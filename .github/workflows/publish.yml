@@ -1,4 +1,4 @@
-name: Publish Release
+name: Publish Release (retired)
 
 on:
   workflow_dispatch:
@@ -8,30 +8,10 @@ permissions: {}
 jobs:
   publish:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: write
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Sync plugin manifest versions and validate
+      - name: Retired workflow
         run: |
-          node ./scripts/sync-version.mjs
-          npm run validate
-
-      - name: Tag and create GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION=$(node -p "require('./package.json').version")
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag "v${VERSION}"
-          git push origin "v${VERSION}"
-          gh release create "v${VERSION}" --title "v${VERSION}" --generate-notes || echo "Release already exists"
+          echo "This workflow is retired. Releases are now managed by release-please."
+          echo "See docs/RELEASING.md."
+          exit 0

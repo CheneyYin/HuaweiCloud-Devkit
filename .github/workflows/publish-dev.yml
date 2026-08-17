@@ -1,4 +1,4 @@
-name: Publish Dev (next)
+name: Publish Dev (retired)
 
 on:
   workflow_dispatch:
@@ -8,56 +8,10 @@ permissions: {}
 jobs:
   publish-dev:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          registry-url: https://registry.npmjs.org
-
-      - run: npm ci
-
-      - name: Quality gates
+      - name: Retired workflow
         run: |
-          npm test
-          npm run validate
-
-      - name: Bump to dev prerelease (base = latest stable + 1)
-        run: |
-          LATEST=$(npm view huaweicloud-devkit dist-tags.latest 2>/dev/null || echo 0.0.0)
-          BASE=$(node -e "const [a,b,c]=process.argv[1].split('.').map(Number); process.stdout.write(a+'.'+b+'.'+(c+1))" "$LATEST")
-          CUR=$(node -p "require('./package.json').version")
-          CUR_BASE=$(node -e "console.log(process.argv[1].split('-')[0])" "$CUR")
-          NEED_BASE=$(node -e "const [a,b,c]=process.argv[2].split('.').map(Number); const [x,y,z]=process.argv[1].split('.').map(Number); process.stdout.write(x*1e6+y*1e3+z < a*1e6+b*1e3+c ? 'yes' : 'no')" "$CUR_BASE" "$BASE")
-          echo "latest stable: ${LATEST} -> dev base: ${BASE} (current: ${CUR})"
-          if [ "${NEED_BASE}" = "yes" ]; then
-            npm version "${BASE}" --no-git-tag-version
-          fi
-          npm version prerelease --preid=dev --no-git-tag-version
-          echo "dev version: $(node -p "require('./package.json').version")"
-
-      - name: Sync plugin manifest versions
-        run: node ./scripts/sync-version.mjs
-
-      - name: Publish to npm (dist-tag next)
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          for i in $(seq 1 20); do
-            VERSION=$(node -p "require('./package.json').version")
-            if npm publish --tag next 2>/tmp/puberr; then
-              echo "published ${VERSION} as dist-tag next"
-              exit 0
-            fi
-            echo "${VERSION} exists or publish failed, bumping prerelease..."
-            npm version prerelease --preid=dev --no-git-tag-version
-            node ./scripts/sync-version.mjs
-          done
-          echo "Failed to publish after 20 attempts"
-          cat /tmp/puberr
-          exit 1
+          echo "This workflow is retired. Prereleases are now managed by release-please on the 'next' branch."
+          echo "See docs/RELEASING.md."
+          exit 0
