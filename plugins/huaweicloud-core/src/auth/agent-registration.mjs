@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 
-export const SUPPORTED_AGENT_TARGETS = ['opencode', 'codex', 'codex-desktop', 'codearts', 'workbuddy'];
+export const SUPPORTED_AGENT_TARGETS = ['opencode', 'codex', 'codex-desktop', 'codearts', 'workbuddy', 'dsh'];
 
 function baseHome() {
   return process.env.HUAWEICLOUD_HOME || homedir();
@@ -71,6 +71,23 @@ function workbuddyRegistered() {
   return Boolean(cfg?.mcpServers?.['huaweicloud-devkit']);
 }
 
+function dshRoot() {
+  return process.env.DSH_HOME || join(baseHome(), '.dsh');
+}
+
+function dshRegistered() {
+  const patchPath = join(dshRoot(), 'profiles', 'web', 'cordis.patch.yml');
+  if (!existsSync(patchPath)) return false;
+  try {
+    const patch = readFileSync(patchPath, 'utf8');
+    return patch.includes('id: mcp-huaweicloud')
+      && patch.includes("@deepseek-ai/dsh-mcp-client")
+      && patch.includes('serverName: huaweicloud');
+  } catch {
+    return false;
+  }
+}
+
 export function getAgentRegistrationStatuses(target = 'all') {
   const requested = target === 'all' ? SUPPORTED_AGENT_TARGETS : [target];
   const result = { target, agents: {} };
@@ -81,6 +98,7 @@ export function getAgentRegistrationStatuses(target = 'all') {
     if (agent === 'codex') configured = codexCliRegistered();
     if (agent === 'codearts') configured = codeartsRegistered();
     if (agent === 'workbuddy') configured = workbuddyRegistered();
+    if (agent === 'dsh') configured = dshRegistered();
     result.agents[agent] = { configured };
   }
   return result;

@@ -33,6 +33,8 @@
         "codex",
         "opencode",
         "workbuddy",
+        "dsh",
+        "deepseek-harness",
         "mcp",
         "koocli",
         "hcloud"

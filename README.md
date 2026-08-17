@@ -8,7 +8,7 @@
 
 Help AI coding agents use Huawei Cloud safely and accurately — a single integration that gives agents cloud knowledge, CLI tooling, and safety guardrails.
 
-Supports OpenCode, Codex, CodeArts Agent, and WorkBuddy.
+Supports OpenCode, Codex, CodeArts Agent, WorkBuddy, and DeepSeek Harness (DSH).
 
 ## Prerequisites
 
@@ -85,6 +85,29 @@ npx --yes huaweicloud-devkit uninstall --target workbuddy
 
 > **Updating**: `update` is incremental per agent — it refreshes only the installed files and leaves your config untouched. Use `update --target all` to update every installed agent at once.
 
+### DeepSeek Harness (DSH)
+
+```bash
+npx --yes huaweicloud-devkit install --target dsh
+```
+
+The installer copies Skills to `$DSH_HOME/skills`, installs the MCP server and
+safety policy under `$DSH_HOME/huaweicloud-plugins`, and maintains
+`$DSH_HOME/profiles/web/cordis.patch.yml`. **Restart the DSH session** after
+installation.
+
+```bash
+npx --yes huaweicloud-devkit doctor
+npx --yes huaweicloud-devkit status --target dsh
+npx --yes huaweicloud-devkit update --target dsh
+npx --yes huaweicloud-devkit uninstall --target dsh
+```
+
+> DSH V1 reuses the existing MCP server through
+> `@deepseek-ai/dsh-mcp-client`. If the installer reports that the DSH MCP
+> client is not detected, run:
+> `npx @deepseek-ai/dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`.
+
 ### Other Agents
 
 For agents that support the Model Context Protocol (MCP):
@@ -125,6 +148,7 @@ ECS, OBS, VPC, IAM, RDS, GaussDB, FunctionGraph, APIG, CCE, SMN/DMS, ModelArts, 
 - [Architecture](docs/architecture.md)
 - [Safety Model](docs/safety-model.md)
 - [Hook Rule Model](docs/hook-rule-model.md)
+- [DeepSeek Harness Integration](docs/dsh-integration.md)
 - [Changelog](docs/CHANGELOG.md)
 - [KooCLI official docs](https://support.huaweicloud.com/qs-hcli/hcli_02_003.html)
 
