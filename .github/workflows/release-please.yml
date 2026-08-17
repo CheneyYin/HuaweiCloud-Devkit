@@ -17,7 +17,7 @@ jobs:
     steps:
       - name: Run release-please
         id: release
-        uses: googleapis/release-please-action@a02a34c4d62566be9cbeb5632d2c8a6cd10aac7e # v4.2.2
+        uses: googleapis/release-please-action@v4
         with:
           target-branch: ${{ github.ref_name }}
           config-file: release-please-config.json
