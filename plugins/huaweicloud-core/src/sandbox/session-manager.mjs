@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createConnection, getCredentials } from './hwlink-api.mjs';
+import { getWebSocketImpl } from '../proxy/proxy-agent.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const WS_EXEC_INDEX_URL = pathToFileURL(join(__dirname, '..', 'ws-exec', 'index.js')).href;
@@ -55,12 +56,15 @@ async function getSession(workspaceId, username, timeoutMs) {
   const { ak, sk, securitytoken } = getCredentials();
   const { wsUrl, source } = await createConnection(workspaceId, ak, sk, securitytoken);
 
+  const WebSocketImpl = getWebSocketImpl(wsUrl);
+
   const { connectHwlinkTerminalSession } = await import(WS_EXEC_INDEX_URL);
   const session = await connectHwlinkTerminalSession({
     url: wsUrl,
     source,
     username,
     timeoutMs,
+    WebSocketImpl,
   });
 
   sessions.set(key, session);
@@ -71,6 +75,8 @@ export async function execOneShot(workspaceId, command, username, timeoutMs) {
   const { ak, sk, securitytoken } = getCredentials();
   const { wsUrl, source } = await createConnection(workspaceId, ak, sk, securitytoken);
 
+  const WebSocketImpl = getWebSocketImpl(wsUrl);
+
   const { executeHwlinkCommand } = await import(WS_EXEC_INDEX_URL);
   return await executeHwlinkCommand({
     url: wsUrl,
@@ -78,6 +84,7 @@ export async function execOneShot(workspaceId, command, username, timeoutMs) {
     username,
     command,
     timeoutMs,
+    WebSocketImpl,
   });
 }
 

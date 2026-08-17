@@ -1,3 +1,5 @@
+import { getProxyDispatcher } from './proxy/proxy-agent.mjs';
+
 const INDEX_URL = 'https://gitcode.com/api/v5/repos/2501_91318609/skills-for-index/contents/skills-index/index.json?ref=main';
 const CN_EN_MAP_URL = 'https://gitcode.com/api/v5/repos/2501_91318609/skills-for-index/contents/skills-index/cn-en-map.json?ref=main';
 const HTTP_TIMEOUT_MS = 10000;
@@ -19,10 +21,13 @@ async function fetchJson(url, label = '') {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
   try {
-    const resp = await fetch(url, {
+    const dispatcher = await getProxyDispatcher(url);
+    const fetchOpts = {
       headers: { 'User-Agent': 'huaweicloud-devkit/1.0' },
       signal: controller.signal,
-    });
+    };
+    if (dispatcher) fetchOpts.dispatcher = dispatcher;
+    const resp = await fetch(url, fetchOpts);
     const data = await resp.json();
     if (data && data.encoding === 'base64' && data.content) {
       const decoded = Buffer.from(data.content, 'base64').toString('utf8');

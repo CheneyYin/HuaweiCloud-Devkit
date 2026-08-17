@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { resolveCredentials } from '../auth/credentials.mjs';
+import { getProxyDispatcher } from '../proxy/proxy-agent.mjs';
 
 const BASE_URL = process.env.HWLINK_ENDPOINT || 'https://devstation.myhuaweicloud.com';
 
@@ -96,17 +97,25 @@ async function apiGet(path, query, ak, sk, securitytoken) {
   const qs = sortedQs(query);
   const fullPath = qs ? `${path}?${qs}` : path;
   const headers = signRequest('GET', path, query, undefined, ak, sk, securitytoken);
-  const resp = await fetch(`${BASE_URL}${fullPath}`, { headers });
+  const url = `${BASE_URL}${fullPath}`;
+  const dispatcher = await getProxyDispatcher(url);
+  const fetchOpts = { headers };
+  if (dispatcher) fetchOpts.dispatcher = dispatcher;
+  const resp = await fetch(url, fetchOpts);
   return { status: resp.status, data: await resp.json() };
 }
 
 async function apiPost(path, body, ak, sk, securitytoken) {
   const headers = signRequest('POST', path, {}, body, ak, sk, securitytoken);
-  const resp = await fetch(`${BASE_URL}${path}`, {
+  const url = `${BASE_URL}${path}`;
+  const dispatcher = await getProxyDispatcher(url);
+  const fetchOpts = {
     method: 'POST',
     headers: { ...headers, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  });
+  };
+  if (dispatcher) fetchOpts.dispatcher = dispatcher;
+  const resp = await fetch(url, fetchOpts);
   return { status: resp.status, data: await resp.json() };
 }
 
