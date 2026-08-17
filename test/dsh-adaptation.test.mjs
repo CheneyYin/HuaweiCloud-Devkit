@@ -165,10 +165,34 @@ test('dsh uninstall removes installed files and only the managed patch row', () 
     assert.match(uninstall.stdout, /Uninstall complete\./);
 
     assert.equal(countSkills(join(dshHome, 'skills')), 0, 'DSH skills removed');
+    assert.ok(!existsSync(join(dshHome, 'skills')), 'empty DSH skills dir removed');
     assert.ok(!existsSync(join(dshHome, 'huaweicloud-plugins')), 'DSH plugin dir removed');
     const patch = readPatch(dshHome);
     assert.equal(countMcpRows(patch), 0, patch);
     assert.doesNotMatch(patch, /@deepseek-ai\/dsh-mcp-client/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('dsh uninstall preserves non-Huawei skills directory entries', () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-home-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'dsh-proj-'));
+  try {
+    const dshHome = join(home, '.dsh');
+    const customSkillDir = join(dshHome, 'skills', 'custom-skill');
+    mkdirSync(customSkillDir, { recursive: true });
+    writeFileSync(join(customSkillDir, 'SKILL.md'), 'name: custom-skill\n');
+
+    const install = runCli(home, cwd, ['install', '--target', 'dsh'], dshHome);
+    assert.equal(install.status, 0, install.stderr);
+
+    const uninstall = runCli(home, cwd, ['uninstall', '--target', 'dsh'], dshHome);
+    assert.equal(uninstall.status, 0, uninstall.stderr);
+
+    assert.ok(existsSync(customSkillDir), 'custom skill preserved');
+    assert.equal(countSkills(join(dshHome, 'skills')), 0, 'Huawei skills removed');
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });

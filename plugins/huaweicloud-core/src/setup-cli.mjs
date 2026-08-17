@@ -995,6 +995,12 @@ function uninstallDsh() {
       }
     }
     if (removed > 0) console.log(`  Removed ${removed} skills`);
+    try {
+      if (readdirSync(skillsDir).length === 0) {
+        rmSync(skillsDir, { recursive: true, force: true });
+        console.log(`  Removed empty skills directory: ${skillsDir}`);
+      }
+    } catch {}
   }
   if (removeIfExists(dshPluginsDir())) {
     console.log('  Removed MCP server and safety policy');

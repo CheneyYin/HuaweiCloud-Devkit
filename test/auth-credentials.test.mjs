@@ -23,6 +23,7 @@ function withTempHome(fn) {
     HW_SECURITY_TOKEN: process.env.HW_SECURITY_TOKEN,
     HW_REGION: process.env.HW_REGION,
     HUAWEICLOUD_REGION: process.env.HUAWEICLOUD_REGION,
+    DSH_HOME: process.env.DSH_HOME,
   };
   process.env.HUAWEICLOUD_HOME = dir;
   delete process.env.HW_ACCESS_KEY;
@@ -30,6 +31,7 @@ function withTempHome(fn) {
   delete process.env.HW_SECURITY_TOKEN;
   delete process.env.HW_REGION;
   delete process.env.HUAWEICLOUD_REGION;
+  delete process.env.DSH_HOME;
   try {
     return fn(dir);
   } finally {
