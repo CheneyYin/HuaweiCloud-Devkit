@@ -34,6 +34,7 @@ const pluginManifests = [
   join(pluginRoot, '.codex-plugin', 'plugin.json'),
   join(pluginRoot, '.claude-plugin', 'plugin.json'),
   join(pluginRoot, '.cursor-plugin', 'plugin.json'),
+  join(pluginRoot, '.workbuddy-plugin', 'plugin.json'),
 ];
 for (const path of pluginManifests) {
   const manifest = readJson(path);
