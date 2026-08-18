@@ -49,9 +49,10 @@ Domain expertise for Huawei Cloud Sandbox (DevStation) instances and workspace t
 
 Setup is a **plugin-side preflight** — the developer should be asked a question only once, when the agreement actually needs signing:
 
-1. **Check user** (transparent): `huaweicloud_sandbox_check_user` — verify `realnameVerified` and `agreementSigned`. Note: the tool may instead return an `HDKIT_NOT_AGREEMENT` error (e.g. `用户未签署最新版协议`) — treat that exactly the same as `agreementSigned=false`
-2. **Real-name verification** (only if `realnameVerified=false`): tell the developer once, "Huawei Cloud requires real-name verification before using the sandbox." and stop — do not retry `connect` in a loop
+1. **Check user** (transparent): `huaweicloud_sandbox_check_user` — returns `realnameVerified` and `agreementSigned` together (both may be `false`; the tool reports both at once, it never signs anything). Note: on older backends the tool may instead error with `HDKIT_NOT_AGREEMENT` — treat that exactly the same as `agreementSigned=false`
+2. **Real-name verification** (only if `realnameVerified=false`): tell the developer once, "Huawei Cloud requires real-name verification before using the sandbox." (complete it in the Huawei Cloud console) — do not retry `connect` in a loop
 3. **Sign agreement** (only if `agreementSigned=false`, or when step 1 returned an `HDKIT_NOT_AGREEMENT` error): **STOP and do NOT sign.** Tell the developer the sandbox requires signing the latest Huawei Cloud developer service agreement, then **wait for the developer to explicitly agree to sign** (e.g. the developer says "签署" / "sign it"). Only then call `huaweicloud_sandbox_sign_agreement`. **Never call `sign_agreement` on your own initiative** — the signing decision always belongs to the developer, and you must never sign a legal agreement on the developer's behalf without their explicit, unambiguous consent. Do not expose the underlying sandbox/DevBridge service as a separate entity the developer must understand or sign up for
+   - If **both** `realnameVerified=false` and `agreementSigned=false`, present **both** requirements together in one message (real-name verification in the console + the signing request below), so the developer can complete both at once
 4. **Connect**: `huaweicloud_sandbox_connect` — returns `session_id`, `dev_stage_id`, `connection_id`, `connection_address`
 5. **Inject credentials** (optional): `huaweicloud_sandbox_credentials` — enables cloud API access from sandbox
 6. **Execute commands**: `huaweicloud_sandbox_exec_with_session` for interactive work

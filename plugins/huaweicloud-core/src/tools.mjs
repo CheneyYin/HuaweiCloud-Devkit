@@ -341,7 +341,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'huaweicloud_sandbox_check_user',
-    description: 'Check if the current user has completed real-name verification and signed the required agreements. Returns realnameVerified and agreementSigned status.',
+    description: 'Check if the current user has completed real-name verification and signed the required agreements. Returns realnameVerified and agreementSigned together (both may be false; always HTTP 200 on the fixed backend).',
     inputSchema: {
       type: 'object',
       properties: {},
