@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+      - next
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+
+      - name: Compute next version
+        id: bump
+        run: |
+          VERSION=$(node ./scripts/bump-version.mjs ${{ github.ref_name }})
+          if [ -n "$VERSION" ]; then
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "Next version: $VERSION"
+          else
+            echo "Skipping (already released or no new commits)."
+          fi
+
+      - name: Create release PR
+        if: ${{ steps.bump.outputs.version != '' }}
+        env:
+          RELEASE_PLEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+        run: node ./scripts/create-release-pr.mjs "${{ steps.bump.outputs.version }}" "${{ github.ref_name }}"
+
+      - name: Tag release
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if git rev-parse "v${VERSION}" >/dev/null 2>&1; then
+            echo "Tag v${VERSION} already exists."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag "v${VERSION}"
+            git push origin "v${VERSION}"
+            echo "Created tag v${VERSION}"
+          fi
