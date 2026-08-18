@@ -23,6 +23,7 @@ function withTempHome(fn) {
     HW_SECURITY_TOKEN: process.env.HW_SECURITY_TOKEN,
     HW_REGION: process.env.HW_REGION,
     HUAWEICLOUD_REGION: process.env.HUAWEICLOUD_REGION,
+    DSH_HOME: process.env.DSH_HOME,
   };
   process.env.HUAWEICLOUD_HOME = dir;
   delete process.env.HW_ACCESS_KEY;
@@ -30,6 +31,7 @@ function withTempHome(fn) {
   delete process.env.HW_SECURITY_TOKEN;
   delete process.env.HW_REGION;
   delete process.env.HUAWEICLOUD_REGION;
+  delete process.env.DSH_HOME;
   try {
     return fn(dir);
   } finally {
@@ -96,6 +98,7 @@ test('auth sync writes OBS and reports all agent registration targets', () => {
     assert.ok(sync.agents['codex-desktop'] !== undefined);
     assert.ok(sync.agents.codearts !== undefined);
     assert.ok(sync.agents.workbuddy !== undefined);
+    assert.ok(sync.agents.dsh !== undefined);
   });
 });
 
@@ -113,6 +116,49 @@ test('agent registration detects OpenCode MCP config', () => {
   });
 });
 
+test('agent registration detects DSH cordis patch config', () => {
+  withTempHome((home) => {
+    const profileDir = join(home, '.dsh', 'profiles', 'web');
+    mkdirSync(profileDir, { recursive: true });
+    writeFileSync(
+      join(profileDir, 'cordis.patch.yml'),
+      [
+        '- insert:',
+        '    - id: mcp-huaweicloud',
+        "      name: '@deepseek-ai/dsh-mcp-client'",
+        '      config:',
+        '        serverName: huaweicloud',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const status = getAgentRegistrationStatuses('dsh');
+    assert.equal(status.agents.dsh.configured, true);
+  });
+});
+
+test('agent registration detects DSH_HOME cordis patch config', () => {
+  withTempHome((home) => {
+    const previousDshHome = process.env.DSH_HOME;
+    const dshHome = join(home, 'custom-dsh');
+    try {
+      process.env.DSH_HOME = dshHome;
+      const profileDir = join(dshHome, 'profiles', 'web');
+      mkdirSync(profileDir, { recursive: true });
+      writeFileSync(
+        join(profileDir, 'cordis.patch.yml'),
+        "id: mcp-huaweicloud\nname: '@deepseek-ai/dsh-mcp-client'\nserverName: huaweicloud\n",
+        'utf8',
+      );
+      const status = getAgentRegistrationStatuses('dsh');
+      assert.equal(status.agents.dsh.configured, true);
+    } finally {
+      if (previousDshHome === undefined) delete process.env.DSH_HOME;
+      else process.env.DSH_HOME = previousDshHome;
+    }
+  });
+});
+
 test('auth status is redacted and reflects vault/OBS state', () => {
   withTempHome(() => {
     writeGlobalCredentials({ ak: 'STATUS_AK', sk: 'STATUS_SK', region: 'cn-north-4' });
@@ -121,6 +167,7 @@ test('auth status is redacted and reflects vault/OBS state', () => {
     assert.equal(status.credentialsConfigured, true);
     assert.equal(status.obsConfigured, true);
     assert.ok(status.agents.opencode !== undefined);
+    assert.ok(status.agents.dsh !== undefined);
     assert.doesNotMatch(JSON.stringify(status), /STATUS_AK|STATUS_SK/);
   });
 });

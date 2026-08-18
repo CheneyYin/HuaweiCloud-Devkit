@@ -21,6 +21,7 @@
         "lint:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#.git\" \"#test/**\" \"#docs/**\"",
         "lint": "npm run lint:md",
         "validate": "node ./scripts/validate-package.mjs",
+        "pack:verify": "node ./scripts/pack-verify.mjs",
         "postinstall": "node -e \"console.log('\\nHuaweiCloud DevKit installed. Run: npx huaweicloud-devkit install\\n')\""
     },
     "devDependencies": {
@@ -33,6 +34,8 @@
         "codex",
         "opencode",
         "workbuddy",
+        "dsh",
+        "deepseek-harness",
         "mcp",
         "koocli",
         "hcloud"

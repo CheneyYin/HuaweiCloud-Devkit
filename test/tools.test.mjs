@@ -58,6 +58,7 @@ test('TOOL_DEFINITIONS includes all required tools including sandbox', () => {
     'huaweicloud_auth_status',
     'huaweicloud_auth_sync',
     'huaweicloud_sandbox_exec_with_session',
+    'huaweicloud_sandbox_upload_file',
     'huaweicloud_sandbox_close_session',
     'huaweicloud_sandbox_check_user',
     'huaweicloud_sandbox_sign_agreement',
@@ -120,4 +121,22 @@ test('huaweicloud_hook_check_deploy_plan warns on sandbox without ttl', async ()
   assert.equal(result.decision, 'warn');
   assert.equal(result.ok, true);
   assert.equal(result.findings[0].ruleId, 'hwc-sandbox-missing-ttl');
+});
+
+test('service_catalog recommends sandbox first for static website deployment intent', async () => {
+  const en = await callTool('huaweicloud_service_catalog', { intent: 'deploy a static website' });
+  assert.equal(en.recommendedSkills[0], 'huawei-sandbox');
+  assert.ok(en.recommendedSkills.includes('huawei-obs'));
+
+  const zh = await callTool('huaweicloud_service_catalog', { intent: '部署静态网站到华为云' });
+  assert.equal(zh.recommendedSkills[0], 'huawei-sandbox');
+
+  const webApp = await callTool('huaweicloud_service_catalog', { intent: 'host a web app for preview' });
+  assert.equal(webApp.recommendedSkills[0], 'huawei-sandbox');
+});
+
+test('service_catalog keeps storage routing for pure storage intent', async () => {
+  const result = await callTool('huaweicloud_service_catalog', { intent: 'store files in an obs bucket' });
+  assert.ok(result.recommendedSkills.includes('huawei-obs'));
+  assert.notEqual(result.recommendedSkills[0], 'huawei-sandbox');
 });

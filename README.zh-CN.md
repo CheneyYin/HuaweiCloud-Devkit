@@ -8,7 +8,7 @@
 
 帮助 AI 编码助手安全、准确地使用华为云——一站式集成云知识、CLI 工具和安全护栏。
 
-支持 OpenCode、Codex、码道（CodeArts Agent）、WorkBuddy。
+支持 OpenCode、Codex、码道（CodeArts Agent）、WorkBuddy、DeepSeek Harness（DSH）。
 
 ## 前置条件
 
@@ -85,6 +85,27 @@ npx --yes huaweicloud-devkit uninstall --target workbuddy
 
 > **更新机制**：`update` 按 agent 增量更新，只刷新必要文件、不动你的配置文件。`update --target all` 可一次更新所有已安装的 agent。
 
+### DeepSeek Harness（DSH）
+
+```bash
+npx --yes huaweicloud-devkit install --target dsh
+```
+
+安装器会把 Skills 写入 `$DSH_HOME/skills`，把 MCP Server 和安全策略写入
+`$DSH_HOME/huaweicloud-plugins`，并自动维护
+`$DSH_HOME/profiles/web/cordis.patch.yml`。安装后**重启 DSH 会话**。
+
+```bash
+npx --yes huaweicloud-devkit doctor
+npx --yes huaweicloud-devkit status --target dsh
+npx --yes huaweicloud-devkit update --target dsh
+npx --yes huaweicloud-devkit uninstall --target dsh
+```
+
+> DSH V1 通过 `@deepseek-ai/dsh-mcp-client` 复用现有 MCP Server。
+> 如果安装器提示 DSH MCP 客户端未检测到，请按提示执行
+> `npx @deepseek-ai/dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`。
+
 ### 其他 Agent
 
 支持 MCP 协议的 Agent，手动配置：
@@ -125,6 +146,7 @@ ECS、OBS、VPC、IAM、RDS、GaussDB、FunctionGraph、APIG、CCE、SMN/DMS、M
 - [架构](docs/architecture.md)
 - [安全模型](docs/safety-model.md)
 - [Hook 规则模型](docs/hook-rule-model.md)
+- [DeepSeek Harness 集成](docs/dsh-integration.md)
 - [变更记录](docs/CHANGELOG.md)
 - [KooCLI 官方文档](https://support.huaweicloud.com/qs-hcli/hcli_02_003.html)
 

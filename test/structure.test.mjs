@@ -120,6 +120,26 @@ test('skills with references have non-empty reference files', () => {
   }
 });
 
+test('web/static-site deployment intent offers target options with sandbox first, not OBS default', () => {
+  const core = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-core', 'SKILL.md'), 'utf8');
+  assert.match(core, /Deployment Target Options/);
+  assert.match(core, /Sandbox \(DevStation\) — recommended/);
+  assert.match(core, /NEVER default to a single service such as OBS/);
+
+  const obs = readFileSync(join(pluginRoot, 'skills', 'huawei-obs', 'SKILL.md'), 'utf8');
+  assert.match(obs, /Routing Guard: Deploy vs Store/);
+  assert.match(obs, /do NOT default to OBS/);
+  assert.match(obs, /① huawei-sandbox \(recommended\)/);
+
+  const sandbox = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
+  assert.match(sandbox, /present options, sandbox first/i);
+  assert.match(sandbox, /建议优先部署到沙箱/);
+
+  const discovery = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-capability-discovery', 'SKILL.md'), 'utf8');
+  assert.match(discovery, /Deployment Target Options/);
+  assert.match(discovery, /do NOT default to OBS/);
+});
+
 test('all plugin manifests are valid JSON', () => {
   const manifests = [
     join(pluginRoot, '.codex-plugin', 'plugin.json'),
@@ -224,11 +244,11 @@ test('setup-cli.mjs supports the codearts target end to end', () => {
   const branches = setup.match(/target === 'codearts' \|\| target === 'all'/g);
   assert.ok(branches && branches.length >= 3, `codearts dispatch branches: ${branches?.length}`);
   // .installed marker goes to the codearts plugins dir
-  assert.match(setup, /const markerDir = target === 'codearts' \? codeartsPluginsDir\(\)\s+: target === 'workbuddy' \? workbuddyPluginsDir\(\)\s+: target === 'codex-desktop' \? codexDesktopPluginsDir\(\)\s+: opencodePluginsDir\(\);/);
+  assert.match(setup, /const markerDir = target === 'dsh' \? dshPluginsDir\(\)\s+: target === 'codearts' \? codeartsPluginsDir\(\)\s+: target === 'workbuddy' \? workbuddyPluginsDir\(\)\s+: target === 'codex-desktop' \? codexDesktopPluginsDir\(\)\s+: opencodePluginsDir\(\);/);
   // doctor checks the codearts skills dir alongside opencode
-  assert.match(setup, /const skillsOptions = \[opencodeSkillsDir\(\), codexDesktopSkillsDir\(\), codeartsSkillsDir\(\), workbuddySkillsDir\(\)\];/);
+  assert.match(setup, /const skillsOptions = \[opencodeSkillsDir\(\), codexDesktopSkillsDir\(\), codeartsSkillsDir\(\), workbuddySkillsDir\(\), dshSkillsDir\(\)\];/);
   // help text documents the target
-  assert.match(setup, /--target <opencode\|codex\|codearts\|workbuddy\|all>/);
+  assert.match(setup, /--target <opencode\|codex\|codearts\|workbuddy\|dsh\|all>/);
   assert.match(setup, /install --target codearts/);
 });
 
@@ -260,4 +280,59 @@ test('setup-cli.mjs handles KooCLI sandbox blockers and privacy agreement', () =
   assert.match(setup, /if \(hcloudBin\) env\.HCLOUD_BIN = hcloudBin\.replace/);
   // doctor warns about sandbox mode
   assert.match(setup, /CodeArts sandbox mode active/);
+});
+
+test('setup-cli.mjs supports the dsh target end to end', () => {
+  const setup = readFileSync(join(pluginRoot, 'src', 'setup-cli.mjs'), 'utf8');
+  // parseTarget accepts dsh
+  assert.match(setup, /if \(val === 'dsh'\) return 'dsh';/);
+  // DSH path helpers and managed patch constants exist
+  assert.match(setup, /function dshRoot\(\)/);
+  assert.match(setup, /function dshSkillsDir\(\)/);
+  assert.match(setup, /function dshProfileDir\(\)/);
+  assert.match(setup, /function dshPatchFile\(\)/);
+  assert.match(setup, /function dshPluginsDir\(\)/);
+  assert.match(setup, /const DSH_MCP_PATCH_START = '# HuaweiCloud DevKit DSH integration start';/);
+  assert.match(setup, /const DSH_MCP_PATCH_END = '# HuaweiCloud DevKit DSH integration end';/);
+  // install / update / uninstall / status functions exist
+  assert.match(setup, /async function installDsh\(\)/);
+  assert.match(setup, /async function updateDsh\(\)/);
+  assert.match(setup, /function uninstallDsh\(\)/);
+  assert.match(setup, /function dshStatus\(\)/);
+  // install copies skills/server/safety and registers MCP through cordis.patch.yml
+  assert.match(setup, /copyDir\(skillsSrc, dshSkillsDir\(\)\)/);
+  assert.match(setup, /copyDir\(srcDir, join\(pluginDest, 'src'\)\)/);
+  assert.match(setup, /copyDir\(safetyDir, join\(pluginDest, 'safety'\)\)/);
+  assert.match(setup, /ensureDshMcpPatch\(\)/);
+  assert.match(setup, /tryInstallDshMcpClient\(\)/);
+  // DSH MCP patch uses dsh-mcp-client with stdio local server mode
+  assert.match(setup, /name: '@deepseek-ai\/dsh-mcp-client'/);
+  assert.match(setup, /serverName: huaweicloud/);
+  assert.match(setup, /transport: stdio/);
+  assert.match(setup, /failOnStartupError: false/);
+  assert.match(setup, /HUAWEICLOUD_AGENT_TOOLKIT_MODE: local/);
+  assert.match(setup, /HDKITSERVICE_ENDPOINT: ''/);
+  // uninstall removes only the managed patch block
+  assert.match(setup, /removeDshMcpPatch\(\)/);
+  // command dispatch covers dsh for install / uninstall / status / update
+  const branches = setup.match(/target === 'dsh' \|\| target === 'all'/g);
+  assert.ok(branches && branches.length >= 4, `dsh dispatch branches: ${branches?.length}`);
+  // .installed marker goes to the dsh plugins dir
+  assert.match(setup, /target === 'dsh' \? dshPluginsDir\(\)/);
+  // doctor checks DSH plugin dir, patch, and skills dir
+  assert.match(setup, /const dshPluginDir = dshPluginsDir\(\);/);
+  assert.match(setup, /dshPatchConfigured\(\)/);
+  assert.match(setup, /dshSkillsDir\(\)/);
+  // help text documents the target
+  assert.match(setup, /--target <opencode\|codex\|codearts\|workbuddy\|dsh\|all>/);
+  assert.match(setup, /install --target dsh/);
+});
+
+test('tools.mjs resolves skills from the dsh directory', () => {
+  const tools = readFileSync(join(pluginRoot, 'src', 'tools.mjs'), 'utf8');
+  assert.match(tools, /function dshSkillsDir\(\)/);
+  assert.match(tools, /process\.env\.DSH_HOME \|\| join\(homedir\(\), '\.dsh'\)/);
+  assert.match(tools, /return join\(home, 'skills'\);/);
+  assert.match(tools, /if \(existsSync\(dshSkillsDir\(\)\)\) return dshSkillsDir\(\);/);
+  assert.match(tools, /opencode, codex, codex-desktop, codearts, workbuddy, dsh, or all/);
 });

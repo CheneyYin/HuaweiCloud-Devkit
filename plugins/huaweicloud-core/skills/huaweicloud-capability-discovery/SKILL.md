@@ -22,6 +22,10 @@ Use this skill to turn vague developer intent into a precise Huawei Cloud capabi
 8. Treat Terraform as a secondary V1 path for reviewed IaC, not the default.
 9. When no built-in devkit skill matches, browse the community skill marketplace at https://github.com/huaweicloud/huaweicloud-skills. Fetch the index from https://raw.githubusercontent.com/huaweicloud/huaweicloud-skills/master/skills-index/index.json.
 
+## Deployment Target Options
+
+When the intent is to **deploy, host, or preview a web app or static website** and the developer has not named a target, do NOT default to OBS or any single service. Present the options and let the developer choose, recommending the sandbox first: ① huawei-sandbox (recommended — temporary runtime, instant preview URL) ② huawei-obs (long-term static hosting/CDN) ③ huawei-ecs ④ huawei-cce. Only follow an explicit target when the developer names one.
+
 ## Region Intent
 
 - Extract region intent from the user's words before querying. Examples: Singapore -> `ap-southeast-3` first, Hong Kong -> `ap-southeast-2`, Beijing -> `cn-north-4`, Shanghai -> `cn-east-3`.

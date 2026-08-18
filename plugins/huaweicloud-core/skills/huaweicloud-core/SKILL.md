@@ -26,7 +26,7 @@ Do not rely on training data for facts. Huawei Cloud services, pricing, quotas, 
 |----|------|----------------|------------|
 | select | Service Selection | which service, what should I use, compare, recommend | Read references/select.md | select
 | compute | Compute Routing | server, VM, instance, ECS, BMS, GPU, HPC | Handoff to huawei-ecs or huawei-cce |
-| storage | Storage Routing | store files, bucket, OBS, backup, disk, EVS, SFS | Handoff to huawei-obs or huawei-cbr |
+| storage | Storage Routing | store files, bucket, OBS, backup, disk, EVS, SFS (long-term storage/CDN intent only) | Handoff to huawei-obs or huawei-cbr |
 | database | Database Routing | database, SQL, NoSQL, cache, RDS, GaussDB, DDS, DCS | Handoff to huawei-rds or huawei-gaussdb |
 | network | Network Routing | VPC, subnet, security group, EIP, NAT, VPN | Handoff to huawei-vpc |
 | serverless | Serverless Routing | function, Lambda, serverless, FunctionGraph, API gateway | Handoff to huawei-functiongraph or huawei-apig |
@@ -36,7 +36,7 @@ Do not rely on training data for facts. Huawei Cloud services, pricing, quotas, 
 | observability | Observability Routing | monitor, alarm, log, audit, trace, Cloud Eye | Handoff to huawei-cloud-eye or huawei-cts |
 | billing | Billing Routing | cost, bill, budget, spending, invoice | Handoff to huawei-billing |
 | iam | IAM Routing | permission, policy, role, user, group, AK/SK | Handoff to huawei-iam |
-| deployment | Deployment Routing | deploy, CI/CD, pipeline, release | CI/CD pipeline -> huawei-deployment; deploy a web app or a GitHub repo (no CI/CD target) -> huawei-sandbox |
+| deployment | Deployment Routing | deploy, host, publish, CI/CD, pipeline, release | CI/CD pipeline -> huawei-deployment; deploy/host/preview a web app or static website (no CI/CD target) -> present deployment-target options first, see "Deployment Target Options" below |
 | sandbox | Sandbox Routing | sandbox, DevStation, workspace, terminal, preview, temporary runtime | Handoff to huawei-sandbox |
 | cli | CLI and Auth Routing | install hcloud, configure KooCLI, AK/SK setup | Handoff to huaweicloud-cli-and-auth |
 | safety | Safety Routing | is this safe, approve command, risk review | Handoff to huaweicloud-safety |
@@ -50,7 +50,7 @@ Do not rely on training data for facts. Huawei Cloud services, pricing, quotas, 
 |----------|----------------|-------|
 | Web application hosting | ECS | huawei-ecs |
 | Containerized microservices | CCE | huawei-cce |
-| Static file storage / CDN | OBS | huawei-obs |
+| Static file storage / CDN (long-term) | OBS | huawei-obs |
 | Relational database (MySQL/PG) | RDS | huawei-rds |
 | Distributed SQL database | GaussDB | huawei-gaussdb |
 | Document database (MongoDB API) | DDS | huawei-dds-dcs |
@@ -70,6 +70,21 @@ Do not rely on training data for facts. Huawei Cloud services, pricing, quotas, 
 | CI/CD pipeline | CloudDeploy | huawei-deployment |
 | Temporary runtime / web app preview | Sandbox (DevStation) | huawei-sandbox |
 | Getting started | Account setup | huaweicloud-cli-and-auth |
+
+## Deployment Target Options
+
+When the intent is to **deploy, host, or preview a web app or static website** (no explicit target named), NEVER default to a single service such as OBS. Ask the developer to choose a target and present the options in this order:
+
+| # | Option | When to choose | Skill |
+|---|--------|----------------|-------|
+| 1 | **Sandbox (DevStation) — recommended** | Temporary runtime, quick preview, demo; instant public URL | huawei-sandbox |
+| 2 | OBS static website hosting | Long-term static hosting / CDN, no backend | huawei-obs |
+| 3 | ECS | Needs a server runtime (backend, custom server) | huawei-ecs |
+| 4 | CCE | Containerized workloads, scaling | huawei-cce |
+
+- Recommended prompt: "这个项目是 Web 应用/静态网站，建议优先部署到沙箱（临时运行环境，立即可预览）。也可选择 OBS 静态托管、ECS 或 CCE，你想部署到哪里？"
+- If the developer explicitly names a target (e.g. "deploy to OBS"), follow that target and hand off to the corresponding service skill.
+- If the developer has no preference, recommend the sandbox first.
 
 ## Capability Sources
 

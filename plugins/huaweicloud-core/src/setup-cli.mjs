@@ -57,6 +57,15 @@ function workbuddySkillsDir() { return join(homedir(), '.workbuddy', 'skills'); 
 function workbuddyMcpConfigFile() { return join(homedir(), '.workbuddy', 'mcp.json'); }
 function workbuddyPluginsDir() { return join(homedir(), '.workbuddy', 'huaweicloud-plugins'); }
 
+function dshRoot() { return process.env.DSH_HOME || join(homedir(), '.dsh'); }
+function dshSkillsDir() { return join(dshRoot(), 'skills'); }
+function dshProfileDir() { return join(dshRoot(), 'profiles', 'web'); }
+function dshPatchFile() { return join(dshProfileDir(), 'cordis.patch.yml'); }
+function dshPluginsDir() { return join(dshRoot(), 'huaweicloud-plugins'); }
+
+const DSH_MCP_PATCH_START = '# HuaweiCloud DevKit DSH integration start';
+const DSH_MCP_PATCH_END = '# HuaweiCloud DevKit DSH integration end';
+
 // Detect CodeArts sandbox mode (bash_mode in permission config).
 function detectCodeartsSandbox() {
   try {
@@ -759,6 +768,261 @@ function workbuddyStatus() {
   }
 }
 
+function dshMcpServerPath() {
+  return join(dshPluginsDir(), 'src', 'mcp-server.mjs').replace(/\\/g, '/');
+}
+
+function dshPatchBlock() {
+  const hcloudBin = findHcloudBin();
+  const envLines = [
+    '          HUAWEICLOUD_AGENT_TOOLKIT_MODE: local',
+    "          HDKITSERVICE_ENDPOINT: ''",
+  ];
+  if (hcloudBin) {
+    envLines.push(`          HCLOUD_BIN: '${hcloudBin.replace(/\\/g, '/').replace(/'/g, "''")}'`);
+  }
+  return [
+    DSH_MCP_PATCH_START,
+    '- insert:',
+    '    - id: mcp-huaweicloud',
+    "      name: '@deepseek-ai/dsh-mcp-client'",
+    '      config:',
+    '        serverName: huaweicloud',
+    '        transport: stdio',
+    '        command: node',
+    '        args:',
+    `          - '${dshMcpServerPath().replace(/'/g, "''")}'`,
+    '        env:',
+    ...envLines,
+    '        failOnStartupError: false',
+    DSH_MCP_PATCH_END,
+  ].join('\n');
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function removeManagedDshPatchBlock(content) {
+  const pattern = new RegExp(`\\n?${escapeRegExp(DSH_MCP_PATCH_START)}[\\s\\S]*?${escapeRegExp(DSH_MCP_PATCH_END)}\\s*`, 'g');
+  return String(content || '').replace(pattern, '\n').replace(/\n{3,}/g, '\n\n').trimEnd();
+}
+
+function dshPatchHasOnlyCommentsOrEmptyList(content) {
+  const meaningful = String(content || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'));
+  return meaningful.length === 0 || (meaningful.length === 1 && meaningful[0] === '[]');
+}
+
+function ensureDshMcpPatch() {
+  const patchFile = dshPatchFile();
+  const existing = existsSync(patchFile) ? readFileSync(patchFile, 'utf8') : '';
+  const cleaned = removeManagedDshPatchBlock(existing);
+  const block = dshPatchBlock();
+  let next;
+  if (dshPatchHasOnlyCommentsOrEmptyList(cleaned)) {
+    const prefix = cleaned
+      .split(/\r?\n/)
+      .filter((line) => line.trim() !== '[]')
+      .join('\n')
+      .trimEnd();
+    next = `${prefix ? `${prefix}\n` : ''}${block}\n`;
+  } else {
+    next = `${cleaned}\n\n${block}\n`;
+  }
+  if (existing.replace(/\r\n/g, '\n') === next) {
+    console.log(`  DSH patch unchanged: ${patchFile}`);
+    return false;
+  }
+  mkdirSync(dirname(patchFile), { recursive: true });
+  writeFileSync(patchFile, next);
+  console.log(`  DSH patch updated: ${patchFile}`);
+  return true;
+}
+
+function removeDshMcpPatch() {
+  const patchFile = dshPatchFile();
+  if (!existsSync(patchFile)) return false;
+  const existing = readFileSync(patchFile, 'utf8');
+  const cleaned = removeManagedDshPatchBlock(existing);
+  if (cleaned === existing.trimEnd()) return false;
+  const prefix = cleaned
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== '[]')
+    .join('\n')
+    .trimEnd();
+  const next = dshPatchHasOnlyCommentsOrEmptyList(cleaned)
+    ? `${prefix ? `${prefix}\n` : ''}[]\n`
+    : `${cleaned}\n`;
+  writeFileSync(patchFile, next);
+  console.log(`  DSH patch cleaned: ${patchFile}`);
+  return true;
+}
+
+function dshPatchConfigured() {
+  const patchFile = dshPatchFile();
+  if (!existsSync(patchFile)) return false;
+  try {
+    const patch = readFileSync(patchFile, 'utf8');
+    return patch.includes('id: mcp-huaweicloud')
+      && patch.includes("@deepseek-ai/dsh-mcp-client")
+      && patch.includes('serverName: huaweicloud');
+  } catch {
+    return false;
+  }
+}
+
+function commandAvailable(command, args = ['--version']) {
+  try {
+    const r = spawnSync(command, args, { shell: false, windowsHide: true, stdio: 'pipe', timeout: 10000 });
+    if (r.status === 0) return true;
+  } catch {}
+  if (process.platform === 'win32') {
+    try {
+      const w = spawnSync('where.exe', [command], { windowsHide: true, stdio: 'pipe', timeout: 10000 });
+      return w.status === 0 && w.stdout.toString().trim().length > 0;
+    } catch {}
+  }
+  return false;
+}
+
+function dshMcpClientAvailable() {
+  const modulePath = join('node_modules', '@deepseek-ai', 'dsh-mcp-client', 'package.json');
+  const candidates = [
+    join(dshProfileDir(), modulePath),
+    join(dshRoot(), 'profiles', modulePath),
+    join(dshRoot(), modulePath),
+  ];
+  if (candidates.some((p) => existsSync(p))) return true;
+  const pkgPath = join(dshProfileDir(), 'package.json');
+  if (!existsSync(pkgPath)) return false;
+  try {
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+    return Boolean(pkg.dependencies?.['@deepseek-ai/dsh-mcp-client']
+      || pkg.devDependencies?.['@deepseek-ai/dsh-mcp-client']);
+  } catch {
+    return false;
+  }
+}
+
+function tryInstallDshMcpClient() {
+  if (process.env.HUAWEICLOUD_DEVKIT_SKIP_DSH_PLUGIN_INSTALL === '1') {
+    console.log('  DSH MCP client install skipped by environment');
+    return false;
+  }
+  if (dshMcpClientAvailable()) {
+    console.log('  DSH MCP client package detected');
+    return true;
+  }
+  if (commandAvailable('dsh')) {
+    const r = spawnSync('dsh', ['plugin', '--profile', 'web', 'add', '@deepseek-ai/dsh-mcp-client'], {
+      env: { ...process.env, DSH_HOME: dshRoot() },
+      windowsHide: true,
+      stdio: 'pipe',
+      timeout: 60000,
+    });
+    if (r.status === 0) {
+      console.log('  DSH MCP client package installed via dsh');
+      return true;
+    }
+    const err = `${r.stderr || ''}${r.stdout || ''}`.trim().split(/\r?\n/).slice(-2).join(' ');
+    console.log(`  \x1b[33m[WARN]\x1b[0m DSH MCP client auto-install failed${err ? `: ${err}` : ''}`);
+  }
+  if (commandAvailable('pnpm') && existsSync(join(dshProfileDir(), 'package.json'))) {
+    const r = spawnSync('pnpm', ['--dir', dshProfileDir(), 'add', '@deepseek-ai/dsh-mcp-client'], {
+      windowsHide: true,
+      stdio: 'pipe',
+      timeout: 60000,
+    });
+    if (r.status === 0) {
+      console.log('  DSH MCP client package installed via pnpm');
+      return true;
+    }
+  }
+  console.log('  \x1b[33m[WARN]\x1b[0m DSH MCP client package not detected.');
+  console.log('  Manual: npx @deepseek-ai/dsh plugin --profile web add @deepseek-ai/dsh-mcp-client');
+  console.log('  If pnpm is missing, run: corepack enable pnpm');
+  return false;
+}
+
+async function installDsh() {
+  const skillsSrc = join(PLUGIN_ROOT, 'skills');
+  const srcDir = join(PLUGIN_ROOT, 'src');
+  const safetyDir = join(PLUGIN_ROOT, 'safety');
+  const pluginDest = dshPluginsDir();
+
+  copyDir(skillsSrc, dshSkillsDir());
+  console.log(`  Skills -> ${dshSkillsDir()}`);
+  copyDir(srcDir, join(pluginDest, 'src'));
+  console.log(`  MCP Server -> ${join(pluginDest, 'src')}`);
+  copyDir(safetyDir, join(pluginDest, 'safety'));
+  console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
+  ensureDshMcpPatch();
+  tryInstallDshMcpClient();
+  mkdirSync(pluginDest, { recursive: true });
+  writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
+}
+
+async function updateDsh() {
+  const skillsSrc = join(PLUGIN_ROOT, 'skills');
+  const srcDir = join(PLUGIN_ROOT, 'src');
+  const safetyDir = join(PLUGIN_ROOT, 'safety');
+  const pluginDest = dshPluginsDir();
+
+  copyDir(skillsSrc, dshSkillsDir());
+  const stale = pruneStale(dshSkillsDir(), skillsSrc);
+  console.log(`  Skills updated -> ${dshSkillsDir()}${stale > 0 ? ` (removed ${stale} stale)` : ''}`);
+  copyDir(srcDir, join(pluginDest, 'src'));
+  console.log(`  MCP Server updated -> ${join(pluginDest, 'src')}`);
+  copyDir(safetyDir, join(pluginDest, 'safety'));
+  console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
+  ensureDshMcpPatch();
+  tryInstallDshMcpClient();
+  mkdirSync(pluginDest, { recursive: true });
+  writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
+}
+
+function uninstallDsh() {
+  const skillsDir = dshSkillsDir();
+  let removed = 0;
+  if (existsSync(skillsDir)) {
+    for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
+      if (entry.name.startsWith('huawei')) {
+        removeIfExists(join(skillsDir, entry.name));
+        removed++;
+      }
+    }
+    if (removed > 0) console.log(`  Removed ${removed} skills`);
+    try {
+      if (readdirSync(skillsDir).length === 0) {
+        rmSync(skillsDir, { recursive: true, force: true });
+        console.log(`  Removed empty skills directory: ${skillsDir}`);
+      }
+    } catch {}
+  }
+  if (removeIfExists(dshPluginsDir())) {
+    console.log('  Removed MCP server and safety policy');
+  }
+  removeDshMcpPatch();
+}
+
+function dshStatus() {
+  const pluginDir = dshPluginsDir();
+  const skillsDir = dshSkillsDir();
+  console.log(`  MCP Server: ${existsSync(join(pluginDir, 'src', 'mcp-server.mjs')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`);
+  console.log(`  Safety Policy: ${existsSync(join(pluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`);
+  let skillCount = 0;
+  if (existsSync(skillsDir)) {
+    skillCount = readdirSync(skillsDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && d.name.startsWith('huawei')).length;
+  }
+  console.log(`  Skills: ${skillCount > 0 ? `\x1b[32m${skillCount} installed\x1b[0m` : '\x1b[31mNot installed\x1b[0m'}`);
+  console.log(`  DSH patch: ${dshPatchConfigured() ? '\x1b[32mConfigured\x1b[0m' : '\x1b[31mNot configured\x1b[0m'}`);
+  console.log(`  DSH MCP client package: ${dshMcpClientAvailable() ? '\x1b[32mDetected\x1b[0m' : '\x1b[33mCheck DSH profile\x1b[0m'}`);
+}
+
 function opencodeStatus() {
   const pluginDir = opencodePluginsDir();
   const skillsDir = opencodeSkillsDir();
@@ -789,6 +1053,7 @@ function parseTarget() {
   if (val === 'codex-desktop') return 'codex-desktop';
   if (val === 'codearts') return 'codearts';
   if (val === 'workbuddy') return 'workbuddy';
+  if (val === 'dsh') return 'dsh';
   if (val === 'all') return 'all';
   return 'opencode';
 }
@@ -815,6 +1080,10 @@ async function cmdInstall() {
     console.log('\n[WorkBuddy]');
     await installWorkBuddy();
   }
+  if (target === 'dsh' || target === 'all') {
+    console.log('\n[DSH]');
+    await installDsh();
+  }
   if (target === 'codex' || target === 'all') {
     console.log('\n[Codex]');
     if (!hasCodexCLI()) {
@@ -837,11 +1106,13 @@ async function cmdInstall() {
     } else {
       installCodex();
     }
-  }  console.log(`\n\x1b[32mInstallation complete!\x1b[0m`);
+  }
+  console.log(`\n\x1b[32mInstallation complete!\x1b[0m`);
   const appName = target === 'codearts' ? 'CodeArts'
     : target === 'codex-desktop' ? 'Codex Desktop'
     : target === 'codex' ? 'Codex'
     : target === 'workbuddy' ? 'WorkBuddy'
+    : target === 'dsh' ? 'DSH'
     : 'OpenCode';
   const pad = ' '.repeat(24 - appName.length);
   console.log(`\n\x1b[1m\x1b[33m╔══════════════════════════════════════════════════════╗`);
@@ -864,7 +1135,8 @@ async function cmdInstall() {
   console.log(`  3. 运行自检：npx huaweicloud-devkit doctor`);
 
   // Write install marker for doctor to detect
-  const markerDir = target === 'codearts' ? codeartsPluginsDir()
+  const markerDir = target === 'dsh' ? dshPluginsDir()
+    : target === 'codearts' ? codeartsPluginsDir()
     : target === 'workbuddy' ? workbuddyPluginsDir()
     : target === 'codex-desktop' ? codexDesktopPluginsDir()
     : opencodePluginsDir();
@@ -881,6 +1153,9 @@ async function cmdInstall() {
   }
   if (target === 'workbuddy' || target === 'all') {
     console.log('Or describe your Huawei Cloud task in WorkBuddy');
+  }
+  if (target === 'dsh' || target === 'all') {
+    console.log('Or describe your Huawei Cloud task in DSH');
   }
 }
 
@@ -900,6 +1175,10 @@ async function cmdUninstall() {
   if (target === 'workbuddy' || target === 'all') {
     console.log('\n[WorkBuddy]');
     uninstallWorkBuddy();
+  }
+  if (target === 'dsh' || target === 'all') {
+    console.log('\n[DSH]');
+    uninstallDsh();
   }
   if (target === 'codex-desktop' || target === 'codex' || target === 'all') {
     console.log('\n[Codex]');
@@ -945,6 +1224,10 @@ async function cmdStatus() {
     console.log('\n[WorkBuddy]');
     workbuddyStatus();
   }
+  if (target === 'dsh' || target === 'all') {
+    console.log('\n[DSH]');
+    dshStatus();
+  }
   if (target === 'codex' || target === 'all') {
     console.log('\n[Codex]');
     if (!hasCodexCLI()) {
@@ -972,16 +1255,22 @@ async function cmdDoctor() {
   // Node.js
   check('Node.js >= 20', process.versions.node.split('.')[0] >= 20, 'Run: nvm install 20 && nvm use 20');
 
-    // MCP server — check OpenCode, Codex Desktop, CodeArts, and WorkBuddy paths
+    // MCP server — check OpenCode, Codex Desktop, CodeArts, WorkBuddy, and DSH paths
   const opencodePluginDir = opencodePluginsDir();
   const codexPluginDir = codexDesktopPluginsDir();
+  const codeartsPluginDir = codeartsPluginsDir();
   const workbuddyPluginDir = workbuddyPluginsDir();
+  const dshPluginDir = dshPluginsDir();
   const mcpOk = existsSync(join(opencodePluginDir, 'src', 'mcp-server.mjs'))
     || existsSync(join(codexPluginDir, 'src', 'mcp-server.mjs'))
-    || existsSync(join(workbuddyPluginDir, 'src', 'mcp-server.mjs'));
+    || existsSync(join(codeartsPluginDir, 'src', 'mcp-server.mjs'))
+    || existsSync(join(workbuddyPluginDir, 'src', 'mcp-server.mjs'))
+    || existsSync(join(dshPluginDir, 'src', 'mcp-server.mjs'));
   const mcpTarget = existsSync(join(opencodePluginDir, 'src', 'mcp-server.mjs')) ? 'OpenCode'
     : existsSync(join(codexPluginDir, 'src', 'mcp-server.mjs')) ? 'Codex Desktop'
-    : existsSync(join(workbuddyPluginDir, 'src', 'mcp-server.mjs')) ? 'WorkBuddy' : '';
+    : existsSync(join(codeartsPluginDir, 'src', 'mcp-server.mjs')) ? 'CodeArts'
+    : existsSync(join(workbuddyPluginDir, 'src', 'mcp-server.mjs')) ? 'WorkBuddy'
+    : existsSync(join(dshPluginDir, 'src', 'mcp-server.mjs')) ? 'DSH' : '';
   check('MCP server installed', mcpOk, 'Run: npx huaweicloud-devkit install');
 
   if (mcpOk) {
@@ -990,10 +1279,12 @@ async function cmdDoctor() {
 
   const safetyOk = existsSync(join(opencodePluginDir, 'safety', 'policy.json'))
     || existsSync(join(codexPluginDir, 'safety', 'policy.json'))
-    || existsSync(join(workbuddyPluginDir, 'safety', 'policy.json'));
+    || existsSync(join(codeartsPluginDir, 'safety', 'policy.json'))
+    || existsSync(join(workbuddyPluginDir, 'safety', 'policy.json'))
+    || existsSync(join(dshPluginDir, 'safety', 'policy.json'));
   check('Safety policy installed', safetyOk, 'Run: npx huaweicloud-devkit install');
 
-  // MCP config — check OpenCode, Codex Desktop, and WorkBuddy
+  // MCP config — check OpenCode, Codex Desktop, CodeArts, WorkBuddy, and DSH
   let mcpConfigured = false;
   let mcpCfgTarget = '';
   const opencodeCfg = opencodeConfigFile();
@@ -1010,12 +1301,23 @@ async function cmdDoctor() {
       if (cfg.includes('[mcp_servers.huaweicloud-devkit]')) { mcpConfigured = true; mcpCfgTarget = 'Codex Desktop'; }
     } catch {}
   }
+  const codeartsCfg = codeartsMcpSettingsFile();
+  if (!mcpConfigured && existsSync(codeartsCfg)) {
+    try {
+      const cfg = JSON.parse(readFileSync(codeartsCfg, 'utf8'));
+      if (cfg.mcpServers && cfg.mcpServers['huaweicloud-devkit']) { mcpConfigured = true; mcpCfgTarget = 'CodeArts'; }
+    } catch {}
+  }
   const workbuddyCfg = workbuddyMcpConfigFile();
   if (!mcpConfigured && existsSync(workbuddyCfg)) {
     try {
       const cfg = JSON.parse(readFileSync(workbuddyCfg, 'utf8'));
       if (cfg.mcpServers && cfg.mcpServers['huaweicloud-devkit']) { mcpConfigured = true; mcpCfgTarget = 'WorkBuddy'; }
     } catch {}
+  }
+  if (!mcpConfigured && dshPatchConfigured()) {
+    mcpConfigured = true;
+    mcpCfgTarget = 'DSH';
   }
   check('MCP configured', mcpConfigured, mcpCfgTarget ? `Found in ${mcpCfgTarget} config` : 'Run: npx huaweicloud-devkit install');
 
@@ -1046,7 +1348,7 @@ async function cmdDoctor() {
   }
 
   // Skills
-  const skillsOptions = [opencodeSkillsDir(), codexDesktopSkillsDir(), codeartsSkillsDir(), workbuddySkillsDir()];
+  const skillsOptions = [opencodeSkillsDir(), codexDesktopSkillsDir(), codeartsSkillsDir(), workbuddySkillsDir(), dshSkillsDir()];
   let skillCount = 0, skillsDir = '', missingSkills = [];
   for (const dir of skillsOptions) {
     if (!existsSync(dir)) continue;
@@ -1091,6 +1393,7 @@ async function cmdDoctor() {
     { path: join(codexDesktopPluginsDir(), '.installed'), name: 'Codex Desktop' },
     { path: join(workbuddyPluginsDir(), '.installed'), name: 'WorkBuddy' },
     { path: join(codeartsPluginsDir(), '.installed'), name: 'CodeArts' },
+    { path: join(dshPluginsDir(), '.installed'), name: 'DSH' },
   ];
   for (const marker of installedMarkers) {
     if (existsSync(marker.path)) {
@@ -1172,6 +1475,18 @@ async function cmdUpdate() {
     return;
   }
 
+  if (target === 'dsh') {
+    if (!existsSync(join(dshPluginsDir(), 'src', 'mcp-server.mjs'))) {
+      console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
+      return;
+    }
+    console.log('[DSH]');
+    await updateDsh();
+    console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
+    console.log(`\x1b[33mRestart the DSH session for changes to take effect.\x1b[0m`);
+    return;
+  }
+
   if (target === 'all') {
     let updatedAny = false;
     if (existsSync(join(opencodePluginsDir(), 'src', 'mcp-server.mjs'))) {
@@ -1192,6 +1507,11 @@ async function cmdUpdate() {
     if (existsSync(join(workbuddyPluginsDir(), 'src', 'mcp-server.mjs'))) {
       console.log('\n[WorkBuddy]');
       await updateWorkBuddy();
+      updatedAny = true;
+    }
+    if (existsSync(join(dshPluginsDir(), 'src', 'mcp-server.mjs'))) {
+      console.log('\n[DSH]');
+      await updateDsh();
       updatedAny = true;
     }
     if (codexStatus()) {
@@ -1661,7 +1981,7 @@ async function main() {
     case '-h':
     default:
       console.log(BANNER);
-      console.log('Usage: npx huaweicloud-devkit <command> [--target <opencode|codex|codearts|workbuddy|all>]\n');
+      console.log('Usage: npx huaweicloud-devkit <command> [--target <opencode|codex|codearts|workbuddy|dsh|all>]\n');
       console.log('Commands:');
       console.log('  install      Install skills, MCP server, safety policy');
       console.log('  uninstall    Remove installed files');
@@ -1674,12 +1994,13 @@ async function main() {
       console.log('  proxy        Manage proxy config: init | show | clear');
       console.log('  help         Show this help');
       console.log('\nOptions:');
-      console.log('  --target     Target agent: opencode (default), codex, codearts, workbuddy, all');
+      console.log('  --target     Target agent: opencode (default), codex, codearts, workbuddy, dsh, all');
       console.log('\nExamples:');
       console.log('  npx huaweicloud-devkit install');
       console.log('  npx huaweicloud-devkit install --target codex');
       console.log('  npx huaweicloud-devkit install --target codearts');
       console.log('  npx huaweicloud-devkit install --target workbuddy');
+      console.log('  npx huaweicloud-devkit install --target dsh');
       console.log('  npx huaweicloud-devkit install --target all');
       console.log('  npx huaweicloud-devkit auth init');
       console.log('  npx huaweicloud-devkit auth sync --target all');

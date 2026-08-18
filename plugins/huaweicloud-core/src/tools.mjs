@@ -6,7 +6,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { searchMarketplace } from './search-market.mjs';
-import { execWithSession, closeSession, DEFAULT_WORKSPACE_ID } from './sandbox/session-manager.mjs';
+import { execWithSession, closeSession, uploadFileWithSession, DEFAULT_WORKSPACE_ID } from './sandbox/session-manager.mjs';
 import { hdkitCheckUser, hdkitSignAgreement, hdkitConnect, hdkitCredentials } from './sandbox/hdkitservice-api.mjs';
 import { getAuthStatus, syncAuth } from './auth/service.mjs';
 import { readGlobalCredentials, writeObsConfig as writeObsConfigFile } from './auth/credentials.mjs';
@@ -25,8 +25,13 @@ function workbuddySkillsDir() {
   const home = homedir();
   return join(home, '.workbuddy', 'skills');
 }
+function dshSkillsDir() {
+  const home = process.env.DSH_HOME || join(homedir(), '.dsh');
+  return join(home, 'skills');
+}
 function resolveSkillsRoot() {
   if (existsSync(SKILLS_ROOT_DEV)) return SKILLS_ROOT_DEV;
+  if (existsSync(dshSkillsDir())) return dshSkillsDir();
   if (existsSync(codeartsSkillsDir())) return codeartsSkillsDir();
   if (existsSync(opencodeSkillsDir())) return opencodeSkillsDir();
   if (existsSync(workbuddySkillsDir())) return workbuddySkillsDir();
@@ -295,7 +300,7 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
-        target: { type: 'string', description: 'Agent target to check: opencode, codex, codex-desktop, codearts, workbuddy, or all (default).' },
+        target: { type: 'string', description: 'Agent target to check: opencode, codex, codex-desktop, codearts, workbuddy, dsh, or all (default).' },
       },
     },
   },
@@ -305,7 +310,7 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
-        target: { type: 'string', description: 'Agent target to report after sync: opencode, codex, codex-desktop, codearts, workbuddy, or all (default).' },
+        target: { type: 'string', description: 'Agent target to report after sync: opencode, codex, codex-desktop, codearts, workbuddy, dsh, or all (default).' },
       },
     },
   },
@@ -335,8 +340,23 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'huaweicloud_sandbox_upload_file',
+    description: 'Upload a local file into the sandbox workspace. Base64-encodes the file, writes it in small chunks through the terminal session (the exec channel is fragile for large single commands), then decodes and verifies the md5 checksum. Use this instead of embedding large file content directly in a command.',
+    inputSchema: {
+      type: 'object',
+      required: ['local_path', 'remote_path'],
+      properties: {
+        local_path: { type: 'string', description: 'Absolute path to the local file to upload.' },
+        remote_path: { type: 'string', description: 'Target path in the sandbox, e.g. /workspace/<repo>/index.html.' },
+        workspace_id: { type: 'string', description: 'The workspace ID' },
+        username: { type: 'string', description: 'Login username (default: root)' },
+        timeout_ms: { type: 'number', description: 'Per-command execution timeout in milliseconds (default: 30000)' },
+      },
+    },
+  },
+  {
     name: 'huaweicloud_sandbox_check_user',
-    description: 'Check if the current user has completed real-name verification and signed the required agreements. Returns realnameVerified and agreementSigned status.',
+    description: 'Check if the current user has completed real-name verification and signed the required agreements. Returns 200 {realnameVerified, agreementSigned} when all good; throws 403 HDKIT_NOT_REALNAME / HDKIT_NOT_AGREEMENT / HDKIT_NOT_REALNAME_AND_AGREEMENT to indicate what is missing. Never signs anything itself.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -344,7 +364,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'huaweicloud_sandbox_sign_agreement',
-    description: 'Sign all unsigned or outdated agreements for the current user. Required before huaweicloud_sandbox_connect if check-user returns agreementSigned=false.',
+    description: 'Sign all unsigned or outdated agreements for the current user. Required before huaweicloud_sandbox_connect if check-user returns agreementSigned=false. CRITICAL: only call after the user explicitly consents to signing — never sign agreements on the user\'s behalf without their explicit request.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -446,6 +466,15 @@ export async function callTool(name, args = {}) {
       const sandboxUser3 = args.username || 'root';
       const closed = await closeSession(sandboxWsId3, sandboxUser3);
       return closed ? 'ok' : 'not_connected';
+    }
+    case 'huaweicloud_sandbox_upload_file': {
+      if (!args.local_path || !args.remote_path) {
+        throw new Error('local_path and remote_path are required.');
+      }
+      const sandboxWsId4 = args.workspace_id || DEFAULT_WORKSPACE_ID;
+      const sandboxUser4 = args.username || 'root';
+      const sandboxTimeout4 = args.timeout_ms || 30000;
+      return await uploadFileWithSession(sandboxWsId4, args.local_path, args.remote_path, sandboxUser4, sandboxTimeout4);
     }
     case 'huaweicloud_sandbox_check_user':
       return await hdkitCheckUser();
@@ -709,18 +738,28 @@ function serviceCatalog(intent = '') {
     { keywords: ['cts', 'audit', 'trace', 'tracker'], skills: ['huawei-cts'], services: ['CTS'] },
     { keywords: ['cbr', 'backup', 'restore', 'vault', 'snapshot'], skills: ['huawei-cbr'], services: ['CBR'] },
     { keywords: ['deployment', 'deploy', 'ci/cd', 'pipeline', 'release'], skills: ['huawei-deployment'], services: ['CloudDeploy'] },
-    { keywords: ['sandbox', 'devstation', 'workspace', 'terminal', 'preview', 'hwlink'], skills: ['huawei-sandbox'], services: ['Sandbox', 'DevStation'] },
+    { keywords: ['sandbox', 'devstation', 'workspace', 'terminal', 'preview', 'hwlink', 'website', 'web app', 'webapp', 'hosting', '网站', '网页', '静态'], skills: ['huawei-sandbox'], services: ['Sandbox', 'DevStation'] },
     { keywords: ['dds', 'dcs', 'mongodb', 'redis', 'memcached', 'cache', 'document db'], skills: ['huawei-dds-dcs'], services: ['DDS', 'DCS'] },
 ];
   const matched = [];
   const tokens = it.split(/[\s,./-]+/).filter((t) => t.length > 0);
+  const cjk = /[\u4e00-\u9fff]/;
   for (const route of routeMap) {
-    if (route.keywords.some((kw) => tokens.includes(kw))) {
+    if (route.keywords.some((kw) => (kw.includes(' ') || cjk.test(kw)) ? it.includes(kw) : tokens.includes(kw))) {
       matched.push(route);
     }
   }
   const recommendedSkills = [...new Set(matched.flatMap((r) => r.skills))];
   const recommendedServices = [...new Set(matched.flatMap((r) => r.services))].slice(0, 5);
+
+  // Deployment intent (deploy/host/publish a web app or static website) must never
+  // default to a storage/other service — recommend the sandbox first.
+  const deploymentIntent = /deploy|host|hosting|publish|website|web app|preview|部署|托管|发布|网站|网页/.test(it);
+  if (deploymentIntent && recommendedSkills.includes('huawei-sandbox')) {
+    const idx = recommendedSkills.indexOf('huawei-sandbox');
+    recommendedSkills.splice(idx, 1);
+    recommendedSkills.unshift('huawei-sandbox');
+  }
 
   return {
     intent,
