@@ -3,6 +3,11 @@ import { getProxyUrlForTarget } from './proxy-config.mjs';
 let cachedDispatcher = undefined;
 let cachedDispatcherProxyUrl = null;
 
+async function importUndici() {
+  try { return await import('node:undici'); }
+  catch { return await import('undici'); }
+}
+
 export async function getProxyDispatcher(targetUrl) {
   const proxyUrl = getProxyUrlForTarget(targetUrl);
   if (!proxyUrl) return undefined;
@@ -11,7 +16,7 @@ export async function getProxyDispatcher(targetUrl) {
     return cachedDispatcher;
   }
 
-  const { ProxyAgent } = await import('undici');
+  const { ProxyAgent } = await importUndici();
   cachedDispatcher = new ProxyAgent(proxyUrl);
   cachedDispatcherProxyUrl = proxyUrl;
   return cachedDispatcher;
@@ -29,7 +34,7 @@ export async function createProxyWebSocket(url, protocols) {
   }
 
   const dispatcher = await getProxyDispatcher(url);
-  const { WebSocket: UndiciWebSocket } = await import('undici');
+  const { WebSocket: UndiciWebSocket } = await importUndici();
 
   const wsOptions = { dispatcher };
   if (protocols) {
@@ -55,7 +60,7 @@ export function getWebSocketImpl(targetUrl) {
 
     const wsPromise = (async () => {
       const dispatcher = await getProxyDispatcher(url);
-      const { WebSocket: UndiciWebSocket } = await import('undici');
+      const { WebSocket: UndiciWebSocket } = await importUndici();
 
       const wsOptions = { dispatcher };
       if (protocols) {

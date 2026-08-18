@@ -24,6 +24,9 @@
         "pack:verify": "node ./scripts/pack-verify.mjs",
         "postinstall": "node -e \"console.log('\\nHuaweiCloud DevKit installed. Run: npx huaweicloud-devkit install\\n')\""
     },
+    "dependencies": {
+        "undici": "^6.21.0"
+    },
     "devDependencies": {
         "markdownlint-cli2": "^0.23.2"
     },

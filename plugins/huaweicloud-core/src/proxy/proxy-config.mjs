@@ -47,6 +47,10 @@ function shouldBypassProxy(hostname, noProxyList) {
     if (!p) continue;
     if (p === lower) return true;
     if (p === '*') return true;
+    if (p.startsWith('*.')) {
+      const domain = p.slice(1);
+      if (lower.endsWith(domain) || lower === p.slice(2)) return true;
+    }
     if (p.startsWith('.') && lower.endsWith(p)) return true;
     if (lower.endsWith('.' + p)) return true;
   }
@@ -60,9 +64,9 @@ export function getProxySettings(targetUrl) {
 
   const fileConfig = readProxyConfig();
 
-  const https_proxy = envHttps || (fileConfig?.https_proxy || '');
-  const http_proxy = envHttp || (fileConfig?.http_proxy || '');
-  const no_proxy = envNoProxy || (fileConfig?.no_proxy || '');
+  const https_proxy = envHttps || fileConfig?.https_proxy || fileConfig?.HTTPS_PROXY || '';
+  const http_proxy = envHttp || fileConfig?.http_proxy || fileConfig?.HTTP_PROXY || '';
+  const no_proxy = envNoProxy || fileConfig?.no_proxy || fileConfig?.NO_PROXY || '';
 
   if (!https_proxy && !http_proxy) return null;
 

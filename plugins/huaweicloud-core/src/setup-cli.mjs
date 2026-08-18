@@ -1131,8 +1131,9 @@ async function cmdInstall() {
 
   console.log(`\n\x1b[1m下一步：\x1b[0m`);
   console.log(`  1. 配置统一凭据：npx huaweicloud-devkit auth init`);
-  console.log(`  2. 重启 ${appName} 会话（MCP 工具重启后生效）`);
-  console.log(`  3. 运行自检：npx huaweicloud-devkit doctor`);
+  console.log(`  2. 配置代理（企业内网）：npx huaweicloud-devkit proxy init`);
+  console.log(`  3. 重启 ${appName} 会话（MCP 工具重启后生效）`);
+  console.log(`  4. 运行自检：npx huaweicloud-devkit doctor`);
 
   // Write install marker for doctor to detect
   const markerDir = target === 'dsh' ? dshPluginsDir()
@@ -1874,12 +1875,12 @@ async function cmdProxyInit() {
 
   const httpsProxy = await readLineQuestion(`HTTPS proxy [${existing.https_proxy || 'none'}]: `);
   const httpProxy = await readLineQuestion(`HTTP proxy [${existing.http_proxy || 'none'}]: `);
-  const noProxy = await readLineQuestion(`NO_PROXY hosts [${existing.no_proxy || 'localhost,127.0.0.1'}]: `);
+  const noProxy = await readLineQuestion(`NO_PROXY hosts [${existing.no_proxy || '127.0.0.1,localhost,.huawei.com'}]: `);
 
   const config = {
     https_proxy: httpsProxy || existing.https_proxy || '',
     http_proxy: httpProxy || existing.http_proxy || '',
-    no_proxy: noProxy || existing.no_proxy || 'localhost,127.0.0.1',
+    no_proxy: noProxy || existing.no_proxy || '127.0.0.1,localhost,.huawei.com',
   };
 
   const path = writeProxyConfig(config);
