@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { classifyHcloudArgs, redactSecrets, assertAllowed } from './safety-policy.mjs';
+import { getProxySettings } from './proxy/proxy-config.mjs';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_FORCE_KILL_AFTER_MS = 2_000;
@@ -59,12 +60,20 @@ function runHcloudOnce(plan, options) {
   const cwd = options.cwd || undefined;
 
   return new Promise((resolve) => {
+    const proxySettings = getProxySettings();
+    const proxyEnv = {};
+    if (proxySettings) {
+      if (proxySettings.https_proxy) proxyEnv.HTTPS_PROXY = proxySettings.https_proxy;
+      if (proxySettings.http_proxy) proxyEnv.HTTP_PROXY = proxySettings.http_proxy;
+      if (proxySettings.no_proxy) proxyEnv.NO_PROXY = proxySettings.no_proxy;
+    }
     const child = spawn(executable, [...executableArgs, ...plan.rawArgs], {
       shell: false,
       windowsHide: true,
       cwd,
       env: {
         ...process.env,
+        ...proxyEnv,
         ...options.env,
       },
     });
