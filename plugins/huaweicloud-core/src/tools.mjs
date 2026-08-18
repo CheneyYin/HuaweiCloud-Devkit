@@ -341,7 +341,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'huaweicloud_sandbox_check_user',
-    description: 'Check if the current user has completed real-name verification and signed the required agreements. Returns realnameVerified and agreementSigned together (both may be false; always HTTP 200 on the fixed backend).',
+    description: 'Check if the current user has completed real-name verification and signed the required agreements. Returns 200 {realnameVerified, agreementSigned} when all good; throws 403 HDKIT_NOT_REALNAME / HDKIT_NOT_AGREEMENT / HDKIT_NOT_REALNAME_AND_AGREEMENT to indicate what is missing. Never signs anything itself.',
     inputSchema: {
       type: 'object',
       properties: {},
