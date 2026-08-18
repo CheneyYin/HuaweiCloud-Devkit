@@ -39,7 +39,10 @@ jobs:
         if: ${{ steps.bump.outputs.version != '' }}
         env:
           RELEASE_PLEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
-        run: node ./scripts/create-release-pr.mjs "${{ steps.bump.outputs.version }}" "${{ github.ref_name }}"
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          node ./scripts/create-release-pr.mjs "${{ steps.bump.outputs.version }}" "${{ github.ref_name }}"
 
       - name: Tag release
         run: |
