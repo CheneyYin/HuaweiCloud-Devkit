@@ -1,16 +1,9 @@
-name: Publish
+name: Publish npm
 
 on:
   workflow_dispatch:
-    inputs:
-      dist-tag:
-        description: npm dist-tag to publish under (latest for stable, next for prerelease)
-        required: true
-        type: string
-        default: latest
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: Publish
@@ -25,7 +18,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - name: Gate: must run from a v* tag matching package.json
+      - name: "Gate: must run from a v* tag matching package.json"
         run: |
           set -euo pipefail
           [ "$GITHUB_REF_TYPE" = "tag" ] || { echo "::error::Publish must run from a v* tag, not a branch."; exit 1; }
@@ -35,16 +28,6 @@ jobs:
           esac
           VERSION=$(node -p "require('./package.json').version")
           [ "$GITHUB_REF_NAME" = "v$VERSION" ] || { echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $VERSION."; exit 1; }
-          case "$VERSION" in
-            *-*)
-              [ "$DIST_TAG" = "next" ] || { echo "::error::Prerelease $VERSION must publish under dist-tag next, got $DIST_TAG."; exit 1; }
-              ;;
-            *)
-              [ "$DIST_TAG" = "latest" ] || { echo "::error::Stable $VERSION must publish under dist-tag latest, got $DIST_TAG."; exit 1; }
-              ;;
-          esac
-        env:
-          DIST_TAG: ${{ inputs.dist-tag }}
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -66,7 +49,7 @@ jobs:
           node-version: 20
           registry-url: https://registry.npmjs.org
       - run: npm ci
-      - name: Guard: version must not exist on the registry
+      - name: "Guard: version must not exist on the registry"
         run: |
           set -euo pipefail
           VERSION=$(node -p "require('./package.json').version")
@@ -77,4 +60,9 @@ jobs:
       - name: Publish tarball
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --tag ${{ inputs.dist-tag }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          case "$VERSION" in
+            *-*) npm publish --access public --tag next ;;
+            *) npm publish --access public --tag latest ;;
+          esac
