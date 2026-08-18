@@ -159,8 +159,14 @@ Prerelease cadence: at most 1–2 `next` publishes per week, only after
 - Add `release-please.yml` on the `main` branch: computes the next version
   from conventional commits, opens a release PR that bumps `package.json`,
   all plugin manifests, and `CHANGELOG.md`; merging the PR creates the git
-  tag and the GitHub Release.
-- Keep `cd-production.yml` (tag-triggered `npm publish` to `latest`).
+  tag and the GitHub Release. **release-please versions and tags only; it
+  never publishes to npm.**
+- Add `publish.yml` (manual dispatch): the only npm publish path. It must be
+  triggered from a `v*` tag and passes the `npm-publish` environment approval
+  before publishing. `ci.yml` gains a `pack` verification job (tarball file
+  list + real install) on every PR.
+- `cd-production.yml` no longer publishes npm; it keeps only the production
+  deploy placeholder.
 - Retire the manual `Publish Release` and `Publish Dev` workflows.
 
 Release flow after Phase 1:
@@ -169,9 +175,17 @@ Release flow after Phase 1:
 feat/fix commits → PR → merge to main
   → release-please opens/updates a release PR (version + changelog)
   → a maintainer merges it
-  → git tag vX.Y.Z + GitHub Release
-  → cd-production publishes to npm `latest`
+  → git tag vX.Y.Z + GitHub Release (npm is untouched)
+  → a maintainer manually dispatches Publish on the vX.Y.Z tag (dist-tag=latest)
+  → npm-publish environment approval (reviewer + v* tag allowlist)
+  → npm publish → latest
 ```
+
+**Verification is separated from publication.** Every PR runs
+`scripts/pack-verify.mjs` in CI (required files in the tarball + a real
+install into a temp project). The Publish workflow re-runs the same
+verification before publishing, so the bytes that reach npm are the bytes
+that were verified.
 
 **The team decides the version (title override rule).** The version computed by
 release-please is only a proposal, expressed in the release PR title (e.g.
@@ -188,11 +202,12 @@ When fix + feat + feat! commits are mixed, the proposal takes the highest
 priority (feat! > feat > fix); if the team judges the real impact lower than
 the proposal, use the title override to downgrade.
 
-### Phase 2 — Automate the `next` channel
+### Phase 2 — The `next` channel (prereleases)
 
-- Maintain a `next` branch; release-please runs there with `prerelease: true`,
-  producing `X.Y.Z-next.N` automatically.
-- Manual prerelease steps (Section 4) are retired.
+- Maintain a `next` branch; release-please runs there, producing
+  `X.Y.Z-next.N` release PRs; merging only tags, never publishes.
+- Prereleases use the same manual Publish: dispatch from the
+  `vX.Y.Z-next.N` tag with `dist-tag=next`.
 - The `next` line stays tied to the upcoming stable: after `1.1.0` ships,
   `next` resets toward the following release.
 
@@ -218,3 +233,6 @@ the proposal, use the title override to downgrade.
    same version as `package.json`.
 6. The repo `package.json` always reflects the latest **stable** version;
    prerelease numbers exist only transiently during a publish.
+7. **npm publishing happens only through `publish.yml`, manually dispatched
+   from a `v*` tag and approved via the `npm-publish` environment.** No other
+   automated publish path is allowed.
