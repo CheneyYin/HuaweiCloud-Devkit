@@ -24,6 +24,22 @@ jobs:
           node-version: 20
       - run: npm ci
 
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Tag release
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if git rev-parse "v${VERSION}" >/dev/null 2>&1; then
+            echo "Tag v${VERSION} already exists."
+          else
+            git tag "v${VERSION}"
+            git push origin "v${VERSION}"
+            echo "Created tag v${VERSION}"
+          fi
+
       - name: Compute next version
         id: bump
         run: |
@@ -39,20 +55,4 @@ jobs:
         if: ${{ steps.bump.outputs.version != '' }}
         env:
           RELEASE_PLEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          node ./scripts/create-release-pr.mjs "${{ steps.bump.outputs.version }}" "${{ github.ref_name }}"
-
-      - name: Tag release
-        run: |
-          VERSION=$(node -p "require('./package.json').version")
-          if git rev-parse "v${VERSION}" >/dev/null 2>&1; then
-            echo "Tag v${VERSION} already exists."
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag "v${VERSION}"
-            git push origin "v${VERSION}"
-            echo "Created tag v${VERSION}"
-          fi
+        run: node ./scripts/create-release-pr.mjs "${{ steps.bump.outputs.version }}" "${{ github.ref_name }}"
