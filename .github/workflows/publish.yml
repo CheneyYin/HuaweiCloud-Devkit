@@ -1,17 +1,80 @@
-name: Publish Release (retired)
+name: Publish
 
 on:
   workflow_dispatch:
+    inputs:
+      dist-tag:
+        description: npm dist-tag to publish under (latest for stable, next for prerelease)
+        required: true
+        type: string
+        default: latest
 
-permissions: {}
+permissions:
+  contents: read
+
+concurrency:
+  group: Publish
+  cancel-in-progress: false
 
 jobs:
-  publish:
+  verify:
+    name: Verify tag and package
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
-      - name: Retired workflow
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Gate: must run from a v* tag matching package.json
         run: |
-          echo "This workflow is retired. Releases are now managed by release-please."
-          echo "See docs/RELEASING.md."
-          exit 0
+          set -euo pipefail
+          [ "$GITHUB_REF_TYPE" = "tag" ] || { echo "::error::Publish must run from a v* tag, not a branch."; exit 1; }
+          case "$GITHUB_REF_NAME" in
+            v*) ;;
+            *) echo "::error::Tag must start with v (got $GITHUB_REF_NAME)."; exit 1 ;;
+          esac
+          VERSION=$(node -p "require('./package.json').version")
+          [ "$GITHUB_REF_NAME" = "v$VERSION" ] || { echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $VERSION."; exit 1; }
+          case "$VERSION" in
+            *-*)
+              [ "$DIST_TAG" = "next" ] || { echo "::error::Prerelease $VERSION must publish under dist-tag next, got $DIST_TAG."; exit 1; }
+              ;;
+            *)
+              [ "$DIST_TAG" = "latest" ] || { echo "::error::Stable $VERSION must publish under dist-tag latest, got $DIST_TAG."; exit 1; }
+              ;;
+          esac
+        env:
+          DIST_TAG: ${{ inputs.dist-tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm test
+      - run: npm run validate
+      - run: node ./scripts/pack-verify.mjs
+
+  publish:
+    name: Publish to npm
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: npm-publish
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - name: Guard: version must not exist on the registry
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "huaweicloud-devkit@$VERSION" version >/dev/null 2>&1; then
+            echo "::error::$VERSION already exists on npm; nothing to publish."
+            exit 1
+          fi
+      - name: Publish tarball
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --tag ${{ inputs.dist-tag }}

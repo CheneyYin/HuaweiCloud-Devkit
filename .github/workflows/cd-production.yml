@@ -9,30 +9,10 @@ on:
 permissions: {}
 
 jobs:
-  npm-publish:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    environment: production
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          registry-url: https://registry.npmjs.org
-      - run: npm ci
-      - run: npm test
-      - run: npm run validate
-      - name: Publish to npm
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
   remote-deploy:
-    needs: npm-publish
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    environment: production
     permissions:
       contents: read
     steps:

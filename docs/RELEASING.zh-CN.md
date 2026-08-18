@@ -149,7 +149,11 @@ SemVer 排序规则：同数字下，稳定版大于任何预发布版。
 - 新增 `release-please.yml`（`main` 分支）：根据 conventional commits 计算
   下一个版本号，开启发布 PR，自动更新 `package.json`、四个插件清单和
   `CHANGELOG.md`；合并该 PR 即自动创建 git tag 和 GitHub Release。
-- 保留 `cd-production.yml`（tag 触发的 `npm publish` 到 `latest`）。
+  **release-please 只负责定版本和打 tag，不发布 npm。**
+- 新增 `publish.yml`（手动触发）：npm 发布的唯一入口，必须从 `v*` tag 上
+  手动 dispatch，通过 `npm-publish` environment 审批后发布；`ci.yml` 增加
+  `pack` 校验（每个 PR 验证 tarball 完整性 + 真实安装）。
+- `cd-production.yml` 不再发布 npm，仅保留生产部署占位。
 - 退役手动的 `Publish Release` 与 `Publish Dev` 工作流。
 
 阶段 1 完成后的发布流程：
@@ -158,9 +162,15 @@ SemVer 排序规则：同数字下，稳定版大于任何预发布版。
 feat/fix 提交 → PR → 合并到 main
   → release-please 开启/更新发布 PR（版本号 + changelog）
   → 维护者合并该 PR
-  → 自动打 git tag vX.Y.Z + 创建 GitHub Release
-  → cd-production 发布到 npm 的 latest
+  → 自动打 git tag vX.Y.Z + 创建 GitHub Release（此时 npm 未变）
+  → 维护者在 Actions 里对 vX.Y.Z tag 手动触发 Publish（dist-tag=latest）
+  → npm-publish environment 审批（审批人 + tag 白名单 v*）
+  → npm publish → latest
 ```
+
+**发布与验证分离。** 每个 PR 的 CI 都执行 `npm pack` 验证（`scripts/pack-verify.mjs`：
+检查 tarball 必备文件清单 + 在临时目录真实安装验证），发布前 Publish 工作流
+再跑一遍同样的验证，保证"发到 npm 的字节 = 验证过的字节"。
 
 **版本号由团队决定（标题覆盖规则）。** release-please 计算的版本号只是提案，
 出现在发布 PR 的标题里（如 `chore: release 1.0.2`）。合并前维护者可以修改
@@ -175,11 +185,11 @@ PR 标题来强制指定版本号，合并后即按标题中的版本发布：
 多类 commit 混在时（fix + feat + feat!），提案取最高优先级
 （feat! > feat > fix）；如果团队判断实际影响低于提案，用标题覆盖降级即可。
 
-### 阶段 2 —— 自动化 `next` 频道
+### 阶段 2 —— `next` 频道（预发布）
 
-- 维护一条 `next` 分支；release-please 在该分支以 `prerelease: true` 运行，
-  自动产出 `X.Y.Z-next.N`。
-- 第 4 节的手动预发布步骤随之退役。
+- 维护一条 `next` 分支；release-please 在该分支运行，自动产出
+  `X.Y.Z-next.N` 的发布 PR；合并后只打 tag，不发布。
+- 预发布同样走手动 Publish：从 `vX.Y.Z-next.N` tag 触发，`dist-tag=next`。
 - `next` 线与即将到来的稳定版保持挂钩：`1.1.0` 发布后，`next` 重置并指向
   下一个版本。
 
@@ -202,3 +212,5 @@ PR 标题来强制指定版本号，合并后即按标题中的版本发布：
    保持一致。
 6. 仓库中的 `package.json` 永远反映最新**稳定版**；预发布版本号只存在于
    发布过程中的瞬时状态。
+7. **npm 发布只允许通过 `publish.yml` 从 `v*` tag 手动触发**，且必须经过
+   `npm-publish` environment 审批；禁止任何其他自动发布路径。
