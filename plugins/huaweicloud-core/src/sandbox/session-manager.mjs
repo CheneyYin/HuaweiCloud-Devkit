@@ -58,7 +58,7 @@ async function getSession(workspaceId, username, timeoutMs) {
   const { ak, sk, securitytoken } = getCredentials();
   const { wsUrl, source } = await createConnection(workspaceId, ak, sk, securitytoken);
 
-  const WebSocketImpl = getWebSocketImpl(wsUrl);
+  const WebSocketImpl = await getWebSocketImpl(wsUrl);
 
   const { connectHwlinkTerminalSession } = await import(WS_EXEC_INDEX_URL);
   const session = await connectHwlinkTerminalSession({
@@ -77,7 +77,7 @@ export async function execOneShot(workspaceId, command, username, timeoutMs) {
   const { ak, sk, securitytoken } = getCredentials();
   const { wsUrl, source } = await createConnection(workspaceId, ak, sk, securitytoken);
 
-  const WebSocketImpl = getWebSocketImpl(wsUrl);
+  const WebSocketImpl = await getWebSocketImpl(wsUrl);
 
   const { executeHwlinkCommand } = await import(WS_EXEC_INDEX_URL);
   return await executeHwlinkCommand({
