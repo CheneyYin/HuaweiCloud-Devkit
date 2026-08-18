@@ -1,22 +1,14 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, existsSync as fsExists, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import {
-  callTool,
-  runVersionCheck,
-  TOOL_DEFINITIONS,
-} from '../plugins/huaweicloud-core/src/tools.mjs';
+import { callTool, runVersionCheck, TOOL_DEFINITIONS } from '../plugins/huaweicloud-core/src/tools.mjs';
 
 test('runVersionCheck uses hcloud version instead of --version', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'huaweicloud-toolkit-version-'));
   const script = join(dir, 'fake-hcloud.mjs');
-  writeFileSync(
-    script,
-    'console.log(JSON.stringify({ version: "7.0.0", args: process.argv.slice(2) }));',
-    'utf8',
-  );
+  writeFileSync(script, 'console.log(JSON.stringify({ version: "7.0.0", args: process.argv.slice(2) }));', 'utf8');
 
   const result = await runVersionCheck({
     executable: process.execPath,
@@ -74,12 +66,10 @@ test('TOOL_DEFINITIONS includes all required tools including sandbox', () => {
 
 test('TOOL_DEFINITIONS expose cwd parameter on run tools', () => {
   const readonlyTool = TOOL_DEFINITIONS.find((t) => t.name === 'huaweicloud_run_readonly_command');
-  assert.ok(Object.hasOwn(readonlyTool.inputSchema.properties, 'cwd'),
-    'run_readonly_command should have cwd param');
+  assert.ok(Object.hasOwn(readonlyTool.inputSchema.properties, 'cwd'), 'run_readonly_command should have cwd param');
 
   const approvedTool = TOOL_DEFINITIONS.find((t) => t.name === 'huaweicloud_run_approved_command');
-  assert.ok(Object.hasOwn(approvedTool.inputSchema.properties, 'cwd'),
-    'run_approved_command should have cwd param');
+  assert.ok(Object.hasOwn(approvedTool.inputSchema.properties, 'cwd'), 'run_approved_command should have cwd param');
 });
 
 test('TOOL_DEFINITIONS includes proactive hook check tools', () => {
@@ -91,7 +81,8 @@ test('TOOL_DEFINITIONS includes proactive hook check tools', () => {
 
 test('huaweicloud_hook_check_command returns deny finding', async () => {
   const result = await callTool('huaweicloud_hook_check_command', {
-    command: 'hcloud VPC CreateSecurityGroupRule --security_group_rule.port_range_min=22 --security_group_rule.remote_ip_prefix=0.0.0.0/0',
+    command:
+      'hcloud VPC CreateSecurityGroupRule --security_group_rule.port_range_min=22 --security_group_rule.remote_ip_prefix=0.0.0.0/0',
   });
   assert.equal(result.decision, 'deny');
   assert.equal(result.ok, false);

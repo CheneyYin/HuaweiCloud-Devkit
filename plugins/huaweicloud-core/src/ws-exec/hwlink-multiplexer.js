@@ -81,12 +81,7 @@ function sendBinary(ws, data) {
 
 class HwlinkWebSocketMultiplexer {
   constructor(url, source, options = {}) {
-    const {
-      WebSocketImpl = globalThis.WebSocket,
-      protocol = 'devenv',
-      onFrame,
-      trace = false,
-    } = options;
+    const { WebSocketImpl = globalThis.WebSocket, protocol = 'devenv', onFrame, trace = false } = options;
 
     if (typeof WebSocketImpl !== 'function') {
       throw new Error('global WebSocket is unavailable; use Node.js 22+ or pass WebSocketImpl');
@@ -122,9 +117,7 @@ class HwlinkWebSocketMultiplexer {
     });
 
     addWsListener(this.ws, 'error', (eventOrError) => {
-      const error = eventOrError instanceof Error
-        ? eventOrError
-        : new Error('hwlink websocket error');
+      const error = eventOrError instanceof Error ? eventOrError : new Error('hwlink websocket error');
       this.handleError(error);
     });
 
@@ -219,9 +212,4 @@ class HwlinkWebSocketMultiplexer {
   }
 }
 
-export {
-  HwlinkWebSocketMultiplexer,
-  addWsListener,
-  closeQuietly,
-  eventDataToUint8Array,
-};
+export { HwlinkWebSocketMultiplexer, addWsListener, closeQuietly, eventDataToUint8Array };

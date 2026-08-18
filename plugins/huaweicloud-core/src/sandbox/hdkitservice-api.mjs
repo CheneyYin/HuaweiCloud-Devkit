@@ -2,8 +2,7 @@ import { getCredentials } from './hwlink-api.mjs';
 import { getProxyDispatcher } from '../proxy/proxy-agent.mjs';
 
 const HDKIT_BASE_URL =
-  process.env.HDKITSERVICE_ENDPOINT ||
-  'https://devkit.huaweicloud.com/rest/developer/server/hdkitservice/';
+  process.env.HDKITSERVICE_ENDPOINT || 'https://devkit.huaweicloud.com/rest/developer/server/hdkitservice/';
 
 async function hdkitRequest(method, path, body, timeoutMs = 300000) {
   const { ak, sk, securitytoken } = getCredentials();
@@ -45,9 +44,7 @@ async function hdkitRequest(method, path, body, timeoutMs = 300000) {
   }
 
   if (!resp.ok) {
-    const err = new Error(
-      data.message || `hdkitservice error: ${data.code || resp.status}`
-    );
+    const err = new Error(data.message || `hdkitservice error: ${data.code || resp.status}`);
     err.code = data.code;
     err.status = resp.status;
     err.traceId = data.traceId; // 后端实际返回驼峰 traceId
@@ -87,5 +84,3 @@ export async function hdkitCredentials(sessionId, devStageId, enableSts = true) 
 
   return await hdkitRequest('POST', 'credentials', body);
 }
-
-

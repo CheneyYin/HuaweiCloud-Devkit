@@ -32,9 +32,7 @@ function runCli(home, cwd, args, dshHome = join(home, '.dsh')) {
 
 function countSkills(dir) {
   if (!existsSync(dir)) return 0;
-  return readdirSync(dir, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && d.name.startsWith('huawei'))
-    .length;
+  return readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory() && d.name.startsWith('huawei')).length;
 }
 
 function readPatch(dshHome) {

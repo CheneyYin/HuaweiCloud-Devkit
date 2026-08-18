@@ -4,8 +4,11 @@ let cachedDispatcher = undefined;
 let cachedDispatcherProxyUrl = null;
 
 async function importUndici() {
-  try { return await import('node:undici'); }
-  catch { return await import('undici'); }
+  try {
+    return await import('node:undici');
+  } catch {
+    return await import('undici');
+  }
 }
 
 export async function getProxyDispatcher(targetUrl) {

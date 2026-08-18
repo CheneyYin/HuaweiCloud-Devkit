@@ -42,7 +42,7 @@ function isOpTcpTunnelData(op) {
 }
 
 function isOpFailed(op) {
-  return (op >> 24) !== 0;
+  return op >> 24 !== 0;
 }
 
 function isOpCreateTcpTunnel(op) {
@@ -70,12 +70,7 @@ function hex2(n) {
 }
 
 function operationToString(op) {
-  return [
-    hex2((op >> 24) & 0xff),
-    hex2((op >> 16) & 0xff),
-    hex2((op >> 8) & 0xff),
-    hex2(op & 0xff),
-  ].join(' ');
+  return [hex2((op >> 24) & 0xff), hex2((op >> 16) & 0xff), hex2((op >> 8) & 0xff), hex2(op & 0xff)].join(' ');
 }
 
 function formatPacketOneLine(packet) {
@@ -107,15 +102,7 @@ function toUint8Array(bytes) {
 }
 
 function createPacket(opts) {
-  const {
-    operation,
-    reserve = 0,
-    srcPort = 0,
-    dstPort = 0,
-    identifier = 0,
-    source = 0,
-    payload = null,
-  } = opts;
+  const { operation, reserve = 0, srcPort = 0, dstPort = 0, identifier = 0, source = 0, payload = null } = opts;
 
   const payloadLen = payload ? payload.length : 0;
   const total = FIXED_HEADER_LEN + payloadLen;

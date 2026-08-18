@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - name: "Gate: must run from a v* tag matching package.json"
+      - name: 'Gate: must run from a v* tag matching package.json'
         run: |
           set -euo pipefail
           [ "$GITHUB_REF_TYPE" = "tag" ] || { echo "::error::Publish must run from a v* tag, not a branch."; exit 1; }
@@ -49,7 +49,7 @@ jobs:
           node-version: 20
           registry-url: https://registry.npmjs.org
       - run: npm ci
-      - name: "Guard: version must not exist on the registry"
+      - name: 'Guard: version must not exist on the registry'
         run: |
           set -euo pipefail
           VERSION=$(node -p "require('./package.json').version")

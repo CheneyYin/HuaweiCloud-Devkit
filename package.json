@@ -1,50 +1,59 @@
 {
-    "name": "huaweicloud-devkit",
-    "version": "1.0.1",
-    "description": "Agent toolkit that helps coding agents use Huawei Cloud Skills, KooCLI, APIs, SDKs, and future MCP capabilities safely and accurately.",
-    "type": "module",
-    "files": [
-        "bin",
-        ".agents",
-        "plugins/huaweicloud-core",
-        "integrations/opencode"
-    ],
-    "bin": {
-        "huaweicloud-devkit": "./bin/setup.cjs"
-    },
-    "repository": {
-        "type": "git",
-        "url": "https://github.com/huaweicloud/HuaweiCloud-Devkit.git"
-    },
-    "scripts": {
-        "test": "node --test",
-        "lint:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#.git\" \"#test/**\" \"#docs/**\"",
-        "lint": "npm run lint:md",
-        "validate": "node ./scripts/validate-package.mjs",
-        "pack:verify": "node ./scripts/pack-verify.mjs",
-        "postinstall": "node -e \"console.log('\\nHuaweiCloud DevKit installed. Run: npx huaweicloud-devkit install\\n')\""
-    },
-    "dependencies": {
-        "undici": "^6.21.0"
-    },
-    "devDependencies": {
-        "markdownlint-cli2": "^0.23.2"
-    },
-    "keywords": [
-        "huaweicloud",
-        "huawei-cloud",
-        "agent",
-        "codex",
-        "opencode",
-        "workbuddy",
-        "dsh",
-        "deepseek-harness",
-        "mcp",
-        "koocli",
-        "hcloud"
-    ],
-    "license": "Apache-2.0",
-    "engines": {
-        "node": ">=20"
-    }
+  "name": "huaweicloud-devkit",
+  "version": "1.0.1",
+  "description": "Agent toolkit that helps coding agents use Huawei Cloud Skills, KooCLI, APIs, SDKs, and future MCP capabilities safely and accurately.",
+  "type": "module",
+  "files": [
+    "bin",
+    ".agents",
+    "plugins/huaweicloud-core",
+    "integrations/opencode"
+  ],
+  "bin": {
+    "huaweicloud-devkit": "./bin/setup.cjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/huaweicloud/HuaweiCloud-Devkit.git"
+  },
+  "scripts": {
+    "test": "node --test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#.git\" \"#test/**\" \"#docs/**\"",
+    "lint:js": "eslint .",
+    "lint": "npm run lint:md && npm run lint:js",
+    "validate": "node ./scripts/validate-package.mjs",
+    "pack:verify": "node ./scripts/pack-verify.mjs",
+    "postinstall": "node -e \"console.log('\\nHuaweiCloud DevKit installed. Run: npx huaweicloud-devkit install\\n')\""
+  },
+  "dependencies": {
+    "undici": "^6.21.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.8.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-n": "^18.3.0",
+    "globals": "^17.11.0",
+    "markdownlint-cli2": "^0.23.2",
+    "prettier": "^3.9.6"
+  },
+  "keywords": [
+    "huaweicloud",
+    "huawei-cloud",
+    "agent",
+    "codex",
+    "opencode",
+    "workbuddy",
+    "dsh",
+    "deepseek-harness",
+    "mcp",
+    "koocli",
+    "hcloud"
+  ],
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20"
+  }
 }

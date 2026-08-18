@@ -5,7 +5,6 @@ description: Safe Huawei Cloud KooCLI usage and authentication guidance. Use whe
 
 # Huawei Cloud CLI And Auth
 
-
 **STOP - Do not answer from general knowledge.** Follow the procedure below.
 
 Use KooCLI `hcloud` for local inspection and reviewed operations. Never ask the user to paste AK/SK, SK, tokens, passwords, or credential files into chat.
@@ -15,16 +14,21 @@ Use KooCLI `hcloud` for local inspection and reviewed operations. Never ask the 
 Official guide: `https://support.huaweicloud.com/qs-hcli/hcli_02_003.html`.
 
 ### Windows
+
 1. Download and unzip: `https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/latest/huaweicloud-cli-windows-amd64.zip`
 2. Extract to `%USERPROFILE%\hcloud`, add to user `PATH`
 3. Verify: `hcloud version`
 
 ### Linux (amd64 / arm64)
+
 One-liner (recommended):
+
 ```bash
 curl -sSL https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/latest/hcloud_install.sh -o ./hcloud_install.sh && bash ./hcloud_install.sh -y
 ```
+
 Or manual download:
+
 ```bash
 # amd64
 curl -LO "https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/latest/huaweicloud-cli-linux-amd64.tar.gz"
@@ -33,15 +37,20 @@ tar -zxvf huaweicloud-cli-linux-amd64.tar.gz
 curl -LO "https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/latest/huaweicloud-cli-linux-arm64.tar.gz"
 tar -zxvf huaweicloud-cli-linux-arm64.tar.gz
 ```
+
 Move to PATH: `mv $(pwd)/hcloud ~/.local/bin/`
 Verify: `hcloud version`
 
 ### macOS (amd64 / arm64)
+
 One-liner (recommended):
+
 ```bash
 curl -sSL https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/latest/hcloud_install.sh -o ./hcloud_install.sh && bash ./hcloud_install.sh -y
 ```
+
 Or manual download:
+
 ```bash
 # amd64
 curl -LO "https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/latest/huaweicloud-cli-mac-amd64.tar.gz"
@@ -50,6 +59,7 @@ tar -zxvf huaweicloud-cli-mac-amd64.tar.gz
 curl -LO "https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/latest/huaweicloud-cli-mac-arm64.tar.gz"
 tar -zxvf huaweicloud-cli-mac-arm64.tar.gz
 ```
+
 Move to PATH: `mv $(pwd)/hcloud /usr/local/bin/`
 Verify: `hcloud version`
 
