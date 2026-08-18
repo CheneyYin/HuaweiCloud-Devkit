@@ -22,8 +22,17 @@ jobs:
           target-branch: ${{ github.ref_name }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-          prerelease: ${{ github.ref_name != 'main' }}
-          prerelease-type: next
+
+      - name: Checkout
+        if: ${{ steps.release.outputs.release_created && github.ref_name != 'main' }}
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        if: ${{ steps.release.outputs.release_created && github.ref_name != 'main' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
 
       - name: Publish prerelease to npm
         if: ${{ steps.release.outputs.release_created && github.ref_name != 'main' }}
