@@ -80,9 +80,11 @@ function dshRegistered() {
   if (!existsSync(patchPath)) return false;
   try {
     const patch = readFileSync(patchPath, 'utf8');
-    return patch.includes('id: mcp-huaweicloud')
-      && patch.includes("@deepseek-ai/dsh-mcp-client")
-      && patch.includes('serverName: huaweicloud');
+    return (
+      patch.includes('id: mcp-huaweicloud') &&
+      patch.includes('@deepseek-ai/dsh-mcp-client') &&
+      patch.includes('serverName: huaweicloud')
+    );
   } catch {
     return false;
   }

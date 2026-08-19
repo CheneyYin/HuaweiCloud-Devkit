@@ -14,9 +14,7 @@ function hmacSha256(key, data) {
 
 function urlEncode(str) {
   const hex = (c) => '%' + (c < 16 ? '0' : '') + c.toString(16).toUpperCase();
-  const noEscape = new Set(
-    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~'.split('')
-  );
+  const noEscape = new Set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~'.split(''));
   let out = '';
   for (const ch of str) {
     const c = ch.codePointAt(0);
@@ -54,9 +52,7 @@ function signRequest(method, path, query, body, ak, sk, securitytoken) {
       .join('/') +
     '/';
 
-  const signedHeaders = securitytoken
-    ? 'host;x-sdk-date;x-security-token'
-    : 'host;x-sdk-date';
+  const signedHeaders = securitytoken ? 'host;x-sdk-date;x-security-token' : 'host;x-sdk-date';
   const canonicalHeaders = securitytoken
     ? `host:${host}\nx-sdk-date:${ts}\nx-security-token:${securitytoken}\n`
     : `host:${host}\nx-sdk-date:${ts}\n`;
@@ -64,14 +60,7 @@ function signRequest(method, path, query, body, ak, sk, securitytoken) {
   const bodyStr = body ? JSON.stringify(body) : '';
   const payloadHash = sha256Hex(bodyStr);
 
-  const canonicalRequest = [
-    method,
-    curi,
-    cqs,
-    canonicalHeaders,
-    signedHeaders,
-    payloadHash,
-  ].join('\n');
+  const canonicalRequest = [method, curi, cqs, canonicalHeaders, signedHeaders, payloadHash].join('\n');
 
   const stringToSign = `SDK-HMAC-SHA256\n${ts}\n${sha256Hex(canonicalRequest)}`;
   const signature = hmacSha256(sk, stringToSign);
@@ -123,7 +112,9 @@ export async function createConnection(envId, ak, sk, securitytoken) {
   const { status, data } = await apiPost(
     `/open-api-public/v1/devenvs/${envId}/connections`,
     { source: 'CLI' },
-    ak, sk, securitytoken
+    ak,
+    sk,
+    securitytoken,
   );
 
   if (status !== 200 || data?.error_code !== '0000' || !data?.result?.connection_id) {
@@ -138,13 +129,12 @@ export async function createConnection(envId, ak, sk, securitytoken) {
     const { data: getData } = await apiGet(
       `/open-api-public/v1/devenvs/${envId}/connections/${connectionId}`,
       {},
-      ak, sk, securitytoken
+      ak,
+      sk,
+      securitytoken,
     );
 
-    if (
-      getData?.result?.connection_info?.url &&
-      getData.result.connection_info.extensions?.source != null
-    ) {
+    if (getData?.result?.connection_info?.url && getData.result.connection_info.extensions?.source != null) {
       const u = new URL(getData.result.connection_info.url);
       u.searchParams.set('source', String(getData.result.connection_info.extensions.source));
       process.stderr.write(`\rConnection ${connectionId} established (${i}s).\n`);
@@ -158,5 +148,3 @@ export async function createConnection(envId, ak, sk, securitytoken) {
 
   throw new Error(`Timed out waiting for connection ${connectionId}`);
 }
-
-

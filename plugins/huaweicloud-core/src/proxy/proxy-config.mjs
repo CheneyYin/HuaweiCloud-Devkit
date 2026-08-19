@@ -70,7 +70,10 @@ export function getProxySettings(targetUrl) {
 
   if (!https_proxy && !http_proxy) return null;
 
-  const noProxyList = no_proxy.split(',').map((s) => s.trim()).filter(Boolean);
+  const noProxyList = no_proxy
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 
   if (targetUrl) {
     const parsed = new URL(targetUrl);

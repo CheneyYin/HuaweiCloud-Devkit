@@ -67,6 +67,7 @@ npm run validate
 ```
 
 预期输出：
+
 - 测试全部通过
 - "Validated HuaweiCloud Devkit with 28 skills."
 

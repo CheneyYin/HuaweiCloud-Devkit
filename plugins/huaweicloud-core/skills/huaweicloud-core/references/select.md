@@ -17,11 +17,13 @@ Use when the user asks which service to use or compares services.
 ## Example: I need a database
 
 Ask:
+
 - What type of data? Structured (tables) or flexible (documents)?
 - What scale? Small app or enterprise?
 - Do you need SQL queries?
 
 Route based on answers:
+
 - SQL + standard scale -> huawei-rds
 - SQL + massive scale / distributed -> huawei-gaussdb
 - Document model (MongoDB-compatible) -> huawei-dds-dcs

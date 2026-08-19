@@ -125,8 +125,4 @@ class FairQueue {
   }
 }
 
-export {
-  DEFAULT_HIGH_WATERMARK,
-  DEFAULT_LOW_WATERMARK,
-  FairQueue,
-};
+export { DEFAULT_HIGH_WATERMARK, DEFAULT_LOW_WATERMARK, FairQueue };

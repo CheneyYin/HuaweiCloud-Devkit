@@ -23,8 +23,12 @@ async function runNodeExec(args, timeoutMs = 30000) {
     const proc = spawn('node', args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
-    proc.stdout.on('data', (d) => { stdout += d.toString(); });
-    proc.stderr.on('data', (d) => { stderr += d.toString(); });
+    proc.stdout.on('data', (d) => {
+      stdout += d.toString();
+    });
+    proc.stderr.on('data', (d) => {
+      stderr += d.toString();
+    });
 
     const timer = setTimeout(() => {
       proc.kill();
@@ -126,22 +130,35 @@ export async function uploadFileWithSession(workspaceId, localPath, remotePath, 
   for (const [i, chunk] of chunks.entries()) {
     const res = await execWithSession(workspaceId, `printf '%s' '${chunk}' >> "${tmp}"`, username, timeoutMs);
     if (res.exitCode !== 0) {
-      throw new Error(`sandbox upload: failed writing chunk ${i + 1}/${chunks.length}: ${res.stdout || res.error || res.exitCode}`);
+      throw new Error(
+        `sandbox upload: failed writing chunk ${i + 1}/${chunks.length}: ${res.stdout || res.error || res.exitCode}`,
+      );
     }
   }
 
-  const decode = await execWithSession(workspaceId, `base64 -d "${tmp}" > "${remotePath}" && rm -f "${tmp}"`, username, timeoutMs);
+  const decode = await execWithSession(
+    workspaceId,
+    `base64 -d "${tmp}" > "${remotePath}" && rm -f "${tmp}"`,
+    username,
+    timeoutMs,
+  );
   if (decode.exitCode !== 0) {
-    throw new Error(`sandbox upload: failed decoding to ${remotePath}: ${decode.stdout || decode.error || decode.exitCode}`);
+    throw new Error(
+      `sandbox upload: failed decoding to ${remotePath}: ${decode.stdout || decode.error || decode.exitCode}`,
+    );
   }
 
   const verify = await execWithSession(workspaceId, `md5sum "${remotePath}"`, username, timeoutMs);
   let md5Verified = false;
   if (verify.exitCode === 0) {
-    const remoteMd5 = String(verify.stdout || '').trim().split(/\s+/)[0];
+    const remoteMd5 = String(verify.stdout || '')
+      .trim()
+      .split(/\s+/)[0];
     md5Verified = remoteMd5 === expectedMd5;
     if (!md5Verified) {
-      throw new Error(`sandbox upload: md5 mismatch for ${remotePath} (expected ${expectedMd5}, got ${remoteMd5 || 'none'})`);
+      throw new Error(
+        `sandbox upload: md5 mismatch for ${remotePath} (expected ${expectedMd5}, got ${remoteMd5 || 'none'})`,
+      );
     }
   }
 
@@ -161,14 +178,18 @@ export async function closeSession(workspaceId, username) {
   const session = sessions.get(key);
   if (!session) return false;
   sessions.delete(key);
-  try { session.close(); } catch {}
+  try {
+    session.close();
+  } catch {}
   return true;
 }
 
 export async function closeAllSessions() {
   for (const [key, session] of sessions) {
     sessions.delete(key);
-    try { session.close(); } catch {}
+    try {
+      session.close();
+    } catch {}
   }
 }
 

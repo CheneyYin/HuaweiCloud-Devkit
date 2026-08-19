@@ -46,20 +46,17 @@ const pluginRoot = 'plugins/huaweicloud-core';
 
 let commits;
 try {
-  commits = execSync(
-    `git log "v${previousVersion}"..HEAD --no-merges --format="- %s"`,
-    { encoding: 'utf8', cwd: root },
-  ).trim();
+  commits = execSync(`git log "v${previousVersion}"..HEAD --no-merges --format="- %s"`, {
+    encoding: 'utf8',
+    cwd: root,
+  }).trim();
 } catch {
-  commits = execSync(
-    `git log --no-merges --format="- %s"`,
-    { encoding: 'utf8', cwd: root },
-  ).trim();
+  commits = execSync(`git log --no-merges --format="- %s"`, { encoding: 'utf8', cwd: root }).trim();
 }
 
 const date = new Date().toISOString().split('T')[0];
 const changelogPath = 'docs/CHANGELOG.md';
-let changelog = '';
+let changelog;
 try {
   changelog = readFileSync(join(root, changelogPath), 'utf8');
 } catch {
@@ -83,7 +80,11 @@ run(`git add ${pluginRoot}/.codex-plugin/plugin.json`);
 run(`git add ${pluginRoot}/.claude-plugin/plugin.json`);
 run(`git add ${pluginRoot}/.cursor-plugin/plugin.json`);
 run(`git add ${pluginRoot}/.workbuddy-plugin/plugin.json`);
-try { run('git add .version-override'); } catch { /* optional */ }
+try {
+  run('git add .version-override');
+} catch {
+  /* optional */
+}
 
 run(`git commit -m "chore(release): ${version}"`);
 
@@ -102,9 +103,8 @@ const bodyLines = [
 ];
 writeFileSync(bodyPath, bodyLines.join('\n'), 'utf8');
 
-run(
-  `gh pr create --base ${branch} --head ${prBranch} --title "chore(release): ${version}" --body-file "${bodyPath}"`,
-  { env: { ...process.env, GITHUB_TOKEN: token } },
-);
+run(`gh pr create --base ${branch} --head ${prBranch} --title "chore(release): ${version}" --body-file "${bodyPath}"`, {
+  env: { ...process.env, GITHUB_TOKEN: token },
+});
 
 rmSync(tmp, { recursive: true, force: true });

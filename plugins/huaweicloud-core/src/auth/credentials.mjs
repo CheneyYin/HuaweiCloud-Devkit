@@ -7,14 +7,20 @@ import { homedir } from 'node:os';
 // Native Windows has no POSIX modes (statSync always reports 0666), so skip the check there.
 function ensurePrivateMode(path) {
   if (process.platform === 'win32') return;
-  try { chmodSync(path, 0o600); } catch {}
+  try {
+    chmodSync(path, 0o600);
+  } catch {}
   try {
     const mode = statSync(path).mode & 0o777;
     if (mode !== 0o600) {
-      console.warn(`\x1b[33m[WARN]\x1b[0m Could not set 0600 on ${path} (current mode ${mode.toString(8)}). Credentials may be readable by other users.`);
+      console.warn(
+        `\x1b[33m[WARN]\x1b[0m Could not set 0600 on ${path} (current mode ${mode.toString(8)}). Credentials may be readable by other users.`,
+      );
       console.warn(`\x1b[33m       If running under WSL, move the credential home to the Linux filesystem:\x1b[0m`);
       console.warn(`\x1b[33m         export HUAWEICLOUD_HOME=$HOME  (then re-run auth init)\x1b[0m`);
-      console.warn(`\x1b[33m       Or skip file storage entirely with HW_ACCESS_KEY/HW_SECRET_KEY environment variables.\x1b[0m`);
+      console.warn(
+        `\x1b[33m       Or skip file storage entirely with HW_ACCESS_KEY/HW_SECRET_KEY environment variables.\x1b[0m`,
+      );
     }
   } catch {}
 }
@@ -88,7 +94,9 @@ export function resolveCredentials(options = {}) {
 
   if (!ak || !sk) {
     if (options.allowMissing) return null;
-    throw new Error('Huawei Cloud credentials are not configured. Run "npx huaweicloud-devkit auth init" or set HW_ACCESS_KEY/HW_SECRET_KEY.');
+    throw new Error(
+      'Huawei Cloud credentials are not configured. Run "npx huaweicloud-devkit auth init" or set HW_ACCESS_KEY/HW_SECRET_KEY.',
+    );
   }
 
   return { ak, sk, securityToken, region };

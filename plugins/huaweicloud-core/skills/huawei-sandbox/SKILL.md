@@ -1,6 +1,6 @@
 ---
 name: huawei-sandbox
-description: "Use when creating, connecting, or managing Huawei Cloud Sandbox instances and workspace terminals, or when a task needs a temporary runtime to deploy, run, or preview a web application. Covers sandbox lifecycle (check-user, sign-agreement, connect, release), session-based terminal execution, and credential injection. Triggers on: sandbox, workspace, terminal, web app deployment, deploy web app, preview app, deploy github, github repo, deploy repo, website, static site, web application, hwlink, devstation, hdkitservice, remote exec. NOT for: ECS instances (use huawei-ecs), CCE clusters (use huawei-cce)."
+description: 'Use when creating, connecting, or managing Huawei Cloud Sandbox instances and workspace terminals, or when a task needs a temporary runtime to deploy, run, or preview a web application. Covers sandbox lifecycle (check-user, sign-agreement, connect, release), session-based terminal execution, and credential injection. Triggers on: sandbox, workspace, terminal, web app deployment, deploy web app, preview app, deploy github, github repo, deploy repo, website, static site, web application, hwlink, devstation, hdkitservice, remote exec. NOT for: ECS instances (use huawei-ecs), CCE clusters (use huawei-cce).'
 version: 1
 ---
 
@@ -26,25 +26,25 @@ Domain expertise for Huawei Cloud Sandbox (DevStation) instances and workspace t
 
 ### User Verification (Prerequisites)
 
-| Tool | Purpose |
-|------|---------|
-| `huaweicloud_sandbox_check_user` | Check real-name verification and agreement signing status |
+| Tool                                 | Purpose                                                     |
+| ------------------------------------ | ----------------------------------------------------------- |
+| `huaweicloud_sandbox_check_user`     | Check real-name verification and agreement signing status   |
 | `huaweicloud_sandbox_sign_agreement` | Sign unsigned/outdated agreements (required before connect) |
 
 ### Sandbox Lifecycle
 
-| Tool | Purpose |
-|------|---------|
-| `huaweicloud_sandbox_connect` | Connect to sandbox (one user one instance, reuses existing if available) |
-| `huaweicloud_sandbox_credentials` | Inject temporary AK/SK into a running sandbox |
+| Tool                              | Purpose                                                                  |
+| --------------------------------- | ------------------------------------------------------------------------ |
+| `huaweicloud_sandbox_connect`     | Connect to sandbox (one user one instance, reuses existing if available) |
+| `huaweicloud_sandbox_credentials` | Inject temporary AK/SK into a running sandbox                            |
 
 ### Terminal Execution
 
-| Tool | Purpose |
-|------|---------|
-| `huaweicloud_sandbox_exec_with_session` | Session-based execution (state persists) |
-| `huaweicloud_sandbox_upload_file` | Upload a local file into the sandbox (chunked base64 write + md5 verify) |
-| `huaweicloud_sandbox_close_session` | Close a persistent terminal session |
+| Tool                                    | Purpose                                                                  |
+| --------------------------------------- | ------------------------------------------------------------------------ |
+| `huaweicloud_sandbox_exec_with_session` | Session-based execution (state persists)                                 |
+| `huaweicloud_sandbox_upload_file`       | Upload a local file into the sandbox (chunked base64 write + md5 verify) |
+| `huaweicloud_sandbox_close_session`     | Close a persistent terminal session                                      |
 
 ## Workflow
 
@@ -74,11 +74,11 @@ There is no general file-upload primitive on the sandbox service itself. Get loc
 
 `huaweicloud_sandbox_exec_with_session` is fragile for long commands and large inline content. Do NOT paste a file's base64 directly into a single command:
 
-| Payload | Result |
-|---------|--------|
-| ~30KB base64 in one command | exec timeout |
+| Payload                     | Result                                 |
+| --------------------------- | -------------------------------------- |
+| ~30KB base64 in one command | exec timeout                           |
 | ~12KB base64 in one command | session crash (`session is not ready`) |
-| ~4–5KB normal command | OK |
+| ~4–5KB normal command       | OK                                     |
 
 Keep individual exec commands small (≤ ~4KB). For larger content, use `huaweicloud_sandbox_upload_file` instead.
 
@@ -133,20 +133,20 @@ sleep 10 && cat /tmp/host.log
 
 ## Critical Warnings
 
-| Trap | Why |
-|------|-----|
-| Agreement required first | `sandbox_connect` fails if the agreement isn't signed; the `sandbox_check_user` preflight detects this, so surface it to the developer only when signing is needed |
-| Real-name required | `sandbox_connect` fails if `realnameVerified=false`; tell the developer once and stop, don't loop on connect |
-| Never expose tunnel details | Do not mention "DevBridge"/"tunnel"/"devbridge" to the developer — say "正在生成访问地址..." and hand over only the URL |
-| Login needs `--huaweicloud` | `devbridge auth login --access-key/--secret-key` without `--huaweicloud` falls back to interactive browser login, which fails in the sandbox |
-| CLI PATH | The installer only writes `~/.bashrc`; run `export PATH=$PATH:$HOME/.huawei/bin` in the session before using `devbridge` |
-| Never install tunnel tooling locally | If the sandbox cannot install it, report a generic error and stop — installing on the developer's machine defeats sandbox deployment |
-| Return the deployment URL | Always hand the public URL from the host log to the developer as the final result |
-| Session state persists | `exec_with_session` preserves `cd`, env vars, aliases between calls |
-| Destructive commands blocked | `rm -rf /`, `mkfs`, `dd if=`, fork bombs are denied by safety policy |
-| Workspace ID = dev_stage_id | Use `dev_stage_id` from `sandbox_connect` as `workspace_id` for terminal exec |
-| Projects live in `/workspace` | Clone/install project code under `/workspace/<repo-name>` (filesystem-root workspace mount, not `$HOME/workspace`), never in `/tmp` — ephemeral locations lose the project when the sandbox session restarts |
-| Node.js >= 22 required | Sandbox terminal uses built-in WebSocket (globalThis.WebSocket); if Node.js is missing, install it from the Huawei Cloud mirror (see "Node.js in the sandbox") |
+| Trap                                 | Why                                                                                                                                                                                                          |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Agreement required first             | `sandbox_connect` fails if the agreement isn't signed; the `sandbox_check_user` preflight detects this, so surface it to the developer only when signing is needed                                           |
+| Real-name required                   | `sandbox_connect` fails if `realnameVerified=false`; tell the developer once and stop, don't loop on connect                                                                                                 |
+| Never expose tunnel details          | Do not mention "DevBridge"/"tunnel"/"devbridge" to the developer — say "正在生成访问地址..." and hand over only the URL                                                                                      |
+| Login needs `--huaweicloud`          | `devbridge auth login --access-key/--secret-key` without `--huaweicloud` falls back to interactive browser login, which fails in the sandbox                                                                 |
+| CLI PATH                             | The installer only writes `~/.bashrc`; run `export PATH=$PATH:$HOME/.huawei/bin` in the session before using `devbridge`                                                                                     |
+| Never install tunnel tooling locally | If the sandbox cannot install it, report a generic error and stop — installing on the developer's machine defeats sandbox deployment                                                                         |
+| Return the deployment URL            | Always hand the public URL from the host log to the developer as the final result                                                                                                                            |
+| Session state persists               | `exec_with_session` preserves `cd`, env vars, aliases between calls                                                                                                                                          |
+| Destructive commands blocked         | `rm -rf /`, `mkfs`, `dd if=`, fork bombs are denied by safety policy                                                                                                                                         |
+| Workspace ID = dev_stage_id          | Use `dev_stage_id` from `sandbox_connect` as `workspace_id` for terminal exec                                                                                                                                |
+| Projects live in `/workspace`        | Clone/install project code under `/workspace/<repo-name>` (filesystem-root workspace mount, not `$HOME/workspace`), never in `/tmp` — ephemeral locations lose the project when the sandbox session restarts |
+| Node.js >= 22 required               | Sandbox terminal uses built-in WebSocket (globalThis.WebSocket); if Node.js is missing, install it from the Huawei Cloud mirror (see "Node.js in the sandbox")                                               |
 
 ## Node.js in the sandbox
 
@@ -163,11 +163,11 @@ node --version
 
 ## Environment Variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `HW_ACCESS_KEY` | Yes | Huawei Cloud AK |
-| `HW_SECRET_KEY` | Yes | Huawei Cloud SK |
-| `HW_SECURITY_TOKEN` | No | STS security token |
-| `HW_WORKSPACE_ID` | No | Default workspace ID |
-| `HDKITSERVICE_ENDPOINT` | No | hdkitservice API endpoint |
-| `HWLINK_ENDPOINT` | No | DevStation API endpoint |
+| Variable                | Required | Description               |
+| ----------------------- | -------- | ------------------------- |
+| `HW_ACCESS_KEY`         | Yes      | Huawei Cloud AK           |
+| `HW_SECRET_KEY`         | Yes      | Huawei Cloud SK           |
+| `HW_SECURITY_TOKEN`     | No       | STS security token        |
+| `HW_WORKSPACE_ID`       | No       | Default workspace ID      |
+| `HDKITSERVICE_ENDPOINT` | No       | hdkitservice API endpoint |
+| `HWLINK_ENDPOINT`       | No       | DevStation API endpoint   |

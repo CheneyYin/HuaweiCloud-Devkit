@@ -38,11 +38,7 @@ const pluginManifests = [
 ];
 for (const path of pluginManifests) {
   const manifest = readJson(path);
-  assert.equal(
-    pkg.version,
-    manifest.version,
-    `package.json version must match ${path}`,
-  );
+  assert.equal(pkg.version, manifest.version, `package.json version must match ${path}`);
 }
 
 const skills = readdirSync(join(pluginRoot, 'skills')).filter((name) =>

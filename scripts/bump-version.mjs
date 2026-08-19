@@ -1,6 +1,6 @@
 import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -32,10 +32,7 @@ if (hasTags) {
     process.exit(0);
   }
 
-  const newCommits = execSync(
-    `git rev-list "v${currentVersion}"..HEAD --no-merges`,
-    { encoding: 'utf8' },
-  ).trim();
+  const newCommits = execSync(`git rev-list "v${currentVersion}"..HEAD --no-merges`, { encoding: 'utf8' }).trim();
   if (!newCommits) {
     process.exit(0);
   }
@@ -64,10 +61,7 @@ if (branch === 'next') {
   }
   if (!override) {
     try {
-      const commits = execSync(
-        `git log "v${currentVersion}"..HEAD --format=%B`,
-        { encoding: 'utf8' },
-      );
+      const commits = execSync(`git log "v${currentVersion}"..HEAD --format=%B`, { encoding: 'utf8' });
       const releaseAs = commits.match(/^Release-As:\s*(.+)$/m);
       if (releaseAs) {
         override = releaseAs[1].trim();
