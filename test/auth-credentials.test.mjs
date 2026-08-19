@@ -206,6 +206,75 @@ test('resolveCredentialsWithRuntime set and clear workflow', () => {
   });
 });
 
+test('resolveCredentials reads CodeArts project mcp_settings.json', () => {
+  withTempHome((home) => {
+    clearRuntimeCredentials();
+    delete process.env.HW_ACCESS_KEY;
+    delete process.env.HW_SECRET_KEY;
+
+    const codeartsDir = join(process.cwd(), '.codeartsdoer', 'mcp');
+    mkdirSync(codeartsDir, { recursive: true });
+    writeFileSync(
+      join(codeartsDir, 'mcp_settings.json'),
+      JSON.stringify({
+        mcpServers: {
+          'huaweicloud-devkit': {
+            env: {
+              HW_ACCESS_KEY: 'CODEARTS_AK',
+              HW_SECRET_KEY: 'CODEARTS_SK',
+              HW_REGION: 'cn-south-1',
+            },
+          },
+        },
+      }),
+      'utf8',
+    );
+
+    try {
+      const creds = resolveCredentials();
+      assert.equal(creds.ak, 'CODEARTS_AK');
+      assert.equal(creds.sk, 'CODEARTS_SK');
+      assert.equal(creds.region, 'cn-south-1');
+    } finally {
+      rmSync(codeartsDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test('resolveCredentials uses env vars over CodeArts mcp_settings.json', () => {
+  withTempHome((home) => {
+    clearRuntimeCredentials();
+    process.env.HW_ACCESS_KEY = 'ENV_AK';
+    process.env.HW_SECRET_KEY = 'ENV_SK';
+
+    const codeartsDir = join(process.cwd(), '.codeartsdoer', 'mcp');
+    mkdirSync(codeartsDir, { recursive: true });
+    writeFileSync(
+      join(codeartsDir, 'mcp_settings.json'),
+      JSON.stringify({
+        mcpServers: {
+          'huaweicloud-devkit': {
+            env: {
+              HW_ACCESS_KEY: 'CODEARTS_AK',
+              HW_SECRET_KEY: 'CODEARTS_SK',
+            },
+          },
+        },
+      }),
+      'utf8',
+    );
+
+    try {
+      const creds = resolveCredentials();
+      assert.equal(creds.ak, 'ENV_AK');
+    } finally {
+      delete process.env.HW_ACCESS_KEY;
+      delete process.env.HW_SECRET_KEY;
+      rmSync(codeartsDir, { recursive: true, force: true });
+    }
+  });
+});
+
 test('auth status is redacted and reflects vault/OBS state', () => {
   withTempHome(() => {
     writeGlobalCredentials({ ak: 'STATUS_AK', sk: 'STATUS_SK', region: 'cn-north-4' });
