@@ -16,6 +16,8 @@ Supports OpenCode, Codex, CodeArts Agent, WorkBuddy, DeepSeek Harness (DSH), and
 
 ## Quick Start
 
+> **Note:** When `--target` is omitted, the installer auto-detects agents on your machine. If multiple agents are detected, **all of them** will be installed simultaneously. To install for a specific agent only, use `--target <agent>` (see sections below).
+
 ### OpenCode
 
 ```bash
