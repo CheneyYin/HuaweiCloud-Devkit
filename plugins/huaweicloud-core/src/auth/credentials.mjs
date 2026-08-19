@@ -101,3 +101,26 @@ export function resolveCredentials(options = {}) {
 
   return { ak, sk, securityToken, region };
 }
+
+let runtimeCredentials = null;
+
+export function setRuntimeCredentials(ak, sk, securityToken, region) {
+  runtimeCredentials = { ak, sk, securityToken: securityToken || '', region: region || '' };
+}
+
+export function clearRuntimeCredentials() {
+  runtimeCredentials = null;
+}
+
+export function resolveCredentialsWithRuntime(options = {}) {
+  if (runtimeCredentials) {
+    return {
+      ak: runtimeCredentials.ak,
+      sk: runtimeCredentials.sk,
+      securityToken: runtimeCredentials.securityToken,
+      region: runtimeCredentials.region,
+    };
+  }
+
+  return resolveCredentials(options);
+}

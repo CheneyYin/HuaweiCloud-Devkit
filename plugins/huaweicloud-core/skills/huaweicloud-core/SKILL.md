@@ -100,6 +100,7 @@ When the intent is to **deploy, host, or preview a web app or static website** (
 
 - Use huaweicloud_search_docs to discover skills covering a topic
 - Use huaweicloud_retrieve_skill to load a full SKILL.md after routing
+- Use huaweicloud_auth_init to switch credentials at runtime when different accounts co-exist in the same session
 - If no built-in skill matches, consult huaweicloud-capability-discovery for external marketplace options
 - Use huaweicloud_list_regions before creating regional resources
 - Use huaweicloud_get_regional_availability when unsure about service-region pairs
