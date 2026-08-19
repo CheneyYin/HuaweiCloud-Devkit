@@ -29,8 +29,13 @@ async function hdkitRequest(method, path, body, timeoutMs = 300000) {
       body: body ? JSON.stringify(body) : undefined,
       signal: controller.signal,
     };
-    if (dispatcher) fetchOpts.dispatcher = dispatcher;
-    resp = await fetch(url, fetchOpts);
+    if (dispatcher) {
+      fetchOpts.dispatcher = dispatcher;
+      const { fetch: undiciFetch } = await import('undici');
+      resp = await undiciFetch(url, fetchOpts);
+    } else {
+      resp = await fetch(url, fetchOpts);
+    }
   } finally {
     clearTimeout(timer);
   }
