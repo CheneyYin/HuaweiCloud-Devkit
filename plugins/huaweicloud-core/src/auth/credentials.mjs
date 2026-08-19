@@ -84,7 +84,7 @@ export function resolveCredentials(options = {}) {
   let securityToken = process.env.HW_SECURITY_TOKEN;
   let region = process.env.HW_REGION || process.env.HUAWEICLOUD_REGION || '';
 
-  const codeartsCreds = readCodeArtsCredentials();
+  const codeartsCreds = isCodeArtsContext() ? readCodeArtsCredentials() : null;
   if (codeartsCreds) {
     if (!ak && codeartsCreds.ak) ak = codeartsCreds.ak;
     if (!sk && codeartsCreds.sk) sk = codeartsCreds.sk;
@@ -107,6 +107,10 @@ export function resolveCredentials(options = {}) {
   }
 
   return { ak, sk, securityToken, region };
+}
+
+function isCodeArtsContext() {
+  return existsSync(join(process.cwd(), '.codeartsdoer')) || existsSync(join(homedir(), '.codeartsdoer'));
 }
 
 function readCodeArtsCredentials() {
