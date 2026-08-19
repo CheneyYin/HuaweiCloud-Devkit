@@ -368,11 +368,11 @@ test('setup-cli.mjs supports the officeace target end to end', () => {
   assert.match(setup, /function officeaceCapabilitiesFile\(\)/);
   assert.match(setup, /function officeaceSkillsDir\(\)/);
   assert.match(setup, /function officeacePluginsDir\(\)/);
-  assert.match(setup, /function ensureOfficeaceCapabilities\(\)/);
-  assert.match(setup, /function removeOfficeaceCapabilities\(\)/);
+  assert.match(setup, /function ensureOfficeaceMcpInSqlite\(\)/);
+  assert.match(setup, /function removeOfficeaceMcpFromSqlite\(\)/);
   assert.match(setup, /function registerOfficeaceSkillEntries\(\)/);
   assert.match(setup, /copyDir\(skillsSrc, officeaceSkillsDir\(\)\)/);
-  assert.match(setup, /ensureOfficeaceCapabilities\(\)/);
+  assert.match(setup, /ensureOfficeaceMcpInSqlite\(\)/);
   assert.match(setup, /registerOfficeaceSkillEntries\(\)/);
   assert.match(setup, /type.*skill.*source.*custom/s);
   assert.match(setup, /mcpServer.*command.*node/s);
