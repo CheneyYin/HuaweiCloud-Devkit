@@ -339,3 +339,27 @@ test('tools.mjs resolves skills from the dsh directory', () => {
   assert.match(tools, /if \(existsSync\(dshSkillsDir\(\)\)\) return dshSkillsDir\(\);/);
   assert.match(tools, /opencode, codex, codex-desktop, codearts, workbuddy, dsh, or all/);
 });
+
+test('official Huawei Cloud Icons library is integrated', () => {
+  const tools = readFileSync(join(pluginRoot, 'src', 'tools.mjs'), 'utf8');
+  assert.match(tools, /name: 'huaweicloud_get_service_icon'/);
+  assert.match(tools, /getServiceIcon\(args\.service/);
+
+  const snapshotPath = join(pluginRoot, 'src', 'data', 'icons-manifest.v1.json');
+  assert.ok(existsSync(snapshotPath), 'Missing icons-manifest.v1.json snapshot');
+  const manifest = readJson(snapshotPath);
+  assert.ok(Array.isArray(manifest.icons), 'icons must be an array');
+  assert.ok(manifest.icons.length >= 100, `Expected at least 100 icons, got ${manifest.icons.length}`);
+
+  const byId = new Map(manifest.icons.map((i) => [i.id, i]));
+  for (const id of ['ecs', 'obs', 'vpc', 'modelarts']) {
+    const icon = byId.get(id);
+    assert.ok(icon, `Missing icon: ${id}`);
+    assert.match(icon.logo.source_url, /^https:\/\//, `${id} logo source_url must be https`);
+    assert.equal(typeof icon.name, 'string');
+  }
+
+  const discovery = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-capability-discovery', 'SKILL.md'), 'utf8');
+  assert.match(discovery, /huaweicloud_get_service_icon/);
+  assert.match(discovery, /open\.huaweicloud\.com\/openplatform\/icons\.html/);
+});

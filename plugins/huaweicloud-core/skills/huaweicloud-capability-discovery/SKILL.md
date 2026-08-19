@@ -20,6 +20,12 @@ Use this skill to turn vague developer intent into a precise Huawei Cloud capabi
 7. Prefer MCP only when an approved Huawei Cloud MCP tool exists for the needed operation.
 8. Treat Terraform as a secondary V1 path for reviewed IaC, not the default.
 9. When no built-in devkit skill matches, browse the community skill marketplace at https://github.com/huaweicloud/huaweicloud-skills. Fetch the index from https://raw.githubusercontent.com/huaweicloud/huaweicloud-skills/master/skills-index/index.json.
+10. When the deliverable is a PPT, architecture diagram (draw.io), or frontend page that needs official Huawei Cloud service logos, use the `huaweicloud_get_service_icon` MCP tool to get logo URLs from the official Icons library instead of guessing or hotlinking unofficial images.
+
+## Official Service Logos
+
+- Use `huaweicloud_get_service_icon` with the service name, alias, or Chinese name (e.g. `ecs`, `obs`, `modelarts`, `对象存储`). It returns the official CDN logo URL (`logo.source_url`), category, and product page link from https://open.huaweicloud.com/openplatform/icons.html.
+- Prefer `logo.source_url` for web deliverables and the Icons library search page for browsing; do not scrape logos from third-party sites.
 
 ## Deployment Target Options
 

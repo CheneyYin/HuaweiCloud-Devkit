@@ -104,21 +104,23 @@ Steps:
    npm run validate
    ```
 
-4. Run tests: `npm test`.
-5. Publish to the `next` tag:
+4. Refresh the bundled Huawei Cloud Icons manifest snapshot:
+   `node ./scripts/update-icons-manifest.mjs`.
+5. Run tests: `npm test`.
+6. Publish to the `next` tag:
 
    ```powershell
    npm publish --tag next
    ```
 
-6. Restore `package.json` to the stable version and commit only non-version
+7. Restore `package.json` to the stable version and commit only non-version
    changes (the repo must never drift from what is published):
 
    ```powershell
    npm version <previous-stable> --no-git-tag-version
    ```
 
-7. Announce `1.1.0-next.N` with its change list; collect feedback under that
+8. Announce `1.1.0-next.N` with its change list; collect feedback under that
    version number.
 
 Subsequent iterations use `1.1.0-next.1`, `1.1.0-next.2`, and so on.
