@@ -46,17 +46,20 @@ const pluginRoot = 'plugins/huaweicloud-core';
 
 let commits;
 try {
-  commits = execSync(`git log "v${previousVersion}"..HEAD --no-merges --format="- %s"`, {
-    encoding: 'utf8',
-    cwd: root,
-  }).trim();
+  commits = execSync(
+    `git log "v${previousVersion}"..HEAD --no-merges --format="- %s"`,
+    { encoding: 'utf8', cwd: root },
+  ).trim();
 } catch {
-  commits = execSync(`git log --no-merges --format="- %s"`, { encoding: 'utf8', cwd: root }).trim();
+  commits = execSync(
+    `git log --no-merges --format="- %s"`,
+    { encoding: 'utf8', cwd: root },
+  ).trim();
 }
 
 const date = new Date().toISOString().split('T')[0];
 const changelogPath = 'docs/CHANGELOG.md';
-let changelog;
+let changelog = '';
 try {
   changelog = readFileSync(join(root, changelogPath), 'utf8');
 } catch {
@@ -72,6 +75,18 @@ if (existsSync(join(root, '.version-override'))) {
   unlinkSync(join(root, '.version-override'));
 }
 
+const changedFiles = [
+  '.release-please-manifest.json',
+  'package.json',
+  'package-lock.json',
+  changelogPath,
+  `${pluginRoot}/.codex-plugin/plugin.json`,
+  `${pluginRoot}/.claude-plugin/plugin.json`,
+  `${pluginRoot}/.cursor-plugin/plugin.json`,
+  `${pluginRoot}/.workbuddy-plugin/plugin.json`,
+];
+execSync(`npx prettier --write ${changedFiles.join(' ')}`, { cwd: root, stdio: 'inherit' });
+
 const isPrerelease = version.includes('-');
 const prBranch = isPrerelease ? `release-${branch}-${version}` : `release-${version}`;
 run(`git checkout -b ${prBranch}`);
@@ -80,11 +95,7 @@ run(`git add ${pluginRoot}/.codex-plugin/plugin.json`);
 run(`git add ${pluginRoot}/.claude-plugin/plugin.json`);
 run(`git add ${pluginRoot}/.cursor-plugin/plugin.json`);
 run(`git add ${pluginRoot}/.workbuddy-plugin/plugin.json`);
-try {
-  run('git add .version-override');
-} catch {
-  /* optional */
-}
+try { run('git add .version-override'); } catch { /* optional */ }
 
 run(`git commit -m "chore(release): ${version}"`);
 
@@ -103,8 +114,9 @@ const bodyLines = [
 ];
 writeFileSync(bodyPath, bodyLines.join('\n'), 'utf8');
 
-run(`gh pr create --base ${branch} --head ${prBranch} --title "chore(release): ${version}" --body-file "${bodyPath}"`, {
-  env: { ...process.env, GITHUB_TOKEN: token },
-});
+run(
+  `gh pr create --base ${branch} --head ${prBranch} --title "chore(release): ${version}" --body-file "${bodyPath}"`,
+  { env: { ...process.env, GITHUB_TOKEN: token } },
+);
 
 rmSync(tmp, { recursive: true, force: true });
