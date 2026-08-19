@@ -354,12 +354,17 @@ function installRuntimeDeps(pluginsDir) {
     stdio: 'pipe',
     timeout: 120000,
   });
-  if (r.status === 0) {
+  const undiciDir = join(pluginsDir, 'node_modules', 'undici');
+  if (r.status === 0 && existsSync(undiciDir)) {
     console.log(`  Runtime deps installed -> ${join(pluginsDir, 'node_modules')}`);
   } else {
     const err = (r.stderr || '').toString().trim().split(/\r?\n/).slice(-2).join(' ');
     console.log(`  \x1b[33m[WARN]\x1b[0m npm install failed in ${pluginsDir}${err ? `: ${err}` : ''}`);
     console.log('  Manual fix: cd %s && npm install', pluginsDir);
+    if (!existsSync(undiciDir)) {
+      console.log(`  \x1b[31m[ERROR]\x1b[0m undici is NOT installed. MCP server will fail to start.`);
+      console.log(`  Run manually: cd "${pluginsDir}" && npm install undici@^8.10.0`);
+    }
   }
 }
 
