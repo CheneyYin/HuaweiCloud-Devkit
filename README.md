@@ -16,15 +16,15 @@ Supports OpenCode, Codex, CodeArts Agent, WorkBuddy, DeepSeek Harness (DSH), and
 
 ## Quick Start
 
-> **Note:** When `--target` is omitted, the installer auto-detects agents on your machine. If multiple agents are detected, **all of them** will be installed simultaneously. To install for a specific agent only, use `--target <agent>` (see sections below).
-
 ### OpenCode
 
 ```bash
-npx --yes huaweicloud-devkit install
+npx --yes huaweicloud-devkit install --target opencode
 ```
 
-Installs the DevKit into OpenCode automatically. **Restart the session** after installation.
+Installs the DevKit into OpenCode. If `--target` is omitted, the installer auto-detects agents on your machine — when multiple agents are detected, **all of them** will be installed. Use `--target opencode` to ensure only OpenCode is installed.
+
+**Restart the session** after installation.
 
 ```bash
 npx --yes huaweicloud-devkit doctor    # self-check

@@ -16,15 +16,15 @@
 
 ## 快速开始
 
-> **注意：** 未指定 `--target` 时，安装器会自动检测机器上的 agent。如果检测到多个 agent，将**全部安装**。如需仅安装到指定 agent，请使用 `--target <agent>`（见下方各章节）。
-
 ### OpenCode
 
 ```bash
-npx --yes huaweicloud-devkit install
+npx --yes huaweicloud-devkit install --target opencode
 ```
 
-自动安装 DevKit。安装后**重启会话**。
+安装 DevKit 到 OpenCode。如果省略 `--target`，安装器会自动检测机器上的 agent，检测到多个时**全部安装**。建议使用 `--target opencode` 确保仅安装到 OpenCode。
+
+安装后**重启会话**。
 
 ```bash
 npx --yes huaweicloud-devkit doctor   # 自检
