@@ -60,7 +60,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - if: matrix.os == 'windows-latest'
+        run: npm config set msvs_version 2022
       - run: npm ci
+        env:
+          npm_config_build_from_source: 'false'
       - run: npm test
       - run: npm run validate
 
