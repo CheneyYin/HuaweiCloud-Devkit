@@ -29,7 +29,7 @@
     "postinstall": "node -e \"console.log('\\nHuaweiCloud DevKit installed. Run: npx huaweicloud-devkit install\\n')\""
   },
   "dependencies": {
-    "better-sqlite3": "^13.0.3",
+    "sql.js": "^1.14.2",
     "undici": "^8.10.0"
   },
   "devDependencies": {
