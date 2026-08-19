@@ -23,7 +23,7 @@ This is an **agent guidance + safety package**, not a service encyclopedia. Six 
 ```
 plugins/huaweicloud-core/
   skills/           ← 6 meta-skills + service skills
-  src/              ← Node.js MCP server (stdio JSON-RPC, 12 tools)
+  src/              ← Node.js MCP server (stdio JSON-RPC, 13 tools)
   safety/           ← shared policy.json
   hooks/            ← Python PreToolUse hook
   .codex-plugin/    ← Codex plugin manifest

@@ -6,6 +6,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { searchMarketplace } from './search-market.mjs';
+import { getServiceIcon } from './icon-library.mjs';
 import {
   execWithSession,
   closeSession,
@@ -307,6 +308,25 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'huaweicloud_get_service_icon',
+    description:
+      'Find the official Huawei Cloud service logo from the Huawei Cloud Icons library (open.huaweicloud.com/openplatform/icons.html). Returns top 5 matches with CDN logo URLs, local paths, category, aliases, and product page links. Provide service (e.g. ecs, obs, modelarts, 对象存储) or category (e.g. 计算, 存储, 人工智能) to browse. Use when generating PPT, architecture diagrams (draw.io), or frontend pages that need official Huawei Cloud service logos.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        service: {
+          type: 'string',
+          description:
+            'Service name, alias, or Chinese name, e.g. ecs, obs, modelarts, 对象存储, 虚拟私有云. Omit to browse by category only.',
+        },
+        category: {
+          type: 'string',
+          description: 'Optional category filter, e.g. 计算, 存储, 网络, 人工智能, 数据库, 安全, 企业应用.',
+        },
+      },
+    },
+  },
+  {
     name: 'huaweicloud_setup_obs_config',
     description:
       'Synchronize KooCLI credentials to OBS config (~/.obsutilconfig). KooCLI and OBS use separate credential stores — hcloud commands work fine but OBS commands fail with "Please set ak, sk" unless this sync is done. Run this once to enable OBS operations; re-run after changing hcloud credentials.',
@@ -490,6 +510,8 @@ export async function callTool(name, args = {}) {
       return explainError(args);
     case 'huaweicloud_search_marketplace':
       return searchMarketplace(args.query || '', args.category || '');
+    case 'huaweicloud_get_service_icon':
+      return getServiceIcon(args.service || '', args.category || '');
     case 'huaweicloud_setup_obs_config':
       return setupObsConfig(args.profile);
     case 'huaweicloud_auth_status':
