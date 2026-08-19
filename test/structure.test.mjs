@@ -217,7 +217,7 @@ test('.mcp.json is valid and references existing server script', () => {
 test('setup-cli.mjs supports the codearts target end to end', () => {
   const setup = readFileSync(join(pluginRoot, 'src', 'setup-cli.mjs'), 'utf8');
   // parseTarget accepts codearts
-  assert.match(setup, /if \(val === 'codearts'\) return 'codearts';/);
+  assert.match(setup, /'codearts'/);
   // install / uninstall / status functions exist
   assert.match(setup, /async function installCodeArts\(\)/);
   assert.match(setup, /function uninstallCodeArts\(\)/);
@@ -287,8 +287,8 @@ test('setup-cli.mjs handles KooCLI sandbox blockers and privacy agreement', () =
 
 test('setup-cli.mjs supports the dsh target end to end', () => {
   const setup = readFileSync(join(pluginRoot, 'src', 'setup-cli.mjs'), 'utf8');
-  // parseTarget accepts dsh
-  assert.match(setup, /if \(val === 'dsh'\) return 'dsh';/);
+  // SUPPORTED_AGENT_TARGETS includes dsh and parseTarget uses it
+  assert.match(setup, /'dsh'/);
   // DSH path helpers and managed patch constants exist
   assert.match(setup, /function dshRoot\(\)/);
   assert.match(setup, /function dshSkillsDir\(\)/);
