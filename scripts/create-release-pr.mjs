@@ -72,6 +72,18 @@ if (existsSync(join(root, '.version-override'))) {
   unlinkSync(join(root, '.version-override'));
 }
 
+const changedFiles = [
+  '.release-please-manifest.json',
+  'package.json',
+  'package-lock.json',
+  changelogPath,
+  `${pluginRoot}/.codex-plugin/plugin.json`,
+  `${pluginRoot}/.claude-plugin/plugin.json`,
+  `${pluginRoot}/.cursor-plugin/plugin.json`,
+  `${pluginRoot}/.workbuddy-plugin/plugin.json`,
+];
+execSync(`npx prettier --write ${changedFiles.join(' ')}`, { cwd: root, stdio: 'inherit' });
+
 const isPrerelease = version.includes('-');
 const prBranch = isPrerelease ? `release-${branch}-${version}` : `release-${version}`;
 run(`git checkout -b ${prBranch}`);
