@@ -4,8 +4,12 @@ let cachedDispatcher = undefined;
 let cachedDispatcherProxyUrl = null;
 
 async function importUndici() {
-  try { return await import('node:undici'); } // eslint-disable-line n/no-missing-import
-  catch { return await import('undici'); }
+  try {
+    return await import('node:undici');
+  } catch {
+    // eslint-disable-line n/no-missing-import
+    return await import('undici');
+  }
 }
 
 export async function getProxyDispatcher(targetUrl) {
