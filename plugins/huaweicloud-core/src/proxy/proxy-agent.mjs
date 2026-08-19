@@ -5,9 +5,9 @@ let cachedDispatcherProxyUrl = null;
 
 async function importUndici() {
   try {
+    /* eslint-disable-next-line n/no-missing-import */
     return await import('node:undici');
   } catch {
-    // eslint-disable-line n/no-missing-import
     return await import('undici');
   }
 }
