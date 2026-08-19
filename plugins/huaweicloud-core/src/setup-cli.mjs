@@ -13,6 +13,8 @@ import { fileURLToPath } from 'node:url';
 import { homedir, platform } from 'node:os';
 import { createInterface } from 'node:readline';
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { getAuthStatus, syncAuth } from './auth/service.mjs';
 import { SUPPORTED_AGENT_TARGETS } from './auth/agent-registration.mjs';
 import {
@@ -150,6 +152,107 @@ function officeacePluginsDir() {
   return join(officeaceCapabilitiesDir(), 'huaweicloud-plugins');
 }
 
+function officeaceSqlitePath() {
+  const capDir = officeaceCapabilitiesDir();
+  return join(resolve(capDir, '..'), 'data', 'mcp-connectors.sqlite');
+}
+
+function openOfficeaceDb() {
+  const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
+  return new DatabaseSync(officeaceSqlitePath());
+}
+
+function officeaceGetOwnerUserId() {
+  if (!existsSync(officeaceSqlitePath())) return null;
+  try {
+    const db = openOfficeaceDb();
+    const row = db.prepare("SELECT owner_user_id FROM mcp_connectors WHERE owner_user_id IS NOT NULL LIMIT 1").get();
+    db.close();
+    return row?.owner_user_id || null;
+  } catch {
+    return null;
+  }
+}
+
+function ensureOfficeaceMcpInSqlite() {
+  const dbPath = officeaceSqlitePath();
+  if (!existsSync(dbPath)) {
+    console.log(`  \x1b[31mOfficeAce database not found: ${dbPath}\x1b[0m`);
+    console.log(`  \x1b[33mPlease ensure OfficeAce is installed and has been launched at least once.\x1b[0m`);
+    return false;
+  }
+
+  const mcpPath = join(officeacePluginsDir(), 'src', 'mcp-server.mjs').replace(/\\/g, '/');
+  const env = [{ key: 'HUAWEICLOUD_AGENT_TOOLKIT_MODE', value: 'local', sensitive: false }];
+  const hcloudBin = findHcloudBin();
+  if (hcloudBin) env.push({ key: 'HCLOUD_BIN', value: hcloudBin.replace(/\\/g, '/'), sensitive: false });
+
+  const now = Date.now();
+  let db;
+  try {
+    db = openOfficeaceDb();
+
+    const existing = db
+      .prepare("SELECT id, command, args_json FROM mcp_connectors WHERE name = 'huaweicloud-devkit'")
+      .get();
+
+    const argsJson = JSON.stringify([mcpPath]);
+    const envJson = JSON.stringify(env);
+
+    if (existing) {
+      if (existing.command === 'node' && existing.args_json === argsJson) {
+        console.log(`  MCP config unchanged: ${dbPath}`);
+        db.close();
+        return true;
+      }
+      db.prepare(
+        'UPDATE mcp_connectors SET command = ?, args_json = ?, env_json = ?, updated_at = ?, status = ?, enabled = 1 WHERE id = ?',
+      ).run('node', argsJson, envJson, now, 'disconnected', existing.id);
+      console.log(`  MCP config updated: ${dbPath}`);
+    } else {
+      const ownerUserId = officeaceGetOwnerUserId();
+      if (!ownerUserId) {
+        console.log(`  \x1b[31mCannot determine owner_user_id from database\x1b[0m`);
+        db.close();
+        return false;
+      }
+      db.prepare(
+        `INSERT INTO mcp_connectors (id, owner_user_id, type, name, normalized_name, transport, timeout_ms, command, args_json, env_json, enabled, status, created_at, updated_at, version, seeded)
+         VALUES (?, ?, 'custom', 'huaweicloud-devkit', 'huaweicloud-devkit', 'stdio', 60000, 'node', ?, ?, 1, 'disconnected', ?, ?, 1, 0)`,
+      ).run(randomUUID(), ownerUserId, argsJson, envJson, now, now);
+      console.log(`  MCP config created: ${dbPath}`);
+    }
+    db.close();
+    return true;
+  } catch (err) {
+    if (db) {
+      try { db.close(); } catch {}
+    }
+    console.log(`  \x1b[31mFailed to write MCP config: ${err.message}\x1b[0m`);
+    return false;
+  }
+}
+
+function removeOfficeaceMcpFromSqlite() {
+  const dbPath = officeaceSqlitePath();
+  if (!existsSync(dbPath)) return;
+  let db;
+  try {
+    db = openOfficeaceDb();
+    db.prepare("DELETE FROM mcp_connector_tools WHERE connector_id IN (SELECT id FROM mcp_connectors WHERE name = 'huaweicloud-devkit')").run();
+    const result2 = db.prepare("DELETE FROM mcp_connectors WHERE name = 'huaweicloud-devkit'").run();
+    if (result2.changes > 0) {
+      console.log(`  MCP config removed: ${dbPath}`);
+    }
+    db.close();
+  } catch (err) {
+    if (db) {
+      try { db.close(); } catch {}
+    }
+    console.log(`  \x1b[31mFailed to remove MCP config: ${err.message}\x1b[0m`);
+  }
+}
+
 function readCapabilitiesJson() {
   const capFile = officeaceCapabilitiesFile();
   if (!existsSync(capFile)) return { capabilities: [] };
@@ -165,54 +268,7 @@ function writeCapabilitiesJson(config) {
   writeFileSync(officeaceCapabilitiesFile(), JSON.stringify(config, null, 2));
 }
 
-function ensureOfficeaceCapabilities() {
-  const capFile = officeaceCapabilitiesFile();
-  const mcpPath = join(officeacePluginsDir(), 'src', 'mcp-server.mjs').replace(/\\/g, '/');
-  const env = { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local' };
-  const hcloudBin = findHcloudBin();
-  if (hcloudBin) env.HCLOUD_BIN = hcloudBin.replace(/\\/g, '/');
-
-  const config = readCapabilitiesJson();
-  let changed = false;
-
-  // Ensure MCP server entry
-  const mcpEntry = {
-    id: 'huaweicloud-devkit',
-    type: 'mcp',
-    enabled: true,
-    source: 'custom',
-    mcpServer: {
-      command: 'node',
-      args: [mcpPath],
-      env,
-    },
-  };
-  const existingMcpIdx = config.capabilities.findIndex((c) => c.id === 'huaweicloud-devkit' && c.type === 'mcp');
-  if (existingMcpIdx >= 0) {
-    const existing = config.capabilities[existingMcpIdx];
-    if (
-      existing.mcpServer?.command === 'node' &&
-      Array.isArray(existing.mcpServer?.args) &&
-      existing.mcpServer.args[0] === mcpPath
-    ) {
-      console.log(`  MCP config unchanged: ${capFile}`);
-    } else {
-      config.capabilities[existingMcpIdx] = mcpEntry;
-      changed = true;
-    }
-  } else {
-    config.capabilities.push(mcpEntry);
-    changed = true;
-  }
-
-  if (changed) {
-    writeCapabilitiesJson(config);
-    console.log(`  MCP config updated: ${capFile}`);
-  }
-  return changed;
-}
-
-function removeOfficeaceCapabilities() {
+function removeOfficeaceSkillCapabilities() {
   const capFile = officeaceCapabilitiesFile();
   if (!existsSync(capFile)) return;
   let config;
@@ -226,14 +282,13 @@ function removeOfficeaceCapabilities() {
   config.capabilities = config.capabilities.filter(
     (c) =>
       !(
-        (c.id === 'huaweicloud-devkit' && c.type === 'mcp') ||
         (c.id === 'huaweicloud-core' && c.type === 'skill') ||
         (c.source === 'custom' && c.id && c.id.startsWith('huawei'))
       ),
   );
   if (config.capabilities.length !== origLen) {
     writeCapabilitiesJson(config);
-    console.log(`  Capabilities cleaned: ${capFile}`);
+    console.log(`  Skill capabilities cleaned: ${capFile}`);
   }
 }
 
@@ -1367,7 +1422,7 @@ async function installOfficeAce() {
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
 
-  ensureOfficeaceCapabilities();
+  ensureOfficeaceMcpInSqlite();
   registerOfficeaceSkillEntries();
 }
 
@@ -1384,7 +1439,7 @@ async function updateOfficeAce() {
   console.log(`  MCP Server updated -> ${join(pluginDest, 'src')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
-  ensureOfficeaceCapabilities();
+  ensureOfficeaceMcpInSqlite();
   registerOfficeaceSkillEntries();
   mkdirSync(pluginDest, { recursive: true });
   writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
@@ -1412,7 +1467,8 @@ function uninstallOfficeAce() {
   if (removeIfExists(officeacePluginsDir())) {
     console.log('  Removed MCP server and safety policy');
   }
-  removeOfficeaceCapabilities();
+  removeOfficeaceSkillCapabilities();
+  removeOfficeaceMcpFromSqlite();
 }
 
 function officeaceStatus() {
@@ -1433,15 +1489,23 @@ function officeaceStatus() {
   console.log(
     `  Skills: ${skillCount > 0 ? `\x1b[32m${skillCount} installed\x1b[0m` : '\x1b[31mNot installed\x1b[0m'}`,
   );
-  const capFile = officeaceCapabilitiesFile();
-  if (existsSync(capFile)) {
+  const dbPath = officeaceSqlitePath();
+  if (existsSync(dbPath)) {
     try {
-      const config = JSON.parse(readFileSync(capFile, 'utf8'));
-      const hasMcp = (config.capabilities || []).some((c) => c.id === 'huaweicloud-devkit' && c.type === 'mcp');
-      console.log(`  MCP config: ${hasMcp ? '\x1b[32mConfigured\x1b[0m' : '\x1b[31mNot configured\x1b[0m'}`);
+      const db = openOfficeaceDb();
+      const row = db.prepare("SELECT enabled, status FROM mcp_connectors WHERE name = 'huaweicloud-devkit'").get();
+      db.close();
+      if (row) {
+        const statusIcon = row.status === 'connected' ? '\x1b[32m' : '\x1b[33m';
+        console.log(`  MCP config: ${statusIcon}${row.status}\x1b[0m (enabled: ${row.enabled ? 'yes' : 'no'})`);
+      } else {
+        console.log(`  MCP config: \x1b[31mNot configured\x1b[0m`);
+      }
     } catch {
       console.log(`  MCP config: \x1b[31mInvalid\x1b[0m`);
     }
+  } else {
+    console.log(`  MCP config: \x1b[31mDatabase not found\x1b[0m`);
   }
 }
 

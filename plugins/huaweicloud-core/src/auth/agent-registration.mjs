@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 
 export const SUPPORTED_AGENT_TARGETS = [
   'opencode',
@@ -113,12 +114,28 @@ function officeaceCapabilitiesDir() {
   return dotDir;
 }
 
+function officeaceSqlitePath() {
+  const capDir = officeaceCapabilitiesDir();
+  return join(resolve(capDir, '..'), 'data', 'mcp-connectors.sqlite');
+}
+
 function officeaceRegistered() {
+  let hasMcp = false;
+  const dbPath = officeaceSqlitePath();
+  if (existsSync(dbPath)) {
+    try {
+      const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
+      const db = new DatabaseSync(dbPath, { readonly: true });
+      const row = db.prepare("SELECT enabled FROM mcp_connectors WHERE name = 'huaweicloud-devkit'").get();
+      db.close();
+      hasMcp = Boolean(row?.enabled);
+    } catch {}
+  }
+
   const capFile = join(officeaceCapabilitiesDir(), 'capabilities.json');
   const cfg = readJsonSafe(capFile);
-  if (!cfg?.capabilities) return false;
-  const hasMcp = cfg.capabilities.some((c) => c.id === 'huaweicloud-devkit' && c.type === 'mcp');
-  const hasSkills = cfg.capabilities.some((c) => c.id === 'huaweicloud-core' && c.type === 'skill');
+  const hasSkills = cfg?.capabilities?.some((c) => c.id === 'huaweicloud-core' && c.type === 'skill') ?? false;
+
   return hasMcp || hasSkills;
 }
 
