@@ -14,7 +14,7 @@ import { homedir, platform } from 'node:os';
 import { createInterface } from 'node:readline';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { createRequire } from 'node:module';
+import Database from 'better-sqlite3';
 import { getAuthStatus, syncAuth } from './auth/service.mjs';
 import { SUPPORTED_AGENT_TARGETS } from './auth/agent-registration.mjs';
 import {
@@ -158,15 +158,14 @@ function officeaceSqlitePath() {
 }
 
 function openOfficeaceDb() {
-  const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
-  return new DatabaseSync(officeaceSqlitePath());
+  return new Database(officeaceSqlitePath());
 }
 
 function officeaceGetOwnerUserId() {
   if (!existsSync(officeaceSqlitePath())) return null;
   try {
     const db = openOfficeaceDb();
-    const row = db.prepare("SELECT owner_user_id FROM mcp_connectors WHERE owner_user_id IS NOT NULL LIMIT 1").get();
+    const row = db.prepare('SELECT owner_user_id FROM mcp_connectors WHERE owner_user_id IS NOT NULL LIMIT 1').get();
     db.close();
     return row?.owner_user_id || null;
   } catch {
@@ -226,7 +225,9 @@ function ensureOfficeaceMcpInSqlite() {
     return true;
   } catch (err) {
     if (db) {
-      try { db.close(); } catch {}
+      try {
+        db.close();
+      } catch {}
     }
     console.log(`  \x1b[31mFailed to write MCP config: ${err.message}\x1b[0m`);
     return false;
@@ -239,7 +240,9 @@ function removeOfficeaceMcpFromSqlite() {
   let db;
   try {
     db = openOfficeaceDb();
-    db.prepare("DELETE FROM mcp_connector_tools WHERE connector_id IN (SELECT id FROM mcp_connectors WHERE name = 'huaweicloud-devkit')").run();
+    db.prepare(
+      "DELETE FROM mcp_connector_tools WHERE connector_id IN (SELECT id FROM mcp_connectors WHERE name = 'huaweicloud-devkit')",
+    ).run();
     const result2 = db.prepare("DELETE FROM mcp_connectors WHERE name = 'huaweicloud-devkit'").run();
     if (result2.changes > 0) {
       console.log(`  MCP config removed: ${dbPath}`);
@@ -247,7 +250,9 @@ function removeOfficeaceMcpFromSqlite() {
     db.close();
   } catch (err) {
     if (db) {
-      try { db.close(); } catch {}
+      try {
+        db.close();
+      } catch {}
     }
     console.log(`  \x1b[31mFailed to remove MCP config: ${err.message}\x1b[0m`);
   }
