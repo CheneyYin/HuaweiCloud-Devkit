@@ -8,7 +8,7 @@
 
 帮助 AI 编码助手安全、准确地使用华为云——一站式集成云知识、CLI 工具和安全护栏。
 
-支持 OpenCode、Codex、码道（CodeArts Agent）、WorkBuddy、DeepSeek Harness（DSH）。
+支持 OpenCode、Codex、码道（CodeArts Agent）、WorkBuddy、DeepSeek Harness（DSH）、OfficeAce。
 
 ## 前置条件
 
@@ -105,6 +105,21 @@ npx --yes huaweicloud-devkit uninstall --target dsh
 > DSH V1 通过 `@deepseek-ai/dsh-mcp-client` 复用现有 MCP Server。
 > 如果安装器提示 DSH MCP 客户端未检测到，请按提示执行
 > `npx @deepseek-ai/dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`。
+
+### OfficeAce
+
+```bash
+npx --yes huaweicloud-devkit install --target officeace
+```
+
+安装后**重启 OfficeAce**。
+
+```bash
+npx --yes huaweicloud-devkit doctor
+npx --yes huaweicloud-devkit status --target officeace
+npx --yes huaweicloud-devkit update --target officeace
+npx --yes huaweicloud-devkit uninstall --target officeace
+```
 
 ### 其他 Agent
 
