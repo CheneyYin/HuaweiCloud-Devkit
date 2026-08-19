@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.2-next.11 (2026-08-19)
+
+- fix: move eslint-disable-next to correct line for node:undici import
+- style: format proxy-agent.mjs with prettier
+- fix(proxy): use undici fetch for proxy dispatcher, add node:undici fallback, load proxy env at startup
+- docs: restructure README - unify command style, add install-hcloud/auth/install-all/update-all sections
+- docs: update OpenCode section with --target recommendation
+- docs: clarify auto-detection behavior when multiple agents are present
+- fix(release): push to dev only tags, avoid auto-creating release PRs on code merges
+
 ## 1.0.2-next.10 (2026-08-19)
 
 - feat: add huaweicloud-devkit-mcp bin entry for standard MCP config
