@@ -69,8 +69,14 @@ export function findSkillsRoot(candidates) {
 
 function resolveSkillsRoot() {
   return (
-    findSkillsRoot([SKILLS_ROOT_DEV, dshSkillsDir(), codeartsSkillsDir(), opencodeSkillsDir(), workbuddySkillsDir(), officeaceSkillsRoot()]) ||
-    SKILLS_ROOT_DEV
+    findSkillsRoot([
+      SKILLS_ROOT_DEV,
+      dshSkillsDir(),
+      codeartsSkillsDir(),
+      opencodeSkillsDir(),
+      workbuddySkillsDir(),
+      officeaceSkillsRoot(),
+    ]) || SKILLS_ROOT_DEV
   );
 }
 const SKILLS_ROOT = resolveSkillsRoot();

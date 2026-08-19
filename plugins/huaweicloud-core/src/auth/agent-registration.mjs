@@ -3,7 +3,15 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 
-export const SUPPORTED_AGENT_TARGETS = ['opencode', 'codex', 'codex-desktop', 'codearts', 'workbuddy', 'dsh', 'officeace'];
+export const SUPPORTED_AGENT_TARGETS = [
+  'opencode',
+  'codex',
+  'codex-desktop',
+  'codearts',
+  'workbuddy',
+  'dsh',
+  'officeace',
+];
 
 function baseHome() {
   return process.env.HUAWEICLOUD_HOME || homedir();
@@ -109,12 +117,8 @@ function officeaceRegistered() {
   const capFile = join(officeaceCapabilitiesDir(), 'capabilities.json');
   const cfg = readJsonSafe(capFile);
   if (!cfg?.capabilities) return false;
-  const hasMcp = cfg.capabilities.some(
-    (c) => c.id === 'huaweicloud-devkit' && c.type === 'mcp',
-  );
-  const hasSkills = cfg.capabilities.some(
-    (c) => c.id === 'huaweicloud-core' && c.type === 'skill',
-  );
+  const hasMcp = cfg.capabilities.some((c) => c.id === 'huaweicloud-devkit' && c.type === 'mcp');
+  const hasSkills = cfg.capabilities.some((c) => c.id === 'huaweicloud-core' && c.type === 'skill');
   return hasMcp || hasSkills;
 }
 

@@ -187,9 +187,7 @@ function ensureOfficeaceCapabilities() {
       env,
     },
   };
-  const existingMcpIdx = config.capabilities.findIndex(
-    (c) => c.id === 'huaweicloud-devkit' && c.type === 'mcp',
-  );
+  const existingMcpIdx = config.capabilities.findIndex((c) => c.id === 'huaweicloud-devkit' && c.type === 'mcp');
   if (existingMcpIdx >= 0) {
     const existing = config.capabilities[existingMcpIdx];
     if (
@@ -250,9 +248,7 @@ function registerOfficeaceSkillEntries() {
   let changed = false;
 
   for (const name of skillNames) {
-    const existingIdx = config.capabilities.findIndex(
-      (c) => c.id === name && c.type === 'skill',
-    );
+    const existingIdx = config.capabilities.findIndex((c) => c.id === name && c.type === 'skill');
     if (existingIdx >= 0) continue;
     config.capabilities.push({
       id: name,
@@ -1407,12 +1403,8 @@ function officeaceStatus() {
   if (existsSync(capFile)) {
     try {
       const config = JSON.parse(readFileSync(capFile, 'utf8'));
-      const hasMcp = (config.capabilities || []).some(
-        (c) => c.id === 'huaweicloud-devkit' && c.type === 'mcp',
-      );
-      console.log(
-        `  MCP config: ${hasMcp ? '\x1b[32mConfigured\x1b[0m' : '\x1b[31mNot configured\x1b[0m'}`,
-      );
+      const hasMcp = (config.capabilities || []).some((c) => c.id === 'huaweicloud-devkit' && c.type === 'mcp');
+      console.log(`  MCP config: ${hasMcp ? '\x1b[32mConfigured\x1b[0m' : '\x1b[31mNot configured\x1b[0m'}`);
     } catch {
       console.log(`  MCP config: \x1b[31mInvalid\x1b[0m`);
     }
@@ -1463,10 +1455,7 @@ function autoDetectTarget() {
         return existsSync(dsh);
       },
     ],
-    [
-      'officeace',
-      () => existsSync(officeaceCapabilitiesDir()),
-    ],
+    ['officeace', () => existsSync(officeaceCapabilitiesDir())],
   ];
   const detected = checks.filter(([, check]) => check()).map(([name]) => name);
   if (detected.length === 0) {
@@ -1818,9 +1807,10 @@ async function cmdDoctor() {
     if (existsSync(officeaceCfg)) {
       try {
         const cfg = JSON.parse(readFileSync(officeaceCfg, 'utf8'));
-        if (Array.isArray(cfg.capabilities) && cfg.capabilities.some(
-          (c) => c.id === 'huaweicloud-devkit' && c.type === 'mcp',
-        )) {
+        if (
+          Array.isArray(cfg.capabilities) &&
+          cfg.capabilities.some((c) => c.id === 'huaweicloud-devkit' && c.type === 'mcp')
+        ) {
           mcpConfigured = true;
           mcpCfgTarget = 'OfficeAce';
         }
@@ -2564,7 +2554,9 @@ async function main() {
     case '-h':
     default:
       console.log(BANNER);
-      console.log('Usage: npx huaweicloud-devkit <command> [--target <opencode|codex|codearts|workbuddy|dsh|officeace|all>]\n');
+      console.log(
+        'Usage: npx huaweicloud-devkit <command> [--target <opencode|codex|codearts|workbuddy|dsh|officeace|all>]\n',
+      );
       console.log('Commands:');
       console.log('  install      Install skills, MCP server, safety policy');
       console.log('  uninstall    Remove installed files');
