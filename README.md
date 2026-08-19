@@ -65,7 +65,7 @@ npx --yes huaweicloud-devkit update --target codearts
 npx --yes huaweicloud-devkit uninstall --target codearts
 ```
 
-> **Sandbox mode**: CodeArts defaults to sandbox mode which blocks KooCLI. `install-hcloud` detects this and shows how to resolve it — install KooCLI outside the sandbox terminal, or disable sandbox mode in CodeArts settings (Settings → Permissions → Bash mode).
+> **Sandbox mode**: CodeArts defaults to sandbox mode which blocks KooCLI. `install-hcloud` detects this and shows how to resolve it — install KooCLI outside the sandbox terminal, or disable sandbox mode in CodeArts settings (Settings → Conversation Flow → Agent Terminal Command Run Mode → Auto Run).
 
 ### WorkBuddy
 

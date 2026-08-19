@@ -377,7 +377,7 @@ function printSandboxWarning(reason) {
   console.log(`\x1b[31m  请任选其一继续:\x1b[0m`);
   console.log(`\x1b[31m  A. 在码道外的终端安装并使用 KooCLI (推荐):`);
   console.log(`\x1b[31m     https://support.huaweicloud.com/qs-hcli/hcli_02_003.html`);
-  console.log(`\x1b[31m  B. 在码道设置中关闭沙箱模式后重试 (设置 → 权限 → Bash 模式)`);
+  console.log(`\x1b[31m  B. 在码道设置中关闭沙箱模式后重试 (设置 → 对话流 → 智能体 终端命令运行模式 → 自动运行)`);
   console.log(`\x1b[31m  关闭沙箱后重新运行: npx huaweicloud-devkit install-hcloud\x1b[0m`);
 }
 
