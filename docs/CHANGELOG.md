@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.2-next.12 (2026-08-19)
+
+- fix: sandbox MCP improvements - execOneShot tool, timeout, devbridge, endpoint clarity
+
 ## 1.0.2-next.11 (2026-08-19)
 
 - fix: move eslint-disable-next to correct line for node:undici import
