@@ -14,6 +14,7 @@ import { homedir, platform } from 'node:os';
 import { createInterface } from 'node:readline';
 import { spawnSync } from 'node:child_process';
 import { getAuthStatus, syncAuth } from './auth/service.mjs';
+import { SUPPORTED_AGENT_TARGETS } from './auth/agent-registration.mjs';
 import {
   globalCredentialsPath,
   readGlobalCredentials,
@@ -1196,17 +1197,39 @@ function opencodeStatus() {
   }
 }
 
+function autoDetectTarget() {
+  const checks = [
+    ['opencode', () => existsSync(join(homedir(), '.config', 'opencode'))],
+    ['codex-desktop', () => existsSync(join(homedir(), '.codex'))],
+    ['codearts', () => existsSync(join(homedir(), '.codeartsdoer'))],
+    ['workbuddy', () => existsSync(join(homedir(), '.workbuddy'))],
+    [
+      'dsh',
+      () => {
+        const dsh = process.env.DSH_HOME || join(homedir(), '.dsh');
+        return existsSync(dsh);
+      },
+    ],
+  ];
+  const detected = checks.filter(([, check]) => check()).map(([name]) => name);
+  if (detected.length === 0) {
+    console.error('No supported agent detected.');
+    console.error(`Supported: ${SUPPORTED_AGENT_TARGETS.join(', ')} (or "all")`);
+    console.error('Use --target <agent> to specify.');
+    process.exit(1);
+  }
+  if (detected.length === 1) return detected[0];
+  return 'all';
+}
+
 function parseTarget() {
   const idx = process.argv.indexOf('--target');
-  if (idx < 0) return 'opencode';
+  if (idx < 0) return autoDetectTarget();
   const val = (process.argv[idx + 1] || '').toLowerCase();
-  if (val === 'codex') return 'codex';
-  if (val === 'codex-desktop') return 'codex-desktop';
-  if (val === 'codearts') return 'codearts';
-  if (val === 'workbuddy') return 'workbuddy';
-  if (val === 'dsh') return 'dsh';
-  if (val === 'all') return 'all';
-  return 'opencode';
+  if (val === 'all' || SUPPORTED_AGENT_TARGETS.includes(val)) return val;
+  console.error(`Unknown target: ${val}`);
+  console.error(`Supported: ${SUPPORTED_AGENT_TARGETS.join(', ')} (or "all")`);
+  process.exit(1);
 }
 
 async function cmdInstall() {
