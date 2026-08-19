@@ -35,6 +35,7 @@ export default [
     files: ['plugins/huaweicloud-core/src/proxy/proxy-agent.mjs'],
     rules: {
       'n/prefer-node-protocol': 'off',
+      'n/no-missing-import': ['error', { allowModules: ['undici'] }],
     },
   },
   {

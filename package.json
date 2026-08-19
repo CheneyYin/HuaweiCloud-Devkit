@@ -27,9 +27,7 @@
     "pack:verify": "node ./scripts/pack-verify.mjs",
     "postinstall": "node -e \"console.log('\\nHuaweiCloud DevKit installed. Run: npx huaweicloud-devkit install\\n')\""
   },
-  "dependencies": {
-    "undici": "^6.21.0"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "eslint": "^10.8.1",
