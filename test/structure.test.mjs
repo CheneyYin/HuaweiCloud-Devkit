@@ -251,7 +251,7 @@ test('setup-cli.mjs supports the codearts target end to end', () => {
     /const skillsOptions = \[[\s\S]*?opencodeSkillsDir\(\)[\s\S]*?codexDesktopSkillsDir\(\)[\s\S]*?codeartsSkillsDir\(\)[\s\S]*?workbuddySkillsDir\(\)[\s\S]*?dshSkillsDir\(\)[\s\S]*?\];/,
   );
   // help text documents the target
-  assert.match(setup, /--target <opencode\|codex\|codearts\|workbuddy\|dsh\|all>/);
+  assert.match(setup, /--target <opencode\|codex\|codearts\|workbuddy\|dsh\|officeace\|all>/);
   assert.match(setup, /install --target codearts/);
 });
 
@@ -265,7 +265,7 @@ test('tools.mjs resolves skills from the codearts directory', () => {
   assert.match(tools, /existsSync\(join\(root, d\.name, 'SKILL\.md'\)\)/);
   assert.match(
     tools,
-    /findSkillsRoot\(\[[\s\S]*?SKILLS_ROOT_DEV[\s\S]*?dshSkillsDir\(\)[\s\S]*?codeartsSkillsDir\(\)[\s\S]*?opencodeSkillsDir\(\)[\s\S]*?workbuddySkillsDir\(\)[\s\S]*?\]\)/,
+    /findSkillsRoot\(\[[\s\S]*?SKILLS_ROOT_DEV[\s\S]*?dshSkillsDir\(\)[\s\S]*?codeartsSkillsDir\(\)[\s\S]*?opencodeSkillsDir\(\)[\s\S]*?workbuddySkillsDir\(\)[\s\S]*?officeaceSkillsRoot\(\)[\s\S]*?\]\)/,
   );
 });
 
@@ -334,7 +334,7 @@ test('setup-cli.mjs supports the dsh target end to end', () => {
   assert.match(setup, /dshPatchConfigured\(\)/);
   assert.match(setup, /dshSkillsDir\(\)/);
   // help text documents the target
-  assert.match(setup, /--target <opencode\|codex\|codearts\|workbuddy\|dsh\|all>/);
+  assert.match(setup, /--target <opencode\|codex\|codearts\|workbuddy\|dsh\|officeace\|all>/);
   assert.match(setup, /install --target dsh/);
 });
 
@@ -346,7 +346,40 @@ test('tools.mjs resolves skills from the dsh directory', () => {
   // stale or empty dirs must not short-circuit the fallback chain
   assert.match(tools, /resolveSkillsRoot[\s\S]*?findSkillsRoot\(\[/);
   assert.match(tools, /\|\|\s*SKILLS_ROOT_DEV/);
-  assert.match(tools, /opencode, codex, codex-desktop, codearts, workbuddy, dsh, or all/);
+  assert.match(tools, /opencode, codex, codex-desktop, codearts, workbuddy, dsh, officeace, or all/);
+});
+
+test('tools.mjs resolves skills from the officeace directory', () => {
+  const tools = readFileSync(join(pluginRoot, 'src', 'tools.mjs'), 'utf8');
+  assert.match(tools, /function officeaceSkillsRoot\(\)/);
+  assert.match(tools, /process\.env\.OFFICEACE_HOME/);
+  assert.match(tools, /office-claw/);
+  assert.match(tools, /capabilities\.json/);
+});
+
+test('setup-cli.mjs supports the officeace target end to end', () => {
+  const setup = readFileSync(join(pluginRoot, 'src', 'setup-cli.mjs'), 'utf8');
+  assert.match(setup, /'officeace'/);
+  assert.match(setup, /async function installOfficeAce\(\)/);
+  assert.match(setup, /function uninstallOfficeAce\(\)/);
+  assert.match(setup, /function officeaceStatus\(\)/);
+  assert.match(setup, /async function updateOfficeAce\(\)/);
+  assert.match(setup, /function officeaceCapabilitiesDir\(\)/);
+  assert.match(setup, /function officeaceCapabilitiesFile\(\)/);
+  assert.match(setup, /function officeaceSkillsDir\(\)/);
+  assert.match(setup, /function officeacePluginsDir\(\)/);
+  assert.match(setup, /function ensureOfficeaceCapabilities\(\)/);
+  assert.match(setup, /function removeOfficeaceCapabilities\(\)/);
+  assert.match(setup, /function registerOfficeaceSkillEntries\(\)/);
+  assert.match(setup, /copyDir\(skillsSrc, officeaceSkillsDir\(\)\)/);
+  assert.match(setup, /ensureOfficeaceCapabilities\(\)/);
+  assert.match(setup, /registerOfficeaceSkillEntries\(\)/);
+  assert.match(setup, /type.*skill.*source.*custom/s);
+  assert.match(setup, /mcpServer.*command.*node/s);
+  assert.match(setup, /capabilities\.json/);
+  const branches = setup.match(/target === 'officeace' \|\| target === 'all'/g);
+  assert.ok(branches && branches.length >= 3, `officeace dispatch branches: ${branches?.length}`);
+  assert.match(setup, /install --target officeace/);
 });
 
 test('official Huawei Cloud Icons library is integrated', () => {

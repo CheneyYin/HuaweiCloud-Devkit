@@ -35,6 +35,20 @@ function dshSkillsDir() {
   const home = process.env.DSH_HOME || join(homedir(), '.dsh');
   return join(home, 'skills');
 }
+function officeaceSkillsRoot() {
+  if (process.env.OFFICEACE_HOME) return join(process.env.OFFICEACE_HOME, 'skills');
+  const dotDir = join(homedir(), '.office-claw');
+  const dotCapFile = join(dotDir, 'capabilities.json');
+  if (existsSync(dotCapFile)) return join(dotDir, 'skills');
+  if (process.platform === 'win32') {
+    for (const base of [process.env.ProgramFiles, 'C:\\Program Files', 'D:\\Program Files']) {
+      if (!base) continue;
+      const dir = join(base, 'OfficeAce', '.office-claw');
+      if (existsSync(join(dir, 'capabilities.json'))) return join(dir, 'skills');
+    }
+  }
+  return join(dotDir, 'skills');
+}
 export function listSkillDirs(root) {
   if (!existsSync(root)) return [];
   try {
@@ -55,7 +69,7 @@ export function findSkillsRoot(candidates) {
 
 function resolveSkillsRoot() {
   return (
-    findSkillsRoot([SKILLS_ROOT_DEV, dshSkillsDir(), codeartsSkillsDir(), opencodeSkillsDir(), workbuddySkillsDir()]) ||
+    findSkillsRoot([SKILLS_ROOT_DEV, dshSkillsDir(), codeartsSkillsDir(), opencodeSkillsDir(), workbuddySkillsDir(), officeaceSkillsRoot()]) ||
     SKILLS_ROOT_DEV
   );
 }
@@ -363,7 +377,7 @@ export const TOOL_DEFINITIONS = [
         target: {
           type: 'string',
           description:
-            'Agent target to check: opencode, codex, codex-desktop, codearts, workbuddy, dsh, or all (default).',
+            'Agent target to check: opencode, codex, codex-desktop, codearts, workbuddy, dsh, officeace, or all (default).',
         },
       },
     },

@@ -29,6 +29,7 @@ plugins/huaweicloud-core/
   .codex-plugin/    ← Codex plugin manifest
   .claude-plugin/   ← Claude Code plugin manifest
   .cursor-plugin/   ← Cursor plugin manifest
+  .officeace-plugin/← OfficeAce plugin manifest
   .mcp.json         ← MCP server config for agents
 ```
 

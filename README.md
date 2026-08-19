@@ -8,7 +8,7 @@
 
 Help AI coding agents use Huawei Cloud safely and accurately — a single integration that gives agents cloud knowledge, CLI tooling, and safety guardrails.
 
-Supports OpenCode, Codex, CodeArts Agent, WorkBuddy, and DeepSeek Harness (DSH).
+Supports OpenCode, Codex, CodeArts Agent, WorkBuddy, DeepSeek Harness (DSH), and OfficeAce.
 
 ## Prerequisites
 
@@ -107,6 +107,21 @@ npx --yes huaweicloud-devkit uninstall --target dsh
 > `@deepseek-ai/dsh-mcp-client`. If the installer reports that the DSH MCP
 > client is not detected, run:
 > `npx @deepseek-ai/dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`.
+
+### OfficeAce
+
+```bash
+npx --yes huaweicloud-devkit install --target officeace
+```
+
+**Restart OfficeAce** after installation.
+
+```bash
+npx --yes huaweicloud-devkit doctor
+npx --yes huaweicloud-devkit status --target officeace
+npx --yes huaweicloud-devkit update --target officeace
+npx --yes huaweicloud-devkit uninstall --target officeace
+```
 
 ### Other Agents
 
