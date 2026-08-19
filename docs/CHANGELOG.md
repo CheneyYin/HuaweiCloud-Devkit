@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.2-next.10 (2026-08-19)
+
+- feat: add huaweicloud-devkit-mcp bin entry for standard MCP config
+- chore(release): 1.0.2-next.9
+- style: prettier format fix for OfficeAce adapter
+- feat: add OfficeAce adapter support
+- fix(install): run npm install for runtime deps (undici) after copying src
+- fix: format version files with prettier, fix lint in create-release-pr.mjs
+- fix(release): run prettier on changed files before creating release PR
+- fix: remove format from test job needs so formatting issues do not block tests
+- feat(release): publish prereleases directly from dev, manual dispatch only
+
 ## 1.0.2-next.9 (2026-08-19)
 
 - style: prettier format fix for OfficeAce adapter
