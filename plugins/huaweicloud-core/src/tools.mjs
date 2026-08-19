@@ -9,6 +9,7 @@ import { searchMarketplace } from './search-market.mjs';
 import { getServiceIcon } from './icon-library.mjs';
 import {
   execWithSession,
+  execOneShot,
   closeSession,
   uploadFileWithSession,
   DEFAULT_WORKSPACE_ID,
@@ -406,7 +407,7 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'huaweicloud_sandbox_exec_with_session',
     description:
-      'Execute a command on a workspace terminal with session reuse (state persists across calls). Shell state (cd, env vars, aliases) carries over between calls.',
+      'Execute a command on a workspace terminal with session reuse (state persists across calls). Shell state (cd, env vars, aliases) carries over between calls. Use for interactive work and command sequences that need shared state. NOT for long-running commands (>30s) — prefer exec_one_shot for those.',
     inputSchema: {
       type: 'object',
       required: ['command'],
@@ -414,7 +415,22 @@ export const TOOL_DEFINITIONS = [
         command: { type: 'string', description: 'The shell command to execute on the remote workspace' },
         workspace_id: { type: 'string', description: 'The workspace ID' },
         username: { type: 'string', description: 'Login username for the remote terminal (default: root)' },
-        timeout_ms: { type: 'number', description: 'Execution timeout in milliseconds (default: 30000)' },
+        timeout_ms: { type: 'number', description: 'Execution timeout in milliseconds (default: 120000)' },
+      },
+    },
+  },
+  {
+    name: 'huaweicloud_sandbox_exec_one_shot',
+    description:
+      'Execute a command on a workspace terminal with a fresh connection per call (no session state carries over). Each invocation opens a new WebSocket connection, executes one command, then disconnects. Use for long-running build/deploy/install commands (>30s) that do not need shell state persistence between calls. More stable than session-based execution for heavy workloads.',
+    inputSchema: {
+      type: 'object',
+      required: ['command'],
+      properties: {
+        command: { type: 'string', description: 'The shell command to execute on the remote workspace' },
+        workspace_id: { type: 'string', description: 'The workspace ID' },
+        username: { type: 'string', description: 'Login username for the remote terminal (default: root)' },
+        timeout_ms: { type: 'number', description: 'Execution timeout in milliseconds (default: 120000)' },
       },
     },
   },
@@ -441,7 +457,7 @@ export const TOOL_DEFINITIONS = [
         remote_path: { type: 'string', description: 'Target path in the sandbox, e.g. /workspace/<repo>/index.html.' },
         workspace_id: { type: 'string', description: 'The workspace ID' },
         username: { type: 'string', description: 'Login username (default: root)' },
-        timeout_ms: { type: 'number', description: 'Per-command execution timeout in milliseconds (default: 30000)' },
+        timeout_ms: { type: 'number', description: 'Per-command execution timeout in milliseconds (default: 120000)' },
       },
     },
   },
@@ -557,29 +573,36 @@ export async function callTool(name, args = {}) {
     case 'huaweicloud_sandbox_exec_with_session': {
       const sandboxWsId2 = args.workspace_id || DEFAULT_WORKSPACE_ID;
       const sandboxUser2 = args.username || 'root';
-      const sandboxTimeout2 = args.timeout_ms || 30000;
+      const sandboxTimeout2 = args.timeout_ms || 120000;
       const sandboxResult2 = await execWithSession(sandboxWsId2, args.command, sandboxUser2, sandboxTimeout2);
       return { stdout: sandboxResult2.stdout, exitCode: sandboxResult2.exitCode };
     }
-    case 'huaweicloud_sandbox_close_session': {
+    case 'huaweicloud_sandbox_exec_one_shot': {
       const sandboxWsId3 = args.workspace_id || DEFAULT_WORKSPACE_ID;
       const sandboxUser3 = args.username || 'root';
-      const closed = await closeSession(sandboxWsId3, sandboxUser3);
+      const sandboxTimeout3 = args.timeout_ms || 120000;
+      const sandboxResult3 = await execOneShot(sandboxWsId3, args.command, sandboxUser3, sandboxTimeout3);
+      return { stdout: sandboxResult3.stdout, exitCode: sandboxResult3.exitCode };
+    }
+    case 'huaweicloud_sandbox_close_session': {
+      const sandboxWsId4 = args.workspace_id || DEFAULT_WORKSPACE_ID;
+      const sandboxUser4 = args.username || 'root';
+      const closed = await closeSession(sandboxWsId4, sandboxUser4);
       return closed ? 'ok' : 'not_connected';
     }
     case 'huaweicloud_sandbox_upload_file': {
       if (!args.local_path || !args.remote_path) {
         throw new Error('local_path and remote_path are required.');
       }
-      const sandboxWsId4 = args.workspace_id || DEFAULT_WORKSPACE_ID;
-      const sandboxUser4 = args.username || 'root';
-      const sandboxTimeout4 = args.timeout_ms || 30000;
+      const sandboxWsId5 = args.workspace_id || DEFAULT_WORKSPACE_ID;
+      const sandboxUser5 = args.username || 'root';
+      const sandboxTimeout5 = args.timeout_ms || 120000;
       return await uploadFileWithSession(
-        sandboxWsId4,
+        sandboxWsId5,
         args.local_path,
         args.remote_path,
-        sandboxUser4,
-        sandboxTimeout4,
+        sandboxUser5,
+        sandboxTimeout5,
       );
     }
     case 'huaweicloud_sandbox_check_user':
