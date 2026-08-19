@@ -191,6 +191,25 @@ function copyDir(src, dest) {
   }
 }
 
+function installRuntimeDeps(pluginsDir) {
+  const pkgJson = { type: 'module', dependencies: { undici: '^8.10.0' } };
+  mkdirSync(pluginsDir, { recursive: true });
+  writeFileSync(join(pluginsDir, 'package.json'), JSON.stringify(pkgJson, null, 2));
+  const r = spawnSync('npm', ['install', '--omit=dev'], {
+    cwd: pluginsDir,
+    windowsHide: true,
+    stdio: 'pipe',
+    timeout: 120000,
+  });
+  if (r.status === 0) {
+    console.log(`  Runtime deps installed -> ${join(pluginsDir, 'node_modules')}`);
+  } else {
+    const err = (r.stderr || '').toString().trim().split(/\r?\n/).slice(-2).join(' ');
+    console.log(`  \x1b[33m[WARN]\x1b[0m npm install failed in ${pluginsDir}${err ? `: ${err}` : ''}`);
+    console.log('  Manual fix: cd %s && npm install', pluginsDir);
+  }
+}
+
 function removeIfExists(p) {
   if (existsSync(p)) {
     try {
@@ -373,6 +392,7 @@ async function installOpenCode() {
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
   updateOpenCodeConfig(pluginDest);
+  installRuntimeDeps(pluginDest);
 }
 
 function uninstallOpenCode() {
@@ -445,6 +465,7 @@ async function updateOpenCode() {
   updateOpenCodeConfig(pluginDest);
   mkdirSync(pluginDest, { recursive: true });
   writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
+  installRuntimeDeps(pluginDest);
 }
 
 function codexMcpServerPath() {
@@ -549,6 +570,7 @@ async function installCodexDesktop() {
   }
 
   ensureCodexConfigSection(mcpServerAbsPath);
+  installRuntimeDeps(codexDesktopPluginsDir());
 }
 
 // Incremental update: overwrite copied files, prune stale ones, and only touch the config when necessary.
@@ -596,6 +618,7 @@ async function updateCodexDesktop() {
 
   ensureCodexConfigSection(mcpServerAbsPath);
   writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
+  installRuntimeDeps(pluginDest);
 }
 
 function uninstallCodexDesktop() {
@@ -680,6 +703,7 @@ async function installCodeArts() {
 
   registerCodeartsMcp(codeartsMcpSettingsFile());
   registerCodeartsMcp(codeartsProjectMcpSettingsFile());
+  installRuntimeDeps(pluginDest);
 }
 
 // Incremental update: overwrite copied files, prune stale ones, and only touch the config when necessary.
@@ -702,6 +726,7 @@ async function updateCodeArts() {
   registerCodeartsMcp(codeartsProjectMcpSettingsFile());
   mkdirSync(pluginDest, { recursive: true });
   writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
+  installRuntimeDeps(pluginDest);
 }
 
 function uninstallCodeArts() {
@@ -814,6 +839,7 @@ async function installWorkBuddy() {
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
 
   ensureWorkbuddyMcpConfig();
+  installRuntimeDeps(pluginDest);
 }
 
 // Incremental update: overwrite copied files, prune stale ones, and only touch the config when necessary.
@@ -833,6 +859,7 @@ async function updateWorkBuddy() {
   ensureWorkbuddyMcpConfig();
   mkdirSync(pluginDest, { recursive: true });
   writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
+  installRuntimeDeps(pluginDest);
 }
 
 function uninstallWorkBuddy() {
@@ -1097,6 +1124,7 @@ async function installDsh() {
   tryInstallDshMcpClient();
   mkdirSync(pluginDest, { recursive: true });
   writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
+  installRuntimeDeps(pluginDest);
 }
 
 async function updateDsh() {
@@ -1116,6 +1144,7 @@ async function updateDsh() {
   tryInstallDshMcpClient();
   mkdirSync(pluginDest, { recursive: true });
   writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
+  installRuntimeDeps(pluginDest);
 }
 
 function uninstallDsh() {
