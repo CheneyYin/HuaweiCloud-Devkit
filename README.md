@@ -16,21 +16,21 @@ Supports OpenCode, Codex, CodeArts Agent, WorkBuddy, DeepSeek Harness (DSH), and
 
 ## Quick Start
 
+> If `--target` is omitted, the installer auto-detects agents on your machine. When multiple agents are detected, **all of them** will be installed. Specify `--target` to control which agent receives the install.
+
 ### OpenCode
 
 ```bash
 npx --yes huaweicloud-devkit install --target opencode
 ```
 
-Installs the DevKit into OpenCode. If `--target` is omitted, the installer auto-detects agents on your machine — when multiple agents are detected, **all of them** will be installed. Use `--target opencode` to ensure only OpenCode is installed.
-
 **Restart the session** after installation.
 
 ```bash
-npx --yes huaweicloud-devkit doctor    # self-check
-npx --yes huaweicloud-devkit status    # show status
-npx --yes huaweicloud-devkit update    # update
-npx --yes huaweicloud-devkit uninstall # uninstall
+npx --yes huaweicloud-devkit doctor --target opencode
+npx --yes huaweicloud-devkit status --target opencode
+npx --yes huaweicloud-devkit update --target opencode
+npx --yes huaweicloud-devkit uninstall --target opencode
 ```
 
 ### Codex
@@ -42,9 +42,9 @@ npx --yes huaweicloud-devkit install --target codex
 > The Codex CLI must be installed first.
 
 ```bash
-npx --yes huaweicloud-devkit doctor                        # self-check
+npx --yes huaweicloud-devkit doctor --target codex
 npx --yes huaweicloud-devkit status --target codex
-npx --yes huaweicloud-devkit update --target codex         # update
+npx --yes huaweicloud-devkit update --target codex
 npx --yes huaweicloud-devkit uninstall --target codex
 ```
 
@@ -59,16 +59,13 @@ npx --yes huaweicloud-devkit install --target codearts
 **Restart the session** after installation.
 
 ```bash
-npx --yes huaweicloud-devkit install-hcloud   # install KooCLI
-npx --yes huaweicloud-devkit doctor           # self-check
+npx --yes huaweicloud-devkit doctor --target codearts
 npx --yes huaweicloud-devkit status --target codearts
 npx --yes huaweicloud-devkit update --target codearts
 npx --yes huaweicloud-devkit uninstall --target codearts
 ```
 
 > **Sandbox mode**: CodeArts defaults to sandbox mode which blocks KooCLI. `install-hcloud` detects this and shows how to resolve it — install KooCLI outside the sandbox terminal, or disable sandbox mode in CodeArts settings (Settings → Permissions → Bash mode).
->
-> **Authentication**: Run `npx huaweicloud-devkit auth init` to configure unified AK/SK credentials for KooCLI, OBS, and sandbox APIs.
 
 ### WorkBuddy
 
@@ -79,13 +76,11 @@ npx --yes huaweicloud-devkit install --target workbuddy
 **Restart the session** after installation.
 
 ```bash
-npx --yes huaweicloud-devkit doctor
+npx --yes huaweicloud-devkit doctor --target workbuddy
 npx --yes huaweicloud-devkit status --target workbuddy
-npx --yes huaweicloud-devkit update --target workbuddy   # update
+npx --yes huaweicloud-devkit update --target workbuddy
 npx --yes huaweicloud-devkit uninstall --target workbuddy
 ```
-
-> **Updating**: `update` is incremental per agent — it refreshes only the installed files and leaves your config untouched. Use `update --target all` to update every installed agent at once.
 
 ### DeepSeek Harness (DSH)
 
@@ -93,22 +88,16 @@ npx --yes huaweicloud-devkit uninstall --target workbuddy
 npx --yes huaweicloud-devkit install --target dsh
 ```
 
-The installer copies Skills to `$DSH_HOME/skills`, installs the MCP server and
-safety policy under `$DSH_HOME/huaweicloud-plugins`, and maintains
-`$DSH_HOME/profiles/web/cordis.patch.yml`. **Restart the DSH session** after
-installation.
+**Restart the DSH session** after installation.
 
 ```bash
-npx --yes huaweicloud-devkit doctor
+npx --yes huaweicloud-devkit doctor --target dsh
 npx --yes huaweicloud-devkit status --target dsh
 npx --yes huaweicloud-devkit update --target dsh
 npx --yes huaweicloud-devkit uninstall --target dsh
 ```
 
-> DSH V1 reuses the existing MCP server through
-> `@deepseek-ai/dsh-mcp-client`. If the installer reports that the DSH MCP
-> client is not detected, run:
-> `npx @deepseek-ai/dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`.
+> DSH V1 reuses the existing MCP server through `@deepseek-ai/dsh-mcp-client`. If the installer reports that the client is not detected, run: `npx @deepseek-ai/dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`.
 
 ### OfficeAce
 
@@ -119,7 +108,7 @@ npx --yes huaweicloud-devkit install --target officeace
 **Restart OfficeAce** after installation.
 
 ```bash
-npx --yes huaweicloud-devkit doctor
+npx --yes huaweicloud-devkit doctor --target officeace
 npx --yes huaweicloud-devkit status --target officeace
 npx --yes huaweicloud-devkit update --target officeace
 npx --yes huaweicloud-devkit uninstall --target officeace
@@ -127,27 +116,54 @@ npx --yes huaweicloud-devkit uninstall --target officeace
 
 ### Other Agents
 
-For agents that support the Model Context Protocol (MCP):
+For agents that support the Model Context Protocol (MCP), add the MCP server manually:
 
 ```json
 {
-  "mcp": {
+  "mcpServers": {
     "huaweicloud-devkit": {
-      "type": "local",
-      "command": ["node", "<path>/plugins/huaweicloud-core/src/mcp-server.mjs"],
-      "enabled": true
+      "command": "node",
+      "args": ["<path>/plugins/huaweicloud-core/src/mcp-server.mjs"]
     }
   }
 }
 ```
 
-Then install:
+Then install the skills:
 
 ```bash
 npx --yes huaweicloud-devkit install
 ```
 
-> **Prerequisite:** Node.js >= 20. Run `npx huaweicloud-devkit auth init` for unified credentials.
+> For unified credentials across KooCLI and OBS, run `npx huaweicloud-devkit auth init`.
+
+### Install KooCLI
+
+```bash
+npx --yes huaweicloud-devkit install-hcloud
+```
+
+### Configure Credentials
+
+```bash
+npx --yes huaweicloud-devkit auth init
+```
+
+Synchronizes AK/SK to KooCLI, OBS, and sandbox APIs in one step.
+
+### Install All Agents
+
+```bash
+npx --yes huaweicloud-devkit install --target all
+```
+
+### Update All Agents
+
+```bash
+npx --yes huaweicloud-devkit update --target all
+```
+
+`update` is incremental — it refreshes installed files without touching your config.
 
 ## What It Does
 
