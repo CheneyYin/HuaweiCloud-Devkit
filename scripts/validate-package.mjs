@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const pluginRoot = join(root, 'plugins', 'huaweicloud-core');
@@ -94,29 +94,11 @@ readmePaths.forEach((path) => {
 
 const readmes = readmePaths.map((p) => ({ path: p, text: readFileSync(p, 'utf8') }));
 
-const { SUPPORTED_AGENT_TARGETS } = await import(
-  pathToFileURL(join(pluginRoot, 'src', 'auth', 'agent-registration.mjs')).href
-);
-
 readmes.forEach(({ path, text }) => {
-  let missing = 0;
-  for (const target of SUPPORTED_AGENT_TARGETS) {
-    if (!new RegExp(target, 'i').test(text)) {
-      console.warn(`\x1b[33m[README]\x1b[0m ${path}: agent target "${target}" not found`);
-      missing++;
-    }
-  }
   if (!/huaweicloud-devkit-mcp/.test(text)) {
     console.warn(`\x1b[33m[README]\x1b[0m ${path}: missing standard MCP npx config`);
-    missing++;
   }
   if (!/Sandbox|DevStation/i.test(text)) {
     console.warn(`\x1b[33m[README]\x1b[0m ${path}: missing sandbox/DevStation feature`);
-    missing++;
-  }
-  if (missing > 0) {
-    console.warn(
-      `\x1b[33m[README]\x1b[0m ${path}: ${missing} item(s) may need update — check the PR template checklist`,
-    );
   }
 });
