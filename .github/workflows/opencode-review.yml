@@ -1,0 +1,80 @@
+name: PR Code Review
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: anomalyco/opencode/github@latest
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MAAS_API_KEY: ${{ secrets.MAAS_API_KEY }}
+          OPENCODE_CONFIG_CONTENT: |
+            {
+              "provider": {
+                "huaweicloud-maas": {
+                  "npm": "@ai-sdk/openai-compatible",
+                  "name": "Huawei Cloud MaaS",
+                  "options": {
+                    "baseURL": "https://api.modelarts-maas.com/openai/v1",
+                    "apiKey": "{env:MAAS_API_KEY}"
+                  },
+                  "models": {
+                    "glm-5.2": {
+                      "name": "GLM-5.2",
+                      "options": { "reasoning_effort": "max" }
+                    }
+                  }
+                }
+              }
+            }
+        with:
+          model: huaweicloud-maas/glm-5.2
+          use_github_token: true
+          prompt: |
+            Review this PR diff against the target branch. Focus on whether the code
+            conforms to this repo's documented coding standards and smell baseline.
+
+            ## Repo Standards (from AGENTS.md)
+            - Every SKILL.md: YAML frontmatter with `name`, no TODO markers
+            - Skills ~80 lines max, reference files for details
+            - KooCLI: `--param=value` (not space-separated), arrays 1-indexed
+            - `HCLOUD_BIN` respected everywhere, never hardcoded `'hcloud'`
+            - Cross-skill references must not be dead ends
+            - Node >=20, ESM only; `npm test`, `npm run lint`, `npm run validate`
+            - When bumping version, update all plugin manifests + `npm run validate`
+            - Skills are routing workflows, not docs; point to support.huaweicloud.com
+            - Complex params: prefer `--cli-jsonInput=<file>` over inline quoting
+
+            ## Smell Baseline (Fowler, _Refactoring_ ch.3)
+            Repo standards override baseline. Each smell is a judgement call.
+            Skip anything tooling (ESLint/Prettier) already enforces.
+
+            - **Mysterious Name**: name doesn't reveal intent → rename
+            - **Duplicated Code**: same logic in multiple places → extract
+            - **Feature Envy**: method reaches into another object's data → move it
+            - **Data Clumps**: same fields/params travel together → bundle into a type
+            - **Primitive Obsession**: primitive where domain type belongs → create one
+            - **Repeated Switches**: same switch/if on same type recurs → polymorphism
+            - **Shotgun Surgery**: one change scattered across files → gather into one module
+            - **Divergent Change**: one file edited for unrelated reasons → split
+            - **Speculative Generality**: abstractions for future needs → delete, inline
+            - **Message Chains**: long `a.b().c().d()` → hide behind method
+            - **Middle Man**: class mostly delegates → cut it, call target direct
+            - **Refused Bequest**: subclass overrides most inheritance → use composition
+
+            ## Output
+            Per file/hunk: cite violated standard or named smell, quote relevant code.
+            Distinguish hard violations from judgement calls. Under 500 words.
+
+            End with one-line summary: total findings, worst issue.
