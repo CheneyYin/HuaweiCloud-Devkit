@@ -8,7 +8,7 @@
 
 Help AI coding agents use Huawei Cloud safely and accurately — a single integration that gives agents cloud knowledge, CLI tooling, and safety guardrails.
 
-Supports OpenCode, Codex, CodeArts Agent, WorkBuddy, DeepSeek Harness (DSH), and OfficeAce.
+Supports OpenCode, CodeArts Agent, WorkBuddy, DeepSeek Harness (DSH), and OfficeAce.
 
 ## Prerequisites
 
@@ -32,23 +32,6 @@ npx --yes huaweicloud-devkit status --target opencode
 npx --yes huaweicloud-devkit update --target opencode
 npx --yes huaweicloud-devkit uninstall --target opencode
 ```
-
-### Codex
-
-```bash
-npx --yes huaweicloud-devkit install --target codex
-```
-
-> The Codex CLI must be installed first.
-
-```bash
-npx --yes huaweicloud-devkit doctor --target codex
-npx --yes huaweicloud-devkit status --target codex
-npx --yes huaweicloud-devkit update --target codex
-npx --yes huaweicloud-devkit uninstall --target codex
-```
-
-> **Codex Desktop** (Windows): use `--target codex-desktop` with the same commands.
 
 ### CodeArts Agent
 

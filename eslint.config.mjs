@@ -5,7 +5,7 @@ import globals from 'globals';
 
 export default [
   {
-    ignores: ['node_modules/', 'dist/', '*.zst', '*.db', 'scripts/deploy-qixi.mjs'],
+    ignores: ['node_modules/', 'dist/', '*.zst', '*.db'],
   },
   js.configs.recommended,
   nodePlugin.configs['flat/recommended'],
