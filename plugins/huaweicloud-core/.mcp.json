@@ -5,8 +5,7 @@
       "args": ["./src/mcp-server.mjs"],
       "cwd": ".",
       "env": {
-        "HUAWEICLOUD_AGENT_TOOLKIT_MODE": "local",
-        "HDKITSERVICE_ENDPOINT": ""
+        "HUAWEICLOUD_AGENT_TOOLKIT_MODE": "local"
       }
     }
   }

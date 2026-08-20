@@ -8,7 +8,7 @@
 
 帮助 AI 编码助手安全、准确地使用华为云——一站式集成云知识、CLI 工具和安全护栏。
 
-支持 OpenCode、Codex、码道（CodeArts Agent）、WorkBuddy、DeepSeek Harness（DSH）。
+支持 OpenCode、码道（CodeArts Agent）、WorkBuddy、DeepSeek Harness（DSH）、OfficeAce。
 
 ## 前置条件
 
@@ -16,37 +16,22 @@
 
 ## 快速开始
 
+> 省略 `--target` 时，安装器会自动检测机器上的 agent，检测到多个时**全部安装**。建议始终指定 `--target` 以明确安装目标。
+
 ### OpenCode
 
 ```bash
-npx --yes huaweicloud-devkit install
+npx --yes huaweicloud-devkit install --target opencode
 ```
 
-自动安装 DevKit。安装后**重启会话**。
+安装后**重启会话**。
 
 ```bash
-npx --yes huaweicloud-devkit doctor   # 自检
-npx --yes huaweicloud-devkit status   # 查看状态
-npx --yes huaweicloud-devkit update   # 更新
-npx --yes huaweicloud-devkit uninstall # 卸载
+npx --yes huaweicloud-devkit doctor --target opencode
+npx --yes huaweicloud-devkit status --target opencode
+npx --yes huaweicloud-devkit update --target opencode
+npx --yes huaweicloud-devkit uninstall --target opencode
 ```
-
-### Codex
-
-```bash
-npx --yes huaweicloud-devkit install --target codex
-```
-
-> 需要先安装 Codex CLI。
-
-```bash
-npx --yes huaweicloud-devkit doctor                        # 自检
-npx --yes huaweicloud-devkit status --target codex
-npx --yes huaweicloud-devkit update --target codex         # 更新
-npx --yes huaweicloud-devkit uninstall --target codex
-```
-
-> **Codex Desktop**（Windows）：将 `--target codex` 换成 `--target codex-desktop`，命令相同。
 
 ### CodeArts Agent（码道）
 
@@ -57,16 +42,13 @@ npx --yes huaweicloud-devkit install --target codearts
 安装后**重启会话**。
 
 ```bash
-npx --yes huaweicloud-devkit install-hcloud   # 安装 KooCLI
-npx --yes huaweicloud-devkit doctor           # 自检
+npx --yes huaweicloud-devkit doctor --target codearts
 npx --yes huaweicloud-devkit status --target codearts
 npx --yes huaweicloud-devkit update --target codearts
 npx --yes huaweicloud-devkit uninstall --target codearts
 ```
 
-> **沙箱模式**：码道默认沙箱模式会阻止 KooCLI 运行。`install-hcloud` 自动检测并给出指引——请在码道外终端安装使用 KooCLI，或在码道设置中关闭沙箱模式（设置 → 权限 → Bash 模式）。
->
-> **认证**：执行 `npx huaweicloud-devkit auth init`，统一配置 KooCLI、OBS 和沙箱接口所需的 AK/SK。
+> **沙箱模式**：码道默认沙箱模式会阻止 KooCLI 运行。`install-hcloud` 自动检测并给出指引——请在码道外终端安装使用 KooCLI，或在码道设置中关闭沙箱模式（设置 → 对话流 → 智能体 终端命令运行模式 → 自动运行）。
 
 ### WorkBuddy
 
@@ -77,13 +59,11 @@ npx --yes huaweicloud-devkit install --target workbuddy
 安装后**重启会话**。
 
 ```bash
-npx --yes huaweicloud-devkit doctor
+npx --yes huaweicloud-devkit doctor --target workbuddy
 npx --yes huaweicloud-devkit status --target workbuddy
-npx --yes huaweicloud-devkit update --target workbuddy   # 更新
+npx --yes huaweicloud-devkit update --target workbuddy
 npx --yes huaweicloud-devkit uninstall --target workbuddy
 ```
-
-> **更新机制**：`update` 按 agent 增量更新，只刷新必要文件、不动你的配置文件。`update --target all` 可一次更新所有已安装的 agent。
 
 ### DeepSeek Harness（DSH）
 
@@ -91,44 +71,78 @@ npx --yes huaweicloud-devkit uninstall --target workbuddy
 npx --yes huaweicloud-devkit install --target dsh
 ```
 
-安装器会把 Skills 写入 `$DSH_HOME/skills`，把 MCP Server 和安全策略写入
-`$DSH_HOME/huaweicloud-plugins`，并自动维护
-`$DSH_HOME/profiles/web/cordis.patch.yml`。安装后**重启 DSH 会话**。
+安装后**重启 DSH 会话**。
 
 ```bash
-npx --yes huaweicloud-devkit doctor
+npx --yes huaweicloud-devkit doctor --target dsh
 npx --yes huaweicloud-devkit status --target dsh
 npx --yes huaweicloud-devkit update --target dsh
 npx --yes huaweicloud-devkit uninstall --target dsh
 ```
 
-> DSH V1 通过 `@deepseek-ai/dsh-mcp-client` 复用现有 MCP Server。
-> 如果安装器提示 DSH MCP 客户端未检测到，请按提示执行
-> `npx @deepseek-ai/dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`。
+> DSH V1 通过 `@deepseek-ai/dsh-mcp-client` 复用现有 MCP Server。如果安装器提示客户端未检测到，请执行：`npx @deepseek-ai/dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`。
+
+### OfficeAce
+
+```bash
+npx --yes huaweicloud-devkit install --target officeace
+```
+
+安装后**重启 OfficeAce**。
+
+```bash
+npx --yes huaweicloud-devkit doctor --target officeace
+npx --yes huaweicloud-devkit status --target officeace
+npx --yes huaweicloud-devkit update --target officeace
+npx --yes huaweicloud-devkit uninstall --target officeace
+```
 
 ### 其他 Agent
 
-支持 MCP 协议的 Agent，手动配置：
+任何支持 MCP 协议的 Agent，直接使用标准 MCP 配置：
 
 ```json
 {
-  "mcp": {
+  "mcpServers": {
     "huaweicloud-devkit": {
-      "type": "local",
-      "command": ["node", "<路径>/plugins/huaweicloud-core/src/mcp-server.mjs"],
-      "enabled": true
+      "command": "npx",
+      "args": ["-y", "-p", "huaweicloud-devkit@next", "huaweicloud-devkit-mcp"]
     }
   }
 }
 ```
 
-然后安装：
+无需预安装 — `npx` 自动处理一切。
+
+> 项目级 AK/SK 可通过 MCP 配置的 `env` 字段设置 `HW_ACCESS_KEY`/`HW_SECRET_KEY`。
+
+### 安装 KooCLI
 
 ```bash
-npx --yes huaweicloud-devkit install
+npx --yes huaweicloud-devkit install-hcloud
 ```
 
-> **前置条件：** Node.js >= 20。执行 `npx huaweicloud-devkit auth init` 完成统一认证。
+### 配置凭据
+
+```bash
+npx --yes huaweicloud-devkit auth init
+```
+
+一步同步 AK/SK 到 KooCLI、OBS 和沙箱接口。
+
+### 安装所有 Agent
+
+```bash
+npx --yes huaweicloud-devkit install --target all
+```
+
+### 更新所有 Agent
+
+```bash
+npx --yes huaweicloud-devkit update --target all
+```
+
+`update` 是增量更新——只刷新已安装的文件，不动配置文件。
 
 ## 功能特性
 
@@ -136,6 +150,7 @@ npx --yes huaweicloud-devkit install
 - **安全优先执行** — 所有写操作需用户明确批准；凭证和密钥自动脱敏
 - **执行前风险检查** — 公网暴露、凭证泄露、破坏性操作在执行前即被拦截
 - **区域感知** — 自动发现可用区域，创建资源前检查服务可用性
+- **沙箱（DevStation）** — 临时云端运行环境，部署 Web 应用并即刻获得公网预览地址
 
 ## 支持的服务
 

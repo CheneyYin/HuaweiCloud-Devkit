@@ -1,9 +1,18 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 
-export const SUPPORTED_AGENT_TARGETS = ['opencode', 'codex', 'codex-desktop', 'codearts', 'workbuddy', 'dsh'];
+export const SUPPORTED_AGENT_TARGETS = [
+  'opencode',
+  'codex',
+  'codex-desktop',
+  'codearts',
+  'workbuddy',
+  'dsh',
+  'officeace',
+];
 
 function baseHome() {
   return process.env.HUAWEICLOUD_HOME || homedir();
@@ -90,6 +99,46 @@ function dshRegistered() {
   }
 }
 
+function officeaceCapabilitiesDir() {
+  if (process.env.OFFICEACE_HOME) return process.env.OFFICEACE_HOME;
+  const dotDir = join(baseHome(), '.office-claw');
+  const dotCapFile = join(dotDir, 'capabilities.json');
+  if (existsSync(dotCapFile)) return dotDir;
+  if (process.platform === 'win32') {
+    for (const base of [process.env.ProgramFiles, 'C:\\Program Files', 'D:\\Program Files']) {
+      if (!base) continue;
+      const dir = join(base, 'OfficeAce', '.office-claw');
+      if (existsSync(join(dir, 'capabilities.json'))) return dir;
+    }
+  }
+  return dotDir;
+}
+
+function officeaceSqlitePath() {
+  const capDir = officeaceCapabilitiesDir();
+  return join(resolve(capDir, '..'), 'data', 'mcp-connectors.sqlite');
+}
+
+function officeaceRegistered() {
+  let hasMcp = false;
+  const dbPath = officeaceSqlitePath();
+  if (existsSync(dbPath)) {
+    try {
+      const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
+      const db = new DatabaseSync(dbPath, { readonly: true });
+      const row = db.prepare("SELECT enabled FROM mcp_connectors WHERE name = 'huaweicloud-devkit'").get();
+      db.close();
+      hasMcp = Boolean(row?.enabled);
+    } catch {}
+  }
+
+  const capFile = join(officeaceCapabilitiesDir(), 'capabilities.json');
+  const cfg = readJsonSafe(capFile);
+  const hasSkills = cfg?.capabilities?.some((c) => c.id === 'huaweicloud-core' && c.type === 'skill') ?? false;
+
+  return hasMcp || hasSkills;
+}
+
 export function getAgentRegistrationStatuses(target = 'all') {
   const requested = target === 'all' ? SUPPORTED_AGENT_TARGETS : [target];
   const result = { target, agents: {} };
@@ -101,6 +150,7 @@ export function getAgentRegistrationStatuses(target = 'all') {
     if (agent === 'codearts') configured = codeartsRegistered();
     if (agent === 'workbuddy') configured = workbuddyRegistered();
     if (agent === 'dsh') configured = dshRegistered();
+    if (agent === 'officeace') configured = officeaceRegistered();
     result.agents[agent] = { configured };
   }
   return result;

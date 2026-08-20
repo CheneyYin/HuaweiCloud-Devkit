@@ -9,13 +9,19 @@ import { searchMarketplace } from './search-market.mjs';
 import { getServiceIcon } from './icon-library.mjs';
 import {
   execWithSession,
+  execOneShot,
   closeSession,
   uploadFileWithSession,
   DEFAULT_WORKSPACE_ID,
 } from './sandbox/session-manager.mjs';
 import { hdkitCheckUser, hdkitSignAgreement, hdkitConnect, hdkitCredentials } from './sandbox/hdkitservice-api.mjs';
 import { getAuthStatus, syncAuth } from './auth/service.mjs';
-import { readGlobalCredentials, writeObsConfig as writeObsConfigFile } from './auth/credentials.mjs';
+import {
+  readGlobalCredentials,
+  writeObsConfig as writeObsConfigFile,
+  setRuntimeCredentials,
+  clearRuntimeCredentials,
+} from './auth/credentials.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILLS_ROOT_DEV = join(__dirname, '..', 'skills');
@@ -34,6 +40,20 @@ function workbuddySkillsDir() {
 function dshSkillsDir() {
   const home = process.env.DSH_HOME || join(homedir(), '.dsh');
   return join(home, 'skills');
+}
+function officeaceSkillsRoot() {
+  if (process.env.OFFICEACE_HOME) return join(process.env.OFFICEACE_HOME, 'skills');
+  const dotDir = join(homedir(), '.office-claw');
+  const dotCapFile = join(dotDir, 'capabilities.json');
+  if (existsSync(dotCapFile)) return join(dotDir, 'skills');
+  if (process.platform === 'win32') {
+    for (const base of [process.env.ProgramFiles, 'C:\\Program Files', 'D:\\Program Files']) {
+      if (!base) continue;
+      const dir = join(base, 'OfficeAce', '.office-claw');
+      if (existsSync(join(dir, 'capabilities.json'))) return join(dir, 'skills');
+    }
+  }
+  return join(dotDir, 'skills');
 }
 export function listSkillDirs(root) {
   if (!existsSync(root)) return [];
@@ -55,8 +75,14 @@ export function findSkillsRoot(candidates) {
 
 function resolveSkillsRoot() {
   return (
-    findSkillsRoot([SKILLS_ROOT_DEV, dshSkillsDir(), codeartsSkillsDir(), opencodeSkillsDir(), workbuddySkillsDir()]) ||
-    SKILLS_ROOT_DEV
+    findSkillsRoot([
+      SKILLS_ROOT_DEV,
+      dshSkillsDir(),
+      codeartsSkillsDir(),
+      opencodeSkillsDir(),
+      workbuddySkillsDir(),
+      officeaceSkillsRoot(),
+    ]) || SKILLS_ROOT_DEV
   );
 }
 const SKILLS_ROOT = resolveSkillsRoot();
@@ -363,7 +389,7 @@ export const TOOL_DEFINITIONS = [
         target: {
           type: 'string',
           description:
-            'Agent target to check: opencode, codex, codex-desktop, codearts, workbuddy, dsh, or all (default).',
+            'Agent target to check: opencode, codex, codex-desktop, codearts, workbuddy, dsh, officeace, or all (default).',
         },
       },
     },
@@ -384,9 +410,23 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'huaweicloud_auth_init',
+    description:
+      'Set or clear runtime Huawei Cloud credentials (AK/SK) for this MCP session. Runtime credentials take highest priority over environment variables and config files for all subsequent API calls. Use when switching accounts within the same Agent session — call with AK/SK to switch, or with clear=true to fall back to env/file credentials.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ak: { type: 'string', description: 'Huawei Cloud Access Key (required unless clear=true)' },
+        sk: { type: 'string', description: 'Huawei Cloud Secret Key (required unless clear=true)' },
+        region: { type: 'string', description: 'Default region (optional)' },
+        clear: { type: 'boolean', description: 'Set to true to clear runtime credentials and revert to env/file' },
+      },
+    },
+  },
+  {
     name: 'huaweicloud_sandbox_exec_with_session',
     description:
-      'Execute a command on a workspace terminal with session reuse (state persists across calls). Shell state (cd, env vars, aliases) carries over between calls.',
+      'Execute a command on a workspace terminal with session reuse (state persists across calls). Shell state (cd, env vars, aliases) carries over between calls. Use for interactive work and command sequences that need shared state. NOT for long-running commands (>30s) — prefer exec_one_shot for those.',
     inputSchema: {
       type: 'object',
       required: ['command'],
@@ -394,7 +434,22 @@ export const TOOL_DEFINITIONS = [
         command: { type: 'string', description: 'The shell command to execute on the remote workspace' },
         workspace_id: { type: 'string', description: 'The workspace ID' },
         username: { type: 'string', description: 'Login username for the remote terminal (default: root)' },
-        timeout_ms: { type: 'number', description: 'Execution timeout in milliseconds (default: 30000)' },
+        timeout_ms: { type: 'number', description: 'Execution timeout in milliseconds (default: 120000)' },
+      },
+    },
+  },
+  {
+    name: 'huaweicloud_sandbox_exec_one_shot',
+    description:
+      'Execute a command on a workspace terminal with a fresh connection per call (no session state carries over). Each invocation opens a new WebSocket connection, executes one command, then disconnects. Use for long-running build/deploy/install commands (>30s) that do not need shell state persistence between calls. More stable than session-based execution for heavy workloads.',
+    inputSchema: {
+      type: 'object',
+      required: ['command'],
+      properties: {
+        command: { type: 'string', description: 'The shell command to execute on the remote workspace' },
+        workspace_id: { type: 'string', description: 'The workspace ID' },
+        username: { type: 'string', description: 'Login username for the remote terminal (default: root)' },
+        timeout_ms: { type: 'number', description: 'Execution timeout in milliseconds (default: 120000)' },
       },
     },
   },
@@ -421,7 +476,7 @@ export const TOOL_DEFINITIONS = [
         remote_path: { type: 'string', description: 'Target path in the sandbox, e.g. /workspace/<repo>/index.html.' },
         workspace_id: { type: 'string', description: 'The workspace ID' },
         username: { type: 'string', description: 'Login username (default: root)' },
-        timeout_ms: { type: 'number', description: 'Per-command execution timeout in milliseconds (default: 30000)' },
+        timeout_ms: { type: 'number', description: 'Per-command execution timeout in milliseconds (default: 120000)' },
       },
     },
   },
@@ -534,32 +589,49 @@ export async function callTool(name, args = {}) {
       return getAuthStatus(args.target || 'all');
     case 'huaweicloud_auth_sync':
       return syncAuth(args.target || 'all');
+    case 'huaweicloud_auth_init':
+      if (args.clear) {
+        clearRuntimeCredentials();
+        return { status: 'cleared', message: 'Runtime credentials cleared. Fallback to env/file.' };
+      }
+      if (!args.ak || !args.sk) {
+        throw new Error('ak and sk are required. Set clear=true to clear runtime credentials.');
+      }
+      setRuntimeCredentials(args.ak, args.sk, args.region);
+      return { status: 'ok', message: 'Runtime credentials set for this MCP session.' };
     case 'huaweicloud_sandbox_exec_with_session': {
       const sandboxWsId2 = args.workspace_id || DEFAULT_WORKSPACE_ID;
       const sandboxUser2 = args.username || 'root';
-      const sandboxTimeout2 = args.timeout_ms || 30000;
+      const sandboxTimeout2 = args.timeout_ms || 120000;
       const sandboxResult2 = await execWithSession(sandboxWsId2, args.command, sandboxUser2, sandboxTimeout2);
       return { stdout: sandboxResult2.stdout, exitCode: sandboxResult2.exitCode };
     }
-    case 'huaweicloud_sandbox_close_session': {
+    case 'huaweicloud_sandbox_exec_one_shot': {
       const sandboxWsId3 = args.workspace_id || DEFAULT_WORKSPACE_ID;
       const sandboxUser3 = args.username || 'root';
-      const closed = await closeSession(sandboxWsId3, sandboxUser3);
+      const sandboxTimeout3 = args.timeout_ms || 120000;
+      const sandboxResult3 = await execOneShot(sandboxWsId3, args.command, sandboxUser3, sandboxTimeout3);
+      return { stdout: sandboxResult3.stdout, exitCode: sandboxResult3.exitCode };
+    }
+    case 'huaweicloud_sandbox_close_session': {
+      const sandboxWsId4 = args.workspace_id || DEFAULT_WORKSPACE_ID;
+      const sandboxUser4 = args.username || 'root';
+      const closed = await closeSession(sandboxWsId4, sandboxUser4);
       return closed ? 'ok' : 'not_connected';
     }
     case 'huaweicloud_sandbox_upload_file': {
       if (!args.local_path || !args.remote_path) {
         throw new Error('local_path and remote_path are required.');
       }
-      const sandboxWsId4 = args.workspace_id || DEFAULT_WORKSPACE_ID;
-      const sandboxUser4 = args.username || 'root';
-      const sandboxTimeout4 = args.timeout_ms || 30000;
+      const sandboxWsId5 = args.workspace_id || DEFAULT_WORKSPACE_ID;
+      const sandboxUser5 = args.username || 'root';
+      const sandboxTimeout5 = args.timeout_ms || 120000;
       return await uploadFileWithSession(
-        sandboxWsId4,
+        sandboxWsId5,
         args.local_path,
         args.remote_path,
-        sandboxUser4,
-        sandboxTimeout4,
+        sandboxUser5,
+        sandboxTimeout5,
       );
     }
     case 'huaweicloud_sandbox_check_user':

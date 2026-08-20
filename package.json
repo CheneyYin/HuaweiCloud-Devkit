@@ -1,6 +1,6 @@
 {
   "name": "huaweicloud-devkit",
-  "version": "1.0.2-next.8",
+  "version": "1.0.2-next.13",
   "description": "Agent toolkit that helps coding agents use Huawei Cloud Skills, KooCLI, APIs, SDKs, and future MCP capabilities safely and accurately.",
   "type": "module",
   "files": [
@@ -10,7 +10,8 @@
     "integrations/opencode"
   ],
   "bin": {
-    "huaweicloud-devkit": "./bin/setup.cjs"
+    "huaweicloud-devkit": "./bin/setup.cjs",
+    "huaweicloud-devkit-mcp": "./plugins/huaweicloud-core/src/mcp-server.mjs"
   },
   "repository": {
     "type": "git",
@@ -28,6 +29,7 @@
     "postinstall": "node -e \"console.log('\\nHuaweiCloud DevKit installed. Run: npx huaweicloud-devkit install\\n')\""
   },
   "dependencies": {
+    "better-sqlite3": "^13.0.3",
     "undici": "^8.10.0"
   },
   "devDependencies": {
@@ -45,6 +47,8 @@
     "agent",
     "codex",
     "opencode",
+    "officeace",
+    "office-claw",
     "workbuddy",
     "dsh",
     "deepseek-harness",
