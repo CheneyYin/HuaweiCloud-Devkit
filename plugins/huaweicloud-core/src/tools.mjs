@@ -597,7 +597,7 @@ export async function callTool(name, args = {}) {
       if (!args.ak || !args.sk) {
         throw new Error('ak and sk are required. Set clear=true to clear runtime credentials.');
       }
-      setRuntimeCredentials(args.ak, args.sk, args.region);
+      setRuntimeCredentials(args.ak, args.sk, undefined, args.region);
       return { status: 'ok', message: 'Runtime credentials set for this MCP session.' };
     case 'huaweicloud_sandbox_exec_with_session': {
       const sandboxWsId2 = args.workspace_id || DEFAULT_WORKSPACE_ID;
@@ -825,7 +825,7 @@ async function setupObsConfigFromHcloud(profile) {
 const SERVICE_EXAMPLES = {
   ECS: { list: 'ECS ListServersDetails', create: 'ECS CreateServers', show: 'IMS GlanceShowImage' },
   VPC: { list: 'VPC ListVpcs', create: 'VPC CreateVpc', show: 'VPC ShowVpc' },
-  FunctionGraph: {
+  FUNCTIONGRAPH: {
     list: 'FunctionGraph ListFunctions',
     create: 'FunctionGraph CreateFunction',
     show: 'FunctionGraph ShowFunctionConfig',
@@ -834,7 +834,7 @@ const SERVICE_EXAMPLES = {
   OBS: { list: 'OBS ls', create: 'OBS mb obs://<bucket>', show: 'OBS stat obs://<bucket>/<key>' },
   RDS: { list: 'RDS ListInstances', create: 'RDS CreateInstance', show: 'RDS ShowInstance' },
   CES: { list: 'CES ListAlarms', create: 'CES CreateAlarm', show: 'CES ListMetrics' },
-  GaussDB: { list: 'GaussDB ListInstances', create: 'GaussDB CreateInstance', show: 'GaussDB ShowInstance' },
+  GAUSSDB: { list: 'GaussDB ListInstances', create: 'GaussDB CreateInstance', show: 'GaussDB ShowInstance' },
   DDS: { list: 'DDS ListInstances', create: 'DDS CreateInstance', show: 'DDS ShowInstance' },
   DCS: { list: 'DCS ListInstances', create: 'DCS CreateInstance', show: 'DCS ShowInstance' },
 };
