@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const pluginRoot = join(root, 'plugins', 'huaweicloud-core');
@@ -106,4 +106,18 @@ readmes.forEach(({ path, text }) => {
     /Sandbox|DevStation/i,
     `${path}: missing sandbox/DevStation support documentation`,
   );
+});
+
+const { SUPPORTED_AGENT_TARGETS } = await import(
+  pathToFileURL(join(pluginRoot, 'src', 'auth', 'agent-registration.mjs')).href
+);
+
+readmes.forEach(({ path, text }) => {
+  for (const target of SUPPORTED_AGENT_TARGETS) {
+    assert.match(
+      text,
+      new RegExp(target, 'i'),
+      `${path}: README missing agent target "${target}" — add a section or mention in the support list`,
+    );
+  }
 });
