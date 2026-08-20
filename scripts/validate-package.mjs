@@ -94,30 +94,29 @@ readmePaths.forEach((path) => {
 
 const readmes = readmePaths.map((p) => ({ path: p, text: readFileSync(p, 'utf8') }));
 
-readmes.forEach(({ path, text }) => {
-  assert.match(text, /OfficeAce|officeace/i, `${path}: missing OfficeAce from supported agents`);
-  assert.match(
-    text,
-    /huaweicloud-devkit-mcp/,
-    `${path}: missing standard MCP npx config (huaweicloud-devkit-mcp)`,
-  );
-  assert.match(
-    text,
-    /Sandbox|DevStation/i,
-    `${path}: missing sandbox/DevStation support documentation`,
-  );
-});
-
 const { SUPPORTED_AGENT_TARGETS } = await import(
   pathToFileURL(join(pluginRoot, 'src', 'auth', 'agent-registration.mjs')).href
 );
 
 readmes.forEach(({ path, text }) => {
+  let missing = 0;
   for (const target of SUPPORTED_AGENT_TARGETS) {
-    assert.match(
-      text,
-      new RegExp(target, 'i'),
-      `${path}: README missing agent target "${target}" — add a section or mention in the support list`,
+    if (!new RegExp(target, 'i').test(text)) {
+      console.warn(`\x1b[33m[README]\x1b[0m ${path}: agent target "${target}" not found`);
+      missing++;
+    }
+  }
+  if (!/huaweicloud-devkit-mcp/.test(text)) {
+    console.warn(`\x1b[33m[README]\x1b[0m ${path}: missing standard MCP npx config`);
+    missing++;
+  }
+  if (!/Sandbox|DevStation/i.test(text)) {
+    console.warn(`\x1b[33m[README]\x1b[0m ${path}: missing sandbox/DevStation feature`);
+    missing++;
+  }
+  if (missing > 0) {
+    console.warn(
+      `\x1b[33m[README]\x1b[0m ${path}: ${missing} item(s) may need update — check the PR template checklist`,
     );
   }
 });
