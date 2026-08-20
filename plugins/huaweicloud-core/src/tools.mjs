@@ -16,7 +16,12 @@ import {
 } from './sandbox/session-manager.mjs';
 import { hdkitCheckUser, hdkitSignAgreement, hdkitConnect, hdkitCredentials } from './sandbox/hdkitservice-api.mjs';
 import { getAuthStatus, syncAuth } from './auth/service.mjs';
-import { readGlobalCredentials, writeObsConfig as writeObsConfigFile } from './auth/credentials.mjs';
+import {
+  readGlobalCredentials,
+  writeObsConfig as writeObsConfigFile,
+  setRuntimeCredentials,
+  clearRuntimeCredentials,
+} from './auth/credentials.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILLS_ROOT_DEV = join(__dirname, '..', 'skills');
@@ -405,6 +410,20 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'huaweicloud_auth_init',
+    description:
+      'Set or clear runtime Huawei Cloud credentials (AK/SK) for this MCP session. Runtime credentials take highest priority over environment variables and config files for all subsequent API calls. Use when switching accounts within the same Agent session — call with AK/SK to switch, or with clear=true to fall back to env/file credentials.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ak: { type: 'string', description: 'Huawei Cloud Access Key (required unless clear=true)' },
+        sk: { type: 'string', description: 'Huawei Cloud Secret Key (required unless clear=true)' },
+        region: { type: 'string', description: 'Default region (optional)' },
+        clear: { type: 'boolean', description: 'Set to true to clear runtime credentials and revert to env/file' },
+      },
+    },
+  },
+  {
     name: 'huaweicloud_sandbox_exec_with_session',
     description:
       'Execute a command on a workspace terminal with session reuse (state persists across calls). Shell state (cd, env vars, aliases) carries over between calls. Use for interactive work and command sequences that need shared state. NOT for long-running commands (>30s) — prefer exec_one_shot for those.',
@@ -570,6 +589,16 @@ export async function callTool(name, args = {}) {
       return getAuthStatus(args.target || 'all');
     case 'huaweicloud_auth_sync':
       return syncAuth(args.target || 'all');
+    case 'huaweicloud_auth_init':
+      if (args.clear) {
+        clearRuntimeCredentials();
+        return { status: 'cleared', message: 'Runtime credentials cleared. Fallback to env/file.' };
+      }
+      if (!args.ak || !args.sk) {
+        throw new Error('ak and sk are required. Set clear=true to clear runtime credentials.');
+      }
+      setRuntimeCredentials(args.ak, args.sk, args.region);
+      return { status: 'ok', message: 'Runtime credentials set for this MCP session.' };
     case 'huaweicloud_sandbox_exec_with_session': {
       const sandboxWsId2 = args.workspace_id || DEFAULT_WORKSPACE_ID;
       const sandboxUser2 = args.username || 'root';

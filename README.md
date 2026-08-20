@@ -8,7 +8,7 @@
 
 Help AI coding agents use Huawei Cloud safely and accurately — a single integration that gives agents cloud knowledge, CLI tooling, and safety guardrails.
 
-Supports OpenCode, Codex, CodeArts Agent, WorkBuddy, DeepSeek Harness (DSH), and OfficeAce.
+Supports OpenCode, CodeArts Agent, WorkBuddy, DeepSeek Harness (DSH), and OfficeAce.
 
 ## Prerequisites
 
@@ -33,23 +33,6 @@ npx --yes huaweicloud-devkit update --target opencode
 npx --yes huaweicloud-devkit uninstall --target opencode
 ```
 
-### Codex
-
-```bash
-npx --yes huaweicloud-devkit install --target codex
-```
-
-> The Codex CLI must be installed first.
-
-```bash
-npx --yes huaweicloud-devkit doctor --target codex
-npx --yes huaweicloud-devkit status --target codex
-npx --yes huaweicloud-devkit update --target codex
-npx --yes huaweicloud-devkit uninstall --target codex
-```
-
-> **Codex Desktop** (Windows): use `--target codex-desktop` with the same commands.
-
 ### CodeArts Agent
 
 ```bash
@@ -65,7 +48,7 @@ npx --yes huaweicloud-devkit update --target codearts
 npx --yes huaweicloud-devkit uninstall --target codearts
 ```
 
-> **Sandbox mode**: CodeArts defaults to sandbox mode which blocks KooCLI. `install-hcloud` detects this and shows how to resolve it — install KooCLI outside the sandbox terminal, or disable sandbox mode in CodeArts settings (Settings → Permissions → Bash mode).
+> **Sandbox mode**: CodeArts defaults to sandbox mode which blocks KooCLI. `install-hcloud` detects this and shows how to resolve it — install KooCLI outside the sandbox terminal, or disable sandbox mode in CodeArts settings (Settings → Chats → Agents Terminal Command Running Mode → Auto Running).
 
 ### WorkBuddy
 
@@ -116,26 +99,22 @@ npx --yes huaweicloud-devkit uninstall --target officeace
 
 ### Other Agents
 
-For agents that support the Model Context Protocol (MCP), add the MCP server manually:
+Any agent that supports MCP can use the standard config:
 
 ```json
 {
   "mcpServers": {
     "huaweicloud-devkit": {
-      "command": "node",
-      "args": ["<path>/plugins/huaweicloud-core/src/mcp-server.mjs"]
+      "command": "npx",
+      "args": ["-y", "-p", "huaweicloud-devkit@next", "huaweicloud-devkit-mcp"]
     }
   }
 }
 ```
 
-Then install the skills:
+No installation required — `npx` handles everything.
 
-```bash
-npx --yes huaweicloud-devkit install
-```
-
-> For unified credentials across KooCLI and OBS, run `npx huaweicloud-devkit auth init`.
+> Set `HW_ACCESS_KEY`/`HW_SECRET_KEY` in the MCP config `env` field for project-level credentials.
 
 ### Install KooCLI
 
@@ -171,6 +150,7 @@ npx --yes huaweicloud-devkit update --target all
 - **Safety-first execution** — all write operations require explicit user approval; credentials and secrets are automatically redacted from output
 - **Pre-execution risk checks** — public exposure, credential leaks, and destructive operations are caught before they run
 - **Regional awareness** — auto-discovers available regions and checks service availability before creating resources
+- **Sandbox (DevStation)** — temporary cloud runtime for web app deployment with instant public URL preview
 
 ## Supported Services
 
