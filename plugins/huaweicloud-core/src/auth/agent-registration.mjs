@@ -123,13 +123,16 @@ function officeaceRegistered() {
   let hasMcp = false;
   const dbPath = officeaceSqlitePath();
   if (existsSync(dbPath)) {
-    try {
-      const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
-      const db = new DatabaseSync(dbPath, { readonly: true });
-      const row = db.prepare("SELECT enabled FROM mcp_connectors WHERE name = 'huaweicloud-devkit'").get();
-      db.close();
-      hasMcp = Boolean(row?.enabled);
-    } catch {}
+    const nodeMajor = Number(process.versions.node.split('.')[0]);
+    if (nodeMajor >= 22) {
+      try {
+        const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
+        const db = new DatabaseSync(dbPath, { readonly: true });
+        const row = db.prepare("SELECT enabled FROM mcp_connectors WHERE name = 'huaweicloud-devkit'").get();
+        db.close();
+        hasMcp = Boolean(row?.enabled);
+      } catch {}
+    }
   }
 
   const capFile = join(officeaceCapabilitiesDir(), 'capabilities.json');
