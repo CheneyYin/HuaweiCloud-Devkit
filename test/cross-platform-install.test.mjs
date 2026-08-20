@@ -116,8 +116,11 @@ test('install-hcloud shows platform-specific download instructions', () => {
 
     const out = res.stdout;
     const isWin = process.platform === 'win32';
+    const isArm = process.arch === 'arm64';
     if (isWin) {
       assert.match(out, /huaweicloud-cli-windows-amd64\.zip/);
+    } else if (isArm) {
+      assert.match(out, /huaweicloud-cli-linux-arm64\.tar\.gz/);
     } else {
       assert.match(out, /huaweicloud-cli-linux-amd64\.tar\.gz/);
     }
