@@ -12,6 +12,7 @@ import {
   execOneShot,
   closeSession,
   uploadFileWithSession,
+  uploadProjectWithSession,
   DEFAULT_WORKSPACE_ID,
 } from './sandbox/session-manager.mjs';
 import { hdkitCheckUser, hdkitSignAgreement, hdkitConnect, hdkitCredentials } from './sandbox/hdkitservice-api.mjs';
@@ -481,6 +482,35 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'huaweicloud_sandbox_upload_project',
+    description:
+      'Package a local project directory and upload it to a sandbox workspace via HTTP tunnel. Falls back to base64 chunking if tunnel fails. Creates a tar.gz archive, uploads it, and extracts it on the sandbox by default.',
+    inputSchema: {
+      type: 'object',
+      required: ['local_dir'],
+      properties: {
+        local_dir: { type: 'string', description: 'Local project directory to upload.' },
+        remote_dir: {
+          type: 'string',
+          description:
+            'Remote parent directory where project will be extracted (default: /workspace). Final layout: <remote_dir>/<dirname>/',
+        },
+        workspace_id: { type: 'string', description: 'Workspace ID (defaults to HW_WORKSPACE_ID env var)' },
+        username: { type: 'string', description: 'Login username (default: root)' },
+        exclude: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Patterns to exclude from archive (default: .git, node_modules, __pycache__, .venv)',
+        },
+        extract: {
+          type: 'boolean',
+          description: 'Extract tar.gz on sandbox after upload (default: true)',
+        },
+        timeout_ms: { type: 'number', description: 'Execution timeout in milliseconds (default: 120000)' },
+      },
+    },
+  },
+  {
     name: 'huaweicloud_sandbox_check_user',
     description:
       'Check if the current user has completed real-name verification and signed the required agreements. Returns 200 {realnameVerified, agreementSigned} when all good; throws 403 HDKIT_NOT_REALNAME / HDKIT_NOT_AGREEMENT / HDKIT_NOT_REALNAME_AND_AGREEMENT to indicate what is missing. Never signs anything itself.',
@@ -632,6 +662,25 @@ export async function callTool(name, args = {}) {
         args.remote_path,
         sandboxUser5,
         sandboxTimeout5,
+      );
+    }
+    case 'huaweicloud_sandbox_upload_project': {
+      if (!args.local_dir) {
+        throw new Error('local_dir is required.');
+      }
+      const sandboxWsId6 = args.workspace_id || DEFAULT_WORKSPACE_ID;
+      const sandboxUser6 = args.username || 'root';
+      const sandboxTimeout6 = args.timeout_ms || 120000;
+      return await uploadProjectWithSession(
+        sandboxWsId6,
+        args.local_dir,
+        args.remote_dir,
+        sandboxUser6,
+        sandboxTimeout6,
+        {
+          exclude: args.exclude,
+          extract: args.extract,
+        },
       );
     }
     case 'huaweicloud_sandbox_check_user':

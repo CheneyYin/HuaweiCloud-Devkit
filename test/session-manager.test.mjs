@@ -14,7 +14,7 @@ test('ws-exec dynamic import uses file:// URL (Windows-safe)', async () => {
 });
 
 test('splitBase64Chunks splits into chunks no larger than the limit and reassembles losslessly', () => {
-  const base64 = Buffer.from('x'.repeat(10000)).toString('base64');
+  const base64 = Buffer.from('x'.repeat(100000)).toString('base64');
   const chunks = splitBase64Chunks(base64);
   assert.ok(chunks.length > 1, 'expected multiple chunks');
   for (const chunk of chunks) {
