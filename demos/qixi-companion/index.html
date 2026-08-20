@@ -1,585 +1,799 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>🌸 七夕赛博搭子</title>
-<style>
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-:root {
-  --bg-start: #1a0a2e;
-  --bg-end: #2d1b4e;
-  --accent: #ff6b9d;
-  --accent-dim: rgba(255, 107, 157, 0.15);
-  --text: #f0e6ff;
-  --text-dim: rgba(240, 230, 255, 0.6);
-  --bubble-companion: rgba(255, 255, 255, 0.08);
-  --bubble-user: rgba(138, 43, 226, 0.35);
-  --border: rgba(255, 255, 255, 0.1);
-  --surface: rgba(255, 255, 255, 0.04);
-}
-
-body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans SC", sans-serif;
-  background: linear-gradient(135deg, var(--bg-start), var(--bg-end));
-  color: var(--text);
-  min-height: 100dvh;
-  overflow: hidden;
-}
-
-#app {
-  display: flex;
-  flex-direction: column;
-  max-width: 600px;
-  height: 100dvh;
-  margin: 0 auto;
-  position: relative;
-  z-index: 1;
-}
-
-#settings-bar {
-  position: sticky;
-  top: 0;
-  background: rgba(26, 10, 46, 0.95);
-  backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--border);
-  padding: 10px 16px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  z-index: 10;
-}
-#settings-toggle {
-  cursor: pointer;
-  font-size: 20px;
-  user-select: none;
-  transition: transform 0.3s;
-}
-#settings-toggle.collapsed { transform: rotate(-90deg); }
-#settings-content {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  transition: max-height 0.3s, opacity 0.3s;
-  max-height: 60px;
-  opacity: 1;
-}
-#settings-content.hidden { max-height: 0; opacity: 0; pointer-events: none; }
-#api-key-input {
-  flex: 1;
-  min-width: 0;
-  padding: 8px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text);
-  font-size: 14px;
-  outline: none;
-  transition: border-color 0.2s;
-}
-#api-key-input:focus { border-color: var(--accent); }
-#api-key-input::placeholder { color: var(--text-dim); }
-#save-key-btn, #clear-key-btn {
-  padding: 8px 14px;
-  border-radius: 8px;
-  border: none;
-  cursor: pointer;
-  font-size: 14px;
-  white-space: nowrap;
-  transition: opacity 0.2s;
-}
-#save-key-btn { background: var(--accent); color: #fff; }
-#clear-key-btn { background: rgba(255,255,255,0.1); color: var(--text); }
-#save-key-btn:hover, #clear-key-btn:hover { opacity: 0.85; }
-#key-status { font-size: 13px; color: var(--text-dim); white-space: nowrap; }
-
-#chat-area {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
-  scroll-behavior: smooth;
-}
-.chat-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--border);
-}
-.chat-header span { font-size: 14px; color: var(--text-dim); }
-#clear-chat-btn {
-  padding: 4px 12px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-dim);
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-#clear-chat-btn:hover { color: var(--accent); border-color: var(--accent); }
-#messages {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  min-height: 100%;
-}
-#messages:empty::before {
-  content: "🌸 先设置 API Key，然后跟我聊天吧~";
-  color: var(--text-dim);
-  text-align: center;
-  font-size: 16px;
-  padding: 40px 20px;
-  display: block;
-}
-
-.message {
-  display: flex;
-  gap: 8px;
-  max-width: 85%;
-  animation: fadeIn 0.3s ease;
-}
-@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-.message.companion { align-self: flex-start; }
-.message.user { align-self: flex-end; flex-direction: row-reverse; }
-
-.message .avatar {
-  width: 36px; height: 36px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 20px;
-  flex-shrink: 0;
-  background: rgba(255,255,255,0.1);
-}
-.message.companion .avatar { background: rgba(255, 107, 157, 0.25); }
-
-.message .bubble {
-  padding: 10px 14px;
-  border-radius: 16px;
-  font-size: 15px;
-  line-height: 1.55;
-  word-break: break-word;
-  white-space: pre-wrap;
-}
-.message.companion .bubble {
-  background: var(--bubble-companion);
-  border: 1px solid var(--border);
-  border-top-left-radius: 4px;
-}
-.message.user .bubble {
-  background: var(--bubble-user);
-  border-top-right-radius: 4px;
-}
-
-.message .time {
-  font-size: 11px;
-  color: var(--text-dim);
-  margin-top: 4px;
-}
-
-.typing-indicator {
-  display: flex;
-  gap: 4px;
-  padding: 10px 14px;
-  align-self: flex-start;
-  max-width: 85%;
-}
-.typing-indicator span {
-  width: 8px; height: 8px;
-  border-radius: 50%;
-  background: var(--accent);
-  animation: bounce 1.4s infinite ease-in-out;
-}
-.typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
-.typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
-@keyframes bounce {
-  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
-  40% { transform: scale(1); opacity: 1; }
-}
-
-#input-area {
-  position: sticky;
-  bottom: 0;
-  background: rgba(26, 10, 46, 0.95);
-  backdrop-filter: blur(8px);
-  border-top: 1px solid var(--border); padding: 10px 16px;
-  display: flex; gap: 10px; align-items: flex-end;
-}
-#chat-input {
-  flex: 1; padding: 10px 14px; border-radius: 12px; border: 1px solid var(--border);
-  background: var(--surface); color: var(--text); font-size: 15px; font-family: inherit;
-  resize: none; outline: none; max-height: 120px; transition: border-color 0.2s;
-}
-#chat-input:focus { border-color: var(--accent); }
-#chat-input::placeholder { color: var(--text-dim); }
-#send-btn {
-  padding: 10px 18px; border-radius: 12px; border: none; background: var(--accent);
-  color: #fff; font-size: 15px; cursor: pointer; flex-shrink: 0; transition: opacity 0.2s;
-}
-#send-btn:hover { opacity: 0.85; }
-#send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
-#particles {
-  position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0;
-}
-
-#messages.has-key:empty::before {
-  content: "💬 七夕快乐~ 来跟赛博搭子聊聊天吧！";
-}
-
-.error-msg {
-  align-self: center; text-align: center; color: #ff8fa3; font-size: 14px;
-  padding: 8px 16px; border-radius: 8px; background: rgba(255, 107, 157, 0.1);
-}
-
-#chat-area::-webkit-scrollbar { width: 4px; }
-#chat-area::-webkit-scrollbar-track { background: transparent; }
-#chat-area::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
-</style>
-</head>
-<body>
-<div id="app">
-  <header id="settings-bar">
-    <div id="settings-toggle">⚙️</div>
-    <div id="settings-content" class="expanded">
-      <input type="password" id="api-key-input" placeholder="输入你的 DeepSeek API Key...">
-      <button id="save-key-btn">保存</button>
-      <button id="clear-key-btn" style="display:none;">清除 Key</button>
-      <span id="key-status"></span>
-    </div>
-    </header>
-    <main id="chat-area">
-      <div class="chat-header">
-        <span></span>
-        <button id="clear-chat-btn">清空</button>
-      </div>
-      <div id="messages"></div>
-    </main>
-    <footer id="input-area">
-      <textarea id="chat-input" placeholder="跟赛博搭子聊点什么..." rows="1"></textarea>
-      <button id="send-btn" disabled>发送</button>
-    </footer>
-  </div>
-  <canvas id="particles"></canvas>
-<script>
-(function() {
-  'use strict';
-
-  // -- Storage --
-  const StorageManager = {
-    getApiKey() { try { return localStorage.getItem('deepseek_api_key') || ''; } catch { return ''; } },
-    setApiKey(k) { try { localStorage.setItem('deepseek_api_key', k); } catch {} },
-    clearApiKey() { try { localStorage.removeItem('deepseek_api_key'); } catch {} },
-    getMessages() { try { const r = localStorage.getItem('chat_messages'); return r ? JSON.parse(r) : []; } catch { return []; } },
-    saveMessages(ms) { try { localStorage.setItem('chat_messages', JSON.stringify(ms)); } catch {} },
-    clearMessages() { try { localStorage.removeItem('chat_messages'); } catch {} }
-  };
-
-  // -- DOM refs --
-  const settingsToggle = document.getElementById('settings-toggle');
-  const settingsContent = document.getElementById('settings-content');
-  const apiKeyInput = document.getElementById('api-key-input');
-  const saveKeyBtn = document.getElementById('save-key-btn');
-  const clearKeyBtn = document.getElementById('clear-key-btn');
-  const keyStatus = document.getElementById('key-status');
-  const messagesEl = document.getElementById('messages');
-  const chatInput = document.getElementById('chat-input');
-  const sendBtn = document.getElementById('send-btn');
-  const chatArea = document.getElementById('chat-area');
-  const clearChatBtn = document.getElementById('clear-chat-btn');
-
-  // -- Key UI --
-  function updateKeyUI() {
-    const key = StorageManager.getApiKey();
-    if (key) {
-      const masked = key.length > 10 ? key.slice(0, 3) + '****' + key.slice(-4) : '已设置';
-      keyStatus.textContent = 'Key: ' + masked;
-      apiKeyInput.style.display = 'none';
-      saveKeyBtn.style.display = 'none';
-      clearKeyBtn.style.display = '';
-      settingsContent.classList.add('hidden');
-      settingsToggle.classList.add('collapsed');
-      messagesEl.classList.add('has-key');
-      sendBtn.disabled = false;
-    } else {
-      keyStatus.textContent = '';
-      apiKeyInput.style.display = '';
-      saveKeyBtn.style.display = '';
-      clearKeyBtn.style.display = 'none';
-      settingsContent.classList.remove('hidden');
-      settingsToggle.classList.remove('collapsed');
-      messagesEl.classList.remove('has-key');
-      sendBtn.disabled = true;
-    }
-  }
-
-  saveKeyBtn.addEventListener('click', function() {
-    const k = apiKeyInput.value.trim();
-    if (!k) return;
-    StorageManager.setApiKey(k);
-    apiKeyInput.value = '';
-    updateKeyUI();
-  });
-
-  clearKeyBtn.addEventListener('click', function() {
-    StorageManager.clearApiKey();
-    updateKeyUI();
-  });
-
-  settingsToggle.addEventListener('click', function() {
-    settingsContent.classList.toggle('hidden');
-    settingsToggle.classList.toggle('collapsed');
-  });
-
-  // -- DeepSeek API --
-  var SYSTEM_PROMPT = '你是用户的七夕赛博搭子，一个擅长吐槽的幽默角色。你的风格：爱开玩笑但不过分、偶尔自黑、能接梗、吐槽精准但不伤人。今天是七夕节，如果用户没有特别提到，找合适的时机cue一下七夕的话题（比如别人都在过节你在跟我聊天，看来咱俩挺配的）。回复要简短有趣，控制在2-4句话。不要用"作为AI"这种开场白。用轻松口语化的中文聊天，可以适当使用网络流行语。';
-
-  function streamChat(userMessage, history, onChunk, onDone, onError) {
-    var apiKey = StorageManager.getApiKey();
-    if (!apiKey) { onError('请先设置 API Key'); return; }
-
-    var messages = [{ role: 'system', content: SYSTEM_PROMPT }].concat(history).concat([{ role: 'user', content: userMessage }]);
-
-    var controller = new AbortController();
-    var timeoutId = setTimeout(function() { controller.abort(); }, 30000);
-
-    fetch('https://api.deepseek.com/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + apiKey
-      },
-      body: JSON.stringify({ model: 'deepseek-chat', messages: messages, stream: true }),
-      signal: controller.signal
-    }).then(function(response) {
-      clearTimeout(timeoutId);
-      if (!response.ok) {
-        if (response.status === 401) { onError('Key 不对，检查一下？'); return; }
-        if (response.status === 429) { onError('话太多了，歇会儿再聊~'); return; }
-        if (response.status >= 500) { onError('搭子大脑宕机了，稍后再试...'); return; }
-        onError('出了点问题（' + response.status + '），刷新试试？');
-        return;
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <title>🌸 七夕赛博搭子</title>
+    <style>
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
       }
-      var reader = response.body.getReader();
-      var decoder = new TextDecoder();
-      var buffer = '';
-      var fullContent = '';
-      function read() {
-        reader.read().then(function(result) {
-          if (result.done) { onDone(fullContent); return; }
-          buffer += decoder.decode(result.value, { stream: true });
-          var lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-          lines.forEach(function(line) {
-            var trimmed = line.trim();
-            if (!trimmed || !trimmed.startsWith('data: ')) return;
-            var data = trimmed.slice(6);
-            if (data === '[DONE]') return;
-            try {
-              var parsed = JSON.parse(data);
-              var delta = parsed.choices && parsed.choices[0] && parsed.choices[0].delta && parsed.choices[0].delta.content;
-              if (delta) { fullContent += delta; onChunk(delta); }
-            } catch(e) {}
-          });
-          read();
-        });
+
+      :root {
+        --bg-start: #1a0a2e;
+        --bg-end: #2d1b4e;
+        --accent: #ff6b9d;
+        --accent-dim: rgba(255, 107, 157, 0.15);
+        --text: #f0e6ff;
+        --text-dim: rgba(240, 230, 255, 0.6);
+        --bubble-companion: rgba(255, 255, 255, 0.08);
+        --bubble-user: rgba(138, 43, 226, 0.35);
+        --border: rgba(255, 255, 255, 0.1);
+        --surface: rgba(255, 255, 255, 0.04);
       }
-      read();
-    }).catch(function(err) {
-      clearTimeout(timeoutId);
-      if (err.name === 'AbortError') { onError('搭子反应有点慢，刷新一下吧~'); }
-      else { onError('网络走丢了，刷新试试？'); }
-    });
-  }
 
-  // -- Chat state --
-  var chatHistory = StorageManager.getMessages();
-  var isStreaming = false;
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans SC', sans-serif;
+        background: linear-gradient(135deg, var(--bg-start), var(--bg-end));
+        color: var(--text);
+        min-height: 100dvh;
+        overflow: hidden;
+      }
 
-  function formatTime(iso) {
-    var d = new Date(iso);
-    return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
-  }
+      #app {
+        display: flex;
+        flex-direction: column;
+        max-width: 600px;
+        height: 100dvh;
+        margin: 0 auto;
+        position: relative;
+        z-index: 1;
+      }
 
-  function escapeHtml(str) {
-    var div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-  }
+      #settings-bar {
+        position: sticky;
+        top: 0;
+        background: rgba(26, 10, 46, 0.95);
+        backdrop-filter: blur(8px);
+        border-bottom: 1px solid var(--border);
+        padding: 10px 16px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        z-index: 10;
+      }
+      #settings-toggle {
+        cursor: pointer;
+        font-size: 20px;
+        user-select: none;
+        transition: transform 0.3s;
+      }
+      #settings-toggle.collapsed {
+        transform: rotate(-90deg);
+      }
+      #settings-content {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        transition:
+          max-height 0.3s,
+          opacity 0.3s;
+        max-height: 60px;
+        opacity: 1;
+      }
+      #settings-content.hidden {
+        max-height: 0;
+        opacity: 0;
+        pointer-events: none;
+      }
+      #api-key-input {
+        flex: 1;
+        min-width: 0;
+        padding: 8px 12px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text);
+        font-size: 14px;
+        outline: none;
+        transition: border-color 0.2s;
+      }
+      #api-key-input:focus {
+        border-color: var(--accent);
+      }
+      #api-key-input::placeholder {
+        color: var(--text-dim);
+      }
+      #save-key-btn,
+      #clear-key-btn {
+        padding: 8px 14px;
+        border-radius: 8px;
+        border: none;
+        cursor: pointer;
+        font-size: 14px;
+        white-space: nowrap;
+        transition: opacity 0.2s;
+      }
+      #save-key-btn {
+        background: var(--accent);
+        color: #fff;
+      }
+      #clear-key-btn {
+        background: rgba(255, 255, 255, 0.1);
+        color: var(--text);
+      }
+      #save-key-btn:hover,
+      #clear-key-btn:hover {
+        opacity: 0.85;
+      }
+      #key-status {
+        font-size: 13px;
+        color: var(--text-dim);
+        white-space: nowrap;
+      }
 
-  function scrollToBottom() {
-    requestAnimationFrame(function() { chatArea.scrollTop = chatArea.scrollHeight; });
-  }
+      #chat-area {
+        flex: 1;
+        overflow-y: auto;
+        padding: 16px;
+        scroll-behavior: smooth;
+      }
+      .chat-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid var(--border);
+      }
+      .chat-header span {
+        font-size: 14px;
+        color: var(--text-dim);
+      }
+      #clear-chat-btn {
+        padding: 4px 12px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--text-dim);
+        font-size: 13px;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      #clear-chat-btn:hover {
+        color: var(--accent);
+        border-color: var(--accent);
+      }
+      #messages {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        min-height: 100%;
+      }
+      #messages:empty::before {
+        content: '🌸 先设置 API Key，然后跟我聊天吧~';
+        color: var(--text-dim);
+        text-align: center;
+        font-size: 16px;
+        padding: 40px 20px;
+        display: block;
+      }
 
-  function showTypingIndicator() {
-    var div = document.createElement('div');
-    div.className = 'typing-indicator';
-    div.id = 'typing-indicator';
-    div.innerHTML = '<span></span><span></span><span></span>';
-    messagesEl.appendChild(div);
-    scrollToBottom();
-  }
-
-  function removeTypingIndicator() {
-    var el = document.getElementById('typing-indicator');
-    if (el) el.remove();
-  }
-
-  function showError(msg) {
-    removeTypingIndicator();
-    var div = document.createElement('div');
-    div.className = 'error-msg';
-    div.textContent = msg;
-    messagesEl.appendChild(div);
-    scrollToBottom();
-    setTimeout(function() { if (div.parentNode) div.remove(); }, 5000);
-  }
-
-  function setSendingState(sending) {
-    isStreaming = sending;
-    sendBtn.disabled = sending;
-    chatInput.disabled = sending;
-  }
-
-  function renderHistory() {
-    messagesEl.innerHTML = '';
-    chatHistory = StorageManager.getMessages();
-    chatHistory.forEach(function(msg) {
-      var div = document.createElement('div');
-      div.className = 'message ' + msg.role;
-      div.innerHTML = '<div class="avatar">' + (msg.role === 'user' ? '🙂' : '🤖') + '</div>' +
-        '<div><div class="bubble">' + escapeHtml(msg.content) + '</div>' +
-        '<div class="time">' + (msg.time ? formatTime(msg.time) : '') + '</div></div>';
-      messagesEl.appendChild(div);
-    });
-    if (StorageManager.getApiKey()) { messagesEl.classList.add('has-key'); }
-    scrollToBottom();
-  }
-
-  function sendMessage() {
-    var text = chatInput.value.trim();
-    if (!text || isStreaming) return;
-    if (!StorageManager.getApiKey()) { showError('先设置一下 API Key 才能聊天哦~'); return; }
-
-    var userMsg = { role: 'user', content: text, time: new Date().toISOString() };
-    chatHistory.push(userMsg);
-    StorageManager.saveMessages(chatHistory);
-
-    var div = document.createElement('div');
-    div.className = 'message user';
-    div.innerHTML = '<div class="avatar">🙂</div>' +
-      '<div><div class="bubble">' + escapeHtml(text) + '</div>' +
-      '<div class="time">' + formatTime(userMsg.time) + '</div></div>';
-    messagesEl.appendChild(div);
-
-    chatInput.value = '';
-    chatInput.style.height = 'auto';
-    setSendingState(true);
-    showTypingIndicator();
-
-    var displayHistory = chatHistory.map(function(m) { return { role: m.role, content: m.content }; });
-
-    var streamedContent = '';
-
-    streamChat(
-      text,
-      displayHistory.slice(0, -1),
-      function(chunk) {
-        if (!streamedContent) {
-          removeTypingIndicator();
-          var bubbleDiv = document.createElement('div');
-          bubbleDiv.className = 'message companion';
-          bubbleDiv.id = 'streaming-bubble';
-          bubbleDiv.innerHTML = '<div class="avatar">🤖</div>' +
-            '<div><div class="bubble"></div><div class="time"></div></div>';
-          messagesEl.appendChild(bubbleDiv);
+      .message {
+        display: flex;
+        gap: 8px;
+        max-width: 85%;
+        animation: fadeIn 0.3s ease;
+      }
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+          transform: translateY(8px);
         }
-        streamedContent += chunk;
-        var bubble = document.querySelector('#streaming-bubble .bubble');
-        if (bubble) bubble.textContent = streamedContent;
-        scrollToBottom();
-      },
-      function(fullContent) {
-        var streamingEl = document.getElementById('streaming-bubble');
-        if (streamingEl) streamingEl.removeAttribute('id');
-        var assistantMsg = { role: 'assistant', content: fullContent, time: new Date().toISOString() };
-        chatHistory.push(assistantMsg);
-        StorageManager.saveMessages(chatHistory);
-        var timeEl = document.querySelector('.message.companion:last-child .time');
-        if (timeEl) timeEl.textContent = formatTime(assistantMsg.time);
-        setSendingState(false);
-      },
-      function(errMsg) { showError(errMsg); setSendingState(false); }
-    );
-  }
-
-  sendBtn.addEventListener('click', sendMessage);
-  chatInput.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-  });
-  chatInput.addEventListener('input', function() {
-    chatInput.style.height = 'auto';
-    chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
-  });
-  clearChatBtn.addEventListener('click', function() {
-    if (isStreaming) return;
-    StorageManager.clearMessages();
-    chatHistory = [];
-    messagesEl.innerHTML = '';
-    if (StorageManager.getApiKey()) { messagesEl.classList.add('has-key'); }
-  });
-
-  // -- Particles --
-  (function() {
-    var canvas = document.getElementById('particles');
-    var ctx = canvas.getContext('2d');
-    var petals = [];
-    var MAX = 20;
-    function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
-    resize();
-    window.addEventListener('resize', resize);
-    var shapes = ['🌸', '💮', '🩷', '✨'];
-    for (var i = 0; i < MAX; i++) {
-      petals.push({
-        x: Math.random() * canvas.width,
-        y: Math.random() * canvas.height,
-        size: 14 + Math.random() * 18,
-        speed: 0.3 + Math.random() * 0.7,
-        drift: (Math.random() - 0.5) * 0.4,
-        opacity: 0.12 + Math.random() * 0.2,
-        shape: shapes[Math.floor(Math.random() * shapes.length)]
-      });
-    }
-    function animate() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      for (var i = 0; i < petals.length; i++) {
-        var p = petals[i];
-        p.y += p.speed; p.x += p.drift;
-        if (p.y > canvas.height + 40) { p.y = -40; p.x = Math.random() * canvas.width; }
-        if (p.x < -40) p.x = canvas.width + 40;
-        if (p.x > canvas.width + 40) p.x = -40;
-        ctx.font = p.size + 'px serif';
-        ctx.globalAlpha = p.opacity;
-        ctx.fillText(p.shape, p.x, p.y);
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
       }
-      ctx.globalAlpha = 1;
-      requestAnimationFrame(animate);
-    }
-    animate();
-  })();
+      .message.companion {
+        align-self: flex-start;
+      }
+      .message.user {
+        align-self: flex-end;
+        flex-direction: row-reverse;
+      }
 
-  // -- Init --
-  updateKeyUI();
-  renderHistory();
-})();
-</script>
-</body>
+      .message .avatar {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 20px;
+        flex-shrink: 0;
+        background: rgba(255, 255, 255, 0.1);
+      }
+      .message.companion .avatar {
+        background: rgba(255, 107, 157, 0.25);
+      }
+
+      .message .bubble {
+        padding: 10px 14px;
+        border-radius: 16px;
+        font-size: 15px;
+        line-height: 1.55;
+        word-break: break-word;
+        white-space: pre-wrap;
+      }
+      .message.companion .bubble {
+        background: var(--bubble-companion);
+        border: 1px solid var(--border);
+        border-top-left-radius: 4px;
+      }
+      .message.user .bubble {
+        background: var(--bubble-user);
+        border-top-right-radius: 4px;
+      }
+
+      .message .time {
+        font-size: 11px;
+        color: var(--text-dim);
+        margin-top: 4px;
+      }
+
+      .typing-indicator {
+        display: flex;
+        gap: 4px;
+        padding: 10px 14px;
+        align-self: flex-start;
+        max-width: 85%;
+      }
+      .typing-indicator span {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--accent);
+        animation: bounce 1.4s infinite ease-in-out;
+      }
+      .typing-indicator span:nth-child(2) {
+        animation-delay: 0.2s;
+      }
+      .typing-indicator span:nth-child(3) {
+        animation-delay: 0.4s;
+      }
+      @keyframes bounce {
+        0%,
+        80%,
+        100% {
+          transform: scale(0.6);
+          opacity: 0.4;
+        }
+        40% {
+          transform: scale(1);
+          opacity: 1;
+        }
+      }
+
+      #input-area {
+        position: sticky;
+        bottom: 0;
+        background: rgba(26, 10, 46, 0.95);
+        backdrop-filter: blur(8px);
+        border-top: 1px solid var(--border);
+        padding: 10px 16px;
+        display: flex;
+        gap: 10px;
+        align-items: flex-end;
+      }
+      #chat-input {
+        flex: 1;
+        padding: 10px 14px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text);
+        font-size: 15px;
+        font-family: inherit;
+        resize: none;
+        outline: none;
+        max-height: 120px;
+        transition: border-color 0.2s;
+      }
+      #chat-input:focus {
+        border-color: var(--accent);
+      }
+      #chat-input::placeholder {
+        color: var(--text-dim);
+      }
+      #send-btn {
+        padding: 10px 18px;
+        border-radius: 12px;
+        border: none;
+        background: var(--accent);
+        color: #fff;
+        font-size: 15px;
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: opacity 0.2s;
+      }
+      #send-btn:hover {
+        opacity: 0.85;
+      }
+      #send-btn:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+
+      #particles {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 0;
+      }
+
+      #messages.has-key:empty::before {
+        content: '💬 七夕快乐~ 来跟赛博搭子聊聊天吧！';
+      }
+
+      .error-msg {
+        align-self: center;
+        text-align: center;
+        color: #ff8fa3;
+        font-size: 14px;
+        padding: 8px 16px;
+        border-radius: 8px;
+        background: rgba(255, 107, 157, 0.1);
+      }
+
+      #chat-area::-webkit-scrollbar {
+        width: 4px;
+      }
+      #chat-area::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      #chat-area::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.15);
+        border-radius: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <header id="settings-bar">
+        <div id="settings-toggle">⚙️</div>
+        <div id="settings-content" class="expanded">
+          <input type="password" id="api-key-input" placeholder="输入你的 DeepSeek API Key..." />
+          <button id="save-key-btn">保存</button>
+          <button id="clear-key-btn" style="display: none">清除 Key</button>
+          <span id="key-status"></span>
+        </div>
+      </header>
+      <main id="chat-area">
+        <div class="chat-header">
+          <span></span>
+          <button id="clear-chat-btn">清空</button>
+        </div>
+        <div id="messages"></div>
+      </main>
+      <footer id="input-area">
+        <textarea id="chat-input" placeholder="跟赛博搭子聊点什么..." rows="1"></textarea>
+        <button id="send-btn" disabled>发送</button>
+      </footer>
+    </div>
+    <canvas id="particles"></canvas>
+    <script>
+      (function () {
+        'use strict';
+
+        // -- Storage --
+        const StorageManager = {
+          getApiKey() {
+            try {
+              return localStorage.getItem('deepseek_api_key') || '';
+            } catch {
+              return '';
+            }
+          },
+          setApiKey(k) {
+            try {
+              localStorage.setItem('deepseek_api_key', k);
+            } catch {}
+          },
+          clearApiKey() {
+            try {
+              localStorage.removeItem('deepseek_api_key');
+            } catch {}
+          },
+          getMessages() {
+            try {
+              const r = localStorage.getItem('chat_messages');
+              return r ? JSON.parse(r) : [];
+            } catch {
+              return [];
+            }
+          },
+          saveMessages(ms) {
+            try {
+              localStorage.setItem('chat_messages', JSON.stringify(ms));
+            } catch {}
+          },
+          clearMessages() {
+            try {
+              localStorage.removeItem('chat_messages');
+            } catch {}
+          },
+        };
+
+        // -- DOM refs --
+        const settingsToggle = document.getElementById('settings-toggle');
+        const settingsContent = document.getElementById('settings-content');
+        const apiKeyInput = document.getElementById('api-key-input');
+        const saveKeyBtn = document.getElementById('save-key-btn');
+        const clearKeyBtn = document.getElementById('clear-key-btn');
+        const keyStatus = document.getElementById('key-status');
+        const messagesEl = document.getElementById('messages');
+        const chatInput = document.getElementById('chat-input');
+        const sendBtn = document.getElementById('send-btn');
+        const chatArea = document.getElementById('chat-area');
+        const clearChatBtn = document.getElementById('clear-chat-btn');
+
+        // -- Key UI --
+        function updateKeyUI() {
+          const key = StorageManager.getApiKey();
+          if (key) {
+            const masked = key.length > 10 ? key.slice(0, 3) + '****' + key.slice(-4) : '已设置';
+            keyStatus.textContent = 'Key: ' + masked;
+            apiKeyInput.style.display = 'none';
+            saveKeyBtn.style.display = 'none';
+            clearKeyBtn.style.display = '';
+            settingsContent.classList.add('hidden');
+            settingsToggle.classList.add('collapsed');
+            messagesEl.classList.add('has-key');
+            sendBtn.disabled = false;
+          } else {
+            keyStatus.textContent = '';
+            apiKeyInput.style.display = '';
+            saveKeyBtn.style.display = '';
+            clearKeyBtn.style.display = 'none';
+            settingsContent.classList.remove('hidden');
+            settingsToggle.classList.remove('collapsed');
+            messagesEl.classList.remove('has-key');
+            sendBtn.disabled = true;
+          }
+        }
+
+        saveKeyBtn.addEventListener('click', function () {
+          const k = apiKeyInput.value.trim();
+          if (!k) return;
+          StorageManager.setApiKey(k);
+          apiKeyInput.value = '';
+          updateKeyUI();
+        });
+
+        clearKeyBtn.addEventListener('click', function () {
+          StorageManager.clearApiKey();
+          updateKeyUI();
+        });
+
+        settingsToggle.addEventListener('click', function () {
+          settingsContent.classList.toggle('hidden');
+          settingsToggle.classList.toggle('collapsed');
+        });
+
+        // -- DeepSeek API --
+        var SYSTEM_PROMPT =
+          '你是用户的七夕赛博搭子，一个擅长吐槽的幽默角色。你的风格：爱开玩笑但不过分、偶尔自黑、能接梗、吐槽精准但不伤人。今天是七夕节，如果用户没有特别提到，找合适的时机cue一下七夕的话题（比如别人都在过节你在跟我聊天，看来咱俩挺配的）。回复要简短有趣，控制在2-4句话。不要用"作为AI"这种开场白。用轻松口语化的中文聊天，可以适当使用网络流行语。';
+
+        function streamChat(userMessage, history, onChunk, onDone, onError) {
+          var apiKey = StorageManager.getApiKey();
+          if (!apiKey) {
+            onError('请先设置 API Key');
+            return;
+          }
+
+          var messages = [{ role: 'system', content: SYSTEM_PROMPT }]
+            .concat(history)
+            .concat([{ role: 'user', content: userMessage }]);
+
+          var controller = new AbortController();
+          var timeoutId = setTimeout(function () {
+            controller.abort();
+          }, 30000);
+
+          fetch('https://api.deepseek.com/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: 'Bearer ' + apiKey,
+            },
+            body: JSON.stringify({ model: 'deepseek-chat', messages: messages, stream: true }),
+            signal: controller.signal,
+          })
+            .then(function (response) {
+              clearTimeout(timeoutId);
+              if (!response.ok) {
+                if (response.status === 401) {
+                  onError('Key 不对，检查一下？');
+                  return;
+                }
+                if (response.status === 429) {
+                  onError('话太多了，歇会儿再聊~');
+                  return;
+                }
+                if (response.status >= 500) {
+                  onError('搭子大脑宕机了，稍后再试...');
+                  return;
+                }
+                onError('出了点问题（' + response.status + '），刷新试试？');
+                return;
+              }
+              var reader = response.body.getReader();
+              var decoder = new TextDecoder();
+              var buffer = '';
+              var fullContent = '';
+              function read() {
+                reader.read().then(function (result) {
+                  if (result.done) {
+                    onDone(fullContent);
+                    return;
+                  }
+                  buffer += decoder.decode(result.value, { stream: true });
+                  var lines = buffer.split('\n');
+                  buffer = lines.pop() || '';
+                  lines.forEach(function (line) {
+                    var trimmed = line.trim();
+                    if (!trimmed || !trimmed.startsWith('data: ')) return;
+                    var data = trimmed.slice(6);
+                    if (data === '[DONE]') return;
+                    try {
+                      var parsed = JSON.parse(data);
+                      var delta =
+                        parsed.choices &&
+                        parsed.choices[0] &&
+                        parsed.choices[0].delta &&
+                        parsed.choices[0].delta.content;
+                      if (delta) {
+                        fullContent += delta;
+                        onChunk(delta);
+                      }
+                    } catch (e) {}
+                  });
+                  read();
+                });
+              }
+              read();
+            })
+            .catch(function (err) {
+              clearTimeout(timeoutId);
+              if (err.name === 'AbortError') {
+                onError('搭子反应有点慢，刷新一下吧~');
+              } else {
+                onError('网络走丢了，刷新试试？');
+              }
+            });
+        }
+
+        // -- Chat state --
+        var chatHistory = StorageManager.getMessages();
+        var isStreaming = false;
+
+        function formatTime(iso) {
+          var d = new Date(iso);
+          return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+        }
+
+        function escapeHtml(str) {
+          var div = document.createElement('div');
+          div.textContent = str;
+          return div.innerHTML;
+        }
+
+        function scrollToBottom() {
+          requestAnimationFrame(function () {
+            chatArea.scrollTop = chatArea.scrollHeight;
+          });
+        }
+
+        function showTypingIndicator() {
+          var div = document.createElement('div');
+          div.className = 'typing-indicator';
+          div.id = 'typing-indicator';
+          div.innerHTML = '<span></span><span></span><span></span>';
+          messagesEl.appendChild(div);
+          scrollToBottom();
+        }
+
+        function removeTypingIndicator() {
+          var el = document.getElementById('typing-indicator');
+          if (el) el.remove();
+        }
+
+        function showError(msg) {
+          removeTypingIndicator();
+          var div = document.createElement('div');
+          div.className = 'error-msg';
+          div.textContent = msg;
+          messagesEl.appendChild(div);
+          scrollToBottom();
+          setTimeout(function () {
+            if (div.parentNode) div.remove();
+          }, 5000);
+        }
+
+        function setSendingState(sending) {
+          isStreaming = sending;
+          sendBtn.disabled = sending;
+          chatInput.disabled = sending;
+        }
+
+        function renderHistory() {
+          messagesEl.innerHTML = '';
+          chatHistory = StorageManager.getMessages();
+          chatHistory.forEach(function (msg) {
+            var div = document.createElement('div');
+            div.className = 'message ' + msg.role;
+            div.innerHTML =
+              '<div class="avatar">' +
+              (msg.role === 'user' ? '🙂' : '🤖') +
+              '</div>' +
+              '<div><div class="bubble">' +
+              escapeHtml(msg.content) +
+              '</div>' +
+              '<div class="time">' +
+              (msg.time ? formatTime(msg.time) : '') +
+              '</div></div>';
+            messagesEl.appendChild(div);
+          });
+          if (StorageManager.getApiKey()) {
+            messagesEl.classList.add('has-key');
+          }
+          scrollToBottom();
+        }
+
+        function sendMessage() {
+          var text = chatInput.value.trim();
+          if (!text || isStreaming) return;
+          if (!StorageManager.getApiKey()) {
+            showError('先设置一下 API Key 才能聊天哦~');
+            return;
+          }
+
+          var userMsg = { role: 'user', content: text, time: new Date().toISOString() };
+          chatHistory.push(userMsg);
+          StorageManager.saveMessages(chatHistory);
+
+          var div = document.createElement('div');
+          div.className = 'message user';
+          div.innerHTML =
+            '<div class="avatar">🙂</div>' +
+            '<div><div class="bubble">' +
+            escapeHtml(text) +
+            '</div>' +
+            '<div class="time">' +
+            formatTime(userMsg.time) +
+            '</div></div>';
+          messagesEl.appendChild(div);
+
+          chatInput.value = '';
+          chatInput.style.height = 'auto';
+          setSendingState(true);
+          showTypingIndicator();
+
+          var displayHistory = chatHistory.map(function (m) {
+            return { role: m.role, content: m.content };
+          });
+
+          var streamedContent = '';
+
+          streamChat(
+            text,
+            displayHistory.slice(0, -1),
+            function (chunk) {
+              if (!streamedContent) {
+                removeTypingIndicator();
+                var bubbleDiv = document.createElement('div');
+                bubbleDiv.className = 'message companion';
+                bubbleDiv.id = 'streaming-bubble';
+                bubbleDiv.innerHTML =
+                  '<div class="avatar">🤖</div>' + '<div><div class="bubble"></div><div class="time"></div></div>';
+                messagesEl.appendChild(bubbleDiv);
+              }
+              streamedContent += chunk;
+              var bubble = document.querySelector('#streaming-bubble .bubble');
+              if (bubble) bubble.textContent = streamedContent;
+              scrollToBottom();
+            },
+            function (fullContent) {
+              var streamingEl = document.getElementById('streaming-bubble');
+              if (streamingEl) streamingEl.removeAttribute('id');
+              var assistantMsg = { role: 'assistant', content: fullContent, time: new Date().toISOString() };
+              chatHistory.push(assistantMsg);
+              StorageManager.saveMessages(chatHistory);
+              var timeEl = document.querySelector('.message.companion:last-child .time');
+              if (timeEl) timeEl.textContent = formatTime(assistantMsg.time);
+              setSendingState(false);
+            },
+            function (errMsg) {
+              showError(errMsg);
+              setSendingState(false);
+            },
+          );
+        }
+
+        sendBtn.addEventListener('click', sendMessage);
+        chatInput.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+          }
+        });
+        chatInput.addEventListener('input', function () {
+          chatInput.style.height = 'auto';
+          chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
+        });
+        clearChatBtn.addEventListener('click', function () {
+          if (isStreaming) return;
+          StorageManager.clearMessages();
+          chatHistory = [];
+          messagesEl.innerHTML = '';
+          if (StorageManager.getApiKey()) {
+            messagesEl.classList.add('has-key');
+          }
+        });
+
+        // -- Particles --
+        (function () {
+          var canvas = document.getElementById('particles');
+          var ctx = canvas.getContext('2d');
+          var petals = [];
+          var MAX = 20;
+          function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+          }
+          resize();
+          window.addEventListener('resize', resize);
+          var shapes = ['🌸', '💮', '🩷', '✨'];
+          for (var i = 0; i < MAX; i++) {
+            petals.push({
+              x: Math.random() * canvas.width,
+              y: Math.random() * canvas.height,
+              size: 14 + Math.random() * 18,
+              speed: 0.3 + Math.random() * 0.7,
+              drift: (Math.random() - 0.5) * 0.4,
+              opacity: 0.12 + Math.random() * 0.2,
+              shape: shapes[Math.floor(Math.random() * shapes.length)],
+            });
+          }
+          function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            for (var i = 0; i < petals.length; i++) {
+              var p = petals[i];
+              p.y += p.speed;
+              p.x += p.drift;
+              if (p.y > canvas.height + 40) {
+                p.y = -40;
+                p.x = Math.random() * canvas.width;
+              }
+              if (p.x < -40) p.x = canvas.width + 40;
+              if (p.x > canvas.width + 40) p.x = -40;
+              ctx.font = p.size + 'px serif';
+              ctx.globalAlpha = p.opacity;
+              ctx.fillText(p.shape, p.x, p.y);
+            }
+            ctx.globalAlpha = 1;
+            requestAnimationFrame(animate);
+          }
+          animate();
+        })();
+
+        // -- Init --
+        updateKeyUI();
+        renderHistory();
+      })();
+    </script>
+  </body>
 </html>

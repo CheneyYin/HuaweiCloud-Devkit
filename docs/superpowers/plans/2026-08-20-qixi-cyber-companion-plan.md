@@ -24,9 +24,11 @@
 ### Task 1: Create project directory and HTML skeleton
 
 **Files:**
+
 - Create: `demos/qixi-companion/index.html`
 
 **Interfaces:**
+
 - Produces: `index.html` with complete structural markup for settings panel + chat area + input area
 
 - [ ] **Step 1: Create directory**
@@ -40,42 +42,42 @@ New-Item -ItemType Directory -Path "demos/qixi-companion" -Force
 ```html
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>🌸 七夕赛博搭子</title>
-  <style>
-    /* Task 2 fills this in */
-  </style>
-</head>
-<body>
-  <div id="app">
-    <header id="settings-bar">
-      <div id="settings-toggle">⚙️</div>
-      <div id="settings-content" class="expanded">
-        <input type="password" id="api-key-input" placeholder="输入你的 DeepSeek API Key...">
-        <button id="save-key-btn">保存</button>
-        <button id="clear-key-btn" style="display:none;">清除 Key</button>
-        <span id="key-status"></span>
-      </div>
-    </header>
-    <main id="chat-area">
-      <div class="chat-header">
-        <span>💬</span>
-        <button id="clear-chat-btn">清空</button>
-      </div>
-      <div id="messages"></div>
-    </main>
-    <footer id="input-area">
-      <textarea id="chat-input" placeholder="跟赛博搭子聊点什么..." rows="1"></textarea>
-      <button id="send-btn" disabled>发送</button>
-    </footer>
-  </div>
-  <canvas id="particles"></canvas>
-  <script>
-    // Task 3-5 fill this in
-  </script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>🌸 七夕赛博搭子</title>
+    <style>
+      /* Task 2 fills this in */
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <header id="settings-bar">
+        <div id="settings-toggle">⚙️</div>
+        <div id="settings-content" class="expanded">
+          <input type="password" id="api-key-input" placeholder="输入你的 DeepSeek API Key..." />
+          <button id="save-key-btn">保存</button>
+          <button id="clear-key-btn" style="display:none;">清除 Key</button>
+          <span id="key-status"></span>
+        </div>
+      </header>
+      <main id="chat-area">
+        <div class="chat-header">
+          <span>💬</span>
+          <button id="clear-chat-btn">清空</button>
+        </div>
+        <div id="messages"></div>
+      </main>
+      <footer id="input-area">
+        <textarea id="chat-input" placeholder="跟赛博搭子聊点什么..." rows="1"></textarea>
+        <button id="send-btn" disabled>发送</button>
+      </footer>
+    </div>
+    <canvas id="particles"></canvas>
+    <script>
+      // Task 3-5 fill this in
+    </script>
+  </body>
 </html>
 ```
 
@@ -91,9 +93,11 @@ git commit -m "feat(qixi): add HTML skeleton for cyber companion app"
 ### Task 2: Add all CSS styling
 
 **Files:**
+
 - Modify: `demos/qixi-companion/index.html` (replace `<style>` placeholder)
 
 **Interfaces:**
+
 - Consumes: HTML structure from Task 1 (element IDs: `app`, `settings-bar`, `settings-toggle`, `settings-content`, `api-key-input`, `save-key-btn`, `clear-key-btn`, `key-status`, `chat-area`, `messages`, `input-area`, `chat-input`, `send-btn`, `particles`)
 
 - [ ] **Step 1: Replace empty `<style>` block with full CSS**
@@ -101,7 +105,13 @@ git commit -m "feat(qixi): add HTML skeleton for cyber companion app"
 Replace the `<style>/* Task 2 fills this in */</style>` placeholder with:
 
 ```css
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
 
 :root {
   --bg-start: #1a0a2e;
@@ -117,7 +127,8 @@ Replace the `<style>/* Task 2 fills this in */</style>` placeholder with:
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans SC", sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans SC', sans-serif;
   background: linear-gradient(135deg, var(--bg-start), var(--bg-end));
   color: var(--text);
   min-height: 100dvh;
@@ -154,7 +165,9 @@ body {
   user-select: none;
   transition: transform 0.3s;
 }
-#settings-toggle.collapsed { transform: rotate(-90deg); }
+#settings-toggle.collapsed {
+  transform: rotate(-90deg);
+}
 #settings-content {
   display: flex;
   align-items: center;
@@ -162,11 +175,17 @@ body {
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  transition: max-height 0.3s, opacity 0.3s;
+  transition:
+    max-height 0.3s,
+    opacity 0.3s;
   max-height: 60px;
   opacity: 1;
 }
-#settings-content.hidden { max-height: 0; opacity: 0; pointer-events: none; }
+#settings-content.hidden {
+  max-height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
 #api-key-input {
   flex: 1;
   min-width: 0;
@@ -179,9 +198,14 @@ body {
   outline: none;
   transition: border-color 0.2s;
 }
-#api-key-input:focus { border-color: var(--accent); }
-#api-key-input::placeholder { color: var(--text-dim); }
-#save-key-btn, #clear-key-btn {
+#api-key-input:focus {
+  border-color: var(--accent);
+}
+#api-key-input::placeholder {
+  color: var(--text-dim);
+}
+#save-key-btn,
+#clear-key-btn {
   padding: 8px 14px;
   border-radius: 8px;
   border: none;
@@ -190,10 +214,23 @@ body {
   white-space: nowrap;
   transition: opacity 0.2s;
 }
-#save-key-btn { background: var(--accent); color: #fff; }
-#clear-key-btn { background: rgba(255,255,255,0.1); color: var(--text); }
-#save-key-btn:hover, #clear-key-btn:hover { opacity: 0.85; }
-#key-status { font-size: 13px; color: var(--text-dim); white-space: nowrap; }
+#save-key-btn {
+  background: var(--accent);
+  color: #fff;
+}
+#clear-key-btn {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+}
+#save-key-btn:hover,
+#clear-key-btn:hover {
+  opacity: 0.85;
+}
+#key-status {
+  font-size: 13px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
 
 /* Chat Area */
 #chat-area {
@@ -210,7 +247,10 @@ body {
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border);
 }
-.chat-header span { font-size: 14px; color: var(--text-dim); }
+.chat-header span {
+  font-size: 14px;
+  color: var(--text-dim);
+}
 #clear-chat-btn {
   padding: 4px 12px;
   border-radius: 6px;
@@ -221,7 +261,10 @@ body {
   cursor: pointer;
   transition: all 0.2s;
 }
-#clear-chat-btn:hover { color: var(--accent); border-color: var(--accent); }
+#clear-chat-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
 #messages {
   display: flex;
   flex-direction: column;
@@ -229,7 +272,7 @@ body {
   min-height: 100%;
 }
 #messages:empty::before {
-  content: "🌸 先设置 API Key，然后跟我聊天吧~";
+  content: '🌸 先设置 API Key，然后跟我聊天吧~';
   color: var(--text-dim);
   text-align: center;
   font-size: 16px;
@@ -243,9 +286,23 @@ body {
   max-width: 85%;
   animation: fadeIn 0.3s ease;
 }
-@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-.message.companion { align-self: flex-start; }
-.message.user { align-self: flex-end; flex-direction: row-reverse; }
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.message.companion {
+  align-self: flex-start;
+}
+.message.user {
+  align-self: flex-end;
+  flex-direction: row-reverse;
+}
 
 .message .avatar {
   width: 36px;
@@ -256,9 +313,11 @@ body {
   justify-content: center;
   font-size: 20px;
   flex-shrink: 0;
-  background: rgba(255,255,255,0.1);
+  background: rgba(255, 255, 255, 0.1);
 }
-.message.companion .avatar { background: rgba(255, 107, 157, 0.25); }
+.message.companion .avatar {
+  background: rgba(255, 107, 157, 0.25);
+}
 
 .message .bubble {
   padding: 10px 14px;
@@ -293,16 +352,29 @@ body {
   max-width: 85%;
 }
 .typing-indicator span {
-  width: 8px; height: 8px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--accent);
   animation: bounce 1.4s infinite ease-in-out;
 }
-.typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
-.typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+.typing-indicator span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.typing-indicator span:nth-child(3) {
+  animation-delay: 0.4s;
+}
 @keyframes bounce {
-  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
-  40% { transform: scale(1); opacity: 1; }
+  0%,
+  80%,
+  100% {
+    transform: scale(0.6);
+    opacity: 0.4;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 /* Input Area */
@@ -331,8 +403,12 @@ body {
   max-height: 120px;
   transition: border-color 0.2s;
 }
-#chat-input:focus { border-color: var(--accent); }
-#chat-input::placeholder { color: var(--text-dim); }
+#chat-input:focus {
+  border-color: var(--accent);
+}
+#chat-input::placeholder {
+  color: var(--text-dim);
+}
 #send-btn {
   padding: 10px 18px;
   border-radius: 12px;
@@ -344,21 +420,28 @@ body {
   flex-shrink: 0;
   transition: opacity 0.2s;
 }
-#send-btn:hover { opacity: 0.85; }
-#send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+#send-btn:hover {
+  opacity: 0.85;
+}
+#send-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 
 /* Particles Canvas */
 #particles {
   position: fixed;
-  top: 0; left: 0;
-  width: 100%; height: 100%;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
   z-index: 0;
 }
 
 /* Welcome placeholder override when has-key */
 #messages.has-key:empty::before {
-  content: "💬 七夕快乐~ 来跟赛博搭子聊聊天吧！";
+  content: '💬 七夕快乐~ 来跟赛博搭子聊聊天吧！';
 }
 
 /* Error message */
@@ -373,9 +456,16 @@ body {
 }
 
 /* Scrollbar */
-#chat-area::-webkit-scrollbar { width: 4px; }
-#chat-area::-webkit-scrollbar-track { background: transparent; }
-#chat-area::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
+#chat-area::-webkit-scrollbar {
+  width: 4px;
+}
+#chat-area::-webkit-scrollbar-track {
+  background: transparent;
+}
+#chat-area::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+}
 ```
 
 - [ ] **Step 2: Commit**
@@ -390,9 +480,11 @@ git commit -m "feat(qixi): add complete CSS styling with Qixi theme"
 ### Task 3: Implement API Key management + storage layer
 
 **Files:**
+
 - Modify: `demos/qixi-companion/index.html` (add JS to `<script>` block)
 
 **Interfaces:**
+
 - Consumes: HTML structure (Task 1), CSS (Task 2)
 - Produces: `StorageManager` object with methods `getApiKey()`, `setApiKey(key)`, `clearApiKey()`, `getMessages()`, `saveMessages(msgs)`, `clearMessages()`
 
@@ -403,31 +495,40 @@ Add to the empty `<script>` block:
 ```javascript
 const StorageManager = {
   getApiKey() {
-    try { return localStorage.getItem('deepseek_api_key') || ''; }
-    catch { return ''; }
+    try {
+      return localStorage.getItem('deepseek_api_key') || '';
+    } catch {
+      return '';
+    }
   },
   setApiKey(key) {
-    try { localStorage.setItem('deepseek_api_key', key); }
-    catch { }
+    try {
+      localStorage.setItem('deepseek_api_key', key);
+    } catch {}
   },
   clearApiKey() {
-    try { localStorage.removeItem('deepseek_api_key'); }
-    catch { }
+    try {
+      localStorage.removeItem('deepseek_api_key');
+    } catch {}
   },
   getMessages() {
     try {
       const raw = localStorage.getItem('chat_messages');
       return raw ? JSON.parse(raw) : [];
-    } catch { return []; }
+    } catch {
+      return [];
+    }
   },
   saveMessages(msgs) {
-    try { localStorage.setItem('chat_messages', JSON.stringify(msgs)); }
-    catch { }
+    try {
+      localStorage.setItem('chat_messages', JSON.stringify(msgs));
+    } catch {}
   },
   clearMessages() {
-    try { localStorage.removeItem('chat_messages'); }
-    catch { }
-  }
+    try {
+      localStorage.removeItem('chat_messages');
+    } catch {}
+  },
 };
 
 const settingsToggle = document.getElementById('settings-toggle');
@@ -440,9 +541,7 @@ const keyStatus = document.getElementById('key-status');
 function updateKeyUI() {
   const key = StorageManager.getApiKey();
   if (key) {
-    const masked = key.length > 10
-      ? key.slice(0, 3) + '****' + key.slice(-4)
-      : '已设置';
+    const masked = key.length > 10 ? key.slice(0, 3) + '****' + key.slice(-4) : '已设置';
     keyStatus.textContent = 'Key: ' + masked;
     apiKeyInput.style.display = 'none';
     saveKeyBtn.style.display = 'none';
@@ -498,9 +597,11 @@ git commit -m "feat(qixi): add API key management with localStorage persistence"
 ### Task 4: Implement DeepSeek API client with streaming
 
 **Files:**
+
 - Modify: `demos/qixi-companion/index.html` (append JS to `<script>` block)
 
 **Interfaces:**
+
 - Consumes: `StorageManager.getApiKey()` from Task 3
 - Produces: `streamChat(userMessage, history, onChunk, onDone, onError)` async function
 
@@ -513,13 +614,12 @@ const SYSTEM_PROMPT = `你是用户的七夕赛博搭子，一个擅长吐槽的
 
 async function streamChat(userMessage, history, onChunk, onDone, onError) {
   const apiKey = StorageManager.getApiKey();
-  if (!apiKey) { onError('请先设置 API Key'); return; }
+  if (!apiKey) {
+    onError('请先设置 API Key');
+    return;
+  }
 
-  const messages = [
-    { role: 'system', content: SYSTEM_PROMPT },
-    ...history,
-    { role: 'user', content: userMessage }
-  ];
+  const messages = [{ role: 'system', content: SYSTEM_PROMPT }, ...history, { role: 'user', content: userMessage }];
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 30000);
@@ -529,22 +629,31 @@ async function streamChat(userMessage, history, onChunk, onDone, onError) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + apiKey
+        Authorization: 'Bearer ' + apiKey,
       },
       body: JSON.stringify({
         model: 'deepseek-chat',
         messages,
-        stream: true
+        stream: true,
       }),
-      signal: controller.signal
+      signal: controller.signal,
     });
 
     clearTimeout(timeoutId);
 
     if (!response.ok) {
-      if (response.status === 401) { onError('Key 不对，检查一下？'); return; }
-      if (response.status === 429) { onError('话太多了，歇会儿再聊~'); return; }
-      if (response.readyState >= 500) { onError('搭子大脑宕机了，稍后再试...'); return; }
+      if (response.status === 401) {
+        onError('Key 不对，检查一下？');
+        return;
+      }
+      if (response.status === 429) {
+        onError('话太多了，歇会儿再聊~');
+        return;
+      }
+      if (response.readyState >= 500) {
+        onError('搭子大脑宕机了，稍后再试...');
+        return;
+      }
       onError('出了点问题（' + response.status + '），刷新试试？');
       return;
     }
@@ -576,15 +685,18 @@ async function streamChat(userMessage, history, onChunk, onDone, onError) {
             fullContent += delta;
             onChunk(delta);
           }
-        } catch { }
+        } catch {}
       }
     }
 
     onDone(fullContent);
   } catch (err) {
     clearTimeout(timeoutId);
-    if (err.name === 'AbortError') { onError('搭子反应有点慢，刷新重试一下？'); }
-    else { onError('网络走丢了，刷新试试？'); }
+    if (err.name === 'AbortError') {
+      onError('搭子反应有点慢，刷新重试一下？');
+    } else {
+      onError('网络走丢了，刷新试试？');
+    }
   }
 }
 ```
@@ -601,9 +713,11 @@ git commit -m "feat(qixi): add DeepSeek API streaming client"
 ### Task 5: Implement chat UI logic
 
 **Files:**
+
 - Modify: `demos/qixi-companion/index.html` (append JS to `<script>` block)
 
 **Interfaces:**
+
 - Consumes: `StorageManager` (Task 3), `streamChat` (Task 4), HTML structure (Task 1)
 - Produces: Fully functional chat interface
 
@@ -628,9 +742,16 @@ function formatTime(iso) {
 function renderMessage(msg, isStreamingBubble) {
   const div = document.createElement('div');
   div.className = 'message ' + msg.role;
-  div.innerHTML = '<div class="avatar">' + (msg.role === 'user' ? '🙂' : '🤖') + '</div>' +
-    '<div><div class="bubble">' + escapeHtml(msg.content) + '</div>' +
-    '<div class="time">' + (msg.time ? formatTime(msg.time) : '') + '</div></div>';
+  div.innerHTML =
+    '<div class="avatar">' +
+    (msg.role === 'user' ? '🙂' : '🤖') +
+    '</div>' +
+    '<div><div class="bubble">' +
+    escapeHtml(msg.content) +
+    '</div>' +
+    '<div class="time">' +
+    (msg.time ? formatTime(msg.time) : '') +
+    '</div></div>';
 
   if (isStreamingBubble) {
     div.id = 'streaming-bubble';
@@ -673,7 +794,9 @@ function showError(msg) {
   div.textContent = msg;
   messagesEl.appendChild(div);
   scrollToBottom();
-  setTimeout(() => { if (div.parentNode) div.remove(); }, 5000);
+  setTimeout(() => {
+    if (div.parentNode) div.remove();
+  }, 5000);
 }
 
 function setSendingState(sending) {
@@ -685,7 +808,7 @@ function setSendingState(sending) {
 function renderHistory() {
   messagesEl.innerHTML = '';
   chatHistory = StorageManager.getMessages();
-  chatHistory.forEach(msg => renderMessage(msg, false));
+  chatHistory.forEach((msg) => renderMessage(msg, false));
   if (StorageManager.getApiKey()) {
     messagesEl.classList.add('has-key');
   }
@@ -711,7 +834,7 @@ async function sendMessage() {
   setSendingState(true);
   showTypingIndicator();
 
-  const displayHistory = chatHistory.map(m => ({ role: m.role, content: m.content }));
+  const displayHistory = chatHistory.map((m) => ({ role: m.role, content: m.content }));
 
   let streamedContent = '';
 
@@ -724,8 +847,8 @@ async function sendMessage() {
         const bubbleDiv = document.createElement('div');
         bubbleDiv.className = 'message companion';
         bubbleDiv.id = 'streaming-bubble';
-        bubbleDiv.innerHTML = '<div class="avatar">🤖</div>' +
-          '<div><div class="bubble"></div><div class="time"></div></div>';
+        bubbleDiv.innerHTML =
+          '<div class="avatar">🤖</div>' + '<div><div class="bubble"></div><div class="time"></div></div>';
         messagesEl.appendChild(bubbleDiv);
       }
       streamedContent += chunk;
@@ -749,7 +872,7 @@ async function sendMessage() {
     (errMsg) => {
       showError(errMsg);
       setSendingState(false);
-    }
+    },
   );
 }
 
@@ -792,9 +915,11 @@ git commit -m "feat(qixi): add full chat UI with streaming, history, and error h
 ### Task 6: Add Qixi particle animation
 
 **Files:**
+
 - Modify: `demos/qixi-companion/index.html` (append JS to `<script>` block)
 
 **Interfaces:**
+
 - Consumes: `<canvas id="particles">` from Task 1
 - Produces: Floating petal/heart particle animation in background
 
@@ -826,7 +951,7 @@ Append to `<script>` block:
       speed: 0.3 + Math.random() * 0.7,
       drift: (Math.random() - 0.5) * 0.4,
       opacity: 0.12 + Math.random() * 0.2,
-      shape: shapes[Math.floor(Math.random() * shapes.length)]
+      shape: shapes[Math.floor(Math.random() * shapes.length)],
     });
   }
 
@@ -837,7 +962,10 @@ Append to `<script>` block:
       p.y += p.speed;
       p.x += p.drift;
 
-      if (p.y > canvas.height + 40) { p.y = -40; p.x = Math.random() * canvas.width; }
+      if (p.y > canvas.height + 40) {
+        p.y = -40;
+        p.x = Math.random() * canvas.width;
+      }
       if (p.x < -40) p.x = canvas.width + 40;
       if (p.x > canvas.width + 40) p.x = -40;
 
@@ -866,6 +994,7 @@ git commit -m "feat(qixi): add floating petal/heart particle animation"
 ### Task 7: End-to-end verification (local)
 
 **Files:**
+
 - No changes to `index.html`; manual testing only
 
 - [ ] **Step 1: Verify HTML file renders correctly**
@@ -895,9 +1024,11 @@ git commit -m "feat(qixi): add floating petal/heart particle animation"
 ### Task 8: Deploy to Huawei Cloud DevStation sandbox
 
 **Files:**
+
 - Upload: `demos/qixi-companion/index.html`
 
 **Interfaces:**
+
 - Consumes: HuaweiCloud DevKit sandbox tools
 - Produces: Public URL accessible on web
 
@@ -943,6 +1074,7 @@ git commit --allow-empty -m "deploy(qixi): deployed cyber companion to sandbox"
 ### Task 9: Push to GitHub
 
 **Files:**
+
 - All committed files
 
 - [ ] **Step 1: Verify all changes committed**

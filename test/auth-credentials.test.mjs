@@ -207,7 +207,7 @@ test('resolveCredentialsWithRuntime set and clear workflow', () => {
 });
 
 test('resolveCredentials reads CodeArts project mcp_settings.json', () => {
-  withTempHome((home) => {
+  withTempHome((_home) => {
     clearRuntimeCredentials();
     delete process.env.HW_ACCESS_KEY;
     delete process.env.HW_SECRET_KEY;
@@ -242,7 +242,7 @@ test('resolveCredentials reads CodeArts project mcp_settings.json', () => {
 });
 
 test('resolveCredentials uses env vars over CodeArts mcp_settings.json', () => {
-  withTempHome((home) => {
+  withTempHome((_home) => {
     clearRuntimeCredentials();
     process.env.HW_ACCESS_KEY = 'ENV_AK';
     process.env.HW_SECRET_KEY = 'ENV_SK';

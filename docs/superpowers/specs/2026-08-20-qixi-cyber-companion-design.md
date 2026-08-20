@@ -136,15 +136,15 @@ Each message: `{role: "user"|"assistant", content: string, time: ISO string}`
 
 ## Error Handling
 
-| Scenario | Handling |
-|----------|-----------|
-| No API Key set | Show prompt in chat area: "先设置一下 API Key 才能开始吐槽哦~" |
-| API returns 401 | Show error: "Key 不对，检查一下？" |
-| API returns 429 | Show error: "话太多了，歇会儿再聊~" with retry hint |
-| Network error | Show error: "网络走丢了，刷新试试？" |
-| API timeout (30s) | Abort fetch, show timeout message |
-| Empty input | Send button disabled, no-op on Enter |
-| JSON parse error on SSE | Skip malformed chunk, continue streaming |
+| Scenario                | Handling                                                       |
+| ----------------------- | -------------------------------------------------------------- |
+| No API Key set          | Show prompt in chat area: "先设置一下 API Key 才能开始吐槽哦~" |
+| API returns 401         | Show error: "Key 不对，检查一下？"                             |
+| API returns 429         | Show error: "话太多了，歇会儿再聊~" with retry hint            |
+| Network error           | Show error: "网络走丢了，刷新试试？"                           |
+| API timeout (30s)       | Abort fetch, show timeout message                              |
+| Empty input             | Send button disabled, no-op on Enter                           |
+| JSON parse error on SSE | Skip malformed chunk, continue streaming                       |
 
 ## Deployment
 

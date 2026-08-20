@@ -1,5 +1,14 @@
-import { execWithSession, closeAllSessions, DEFAULT_WORKSPACE_ID } from '../plugins/huaweicloud-core/src/sandbox/session-manager.mjs';
-import { hdkitCheckUser, hdkitSignAgreement, hdkitConnect, hdkitCredentials } from '../plugins/huaweicloud-core/src/sandbox/hdkitservice-api.mjs';
+import {
+  execWithSession,
+  closeAllSessions,
+  DEFAULT_WORKSPACE_ID,
+} from '../plugins/huaweicloud-core/src/sandbox/session-manager.mjs';
+import {
+  hdkitCheckUser,
+  hdkitSignAgreement,
+  hdkitConnect,
+  hdkitCredentials,
+} from '../plugins/huaweicloud-core/src/sandbox/hdkitservice-api.mjs';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +20,10 @@ const remoteFile = `${remoteDir}/index.html`;
 const port = 8080;
 
 function stripAnsi(str) {
-  return String(str ?? '').replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\]133;[A-Z]/g, '').trim();
+  return String(str ?? '')
+    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+    .replace(/\]133;[A-Z]/g, '')
+    .trim();
 }
 
 async function safeExec(wsId, cmd, timeout = 30000) {
@@ -87,19 +99,22 @@ async function main() {
   console.log('  Upload:', up.ok ? 'ok (' + up.bytes + ' bytes)' : JSON.stringify(up));
 
   console.log('Stopping any previous server...');
-  await safeExec(wsId, 'pkill -f "python3 -m http.server 8080" 2>/dev/null; pkill -f "devbridge host" 2>/dev/null; true');
+  await safeExec(
+    wsId,
+    'pkill -f "python3 -m http.server 8080" 2>/dev/null; pkill -f "devbridge host" 2>/dev/null; true',
+  );
 
   console.log('Starting HTTP server on port ' + port + '...');
   const serverResult = await safeExec(
     wsId,
     `cd "${remoteDir}" && nohup python3 -m http.server ${port} > /tmp/http-server.log 2>&1 & echo "PID=$!"`,
-    30000
+    30000,
   );
   console.log('  Server:', serverResult.stdout);
 
   console.log('Starting devbridge tunnel...');
   await safeExec(wsId, `nohup devbridge host -p ${port} > /tmp/devbridge.log 2>&1 &`, 10000);
-  await new Promise(r => setTimeout(r, 4000));
+  await new Promise((r) => setTimeout(r, 4000));
   const tunnelResult = await safeExec(wsId, 'cat /tmp/devbridge.log', 10000);
   console.log('  Tunnel log:', tunnelResult.stdout);
 
@@ -107,7 +122,7 @@ async function main() {
   console.log('\nDeployment complete!');
 }
 
-main().catch(err => {
+main().catch((err) => {
   console.error('Deployment failed:', err.message);
   process.exit(1);
 });
