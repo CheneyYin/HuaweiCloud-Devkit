@@ -405,7 +405,12 @@ function copyDir(src, dest) {
 }
 
 function installRuntimeDeps(pluginsDir) {
-  const pkgJson = { name: 'huaweicloud-plugins', version: pkgVersion, type: 'module', dependencies: { undici: '^8.10.0' } };
+  const pkgJson = {
+    name: 'huaweicloud-plugins',
+    version: pkgVersion,
+    type: 'module',
+    dependencies: { undici: '^8.10.0' },
+  };
   mkdirSync(pluginsDir, { recursive: true });
   writeFileSync(join(pluginsDir, 'package.json'), JSON.stringify(pkgJson, null, 2));
   const r = spawnSync('npm', ['install', '--omit=dev'], {

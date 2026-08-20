@@ -118,7 +118,10 @@ test('MCP server reports version from plugin package.json in installed layout', 
     const pluginRoot = join(dir, 'huaweicloud-plugins');
     cpSync(join(root, 'plugins', 'huaweicloud-core', 'src'), join(pluginRoot, 'src'), { recursive: true });
     cpSync(join(root, 'plugins', 'huaweicloud-core', 'safety'), join(pluginRoot, 'safety'), { recursive: true });
-    writeFileSync(join(pluginRoot, 'package.json'), JSON.stringify({ name: 'huaweicloud-plugins', version: '9.9.9-test' }));
+    writeFileSync(
+      join(pluginRoot, 'package.json'),
+      JSON.stringify({ name: 'huaweicloud-plugins', version: '9.9.9-test' }),
+    );
     const client = createClient(join(pluginRoot, 'src', 'mcp-server.mjs'));
     try {
       const initialized = await client.request('initialize', {
