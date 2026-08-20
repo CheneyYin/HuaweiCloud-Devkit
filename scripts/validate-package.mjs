@@ -85,3 +85,25 @@ for (const rule of riskCatalog.rules) {
 }
 
 console.log(`Validated HuaweiCloud Devkit with ${skills.length} skills.`);
+
+const readmePaths = [join(root, 'README.md'), join(root, 'README.zh-CN.md')];
+
+readmePaths.forEach((path) => {
+  assert.ok(existsSync(path), `Missing README: ${path}`);
+});
+
+const readmes = readmePaths.map((p) => ({ path: p, text: readFileSync(p, 'utf8') }));
+
+readmes.forEach(({ path, text }) => {
+  assert.match(text, /OfficeAce|officeace/i, `${path}: missing OfficeAce from supported agents`);
+  assert.match(
+    text,
+    /huaweicloud-devkit-mcp/,
+    `${path}: missing standard MCP npx config (huaweicloud-devkit-mcp)`,
+  );
+  assert.match(
+    text,
+    /Sandbox|DevStation/i,
+    `${path}: missing sandbox/DevStation support documentation`,
+  );
+});

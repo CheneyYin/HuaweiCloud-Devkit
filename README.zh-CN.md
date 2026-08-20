@@ -116,26 +116,22 @@ npx --yes huaweicloud-devkit uninstall --target officeace
 
 ### 其他 Agent
 
-支持 MCP 协议的 Agent，手动添加 MCP Server 配置：
+任何支持 MCP 协议的 Agent，直接使用标准 MCP 配置：
 
 ```json
 {
   "mcpServers": {
     "huaweicloud-devkit": {
-      "command": "node",
-      "args": ["<路径>/plugins/huaweicloud-core/src/mcp-server.mjs"]
+      "command": "npx",
+      "args": ["-y", "-p", "huaweicloud-devkit@next", "huaweicloud-devkit-mcp"]
     }
   }
 }
 ```
 
-然后安装 skills：
+无需预安装 — `npx` 自动处理一切。
 
-```bash
-npx --yes huaweicloud-devkit install
-```
-
-> 执行 `npx huaweicloud-devkit auth init` 完成 KooCLI、OBS 的统一认证。
+> 项目级 AK/SK 可通过 MCP 配置的 `env` 字段设置 `HW_ACCESS_KEY`/`HW_SECRET_KEY`。
 
 ### 安装 KooCLI
 
@@ -171,6 +167,7 @@ npx --yes huaweicloud-devkit update --target all
 - **安全优先执行** — 所有写操作需用户明确批准；凭证和密钥自动脱敏
 - **执行前风险检查** — 公网暴露、凭证泄露、破坏性操作在执行前即被拦截
 - **区域感知** — 自动发现可用区域，创建资源前检查服务可用性
+- **沙箱（DevStation）** — 临时云端运行环境，部署 Web 应用并即刻获得公网预览地址
 
 ## 支持的服务
 
