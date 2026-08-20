@@ -8,14 +8,14 @@
 
 ## 总览
 
-| 级别 | 数量 |
-|------|------|
-| 🔴 严重 | 6 |
-| 🟠 高危 | 5 |
-| 🟡 中危 | 7 |
-| ⚪ 低危 | 5 |
-| 📋 代码质量 | 69 |
-| **总计** | **92** |
+| 级别        | 数量   |
+| ----------- | ------ |
+| 🔴 严重     | 6      |
+| 🟠 高危     | 5      |
+| 🟡 中危     | 7      |
+| ⚪ 低危     | 5      |
+| 📋 代码质量 | 69     |
+| **总计**    | **92** |
 
 ---
 
@@ -92,15 +92,15 @@
 
 ## 🟡 中危问题
 
-| # | 文件 | 问题 |
-|---|------|------|
-| 12 | `integrations/opencode/opencode.json:7` | 中文占位符 `<绝对路径>` 对非中文用户不友好 |
-| 13 | `rules/huawei-agent-rules.md` | 缺 sandbox/auth/icon/hook 工具引用 |
-| 14 | `setup-cli.mjs:580` | `uninstallCodex` 硬编码 `'HuaweiCloud-Devkit'` 作为回退 |
-| 15 | `sandbox/session-manager.mjs:12` | `DEFAULT_WORKSPACE_ID` 硬编码 demo UUID |
-| 16 | `huaweicloud-core/SKILL.md:3` | 描述只提 Codex/OpenCode，未提其他 4 个 Agent |
-| 17 | `docs/CHANGELOG.md` | `1.0.2-next.10/9` 有重复条目 |
-| 18 | `docs/RELEASING.md:147` | Phase 0/1 标记为未完成，实际已实现 |
+| #   | 文件                                    | 问题                                                    |
+| --- | --------------------------------------- | ------------------------------------------------------- |
+| 12  | `integrations/opencode/opencode.json:7` | 中文占位符 `<绝对路径>` 对非中文用户不友好              |
+| 13  | `rules/huawei-agent-rules.md`           | 缺 sandbox/auth/icon/hook 工具引用                      |
+| 14  | `setup-cli.mjs:580`                     | `uninstallCodex` 硬编码 `'HuaweiCloud-Devkit'` 作为回退 |
+| 15  | `sandbox/session-manager.mjs:12`        | `DEFAULT_WORKSPACE_ID` 硬编码 demo UUID                 |
+| 16  | `huaweicloud-core/SKILL.md:3`           | 描述只提 Codex/OpenCode，未提其他 4 个 Agent            |
+| 17  | `docs/CHANGELOG.md`                     | `1.0.2-next.10/9` 有重复条目                            |
+| 18  | `docs/RELEASING.md:147`                 | Phase 0/1 标记为未完成，实际已实现                      |
 
 ---
 
@@ -115,32 +115,39 @@
 ## 📋 代码质量问题（69 项摘要）
 
 ### 死链（6 项）
+
 - `huawei-ecs/SKILL.md` 引用不存在的 `references/sg.md`
 - `huawei-iam/SKILL.md` 引用不存在的 `iam-ops.md`, `agency.md`, `sts.md`
 - `huawei-obs/SKILL.md` 引用不存在的 `replication.md`
 - `huawei-vpc/SKILL.md` 引用不存在的 `eip.md`
 
 ### 路径错误（3 项）
+
 - `cloud-find-skills` Reference 表写 `.py`，实际 `.mjs`
 - Troubleshooting 写 `python scripts/search-skills.py`
 
 ### 破损代码（2 项）
+
 - `huawei-dew/SKILL.md:56` 代码块 `` `\x08ash `` (含退格字符)
 
 ### 缺 YAML version（6 项）
+
 - `huaweicloud-api-and-sdk`, `huaweicloud-capability-discovery`, `huaweicloud-cli-and-auth`, `huaweicloud-safety`, `huaweicloud-troubleshooting`, `huawei-cloud-find-skills`
 
 ### 重复代码（12+ 处）
+
 - `setup-cli.mjs` 6 个 Agent 的 install/update/uninstall/status 模式重复
 - `tools.mjs` sandbox 工具处理 4 个函数的变量提取模式重复
 - `ws-exec-client.js` 和 `hwlink-exec-client.js` 重复 `normalizeCommand`/`normalizeTimeout`
 - `safety-policy.mjs` 和 `risk-rule-engine.mjs` 重复脱敏正则
 
 ### 函数过复杂
+
 - `classifyHcloudArgs` 185 行
 - `tools.mjs` 1359 行应拆分
 
 ### 安全相关
+
 - `hdkitservice-api.mjs` SK 以明文 HTTP Header 传输
 - `credentials.mjs` Windows 上无文件权限控制
 - `setup-cli.mjs` hcloud configure 通过命令行参数传递 AK/SK（进程可见）
