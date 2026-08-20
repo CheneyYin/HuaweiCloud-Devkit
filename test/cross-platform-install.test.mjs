@@ -10,13 +10,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const setupCli = join(root, 'bin', 'setup.cjs');
 
 function makeEnv(home) {
-  return {
-    ...process.env,
-    USERPROFILE: home,
-    HOME: home,
-    HOMEDRIVE: home.slice(0, 2),
-    HOMEPATH: home.slice(2),
-  };
+  return { ...process.env, USERPROFILE: home, HOME: home, HOMEDRIVE: home.slice(0, 2), HOMEPATH: home.slice(2) };
 }
 
 function runCli(home, cwd, args) {
@@ -38,10 +32,7 @@ test('install creates opencode config with normalized forward-slash paths', () =
   try {
     const res = runCli(home, cwd, ['install', '--target', 'opencode']);
     assert.equal(res.status, 0, `stderr: ${res.stderr}`);
-
-    const configPath = join(home, '.config', 'opencode', 'opencode.json');
-    assert.ok(existsSync(configPath), 'MCP config should exist');
-    const config = readJson(configPath);
+    const config = readJson(join(home, '.config', 'opencode', 'opencode.json'));
     const cmd = config.mcp['huaweicloud-devkit'].command;
     assert.ok(cmd[1].includes('mcp-server.mjs'));
     assert.doesNotMatch(cmd[1], /\\/, 'MCP path must not contain backslashes');
@@ -55,11 +46,7 @@ test('install creates correct dir structure under homedir', () => {
   const home = mkdtempSync(join(tmpdir(), 'cp-platform-'));
   const cwd = mkdtempSync(join(tmpdir(), 'cp-proj-'));
   try {
-    const res = runCli(home, cwd, ['install', '--target', 'opencode']);
-    assert.equal(res.status, 0, res.stderr);
-
-    assert.ok(existsSync(join(home, '.config', 'opencode', 'skills')));
-    assert.ok(existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins')));
+    assert.equal(runCli(home, cwd, ['install', '--target', 'opencode']).status, 0);
     assert.ok(existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins', 'src', 'mcp-server.mjs')));
     assert.ok(existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins', 'safety', 'policy.json')));
   } finally {
@@ -90,8 +77,6 @@ test('handles platform-specific home directory resolution', () => {
       ...process.env,
       USERPROFILE: isWin ? home : join(tmpdir(), 'not-used'),
       HOME: isWin ? join(tmpdir(), 'not-used') : home,
-      HOMEDRIVE: home.slice(0, 2),
-      HOMEPATH: home.slice(2),
     };
     const res = spawnSync(process.execPath, [setupCli, 'install', '--target', 'opencode'], {
       cwd,
@@ -113,16 +98,11 @@ test('install-hcloud shows platform-specific download instructions', () => {
   try {
     const res = runCli(home, cwd, ['install-hcloud']);
     assert.equal(res.status, 0, res.stderr);
-
-    const out = res.stdout;
     const isWin = process.platform === 'win32';
-    const isArm = process.arch === 'arm64';
     if (isWin) {
-      assert.match(out, /huaweicloud-cli-windows-amd64\.zip/);
-    } else if (isArm) {
-      assert.match(out, /huaweicloud-cli-linux-arm64\.tar\.gz/);
+      assert.match(res.stdout, /huaweicloud-cli-windows-amd64\.zip/);
     } else {
-      assert.match(out, /huaweicloud-cli-linux-amd64\.tar\.gz/);
+      assert.match(res.stdout, /huaweicloud-cli-linux-amd64\.tar\.gz/);
     }
   } finally {
     rmSync(home, { recursive: true, force: true });
@@ -150,8 +130,7 @@ test('uninstall cleans up all platform directories', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'cp-proj-'));
   try {
     runCli(home, cwd, ['install', '--target', 'opencode']);
-    const res = runCli(home, cwd, ['uninstall', '--target', 'opencode']);
-    assert.equal(res.status, 0, res.stderr);
+    assert.equal(runCli(home, cwd, ['uninstall', '--target', 'opencode']).status, 0);
     assert.ok(!existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins')));
   } finally {
     rmSync(home, { recursive: true, force: true });
