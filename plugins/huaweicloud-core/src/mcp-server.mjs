@@ -1,8 +1,7 @@
 #!/usr/bin/env node
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 import { stdin, stdout } from 'node:process';
-import { rmSync, existsSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { rmSync, existsSync, readFileSync } from 'node:fs';
+import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TOOL_DEFINITIONS, callTool } from './tools.mjs';
 
@@ -25,6 +24,14 @@ try {
   const pluginDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const marker = resolve(pluginDir, '.installed');
   if (existsSync(marker)) rmSync(marker, { force: true });
+} catch {}
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const pluginRoot = resolve(__dirname, '..');
+const packageRoot = resolve(pluginRoot, '..', '..');
+let pkgVersion = '0.0.0';
+try {
+  pkgVersion = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
 } catch {}
 
 let buffer = Buffer.alloc(0);
@@ -104,7 +111,7 @@ async function dispatch(method, params) {
       },
       serverInfo: {
         name: 'huaweicloud-devkit',
-        version: '0.1.0',
+        version: pkgVersion,
       },
     };
   }
