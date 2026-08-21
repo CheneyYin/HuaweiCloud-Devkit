@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.2-next.19 (2026-08-21)
+
+- style: prettier format
+- chore: bump version to 1.0.2-next.18 (#205)
+- feat: add sandbox_upload_project tool with HTTP tunnel transfer
+- ci: add PR code review workflow with Huawei Cloud MaaS GLM-5.2
+
 ## 1.0.2-next.13 (2026-08-19)
 
 - ci: restore Windows jobs but skip actual build (branch protection requirement)
