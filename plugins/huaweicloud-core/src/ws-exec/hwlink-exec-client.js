@@ -383,10 +383,15 @@ class HwlinkTerminalExecSession {
     const pending = this.pending;
     if (!pending) return;
 
-    const doneMatch = pending.buffer.match(pending.markers.donePattern);
-    if (!doneMatch || doneMatch.index === undefined) return;
+    const doneMarker = pending.markers.doneMarker;
+    const markerIndex = pending.buffer.lastIndexOf(doneMarker);
+    if (markerIndex === -1) return;
 
-    const rawOutput = pending.buffer.slice(0, doneMatch.index);
+    const afterMarker = pending.buffer.slice(markerIndex + doneMarker.length);
+    const exitMatch = afterMarker.match(/^(\d+)/);
+    if (!exitMatch) return;
+
+    const rawOutput = pending.buffer.slice(0, markerIndex);
     const stdout = cleanCommandOutput(rawOutput, {
       inputEchoed: this.inputEchoed,
       command: pending.command,
@@ -397,7 +402,7 @@ class HwlinkTerminalExecSession {
     this.pending = null;
     pending.resolve({
       stdout,
-      exitCode: Number(doneMatch[1]),
+      exitCode: Number(exitMatch[1]),
       url: this.url,
       source: this.source,
       username: this.username,

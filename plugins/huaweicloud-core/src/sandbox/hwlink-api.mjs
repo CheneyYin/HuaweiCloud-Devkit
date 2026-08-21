@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { resolveCredentials } from '../auth/credentials.mjs';
+import { resolveCredentialsWithRuntime } from '../auth/credentials.mjs';
 import { getProxyDispatcher } from '../proxy/proxy-agent.mjs';
 
 const BASE_URL = process.env.HWLINK_ENDPOINT || 'https://devstation.myhuaweicloud.com';
@@ -77,7 +77,7 @@ function signRequest(method, path, query, body, ak, sk, securitytoken) {
 }
 
 export function getCredentials() {
-  const credentials = resolveCredentials();
+  const credentials = resolveCredentialsWithRuntime();
   return { ak: credentials.ak, sk: credentials.sk, securitytoken: credentials.securityToken };
 }
 
