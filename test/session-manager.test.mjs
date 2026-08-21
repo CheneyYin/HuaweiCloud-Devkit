@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+
 import {
   WS_EXEC_INDEX_URL,
   splitBase64Chunks,
   UPLOAD_CHUNK_SIZE,
-  currentWorkspaceId,
+getCurrentWorkspaceId,
   setWorkspaceId,
 } from '../plugins/huaweicloud-core/src/sandbox/session-manager.mjs';
 
@@ -33,13 +34,13 @@ test('splitBase64Chunks returns a single chunk for small inputs', () => {
 });
 
 test('currentWorkspaceId defaults to null without env or setter', () => {
-  assert.equal(currentWorkspaceId, null);
+  assert.equal(getCurrentWorkspaceId(), null);
 });
 
 test('setWorkspaceId caches and updates env var', () => {
   const testId = 'test-workspace-123';
   setWorkspaceId(testId);
-  assert.equal(currentWorkspaceId, testId);
+  assert.equal(getCurrentWorkspaceId(), testId);
   assert.equal(process.env.HW_WORKSPACE_ID, testId);
   setWorkspaceId(null);
 });

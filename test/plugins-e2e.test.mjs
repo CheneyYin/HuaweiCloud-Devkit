@@ -9,7 +9,7 @@ import test from 'node:test';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const setupCli = join(root, 'bin', 'setup.cjs');
 
-function makeEnv(home, cwd) {
+function makeEnv(home, _cwd) {
   return {
     ...process.env,
     USERPROFILE: home,
