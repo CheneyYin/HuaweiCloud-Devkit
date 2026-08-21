@@ -14,13 +14,13 @@ huaweicloud-devkit sandbox upload (`uploadFileWithSession`) uses base64 chunking
 
 ### 1.2 Current Limitations
 
-| Issue | Detail |
-|-------|--------|
-| Size overhead | base64 encoding causes 33% volume expansion |
-| Fragility | Single commands > ~4KB are fragile (timeout or session crash) |
-| Large file | >1MB extremely slow, >12KB base64 in one command → session crash |
-| No progress | No way to report upload progress |
-| No streaming | Entire file must be base64-encoded in memory first |
+| Issue         | Detail                                                           |
+| ------------- | ---------------------------------------------------------------- |
+| Size overhead | base64 encoding causes 33% volume expansion                      |
+| Fragility     | Single commands > ~4KB are fragile (timeout or session crash)    |
+| Large file    | >1MB extremely slow, >12KB base64 in one command → session crash |
+| No progress   | No way to report upload progress                                 |
+| No streaming  | Entire file must be base64-encoded in memory first               |
 
 ### 1.3 Goal
 
@@ -56,13 +56,13 @@ Add an `uploadProject` feature to the sandbox tool that can package a local proj
 
 ### 2.3 Why This Approach
 
-| Aspect | Reason |
-|--------|--------|
-| Push model | Client controls when and what to upload, more natural for "upload" |
-| Sandbox as server | Sandbox controls where files are written, more secure |
-| Binary transfer | No base64 overhead, raw binary over HTTP |
-| HTTP semantics | Built-in Content-Length for progress, status codes for errors |
-| Tunnel reuse | Leverages existing hwlink WebSocket multiplexer infrastructure |
+| Aspect            | Reason                                                             |
+| ----------------- | ------------------------------------------------------------------ |
+| Push model        | Client controls when and what to upload, more natural for "upload" |
+| Sandbox as server | Sandbox controls where files are written, more secure              |
+| Binary transfer   | No base64 overhead, raw binary over HTTP                           |
+| HTTP semantics    | Built-in Content-Length for progress, status codes for errors      |
+| Tunnel reuse      | Leverages existing hwlink WebSocket multiplexer infrastructure     |
 
 ## 3. Project Structure Changes
 
@@ -151,13 +151,13 @@ HwlinkTunnelChannel
 
 #### OpCode Handling
 
-| Received OpCode | Action |
-|----------------|--------|
+| Received OpCode                              | Action                                                |
+| -------------------------------------------- | ----------------------------------------------------- |
 | `OpTunnelSuccess` (with matching identifier) | Mark sub-connection as ready, resolve pending promise |
-| `OpTcpTunnelData` | Write payload data to the corresponding local socket |
-| `OpDisconnect` | Close the corresponding local socket |
-| `ErrTcpTunnel` | Close the corresponding local socket, emit error |
-| `OpSubStreamPing` | Respond with `OpSubStreamPong` |
+| `OpTcpTunnelData`                            | Write payload data to the corresponding local socket  |
+| `OpDisconnect`                               | Close the corresponding local socket                  |
+| `ErrTcpTunnel`                               | Close the corresponding local socket, emit error      |
+| `OpSubStreamPing`                            | Respond with `OpSubStreamPong`                        |
 
 ### 4.2 Sandbox HTTP File Server (`sandbox-file-server.py`)
 
@@ -269,7 +269,7 @@ async function waitForServerReady(localPort, maxRetries = 30, intervalMs = 1000)
       });
       if (r.ok) return;
     } catch {}
-    await new Promise(r => setTimeout(r, intervalMs));
+    await new Promise((r) => setTimeout(r, intervalMs));
   }
   throw new Error(`sandbox file server not ready after ${maxRetries * intervalMs}ms`);
 }
@@ -277,11 +277,7 @@ async function waitForServerReady(localPort, maxRetries = 30, intervalMs = 1000)
 async function cleanupFileServer(workspaceId, username) {
   const pidFile = '/tmp/sandbox-file-server.pid';
   const scriptPath = '/tmp/sandbox-file-server.py';
-  await execWithSession(
-    workspaceId,
-    `kill $(cat ${pidFile}) 2>/dev/null; rm -f ${pidFile} ${scriptPath}`,
-    username,
-  );
+  await execWithSession(workspaceId, `kill $(cat ${pidFile}) 2>/dev/null; rm -f ${pidFile} ${scriptPath}`, username);
 }
 ```
 
@@ -344,9 +340,7 @@ async function uploadProjectWithSession(workspaceId, localDir, remoteDir, userna
   session.mux.register(tunnel);
   await Promise.race([
     tunnel.ready,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('tunnel ready timeout')), TUNNEL_READY_TIMEOUT_MS)
-    ),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('tunnel ready timeout')), TUNNEL_READY_TIMEOUT_MS)),
   ]);
 
   // Step 3.5: Wait for server to be ready via tunnel health check
@@ -414,9 +408,11 @@ async function createTarGz(localDir, exclude = []) {
   mkdirSync(dirname(archivePath), { recursive: true });
 
   const args = [
-    ...exclude.flatMap(p => ['--exclude', p]),
-    '-czf', archivePath,
-    '-C', dirname(localDir),
+    ...exclude.flatMap((p) => ['--exclude', p]),
+    '-czf',
+    archivePath,
+    '-C',
+    dirname(localDir),
     basename(localDir),
   ];
   await execFile('tar', args);
@@ -428,7 +424,7 @@ async function computeMd5(filePath) {
   return new Promise((resolve, reject) => {
     const hash = createHash('md5');
     createReadStream(filePath)
-      .on('data', chunk => hash.update(chunk))
+      .on('data', (chunk) => hash.update(chunk))
       .on('end', () => resolve(hash.digest('hex')))
       .on('error', reject);
   });
@@ -487,31 +483,31 @@ Add to `tools.mjs`:
 
 ## 5. Comparison with Existing Base64 Approach
 
-| Dimension | Base64 Chunking (Current) | HTTP + Tunnel (New) |
-|-----------|--------------------------|---------------------|
-| Transfer efficiency | 33% overhead (base64) | Raw binary, no overhead |
-| Large file support | Poor (>1MB extremely slow) | Good (streaming HTTP) |
-| Reliability | Fragile (large chunks crash session) | Stable (HTTP semantics) |
-| Progress reporting | None | Content-Length based |
-| Integrity check | md5sum (extra exec command) | md5 in HTTP response |
-| Connection overhead | Reuses terminal session | Requires tunnel setup |
-| Implementation complexity | Low | Medium (tunnel channel) |
-| Dependencies | None | Tunnel channel + Python3 on sandbox |
+| Dimension                 | Base64 Chunking (Current)            | HTTP + Tunnel (New)                 |
+| ------------------------- | ------------------------------------ | ----------------------------------- |
+| Transfer efficiency       | 33% overhead (base64)                | Raw binary, no overhead             |
+| Large file support        | Poor (>1MB extremely slow)           | Good (streaming HTTP)               |
+| Reliability               | Fragile (large chunks crash session) | Stable (HTTP semantics)             |
+| Progress reporting        | None                                 | Content-Length based                |
+| Integrity check           | md5sum (extra exec command)          | md5 in HTTP response                |
+| Connection overhead       | Reuses terminal session              | Requires tunnel setup               |
+| Implementation complexity | Low                                  | Medium (tunnel channel)             |
+| Dependencies              | None                                 | Tunnel channel + Python3 on sandbox |
 
 ## 6. Risk Analysis
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Python3 not available on sandbox | HTTP server cannot start | Fallback to base64 chunking; detect Python availability before attempting |
-| Tunnel port conflict | Tunnel fails to establish | Use port 0 (auto-assign) for local port; check sandbox port availability before deploying server |
-| Sandbox HTTP server crash | Upload fails mid-transfer | Health check polling before upload; retry logic; fallback to base64 |
-| Tunnel channel implementation bugs | Data corruption or hang | Thorough testing with various file sizes; checksum verification |
-| Large archive OOM | Local memory pressure | Stream file via `fs.createReadStream` for POST body; streaming MD5 hash |
-| Cleanup failure | Orphaned processes on sandbox | PID tracking + kill on cleanup; timeout-based self-termination for HTTP server |
-| Proxy environment | Tunnel may not work through proxy | Respect existing proxy config from `proxy-agent.mjs` |
-| Unauthorized upload | Any sandbox process writes via HTTP | Bind server to 127.0.0.1; session-scoped token auth via `X-Upload-Token` (valid for server lifetime, allows retry; invalidated on server stop) |
-| Tunnel ready timeout | Upload hangs indefinitely | 15s timeout on `tunnel.ready` promise with `Promise.race` |
-| Sandbox port 8888 occupied | HTTP server fails to start | Pre-check with `ss -tlnp \| grep :8888`; use alternative port if occupied |
+| Risk                               | Impact                              | Mitigation                                                                                                                                     |
+| ---------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Python3 not available on sandbox   | HTTP server cannot start            | Fallback to base64 chunking; detect Python availability before attempting                                                                      |
+| Tunnel port conflict               | Tunnel fails to establish           | Use port 0 (auto-assign) for local port; check sandbox port availability before deploying server                                               |
+| Sandbox HTTP server crash          | Upload fails mid-transfer           | Health check polling before upload; retry logic; fallback to base64                                                                            |
+| Tunnel channel implementation bugs | Data corruption or hang             | Thorough testing with various file sizes; checksum verification                                                                                |
+| Large archive OOM                  | Local memory pressure               | Stream file via `fs.createReadStream` for POST body; streaming MD5 hash                                                                        |
+| Cleanup failure                    | Orphaned processes on sandbox       | PID tracking + kill on cleanup; timeout-based self-termination for HTTP server                                                                 |
+| Proxy environment                  | Tunnel may not work through proxy   | Respect existing proxy config from `proxy-agent.mjs`                                                                                           |
+| Unauthorized upload                | Any sandbox process writes via HTTP | Bind server to 127.0.0.1; session-scoped token auth via `X-Upload-Token` (valid for server lifetime, allows retry; invalidated on server stop) |
+| Tunnel ready timeout               | Upload hangs indefinitely           | 15s timeout on `tunnel.ready` promise with `Promise.race`                                                                                      |
+| Sandbox port 8888 occupied         | HTTP server fails to start          | Pre-check with `ss -tlnp \| grep :8888`; use alternative port if occupied                                                                      |
 
 ## 7. Fallback Strategy
 

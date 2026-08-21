@@ -56,7 +56,9 @@ class HwlinkTunnelChannel {
     if (isOpFailed(packet.operation)) {
       const subConn = this.subConnections.get(packet.identifier);
       if (subConn && subConn.socket && !subConn.socket.destroyed) {
-        try { subConn.socket.end(); } catch {}
+        try {
+          subConn.socket.end();
+        } catch {}
       }
       this.subConnections.delete(packet.identifier);
       this._unregisterSubId(packet.identifier);
@@ -166,7 +168,9 @@ class HwlinkTunnelChannel {
     this.nextSubId = ((this.nextSubId + 1) & 0xffffffff) >>> 0;
 
     let readyResolve;
-    const readyPromise = new Promise((resolve) => { readyResolve = resolve; });
+    const readyPromise = new Promise((resolve) => {
+      readyResolve = resolve;
+    });
     const subConn = {
       identifier: subId,
       socket,

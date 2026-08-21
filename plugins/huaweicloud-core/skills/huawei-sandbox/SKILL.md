@@ -40,24 +40,24 @@ Domain expertise for Huawei Cloud Sandbox (DevStation) instances and workspace t
 
 ### Terminal Execution
 
-| Tool                                    | Purpose                                                                  |
-| --------------------------------------- | ------------------------------------------------------------------------ |
-| `huaweicloud_sandbox_exec_with_session` | Session-based execution (state persists; best for interactive work)      |
-| `huaweicloud_sandbox_exec_one_shot`     | One-shot execution (fresh connection; best for long/heavy commands)      |
-| `huaweicloud_sandbox_upload_file`       | Upload a local file into the sandbox (chunked base64 write + md5 verify) |
+| Tool                                    | Purpose                                                                     |
+| --------------------------------------- | --------------------------------------------------------------------------- |
+| `huaweicloud_sandbox_exec_with_session` | Session-based execution (state persists; best for interactive work)         |
+| `huaweicloud_sandbox_exec_one_shot`     | One-shot execution (fresh connection; best for long/heavy commands)         |
+| `huaweicloud_sandbox_upload_file`       | Upload a local file into the sandbox (chunked base64 write + md5 verify)    |
 | `huaweicloud_sandbox_upload_project`    | Upload a local project directory to sandbox (HTTP tunnel, tar.gz + extract) |
-| `huaweicloud_sandbox_close_session`     | Close a persistent terminal session                                      |
+| `huaweicloud_sandbox_close_session`     | Close a persistent terminal session                                         |
 
 ### Tool Selection Guide
 
-| Scenario                           | Use                                | Why                                                     |
-| ---------------------------------- | ---------------------------------- | ------------------------------------------------------- |
-| `cd`, env setup, command chains    | `exec_with_session`                | Needs shared shell state across calls                   |
-| `npm install`, `apt-get`, builds   | `exec_one_shot`                    | Long-running (>30s), no state needed, more stable       |
-| `curl`, health checks, quick tests | Either — `exec_one_shot` preferred | Stateless, fast                                         |
-| Server startup (background)        | `exec_with_session`                | Need to `nohup ... &` then check output in same session |
-| Deployment scripts                 | `exec_one_shot+shot`               | Long script, fresh connection avoids session timeouts   |
-| Single file upload (<1MB)          | `upload_file`                      | Base64 chunked, reliable for small files                |
+| Scenario                           | Use                                | Why                                                          |
+| ---------------------------------- | ---------------------------------- | ------------------------------------------------------------ |
+| `cd`, env setup, command chains    | `exec_with_session`                | Needs shared shell state across calls                        |
+| `npm install`, `apt-get`, builds   | `exec_one_shot`                    | Long-running (>30s), no state needed, more stable            |
+| `curl`, health checks, quick tests | Either — `exec_one_shot` preferred | Stateless, fast                                              |
+| Server startup (background)        | `exec_with_session`                | Need to `nohup ... &` then check output in same session      |
+| Deployment scripts                 | `exec_one_shot+shot`               | Long script, fresh connection avoids session timeouts        |
+| Single file upload (<1MB)          | `upload_file`                      | Base64 chunked, reliable for small files                     |
 | Project directory upload (>1MB)    | `upload_project`                   | HTTP tunnel, much faster than base64 for multi-file projects |
 
 **Timeout tuning**: default is 120s. For commands expected to run longer (e.g. large builds), pass `timeout_ms` explicitly:
@@ -191,8 +191,8 @@ sleep 10 && cat /tmp/host.log
 | Destructive commands blocked         | `rm -rf /`, `mkfs`, `dd if=`, fork bombs are denied by safety policy                                                                                                                                         |
 | Workspace ID = dev_stage_id          | Use `dev_stage_id` from `sandbox_connect` as `workspace_id` for terminal exec                                                                                                                                |
 | Projects live in `/workspace`        | Clone/install project code under `/workspace/<repo-name>` (filesystem-root workspace mount, not `$HOME/workspace`), never in `/tmp` — ephemeral locations lose the project when the sandbox session restarts |
-| Upload project for local code        | Use `sandbox_upload_project` to transfer local projects — packages as tar.gz, uploads via HTTP tunnel, extracts on sandbox. Much faster than base64 for multi-file projects |
-| Upload file for single files         | Use `sandbox_upload_file` for individual files — base64 chunked, reliable for small files (<1MB) |
+| Upload project for local code        | Use `sandbox_upload_project` to transfer local projects — packages as tar.gz, uploads via HTTP tunnel, extracts on sandbox. Much faster than base64 for multi-file projects                                  |
+| Upload file for single files         | Use `sandbox_upload_file` for individual files — base64 chunked, reliable for small files (<1MB)                                                                                                             |
 | Node.js >= 22 required               | Sandbox terminal uses built-in WebSocket (globalThis.WebSocket); if Node.js is missing, install it from the Huawei Cloud mirror (see "Node.js in the sandbox")                                               |
 
 ## Node.js in the sandbox

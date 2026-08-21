@@ -1,15 +1,7 @@
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createConnection as netConnect } from 'node:net';
-import {
-  existsSync,
-  readFileSync,
-  statSync,
-  mkdirSync,
-  rmSync,
-  createReadStream,
-  appendFileSync,
-} from 'node:fs';
+import { existsSync, readFileSync, statSync, mkdirSync, rmSync, createReadStream, appendFileSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { join, dirname, basename } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -104,11 +96,26 @@ async function createTunnelSession(workspaceId, username, timeoutMs = 30000) {
       reject(new Error('tunnel session WebSocket open timeout'));
     }, timeoutMs);
     const interval = setInterval(() => {
-      if (mux.readyState === 1) { clearTimeout(timer); clearInterval(interval); resolve(); }
-      else if (mux.readyState === 3) { clearTimeout(timer); clearInterval(interval); reject(new Error('tunnel session WebSocket closed')); }
+      if (mux.readyState === 1) {
+        clearTimeout(timer);
+        clearInterval(interval);
+        resolve();
+      } else if (mux.readyState === 3) {
+        clearTimeout(timer);
+        clearInterval(interval);
+        reject(new Error('tunnel session WebSocket closed'));
+      }
     }, 100);
-    mux.onClose = () => { clearTimeout(timer); clearInterval(interval); reject(new Error('tunnel session WebSocket closed')); };
-    mux.onError = (err) => { clearTimeout(timer); clearInterval(interval); reject(err); };
+    mux.onClose = () => {
+      clearTimeout(timer);
+      clearInterval(interval);
+      reject(new Error('tunnel session WebSocket closed'));
+    };
+    mux.onError = (err) => {
+      clearTimeout(timer);
+      clearInterval(interval);
+      reject(err);
+    };
   });
 
   return { mux, close: () => mux.close() };
@@ -224,10 +231,7 @@ export async function uploadFileWithSession(workspaceId, localPath, remotePath, 
   };
 }
 
-const SANDBOX_FILE_SERVER_SCRIPT = readFileSync(
-  join(__dirname, 'sandbox-file-server.py'),
-  'utf8',
-);
+const SANDBOX_FILE_SERVER_SCRIPT = readFileSync(join(__dirname, 'sandbox-file-server.py'), 'utf8');
 
 const TUNNEL_READY_TIMEOUT_MS = 30000;
 const SERVER_HEALTH_MAX_RETRIES = 30;
@@ -294,7 +298,9 @@ async function deployFileServer(workspaceId, username, port = 8888, token = '') 
     : `python3 ${scriptPath} ${port} & echo $! > ${pidFile}`;
   uploadLog(`deployFileServer: starting server on port ${port}`);
   const startResult = await execWithSession(workspaceId, cmd, username);
-  uploadLog(`deployFileServer: start result exitCode=${startResult.exitCode} stdout=${JSON.stringify(startResult.stdout?.slice(0, 200))}`);
+  uploadLog(
+    `deployFileServer: start result exitCode=${startResult.exitCode} stdout=${JSON.stringify(startResult.stdout?.slice(0, 200))}`,
+  );
   return startResult;
 }
 
@@ -308,11 +314,19 @@ async function uploadViaTunnel(localPort, archivePath, archiveSize, archiveRemot
     `X-Target-Path: ${archiveRemotePath}`,
     `X-Upload-Token: ${uploadToken}`,
     'Connection: close',
-    '', '',
+    '',
+    '',
   ].join('\r\n');
   return new Promise((resolve, reject) => {
     let settled = false;
-    const done = (fn) => { if (!settled) { settled = true; clearTimeout(timer); sock.destroy(); fn(); } };
+    const done = (fn) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        sock.destroy();
+        fn();
+      }
+    };
     const timer = setTimeout(() => done(() => reject(new Error(`upload timeout after ${timeoutMs}ms`))), timeoutMs);
     const sock = netConnect({ host: '127.0.0.1', port: localPort }, () => {
       sock.write(headers);
@@ -366,11 +380,18 @@ async function uploadViaTunnel(localPort, archivePath, archiveSize, archiveRemot
           reject(new Error(`upload HTTP ${statusCode}: ${body}`));
           return;
         }
-        try { resolve(JSON.parse(body)); } catch (e) { reject(new Error(`invalid JSON response: ${body.slice(0, 200)}`)); }
+        try {
+          resolve(JSON.parse(body));
+        } catch (e) {
+          reject(new Error(`invalid JSON response: ${body.slice(0, 200)}`));
+        }
       });
     });
     sock.on('error', (err) => {
-      done(() => { uploadLog(`uploadViaTunnel: socket error: ${err.message}`); reject(err); });
+      done(() => {
+        uploadLog(`uploadViaTunnel: socket error: ${err.message}`);
+        reject(err);
+      });
     });
   });
 }
@@ -381,7 +402,13 @@ async function waitForServerReady(localPort) {
       uploadLog(`waitForServerReady: attempt ${i + 1}, checking http://localhost:${localPort}/health`);
       const ok = await new Promise((resolve) => {
         let settled = false;
-        const done = (val) => { if (!settled) { settled = true; sock.destroy(); resolve(val); } };
+        const done = (val) => {
+          if (!settled) {
+            settled = true;
+            sock.destroy();
+            resolve(val);
+          }
+        };
         const sock = netConnect({ host: '127.0.0.1', port: localPort }, () => {
           sock.write('GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n');
         });
@@ -404,17 +431,15 @@ async function waitForServerReady(localPort) {
     }
     await new Promise((r) => setTimeout(r, SERVER_HEALTH_INTERVAL_MS));
   }
-  throw new Error(`sandbox file server not ready after ${SERVER_HEALTH_MAX_RETRIES * SERVER_HEALTH_INTERVAL_MS}ms (log: ${UPLOAD_LOG_PATH})`);
+  throw new Error(
+    `sandbox file server not ready after ${SERVER_HEALTH_MAX_RETRIES * SERVER_HEALTH_INTERVAL_MS}ms (log: ${UPLOAD_LOG_PATH})`,
+  );
 }
 
 async function cleanupFileServer(workspaceId, username) {
   const pidFile = '/tmp/sandbox-file-server.pid';
   const scriptPath = '/tmp/sandbox-file-server.py';
-  await execWithSession(
-    workspaceId,
-    `kill $(cat ${pidFile}) 2>/dev/null; rm -f ${pidFile} ${scriptPath}`,
-    username,
-  );
+  await execWithSession(workspaceId, `kill $(cat ${pidFile}) 2>/dev/null; rm -f ${pidFile} ${scriptPath}`, username);
 }
 
 async function uploadViaHttpTunnel(workspaceId, archivePath, archiveRemotePath, username, timeoutMs, options) {
@@ -422,7 +447,9 @@ async function uploadViaHttpTunnel(workspaceId, archivePath, archiveRemotePath, 
   const uploadToken = generateUploadToken();
   const archiveSize = statSync(archivePath).size;
 
-  uploadLog(`uploadViaHttpTunnel: start (archive=${archivePath}, size=${archiveSize}, remotePath=${archiveRemotePath})`);
+  uploadLog(
+    `uploadViaHttpTunnel: start (archive=${archivePath}, size=${archiveSize}, remotePath=${archiveRemotePath})`,
+  );
 
   uploadLog(`uploadViaHttpTunnel: deploying file server on sandbox port ${sandboxPort}`);
   await deployFileServer(workspaceId, username, sandboxPort, uploadToken);
@@ -443,7 +470,10 @@ async function uploadViaHttpTunnel(workspaceId, archivePath, archiveRemotePath, 
     await Promise.race([
       tunnel.ready,
       new Promise((_, reject) =>
-        setTimeout(() => reject(new Error(`tunnel ready timeout after ${TUNNEL_READY_TIMEOUT_MS}ms`)), TUNNEL_READY_TIMEOUT_MS),
+        setTimeout(
+          () => reject(new Error(`tunnel ready timeout after ${TUNNEL_READY_TIMEOUT_MS}ms`)),
+          TUNNEL_READY_TIMEOUT_MS,
+        ),
       ),
     ]);
     uploadLog(`uploadViaHttpTunnel: tunnel ready, localPort=${tunnel.localPort}`);
@@ -452,10 +482,10 @@ async function uploadViaHttpTunnel(workspaceId, archivePath, archiveRemotePath, 
     tunnel.close();
     throw new Error(
       `HTTP tunnel failed to establish: ${tunnelReadyError.message}. ` +
-      `This means the WebSocket port-forwarding channel to sandbox port ${sandboxPort} could not be opened. ` +
-      `Common causes: (1) Python file server not running on sandbox, (2) sandbox port ${sandboxPort} blocked, ` +
-      `(3) hwlink multiplexer channel rejected. ` +
-      `Diagnostic log: ${UPLOAD_LOG_PATH}`,
+        `This means the WebSocket port-forwarding channel to sandbox port ${sandboxPort} could not be opened. ` +
+        `Common causes: (1) Python file server not running on sandbox, (2) sandbox port ${sandboxPort} blocked, ` +
+        `(3) hwlink multiplexer channel rejected. ` +
+        `Diagnostic log: ${UPLOAD_LOG_PATH}`,
       { cause: tunnelReadyError },
     );
   }
@@ -465,7 +495,14 @@ async function uploadViaHttpTunnel(workspaceId, archivePath, archiveRemotePath, 
     await waitForServerReady(tunnel.localPort);
 
     uploadLog(`uploadViaHttpTunnel: sending POST with ${archiveSize} bytes`);
-    const result = await uploadViaTunnel(tunnel.localPort, archivePath, archiveSize, archiveRemotePath, uploadToken, timeoutMs);
+    const result = await uploadViaTunnel(
+      tunnel.localPort,
+      archivePath,
+      archiveSize,
+      archiveRemotePath,
+      uploadToken,
+      timeoutMs,
+    );
     uploadLog(`uploadViaHttpTunnel: upload complete (bytes=${result.bytes}, md5=${result.md5})`);
     return result;
   } catch (uploadError) {
@@ -511,9 +548,9 @@ export async function uploadProjectWithSession(
     cleanupLocalArchive(archivePath);
     throw new Error(
       `sandbox upload failed: HTTP tunnel could not transfer the project archive. ` +
-      `Archive size: ${(archiveSize / 1024).toFixed(1)}KB. ` +
-      `Root cause: ${tunnelError.message}. ` +
-      `Diagnostic log: ${UPLOAD_LOG_PATH}`,
+        `Archive size: ${(archiveSize / 1024).toFixed(1)}KB. ` +
+        `Root cause: ${tunnelError.message}. ` +
+        `Diagnostic log: ${UPLOAD_LOG_PATH}`,
       { cause: tunnelError },
     );
   }
