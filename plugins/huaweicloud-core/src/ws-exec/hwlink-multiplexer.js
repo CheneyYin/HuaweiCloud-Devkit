@@ -1,3 +1,12 @@
+/*
+ * This file contains code derived from hwlink.
+ *
+ * Source:
+ * https://gitcode.com/huawei-developers/hwlink
+ *
+ * Licensed under the ISC License.
+ */
+
 import { Buffer } from 'node:buffer';
 
 import { FairQueue } from './hwlink-fair-queue.js';
