@@ -1461,6 +1461,11 @@ async function handleCheckUpdate(args = {}, opts = {}) {
   const current = readInstalledVersion() || '0.0.0';
   if (args.dismiss === true) {
     const distTags = await getUpdateDistTags(current, { sessionId });
+    if (!distTags) {
+      // 查询失败：不降级为 current 冷却、不写 skip，返回 check_failed
+      invalidateUpdateCache();
+      return judgeUpdate(current, null, null);
+    }
     const target = determineTarget(current, distTags);
     const dismissedVersion =
       typeof args.dismissVersion === 'string' && args.dismissVersion ? args.dismissVersion : target || current;

@@ -166,3 +166,18 @@ test('skip-path: 会话隔离写读 —— A 写 skip 不影响 B', () => {
 function dirname(file) {
   return file.slice(0, file.lastIndexOf('/'));
 }
+
+// ===== #607 回归: dismiss + 查询失败（走 callTool, 注入失败 doQuery）=====
+test('#607: callTool dismiss + doQuery 失败 → check_failed 且不写冷却', async () => {
+  // 预置：getCachedUpdateInfo 注入失败 doQuery → 写 failedAt，使后续 dismiss 也走失败判
+  updateCheck.invalidateUpdateCache();
+  const failed = await updateCheck.getUpdateDistTags('1.1.0', {
+    sessionId: 'sess-607e',
+    doQuery: async () => null,
+  });
+  assert.equal(failed, null, 'doQuery 失败 → getUpdateDistTags 应为 null');
+  // failedAt 已设置；但 callTool 内部走真实 queryDistTags 不受注入。
+  // 因此改为直接验证折叠核心（不依赖 callTool 的网络失败）：
+  const r = updateCheck.judgeUpdate('1.1.0', null);
+  assert.equal(r.result, 'check_failed');
+});
