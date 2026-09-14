@@ -82,7 +82,7 @@ Do not rely on training data for facts. Huawei Cloud services, pricing, quotas, 
 | Getting started                                  | Account setup        | huaweicloud-cli-and-auth |
 | Incentive voucher                                | Voucher              | huawei-voucher           |
 
-**Web app scenario layering**: for "deploy a web app", prefer `huawei-sandbox` for free/quick try (hello world, prototype, demo, temporary preview — temporary runtime + public URL, ~8h validity, zero billed resources); route to `huawei-functiongraph` / `huawei-ecs` (or `huawei-cce`) for production / long-term / custom-domain / high-availability hosting. When the chosen target requires **multiple purchased resources** (e.g. VPC + subnet + ECS + EIP + RDS, or OBS + CDN + DNS) or the user asks for an architecture/cost proposal first, hand off to `huawei-iac` for orchestrated provisioning with a mandatory cost gate.
+**Web app scenario layering**: for "deploy a web app", prefer `huawei-sandbox` for free/quick try (hello world, prototype, demo, temporary preview — temporary runtime + public URL (runtime lifetime not exposed via API); credential expiry see `expiresAt` from `connect`/`credentials`, zero billed resources); route to `huawei-functiongraph` / `huawei-ecs` (or `huawei-cce`) for production / long-term / custom-domain / high-availability hosting. When the chosen target requires **multiple purchased resources** (e.g. VPC + subnet + ECS + EIP + RDS, or OBS + CDN + DNS) or the user asks for an architecture/cost proposal first, hand off to `huawei-iac` for orchestrated provisioning with a mandatory cost gate.
 
 ## Deployment Target Options
 

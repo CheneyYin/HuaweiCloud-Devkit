@@ -22,7 +22,7 @@ function isSecretKeyName(key, policy = DEFAULT_POLICY) {
     .toLowerCase()
     .replace(/[^a-z0-9]/g, '');
   if (
-    /access.*key|secret.*key|security.*token|xauth.*token|authorization|password|passwd|adminpass|credential|private.*key/.test(
+    /access.*key|secret.*key|security.*token|xauth.*token|authorization|password|passwd|adminpass|credential|private.*key|userdata|metadata/.test(
       normalized,
     )
   ) {
@@ -32,12 +32,18 @@ function isSecretKeyName(key, policy = DEFAULT_POLICY) {
 }
 
 function redactString(text) {
-  return String(text)
-    .replace(
-      /((?:access[_-]?key|secret[_-]?key|security[_-]?token|x[_-]?auth[_-]?token|authorization|password|passwd|adminPass|credential)\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)/gi,
-      '$1<redacted>',
-    )
-    .replace(/(AK|SK)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;]+)/g, '$1=<redacted>');
+  return (
+    String(text)
+      // Opaque blob keys (cloud-init user_data, metadata, private_key) carry
+      // base64/scripts that may embed SSH keys, DB passwords, bootstrap tokens.
+      // Redact the ENTIRE value of this arg — not just the first whitespace token.
+      .replace(/((?:user[_-]?data|metadata|private[_-]?key)\s*[:=]\s*).*/gi, '$1<redacted>')
+      .replace(
+        /((?:access[_-]?key|secret[_-]?key|security[_-]?token|x[_-]?auth[_-]?token|authorization|password|passwd|adminPass|credential)\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)/gi,
+        '$1<redacted>',
+      )
+      .replace(/(AK|SK)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;]+)/g, '$1=<redacted>')
+  );
 }
 
 export function redactSecrets(value, policy = DEFAULT_POLICY) {

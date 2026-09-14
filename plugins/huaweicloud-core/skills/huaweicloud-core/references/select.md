@@ -38,5 +38,5 @@ Ask:
 
 Route by scenario:
 
-- Free / quick try / prototype / demo / temporary preview -> huawei-sandbox (temporary runtime + public URL, ~8h validity, zero billed resources)
+- Free / quick try / prototype / demo / temporary preview -> huawei-sandbox (temporary runtime + public URL (runtime lifetime not exposed via API); credential expiry see `expiresAt` from `connect`/`credentials`, zero billed resources)
 - Production / long-term / custom domain / high availability -> huawei-functiongraph / huawei-ecs (or huawei-cce for containers)

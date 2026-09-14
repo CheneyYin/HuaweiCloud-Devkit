@@ -49,6 +49,24 @@ test('redactSecrets handles string values with key=value patterns', () => {
   assert.doesNotMatch(out, /HPUAI12345/);
 });
 
+test('redactSecrets masks opaque blob keys (user_data / metadata / private_key) entirely', () => {
+  const redacted = redactSecrets([
+    'ECS',
+    'CreateServers',
+    '--server.user_data=ZXhwb3J0IEFQUF9TRUNSRVQ9czNjcjN0',
+    '--server.user_data=echo TOKEN=abc123 >> /etc/x',
+    '--server.metadata.db_password=secret123',
+    '--keypair.private_key=-----BEGIN RSA PRIVATE KEY-----',
+  ]);
+  for (const arg of redacted) {
+    assert.doesNotMatch(arg, /SECRET|TOKEN|abc123|secret123|RSA|PRIVATE/);
+  }
+  assert.match(redacted[2], /user_data=<redacted>/);
+  assert.match(redacted[3], /user_data=<redacted>/);
+  assert.match(redacted[4], /metadata.db_password=<redacted>/);
+  assert.match(redacted[5], /private_key=<redacted>/);
+});
+
 test('classifyTextCommand blocks direct credential file reads', () => {
   const result = classifyTextCommand('Get-Content ~/.hcloud/config.json');
   assert.equal(result.decision, 'deny');
@@ -71,6 +89,33 @@ test('classifyHcloudArgs blocks unapproved writes', () => {
   const result = classifyHcloudArgs(['ECS', 'NovaCreateServers', '--body', '{}']);
   assert.equal(result.decision, 'deny');
   assert.match(result.reason, /write operation/i);
+});
+
+test('classifyHcloudArgs blocks Apply* operations as writes (#644)', () => {
+  // EIP ApplyEip was classified as unknown_read and allowed through (issue #644 EXP-E04).
+  const applyWrites = [
+    ['EIP', 'ApplyEip'],
+    ['WAF', 'ApplyCertificateToHost'],
+    ['CDN', 'ApplyDomainTemplate'],
+    ['RDS', 'ApplyConfigurationAsync'],
+  ];
+  for (const args of applyWrites) {
+    const result = classifyHcloudArgs(args);
+    assert.equal(result.decision, 'deny', args.join(' '));
+    assert.equal(result.risk, 'write', args.join(' '));
+  }
+});
+
+test('classifyHcloudArgs keeps read operations containing Apply substring as read-only', () => {
+  const result = classifyHcloudArgs(['ECS', 'ListConfigurationApplyHistories']);
+  assert.equal(result.decision, 'allow');
+  assert.equal(result.risk, 'read_only');
+});
+
+test('classifyHcloudArgs allows local help for Apply operations', () => {
+  const result = classifyHcloudArgs(['EIP', 'ApplyEip', '--help']);
+  assert.equal(result.decision, 'allow');
+  assert.equal(result.risk, 'local_metadata');
 });
 
 test('classifyHcloudArgs allows local help for write operations', () => {

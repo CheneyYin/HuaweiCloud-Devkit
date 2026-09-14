@@ -1,7 +1,8 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 
 import { classifyHcloudArgs, redactSecrets, assertAllowed } from './safety-policy.mjs';
 import { getProxySettings } from './proxy/proxy-config.mjs';
@@ -14,29 +15,84 @@ const APPROVAL_TTL_MS = 5 * 60_000;
 const LARGE_OUTPUT_THRESHOLD = 50_000;
 const OUTPUT_DIR = join('/tmp', 'huaweicloud-devkit');
 
-const approvalStore = new Map();
+// Approval tokens must survive a process boundary: plan and run land in
+// different MCP sessions/processes (and headless subprocesses), so the old
+// in-memory Map lost the token and plan→approve→run became unreachable (#578).
+// Persist to a per-user JSON file as the single source of truth. Only the
+// sha256 of the args plus the redacted form are stored — never the raw args,
+// which may carry --adminPass / --server.user_data secrets.
+function approvalFilePath() {
+  return join(process.env.HUAWEICLOUD_HOME || homedir(), '.config', 'huaweicloud', 'approvals.json');
+}
+
+function sha256Hex(data) {
+  return createHash('sha256').update(data).digest('hex');
+}
+
+export function hashArgs(args) {
+  return sha256Hex(JSON.stringify(args));
+}
+
+function readApprovals() {
+  try {
+    const path = approvalFilePath();
+    if (!existsSync(path)) return {};
+    const parsed = JSON.parse(readFileSync(path, 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeApprovals(map) {
+  try {
+    const path = approvalFilePath();
+    mkdirSync(dirname(path), { recursive: true });
+    const tmp = `${path}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(map), { encoding: 'utf8', mode: 0o600 });
+    renameSync(tmp, path);
+  } catch {
+    // Best-effort: an in-file failure degrades cross-process persistence but a
+    // token created/consumed within one process still works.
+  }
+}
+
+function pruneStale(map, now = Date.now()) {
+  let changed = false;
+  for (const [key, value] of Object.entries(map)) {
+    if (now - value.createdAt > APPROVAL_TTL_MS) {
+      delete map[key];
+      changed = true;
+    }
+  }
+  return changed;
+}
 
 export function createApprovalToken(rawArgs) {
   const token = randomUUID();
-  approvalStore.set(token, { rawArgs, createdAt: Date.now() });
-  if (approvalStore.size % 20 === 0) {
-    const now = Date.now();
-    for (const [k, v] of approvalStore) {
-      if (now - v.createdAt > APPROVAL_TTL_MS) approvalStore.delete(k);
-    }
-  }
+  const map = readApprovals();
+  map[token] = {
+    argsHash: hashArgs(rawArgs),
+    argsRedacted: redactSecrets(rawArgs),
+    createdAt: Date.now(),
+  };
+  pruneStale(map);
+  writeApprovals(map);
   return token;
 }
 
 export function consumeApprovalToken(token) {
-  const entry = approvalStore.get(token);
+  const map = readApprovals();
+  const entry = map[token];
   if (!entry) return null;
   if (Date.now() - entry.createdAt > APPROVAL_TTL_MS) {
-    approvalStore.delete(token);
+    delete map[token];
+    writeApprovals(map);
     return null;
   }
-  approvalStore.delete(token);
-  return entry.rawArgs;
+  delete map[token];
+  writeApprovals(map);
+  return entry;
 }
 
 function saveLargeOutput(rawStdout) {
@@ -140,6 +196,47 @@ function obsWriteHint(args) {
   return 'OBS write operations are obsutil-style and always write-class. Before executing, present the full resource manifest (bucket/object list) to the user for ONE batch approval, then run each command through plan → approve (see huawei-iac skill, Provisioning Rules).';
 }
 
+const CATALOG_TTL_MS = 5 * 60 * 1000;
+let _catalogCache = { dir: null, t: 0, cn: new Set(), en: new Set() };
+
+export function readServiceCatalogs(metaDir = join(homedir(), '.hcloud', 'metaRepo')) {
+  const now = Date.now();
+  if (_catalogCache.dir === metaDir && now - _catalogCache.t < CATALOG_TTL_MS) return _catalogCache;
+  const load = (f) => {
+    try {
+      const p = join(metaDir, f);
+      if (!existsSync(p)) return { present: false, set: new Set() };
+      const d = JSON.parse(readFileSync(p, 'utf8'));
+      // Normalize to uppercase on load: catalog entries are mixed-case
+      // (DevStar, CloudTable, MapDS, ...) while lookups use uppercase.
+      return {
+        present: true,
+        set: new Set((d.items || []).map((i) => i?.Service?.Text?.toUpperCase()).filter(Boolean)),
+      };
+    } catch {
+      return { present: false, set: new Set() };
+    }
+  };
+  const cn = load('services_cn.json');
+  const en = load('services_en.json');
+  _catalogCache = { dir: metaDir, t: now, cn: cn.set, en: en.set, cnPresent: cn.present, enPresent: en.present };
+  return _catalogCache;
+}
+
+export function classifyUnsupported(service, metaDir) {
+  const { cn, en, cnPresent, enPresent } = readServiceCatalogs(metaDir);
+  const s = String(service || '').toUpperCase();
+  if (!s) return 'other';
+  if (cnPresent && enPresent) {
+    if (cn.has(s) && !en.has(s)) return 'lang-missing';
+    if (!cn.has(s) && !en.has(s)) return 'not-found';
+    return 'other';
+  }
+  // One or both catalog files are missing locally — we cannot distinguish
+  // "service missing from the en catalog" from "en catalog not downloaded".
+  return 'unknown';
+}
+
 export function planHcloudCommand(args, options = {}) {
   const normalizedArgs = Array.isArray(args) ? args.map(String) : [];
   const classification = classifyHcloudArgs(normalizedArgs, options);
@@ -171,6 +268,29 @@ export function planHcloudCommand(args, options = {}) {
   };
 }
 
+const UNSUPPORTED_SERVICE_RE = /Unsupported service:\s*([A-Za-z0-9_-]+)/i;
+
+function appendLangHint(result, service, metaDir) {
+  const cause = classifyUnsupported(service, metaDir);
+  if (cause === 'lang-missing' || cause === 'unknown') {
+    const nextStep =
+      'KooCLI switches language only via global config: hcloud configure set --cli-lang=cn (changes CLI output language; BSS requires Chinese mode).';
+    return {
+      ...result,
+      langCause: cause,
+      langHint: `Unsupported service: ${service}. ${nextStep}`,
+      langNextStep: nextStep,
+    };
+  }
+  const nextStep = 'Check the service name, or refresh KooCLI metadata (hcloud upgrade / configure).';
+  return {
+    ...result,
+    langCause: cause,
+    langHint: `Unsupported service: ${service}. ${nextStep}`,
+    langNextStep: nextStep,
+  };
+}
+
 export async function runHcloud(args, options = {}) {
   const normalizedArgs = Array.isArray(args) ? args.map(String) : [];
   const plan = {
@@ -179,6 +299,21 @@ export async function runHcloud(args, options = {}) {
   };
   assertAllowed(plan.classification);
 
+  const metaDir = options.metaDir;
+
+  // KooCLI only switches language globally (`hcloud configure set --cli-lang=cn`); there is no
+  // per-command `--cli-lang` flag (it is rejected as "不正确的参数:cli-lang"). So we never mutate
+  // the command — we run it as-is and annotate `Unsupported service` with an actionable cause.
+  const result = await runHcloudOnceWithRetries(plan, options);
+  const text = `${result.stderr || ''}\n${result.stdout || ''}`;
+  const match = text.match(UNSUPPORTED_SERVICE_RE);
+  if (match && !result.ok) {
+    return appendLangHint(result, match[1], metaDir);
+  }
+  return result;
+}
+
+async function runHcloudOnceWithRetries(plan, options) {
   const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     const result = await runHcloudOnce(plan, options);
@@ -226,6 +361,9 @@ function runHcloudOnce(plan, options) {
   const executableArgs = Array.isArray(options.executableArgs) ? options.executableArgs.map(String) : [];
   const cwd = options.cwd || undefined;
   const stdin = options.stdin ?? 'y\n';
+  const childOptions = { ...options };
+  delete childOptions.metaDir;
+  const childEnv = { ...process.env, ...childOptions.env };
 
   return new Promise((resolve) => {
     const proxySettings = getProxySettings();
@@ -242,7 +380,7 @@ function runHcloudOnce(plan, options) {
       env: {
         ...process.env,
         ...proxyEnv,
-        ...options.env,
+        ...childEnv,
       },
     });
     if (stdin) {
@@ -418,7 +556,7 @@ function validateRequiredParams(args) {
   return { valid: missing.length === 0, missing, hints };
 }
 
-function extractApiError(stdout) {
+export function extractApiError(stdout) {
   let text = String(stdout || '');
   // Strip KooCLI multi-version prefix lines (e.g. "ListVpcs有多个版本,默认使用该API版本v3…")
   const bracketIdx = text.indexOf('{');

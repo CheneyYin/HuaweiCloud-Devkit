@@ -11,6 +11,8 @@
     "token",
     "credential",
     "private[_-]?key",
+    "user[_-]?data",
+    "metadata",
     "ak",
     "sk"
   ],
@@ -34,6 +36,7 @@
     "Stop",
     "Start",
     "Restart",
+    "Apply",
     "Authorize",
     "Revoke",
     "Add",

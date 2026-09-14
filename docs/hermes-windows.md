@@ -22,7 +22,7 @@ hermes config set mcp_servers.huaweicloud-devkit.args '["--no-deprecation", "<se
 
 Run `hermes config get mcp_servers.huaweicloud-devkit` to verify.
 
-The server path is printed by `doctor --target hermes` (typically `%LOCALAPPDATA%\hermes\huaweicloud-plugins\src\mcp-server.mjs`).
+The server path is printed by `doctor --target hermes` (typically `~/.hermes/huaweicloud-plugins/src/mcp-server.mjs`, i.e., `%USERPROFILE%\.hermes\huaweicloud-plugins\src\mcp-server.mjs` on Windows).
 
 ## Issue 3: Manual MCP Server Workaround (When Stdio Fails)
 

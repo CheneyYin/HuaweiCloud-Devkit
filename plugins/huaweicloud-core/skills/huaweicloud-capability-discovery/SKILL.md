@@ -29,10 +29,10 @@ Use this skill to turn vague developer intent into a precise Huawei Cloud capabi
 
 Match the scenario before picking a service. For "deploy a web app" requests, layer the recommendation instead of defaulting to a production service:
 
-| Scenario                                                             | Recommended path                                                                             |
-| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| hello world / prototype / demo / temporary preview (free, quick try) | `huawei-sandbox` first — temporary runtime + public URL, ~8h validity, zero billed resources |
-| production / long-term / custom domain / high availability           | `huawei-functiongraph` / `huawei-ecs` (or `huawei-cce` for containers)                       |
+| Scenario                                                             | Recommended path                                                                                                                                                                      |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| hello world / prototype / demo / temporary preview (free, quick try) | `huawei-sandbox` first — temporary runtime + public URL (runtime lifetime not exposed via API); credential expiry see `expiresAt` from `connect`/`credentials`, zero billed resources |
+| production / long-term / custom domain / high availability           | `huawei-functiongraph` / `huawei-ecs` (or `huawei-cce` for containers)                                                                                                                |
 
 Route to the sandbox when the developer signals free/quick preview intent ("免费", "快速", "预览", "hello world", "原型", "演示"); route to production services only when production-grade hosting is explicitly required.
 

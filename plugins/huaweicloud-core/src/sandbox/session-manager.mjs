@@ -984,15 +984,23 @@ fi
 
   const result = await execOneShot(workspaceId, checkScript, username, timeoutMs);
   const stdout = String(result.stdout || '');
+  // Strip ANSI escape sequences (CSI color/cursor codes and OSC shell-integration markers)
+  // and split on any line-ending style (\r\n, \r, or \n) to handle all terminal outputs.
+  // Use new RegExp to avoid ESLint no-control-regex on literal control chars in regex.
+  const ESC = '\x1b';
+  const csiRe = new RegExp(ESC + '\\[[0-9;]*[a-zA-Z]', 'g');
+  const oscRe = new RegExp(ESC + '\\][^' + ESC + '\x07]*(?:\x07|' + ESC + '\\\\)', 'g');
+  const cleanStdout = stdout.replace(csiRe, '').replace(oscRe, '');
   const checks = {};
-  const lines = stdout.split('\n');
+  const lines = cleanStdout.split(new RegExp('\\r\\n|\\r|\\n'));
   for (const line of lines) {
-    const m = line.match(/^(\w+):(\w+)\b(.*)/);
+    const trimmed = line.trim();
+    const m = trimmed.match(/^(\w+):(PASS|FAIL|SKIP)\b(.*)/);
     if (m) checks[m[1]] = { status: m[2], detail: (m[3] || '').trim() };
   }
-  const scoreMatch = stdout.match(/SCORE:(\d+)\/(\d+)/);
-  const tunnelMatch = stdout.match(/TUNNEL_URL:(https:\/\/[^\s]+)/);
-  const complete = /VERDICT:COMPLETE/.test(stdout);
+  const scoreMatch = cleanStdout.match(/SCORE:(\d+)\/(\d+)/);
+  const tunnelMatch = cleanStdout.match(/TUNNEL_URL:(https:\/\/[^\s]+)/);
+  const complete = /VERDICT:COMPLETE/.test(cleanStdout);
 
   const missing = [];
   if (!complete) {
@@ -1000,6 +1008,12 @@ fi
       if (val.status === 'FAIL') missing.push(key);
     }
   }
+
+  // If checks is empty but score was found, parsing failed — return raw output for debugging
+  const parseWarning =
+    Object.keys(checks).length === 0 && scoreMatch
+      ? 'Check output parsing failed — individual check results could not be extracted. See rawOutput for details.'
+      : undefined;
 
   return {
     ok: true,
@@ -1009,6 +1023,8 @@ fi
     score: scoreMatch ? { pass: parseInt(scoreMatch[1], 10), total: parseInt(scoreMatch[2], 10) } : null,
     publicUrl: tunnelMatch ? tunnelMatch[1] : undefined,
     missingSteps: missing.length > 0 ? missing.join(', ') : undefined,
+    parseWarning,
+    rawOutput: parseWarning ? stdout.trim() : undefined,
     nextStep: !complete
       ? missing.includes('devbridge_tunnel') || missing.includes('tunnel_url_accessible')
         ? 'expose_via_devbridge'
@@ -1016,7 +1032,9 @@ fi
           ? 'configure_nginx'
           : missing.includes('qr_code')
             ? 'generate_qr_code'
-            : 'review_checks'
+            : parseWarning
+              ? 'review_raw_output'
+              : 'review_checks'
       : 'complete',
   };
 }

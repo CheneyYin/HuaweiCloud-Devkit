@@ -69,7 +69,11 @@ if (args[0] === '--version') {
   process.exit(0);
 }
 if (args[0] === 'plugin' && args[1] === 'list') {
-  console.log(process.env.FAKE_CODEX_LIST_OUTPUT || '');
+  if (args.includes('--json')) {
+    console.log(process.env.FAKE_CODEX_LIST_JSON || '{"installed":[]}');
+  } else {
+    console.log(process.env.FAKE_CODEX_LIST_OUTPUT || '');
+  }
   process.exit(0);
 }
 if (process.env.FAKE_CODEX_FAIL_PLUGIN_ADD === '1' && args[0] === 'plugin' && args[1] === 'add') {
@@ -92,6 +96,7 @@ process.exit(0);
     FAKE_CODEX_LOG: logPath,
     ...(options.failPluginAdd ? { FAKE_CODEX_FAIL_PLUGIN_ADD: '1' } : {}),
     ...(options.listOutput ? { FAKE_CODEX_LIST_OUTPUT: options.listOutput } : {}),
+    ...(options.listJson ? { FAKE_CODEX_LIST_JSON: options.listJson } : {}),
     logPath,
   };
 }
@@ -505,15 +510,40 @@ test('codex install fails fast when plugin add fails', () => {
   }
 });
 
-test('codex status recognizes current and legacy plugin names', () => {
-  for (const listOutput of ['huaweicloud-devkit@huaweicloud-devkit', 'huaweicloud-core@huaweicloud-devkit']) {
+test('codex status parses plugin list JSON (name match, not path substring)', () => {
+  // Installed plugin by name → Installed
+  {
     const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
     const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
     try {
-      const env = fakeCodexEnv(cwd, { listOutput });
+      const env = fakeCodexEnv(cwd, {
+        listJson: JSON.stringify({
+          installed: [{ name: 'huaweicloud-devkit', pluginId: 'huaweicloud-devkit@personal' }],
+        }),
+      });
       const res = run('codex', home, cwd, 'status', env);
       assert.equal(res.status, 0, res.stderr);
       assert.match(res.stdout, /Plugin:.*Installed/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  }
+  // Legacy name huaweicloud-core in a PATH is no longer treated as installed (#501).
+  {
+    const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
+    try {
+      const env = fakeCodexEnv(cwd, {
+        listJson: JSON.stringify({
+          installed: [
+            { name: 'documents', pluginId: 'documents@x', source: { path: 'C:/pkg/plugins/huaweicloud-core' } },
+          ],
+        }),
+      });
+      const res = run('codex', home, cwd, 'status', env);
+      assert.equal(res.status, 0, res.stderr);
+      assert.match(res.stdout, /Plugin:.*Not installed/);
     } finally {
       rmSync(home, { recursive: true, force: true });
       rmSync(cwd, { recursive: true, force: true });

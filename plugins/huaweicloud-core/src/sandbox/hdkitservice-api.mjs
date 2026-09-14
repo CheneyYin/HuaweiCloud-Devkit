@@ -115,7 +115,11 @@ export async function hdkitVoucherStatus(domainId) {
     const path = domainId ? `voucher/status?domain_id=${encodeURIComponent(domainId)}` : 'voucher/status';
     return await hdkitRequest('GET', path, undefined, 30000);
   } catch (error) {
-    return { claimed: false, message: 'Incentive service unavailable, please try again later' };
+    return {
+      claimed: false,
+      message: error?.message || 'Incentive service unavailable, please try again later',
+      code: error?.code,
+    };
   }
 }
 
@@ -124,6 +128,10 @@ export async function hdkitVoucherClaim(domainId) {
     const body = domainId ? { domain_id: domainId } : {};
     return await hdkitRequest('POST', 'voucher/claim', body);
   } catch (error) {
-    return { claimed: false, message: 'Incentive service unavailable, please try again later' };
+    return {
+      claimed: false,
+      message: error?.message || 'Incentive service unavailable, please try again later',
+      code: error?.code,
+    };
   }
 }

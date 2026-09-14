@@ -4,10 +4,11 @@ import { fileURLToPath } from 'node:url';
 import { homedir, tmpdir } from 'node:os';
 import { spawnSync, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { createHmac, createHash } from 'node:crypto';
 
 import { evaluateArtifacts, evaluateCommandRisk, evaluateDeployPlan } from './risk-rule-engine.mjs';
 import { classifyTextCommand, redactSecrets } from './safety-policy.mjs';
-import { planHcloudCommand, runHcloud, consumeApprovalToken } from './hcloud-cli.mjs';
+import { planHcloudCommand, runHcloud, consumeApprovalToken, hashArgs } from './hcloud-cli.mjs';
 import { searchMarketplace } from './search-market.mjs';
 import { getServiceIcon } from './icon-library.mjs';
 import { detectFramework } from './detect-framework.mjs';
@@ -48,6 +49,7 @@ import {
   resolveCredentialsWithRuntime,
 } from './auth/credentials.mjs';
 import { trackToolInvoke, trackSkillRetrieve, clearUserHash } from './telemetry/telemetry.mjs';
+import { fetchWithProxy } from './proxy/proxy-agent.mjs';
 import { fingerprint, runHcloudConfigure, resolveManagedProfile } from './auth/reconcile.mjs';
 import {
   getCachedUpdateInfo,
@@ -745,7 +747,7 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'huaweicloud_sandbox_connect',
     description:
-      'Connect to a sandbox via hdkitservice. One user one instance - reuses existing sandbox if available, otherwise creates a new one. Returns session_id, dev_stage_id, connection_id, and connection_address.',
+      'Connect to a sandbox via hdkitservice. One user one instance - reuses existing sandbox if available, otherwise creates a new one. Returns session_id, dev_stage_id, connection_id, connection_address, and expiresAt (STS credential expiry).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -844,6 +846,32 @@ export const TOOL_DEFINITIONS = [
           description: 'agent 目标（opencode/codex/codearts/.../all）。缺省时用 all（仅更新已安装的）。',
         },
       },
+    },
+  },
+  {
+    name: 'huaweicloud_obs_set_website_config',
+    description:
+      '配置 OBS 桶的静态网站托管。KooCLI OBS 不支持 SetBucketWebsite API，此工具内部实现 AWS4 签名调用 OBS REST API，屏蔽签名细节。支持 set（配置）、get（查询）、delete（删除）三种操作。操作前需确保桶已创建且已设置 public-read ACL。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['set', 'get', 'delete'],
+          description: '操作类型：set=配置静态网站托管，get=查询当前配置，delete=删除配置',
+        },
+        bucket: { type: 'string', description: 'OBS 桶名称' },
+        region: { type: 'string', description: 'OBS 桶所在区域，如 cn-north-4' },
+        indexDocument: {
+          type: 'string',
+          description: '首页文件名（action=set 时必填），如 index.html',
+        },
+        errorDocument: {
+          type: 'string',
+          description: '错误页面文件名（action=set 时可选），如 404.html 或 error.html',
+        },
+      },
+      required: ['action', 'bucket', 'region'],
     },
   },
 ];
@@ -961,9 +989,23 @@ function readImportFile() {
       region: String(data.region || ''),
     };
   } catch {
+    // Malformed/undecodable import file is un-replayable — wipe it. A VALID
+    // file is kept so a rejected persist can be replayed (see #502).
+    try {
+      rmSync(path, { force: true });
+    } catch {
+      // ignore
+    }
     return null;
-  } finally {
+  }
+}
+
+function clearImportFile() {
+  const path = join(dirname(globalCredentialsPath()), 'creds-import.json');
+  try {
     rmSync(path, { force: true });
+  } catch {
+    // best-effort: an absent or locked file is not an error
   }
 }
 
@@ -996,7 +1038,7 @@ function persistCredentials(ak, sk, securityToken, region) {
     writeLastSync({ kooCliProfile: profile, s1Fingerprint: fingerprint(ak, sk) });
   }
   return {
-    status: 'ok',
+    status: obs.ok && hcloud.ok ? 'ok' : 'partial',
     scope: 'persist',
     backedUp: Boolean(before),
     obs: obs.ok ? { configured: true } : { configured: false, error: obs.error },
@@ -1035,7 +1077,7 @@ function normalizeNumericArgs(args) {
   return out;
 }
 
-export async function callTool(name, rawArgs = {}) {
+export async function callTool(name, rawArgs = {}, opts = {}) {
   const args = normalizeNumericArgs(rawArgs);
   const toolValue = toolInvokeValue(name, args);
   trackToolInvoke(name, toolValue);
@@ -1124,10 +1166,14 @@ export async function callTool(name, rawArgs = {}) {
       let securityToken = args.securityToken || '';
       let region = args.region || '';
       const sourceChannel = args.mode || 'memory';
+      let importedFromFile = false;
 
       if (sourceChannel === 'import' && (!ak || !sk)) {
         const imported = readImportFile();
-        if (imported) ({ ak, sk, securityToken, region } = imported);
+        if (imported) {
+          ({ ak, sk, securityToken, region } = imported);
+          importedFromFile = true;
+        }
       }
       if (sourceChannel === 'mcp-config' && (!ak || !sk)) {
         const cc = readCodeArtsCredentials();
@@ -1143,9 +1189,19 @@ export async function callTool(name, rawArgs = {}) {
         throw new Error('ak and sk are required (or provide creds-import.json for mode=import).');
       }
 
+      if (action === 'persist' && !String(region || '').trim()) {
+        return {
+          status: 'error',
+          scope: 'invalid_region',
+          error:
+            'region is required to persist credentials. Pass --region, or include "region" in creds-import.json (mode=import).',
+        };
+      }
+
       if (action === 'temporary') {
         setRuntimeCredentials(ak, sk, securityToken || undefined, region);
         refreshUserHashAfterAuthChange();
+        if (importedFromFile) clearImportFile();
         return {
           status: 'ok',
           scope: 'temporary',
@@ -1166,6 +1222,7 @@ export async function callTool(name, rawArgs = {}) {
           newRegion: region,
           oldFingerprint: fingerprint(prev.ak, prev.sk),
           newFingerprint: fingerprint(ak, sk),
+          fromImport: importedFromFile,
         });
         return {
           status: 'needs_confirmation',
@@ -1178,6 +1235,10 @@ export async function callTool(name, rawArgs = {}) {
       }
 
       const persisted = persistCredentials(ak, sk, securityToken, region);
+      // Clear the import file for non-replayable outcomes (success, or an
+      // unfixable rejection such as STS R3). Keep it only for a retryable
+      // 'partial' (S1 written but a mirror failed).
+      if (importedFromFile && persisted.status !== 'partial') clearImportFile();
       refreshUserHashAfterAuthChange();
       return persisted;
     }
@@ -1189,6 +1250,7 @@ export async function callTool(name, rawArgs = {}) {
         return { status: 'ok', outcome: 'aborted', message: '保持 S1 现有账号，未覆盖。' };
       }
       const confirmed = persistCredentials(pending.newAk, pending.newSk, pending.newSecurityToken, pending.newRegion);
+      if (pending.fromImport && confirmed.status !== 'partial') clearImportFile();
       refreshUserHashAfterAuthChange();
       return confirmed;
     }
@@ -1414,33 +1476,42 @@ export async function callTool(name, rawArgs = {}) {
     case 'huaweicloud_voucher_claim':
       return await hdkitVoucherClaim(args.domain_id);
     case 'huaweicloud_check_update':
-      return await handleCheckUpdate(args);
+      return await handleCheckUpdate(args, { sessionId: opts?.sessionId, doQuery: opts?.doQuery });
     case 'huaweicloud_upgrade':
-      return await handleUpgrade(args);
+      return await handleUpgrade(args, { sessionId: opts?.sessionId });
+    case 'huaweicloud_obs_set_website_config':
+      return await handleObsWebsiteConfig(args);
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
 }
 
-async function handleCheckUpdate(args = {}) {
+async function handleCheckUpdate(args = {}, opts = {}) {
+  const { sessionId = null, doQuery } = opts;
   const current = readInstalledVersion() || '0.0.0';
   if (args.dismiss === true) {
-    const distTags = await getUpdateDistTags(current);
+    const distTags = await getUpdateDistTags(current, { sessionId, doQuery });
+    if (!distTags) {
+      // 查询失败：不降级为 current 冷却、不写 skip，返回 check_failed。
+      // 不调 invalidateUpdateCache()，以保留 failedAt 的 5 分钟失败节流。
+      return judgeUpdate(current, null, null);
+    }
     const target = determineTarget(current, distTags);
     const dismissedVersion =
       typeof args.dismissVersion === 'string' && args.dismissVersion ? args.dismissVersion : target || current;
-    const state = writeSkipState(resolveSkipFilePath(), dismissedVersion);
+    const state = writeSkipState(resolveSkipFilePath(sessionId), dismissedVersion);
     invalidateUpdateCache();
     return judgeUpdate(current, distTags, state);
   }
-  return getCachedUpdateInfo(current);
+  return getCachedUpdateInfo(current, { sessionId, doQuery });
 }
 
-async function handleUpgrade(args = {}) {
+async function handleUpgrade(args = {}, opts = {}) {
+  const sessionId = opts?.sessionId || null;
   const target = typeof args.target === 'string' && args.target ? args.target : 'all';
   const version = typeof args.version === 'string' && args.version ? args.version : 'latest';
   const current = readInstalledVersion() || '0.0.0';
-  const info = await getCachedUpdateInfo(current);
+  const info = await getCachedUpdateInfo(current, { sessionId });
   if (info && info.result === 'up_to_date') {
     return {
       success: false,
@@ -1674,15 +1745,15 @@ async function runApprovedCommand(args = {}) {
     throw new Error('approvedByUser must be true after explicit user approval for this exact command.');
   }
   const token = String(args.approvalToken || '');
-  const storedArgs = consumeApprovalToken(token);
-  if (!storedArgs || storedArgs.length === 0) {
+  const stored = consumeApprovalToken(token);
+  if (!stored) {
     throw new Error('Invalid or expired approval token. Please re-plan the command.');
   }
   const providedArgs = Array.isArray(args.args) ? args.args.map(String) : [];
-  if (JSON.stringify(storedArgs) !== JSON.stringify(providedArgs)) {
-    const redactedStored = redactSecrets(storedArgs);
-    const redactedProvided = redactSecrets(providedArgs);
-    if (JSON.stringify(redactedStored) !== JSON.stringify(redactedProvided)) {
+  if (hashArgs(providedArgs) !== stored.argsHash) {
+    const redactedStored = JSON.stringify(stored.argsRedacted);
+    const redactedProvided = JSON.stringify(redactSecrets(providedArgs));
+    if (redactedStored !== redactedProvided) {
       throw new Error(
         'Provided args do not match the approved plan. Use the exact args from the plan. ' +
           'If the plan shows <redacted> for passwords or secrets, replace <redacted> with the actual values in approvedCommand.',
@@ -2218,4 +2289,113 @@ async function getRegionalAvailability(service, region) {
 
 export function classifyRawCommand(command) {
   return classifyTextCommand(command);
+}
+
+// ── OBS Static Website Hosting (AWS4 signed REST API) ──
+
+async function handleObsWebsiteConfig(args) {
+  const { action, bucket, region, indexDocument, errorDocument } = args;
+  if (!bucket || !region) {
+    throw new Error('bucket and region are required');
+  }
+  const creds = resolveCredentialsWithRuntime({});
+  if (!creds?.ak || !creds?.sk) {
+    throw new Error('OBS website config requires AK/SK credentials. Run huaweicloud_auth_init first.');
+  }
+
+  const host = `${bucket}.obs.${region}.myhuaweicloud.com`;
+  const endpoint = `https://${host}`;
+
+  if (action === 'get') {
+    const res = await obsSignedRequest('GET', endpoint, '/?website', '', creds, region);
+    return { ok: res.status === 200, status: res.status, body: res.body };
+  }
+
+  if (action === 'delete') {
+    const res = await obsSignedRequest('DELETE', endpoint, '/?website', '', creds, region);
+    return { ok: res.status === 204, status: res.status };
+  }
+
+  if (action === 'set') {
+    if (!indexDocument) {
+      throw new Error('indexDocument is required for action=set');
+    }
+    const xmlParts = ['<WebsiteConfiguration>', `  <IndexDocument><Suffix>${indexDocument}</Suffix></IndexDocument>`];
+    if (errorDocument) {
+      xmlParts.push(`  <ErrorDocument><Key>${errorDocument}</Key></ErrorDocument>`);
+    }
+    xmlParts.push('</WebsiteConfiguration>');
+    const body = xmlParts.join('\n');
+    const res = await obsSignedRequest('PUT', endpoint, '/?website', body, creds, region);
+    const websiteUrl = `http://${bucket}.obs-website.${region}.myhuaweicloud.com`;
+    return {
+      ok: res.status === 200,
+      status: res.status,
+      websiteUrl,
+      message:
+        res.status === 200
+          ? `Static website hosting configured. Website URL: ${websiteUrl} (may take ~1 min to propagate)`
+          : `Failed to configure website: HTTP ${res.status}`,
+    };
+  }
+
+  throw new Error(`Unknown action: ${action}. Use set, get, or delete.`);
+}
+
+async function obsSignedRequest(method, endpoint, pathAndQuery, body, creds, region) {
+  const now = new Date();
+  const dateStamp = now.toISOString().slice(0, 10).replace(/-/g, '');
+  const amzDate = dateStamp + 'T' + now.toISOString().slice(11, 19).replace(/:/g, '') + 'Z';
+  const payloadHash = createHash('sha256').update(body).digest('hex');
+
+  const url = new URL(endpoint + pathAndQuery);
+  const canonicalUri = '/';
+  const canonicalQueryString = 'website=';
+  const canonicalHeaders = `host:${url.host}\n` + `x-amz-content-sha256:${payloadHash}\n` + `x-amz-date:${amzDate}\n`;
+  const signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
+  const canonicalRequest = [
+    method,
+    canonicalUri,
+    canonicalQueryString,
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash,
+  ].join('\n');
+
+  const credentialScope = `${dateStamp}/${region}/s3/aws4_request`;
+  const stringToSign = [
+    'AWS4-HMAC-SHA256',
+    amzDate,
+    credentialScope,
+    createHash('sha256').update(canonicalRequest).digest('hex'),
+  ].join('\n');
+
+  const kDate = createHmac('sha256', 'AWS4' + creds.sk)
+    .update(dateStamp)
+    .digest();
+  const kRegion = createHmac('sha256', kDate).update(region).digest();
+  const kService = createHmac('sha256', kRegion).update('s3').digest();
+  const kSigning = createHmac('sha256', kService).update('aws4_request').digest();
+  const signature = createHmac('sha256', kSigning).update(stringToSign).digest('hex');
+
+  const authorization =
+    `AWS4-HMAC-SHA256 Credential=${creds.ak}/${credentialScope}, ` +
+    `SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
+  const headers = {
+    Host: url.host,
+    'x-amz-content-sha256': payloadHash,
+    'x-amz-date': amzDate,
+    Authorization: authorization,
+  };
+  if (body) headers['Content-Type'] = 'application/xml';
+  if (creds.securityToken) headers['x-amz-security-token'] = creds.securityToken;
+
+  const res = await fetchWithProxy(endpoint + pathAndQuery, {
+    method,
+    headers,
+    body: body || undefined,
+  });
+  const resBody = await res.text();
+  return { status: res.status, body: resBody };
 }
