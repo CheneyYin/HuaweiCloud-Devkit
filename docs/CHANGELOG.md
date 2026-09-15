@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.5 (2026-09-15)
+
+- chore: sync README beta badge to v1.1.5
+- chore: version override for 1.1.5 stable release
+- feat(sandbox): add mandatory target-selection gate before sandbox lifecycle tools (#691)
+- fix(safety+mcp): close env-dump and shell-wrap bypasses, JSON-RPC -32601 (#650) (#688)
+- fix(mcp): actionable explain_error fallback guidance (#648)
+
 ## 1.1.4 (2026-09-14)
 
 - fix(proxy): skip TLS cert verify only for proxy connections (#667)
