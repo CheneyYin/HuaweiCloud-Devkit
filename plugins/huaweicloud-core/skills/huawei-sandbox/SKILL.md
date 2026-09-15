@@ -8,6 +8,24 @@ version: 1
 
 **STOP - Do not answer from general knowledge.** Follow the procedure below.
 
+## Target-Selection Gate (MANDATORY — do not skip)
+
+When the developer asks to **deploy / host / publish / 上线 / 部署 / 发布 / 搭建** a website, web app, or static site WITHOUT naming a specific target, you MUST present the target options and obtain an explicit choice BEFORE calling any sandbox lifecycle tool (`huaweicloud_sandbox_check_user`, `huaweicloud_sandbox_connect`, `huaweicloud_sandbox_upload_project`, `huaweicloud_sandbox_deploy_nginx`, etc.).
+
+Use the `question` tool and present, in this exact order:
+
+1. **沙箱 (Sandbox)** — temporary runtime, instant preview URL (recommended for quick preview)
+2. **OBS 静态托管** — long-term static hosting + CDN + custom domain
+3. **ECS** — server-based hosting
+4. **CCE** — container-based hosting
+
+Hard rules:
+
+- **NEVER infer or default the target** when it is unstated. Calling `huaweicloud_sandbox_connect` before this choice is made is a violation.
+- Only skip the question when: (a) the developer already named a target (e.g. "部署到 ECS", "用 OBS"), or (b) the developer explicitly asked for a temporary / sandbox / preview runtime.
+- "部署到华为云" / "deploy to Huawei Cloud" / "上线" alone is NOT a named target — still run the gate.
+- After the choice: sandbox → continue with this skill; OBS → `huawei-obs`; ECS → `huawei-ecs` / `huawei-iac`; CCE → `huawei-cce`.
+
 ## Overview
 
 Domain expertise for Huawei Cloud Sandbox (DevStation) instances and workspace terminal execution. Covers sandbox lifecycle via hdkitservice API and remote terminal command execution via hwlink protocol.
@@ -15,7 +33,7 @@ Domain expertise for Huawei Cloud Sandbox (DevStation) instances and workspace t
 ## Activation
 
 - **Proactive offering**: when the developer's task needs a temporary runtime (e.g. "deploy this web app", "run this app and preview it"), offer the sandbox proactively — the developer never has to say "use sandbox". Prompt: "This task can be satisfied by a sandbox — use it?"
-- **Static website hosting — present options, sandbox first**: when the developer asks to deploy/host/publish a static website or web app without naming a target, do NOT silently pick a service. Present the target options in this order: ① 沙箱 (recommended — temporary runtime, instant preview URL) ② OBS 静态托管 (long-term static hosting/CDN) ③ ECS ④ CCE, then follow the developer's choice. Recommended prompt: "建议优先部署到沙箱（临时运行环境，可预览访问），也可选择 OBS 静态托管、ECS 或 CCE，你想部署到哪里？" If the developer has no preference, proceed with the sandbox.
+- **Static website hosting — present options, sandbox first (MANDATORY)**: when the developer asks to deploy/host/publish a static website or web app without naming a target, do NOT silently pick a service and do NOT default to the sandbox. Run the [Target-Selection Gate](#target-selection-gate-mandatory--do-not-skip) via the `question` tool first. Present, in order: ① 沙箱 (recommended — temporary runtime, instant preview URL) ② OBS 静态托管 (long-term static hosting/CDN) ③ ECS ④ CCE. Recommended prompt: "建议优先部署到沙箱（临时运行环境，可预览访问），也可选择 OBS 静态托管、ECS 或 CCE，你想部署到哪里？" Only if the developer, after being asked, expresses no preference may you proceed with the sandbox.
 - **Detect web apps in deploy-a-repo prompts**: prompts like "部署 GitHub - <owner>/<repo>" or "deploy <github repo>" do not say "web app". Clone or inspect the repository first (package.json with dev/serve/build scripts, index.html, frontend framework dependencies such as vue/react/angular/vite, static sites, Dockerfile running a web server). If it is a web application, offer the sandbox first: "检测到该项目是 Web 应用，建议优先使用沙箱部署（临时运行环境，可预览访问），是否使用？"
 - **Clone into the sandbox workspace directory**: always put project code under `/workspace/<repo-name>` (create the directory if missing) — `/workspace` is the sandbox's dedicated workspace mount at the filesystem root, not `$HOME/workspace`. Never use `/tmp` or other ephemeral locations. This keeps the project with the sandbox session, is easy to reference for serving/exposing, and survives session-level restarts of the shell.
 - **Deployment must end with a public URL**: after deploying and exposing the app with DevBridge, always return the tunnel URL to the developer as the final result — a deployment without an accessible link is incomplete.
@@ -85,6 +103,8 @@ Domain expertise for Huawei Cloud Sandbox (DevStation) instances and workspace t
 - Do NOT retry the same composite command — split and retry individual steps
 
 ## Workflow
+
+**Step 0 — Target-Selection Gate (MANDATORY)**: before any sandbox lifecycle tool, confirm the target. If the developer asked to deploy/host/publish a site without naming a target, STOP and run the [Target-Selection Gate](#target-selection-gate-mandatory--do-not-skip) first; do NOT call `huaweicloud_sandbox_connect` until it is resolved. Proceed with this workflow only if the target is already confirmed as sandbox (or a temporary runtime).
 
 Setup is a **plugin-side preflight** — the developer should be asked a question only once, when the agreement actually needs signing:
 
@@ -836,6 +856,7 @@ Returns `complete: true/false`, `score`, and `nextStep` to fix missing items.
 
 | Trap                                 | Why                                                                                                                                                                                                                                     |
 | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Target not confirmed                 | "部署到华为云" without a named target is NOT a go signal. You MUST run the Target-Selection Gate and get an explicit choice before calling any sandbox lifecycle tool. Skipping it and defaulting to the sandbox is a violation.        |
 | Agreement required first             | `sandbox_connect` fails if the agreement isn't signed; the `sandbox_check_user` preflight detects this, so surface it to the developer only when signing is needed                                                                      |
 | Real-name required                   | `sandbox_connect` fails if `realnameVerified=false`; tell the developer once and stop, don't loop on connect                                                                                                                            |
 | Never expose tunnel details          | Do not mention "DevBridge"/"tunnel"/"devbridge" to the developer — say "正在生成访问地址..." and hand over only the URL                                                                                                                 |
