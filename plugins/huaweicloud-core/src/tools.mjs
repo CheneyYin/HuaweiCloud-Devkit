@@ -2015,8 +2015,15 @@ function explainError({ service = 'unknown', errorCode = '', message = '', reque
   }
   if (!suggestions.length) {
     suggestions.push(
-      'Collect service name, operation, region, project_id, request_id, and the full redacted error message.',
+      'No known error-code pattern matched. Re-run the failing command with --debug to capture ' +
+        'X-Request-Id from the response headers, then re-call explain_error with service, operation, ' +
+        'region, the full redacted message, and requestId.',
     );
+    if (errorCode) {
+      suggestions.push(
+        `Search the error code "${errorCode}" in the Huawei Cloud error center (support.huaweicloud.com) for the authoritative cause.`,
+      );
+    }
   }
 
   if (requestId) {
