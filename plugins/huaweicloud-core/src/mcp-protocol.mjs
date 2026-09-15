@@ -1,25 +1,9 @@
-import { readFileSync } from 'node:fs';
-import { resolve, dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
 import { TOOL_DEFINITIONS, callTool } from './tools.mjs';
-import { peekCachedUpdateInfo, applyUpdateHint } from './update-check.mjs';
+import { peekCachedUpdateInfo, applyUpdateHint, readInstalledVersion } from './update-check.mjs';
 import { initTelemetry } from './telemetry/telemetry.mjs';
 import { detectAgent } from './telemetry/agent-detect.mjs';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const pluginRoot = resolve(__dirname, '..');
-const packageRoot = resolve(pluginRoot, '..', '..');
-let pkgVersion = '0.0.0';
-for (const base of [pluginRoot, packageRoot]) {
-  try {
-    const version = JSON.parse(readFileSync(join(base, 'package.json'), 'utf8')).version;
-    if (version) {
-      pkgVersion = version;
-      break;
-    }
-  } catch {}
-}
+const pkgVersion = readInstalledVersion() || '0.0.0';
 
 // 会话内首个非 check/upgrade 工具调用附加 _updateInfo，只消费一次。
 // 按会话隔离：同进程内不同会话(A/B)各自首次提示；stdio 用固定 'stdin'。

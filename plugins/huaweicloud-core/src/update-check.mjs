@@ -135,12 +135,31 @@ function selfDir() {
   return dirname(fileURLToPath(import.meta.url));
 }
 
+// Plugin manifests also carry the version and are kept in sync with package.json
+// by `npm run validate`. Codex marketplace installs (`.codex/plugins/cache/...`)
+// contain only the plugin directory — no package.json — so fall back to these
+// manifests when neither candidate package.json exists (#576).
+const VERSION_MANIFEST_RELS = [
+  '.codex-plugin/plugin.json',
+  '.claude-plugin/plugin.json',
+  '.cursor-plugin/plugin.json',
+  '.workbuddy-plugin/plugin.json',
+  '.hermes-plugin/plugin.json',
+  'openclaw.plugin.json',
+];
+
 export function readInstalledVersion() {
   const pluginRoot = resolve(selfDir(), '..');
   const packageRoot = resolve(pluginRoot, '..', '..');
   for (const base of [pluginRoot, packageRoot]) {
     try {
       const version = JSON.parse(readFileSync(join(base, 'package.json'), 'utf8')).version;
+      if (typeof version === 'string' && version) return version;
+    } catch {}
+  }
+  for (const rel of VERSION_MANIFEST_RELS) {
+    try {
+      const version = JSON.parse(readFileSync(join(pluginRoot, rel), 'utf8')).version;
       if (typeof version === 'string' && version) return version;
     } catch {}
   }
