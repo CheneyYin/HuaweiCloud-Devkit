@@ -148,6 +148,35 @@ test('huaweicloud_explain_error maps APIGW.0301 to credential/project_id guidanc
   assert.match(text, /project_id/);
 });
 
+test('huaweicloud_explain_error fallback teaches context capture and error-center lookup (#648)', async () => {
+  // Regression input from issue #648 EXP-E08: ECS Ecs.0103 with minimal context
+  // fell into the generic fallback and produced only a "collect info" line.
+  const result = await callTool('huaweicloud_explain_error', {
+    service: 'ECS',
+    errorCode: 'Ecs.0103',
+    message: 'ECS instance startup failed',
+  });
+  const text = JSON.stringify(result);
+  assert.match(text, /--debug/);
+  assert.match(text, /X-Request-Id/);
+  assert.match(text, /re-call explain_error/);
+  assert.match(text, /Ecs\.0103/);
+  assert.match(text, /support\.huaweicloud\.com/);
+  // requestId was empty, so the support-ticket line must not appear.
+  assert.doesNotMatch(text, /Provide the Request ID/);
+});
+
+test('huaweicloud_explain_error still appends support line when requestId is present', async () => {
+  const result = await callTool('huaweicloud_explain_error', {
+    service: 'ECS',
+    errorCode: 'Ecs.0103',
+    message: 'ECS instance startup failed',
+    requestId: 'req-abc-123',
+  });
+  const text = JSON.stringify(result);
+  assert.match(text, /Provide the Request ID \(req-abc-123\) when contacting Huawei Cloud support\./);
+});
+
 test('callTool rejects invalid numeric timeoutMs instead of silently ignoring it', async () => {
   await assert.rejects(
     () =>
