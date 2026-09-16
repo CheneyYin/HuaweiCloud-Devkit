@@ -37,7 +37,8 @@ import {
 } from './proxy/proxy-config.mjs';
 import { removeKooCli, removeObsConfig } from './sandbox/uninstall-cleanup.mjs';
 import { mergeCommandStyle, mergeArgsStyle, extractUserDelta, applyUserDelta } from './mcp-config-merge.mjs';
-import { saveAgentDelta, takeAgentDelta, purgeBackup } from './mcp-config-backup.mjs';
+import { readAgentDelta, saveAgentDelta, takeAgentDelta, purgeBackup } from './mcp-config-backup.mjs';
+import { isUsableOfficeaceRoot, readOfficeaceRootMarker, writeOfficeaceRootMarker } from './officeace-paths.mjs';
 import { queryDistTagsFetch, determineTarget, semverCompare } from './update-check.mjs';
 import { getKooCliVersion, compareVersion, kooCliDownloadBase, KOO_CLI_BASE } from './koocli-version.mjs';
 import { findHcloudBin, hcloudProbeNextStep, probeHcloud } from './hcloud-probe.mjs';
@@ -185,11 +186,13 @@ function readOfficeaceRegistryInstallDir() {
 
 function officeaceCapabilitiesDir() {
   const configRoot = process.env.OFFICE_CLAW_CONFIG_ROOT;
-  if (configRoot && existsSync(join(configRoot, 'capabilities.json'))) return configRoot;
+  if (isUsableOfficeaceRoot(configRoot)) return configRoot;
+  const markerRoot = readOfficeaceRootMarker();
+  if (markerRoot) return markerRoot;
   const regDir = readOfficeaceRegistryInstallDir();
   if (regDir) {
     const dir = join(regDir, '.office-claw');
-    if (existsSync(join(dir, 'capabilities.json'))) return dir;
+    if (isUsableOfficeaceRoot(dir)) return dir;
   }
   if (platform() === 'win32') {
     const bases = [process.env.ProgramFiles, 'C:\\Program Files', 'D:\\Program Files'];
@@ -197,7 +200,7 @@ function officeaceCapabilitiesDir() {
     for (const base of bases) {
       if (!base) continue;
       const dir = join(base, 'OfficeAce', '.office-claw');
-      if (existsSync(join(dir, 'capabilities.json'))) return dir;
+      if (isUsableOfficeaceRoot(dir)) return dir;
     }
   }
   return null;
@@ -242,7 +245,7 @@ function ensureOfficeaceMcpInSqlite() {
   if (!existsSync(dbPath)) {
     console.log(`  \x1b[31mOfficeAce database not found: ${dbPath}\x1b[0m`);
     console.log(`  \x1b[33mPlease ensure OfficeAce is installed and has been launched at least once.\x1b[0m`);
-    return false;
+    return 'db-missing';
   }
 
   const mcpPath = join(officeacePluginsDir(), 'src', 'mcp-server.mjs').replace(/\\/g, '/');
@@ -281,21 +284,27 @@ function ensureOfficeaceMcpInSqlite() {
       if (existing.command === 'node' && existing.args_json === nextArgsJson && existing.env_json === nextEnvJson) {
         console.log(`  MCP config unchanged: ${dbPath}`);
         db.close();
-        return true;
+        return 'ok';
       }
       db.prepare(
         'UPDATE mcp_connectors SET command = ?, args_json = ?, env_json = ?, updated_at = ?, status = ?, enabled = 1 WHERE id = ?',
       ).run('node', nextArgsJson, nextEnvJson, now, 'disconnected', existing.id);
       console.log(`  MCP config merged (user fields preserved): ${dbPath}`);
     } else {
-      const ownerUserId = officeaceGetOwnerUserId();
+      // Restore user identity + args saved by a previous uninstall (#559).
+      // owner_user_id has no queryable source: we copy it from an existing
+      // row, and fall back to the value backed up before a prior uninstall so
+      // an emptied table does not make registration permanently impossible.
+      const officeaceDelta = readAgentDelta('officeace');
+      const ownerUserId = officeaceGetOwnerUserId() || (officeaceDelta && officeaceDelta.ownerUserId);
       if (!ownerUserId) {
-        console.log(`  \x1b[31mCannot determine owner_user_id from database\x1b[0m`);
+        console.log(`  \x1b[31mCannot determine owner_user_id for the huaweicloud-devkit connector.\x1b[0m`);
+        console.log(
+          `  \x1b[33mThe OfficeAce connector database has no rows to copy the user id from and no prior registration is backed up. Open OfficeAce, add/enable any connector once, then re-run the install.\x1b[0m`,
+        );
         db.close();
-        return false;
+        return 'owner-missing';
       }
-      // Restore user args saved by a previous uninstall (issue #615).
-      const officeaceDelta = takeAgentDelta('officeace');
       const insertArgsJson =
         officeaceDelta && Array.isArray(officeaceDelta.argsExtra)
           ? JSON.stringify([mcpPath, ...officeaceDelta.argsExtra])
@@ -304,10 +313,12 @@ function ensureOfficeaceMcpInSqlite() {
         `INSERT INTO mcp_connectors (id, owner_user_id, type, name, normalized_name, transport, timeout_ms, command, args_json, env_json, enabled, status, created_at, updated_at, version, seeded)
          VALUES (?, ?, 'custom', 'huaweicloud-devkit', 'huaweicloud-devkit', 'stdio', 60000, 'node', ?, ?, 1, 'disconnected', ?, ?, 1, 0)`,
       ).run(randomUUID(), ownerUserId, insertArgsJson, envJson, now, now);
+      // Consume the backup only after a successful insert so a DB failure keeps it for the next retry.
+      takeAgentDelta('officeace');
       console.log(`  MCP config created: ${dbPath}`);
     }
     db.close();
-    return true;
+    return 'ok';
   } catch (error) {
     if (db) {
       try {
@@ -315,7 +326,7 @@ function ensureOfficeaceMcpInSqlite() {
       } catch {}
     }
     console.log(`  \x1b[31mFailed to write MCP config: ${error.message}\x1b[0m`);
-    return false;
+    return 'error';
   }
 }
 
@@ -325,17 +336,28 @@ function removeOfficeaceMcpFromSqlite() {
   let db;
   try {
     db = openOfficeaceDb();
-    // Back up user args before deleting the connector row (issue #615).
+    // Back up user identity + args before deleting the connector row:
+    // owner_user_id is copied from existing rows on reinstall, so an empty
+    // table after this delete would make registration impossible (#559).
     try {
-      const row = db.prepare("SELECT args_json FROM mcp_connectors WHERE name = 'huaweicloud-devkit'").get();
-      const parsed = row ? JSON.parse(row.args_json || '[]') : [];
-      if (Array.isArray(parsed) && parsed.length > 1) {
-        saveAgentDelta('officeace', { argsExtra: parsed.slice(1) });
-      }
+      const row = db
+        .prepare("SELECT owner_user_id, args_json FROM mcp_connectors WHERE name = 'huaweicloud-devkit'")
+        .get();
+      const delta = {};
+      if (row?.owner_user_id) delta.ownerUserId = row.owner_user_id;
+      try {
+        const parsed = row ? JSON.parse(row.args_json || '[]') : [];
+        if (Array.isArray(parsed) && parsed.length > 1) delta.argsExtra = parsed.slice(1);
+      } catch {}
+      if (Object.keys(delta).length > 0) saveAgentDelta('officeace', delta);
     } catch {}
-    db.prepare(
-      "DELETE FROM mcp_connector_tools WHERE connector_id IN (SELECT id FROM mcp_connectors WHERE name = 'huaweicloud-devkit')",
-    ).run();
+    // mcp_connector_tools may not exist on minimal installs — deleting it must
+    // not abort deleting the connector row itself.
+    try {
+      db.prepare(
+        "DELETE FROM mcp_connector_tools WHERE connector_id IN (SELECT id FROM mcp_connectors WHERE name = 'huaweicloud-devkit')",
+      ).run();
+    } catch {}
     const result2 = db.prepare("DELETE FROM mcp_connectors WHERE name = 'huaweicloud-devkit'").run();
     if (result2.changes > 0) {
       console.log(`  MCP config removed: ${dbPath}`);
@@ -2377,8 +2399,17 @@ async function installOfficeAce() {
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
 
   installRuntimeDeps(pluginDest);
-  ensureOfficeaceMcpInSqlite();
+  if (ensureOfficeaceMcpInSqlite() === 'owner-missing') {
+    throw new Error(
+      'OfficeAce MCP connector registration failed (owner_user_id unavailable). ' +
+        'Open OfficeAce, add/enable any connector once, then re-run install.',
+    );
+  }
   registerOfficeaceSkillEntries();
+  // Persist the resolved root so a later uninstall/update (new process, no
+  // OFFICE_CLAW_CONFIG_ROOT env) still targets the same directory (#559).
+  const resolvedRoot = officeaceCapabilitiesDir();
+  if (resolvedRoot) writeOfficeaceRootMarker(resolvedRoot);
 }
 
 async function updateOfficeAce() {
@@ -2395,8 +2426,15 @@ async function updateOfficeAce() {
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
   installRuntimeDeps(pluginDest);
-  ensureOfficeaceMcpInSqlite();
+  if (ensureOfficeaceMcpInSqlite() === 'owner-missing') {
+    console.log(
+      `  \x1b[31m[WARN]\x1b[0m OfficeAce MCP connector registration failed (owner_user_id unavailable). ` +
+        `The connector may stay disconnected until you add/enable any connector once in OfficeAce and re-run update.`,
+    );
+  }
   registerOfficeaceSkillEntries();
+  const resolvedRoot = officeaceCapabilitiesDir();
+  if (resolvedRoot) writeOfficeaceRootMarker(resolvedRoot);
   mkdirSync(pluginDest, { recursive: true });
   writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
 }
