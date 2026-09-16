@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -147,6 +147,36 @@ test('MCP server reports version from plugin package.json in installed layout', 
         clientInfo: { name: 'test-client', version: '0.0.0' },
       });
       assert.equal(initialized.result.serverInfo.version, '9.9.9-test');
+    } finally {
+      client.close();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('MCP server reports version from plugin manifest in Codex cache layout (#576)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hwc-codex-'));
+  try {
+    // Codex marketplace layout: plugin dir only, no package.json anywhere in
+    // the candidate paths — the version must come from the plugin manifest.
+    const codexRoot = join(dir, 'huaweicloud-devkit', 'huaweicloud-devkit', '1.1.5');
+    mkdirSync(codexRoot, { recursive: true });
+    cpSync(join(root, 'plugins', 'huaweicloud-core', 'src'), join(codexRoot, 'src'), { recursive: true });
+    cpSync(join(root, 'plugins', 'huaweicloud-core', 'safety'), join(codexRoot, 'safety'), { recursive: true });
+    mkdirSync(join(codexRoot, '.codex-plugin'), { recursive: true });
+    writeFileSync(
+      join(codexRoot, '.codex-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'huaweicloud-devkit', version: '1.1.5-codex' }),
+    );
+    const client = createClient(join(codexRoot, 'src', 'mcp-server.mjs'));
+    try {
+      const initialized = await client.request('initialize', {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'codex', version: '0.153.4' },
+      });
+      assert.equal(initialized.result.serverInfo.version, '1.1.5-codex');
     } finally {
       client.close();
     }
