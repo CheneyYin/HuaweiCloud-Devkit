@@ -63,7 +63,7 @@ import {
   upgradePackage,
 } from './update-check.mjs';
 import { hcloudProbeNextStep, probeHcloud } from './hcloud-probe.mjs';
-import { readOfficeaceRootMarker } from './officeace-paths.mjs';
+import { isUsableOfficeaceRoot, readOfficeaceRootMarker } from './officeace-paths.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILLS_ROOT_DEV = join(__dirname, '..', 'skills');
@@ -105,7 +105,10 @@ function readOfficeaceRegistryInstallDir() {
 
 function officeaceSkillsRoot() {
   const configRoot = process.env.OFFICE_CLAW_CONFIG_ROOT;
-  if (configRoot && existsSync(join(configRoot, 'capabilities.json'))) return join(configRoot, 'skills');
+  // Same lenient probe as the installer (isUsableOfficeaceRoot) so env pointing
+  // at "skills present but capabilities.json absent" resolves identically at
+  // install and at runtime (#559 review).
+  if (configRoot && isUsableOfficeaceRoot(configRoot)) return join(configRoot, 'skills');
   // Same persisted root used by the installer keeps install-time and
   // runtime skill discovery consistent (#559).
   const markerRoot = readOfficeaceRootMarker();
