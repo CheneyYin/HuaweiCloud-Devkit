@@ -171,3 +171,38 @@ test('evaluateCommandRisk does not flag delete-protection toggles as destructive
     assert.equal(result.decision, 'allow', `${op} should not be flagged as destructive delete`);
   }
 });
+
+test('evaluateCommandRisk fails closed on malformed input (#564)', () => {
+  for (const bad of [null, undefined, 12345, { cmd: 'x' }, '', '   ']) {
+    const result = evaluateCommandRisk(bad);
+    assert.equal(result.decision, 'deny', `input ${String(bad)} must deny`);
+    assert.equal(result.risk, 'invalid');
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].ruleId, 'invalid-input');
+    assert.match(result.findings[0].message, /non-empty string/);
+  }
+  // A long but well-formed string is not an anomaly — allow is the correct verdict.
+  const long = evaluateCommandRisk('verylongcmd '.repeat(2000));
+  assert.equal(long.decision, 'allow');
+});
+
+test('evaluateArtifacts fails closed on malformed input (#564)', () => {
+  for (const bad of [null, undefined, [], {}, 'x']) {
+    const result = evaluateArtifacts(bad);
+    assert.equal(result.decision, 'deny', `input ${String(bad)} must deny`);
+    assert.equal(result.risk, 'invalid');
+    assert.equal(result.findings[0].ruleId, 'invalid-input');
+  }
+  assert.equal(evaluateArtifacts([{ path: 'a.json', content: '{}' }]).decision !== 'deny', true);
+});
+
+test('evaluateDeployPlan fails closed on malformed input (#564)', () => {
+  for (const bad of [null, undefined, {}, [], 5, true, '', '   ']) {
+    const result = evaluateDeployPlan(bad);
+    assert.equal(result.decision, 'deny', `input ${JSON.stringify(bad)} must deny`);
+    assert.equal(result.risk, 'invalid');
+    assert.equal(result.findings[0].ruleId, 'invalid-input');
+  }
+  assert.equal(evaluateDeployPlan({ app: 'x' }).decision !== 'deny', true);
+  assert.equal(evaluateDeployPlan('deploy a static site').decision !== 'deny', true);
+});

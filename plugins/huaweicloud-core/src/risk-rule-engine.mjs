@@ -108,15 +108,57 @@ function evaluate(stage, inputs, options = {}) {
   };
 }
 
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isNonEmptyContainer(value) {
+  if (Array.isArray(value)) return value.length > 0;
+  if (value && typeof value === 'object') return Object.keys(value).length > 0;
+  return false;
+}
+
+// A risk check that could not inspect its input must never report "allow"
+// (fail-open) — it reports deny with an `invalid` risk and a synthetic finding
+// so the reason is visible through the tool response (#564).
+function invalidRiskResult(stage, reason) {
+  return {
+    decision: 'deny',
+    risk: 'invalid',
+    findings: [
+      {
+        ruleId: 'invalid-input',
+        title: 'Invalid input for risk check',
+        category: 'invalid',
+        severity: 'deny',
+        message: reason,
+        remediation: 'Provide a valid, non-empty input before re-running the check.',
+        source: stage,
+        evidence: '',
+      },
+    ],
+  };
+}
+
 export function evaluateCommandRisk(command, options = {}) {
+  if (!isNonEmptyString(command)) {
+    return invalidRiskResult('command', 'command must be a non-empty string.');
+  }
   return evaluate('command', { command }, options);
 }
 
 export function evaluateArtifacts(artifacts, options = {}) {
-  return evaluate('artifact', Array.isArray(artifacts) ? artifacts : [], options);
+  if (!Array.isArray(artifacts) || artifacts.length === 0) {
+    return invalidRiskResult('artifact', 'artifacts must be a non-empty array.');
+  }
+  return evaluate('artifact', artifacts, options);
 }
 
 export function evaluateDeployPlan(plan, options = {}) {
+  const valid = isNonEmptyString(plan) || (plan != null && typeof plan === 'object' && isNonEmptyContainer(plan));
+  if (!valid) {
+    return invalidRiskResult('deploy_plan', 'plan must be a non-empty object, array, or string.');
+  }
   return evaluate('deploy_plan', { plan }, options);
 }
 
