@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.1.6-next.0 (2026-09-16)
+
+- chore: sync README beta badge to 1.1.6
+- chore: set version-override to 1.1.6 (next -> 1.1.6-next.0)
+- fix(hook): risk engine fails closed on malformed input (#564)
+- fix(officeace): align runtime skill root env probe with installer (#559)
+- fix(setup): make OfficeAce install/uninstall/register integrity reliable (#559)
+- fix(mcp): resolve plugin version from plugin manifest in Codex cache layout (#576)
+- feat(sandbox): add mandatory target-selection gate before sandbox lifecycle tools (#691)
+- fix(safety+mcp): close env-dump and shell-wrap bypasses, JSON-RPC -32601 (#650) (#688)
+- fix(mcp): actionable explain_error fallback guidance (#648)
+- fix(proxy): skip TLS cert verify only for proxy connections (#667)
+- fix(safety): classify Apply* operations as write (#644)
+- feat(auth): onboarding guidance for credential setup (scenarios 1-4) (#665)
+- test: fix Windows path compat in upgrade-session test (split('/') → path.basename)
+- fix(#614/#607): review 两点 — 保留 failedAt 节流 + doQuery 注入口补真覆盖
+- fix(#614/#607): dismiss + 查询失败路径 — 不写伪冷却、返回 check_failed
+
 ## 1.1.4-next.6 (2026-09-14)
 
 - fix(setup): preserve user MCP config fields across install/update/uninstall (#615) (#661)
