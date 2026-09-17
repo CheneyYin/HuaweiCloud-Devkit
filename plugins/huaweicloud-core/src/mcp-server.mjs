@@ -128,7 +128,13 @@ function runStdioServer() {
         useContentLengthFraming = false;
         const line = buffer.subarray(0, lf).toString('utf8').trim();
         buffer = buffer.subarray(lf + 1);
-        if (line) void handleMessage(JSON.parse(line));
+        if (line) {
+          try {
+            void handleMessage(JSON.parse(line));
+          } catch {
+            writeParseError();
+          }
+        }
         continue;
       }
 
@@ -149,11 +155,17 @@ function runStdioServer() {
     if (buffer.length < bodyEnd) return false;
     const body = buffer.subarray(bodyStart, bodyEnd).toString('utf8');
     buffer = buffer.subarray(bodyEnd);
-    void handleMessage(JSON.parse(body));
+    try {
+      void handleMessage(JSON.parse(body));
+    } catch {
+      writeParseError();
+    }
     return true;
   }
 
   async function handleMessage(message) {
+    // Non-object frames (e.g. a bare `null` body) are invalid but must not crash.
+    if (!message || typeof message !== 'object' || Array.isArray(message)) return;
     if (!Object.hasOwn(message, 'id')) {
       if (message.method === 'notifications/initialized') return;
       return;
@@ -180,5 +192,13 @@ function runStdioServer() {
     } else {
       stdout.write(json + '\n');
     }
+  }
+
+  function writeParseError() {
+    writeMessage({
+      jsonrpc: '2.0',
+      id: null,
+      error: { code: -32700, message: 'Parse error' },
+    });
   }
 }

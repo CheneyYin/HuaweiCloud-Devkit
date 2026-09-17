@@ -259,6 +259,9 @@ export function queryDistTagsSync({ timeoutMs = 15000, cwd } = {}) {
       timeout: timeoutMs,
       windowsHide: true,
       cwd,
+      // Windows + Node 22: spawning `npm.cmd` directly throws EINVAL (CVE-2024-27980
+      // mitigation); shell:true routes the .cmd through cmd.exe like other spawns (#643).
+      shell: true,
     });
     if (result.status !== 0) {
       debugLog(`queryDistTagsSync: npm view exited with status ${result.status}`);
@@ -278,6 +281,7 @@ export function queryDistTags({ timeoutMs = 15000, cwd } = {}) {
       child = spawn(NPM_BIN, ['view', 'huaweicloud-devkit', 'dist-tags', '--json'], {
         windowsHide: true,
         cwd,
+        shell: true,
       });
     } catch (error) {
       debugLog(`queryDistTags: ${error?.message || error}`);
@@ -431,7 +435,7 @@ export async function upgradePackage({ target = 'all', version = 'latest' } = {}
   const command = ['--yes', `huaweicloud-devkit@${tag}`, 'update', '--target', String(target)];
   let execResult;
   try {
-    execResult = spawnFn(NPX_BIN, command, { encoding: 'utf8', timeout: 300000, windowsHide: true });
+    execResult = spawnFn(NPX_BIN, command, { encoding: 'utf8', timeout: 300000, windowsHide: true, shell: true });
   } catch (error) {
     return {
       success: false,
