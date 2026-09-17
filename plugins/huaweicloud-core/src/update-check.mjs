@@ -7,6 +7,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { fetchWithProxy } from './proxy/proxy-agent.mjs';
+import { SUPPORTED_AGENT_TARGETS } from './auth/agent-registration.mjs';
 
 const IS_WINDOWS = process.platform === 'win32';
 const NPM_BIN = IS_WINDOWS ? 'npm.cmd' : 'npm';
@@ -259,6 +260,9 @@ export function queryDistTagsSync({ timeoutMs = 15000, cwd } = {}) {
       timeout: timeoutMs,
       windowsHide: true,
       cwd,
+      // Windows + Node 22: spawning `npm.cmd` directly throws EINVAL (CVE-2024-27980
+      // mitigation); shell:true routes the .cmd through cmd.exe like other spawns (#643).
+      shell: true,
     });
     if (result.status !== 0) {
       debugLog(`queryDistTagsSync: npm view exited with status ${result.status}`);
@@ -278,6 +282,7 @@ export function queryDistTags({ timeoutMs = 15000, cwd } = {}) {
       child = spawn(NPM_BIN, ['view', 'huaweicloud-devkit', 'dist-tags', '--json'], {
         windowsHide: true,
         cwd,
+        shell: true,
       });
     } catch (error) {
       debugLog(`queryDistTags: ${error?.message || error}`);
@@ -401,6 +406,13 @@ export async function upgradePackage({ target = 'all', version = 'latest' } = {}
   if (version !== 'latest') {
     return { success: false, error: 'version 参数仅支持 latest。目标版本由插件自动判定。' };
   }
+  // The target is interpolated into an npx command spawned with shell:true;
+  // reject anything outside the known agent set + 'all' so a crafted value
+  // cannot be interpreted as shell operators (review #717).
+  const targetStr = String(target);
+  if (targetStr !== 'all' && !SUPPORTED_AGENT_TARGETS.includes(targetStr)) {
+    return { success: false, error: `不支持的升级目标：${targetStr}` };
+  }
   const { doQuery = queryDistTags, spawnFn = defaultSpawn } = options;
   // Tests inject currentVersion explicitly - the repo package.json version changes
   // between prerelease and stable lines, which must not flip the upgrade-tag logic.
@@ -431,7 +443,7 @@ export async function upgradePackage({ target = 'all', version = 'latest' } = {}
   const command = ['--yes', `huaweicloud-devkit@${tag}`, 'update', '--target', String(target)];
   let execResult;
   try {
-    execResult = spawnFn(NPX_BIN, command, { encoding: 'utf8', timeout: 300000, windowsHide: true });
+    execResult = spawnFn(NPX_BIN, command, { encoding: 'utf8', timeout: 300000, windowsHide: true, shell: true });
   } catch (error) {
     return {
       success: false,

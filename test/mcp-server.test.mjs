@@ -21,6 +21,7 @@ function createClient(server = serverPath) {
   });
   let buffer = Buffer.alloc(0);
   const pending = new Map();
+  const frames = [];
 
   child.stdout.on('data', (chunk) => {
     buffer = Buffer.concat([buffer, chunk]);
@@ -36,11 +37,21 @@ function createClient(server = serverPath) {
       if (buffer.length < bodyEnd) return;
       const payload = JSON.parse(buffer.subarray(bodyStart, bodyEnd).toString('utf8'));
       buffer = buffer.subarray(bodyEnd);
+      frames.push(payload);
       pending.get(payload.id)?.(payload);
     }
   });
 
   return {
+    raw(data) {
+      child.stdin.write(data);
+    },
+    frames() {
+      return frames;
+    },
+    isAlive() {
+      return child.exitCode === null;
+    },
     request(method, params = {}) {
       const id = Math.floor(Math.random() * 1_000_000);
       child.stdin.write(frame({ jsonrpc: '2.0', id, method, params }));
@@ -126,6 +137,61 @@ test('MCP server returns JSON-RPC -32601 for unknown methods (#650 D9-2)', async
     assert.match(response.error.message, /Method not found/);
   } finally {
     client.close();
+  }
+});
+
+test('MCP server returns -32700 and keeps serving after a malformed frame (#643)', async () => {
+  const client = createClient();
+  try {
+    await client.request('initialize', {
+      protocolVersion: '2024-11-05',
+      capabilities: {},
+      clientInfo: { name: 'test-client', version: '0.0.0' },
+    });
+    client.raw('Content-Length: 5\r\n\r\n{bad!');
+
+    const deadline = Date.now() + 3000;
+    let parseError;
+    while (Date.now() < deadline) {
+      parseError = client.frames().find((p) => p.error && p.error.code === -32700);
+      if (parseError) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.ok(parseError, 'expected a -32700 Parse error frame');
+    assert.equal(parseError.error.code, -32700);
+    assert.equal(parseError.id, null, 'parse error has null id');
+
+    const listed = await client.request('tools/list');
+    assert.ok(Array.isArray(listed.result.tools), 'server still serves valid requests after a parse error');
+    assert.equal(client.isAlive(), true, 'malformed frame must not kill the process');
+  } finally {
+    client.close();
+  }
+});
+
+test('MCP server returns -32700 for a malformed newline-delimited frame (#643)', async () => {
+  const child = spawn(process.execPath, [serverPath], { stdio: ['pipe', 'pipe', 'pipe'] });
+  let out = '';
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => {
+    out += chunk;
+  });
+  try {
+    child.stdin.write('{bad!\n');
+    const deadline = Date.now() + 3000;
+    let line = '';
+    while (Date.now() < deadline) {
+      line = out.split('\n').find((l) => l.includes('-32700')) || '';
+      if (line) break;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    }
+    assert.ok(line, 'expected a newline-delimited -32700 frame');
+    const payload = JSON.parse(line);
+    assert.equal(payload.error.code, -32700);
+    assert.equal(payload.id, null);
+    assert.equal(child.exitCode, null, 'malformed newline frame must not kill the process');
+  } finally {
+    child.kill();
   }
 });
 
