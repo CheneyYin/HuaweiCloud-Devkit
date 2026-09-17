@@ -32,6 +32,9 @@ function makeEnv(home, extra = {}) {
   for (const key of ['ATOMCODE_HOME', 'DSH_HOME', 'HUAWEICLOUD_HOME', 'OFFICE_CLAW_CONFIG_ROOT']) {
     delete env[key];
   }
+  // OfficeAce detection probes the real Windows registry / Program Files, which
+  // would leak a real OfficeAce install into these fake-HOME tests (#654).
+  env.HUAWEICLOUD_DEVKIT_SKIP_OFFICEACE_DETECT = '1';
   return { ...env, ...extra };
 }
 

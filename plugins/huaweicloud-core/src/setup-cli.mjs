@@ -189,6 +189,10 @@ function officeaceCapabilitiesDir() {
   if (isUsableOfficeaceRoot(configRoot)) return configRoot;
   const markerRoot = readOfficeaceRootMarker();
   if (markerRoot) return markerRoot;
+  // Skip system probes (registry / Program Files) so automated environments can
+  // keep OfficeAce detection hermetic — those probes can leak a real OfficeAce
+  // install into a sandboxed/fake HOME (#654).
+  if (process.env.HUAWEICLOUD_DEVKIT_SKIP_OFFICEACE_DETECT === '1') return null;
   const regDir = readOfficeaceRegistryInstallDir();
   if (regDir) {
     const dir = join(regDir, '.office-claw');
