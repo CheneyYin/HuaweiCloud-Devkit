@@ -164,8 +164,12 @@ function runStdioServer() {
   }
 
   async function handleMessage(message) {
-    // Non-object frames (e.g. a bare `null` body) are invalid but must not crash.
-    if (!message || typeof message !== 'object' || Array.isArray(message)) return;
+    // Valid JSON that is not an object (null / array / string) is an invalid
+    // request per JSON-RPC 2.0 — reply -32600 rather than silently dropping it.
+    if (!message || typeof message !== 'object' || Array.isArray(message)) {
+      writeJsonRpcError(-32600, 'Invalid Request');
+      return;
+    }
     if (!Object.hasOwn(message, 'id')) {
       if (message.method === 'notifications/initialized') return;
       return;
@@ -194,11 +198,15 @@ function runStdioServer() {
     }
   }
 
-  function writeParseError() {
+  function writeJsonRpcError(code, message) {
     writeMessage({
       jsonrpc: '2.0',
       id: null,
-      error: { code: -32700, message: 'Parse error' },
+      error: { code, message },
     });
+  }
+
+  function writeParseError() {
+    writeJsonRpcError(-32700, 'Parse error');
   }
 }

@@ -169,6 +169,32 @@ test('MCP server returns -32700 and keeps serving after a malformed frame (#643)
   }
 });
 
+test('MCP server returns -32700 for a malformed newline-delimited frame (#643)', async () => {
+  const child = spawn(process.execPath, [serverPath], { stdio: ['pipe', 'pipe', 'pipe'] });
+  let out = '';
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => {
+    out += chunk;
+  });
+  try {
+    child.stdin.write('{bad!\n');
+    const deadline = Date.now() + 3000;
+    let line = '';
+    while (Date.now() < deadline) {
+      line = out.split('\n').find((l) => l.includes('-32700')) || '';
+      if (line) break;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    }
+    assert.ok(line, 'expected a newline-delimited -32700 frame');
+    const payload = JSON.parse(line);
+    assert.equal(payload.error.code, -32700);
+    assert.equal(payload.id, null);
+    assert.equal(child.exitCode, null, 'malformed newline frame must not kill the process');
+  } finally {
+    child.kill();
+  }
+});
+
 test('MCP server returns JSON-RPC -32602 for tools/call missing required params (#704)', async () => {
   const client = createClient();
   try {

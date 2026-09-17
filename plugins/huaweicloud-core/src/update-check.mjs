@@ -7,6 +7,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { fetchWithProxy } from './proxy/proxy-agent.mjs';
+import { SUPPORTED_AGENT_TARGETS } from './auth/agent-registration.mjs';
 
 const IS_WINDOWS = process.platform === 'win32';
 const NPM_BIN = IS_WINDOWS ? 'npm.cmd' : 'npm';
@@ -404,6 +405,13 @@ function restartMessage(target) {
 export async function upgradePackage({ target = 'all', version = 'latest' } = {}, options = {}) {
   if (version !== 'latest') {
     return { success: false, error: 'version 参数仅支持 latest。目标版本由插件自动判定。' };
+  }
+  // The target is interpolated into an npx command spawned with shell:true;
+  // reject anything outside the known agent set + 'all' so a crafted value
+  // cannot be interpreted as shell operators (review #717).
+  const targetStr = String(target);
+  if (targetStr !== 'all' && !SUPPORTED_AGENT_TARGETS.includes(targetStr)) {
+    return { success: false, error: `不支持的升级目标：${targetStr}` };
   }
   const { doQuery = queryDistTags, spawnFn = defaultSpawn } = options;
   // Tests inject currentVersion explicitly - the repo package.json version changes
