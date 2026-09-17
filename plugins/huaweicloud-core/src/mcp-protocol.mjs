@@ -59,6 +59,24 @@ export async function dispatch(method, params, opts = {}) {
   }
 
   if (method === 'tools/call') {
+    const tool = TOOL_DEFINITIONS.find((t) => t.name === params.name);
+    if (!tool) {
+      // JSON-RPC 2.0: an unknown tool name is a client-side parameter error,
+      // not a server fault (#704 D9-2).
+      const unknownToolError = new Error(`Unknown tool: ${params.name}`);
+      unknownToolError.code = -32602;
+      throw unknownToolError;
+    }
+    const missing = (tool.inputSchema?.required || []).filter(
+      (key) => !params.arguments || !Object.hasOwn(params.arguments, key),
+    );
+    if (missing.length > 0) {
+      const invalidParamsError = new Error(
+        `Invalid params: missing required field(s) ${missing.map((key) => JSON.stringify(key)).join(', ')} for tool "${params.name}".`,
+      );
+      invalidParamsError.code = -32602;
+      throw invalidParamsError;
+    }
     const result = await callTool(params.name, params.arguments || {});
     const decorated = _decorateResult(sessionId, params.name, result);
     return {

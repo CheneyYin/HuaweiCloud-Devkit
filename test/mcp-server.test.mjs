@@ -129,6 +129,65 @@ test('MCP server returns JSON-RPC -32601 for unknown methods (#650 D9-2)', async
   }
 });
 
+test('MCP server returns JSON-RPC -32602 for tools/call missing required params (#704)', async () => {
+  const client = createClient();
+  try {
+    await client.request('initialize', {
+      protocolVersion: '2024-11-05',
+      capabilities: {},
+      clientInfo: { name: 'test-client', version: '0.0.0' },
+    });
+    const single = await client.request('tools/call', { name: 'huaweicloud_plan_cli_command', arguments: {} });
+    assert.ok(single.error, 'missing required param must be an error');
+    assert.equal(single.error.code, -32602);
+    assert.match(single.error.message, /missing required field/);
+    assert.match(single.error.message, /"args"/);
+
+    const multi = await client.request('tools/call', { name: 'huaweicloud_run_approved_command', arguments: {} });
+    assert.ok(multi.error);
+    assert.equal(multi.error.code, -32602);
+    assert.match(multi.error.message, /"args"/);
+    assert.match(multi.error.message, /"approvalToken"/);
+    assert.match(multi.error.message, /"approvedByUser"/);
+  } finally {
+    client.close();
+  }
+});
+
+test('MCP server returns JSON-RPC -32602 for tools/call with unknown tool name (#704)', async () => {
+  const client = createClient();
+  try {
+    await client.request('initialize', {
+      protocolVersion: '2024-11-05',
+      capabilities: {},
+      clientInfo: { name: 'test-client', version: '0.0.0' },
+    });
+    const response = await client.request('tools/call', { name: 'huaweicloud_nonexistent', arguments: {} });
+    assert.ok(response.error, 'unknown tool must be an error');
+    assert.equal(response.error.code, -32602);
+    assert.match(response.error.message, /Unknown tool/);
+  } finally {
+    client.close();
+  }
+});
+
+test('MCP server does not require params for tools without required fields (#704)', async () => {
+  const client = createClient();
+  try {
+    await client.request('initialize', {
+      protocolVersion: '2024-11-05',
+      capabilities: {},
+      clientInfo: { name: 'test-client', version: '0.0.0' },
+    });
+    // explain_error has no required fields and must still return a result.
+    const response = await client.request('tools/call', { name: 'huaweicloud_explain_error', arguments: {} });
+    assert.ok(response.result, 'expected a result, not an error');
+    assert.equal(response.result.isError, false);
+  } finally {
+    client.close();
+  }
+});
+
 test('MCP server reports version from plugin package.json in installed layout', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'hwc-version-'));
   try {
