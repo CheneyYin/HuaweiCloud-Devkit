@@ -172,7 +172,6 @@ test('evaluateCommandRisk does not flag delete-protection toggles as destructive
   }
 });
 
-
 test('evaluateCommandRisk warns on IAM high-risk write operations (#725)', () => {
   for (const op of ['CreateUser', 'CreatePolicy', 'CreateRole', 'CreateAgency']) {
     const result = evaluateCommandRisk(`hcloud IAM ${op} --name admin`);
@@ -201,7 +200,6 @@ test('evaluateCommandRisk still allows IAM read-only operations (#725)', () => {
     assert.equal(result.findings.length, 0, `IAM ${op} should have no findings`);
   }
 });
-
 
 test('evaluateCommandRisk fails closed on malformed input (#564)', () => {
   for (const bad of [null, undefined, 12345, { cmd: 'x' }, '', '   ']) {
