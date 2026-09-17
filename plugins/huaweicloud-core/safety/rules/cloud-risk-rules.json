@@ -6,7 +6,9 @@
       "title": "Credential file read",
       "category": "credential",
       "severity": "deny",
-      "stages": ["command"],
+      "stages": [
+        "command"
+      ],
       "match": {
         "any": [
           {
@@ -27,7 +29,9 @@
       "title": "Cloud credential environment dump",
       "category": "credential",
       "severity": "deny",
-      "stages": ["command"],
+      "stages": [
+        "command"
+      ],
       "match": {
         "all": [
           {
@@ -48,7 +52,9 @@
       "title": "Plaintext secret read",
       "category": "secret",
       "severity": "deny",
-      "stages": ["command"],
+      "stages": [
+        "command"
+      ],
       "match": {
         "any": [
           {
@@ -69,7 +75,9 @@
       "title": "Temporary credential exposure",
       "category": "credential",
       "severity": "warn",
-      "stages": ["command"],
+      "stages": [
+        "command"
+      ],
       "match": {
         "any": [
           {
@@ -86,7 +94,9 @@
       "title": "Encoded payload piped to shell",
       "category": "execution",
       "severity": "deny",
-      "stages": ["command"],
+      "stages": [
+        "command"
+      ],
       "match": {
         "all": [
           {
@@ -111,7 +121,11 @@
       "title": "Public admin port exposure",
       "category": "public_exposure",
       "severity": "deny",
-      "stages": ["command", "artifact", "deploy_plan"],
+      "stages": [
+        "command",
+        "artifact",
+        "deploy_plan"
+      ],
       "match": {
         "all": [
           {
@@ -132,7 +146,11 @@
       "title": "OBS anonymous write",
       "category": "public_exposure",
       "severity": "deny",
-      "stages": ["command", "artifact", "deploy_plan"],
+      "stages": [
+        "command",
+        "artifact",
+        "deploy_plan"
+      ],
       "match": {
         "all": [
           {
@@ -159,7 +177,11 @@
       "title": "Public FunctionGraph trigger without auth",
       "category": "public_exposure",
       "severity": "warn",
-      "stages": ["command", "artifact", "deploy_plan"],
+      "stages": [
+        "command",
+        "artifact",
+        "deploy_plan"
+      ],
       "match": {
         "all": [
           {
@@ -180,7 +202,11 @@
       "title": "Broad IAM administrator grant",
       "category": "iam",
       "severity": "deny",
-      "stages": ["command", "artifact", "deploy_plan"],
+      "stages": [
+        "command",
+        "artifact",
+        "deploy_plan"
+      ],
       "match": {
         "all": [
           {
@@ -201,11 +227,32 @@
       "remediation": "Use least-privilege service actions, resource constraints, and short-lived credentials for generated application workflows."
     },
     {
+      "id": "hwc-iam-highrisk-write",
+      "title": "High-risk IAM write operation",
+      "category": "iam",
+      "severity": "warn",
+      "stages": [
+        "command"
+      ],
+      "match": {
+        "any": [
+          {
+            "field": "text",
+            "regex": "hcloud\\s+IAM\\s+(CreateUser|CreatePolicy|CreateRole|CreateAgency)\\b"
+          }
+        ]
+      },
+      "message": "This hcloud command creates or modifies IAM principals (users, policies, roles, or agencies). These operations can grant elevated privileges.",
+      "remediation": "Confirm the principal name, scope, and attached permissions with the user before creating IAM users, policies, roles, or agencies."
+    },
+    {
       "id": "hwc-destructive-delete-force",
       "title": "Forced destructive operation",
       "category": "destructive",
       "severity": "deny",
-      "stages": ["command"],
+      "stages": [
+        "command"
+      ],
       "match": {
         "all": [
           {
@@ -226,7 +273,9 @@
       "title": "Destructive cloud resource operation",
       "category": "destructive",
       "severity": "warn",
-      "stages": ["command"],
+      "stages": [
+        "command"
+      ],
       "match": {
         "any": [
           {
@@ -253,7 +302,9 @@
       "title": "Destructive resource reset operation",
       "category": "destructive",
       "severity": "warn",
-      "stages": ["command"],
+      "stages": [
+        "command"
+      ],
       "match": {
         "any": [
           {
@@ -270,7 +321,9 @@
       "title": "Cascading cloud resource deletion",
       "category": "destructive",
       "severity": "warn",
-      "stages": ["command"],
+      "stages": [
+        "command"
+      ],
       "match": {
         "all": [
           {
@@ -291,7 +344,10 @@
       "title": "Sandbox deployment missing cleanup metadata",
       "category": "sandbox",
       "severity": "warn",
-      "stages": ["artifact", "deploy_plan"],
+      "stages": [
+        "artifact",
+        "deploy_plan"
+      ],
       "match": {
         "all": [
           {
@@ -318,7 +374,11 @@
       "title": "Unbounded scale or high-cost resource",
       "category": "cost",
       "severity": "warn",
-      "stages": ["command", "artifact", "deploy_plan"],
+      "stages": [
+        "command",
+        "artifact",
+        "deploy_plan"
+      ],
       "match": {
         "any": [
           {
@@ -339,7 +399,9 @@
       "title": "Destructive command in sandbox terminal",
       "category": "destructive",
       "severity": "deny",
-      "stages": ["command"],
+      "stages": [
+        "command"
+      ],
       "match": {
         "any": [
           {
