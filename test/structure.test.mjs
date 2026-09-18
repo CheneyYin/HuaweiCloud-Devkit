@@ -146,6 +146,20 @@ test('skill SKILL.md files meet minimum content quality bar', () => {
   }
 });
 
+test('huawei-deployment skill uses verified KooCLI service and operation names', () => {
+  const body = readFileSync(join(pluginRoot, 'skills', 'huawei-deployment', 'SKILL.md'), 'utf8');
+  assert.match(body, /CodeArtsDeploy/);
+  assert.match(body, /StartDeployTask/);
+  assert.match(body, /ListAllApp/);
+  assert.match(body, /DeleteDeployTask/);
+  assert.match(body, /Deploy\.00016902/);
+  assert.match(body, /APIGW\.0301/);
+  assert.doesNotMatch(body, /\bStartTask\b/);
+  assert.doesNotMatch(body, /\bListTasks\b/);
+  assert.doesNotMatch(body, /\bCreateTask\b/);
+  assert.doesNotMatch(body, /\bDeleteTask\b/);
+});
+
 test('skills with references have non-empty reference files', () => {
   const skillsDir = join(pluginRoot, 'skills');
   const skillNames = readdirSync(skillsDir).filter((name) => existsSync(join(skillsDir, name, 'SKILL.md')));
