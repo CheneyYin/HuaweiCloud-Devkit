@@ -870,13 +870,16 @@ fi`;
     exitCode: result.exitCode,
     stdout: result.stdout,
     nextStep: 'expose_via_devbridge',
-    warning: [
-      !tunnelActive ? 'No active DevBridge tunnel — deployment is incomplete. Proceed to Step 7 to expose the app.' : undefined,
-      formatPortConflictWarning(basePort, targetPort),
-      tunnelActive ? formatPortDriftWarning(basePort, targetPort) : undefined,
-    ]
-      .filter(Boolean)
-      .join(' ') || undefined,
+    warning:
+      [
+        !tunnelActive
+          ? 'No active DevBridge tunnel — deployment is incomplete. Proceed to Step 7 to expose the app.'
+          : undefined,
+        formatPortConflictWarning(basePort, targetPort),
+        tunnelActive ? formatPortDriftWarning(basePort, targetPort) : undefined,
+      ]
+        .filter(Boolean)
+        .join(' ') || undefined,
   };
 }
 
@@ -1056,8 +1059,7 @@ fi
     parseWarning,
     rawOutput: parseWarning ? stdout.trim() : undefined,
     nextStep: nextStepValue,
-    remediation:
-      nextStepValue === 'expose_via_devbridge' ? buildExposeRemediation(port) : undefined,
+    remediation: nextStepValue === 'expose_via_devbridge' ? buildExposeRemediation(port) : undefined,
   };
 }
 
