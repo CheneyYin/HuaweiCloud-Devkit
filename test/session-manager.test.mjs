@@ -8,6 +8,7 @@ import {
   getCurrentWorkspaceId,
   setWorkspaceId,
   formatPortConflictWarning,
+  TUNNEL_URL_PATTERN,
 } from '../plugins/huaweicloud-core/src/sandbox/session-manager.mjs';
 
 test('ws-exec dynamic import uses file:// URL (Windows-safe)', async () => {
@@ -52,4 +53,14 @@ test('formatPortConflictWarning returns undefined when port is unchanged', () =>
 
 test('formatPortConflictWarning reports the real auto-assigned port', () => {
   assert.equal(formatPortConflictWarning(80, 81), 'Port 80 is in use — auto-assigned port 81');
+});
+
+test('TUNNEL_URL_PATTERN matches a real tunnel URL', () => {
+  const m = 'TUNNEL_URL:https://c4rdv7bv-80.cn-north-4-bridge.myhuaweicloud.com'.match(TUNNEL_URL_PATTERN);
+  assert.ok(m, 'valid URL should match');
+  assert.equal(m[1], 'https://c4rdv7bv-80.cn-north-4-bridge.myhuaweicloud.com');
+});
+
+test('TUNNEL_URL_PATTERN rejects URL with empty tunnel prefix', () => {
+  assert.equal('TUNNEL_URL:https://-80.cn-north-4-bridge.myhuaweicloud.com'.match(TUNNEL_URL_PATTERN), null);
 });

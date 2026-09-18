@@ -25,6 +25,8 @@ const execFileAsync = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const WS_EXEC_INDEX_URL = pathToFileURL(join(__dirname, '..', 'ws-exec', 'index.js')).href;
 
+export const TUNNEL_URL_PATTERN = /TUNNEL_URL:(https:\/\/[A-Za-z0-9_-]+-\d+\.cn-north-4-bridge\.myhuaweicloud\.com)/;
+
 let currentWorkspaceId = process.env.HW_WORKSPACE_ID || null;
 
 function getCurrentWorkspaceId() {
@@ -929,7 +931,11 @@ export async function deployCheck(
     ``,
     `TOTAL=$((TOTAL+1))`,
     `TUNNEL_ID=$(devbridge list -j 2>/dev/null | grep -oP '"tunnelId":\\s*"\\K[^"]+' | head -1)`,
-    `TUNNEL_URL="https://\${TUNNEL_ID}-${port}.cn-north-4-bridge.myhuaweicloud.com"`,
+    `if [ -n "$TUNNEL_ID" ]; then`,
+    `  TUNNEL_URL="https://\${TUNNEL_ID}-${port}.cn-north-4-bridge.myhuaweicloud.com"`,
+    `else`,
+    `  TUNNEL_URL=""`,
+    `fi`,
     `if [ -n "$TUNNEL_ID" ] && [ -n "$TUNNEL_URL" ]; then`,
     `  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$TUNNEL_URL" 2>/dev/null || echo "000")`,
     `  if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "304" ]; then`,
@@ -1001,7 +1007,7 @@ fi
     if (m) checks[m[1]] = { status: m[2], detail: (m[3] || '').trim() };
   }
   const scoreMatch = cleanStdout.match(/SCORE:(\d+)\/(\d+)/);
-  const tunnelMatch = cleanStdout.match(/TUNNEL_URL:(https:\/\/[^\s]+)/);
+  const tunnelMatch = cleanStdout.match(TUNNEL_URL_PATTERN);
   const complete = /VERDICT:COMPLETE/.test(cleanStdout);
 
   const missing = [];
