@@ -29,14 +29,14 @@ Domain expertise for Huawei Cloud CloudDeploy. Covers application creation, depl
 
 ## Common Workflows
 
-| Task                   | Operation（省略参数用 `<placeholder>`，参数以 `hcloud CodeArtsDeploy <Op> --help` 为准）                                                    |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| List applications      | `ListAllApp --cli-region=<r> --project_id=<id> --page=1 --size=10`（`ListDeployTasks` 已由云侧于 2024-09-30 弃用，推荐本接口）              |
-| Show app detail        | `ShowAppDetailById --cli-region=<r> --application_id=<id>`                                                                                  |
-| Create application     | `CreateApp --cli-region=<r> --name=<n> --create_type=template --project_id=<id> --is_draft=false`（`--create_type` 仅有 `template` 一个值） |
-| Create deployment task | `CreateDeployTaskByTemplate --cli-region=<r> --template_id=<id> --task_name=<n>`                                                            |
-| Start deployment       | `StartDeployTask --cli-region=<r> --task_id=<id>`                                                                                           |
-| Delete task            | `DeleteDeployTask --cli-region=<r> --task_id=<id>`                                                                                          |
+| Task                   | Operation（省略参数用 `<placeholder>`，参数以 `hcloud CodeArtsDeploy <Op> --help` 为准）                                                          |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| List applications      | `ListAllApp --cli-region=<r> --project_id=<id> --page=1 --size=10`（`ListDeployTasks` 已由云侧于 2024-09-30 弃用，推荐本接口）                    |
+| Show app detail        | `ShowAppDetailById --cli-region=<r> --app_id=<id>`                                                                                                |
+| Create application     | `CreateApp --cli-region=<r> --name=<n> --create_type=template --project_id=<id> --is_draft=false`（`--create_type` 仅有 `template` 一个值）       |
+| Create deployment task | `CreateDeployTaskByTemplate --cli-region=<r> --template_id=<id> --task_name=<n>`（deprecated since 2024-09-30 — `--help` recommends `CreateApp`） |
+| Start deployment       | `StartDeployTask --cli-region=<r> --task_id=<id>`                                                                                                 |
+| Delete task            | `DeleteDeployTask --cli-region=<r> --task_id=<id>`（deprecated since 2024-09-30 — `--help` recommends `DeleteApplication --app_id=<id>`）         |
 
 ## Troubleshooting
 

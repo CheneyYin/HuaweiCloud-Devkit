@@ -154,6 +154,10 @@ test('huawei-deployment skill uses verified KooCLI service and operation names',
   assert.match(body, /DeleteDeployTask/);
   assert.match(body, /Deploy\.00016902/);
   assert.match(body, /APIGW\.0301/);
+  assert.match(body, /--app_id/);
+  assert.match(body, /DeleteApplication/);
+  assert.match(body, /deprecated since 2024-09-30/);
+  assert.doesNotMatch(body, /--application_id/);
   assert.doesNotMatch(body, /\bStartTask\b/);
   assert.doesNotMatch(body, /\bListTasks\b/);
   assert.doesNotMatch(body, /\bCreateTask\b/);
