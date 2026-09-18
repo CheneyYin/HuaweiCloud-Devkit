@@ -25,6 +25,8 @@ const execFileAsync = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const WS_EXEC_INDEX_URL = pathToFileURL(join(__dirname, '..', 'ws-exec', 'index.js')).href;
 
+export const TUNNEL_URL_PATTERN = /TUNNEL_URL:(https:\/\/[A-Za-z0-9_-]+-\d+\.cn-north-4-bridge\.myhuaweicloud\.com)/;
+
 let currentWorkspaceId = process.env.HW_WORKSPACE_ID || null;
 
 function getCurrentWorkspaceId() {
@@ -178,6 +180,24 @@ export function splitBase64Chunks(base64, chunkSize = UPLOAD_CHUNK_SIZE) {
     chunks.push(base64.slice(offset, offset + chunkSize));
   }
   return chunks;
+}
+
+export function formatPortConflictWarning(basePort, targetPort) {
+  return targetPort !== basePort ? `Port ${basePort} is in use — auto-assigned port ${targetPort}` : undefined;
+}
+
+export function formatPortDriftWarning(basePort, targetPort) {
+  if (targetPort === basePort) return undefined;
+  return `Port ${basePort} was occupied — nginx now listens on port ${targetPort}. Any DevBridge tunnel bound to port ${basePort} is detached: run "devbridge port create <tunnelId> -p ${targetPort} --protocol http -a" and restart "devbridge host" for the new port.`;
+}
+
+export function formatProxyPortWarning(basePort, targetPort) {
+  if (targetPort === basePort) return undefined;
+  return `Port ${basePort} is in use — the proxy template still listens on port ${basePort}: auto-increment does not apply to proxy configs, so nginx may fail to bind. Free the port or deploy a static/spa build instead.`;
+}
+
+export function buildExposeRemediation(port) {
+  return `In the sandbox: source /tmp/hw_creds.sh; devbridge delete-all; devbridge create <name>; devbridge port create <tunnelId> -p ${port} --protocol http -a; nohup devbridge host <tunnelId> -p ${port} > /tmp/host.log 2>&1 & If deploy_nginx reported a different (auto-incremented) port in its "port" field, use THAT port instead of the one shown here. Full procedure in huawei-sandbox skill, Step 7 (Expose via DevBridge).`;
 }
 
 export async function uploadFileWithSession(workspaceId, localPath, remotePath, username = 'root', timeoutMs = 30000) {
@@ -728,7 +748,6 @@ export async function deployNginx(
   const basePort = nginxType === 'proxy' ? listenPort : port;
 
   let targetPort = basePort;
-  let portWarning;
   const maxPortAttempts = 10;
   for (let offset = 0; offset < maxPortAttempts; offset += 1) {
     targetPort = basePort + offset;
@@ -740,9 +759,6 @@ export async function deployNginx(
         10000,
       );
       if (!String(portCheck.stdout || '').includes('IN_USE')) break;
-      if (offset === 0) {
-        portWarning = `Port ${basePort} is in use — auto-assigned port ${targetPort}`;
-      }
     } catch {}
     if (offset === maxPortAttempts - 1) {
       throw new Error(
@@ -860,9 +876,17 @@ fi`;
     stdout: result.stdout,
     nextStep: 'expose_via_devbridge',
     warning:
-      (!tunnelActive
-        ? 'No active DevBridge tunnel — deployment is incomplete. Proceed to Step 7 to expose the app.'
-        : portWarning) || undefined,
+      [
+        !tunnelActive
+          ? 'No active DevBridge tunnel — deployment is incomplete. Proceed to Step 7 to expose the app.'
+          : undefined,
+        nginxType === 'proxy'
+          ? formatProxyPortWarning(basePort, targetPort)
+          : formatPortConflictWarning(basePort, targetPort),
+        tunnelActive && nginxType !== 'proxy' ? formatPortDriftWarning(basePort, targetPort) : undefined,
+      ]
+        .filter(Boolean)
+        .join(' ') || undefined,
   };
 }
 
@@ -927,7 +951,11 @@ export async function deployCheck(
     ``,
     `TOTAL=$((TOTAL+1))`,
     `TUNNEL_ID=$(devbridge list -j 2>/dev/null | grep -oP '"tunnelId":\\s*"\\K[^"]+' | head -1)`,
-    `TUNNEL_URL="https://\${TUNNEL_ID}-${port}.cn-north-4-bridge.myhuaweicloud.com"`,
+    `if [ -n "$TUNNEL_ID" ]; then`,
+    `  TUNNEL_URL="https://\${TUNNEL_ID}-${port}.cn-north-4-bridge.myhuaweicloud.com"`,
+    `else`,
+    `  TUNNEL_URL=""`,
+    `fi`,
     `if [ -n "$TUNNEL_ID" ] && [ -n "$TUNNEL_URL" ]; then`,
     `  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$TUNNEL_URL" 2>/dev/null || echo "000")`,
     `  if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "304" ]; then`,
@@ -999,7 +1027,7 @@ fi
     if (m) checks[m[1]] = { status: m[2], detail: (m[3] || '').trim() };
   }
   const scoreMatch = cleanStdout.match(/SCORE:(\d+)\/(\d+)/);
-  const tunnelMatch = cleanStdout.match(/TUNNEL_URL:(https:\/\/[^\s]+)/);
+  const tunnelMatch = cleanStdout.match(TUNNEL_URL_PATTERN);
   const complete = /VERDICT:COMPLETE/.test(cleanStdout);
 
   const missing = [];
@@ -1015,6 +1043,18 @@ fi
       ? 'Check output parsing failed — individual check results could not be extracted. See rawOutput for details.'
       : undefined;
 
+  const nextStepValue = !complete
+    ? missing.includes('devbridge_tunnel') || missing.includes('tunnel_url_accessible')
+      ? 'expose_via_devbridge'
+      : missing.includes('nginx_serving')
+        ? 'configure_nginx'
+        : missing.includes('qr_code')
+          ? 'generate_qr_code'
+          : parseWarning
+            ? 'review_raw_output'
+            : 'review_checks'
+    : 'complete';
+
   return {
     ok: true,
     complete,
@@ -1025,17 +1065,8 @@ fi
     missingSteps: missing.length > 0 ? missing.join(', ') : undefined,
     parseWarning,
     rawOutput: parseWarning ? stdout.trim() : undefined,
-    nextStep: !complete
-      ? missing.includes('devbridge_tunnel') || missing.includes('tunnel_url_accessible')
-        ? 'expose_via_devbridge'
-        : missing.includes('nginx_serving')
-          ? 'configure_nginx'
-          : missing.includes('qr_code')
-            ? 'generate_qr_code'
-            : parseWarning
-              ? 'review_raw_output'
-              : 'review_checks'
-      : 'complete',
+    nextStep: nextStepValue,
+    remediation: nextStepValue === 'expose_via_devbridge' ? buildExposeRemediation(port) : undefined,
   };
 }
 

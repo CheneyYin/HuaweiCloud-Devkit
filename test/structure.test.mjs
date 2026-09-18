@@ -146,6 +146,24 @@ test('skill SKILL.md files meet minimum content quality bar', () => {
   }
 });
 
+test('huawei-deployment skill uses verified KooCLI service and operation names', () => {
+  const body = readFileSync(join(pluginRoot, 'skills', 'huawei-deployment', 'SKILL.md'), 'utf8');
+  assert.match(body, /CodeArtsDeploy/);
+  assert.match(body, /StartDeployTask/);
+  assert.match(body, /ListAllApp/);
+  assert.match(body, /DeleteDeployTask/);
+  assert.match(body, /Deploy\.00016902/);
+  assert.match(body, /APIGW\.0301/);
+  assert.match(body, /--app_id/);
+  assert.match(body, /DeleteApplication/);
+  assert.match(body, /deprecated since 2024-09-30/);
+  assert.doesNotMatch(body, /--application_id/);
+  assert.doesNotMatch(body, /\bStartTask\b/);
+  assert.doesNotMatch(body, /\bListTasks\b/);
+  assert.doesNotMatch(body, /\bCreateTask\b/);
+  assert.doesNotMatch(body, /\bDeleteTask\b/);
+});
+
 test('skills with references have non-empty reference files', () => {
   const skillsDir = join(pluginRoot, 'skills');
   const skillNames = readdirSync(skillsDir).filter((name) => existsSync(join(skillsDir, name, 'SKILL.md')));
@@ -191,6 +209,14 @@ test('devbridge uses the valid `list` command, not the non-existent `ls`', () =>
 
   assert.doesNotMatch(sessionManager, /devbridge ls\b/);
   assert.match(sessionManager, /devbridge list -j/);
+});
+
+test('huawei-sandbox skill documents devbridge description and host/connect traps', () => {
+  const body = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
+  assert.match(body, /only Chinese characters, digits, letters/);
+  assert.match(body, /Connection failed, retrying/);
+  assert.match(body, /devbridge host/);
+  assert.match(body, /expose_via_devbridge/);
 });
 
 test('all plugin manifests are valid JSON', () => {
@@ -668,4 +694,10 @@ test('cmdUpdate has no trailing unreachable reinstall; cmdReinstall keeps it', (
   );
   assert.match(cmdReinstallBody, /await cmdUninstall\(\)/);
   assert.match(cmdReinstallBody, /await cmdInstall\(\)/);
+});
+
+test('doctor success message does not demand a restart', () => {
+  const setupCli = readFileSync(join(root, 'plugins', 'huaweicloud-core', 'src', 'setup-cli.mjs'), 'utf8');
+  assert.match(setupCli, /You can now describe your Huawei Cloud task/);
+  assert.doesNotMatch(setupCli, /Restart your session, then describe/);
 });
