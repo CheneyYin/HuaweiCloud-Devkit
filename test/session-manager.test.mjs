@@ -8,6 +8,7 @@ import {
   getCurrentWorkspaceId,
   setWorkspaceId,
   formatPortConflictWarning,
+  formatPortDriftWarning,
   TUNNEL_URL_PATTERN,
 } from '../plugins/huaweicloud-core/src/sandbox/session-manager.mjs';
 
@@ -53,6 +54,16 @@ test('formatPortConflictWarning returns undefined when port is unchanged', () =>
 
 test('formatPortConflictWarning reports the real auto-assigned port', () => {
   assert.equal(formatPortConflictWarning(80, 81), 'Port 80 is in use — auto-assigned port 81');
+});
+
+test('formatPortDriftWarning is undefined without drift', () => {
+  assert.equal(formatPortDriftWarning(80, 80), undefined);
+});
+
+test('formatPortDriftWarning names both ports and the re-bind command', () => {
+  const msg = formatPortDriftWarning(80, 81);
+  assert.match(msg, /nginx now listens on port 81/);
+  assert.match(msg, /devbridge port create <tunnelId> -p 81 --protocol http -a/);
 });
 
 test('TUNNEL_URL_PATTERN matches a real tunnel URL', () => {

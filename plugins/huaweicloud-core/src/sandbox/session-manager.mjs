@@ -186,6 +186,11 @@ export function formatPortConflictWarning(basePort, targetPort) {
   return targetPort !== basePort ? `Port ${basePort} is in use — auto-assigned port ${targetPort}` : undefined;
 }
 
+export function formatPortDriftWarning(basePort, targetPort) {
+  if (targetPort === basePort) return undefined;
+  return `Port ${basePort} was occupied — nginx now listens on port ${targetPort}. Any DevBridge tunnel bound to port ${basePort} is detached: run "devbridge port create <tunnelId> -p ${targetPort} --protocol http -a" and restart "devbridge host" for the new port.`;
+}
+
 export async function uploadFileWithSession(workspaceId, localPath, remotePath, username = 'root', timeoutMs = 30000) {
   if (!existsSync(localPath)) {
     throw new Error(`sandbox upload: local file not found: ${localPath}`);
@@ -864,6 +869,7 @@ fi`;
     warning: [
       !tunnelActive ? 'No active DevBridge tunnel — deployment is incomplete. Proceed to Step 7 to expose the app.' : undefined,
       formatPortConflictWarning(basePort, targetPort),
+      tunnelActive ? formatPortDriftWarning(basePort, targetPort) : undefined,
     ]
       .filter(Boolean)
       .join(' ') || undefined,
