@@ -191,6 +191,10 @@ export function formatPortDriftWarning(basePort, targetPort) {
   return `Port ${basePort} was occupied — nginx now listens on port ${targetPort}. Any DevBridge tunnel bound to port ${basePort} is detached: run "devbridge port create <tunnelId> -p ${targetPort} --protocol http -a" and restart "devbridge host" for the new port.`;
 }
 
+export function buildExposeRemediation(port) {
+  return `In the sandbox: source /tmp/hw_creds.sh; devbridge delete-all; devbridge create <name>; devbridge port create <tunnelId> -p ${port} --protocol http -a; nohup devbridge host <tunnelId> -p ${port} > /tmp/host.log 2>&1 & — full procedure in huawei-sandbox skill, Step 7 (Expose via DevBridge).`;
+}
+
 export async function uploadFileWithSession(workspaceId, localPath, remotePath, username = 'root', timeoutMs = 30000) {
   if (!existsSync(localPath)) {
     throw new Error(`sandbox upload: local file not found: ${localPath}`);
@@ -1029,6 +1033,18 @@ fi
       ? 'Check output parsing failed — individual check results could not be extracted. See rawOutput for details.'
       : undefined;
 
+  const nextStepValue = !complete
+    ? missing.includes('devbridge_tunnel') || missing.includes('tunnel_url_accessible')
+      ? 'expose_via_devbridge'
+      : missing.includes('nginx_serving')
+        ? 'configure_nginx'
+        : missing.includes('qr_code')
+          ? 'generate_qr_code'
+          : parseWarning
+            ? 'review_raw_output'
+            : 'review_checks'
+    : 'complete';
+
   return {
     ok: true,
     complete,
@@ -1039,17 +1055,9 @@ fi
     missingSteps: missing.length > 0 ? missing.join(', ') : undefined,
     parseWarning,
     rawOutput: parseWarning ? stdout.trim() : undefined,
-    nextStep: !complete
-      ? missing.includes('devbridge_tunnel') || missing.includes('tunnel_url_accessible')
-        ? 'expose_via_devbridge'
-        : missing.includes('nginx_serving')
-          ? 'configure_nginx'
-          : missing.includes('qr_code')
-            ? 'generate_qr_code'
-            : parseWarning
-              ? 'review_raw_output'
-              : 'review_checks'
-      : 'complete',
+    nextStep: nextStepValue,
+    remediation:
+      nextStepValue === 'expose_via_devbridge' ? buildExposeRemediation(port) : undefined,
   };
 }
 

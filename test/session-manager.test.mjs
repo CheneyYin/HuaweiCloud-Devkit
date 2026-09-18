@@ -9,6 +9,7 @@ import {
   setWorkspaceId,
   formatPortConflictWarning,
   formatPortDriftWarning,
+  buildExposeRemediation,
   TUNNEL_URL_PATTERN,
 } from '../plugins/huaweicloud-core/src/sandbox/session-manager.mjs';
 
@@ -64,6 +65,12 @@ test('formatPortDriftWarning names both ports and the re-bind command', () => {
   const msg = formatPortDriftWarning(80, 81);
   assert.match(msg, /nginx now listens on port 81/);
   assert.match(msg, /devbridge port create <tunnelId> -p 81 --protocol http -a/);
+});
+
+test('buildExposeRemediation includes credential sourcing and host command with port', () => {
+  const msg = buildExposeRemediation(82);
+  assert.match(msg, /source \/tmp\/hw_creds\.sh/);
+  assert.match(msg, /devbridge port create <tunnelId> -p 82 --protocol http -a/);
 });
 
 test('TUNNEL_URL_PATTERN matches a real tunnel URL', () => {
