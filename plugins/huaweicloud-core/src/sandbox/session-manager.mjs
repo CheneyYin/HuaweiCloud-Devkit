@@ -191,6 +191,11 @@ export function formatPortDriftWarning(basePort, targetPort) {
   return `Port ${basePort} was occupied — nginx now listens on port ${targetPort}. Any DevBridge tunnel bound to port ${basePort} is detached: run "devbridge port create <tunnelId> -p ${targetPort} --protocol http -a" and restart "devbridge host" for the new port.`;
 }
 
+export function formatProxyPortWarning(basePort, targetPort) {
+  if (targetPort === basePort) return undefined;
+  return `Port ${basePort} is in use — the proxy template still listens on port ${basePort}: auto-increment does not apply to proxy configs, so nginx may fail to bind. Free the port or deploy a static/spa build instead.`;
+}
+
 export function buildExposeRemediation(port) {
   return `In the sandbox: source /tmp/hw_creds.sh; devbridge delete-all; devbridge create <name>; devbridge port create <tunnelId> -p ${port} --protocol http -a; nohup devbridge host <tunnelId> -p ${port} > /tmp/host.log 2>&1 & If deploy_nginx reported a different (auto-incremented) port in its "port" field, use THAT port instead of the one shown here. Full procedure in huawei-sandbox skill, Step 7 (Expose via DevBridge).`;
 }
@@ -875,8 +880,10 @@ fi`;
         !tunnelActive
           ? 'No active DevBridge tunnel — deployment is incomplete. Proceed to Step 7 to expose the app.'
           : undefined,
-        formatPortConflictWarning(basePort, targetPort),
-        tunnelActive ? formatPortDriftWarning(basePort, targetPort) : undefined,
+        nginxType === 'proxy'
+          ? formatProxyPortWarning(basePort, targetPort)
+          : formatPortConflictWarning(basePort, targetPort),
+        tunnelActive && nginxType !== 'proxy' ? formatPortDriftWarning(basePort, targetPort) : undefined,
       ]
         .filter(Boolean)
         .join(' ') || undefined,

@@ -9,6 +9,7 @@ import {
   setWorkspaceId,
   formatPortConflictWarning,
   formatPortDriftWarning,
+  formatProxyPortWarning,
   buildExposeRemediation,
   TUNNEL_URL_PATTERN,
 } from '../plugins/huaweicloud-core/src/sandbox/session-manager.mjs';
@@ -82,4 +83,14 @@ test('TUNNEL_URL_PATTERN matches a real tunnel URL', () => {
 
 test('TUNNEL_URL_PATTERN rejects URL with empty tunnel prefix', () => {
   assert.equal('TUNNEL_URL:https://-80.cn-north-4-bridge.myhuaweicloud.com'.match(TUNNEL_URL_PATTERN), null);
+});
+
+test('formatProxyPortWarning is undefined without drift', () => {
+  assert.equal(formatProxyPortWarning(80, 80), undefined);
+});
+
+test('formatProxyPortWarning explains proxy templates ignore auto-increment', () => {
+  const msg = formatProxyPortWarning(80, 81);
+  assert.match(msg, /still listens on port 80/);
+  assert.match(msg, /auto-increment does not apply to proxy configs/);
 });
