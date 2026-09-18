@@ -669,3 +669,9 @@ test('cmdUpdate has no trailing unreachable reinstall; cmdReinstall keeps it', (
   assert.match(cmdReinstallBody, /await cmdUninstall\(\)/);
   assert.match(cmdReinstallBody, /await cmdInstall\(\)/);
 });
+
+test('doctor success message does not demand a restart', () => {
+  const setupCli = readFileSync(join(root, 'plugins', 'huaweicloud-core', 'src', 'setup-cli.mjs'), 'utf8');
+  assert.match(setupCli, /You can now describe your Huawei Cloud task/);
+  assert.doesNotMatch(setupCli, /Restart your session, then describe/);
+});
