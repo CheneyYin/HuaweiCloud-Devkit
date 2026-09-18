@@ -192,7 +192,7 @@ export function formatPortDriftWarning(basePort, targetPort) {
 }
 
 export function buildExposeRemediation(port) {
-  return `In the sandbox: source /tmp/hw_creds.sh; devbridge delete-all; devbridge create <name>; devbridge port create <tunnelId> -p ${port} --protocol http -a; nohup devbridge host <tunnelId> -p ${port} > /tmp/host.log 2>&1 & — full procedure in huawei-sandbox skill, Step 7 (Expose via DevBridge).`;
+  return `In the sandbox: source /tmp/hw_creds.sh; devbridge delete-all; devbridge create <name>; devbridge port create <tunnelId> -p ${port} --protocol http -a; nohup devbridge host <tunnelId> -p ${port} > /tmp/host.log 2>&1 & If deploy_nginx reported a different (auto-incremented) port in its "port" field, use THAT port instead of the one shown here. Full procedure in huawei-sandbox skill, Step 7 (Expose via DevBridge).`;
 }
 
 export async function uploadFileWithSession(workspaceId, localPath, remotePath, username = 'root', timeoutMs = 30000) {

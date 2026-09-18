@@ -71,6 +71,7 @@ test('buildExposeRemediation includes credential sourcing and host command with 
   const msg = buildExposeRemediation(82);
   assert.match(msg, /source \/tmp\/hw_creds\.sh/);
   assert.match(msg, /devbridge port create <tunnelId> -p 82 --protocol http -a/);
+  assert.match(msg, /use THAT port instead/);
 });
 
 test('TUNNEL_URL_PATTERN matches a real tunnel URL', () => {
