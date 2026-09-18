@@ -207,6 +207,14 @@ test('devbridge uses the valid `list` command, not the non-existent `ls`', () =>
   assert.match(sessionManager, /devbridge list -j/);
 });
 
+test('huawei-sandbox skill documents devbridge description and host/connect traps', () => {
+  const body = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
+  assert.match(body, /only Chinese characters, digits, letters/);
+  assert.match(body, /Connection failed, retrying/);
+  assert.match(body, /devbridge host/);
+  assert.match(body, /expose_via_devbridge/);
+});
+
 test('all plugin manifests are valid JSON', () => {
   const manifests = [
     join(pluginRoot, '.codex-plugin', 'plugin.json'),
