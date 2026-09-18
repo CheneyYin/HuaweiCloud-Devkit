@@ -180,6 +180,10 @@ export function splitBase64Chunks(base64, chunkSize = UPLOAD_CHUNK_SIZE) {
   return chunks;
 }
 
+export function formatPortConflictWarning(basePort, targetPort) {
+  return targetPort !== basePort ? `Port ${basePort} is in use — auto-assigned port ${targetPort}` : undefined;
+}
+
 export async function uploadFileWithSession(workspaceId, localPath, remotePath, username = 'root', timeoutMs = 30000) {
   if (!existsSync(localPath)) {
     throw new Error(`sandbox upload: local file not found: ${localPath}`);
@@ -728,7 +732,6 @@ export async function deployNginx(
   const basePort = nginxType === 'proxy' ? listenPort : port;
 
   let targetPort = basePort;
-  let portWarning;
   const maxPortAttempts = 10;
   for (let offset = 0; offset < maxPortAttempts; offset += 1) {
     targetPort = basePort + offset;
@@ -740,9 +743,6 @@ export async function deployNginx(
         10000,
       );
       if (!String(portCheck.stdout || '').includes('IN_USE')) break;
-      if (offset === 0) {
-        portWarning = `Port ${basePort} is in use — auto-assigned port ${targetPort}`;
-      }
     } catch {}
     if (offset === maxPortAttempts - 1) {
       throw new Error(
@@ -859,10 +859,12 @@ fi`;
     exitCode: result.exitCode,
     stdout: result.stdout,
     nextStep: 'expose_via_devbridge',
-    warning:
-      (!tunnelActive
-        ? 'No active DevBridge tunnel — deployment is incomplete. Proceed to Step 7 to expose the app.'
-        : portWarning) || undefined,
+    warning: [
+      !tunnelActive ? 'No active DevBridge tunnel — deployment is incomplete. Proceed to Step 7 to expose the app.' : undefined,
+      formatPortConflictWarning(basePort, targetPort),
+    ]
+      .filter(Boolean)
+      .join(' ') || undefined,
   };
 }
 

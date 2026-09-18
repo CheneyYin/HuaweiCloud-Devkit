@@ -7,6 +7,7 @@ import {
   UPLOAD_CHUNK_SIZE,
   getCurrentWorkspaceId,
   setWorkspaceId,
+  formatPortConflictWarning,
 } from '../plugins/huaweicloud-core/src/sandbox/session-manager.mjs';
 
 test('ws-exec dynamic import uses file:// URL (Windows-safe)', async () => {
@@ -43,4 +44,12 @@ test('setWorkspaceId caches and updates env var', () => {
   assert.equal(getCurrentWorkspaceId(), testId);
   assert.equal(process.env.HW_WORKSPACE_ID, testId);
   setWorkspaceId(null);
+});
+
+test('formatPortConflictWarning returns undefined when port is unchanged', () => {
+  assert.equal(formatPortConflictWarning(80, 80), undefined);
+});
+
+test('formatPortConflictWarning reports the real auto-assigned port', () => {
+  assert.equal(formatPortConflictWarning(80, 81), 'Port 80 is in use — auto-assigned port 81');
 });
