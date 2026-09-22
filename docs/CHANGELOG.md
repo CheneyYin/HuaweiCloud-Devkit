@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.1.6-next.1 (2026-09-22)
+
+- feat(sandbox): migrate DevBridge flow to 0.2.x (s2 gateway + API Key auth) (#793)
+- fix(sandbox): proxy deploys no longer emit misleading port warnings
+- docs(deployment): correct ShowAppDetailById param and annotate deprecated ops
+- fix(sandbox): remediation cautions against stale port after drift
+- style: apply prettier
+- docs(sandbox): document devbridge host vs connect, description traps, and port drift
+- docs(deployment): fix KooCLI service/operation names verified against hcloud --help
+- fix(setup): doctor success message no longer demands a restart
+- feat(sandbox): deploy_check returns executable remediation for expose_via_devbridge
+- fix(sandbox): warn when port drift detaches an active DevBridge tunnel
+- fix(sandbox): deploy_check no longer reports malformed publicUrl without tunnel
+- fix(sandbox): port conflict warning reports real auto-assigned port
+- fix(setup): workbuddy uninstall crash + honest uninstall skill counts (#556)
+- fix(mcp): address #717 review — target allowlist, -32600, newline test
+- fix(mcp): survive malformed JSON frames (-32700) and Windows npm EINVAL (#643)
+- test(setup): make OfficeAce auto-detect hermetic in install tests (#654)
+- fix(mcp): return -32602 for tools/call missing required params or unknown tool (#704)
+
 ## Unreleased
 
 - feat(sandbox): `huaweicloud_sandbox_credentials` 新增 `api_key` 参数（或本地 `HW_API_KEY` 透传），注入沙箱供 devbridge 0.2.x 使用
