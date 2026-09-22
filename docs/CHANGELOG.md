@@ -1,49 +1,51 @@
 # Changelog
 
-## 1.1.5 (2026-09-15)
+## 1.1.6-next.1 (2026-09-22)
 
-- chore: sync README beta badge to v1.1.5
-- chore: version override for 1.1.5 stable release
+- feat(sandbox): migrate DevBridge flow to 0.2.x (s2 gateway + API Key auth) (#793)
+- fix(sandbox): proxy deploys no longer emit misleading port warnings
+- docs(deployment): correct ShowAppDetailById param and annotate deprecated ops
+- fix(sandbox): remediation cautions against stale port after drift
+- style: apply prettier
+- docs(sandbox): document devbridge host vs connect, description traps, and port drift
+- docs(deployment): fix KooCLI service/operation names verified against hcloud --help
+- fix(setup): doctor success message no longer demands a restart
+- feat(sandbox): deploy_check returns executable remediation for expose_via_devbridge
+- fix(sandbox): warn when port drift detaches an active DevBridge tunnel
+- fix(sandbox): deploy_check no longer reports malformed publicUrl without tunnel
+- fix(sandbox): port conflict warning reports real auto-assigned port
+- fix(setup): workbuddy uninstall crash + honest uninstall skill counts (#556)
+- fix(mcp): address #717 review — target allowlist, -32600, newline test
+- fix(mcp): survive malformed JSON frames (-32700) and Windows npm EINVAL (#643)
+- test(setup): make OfficeAce auto-detect hermetic in install tests (#654)
+- fix(mcp): return -32602 for tools/call missing required params or unknown tool (#704)
+
+## Unreleased
+
+- feat(sandbox): `huaweicloud_sandbox_credentials` 新增 `api_key` 参数（或本地 `HW_API_KEY` 透传），注入沙箱供 devbridge 0.2.x 使用
+- fix(sandbox): deploy_check/deploy_nginx 适配 DevBridge 0.2.x——网关迁移后隧道 URL 改用 `devbridge-s2.hwtunnel.com` 域名构造；「服务已迁移」占位页（HTTP 200）判为 FAIL，修复假 200 误判 complete
+- fix(sandbox): 隧道探测版本感知——0.1.x 用 `list -j` JSON，0.2.x（已移除 `-j`）解析纯文本表格数据行的 8 位 base32 tunnelId
+- docs(sandbox): SKILL.md 暴露流程重写——API Key 登录引导（获取入口/交付方式/失败路径/安全提示）、存量沙箱 0.1.x→0.2.x 原地单版本升级（官方 installer，GitCode 渠道优先 + GitHub 兜底 + `--http1.1` 规避 HTTP2 framing）、残留 `/usr/local/bin/devbridge` 清理、新域名格式说明
+- test: 新增 devbridge s2 域名迁移/API Key 认证/版本升级守护测试；改写 `list -j` 断言为版本感知表述
+- fix(sandbox): 审查加固——API Key（长期账号级凭据）与临时 AK/SK 分离存储（`/tmp/hw_api_key`，0600）；`api_key` 优先级改为本地 `HW_API_KEY` 环境变量优先；修复 PATH 追加写法导致旧镜像二进制抢占解析的问题（改为前置 + 显式比对清理残留）
+
+## 1.1.6-next.0 (2026-09-16)
+
+- chore: sync README beta badge to 1.1.6
+- chore: set version-override to 1.1.6 (next -> 1.1.6-next.0)
+- fix(hook): risk engine fails closed on malformed input (#564)
+- fix(officeace): align runtime skill root env probe with installer (#559)
+- fix(setup): make OfficeAce install/uninstall/register integrity reliable (#559)
+- fix(mcp): resolve plugin version from plugin manifest in Codex cache layout (#576)
 - feat(sandbox): add mandatory target-selection gate before sandbox lifecycle tools (#691)
 - fix(safety+mcp): close env-dump and shell-wrap bypasses, JSON-RPC -32601 (#650) (#688)
 - fix(mcp): actionable explain_error fallback guidance (#648)
-
-## 1.1.4 (2026-09-14)
-
 - fix(proxy): skip TLS cert verify only for proxy connections (#667)
 - fix(safety): classify Apply* operations as write (#644)
 - feat(auth): onboarding guidance for credential setup (scenarios 1-4) (#665)
 - test: fix Windows path compat in upgrade-session test (split('/') → path.basename)
 - fix(#614/#607): review 两点 — 保留 failedAt 节流 + doQuery 注入口补真覆盖
 - fix(#614/#607): dismiss + 查询失败路径 — 不写伪冷却、返回 check_failed
-- chore(release): 1.1.3 (#620)
-- chore: advance main to 1.1.3-next.4 (business keeps dev; prepare stable 1.1.3) (#619)
-- test(update-check): decouple upgrade-tag logic from repo package.json version
-- chore(release): 1.1.2
-- test: resolve structure.test.mjs to dev version (union-merge artifact)
-- chore(release): 1.1.1 (#515)
-- chore: merge dev into main for 1.1.1 stable release (#513)
-- chore: add dsh.bundle manifest for DSH plugin ecosystem
-- chore(release): 1.1.0 (#440)
-- chore: merge dev into main for 1.1.0 release (#438)
-- chore: version override for 1.1.0 stable release (#433)
-- docs: add Huawei Cloud npm mirror recommendation for China users
-- chore(release): 1.0.2
-- style: prettier format fix
-- feat: v1.0.2 stable - merge all dev changes
-- fix(release): update release trigger to workflow_dispatch and main push only
-- feat(release): sync release workflow to main, seed manifest with 1.0.1
-- fix(release): retire the live Publish Dev workflow on main
-- fix(release): restore full publish flow with quoted step names
-- fix(release): probe publish job with environment only
-- fix(release): probe without job outputs and needs.outputs wiring
-- fix(release): restore full tag-gated publish logic
-- fix(release): reduce npm-publish workflow to minimal probe
-- fix(release): drop workflow_dispatch inputs, derive dist-tag from the tag version
-- fix(release): rename publish workflow to npm-publish to recover a fresh workflow_dispatch index
-- fix(release): add pack-verify script to main
-- fix(release): sync ci.yml with pack verification to main
-- fix(release): add tag-gated Publish workflow to main so workflow_dispatch works from tags
 
 ## 1.1.4-next.6 (2026-09-14)
 
