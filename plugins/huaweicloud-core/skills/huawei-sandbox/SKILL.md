@@ -278,12 +278,14 @@ export PATH="$HOME/.huawei/bin:$PATH"
 source /tmp/hw_creds.sh 2>/dev/null
 if devbridge auth login --help 2>&1 | grep -q -- '--access-key'; then
   echo "AUTH_MODE=AKSK_SUPPORTED"
-  devbridge auth login --access-key "$HW_ACCESS_KEY" --secret-key "$HW_SECRET_KEY" && devbridge auth status
+  devbridge auth login --access-key "$HW_ACCESS_KEY" --secret-key "$HW_SECRET_KEY"
+  devbridge auth status   # separate step: a status failure must not mask the login result
 else
   echo "AUTH_MODE=API_KEY_ONLY"
   source /tmp/hw_api_key 2>/dev/null
   if [ -n "$HW_API_KEY" ]; then
-    devbridge auth login --api-key "$HW_API_KEY" && devbridge auth status
+    devbridge auth login --api-key "$HW_API_KEY"
+    devbridge auth status   # separate step: a status failure must not mask the login result
   else
     echo "NO_API_KEY"
   fi
