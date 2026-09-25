@@ -6,7 +6,7 @@ import {
   evaluateCommandRisk,
   evaluateDeployPlan,
   loadRiskRules,
-} from '../plugins/huaweicloud-core/src/risk-rule-engine.mjs';
+} from '../plugins/huaweicloud-core/src/risk-rule-engine.ts';
 
 test('loadRiskRules loads the public catalog', () => {
   const catalog = loadRiskRules();

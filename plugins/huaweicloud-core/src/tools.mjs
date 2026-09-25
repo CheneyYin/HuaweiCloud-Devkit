@@ -6,10 +6,10 @@ import { spawnSync, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHmac, createHash } from 'node:crypto';
 
-import { evaluateArtifacts, evaluateCommandRisk, evaluateDeployPlan } from './risk-rule-engine.mjs';
-import { classifyTextCommand, redactSecrets } from './safety-policy.mjs';
+import { evaluateArtifacts, evaluateCommandRisk, evaluateDeployPlan } from './risk-rule-engine.ts';
+import { classifyTextCommand, redactSecrets } from './safety-policy.ts';
 import { planHcloudCommand, runHcloud, consumeApprovalToken, hashArgs } from './hcloud-cli.mjs';
-import { searchMarketplace } from './search-market.mjs';
+import { searchMarketplace } from './search-market.ts';
 import { getServiceIcon } from './icon-library.ts';
 import { detectFramework } from './detect-framework.mjs';
 import {
@@ -31,8 +31,8 @@ import {
   hdkitVoucherStatus,
   hdkitVoucherClaim,
   hdkitGenerateUserHash,
-} from './sandbox/hdkitservice-api.mjs';
-import { getCredentials } from './sandbox/hwlink-api.mjs';
+} from './sandbox/hdkitservice-api.ts';
+import { getCredentials } from './sandbox/hwlink-api.ts';
 import { getAuthStatus, syncAuth } from './auth/service.mjs';
 import { validateIamCredentials } from './auth/credential-validator.mjs';
 import {

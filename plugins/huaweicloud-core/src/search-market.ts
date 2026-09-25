@@ -42,54 +42,127 @@ const GENERIC_KEYWORDS = new Set([
   'install',
 ]);
 
-let cachedIndex = null;
-let cachedCnEnMap = null;
+interface MarketSkill {
+  name?: string;
+  description?: string;
+  service?: string;
+  category?: string;
+  triggers?: string[];
+}
 
-async function fetchJson(url, label = '') {
+interface MarketIndex {
+  skills?: MarketSkill[];
+  categories?: string[];
+}
+
+interface MarketplaceItem {
+  score: number;
+  name: string;
+  category: string;
+  service: string;
+  description: string;
+  triggers: string[];
+  matched: string[];
+  installCommand: string;
+}
+
+interface MarketplaceSearchResult {
+  ok: boolean;
+  query: string;
+  category: string;
+  count: number;
+  results: MarketplaceItem[];
+  fallback?: string[];
+  expandedKeywords?: string[];
+}
+
+let cachedIndex: MarketIndex | null = null;
+let cachedCnEnMap: Record<string, string> | null = null;
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function toMarketSkill(value: unknown): MarketSkill {
+  const raw = asRecord(value);
+  return {
+    name: typeof raw.name === 'string' ? raw.name : undefined,
+    description: typeof raw.description === 'string' ? raw.description : undefined,
+    service: typeof raw.service === 'string' ? raw.service : undefined,
+    category: typeof raw.category === 'string' ? raw.category : undefined,
+    triggers: Array.isArray(raw.triggers)
+      ? raw.triggers.filter((trigger): trigger is string => typeof trigger === 'string')
+      : undefined,
+  };
+}
+
+function toMarketIndex(value: unknown): MarketIndex {
+  const raw = asRecord(value);
+  return {
+    skills: Array.isArray(raw.skills) ? raw.skills.map((skill) => toMarketSkill(skill)) : undefined,
+    categories: Array.isArray(raw.categories)
+      ? raw.categories.filter((category): category is string => typeof category === 'string')
+      : undefined,
+  };
+}
+
+function toCnEnMap(value: unknown): Record<string, string> {
+  const raw = asRecord(value);
+  const map: Record<string, string> = {};
+  for (const [key, val] of Object.entries(raw)) {
+    if (typeof val === 'string') map[key] = val;
+  }
+  return map;
+}
+
+async function fetchJson(url: string, label = ''): Promise<unknown> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
   try {
     const dispatcher = await getProxyDispatcher(url);
-    const fetchOpts = {
+    const fetchOpts: RequestInit & { dispatcher?: unknown } = {
       headers: { 'User-Agent': 'huaweicloud-devkit/1.0' },
       signal: controller.signal,
     };
     if (dispatcher) fetchOpts.dispatcher = dispatcher;
     const resp = await fetch(url, fetchOpts);
-    const data = await resp.json();
-    if (data && data.encoding === 'base64' && data.content) {
-      const decoded = Buffer.from(data.content, 'base64').toString('utf8');
+    const data: unknown = await resp.json();
+    const record = asRecord(data);
+    if (record.encoding === 'base64' && typeof record.content === 'string' && record.content) {
+      const decoded = Buffer.from(record.content, 'base64').toString('utf8');
       return JSON.parse(decoded);
     }
     return data;
   } catch (error) {
-    throw new Error(`Failed to fetch ${label}: ${error.message}`, { cause: error });
+    throw new Error(`Failed to fetch ${label}: ${error instanceof Error ? error.message : String(error)}`, {
+      cause: error,
+    });
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function loadIndex() {
-  if (!cachedIndex) cachedIndex = await fetchJson(INDEX_URL, 'index.json');
+async function loadIndex(): Promise<MarketIndex> {
+  if (!cachedIndex) cachedIndex = toMarketIndex(await fetchJson(INDEX_URL, 'index.json'));
   return cachedIndex;
 }
 
-async function loadCnEnMap() {
-  if (!cachedCnEnMap) cachedCnEnMap = await fetchJson(CN_EN_MAP_URL, 'cn-en-map.json');
+async function loadCnEnMap(): Promise<Record<string, string>> {
+  if (!cachedCnEnMap) cachedCnEnMap = toCnEnMap(await fetchJson(CN_EN_MAP_URL, 'cn-en-map.json'));
   return cachedCnEnMap;
 }
 
-export function clearMarketCache() {
+export function clearMarketCache(): void {
   cachedIndex = null;
   cachedCnEnMap = null;
 }
 
-function isGeneric(kw) {
+function isGeneric(kw: string): boolean {
   const k = kw.toLowerCase().trim();
   return GENERIC_KEYWORDS.has(k) || /华为云|huawei/i.test(k);
 }
 
-function expandKeywords(rawKeyword, cnEnMap) {
+function expandKeywords(rawKeyword: string, cnEnMap: Record<string, string>): [string[], string[]] {
   if (!rawKeyword) return [[], []];
   const parts = rawKeyword.replace(/[,;]/g, ' ').split(/\s+/).filter(Boolean);
   const expanded = [...parts];
@@ -106,10 +179,10 @@ function expandKeywords(rawKeyword, cnEnMap) {
   return [specific, generic];
 }
 
-function scoreSkill(skill, specificKws, genericKws) {
+function scoreSkill(skill: MarketSkill, specificKws: string[], genericKws: string[]): [number, string[]] {
   if (!specificKws.length && !genericKws.length) return [1, []];
   let total = 0;
-  const matched = [];
+  const matched: string[] = [];
   const nameLower = (skill.name || '').toLowerCase();
   const descLower = (skill.description || '').toLowerCase();
   const serviceLower = (skill.service || '').toLowerCase();
@@ -147,18 +220,18 @@ function scoreSkill(skill, specificKws, genericKws) {
   return [total, matched];
 }
 
-function truncate(desc, limit = 150) {
+function truncate(desc: string | undefined, limit = 150): string {
   if (!desc) return '';
   return desc.length > limit ? desc.slice(0, limit) + '...' : desc;
 }
 
-export async function searchMarketplace(query = '', category = '') {
+export async function searchMarketplace(query = '', category = ''): Promise<MarketplaceSearchResult> {
   const idx = await loadIndex();
   const cnEnMap = await loadCnEnMap();
   const [specificKws, genericKws] = expandKeywords(query, cnEnMap);
   const hasSpecific = specificKws.length > 0;
 
-  const results = [];
+  const results: MarketplaceItem[] = [];
   for (const skill of idx.skills || []) {
     if (category && skill.category !== category) continue;
     const [score, matched] = scoreSkill(skill, specificKws, genericKws);
@@ -203,7 +276,7 @@ export async function searchMarketplace(query = '', category = '') {
   };
 }
 
-export async function getMarketplaceCategories() {
+export async function getMarketplaceCategories(): Promise<{ ok: boolean; categories: string[] }> {
   const idx = await loadIndex();
   return { ok: true, categories: idx.categories || [] };
 }

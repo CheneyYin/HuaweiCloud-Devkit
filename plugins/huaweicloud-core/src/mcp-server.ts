@@ -6,7 +6,7 @@ import { platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { dispatch } from './mcp-protocol.ts';
-import { DEFAULT_PORT, DEFAULT_HOST } from './mcp-server-remote.mjs';
+import { DEFAULT_PORT, DEFAULT_HOST } from './mcp-server-remote.ts';
 import { getCachedUpdateInfo, readInstalledVersion } from './update-check.mjs';
 import { detectAgent } from './telemetry/agent-detect.ts';
 
@@ -54,7 +54,7 @@ try {
 } catch {}
 
 if (transport === 'remote') {
-  const { startRemoteServer } = await import('./mcp-server-remote.mjs');
+  const { startRemoteServer } = await import('./mcp-server-remote.ts');
   startRemoteServer({ port: remotePort, host: remoteHost }).catch((error) => {
     process.stderr.write(`Failed to start MCP remote server: ${error.message}\n`);
     process.exit(1);

@@ -13,7 +13,7 @@ let base;
 let startRemoteServer;
 
 test.before(async () => {
-  const mod = await import(pathToFileURL(join(srcDir, 'mcp-server-remote.mjs')).href);
+  const mod = await import(pathToFileURL(join(srcDir, 'mcp-server-remote.ts')).href);
   startRemoteServer = mod.startRemoteServer;
   const started = await startRemoteServer({ port: 0 });
   server = started.server;
@@ -107,7 +107,7 @@ test('remote MCP server falls back to SSE when client only accepts text/event-st
 });
 
 test('exports DEFAULT_PORT 9528 to avoid IACMCPServer port 9527 conflict', async () => {
-  const mod = await import(pathToFileURL(join(srcDir, 'mcp-server-remote.mjs')).href);
+  const mod = await import(pathToFileURL(join(srcDir, 'mcp-server-remote.ts')).href);
   assert.equal(mod.DEFAULT_PORT, 9528);
 });
 

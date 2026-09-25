@@ -749,7 +749,7 @@ test('stdio server warms update cache; shared protocol decorates first tool call
 });
 
 test('hdkitservice-api sends X-HW-Client-Version; SKILL session-start wording', () => {
-  const api = readSource(join('src', 'sandbox', 'hdkitservice-api.mjs'));
+  const api = readSource(join('src', 'sandbox', 'hdkitservice-api.ts'));
   assert.match(api, /X-HW-Client-Version/);
   assert.match(api, /readInstalledVersion\(\)/);
   const skill = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-core', 'SKILL.md'), 'utf8');

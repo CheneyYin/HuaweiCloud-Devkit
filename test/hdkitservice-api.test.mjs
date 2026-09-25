@@ -9,7 +9,7 @@ process.env.HW_SECRET_KEY = 'TESTSK';
 process.env.HDKITSERVICE_ENDPOINT = 'https://example.test/hdkitservice/';
 
 const { hdkitConnect, hdkitVoucherStatus, hdkitVoucherClaim } =
-  await import('../plugins/huaweicloud-core/src/sandbox/hdkitservice-api.mjs');
+  await import('../plugins/huaweicloud-core/src/sandbox/hdkitservice-api.ts');
 const { clearRuntimeCredentials } = await import('../plugins/huaweicloud-core/src/auth/credentials.mjs');
 
 test('hdkitservice connect parses backend traceId (camelCase) on error', async () => {

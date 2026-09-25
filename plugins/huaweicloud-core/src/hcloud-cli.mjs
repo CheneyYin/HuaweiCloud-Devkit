@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { classifyHcloudArgs, redactSecrets, assertAllowed } from './safety-policy.mjs';
+import { classifyHcloudArgs, redactSecrets, assertAllowed } from './safety-policy.ts';
 import { getProxySettings } from './proxy/proxy-config.ts';
 import { findHcloudBin, resolveHcloudCommand } from './hcloud-probe.ts';
 import { parseStsExpiry, resolveCredentialsWithRuntime } from './auth/credentials.mjs';

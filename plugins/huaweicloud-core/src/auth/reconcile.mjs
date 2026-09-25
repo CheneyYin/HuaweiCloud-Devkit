@@ -13,7 +13,7 @@ import {
   resolveCredentialsWithRuntime,
 } from './credentials.mjs';
 import { resolveHcloudCommand } from '../hcloud-probe.ts';
-import { redactSecrets } from '../safety-policy.mjs';
+import { redactSecrets } from '../safety-policy.ts';
 
 export { hasRuntimeCredentials };
 

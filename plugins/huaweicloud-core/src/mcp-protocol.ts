@@ -64,7 +64,7 @@ export async function dispatch(method: string, params: unknown, opts: DispatchOp
     const ci = toClientInfo(p.clientInfo);
 
     try {
-      const { hdkitGenerateUserHash } = await import('./sandbox/hdkitservice-api.mjs');
+      const { hdkitGenerateUserHash } = await import('./sandbox/hdkitservice-api.ts');
       await Promise.race([
         hdkitGenerateUserHash(),
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000)),

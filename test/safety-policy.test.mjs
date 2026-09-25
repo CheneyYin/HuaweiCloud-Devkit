@@ -5,7 +5,7 @@ import {
   classifyHcloudArgs,
   classifyTextCommand,
   redactSecrets,
-} from '../plugins/huaweicloud-core/src/safety-policy.mjs';
+} from '../plugins/huaweicloud-core/src/safety-policy.ts';
 
 test('redactSecrets removes credential-shaped values recursively', () => {
   const redacted = redactSecrets({

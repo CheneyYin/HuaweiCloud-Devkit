@@ -2,22 +2,60 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { evaluateCommandRisk, mergeRiskDecision } from './risk-rule-engine.mjs';
+import { evaluateCommandRisk, mergeRiskDecision, type RiskDecision } from './risk-rule-engine.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const policyPath = join(__dirname, '..', 'safety', 'policy.json');
 
-export function loadPolicy() {
-  return JSON.parse(readFileSync(policyPath, 'utf8'));
+// Only the pattern-array fields this module reads are modeled. Extra keys in
+// policy.json are intentionally not surfaced through the type.
+export interface Policy {
+  secretKeyNamePatterns: string[];
+  credentialFilePatterns: string[];
+  blockedConfigureSubcommands: string[];
+  blockedSecretOperations: string[];
+  writeOperationPrefixes: string[];
+  readOperationPrefixes: string[];
+}
+
+export interface ClassifyOptions {
+  policy?: Policy;
+  allowWrites?: boolean;
+  allowCredentialRead?: boolean;
+  rawCommand?: string;
+  skipRiskRules?: boolean;
+  _segmentDepth?: number;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+// Missing / non-array fields normalize to []. Valid policy.json always has all
+// six arrays; malformed fields that used to throw at first use become empty.
+function toStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+export function loadPolicy(): Policy {
+  const raw = asRecord(JSON.parse(readFileSync(policyPath, 'utf8')));
+  return {
+    secretKeyNamePatterns: toStringArray(raw.secretKeyNamePatterns),
+    credentialFilePatterns: toStringArray(raw.credentialFilePatterns),
+    blockedConfigureSubcommands: toStringArray(raw.blockedConfigureSubcommands),
+    blockedSecretOperations: toStringArray(raw.blockedSecretOperations),
+    writeOperationPrefixes: toStringArray(raw.writeOperationPrefixes),
+    readOperationPrefixes: toStringArray(raw.readOperationPrefixes),
+  };
 }
 
 const DEFAULT_POLICY = loadPolicy();
 
-function regexFrom(pattern) {
+function regexFrom(pattern: string): RegExp {
   return new RegExp(pattern, 'i');
 }
 
-function isSecretKeyName(key, policy = DEFAULT_POLICY) {
+function isSecretKeyName(key: unknown, policy: Policy = DEFAULT_POLICY): boolean {
   const normalized = String(key)
     .toLowerCase()
     .replace(/[^a-z0-9]/g, '');
@@ -28,10 +66,10 @@ function isSecretKeyName(key, policy = DEFAULT_POLICY) {
   ) {
     return true;
   }
-  return policy.secretKeyNamePatterns.some((pattern) => regexFrom(`^(${pattern})$`).test(key));
+  return policy.secretKeyNamePatterns.some((pattern) => regexFrom(`^(${pattern})$`).test(String(key)));
 }
 
-function redactString(text) {
+function redactString(text: unknown): string {
   return (
     String(text)
       // Opaque blob keys (cloud-init user_data, metadata, private_key) carry
@@ -46,7 +84,13 @@ function redactString(text) {
   );
 }
 
-export function redactSecrets(value, policy = DEFAULT_POLICY) {
+// Overload parameter names are documentation only; the implementation below
+// carries the real, used parameters.
+// eslint-disable-next-line no-unused-vars
+export function redactSecrets(value: string, policy?: Policy): string;
+// eslint-disable-next-line no-unused-vars
+export function redactSecrets(value: unknown, policy?: Policy): unknown;
+export function redactSecrets(value: unknown, policy: Policy = DEFAULT_POLICY): unknown {
   if (Array.isArray(value)) {
     return value.map((item) => redactSecrets(item, policy));
   }
@@ -64,7 +108,7 @@ export function redactSecrets(value, policy = DEFAULT_POLICY) {
   return value;
 }
 
-function stripExecutable(args) {
+function stripExecutable(args: string[]): string[] {
   if (!args.length) return [];
   let current = args;
   // Unwrap shell wrappers (bash -c / sh -c 'hcloud ...', sudo hcloud ...) so
@@ -100,8 +144,10 @@ function stripExecutable(args) {
   return current;
 }
 
-function commandOperation(args) {
-  const stripped = stripExecutable(args).map(String).filter(Boolean);
+function commandOperation(args: unknown): { service: string; operation: string; args: string[] } {
+  const stripped = stripExecutable(Array.isArray(args) ? args.map((arg) => String(arg)) : [])
+    .map(String)
+    .filter(Boolean);
   if (stripped[0]?.toLowerCase() === 'configure') {
     return { service: 'configure', operation: stripped[1] || '', args: stripped };
   }
@@ -113,28 +159,28 @@ function commandOperation(args) {
   };
 }
 
-function matchesAny(value, patterns) {
+function matchesAny(value: string, patterns: string[]): boolean {
   return patterns.some((pattern) => regexFrom(pattern).test(value));
 }
 
-function hasWritePrefix(operation, policy) {
+function hasWritePrefix(operation: string, policy: Policy): boolean {
   const normalized = String(operation);
   return policy.writeOperationPrefixes.some((prefix) => new RegExp(`(^|[A-Za-z0-9])${prefix}`, 'i').test(normalized));
 }
 
-function hasReadPrefix(operation, policy) {
+function hasReadPrefix(operation: string, policy: Policy): boolean {
   return policy.readOperationPrefixes.some((prefix) => new RegExp(`^${prefix}`, 'i').test(operation));
 }
 
-function isLocalMetadataCommand(args) {
+function isLocalMetadataCommand(args: string[]): boolean {
   return args.some((arg) => /^(--help|-h|help|version|--version)$/i.test(String(arg)));
 }
 
-function commandRiskText(normalizedArgs, options = {}) {
+function commandRiskText(normalizedArgs: string[], options: ClassifyOptions): string {
   return options.rawCommand || ['hcloud', ...normalizedArgs].join(' ');
 }
 
-function applyCommandRiskRules(base, normalizedArgs, options = {}) {
+function applyCommandRiskRules(base: RiskDecision, normalizedArgs: string[], options: ClassifyOptions): RiskDecision {
   if (base.decision === 'deny' || options.skipRiskRules === true) {
     return base;
   }
@@ -142,7 +188,7 @@ function applyCommandRiskRules(base, normalizedArgs, options = {}) {
   return mergeRiskDecision(base, risk);
 }
 
-function applyRawCommandRiskRules(base, command, options = {}) {
+function applyRawCommandRiskRules(base: RiskDecision, command: string, options: ClassifyOptions): RiskDecision {
   if (base.decision === 'deny' || options.skipRiskRules === true) {
     return base;
   }
@@ -153,7 +199,7 @@ function applyRawCommandRiskRules(base, command, options = {}) {
 // Find hcloud command segments split by shell operators (; && || |) so a write
 // command in the middle of a concatenated string keeps its deny classification
 // (#650 review edge 1).
-function findHcloudCommandSegments(text) {
+function findHcloudCommandSegments(text: unknown): string[][] {
   return String(text)
     .split(/(?:\|\||&&|;|\|)/)
     .map((segment) => segment.trim())
@@ -165,12 +211,12 @@ function findHcloudCommandSegments(text) {
     });
 }
 
-export function classifyHcloudArgs(args, options = {}) {
+export function classifyHcloudArgs(args: unknown, options: ClassifyOptions = {}): RiskDecision {
   const policy = options.policy || DEFAULT_POLICY;
   // Second pass for shell-wrapped input (#650 D4-16 review edge 1): when the
   // leading command is not hcloud but a concatenated segment contains one,
   // classify every hcloud segment and merge to the most severe decision.
-  const unwrappedTokens = stripExecutable(Array.isArray(args) ? args.map(String) : []);
+  const unwrappedTokens = stripExecutable(Array.isArray(args) ? args.map((arg) => String(arg)) : []);
   const unwrappedFirst = String(unwrappedTokens[0] || '').toLowerCase();
   const unwrappedIsHcloud =
     unwrappedFirst === 'hcloud' ||
@@ -183,7 +229,7 @@ export function classifyHcloudArgs(args, options = {}) {
       const results = hcloudSegments.map((segment) => classifyHcloudArgs(segment, { ...options, _segmentDepth: 1 }));
       return (
         results.find((result) => result.decision === 'deny') ||
-        results.find((result) => ['write', 'execution', 'secret', 'credential'].includes(result.risk)) ||
+        results.find((result) => ['write', 'execution', 'secret', 'credential'].includes(result.risk ?? '')) ||
         results[0]
       );
     }
@@ -373,7 +419,7 @@ export function classifyHcloudArgs(args, options = {}) {
   );
 }
 
-function splitSimpleCommand(command) {
+function splitSimpleCommand(command: unknown): string[] {
   return (
     String(command)
       .match(/"[^"]*"|'[^']*'|\S+/g)
@@ -381,7 +427,7 @@ function splitSimpleCommand(command) {
   );
 }
 
-export function classifyTextCommand(command, options = {}) {
+export function classifyTextCommand(command: unknown, options: ClassifyOptions = {}): RiskDecision {
   const policy = options.policy || DEFAULT_POLICY;
   const text = String(command || '');
 
@@ -448,9 +494,10 @@ export function classifyTextCommand(command, options = {}) {
   );
 }
 
-export function assertAllowed(result) {
+export function assertAllowed(result: RiskDecision): RiskDecision {
   if (result.decision === 'deny') {
-    const error = new Error(result.reason);
+    // Fresh Error we immediately augment; the cast names the shape we attach.
+    const error = new Error(result.reason) as Error & { policy: RiskDecision };
     error.policy = result;
     throw error;
   }

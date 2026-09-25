@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { compareVersion, getKooCliVersion, parseHcloudVersion } from './koocli-version.ts';
-import { redactSecrets } from './safety-policy.mjs';
+import { redactSecrets } from './safety-policy.ts';
 
 const VERSION_RE = /KooCLI|Current.*version|当前KooCLI/i;
 

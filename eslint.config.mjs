@@ -92,7 +92,7 @@ export default [
     },
   },
   {
-    files: ['plugins/huaweicloud-core/src/sandbox/hdkitservice-api.mjs'],
+    files: ['plugins/huaweicloud-core/src/sandbox/hdkitservice-api.ts'],
     rules: {
       'n/no-missing-import': ['error', { allowModules: ['undici'] }],
     },

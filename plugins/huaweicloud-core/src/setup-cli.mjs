@@ -21,7 +21,7 @@ import { getAuthStatus, syncAuth } from './auth/service.mjs';
 import { resolveAndApplyProjectId } from './auth/project-id.ts';
 import { SUPPORTED_AGENT_TARGETS } from './auth/agent-registration.mjs';
 import { fingerprint, readKooCliProfiles, resolveManagedProfile } from './auth/reconcile.mjs';
-import { redactSecrets } from './safety-policy.mjs';
+import { redactSecrets } from './safety-policy.ts';
 import {
   globalCredentialsPath,
   readGlobalCredentials,

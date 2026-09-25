@@ -16,7 +16,7 @@ import { join, dirname, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { createConnection, getCredentials } from './hwlink-api.mjs';
+import { createConnection, getCredentials } from './hwlink-api.ts';
 import { getWebSocketImpl } from '../proxy/proxy-agent.ts';
 import { trackSandboxConnect, trackSandboxDisconnect } from '../telemetry/telemetry.mjs';
 
