@@ -37,52 +37,76 @@ const ReserveSource = Object.freeze({
 
 let nextId = 1;
 
-function nextIdentifier() {
+// Decoded wire shape of an hwlink frame. `data` is a subarray view into the
+// received buffer (null when the frame carries no payload); it is never copied.
+export interface HwlinkPacket {
+  headerLength: number;
+  reserve: number;
+  packetLength: number;
+  operation: number;
+  srcPort: number;
+  dstPort: number;
+  identifier: number;
+  source: number;
+  data: Uint8Array | null;
+}
+
+interface CreatePacketOptions {
+  operation: number;
+  reserve?: number;
+  srcPort?: number;
+  dstPort?: number;
+  identifier?: number;
+  source?: number;
+  payload?: Uint8Array | null;
+}
+
+function nextIdentifier(): number {
   nextId = ((nextId + 1) & 0xffffffff) >>> 0;
   return nextId;
 }
 
-function isOpTunnelSuccess(op) {
+function isOpTunnelSuccess(op: number): boolean {
   return (op & 0xff00) === OpCode.OpTunnelSuccess;
 }
 
-function isOpTcpTunnelData(op) {
+function isOpTcpTunnelData(op: number): boolean {
   return (op & 0xff) === OpCode.OpTcpTunnelData;
 }
 
-function isOpFailed(op) {
+function isOpFailed(op: number): boolean {
   return op >> 24 !== 0;
 }
 
-function isOpCreateTcpTunnel(op) {
+function isOpCreateTcpTunnel(op: number): boolean {
   return (op & 0xff) === OpCode.OpCreateTcpTunnel;
 }
 
-function isOpReverseCreateTcpTunnel(op) {
+function isOpReverseCreateTcpTunnel(op: number): boolean {
   return (op & 0xff) === OpCode.OpReverseCreateTcpTunnel;
 }
 
-function isOpCmdTerminalData(op) {
+function isOpCmdTerminalData(op: number): boolean {
   return (op & 0xff) === OpCode.OpCmdTerminalData;
 }
 
-function isOpListenTcpTunnel(op) {
+function isOpListenTcpTunnel(op: number): boolean {
   return (op & 0xff) === OpCode.OpListenTcpTunnel;
 }
 
-function isSubStreamPing(op) {
+function isSubStreamPing(op: number): boolean {
   return (op & 0xff00) === OpCode.OpSubStreamPing;
 }
 
-function hex2(n) {
+function hex2(n: number): string {
   return `0x${n.toString(16).padStart(2, '0').toUpperCase()}`;
 }
 
-function operationToString(op) {
+function operationToString(op: number): string {
   return [hex2((op >> 24) & 0xff), hex2((op >> 16) & 0xff), hex2((op >> 8) & 0xff), hex2(op & 0xff)].join(' ');
 }
 
-function formatPacketOneLine(packet) {
+function formatPacketOneLine(packet: HwlinkPacket): string {
   const err = (packet.operation >> 24) & 0xff;
   const ctl = (packet.operation >> 16) & 0xff;
   const sync = (packet.operation >> 8) & 0xff;
@@ -101,7 +125,7 @@ function formatPacketOneLine(packet) {
   );
 }
 
-function toUint8Array(bytes) {
+function toUint8Array(bytes: Uint8Array | ArrayBuffer | ArrayBufferView): Uint8Array {
   if (bytes instanceof Uint8Array) return bytes;
   if (bytes instanceof ArrayBuffer) return new Uint8Array(bytes);
   if (ArrayBuffer.isView(bytes)) {
@@ -110,7 +134,7 @@ function toUint8Array(bytes) {
   throw new TypeError('packet bytes must be an ArrayBuffer or Uint8Array');
 }
 
-function createPacket(opts) {
+function createPacket(opts: CreatePacketOptions): Uint8Array {
   const { operation, reserve = 0, srcPort = 0, dstPort = 0, identifier = 0, source = 0, payload = null } = opts;
 
   const payloadLen = payload ? payload.length : 0;
@@ -135,7 +159,7 @@ function createPacket(opts) {
   return u8;
 }
 
-function parsePacket(bytes) {
+function parsePacket(bytes: Uint8Array | ArrayBuffer | ArrayBufferView): HwlinkPacket {
   const u8 = toUint8Array(bytes);
   if (u8.byteLength < FIXED_HEADER_LEN) {
     throw new Error(`packet too short: ${u8.byteLength} bytes`);
@@ -158,7 +182,7 @@ function parsePacket(bytes) {
     throw new Error(`incomplete hwlink packet: ${packetLength} > ${u8.byteLength}`);
   }
 
-  let data = null;
+  let data: Uint8Array | null = null;
   if (packetLength > FIXED_HEADER_LEN) {
     data = u8.subarray(FIXED_HEADER_LEN, packetLength);
   }

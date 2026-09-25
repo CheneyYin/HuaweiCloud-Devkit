@@ -8,6 +8,7 @@
  */
 
 import { createServer } from 'node:net';
+import type { Server, Socket } from 'node:net';
 
 import {
   OpCode,
@@ -20,12 +21,49 @@ import {
   isOpFailed,
   isSubStreamPing,
   nextIdentifier,
-} from './hwlink-packet.js';
+} from './hwlink-packet.ts';
+import type { HwlinkPacket } from './hwlink-packet.ts';
+import type { HwlinkWebSocketMultiplexer } from './hwlink-multiplexer.ts';
 
 const MAX_TUNNEL_PAYLOAD_SIZE = MAX_SEND_CHUNK_SIZE - FIXED_HEADER_LEN;
 
+interface TunnelChannelOptions {
+  localPort?: number;
+  remotePort: number;
+  onReady?: () => void;
+  onClose?: () => void;
+  onError?: (_error: unknown) => void;
+}
+
+interface SubConnection {
+  identifier: number;
+  socket: Socket;
+  ready: boolean;
+  readyResolve: (() => void) | undefined;
+  readyPromise: Promise<void>;
+}
+
 class HwlinkTunnelChannel {
-  constructor({ localPort = 0, remotePort, onReady, onClose, onError }) {
+  localPort: number;
+  remotePort: number;
+  identifier: number;
+  mux: HwlinkWebSocketMultiplexer | null;
+  closed: boolean;
+  opened: boolean;
+
+  subConnections: Map<number, SubConnection>;
+  localServer: Server | null;
+  nextSubId: number;
+
+  onReadyCb: (() => void) | null;
+  onCloseCb: (() => void) | null;
+  onErrorCb: ((_error: unknown) => void) | null;
+
+  _readyResolve: (() => void) | null;
+  _readyReject: ((_error: unknown) => void) | null;
+  ready: Promise<void>;
+
+  constructor({ localPort = 0, remotePort, onReady, onClose, onError }: TunnelChannelOptions) {
     this.localPort = localPort;
     this.remotePort = remotePort;
     this.identifier = nextIdentifier();
@@ -43,24 +81,24 @@ class HwlinkTunnelChannel {
 
     this._readyResolve = null;
     this._readyReject = null;
-    this.ready = new Promise((resolve, reject) => {
-      this._readyResolve = resolve;
+    this.ready = new Promise<void>((resolve, reject) => {
+      this._readyResolve = () => resolve();
       this._readyReject = reject;
     });
   }
 
-  attach(mux) {
+  attach(mux: HwlinkWebSocketMultiplexer): void {
     this.mux = mux;
     mux.register(this);
   }
 
-  onopen() {
+  onopen(): void {
     if (this.closed || this.opened) return;
     this.opened = true;
     this.startLocalServer();
   }
 
-  onmessage(packet) {
+  onmessage(packet: HwlinkPacket): void {
     if (this.closed) return;
 
     if (isOpFailed(packet.operation)) {
@@ -92,7 +130,9 @@ class HwlinkTunnelChannel {
     if (isOpTcpTunnelData(packet.operation)) {
       const subConn = this.subConnections.get(packet.identifier);
       if (subConn && subConn.socket && !subConn.socket.destroyed) {
-        subConn.socket.write(packet.data);
+        // A TCP-tunnel-data frame always carries a payload; the assertion keeps
+        // the original `write(packet.data)` call (null would still be passed).
+        subConn.socket.write(packet.data!);
       }
       return;
     }
@@ -121,7 +161,7 @@ class HwlinkTunnelChannel {
     }
   }
 
-  onerror(error) {
+  onerror(error: unknown): void {
     if (this.onErrorCb) this.onErrorCb(error);
     if (this._readyReject) {
       this._readyReject(error);
@@ -130,17 +170,23 @@ class HwlinkTunnelChannel {
     }
   }
 
-  onclose() {
+  onclose(): void {
     this.close();
   }
 
-  startLocalServer() {
-    this.localServer = createServer((socket) => {
+  startLocalServer(): void {
+    const server = createServer((socket) => {
       this.onIncomingConnection(socket);
     });
+    this.localServer = server;
 
-    this.localServer.listen(this.localPort, '127.0.0.1', () => {
-      this.localPort = this.localServer.address().port;
+    server.listen(this.localPort, '127.0.0.1', () => {
+      // The listening callback fires only for a bound TCP server, so address()
+      // is an AddressInfo; the guard is pure narrowing.
+      const address = server.address();
+      if (address && typeof address === 'object') {
+        this.localPort = address.port;
+      }
       if (this.onReadyCb) this.onReadyCb();
       if (this._readyResolve) {
         this._readyResolve();
@@ -149,7 +195,7 @@ class HwlinkTunnelChannel {
       }
     });
 
-    this.localServer.on('error', (err) => {
+    server.on('error', (err) => {
       if (this.onErrorCb) this.onErrorCb(err);
       if (this._readyReject) {
         this._readyReject(err);
@@ -159,29 +205,29 @@ class HwlinkTunnelChannel {
     });
   }
 
-  _registerSubId(subId) {
+  _registerSubId(subId: number): void {
     if (this.mux && !this.mux.channels.has(subId)) {
       this.mux.channels.set(subId, this);
       this.mux.queue.register({ identifier: subId });
     }
   }
 
-  _unregisterSubId(subId) {
+  _unregisterSubId(subId: number): void {
     if (this.mux) {
       this.mux.channels.delete(subId);
       this.mux.queue.unregister({ identifier: subId });
     }
   }
 
-  onIncomingConnection(socket) {
+  onIncomingConnection(socket: Socket): void {
     const subId = this.nextSubId;
     this.nextSubId = ((this.nextSubId + 1) & 0xffffffff) >>> 0;
 
-    let readyResolve;
-    const readyPromise = new Promise((resolve) => {
-      readyResolve = resolve;
+    let readyResolve: (() => void) | undefined;
+    const readyPromise = new Promise<void>((resolve) => {
+      readyResolve = () => resolve();
     });
-    const subConn = {
+    const subConn: SubConnection = {
       identifier: subId,
       socket,
       ready: false,
@@ -233,7 +279,7 @@ class HwlinkTunnelChannel {
     });
   }
 
-  destroySubConnection(subConn, error) {
+  destroySubConnection(subConn: SubConnection, error?: Error): void {
     if (subConn.socket && !subConn.socket.destroyed) {
       if (error) subConn.socket.destroy(error);
       else subConn.socket.destroy();
@@ -242,11 +288,11 @@ class HwlinkTunnelChannel {
     this.subConnections.delete(subConn.identifier);
   }
 
-  sendRaw(data) {
+  sendRaw(data: Uint8Array): void {
     if (this.mux) this.mux.sendFairly(this, data);
   }
 
-  close() {
+  close(): void {
     if (this.closed) return;
     this.closed = true;
 

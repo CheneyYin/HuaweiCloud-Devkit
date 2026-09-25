@@ -17,12 +17,24 @@ import {
   isOpFailed,
   isSubStreamPing,
   nextIdentifier,
-} from './hwlink-packet.js';
+} from './hwlink-packet.ts';
+import type { HwlinkPacket } from './hwlink-packet.ts';
+import type { HwlinkWebSocketMultiplexer } from './hwlink-multiplexer.ts';
 
 const encoder = new TextEncoder();
 const MAX_TERMINAL_PAYLOAD_SIZE = MAX_SEND_CHUNK_SIZE - FIXED_HEADER_LEN;
 
 class HwlinkTerminalChannel {
+  username: string;
+  identifier: number;
+  mux: HwlinkWebSocketMultiplexer | null;
+  closed: boolean;
+  opened: boolean;
+  onDataCb: ((_data: Uint8Array) => void) | null;
+  onCloseCb: (() => void) | null;
+  onErrorCb: ((_error: unknown) => void) | null;
+  onReadyCb: (() => void) | null;
+
   constructor(username = 'root') {
     this.username = username;
     this.identifier = nextIdentifier();
@@ -35,32 +47,32 @@ class HwlinkTerminalChannel {
     this.onReadyCb = null;
   }
 
-  onData(cb) {
+  onData(cb: (_data: Uint8Array) => void): void {
     this.onDataCb = cb;
   }
 
-  onClose(cb) {
+  onClose(cb: () => void): void {
     this.onCloseCb = cb;
   }
 
-  onError(cb) {
+  onError(cb: (_error: unknown) => void): void {
     this.onErrorCb = cb;
   }
 
-  onReady(cb) {
+  onReady(cb: () => void): void {
     this.onReadyCb = cb;
   }
 
-  get isClosed() {
+  get isClosed(): boolean {
     return this.closed;
   }
 
-  attach(mux) {
+  attach(mux: HwlinkWebSocketMultiplexer): void {
     this.mux = mux;
     mux.register(this);
   }
 
-  onopen() {
+  onopen(): void {
     if (this.closed || this.opened) return;
     this.opened = true;
     this.sendRaw(
@@ -75,7 +87,7 @@ class HwlinkTerminalChannel {
     if (this.onReadyCb) this.onReadyCb();
   }
 
-  onmessage(packet) {
+  onmessage(packet: HwlinkPacket): void {
     if (this.closed) return;
 
     if (isOpFailed(packet.operation)) {
@@ -101,15 +113,15 @@ class HwlinkTerminalChannel {
     }
   }
 
-  onerror(error) {
+  onerror(error: unknown): void {
     if (this.onErrorCb) this.onErrorCb(error);
   }
 
-  onclose() {
+  onclose(): void {
     this.close();
   }
 
-  sendInput(data) {
+  sendInput(data: Uint8Array): void {
     if (this.closed) return;
     for (let offset = 0; offset < data.byteLength; offset += MAX_TERMINAL_PAYLOAD_SIZE) {
       const payload = data.subarray(offset, offset + MAX_TERMINAL_PAYLOAD_SIZE);
@@ -117,7 +129,7 @@ class HwlinkTerminalChannel {
     }
   }
 
-  sendTerminalData(payload) {
+  sendTerminalData(payload: Uint8Array): void {
     this.sendRaw(
       createPacket({
         operation: OpCode.OpCmdTerminalData | OpCode.OpSubStreamPong,
@@ -129,11 +141,11 @@ class HwlinkTerminalChannel {
     );
   }
 
-  sendText(text) {
+  sendText(text: string): void {
     this.sendInput(encoder.encode(text));
   }
 
-  resize(cols, rows) {
+  resize(cols: number, rows: number): void {
     if (this.closed) return;
     const payload = new Uint8Array(4);
     const view = new DataView(payload.buffer);
@@ -150,11 +162,11 @@ class HwlinkTerminalChannel {
     );
   }
 
-  sendRaw(data) {
+  sendRaw(data: Uint8Array): void {
     if (this.mux) this.mux.sendFairly(this, data);
   }
 
-  handleError(error) {
+  handleError(error: unknown): void {
     if (this.closed) return;
     this.closed = true;
     if (this.mux) this.mux.unregister(this);
@@ -162,7 +174,7 @@ class HwlinkTerminalChannel {
     if (this.onCloseCb) this.onCloseCb();
   }
 
-  close() {
+  close(): void {
     if (this.closed) return;
     this.closed = true;
     if (this.mux) this.mux.unregister(this);

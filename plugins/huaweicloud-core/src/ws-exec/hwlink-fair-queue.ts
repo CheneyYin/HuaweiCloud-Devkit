@@ -10,8 +10,34 @@
 const DEFAULT_HIGH_WATERMARK = 8 * 1024 * 1024;
 const DEFAULT_LOW_WATERMARK = 2 * 1024 * 1024;
 
+// Only the identifier is read from a registered channel, so the queue accepts
+// any object carrying one (terminal/tunnel channels and synthetic sub-IDs).
+interface QueueChannel {
+  identifier: number;
+}
+
+interface FairQueueOptions {
+  highWatermark?: number;
+  lowWatermark?: number;
+}
+
+type SendFn = (_data: Uint8Array) => void | Promise<void>;
+
 class FairQueue {
-  constructor(onSend, opts = {}) {
+  onSend: SendFn;
+  channels: Map<number, Uint8Array[]>;
+  readyChannels: Set<number>;
+  channelOrder: number[];
+  cursor: number;
+  normalQueue: Uint8Array[];
+  highPriorityQueue: Uint8Array[];
+  draining: boolean;
+  totalBytes: number;
+  backpressureQueue: Array<() => void>;
+  highWatermark: number;
+  lowWatermark: number;
+
+  constructor(onSend: SendFn, opts: FairQueueOptions = {}) {
     this.onSend = onSend;
     this.channels = new Map();
     this.readyChannels = new Set();
@@ -26,18 +52,18 @@ class FairQueue {
     this.lowWatermark = opts.lowWatermark || DEFAULT_LOW_WATERMARK;
   }
 
-  register(ch) {
+  register(ch: QueueChannel): void {
     this.channels.set(ch.identifier, []);
   }
 
-  unregister(ch) {
+  unregister(ch: QueueChannel): void {
     this.channels.delete(ch.identifier);
     this.readyChannels.delete(ch.identifier);
   }
 
-  async sendFairly(ch, data) {
+  async sendFairly(ch: QueueChannel, data: Uint8Array): Promise<void> {
     if (this.totalBytes >= this.highWatermark) {
-      await new Promise((resolve) => {
+      await new Promise<void>((resolve) => {
         this.backpressureQueue.push(resolve);
       });
     }
@@ -54,23 +80,24 @@ class FairQueue {
     this.startDrain();
   }
 
-  sendImmediately(data) {
+  sendImmediately(data: Uint8Array): void {
     this.highPriorityQueue.push(data);
     this.totalBytes += data.byteLength;
     this.startDrain();
   }
 
-  startDrain() {
+  startDrain(): void {
     if (this.draining) return;
     this.draining = true;
     this.drain().catch(() => {});
   }
 
-  async drain() {
+  async drain(): Promise<void> {
     try {
       while (true) {
         if (this.highPriorityQueue.length > 0) {
-          const data = this.highPriorityQueue.shift();
+          // Length was just checked; shift() on a non-empty array is defined.
+          const data = this.highPriorityQueue.shift()!;
           this.totalBytes -= data.byteLength;
           await this.onSend(data);
           this.checkBackpressure();
@@ -78,7 +105,8 @@ class FairQueue {
         }
 
         if (this.normalQueue.length > 0) {
-          const data = this.normalQueue.shift();
+          // Length was just checked; shift() on a non-empty array is defined.
+          const data = this.normalQueue.shift()!;
           this.totalBytes -= data.byteLength;
           await this.onSend(data);
           this.checkBackpressure();
@@ -96,7 +124,7 @@ class FairQueue {
     }
   }
 
-  collectRound() {
+  collectRound(): void {
     if (this.readyChannels.size === 0) return;
     const len = this.channelOrder.length;
     if (len === 0) return;
@@ -115,7 +143,8 @@ class FairQueue {
         continue;
       }
 
-      const data = buffer.shift();
+      // `buffer` is non-empty here; shift() is defined.
+      const data = buffer.shift()!;
       this.normalQueue.push(data);
       if (buffer.length === 0) {
         this.readyChannels.delete(id);
@@ -126,9 +155,10 @@ class FairQueue {
     this.channelOrder = Array.from(new Set(this.channelOrder.filter((id) => this.readyChannels.has(id))));
   }
 
-  checkBackpressure() {
+  checkBackpressure(): void {
     while (this.totalBytes < this.lowWatermark && this.backpressureQueue.length > 0) {
-      const resolve = this.backpressureQueue.shift();
+      // Length was just checked; shift() on a non-empty array is defined.
+      const resolve = this.backpressureQueue.shift()!;
       resolve();
     }
   }

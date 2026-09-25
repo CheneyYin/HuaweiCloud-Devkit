@@ -9,12 +9,61 @@
 
 import { Buffer } from 'node:buffer';
 
-import { FairQueue } from './hwlink-fair-queue.js';
-import { formatPacketOneLine, parsePacket } from './hwlink-packet.js';
+import { FairQueue } from './hwlink-fair-queue.ts';
+import { formatPacketOneLine, parsePacket } from './hwlink-packet.ts';
+import type { HwlinkPacket } from './hwlink-packet.ts';
 
 const WS_OPEN = 1;
 
-function addWsListener(ws, event, handler) {
+type WsListener = (..._args: unknown[]) => void;
+
+// Structural view of the WebSocket instance we drive. Both Node's global
+// WebSocket and the proxy/undici implementations satisfy it; `on` is the
+// ws-package listener API, `addEventListener` the WHATWG one.
+interface WebSocketLike {
+  readyState: number;
+  binaryType?: string;
+  on?: (_event: string, _handler: WsListener) => void;
+  addEventListener?: (_event: string, _handler: WsListener) => void;
+  send: (_data: Uint8Array, _cb?: (_error?: unknown) => void) => unknown;
+  close: () => void;
+}
+
+export type WebSocketConstructor = new (_url: string, _protocol?: string) => WebSocketLike;
+
+interface CloseEventLike {
+  code: number;
+  reason: string;
+}
+
+export interface FrameReport {
+  direction: 'in' | 'out';
+  packet: HwlinkPacket;
+  line: string;
+}
+
+interface MultiplexerOptions {
+  WebSocketImpl?: WebSocketConstructor;
+  protocol?: string;
+  onFrame?: (_frame: FrameReport) => void;
+  trace?: boolean;
+}
+
+// Minimal contract every registered channel must expose. Terminal and tunnel
+// channels satisfy it; callbacks that ignore arguments remain assignable.
+interface HwlinkChannel {
+  identifier: number;
+  onopen: () => void;
+  onmessage: (_packet: HwlinkPacket) => void;
+  onerror: (_error: unknown) => void;
+  onclose: (_event: CloseEventLike) => void;
+}
+
+interface ArrayBufferProvider {
+  arrayBuffer: () => Promise<ArrayBuffer>;
+}
+
+function addWsListener(ws: WebSocketLike, event: string, handler: WsListener): void {
   if (typeof ws.on === 'function') {
     ws.on(event, handler);
     return;
@@ -26,7 +75,7 @@ function addWsListener(ws, event, handler) {
   throw new Error('WebSocket implementation does not support event listeners');
 }
 
-function closeQuietly(ws) {
+function closeQuietly(ws: WebSocketLike): void {
   try {
     ws.close();
   } catch {
@@ -34,7 +83,7 @@ function closeQuietly(ws) {
   }
 }
 
-function extractMessageData(eventOrData) {
+function extractMessageData(eventOrData: unknown): unknown {
   if (
     eventOrData &&
     typeof eventOrData === 'object' &&
@@ -48,7 +97,16 @@ function extractMessageData(eventOrData) {
   return eventOrData;
 }
 
-function eventDataToUint8Array(data) {
+function hasArrayBuffer(value: unknown): value is ArrayBufferProvider {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return false;
+  return 'arrayBuffer' in value && typeof value.arrayBuffer === 'function';
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return typeof value === 'object' && value !== null && 'then' in value && typeof value.then === 'function';
+}
+
+function eventDataToUint8Array(data: unknown): Promise<Uint8Array> {
   if (data instanceof Uint8Array) return Promise.resolve(data);
   if (Buffer.isBuffer(data)) {
     return Promise.resolve(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
@@ -57,18 +115,18 @@ function eventDataToUint8Array(data) {
   if (ArrayBuffer.isView(data)) {
     return Promise.resolve(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
   }
-  if (data && typeof data.arrayBuffer === 'function') {
+  if (hasArrayBuffer(data)) {
     return data.arrayBuffer().then((buffer) => new Uint8Array(buffer));
   }
   return Promise.reject(new Error(`unsupported websocket message data: ${typeof data}`));
 }
 
-function sendBinary(ws, data) {
+function sendBinary(ws: WebSocketLike, data: Uint8Array): Promise<void> {
   if (ws.readyState !== WS_OPEN) return Promise.resolve();
 
-  return new Promise((resolve, reject) => {
+  return new Promise<void>((resolve, reject) => {
     let settled = false;
-    const done = (err) => {
+    const done = (err?: unknown): void => {
       if (settled) return;
       settled = true;
       if (err) reject(err);
@@ -77,7 +135,7 @@ function sendBinary(ws, data) {
 
     try {
       const maybePromise = ws.send(data, done);
-      if (maybePromise && typeof maybePromise.then === 'function') {
+      if (isPromiseLike(maybePromise)) {
         maybePromise.then(() => done(), done);
         return;
       }
@@ -89,7 +147,19 @@ function sendBinary(ws, data) {
 }
 
 class HwlinkWebSocketMultiplexer {
-  constructor(url, source, options = {}) {
+  url: string;
+  source: number;
+  onFrame: ((_frame: FrameReport) => void) | undefined;
+  trace: boolean;
+  channels: Map<number, HwlinkChannel>;
+  unknownIdentifierHandler: ((_packet: HwlinkPacket, _mux: HwlinkWebSocketMultiplexer) => void) | null;
+  onClose: ((_event: CloseEventLike) => void) | null;
+  onError: ((_error: unknown) => void) | null;
+  closed: boolean;
+  queue: FairQueue;
+  ws: WebSocketLike;
+
+  constructor(url: string, source: number, options: MultiplexerOptions = {}) {
     const { WebSocketImpl = globalThis.WebSocket, protocol = 'devenv', onFrame, trace = false } = options;
 
     if (typeof WebSocketImpl !== 'function') {
@@ -138,7 +208,7 @@ class HwlinkWebSocketMultiplexer {
     });
   }
 
-  normalizeCloseEvent(eventOrCode, maybeReason) {
+  normalizeCloseEvent(eventOrCode: unknown, maybeReason: unknown): CloseEventLike {
     if (typeof eventOrCode === 'number') {
       return {
         code: eventOrCode,
@@ -146,13 +216,18 @@ class HwlinkWebSocketMultiplexer {
       };
     }
 
-    return {
-      code: eventOrCode && typeof eventOrCode.code === 'number' ? eventOrCode.code : 0,
-      reason: eventOrCode && eventOrCode.reason ? String(eventOrCode.reason) : '',
-    };
+    const code =
+      eventOrCode && typeof eventOrCode === 'object' && 'code' in eventOrCode && typeof eventOrCode.code === 'number'
+        ? eventOrCode.code
+        : 0;
+    const reason =
+      eventOrCode && typeof eventOrCode === 'object' && 'reason' in eventOrCode && eventOrCode.reason
+        ? String(eventOrCode.reason)
+        : '';
+    return { code, reason };
   }
 
-  register(ch) {
+  register(ch: HwlinkChannel): void {
     this.channels.set(ch.identifier, ch);
     this.queue.register(ch);
     if (this.ws.readyState === WS_OPEN) {
@@ -160,24 +235,24 @@ class HwlinkWebSocketMultiplexer {
     }
   }
 
-  unregister(ch) {
+  unregister(ch: HwlinkChannel): void {
     this.channels.delete(ch.identifier);
     this.queue.unregister(ch);
   }
 
-  sendFairly(ch, data) {
+  sendFairly(ch: HwlinkChannel, data: Uint8Array): void {
     this.queue.sendFairly(ch, data);
   }
 
-  sendImmediately(data) {
+  sendImmediately(data: Uint8Array): void {
     this.queue.sendImmediately(data);
   }
 
-  get readyState() {
+  get readyState(): number {
     return this.ws.readyState;
   }
 
-  async handleMessage(data) {
+  async handleMessage(data: unknown): Promise<void> {
     const bytes = await eventDataToUint8Array(data);
     const packet = parsePacket(bytes);
     this.reportFrame('in', packet);
@@ -193,13 +268,13 @@ class HwlinkWebSocketMultiplexer {
     }
   }
 
-  wsSend(data) {
+  wsSend(data: Uint8Array): Promise<void> {
     const packet = parsePacket(data);
     this.reportFrame('out', packet);
     return sendBinary(this.ws, data);
   }
 
-  reportFrame(direction, packet) {
+  reportFrame(direction: 'in' | 'out', packet: HwlinkPacket): void {
     if (this.onFrame) {
       this.onFrame({ direction, packet, line: formatPacketOneLine(packet) });
     }
@@ -209,12 +284,12 @@ class HwlinkWebSocketMultiplexer {
     }
   }
 
-  handleError(error) {
+  handleError(error: unknown): void {
     for (const ch of this.channels.values()) ch.onerror(error);
     if (this.onError) this.onError(error);
   }
 
-  close() {
+  close(): void {
     if (this.closed) return;
     this.closed = true;
     closeQuietly(this.ws);

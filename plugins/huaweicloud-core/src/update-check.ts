@@ -73,7 +73,7 @@ interface SpawnResultLike {
   error?: { message?: string } | null;
 }
 
-type UpgradeSpawnFn = (command: string, args: readonly string[], options: SpawnSyncOptions) => SpawnResultLike;
+type UpgradeSpawnFn = (_command: string, _args: readonly string[], _options: SpawnSyncOptions) => SpawnResultLike;
 
 // One-property read with validation, for the JS boundary of thrown values:
 // only a non-empty `message` string is surfaced.

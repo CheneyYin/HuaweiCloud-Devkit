@@ -4,8 +4,76 @@ import { randomBytes } from 'node:crypto';
 const DEFAULT_URL = 'ws://127.0.0.1:8080';
 const DEFAULT_TIMEOUT_MS = 30000;
 
+type WsListener = (..._args: unknown[]) => void;
+
+interface WebSocketLike {
+  send: (_data: string) => unknown;
+  close: () => void;
+  addEventListener: (_event: string, _handler: WsListener) => void;
+}
+
+type WebSocketConstructor = new (_url: string) => WebSocketLike;
+
+interface MessageEventLike {
+  data: unknown;
+}
+
+interface ArrayBufferProvider {
+  arrayBuffer: () => Promise<ArrayBuffer>;
+}
+
+interface Markers {
+  nonce: string;
+  readyPrefix: string;
+  donePrefix: string;
+  readySuffix: string;
+  doneSuffix: string;
+  readyMarker: string;
+  doneMarker: string;
+}
+
+interface ExecResult {
+  stdout: string;
+  exitCode: number;
+  url: string;
+  command: string;
+}
+
+interface ShellSessionOptions {
+  url?: string;
+  timeoutMs?: number;
+  WebSocketImpl?: WebSocketConstructor;
+  onFrame?: (_chunk: string) => void;
+}
+
+interface ExecuteCommandOptions extends ShellSessionOptions {
+  command?: string;
+}
+
+interface ExecOptions {
+  timeoutMs?: number;
+}
+
+interface CleanCommandOutputOptions {
+  inputEchoed: boolean;
+  command: string;
+  doneCommand: string;
+}
+
+interface PendingExec {
+  buffer: string;
+  command: string;
+  doneCommand: string;
+  markers: Markers;
+  reject: (_error: unknown) => void;
+  resolve: (_result: ExecResult) => void;
+  timeout: NodeJS.Timeout;
+}
+
 class WebSocketExecError extends Error {
-  constructor(message, exitCode, details = {}) {
+  exitCode: number;
+
+  constructor(message: string, exitCode: number, details: Record<string, unknown> = {}) {
     super(message);
     this.name = 'WebSocketExecError';
     this.exitCode = exitCode;
@@ -13,24 +81,33 @@ class WebSocketExecError extends Error {
   }
 }
 
-async function eventDataToString(data) {
+function hasArrayBuffer(value: unknown): value is ArrayBufferProvider {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return false;
+  return 'arrayBuffer' in value && typeof value.arrayBuffer === 'function';
+}
+
+function isMessageEvent(value: unknown): value is MessageEventLike {
+  return typeof value === 'object' && value !== null && 'data' in value;
+}
+
+async function eventDataToString(data: unknown): Promise<string> {
   if (typeof data === 'string') return data;
   if (Buffer.isBuffer(data)) return data.toString('utf8');
   if (data instanceof ArrayBuffer) return Buffer.from(data).toString('utf8');
   if (ArrayBuffer.isView(data)) {
     return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString('utf8');
   }
-  if (data && typeof data.arrayBuffer === 'function') {
+  if (hasArrayBuffer(data)) {
     return Buffer.from(await data.arrayBuffer()).toString('utf8');
   }
   return String(data);
 }
 
-function sendLine(ws, line) {
+function sendLine(ws: WebSocketLike, line: string): void {
   ws.send(`${line}\n`);
 }
 
-function closeQuietly(ws) {
+function closeQuietly(ws: WebSocketLike): void {
   try {
     ws.close();
   } catch {
@@ -38,7 +115,7 @@ function closeQuietly(ws) {
   }
 }
 
-function stripEchoedLine(text, line, options = {}) {
+function stripEchoedLine(text: string, line: string, options: { allowAttached?: boolean } = {}): string {
   if (text.startsWith(line)) {
     text = text.slice(line.length);
     text = text.replace(/^\r?\n/, '');
@@ -70,7 +147,7 @@ function stripEchoedLine(text, line, options = {}) {
   return text;
 }
 
-function buildMarkers(nonce = randomBytes(8).toString('hex')) {
+function buildMarkers(nonce: string = randomBytes(8).toString('hex')): Markers {
   const readyPrefix = '__WS_EXEC_READY_';
   const donePrefix = '__WS_EXEC_DONE_';
   const readySuffix = `${nonce}__`;
@@ -89,28 +166,28 @@ function buildMarkers(nonce = randomBytes(8).toString('hex')) {
   };
 }
 
-function buildShellCommands(markers) {
+function buildShellCommands(markers: Markers): { readyCommand: string; doneCommand: string } {
   return {
     readyCommand: `stty -echo 2>/dev/null; export PS1= PS2= PROMPT_COMMAND=; printf '\\n%s%s\\n' '${markers.readyPrefix}' '${markers.readySuffix}'`,
     doneCommand: `__ws_exec_rc=$?; printf '\\n%s%s%d\\n' '${markers.donePrefix}' '${markers.doneSuffix}' "$__ws_exec_rc"`,
   };
 }
 
-function cleanCommandOutput(output, { inputEchoed, command, doneCommand }) {
+function cleanCommandOutput(output: string, { inputEchoed, command, doneCommand }: CleanCommandOutputOptions): string {
   let cleaned = output;
   if (inputEchoed) cleaned = stripEchoedLine(cleaned, command);
   cleaned = stripEchoedLine(cleaned, doneCommand, { allowAttached: true });
   return cleaned.replace(/^\r?\n/, '').replace(/\r?\n\r?\n$/, '\n');
 }
 
-function normalizeCommand(command) {
+function normalizeCommand(command: unknown): string {
   if (!command || !String(command).trim()) {
     throw new WebSocketExecError('missing command', 2);
   }
   return String(command).trim();
 }
 
-function normalizeTimeout(timeoutMs) {
+function normalizeTimeout(timeoutMs: number): number {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     throw new WebSocketExecError('timeoutMs must be a positive number of milliseconds', 2);
   }
@@ -118,7 +195,24 @@ function normalizeTimeout(timeoutMs) {
 }
 
 class WebSocketShellSession {
-  constructor(options = {}) {
+  url: string;
+  timeoutMs: number;
+  WebSocketImpl: WebSocketConstructor;
+  onFrame: ((_chunk: string) => void) | undefined;
+  state: 'opening' | 'ready' | 'closed';
+  readyBuffer: string;
+  inputEchoed: boolean;
+  pending: PendingExec | null;
+  queue: Promise<unknown>;
+  ws: WebSocketLike;
+  readyMarkers: Markers;
+  readyCommand: string;
+  readyPromise: Promise<WebSocketShellSession>;
+  resolveReady: (_session: WebSocketShellSession) => void;
+  rejectReady: (_error: unknown) => void;
+  readyTimeout: NodeJS.Timeout;
+
+  constructor(options: ShellSessionOptions = {}) {
     const {
       url = DEFAULT_URL,
       timeoutMs = DEFAULT_TIMEOUT_MS,
@@ -145,7 +239,9 @@ class WebSocketShellSession {
     const { readyCommand } = buildShellCommands(this.readyMarkers);
     this.readyCommand = readyCommand;
 
-    this.readyPromise = new Promise((resolve, reject) => {
+    this.resolveReady = () => {};
+    this.rejectReady = () => {};
+    this.readyPromise = new Promise<WebSocketShellSession>((resolve, reject) => {
       this.resolveReady = resolve;
       this.rejectReady = reject;
     });
@@ -164,7 +260,8 @@ class WebSocketShellSession {
     });
 
     this.ws.addEventListener('message', (event) => {
-      this.handleMessage(event).catch((error) => {
+      const data = isMessageEvent(event) ? event.data : event;
+      this.handleMessage(data).catch((error) => {
         this.fail(
           new WebSocketExecError(`exec message handling error: ${error.message}`, 1, {
             cause: error,
@@ -187,18 +284,18 @@ class WebSocketShellSession {
     });
   }
 
-  ready() {
+  ready(): Promise<WebSocketShellSession> {
     return this.readyPromise;
   }
 
-  exec(command, options = {}) {
-    const run = () => this.runExec(command, options);
+  exec(command: unknown, options: ExecOptions = {}): Promise<ExecResult> {
+    const run = (): Promise<ExecResult> => this.runExec(command, options);
     const result = this.queue.then(run, run);
     this.queue = result.catch(() => {});
     return result;
   }
 
-  close() {
+  close(): void {
     if (this.state === 'closed') return;
     const wasOpening = this.state === 'opening';
     const pending = this.pending;
@@ -218,7 +315,7 @@ class WebSocketShellSession {
     closeQuietly(this.ws);
   }
 
-  fail(error) {
+  fail(error: unknown): void {
     if (this.state === 'closed') return;
 
     const wasOpening = this.state === 'opening';
@@ -238,10 +335,10 @@ class WebSocketShellSession {
     }
   }
 
-  async handleMessage(event) {
+  async handleMessage(data: unknown): Promise<void> {
     if (this.state === 'closed') return;
 
-    const chunk = await eventDataToString(event.data);
+    const chunk = await eventDataToString(data);
     if (this.onFrame) this.onFrame(chunk);
 
     if (this.state === 'opening') {
@@ -256,7 +353,7 @@ class WebSocketShellSession {
     }
   }
 
-  tryCompleteReady() {
+  tryCompleteReady(): void {
     const readyIndex = this.readyBuffer.indexOf(this.readyMarkers.readyMarker);
     if (readyIndex === -1) return;
 
@@ -267,7 +364,7 @@ class WebSocketShellSession {
     this.resolveReady(this);
   }
 
-  runExec(command, options = {}) {
+  runExec(command: unknown, options: ExecOptions = {}): Promise<ExecResult> {
     if (this.state !== 'ready') {
       return Promise.reject(new WebSocketExecError('exec session is not ready', 1, { phase: this.state }));
     }
@@ -277,7 +374,7 @@ class WebSocketShellSession {
     const markers = buildMarkers();
     const { doneCommand } = buildShellCommands(markers);
 
-    return new Promise((resolve, reject) => {
+    return new Promise<ExecResult>((resolve, reject) => {
       this.pending = {
         buffer: '',
         command: shellCommand,
@@ -300,7 +397,7 @@ class WebSocketShellSession {
     });
   }
 
-  tryCompletePending() {
+  tryCompletePending(): void {
     const pending = this.pending;
     if (!pending) return;
 
@@ -332,13 +429,13 @@ class WebSocketShellSession {
   }
 }
 
-async function connectShellSession(options = {}) {
+async function connectShellSession(options: ShellSessionOptions = {}): Promise<WebSocketShellSession> {
   const session = new WebSocketShellSession(options);
   await session.ready();
   return session;
 }
 
-async function executeCommand(options = {}) {
+async function executeCommand(options: ExecuteCommandOptions = {}): Promise<ExecResult> {
   const { command, timeoutMs = DEFAULT_TIMEOUT_MS, ...sessionOptions } = options;
   const shellCommand = normalizeCommand(command);
   const normalizedTimeoutMs = normalizeTimeout(timeoutMs);

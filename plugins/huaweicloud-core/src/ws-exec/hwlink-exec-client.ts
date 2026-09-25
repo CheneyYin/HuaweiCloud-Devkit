@@ -13,28 +13,114 @@ import {
   buildMarkers,
   buildShellCommands,
   cleanCommandOutput,
-} from './ws-exec-client.js';
-import { HwlinkWebSocketMultiplexer } from './hwlink-multiplexer.js';
-import { HwlinkTerminalChannel } from './hwlink-terminal-channel.js';
+} from './ws-exec-client.ts';
+import { HwlinkWebSocketMultiplexer } from './hwlink-multiplexer.ts';
+import { HwlinkTerminalChannel } from './hwlink-terminal-channel.ts';
+import type { FrameReport, WebSocketConstructor } from './hwlink-multiplexer.ts';
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 
-function normalizeCommand(command) {
+type Markers = ReturnType<typeof buildMarkers>;
+
+interface HwlinkExecResult {
+  stdout: string;
+  exitCode: number;
+  url: string;
+  source: number;
+  username: string;
+  command: string;
+}
+
+interface PendingExec {
+  buffer: string;
+  command: string;
+  doneCommand: string;
+  markers: Markers;
+  reject: (_error: unknown) => void;
+  resolve: (_result: HwlinkExecResult) => void;
+  timeout: NodeJS.Timeout;
+}
+
+interface CreateHwlinkTerminalOptions {
+  url?: string;
+  source?: unknown;
+  username?: string;
+  WebSocketImpl?: WebSocketConstructor;
+  protocol?: string;
+  cols?: number;
+  rows?: number;
+  onFrame?: (_frame: FrameReport) => void;
+  onData?: (_data: Uint8Array) => void;
+  onError?: (_error: WebSocketExecError) => void;
+  onClose?: () => void;
+  trace?: boolean;
+}
+
+interface HwlinkTerminalHandle {
+  url: string;
+  source: number;
+  username: string;
+  mux: HwlinkWebSocketMultiplexer;
+  term: HwlinkTerminalChannel;
+  ready: Promise<HwlinkTerminalHandle>;
+  close: () => void;
+  resize: (_nextCols: number, _nextRows: number) => void;
+  sendInput: (_data: Uint8Array) => void;
+  sendText: (_text: string) => void;
+}
+
+interface HwlinkTerminalSessionOptions {
+  url?: string;
+  source?: unknown;
+  username?: string;
+  timeoutMs?: number;
+  WebSocketImpl?: WebSocketConstructor;
+  protocol?: string;
+  cols?: number;
+  rows?: number;
+  onFrame?: (_frame: FrameReport) => void;
+  onData?: (_data: Uint8Array, _chunk: string) => void;
+  trace?: boolean;
+}
+
+interface ExecuteHwlinkCommandOptions extends HwlinkTerminalSessionOptions {
+  command?: string;
+}
+
+interface ExecOptions {
+  timeoutMs?: number;
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
+    return error.message;
+  }
+  return String(error);
+}
+
+// Number.isFinite returns true only for primitive numbers, so adding the
+// typeof check is a pure narrowing with identical results.
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function normalizeCommand(command: unknown): string {
   if (!command || !String(command).trim()) {
     throw new WebSocketExecError('missing command', 2);
   }
   return String(command).trim();
 }
 
-function normalizeTimeout(timeoutMs) {
+function normalizeTimeout(timeoutMs: number): number {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     throw new WebSocketExecError('timeoutMs must be a positive number of milliseconds', 2);
   }
   return timeoutMs;
 }
 
-function normalizeSource(source) {
+function normalizeSource(source: unknown): number {
   const numericSource = Number(source);
   if (!Number.isInteger(numericSource) || numericSource < -0x80000000 || numericSource > 0xffffffff) {
     throw new WebSocketExecError('hwlink source must be an int32 or uint32 number', 2);
@@ -42,14 +128,14 @@ function normalizeSource(source) {
   return numericSource;
 }
 
-function normalizeUrl(url) {
+function normalizeUrl(url: unknown): string {
   if (!url || !String(url).trim()) {
     throw new WebSocketExecError('hwlink url is required', 2);
   }
   return String(url);
 }
 
-function createHwlinkTerminal(options = {}) {
+function createHwlinkTerminal(options: CreateHwlinkTerminalOptions = {}): HwlinkTerminalHandle {
   const {
     url,
     source,
@@ -76,23 +162,23 @@ function createHwlinkTerminal(options = {}) {
   const term = new HwlinkTerminalChannel(username);
   let closed = false;
   let readySettled = false;
-  let readyResolve;
-  let readyReject;
+  let readyResolve: (_handle: HwlinkTerminalHandle) => void = () => {};
+  let readyReject: (_error: unknown) => void = () => {};
 
-  const ready = new Promise((resolve, reject) => {
+  const ready = new Promise<HwlinkTerminalHandle>((resolve, reject) => {
     readyResolve = resolve;
     readyReject = reject;
   });
 
-  function settleReady(error) {
+  function settleReady(error?: unknown): void {
     if (readySettled) return;
     readySettled = true;
     if (error) readyReject(error);
     else readyResolve(handle);
   }
 
-  function handleError(error, prefix) {
-    const wrapped = new WebSocketExecError(`${prefix}: ${error.message}`, 1, {
+  function handleError(error: unknown, prefix: string): void {
+    const wrapped = new WebSocketExecError(`${prefix}: ${errorMessage(error)}`, 1, {
       cause: error,
       phase: readySettled ? 'open' : 'opening',
     });
@@ -101,7 +187,7 @@ function createHwlinkTerminal(options = {}) {
     close();
   }
 
-  function handleClose() {
+  function handleClose(): void {
     settleReady(
       new WebSocketExecError('hwlink terminal closed before ready', 1, {
         phase: 'opening',
@@ -113,7 +199,7 @@ function createHwlinkTerminal(options = {}) {
   }
 
   term.onReady(() => {
-    if (Number.isFinite(cols) && Number.isFinite(rows)) {
+    if (isFiniteNumber(cols) && isFiniteNumber(rows)) {
       term.resize(cols, rows);
     }
     settleReady();
@@ -126,14 +212,14 @@ function createHwlinkTerminal(options = {}) {
   mux.onError = (error) => handleError(error, 'hwlink websocket error');
   mux.onClose = handleClose;
 
-  function close() {
+  function close(): void {
     if (closed) return;
     closed = true;
     term.close();
     mux.close();
   }
 
-  const handle = {
+  const handle: HwlinkTerminalHandle = {
     url: normalizedUrl,
     source: normalizedSource,
     username,
@@ -141,9 +227,9 @@ function createHwlinkTerminal(options = {}) {
     term,
     ready,
     close,
-    resize: (nextCols, nextRows) => term.resize(nextCols, nextRows),
-    sendInput: (data) => term.sendInput(data),
-    sendText: (text) => term.sendText(text),
+    resize: (nextCols: number, nextRows: number) => term.resize(nextCols, nextRows),
+    sendInput: (data: Uint8Array) => term.sendInput(data),
+    sendText: (text: string) => term.sendText(text),
   };
 
   term.attach(mux);
@@ -151,7 +237,28 @@ function createHwlinkTerminal(options = {}) {
 }
 
 class HwlinkTerminalExecSession {
-  constructor(options = {}) {
+  url: string;
+  source: number;
+  username: string;
+  timeoutMs: number;
+  onData: ((_data: Uint8Array, _chunk: string) => void) | undefined;
+  initialCols: number | undefined;
+  initialRows: number | undefined;
+  state: 'opening' | 'ready' | 'closed';
+  readyBuffer: string;
+  inputEchoed: boolean;
+  pending: PendingExec | null;
+  queue: Promise<unknown>;
+  readyMarkers: Markers;
+  readyCommand: string;
+  readyPromise: Promise<HwlinkTerminalExecSession>;
+  resolveReady: (_session: HwlinkTerminalExecSession) => void;
+  rejectReady: (_error: unknown) => void;
+  readyTimeout: NodeJS.Timeout;
+  mux!: HwlinkWebSocketMultiplexer;
+  term!: HwlinkTerminalChannel;
+
+  constructor(options: HwlinkTerminalSessionOptions = {}) {
     const {
       url,
       source,
@@ -182,7 +289,9 @@ class HwlinkTerminalExecSession {
     const { readyCommand } = buildShellCommands(this.readyMarkers);
     this.readyCommand = readyCommand;
 
-    this.readyPromise = new Promise((resolve, reject) => {
+    this.resolveReady = () => {};
+    this.rejectReady = () => {};
+    this.readyPromise = new Promise<HwlinkTerminalExecSession>((resolve, reject) => {
       this.resolveReady = resolve;
       this.rejectReady = reject;
     });
@@ -205,21 +314,21 @@ class HwlinkTerminalExecSession {
       });
     } catch (error) {
       clearTimeout(this.readyTimeout);
-      throw new WebSocketExecError(error.message, 2, { cause: error, phase: 'opening' });
+      throw new WebSocketExecError(errorMessage(error), 2, { cause: error, phase: 'opening' });
     }
 
     this.term = new HwlinkTerminalChannel(username);
     this.term.onData((data) => this.handleTerminalData(data));
     this.term.onError((error) => {
       this.fail(
-        new WebSocketExecError(`hwlink terminal error: ${error.message}`, 1, {
+        new WebSocketExecError(`hwlink terminal error: ${errorMessage(error)}`, 1, {
           cause: error,
           phase: this.state,
         }),
       );
     });
     this.term.onReady(() => {
-      if (Number.isFinite(this.initialCols) && Number.isFinite(this.initialRows)) {
+      if (isFiniteNumber(this.initialCols) && isFiniteNumber(this.initialRows)) {
         this.term.resize(this.initialCols, this.initialRows);
       }
       this.sendLine(this.readyCommand);
@@ -245,7 +354,7 @@ class HwlinkTerminalExecSession {
     this.mux.onError = (error) => {
       if (this.state !== 'closed') {
         this.fail(
-          new WebSocketExecError(`hwlink websocket error: ${error.message}`, 1, {
+          new WebSocketExecError(`hwlink websocket error: ${errorMessage(error)}`, 1, {
             cause: error,
             phase: this.state,
           }),
@@ -256,22 +365,22 @@ class HwlinkTerminalExecSession {
     this.term.attach(this.mux);
   }
 
-  ready() {
+  ready(): Promise<HwlinkTerminalExecSession> {
     return this.readyPromise;
   }
 
-  exec(command, options = {}) {
-    const run = () => this.runExec(command, options);
+  exec(command: unknown, options: ExecOptions = {}): Promise<HwlinkExecResult> {
+    const run = (): Promise<HwlinkExecResult> => this.runExec(command, options);
     const result = this.queue.then(run, run);
     this.queue = result.catch(() => {});
     return result;
   }
 
-  resize(cols, rows) {
+  resize(cols: number, rows: number): void {
     this.term.resize(cols, rows);
   }
 
-  close() {
+  close(): void {
     if (this.state === 'closed') return;
     const wasOpening = this.state === 'opening';
     const pending = this.pending;
@@ -300,7 +409,7 @@ class HwlinkTerminalExecSession {
     this.mux.close();
   }
 
-  fail(error) {
+  fail(error: unknown): void {
     if (this.state === 'closed') return;
 
     const wasOpening = this.state === 'opening';
@@ -322,7 +431,7 @@ class HwlinkTerminalExecSession {
     this.mux.close();
   }
 
-  handleTerminalData(data) {
+  handleTerminalData(data: Uint8Array): void {
     if (this.state === 'closed') return;
 
     const chunk = decoder.decode(data, { stream: true });
@@ -340,7 +449,7 @@ class HwlinkTerminalExecSession {
     }
   }
 
-  tryCompleteReady() {
+  tryCompleteReady(): void {
     const readyIndex = this.readyBuffer.indexOf(this.readyMarkers.readyMarker);
     if (readyIndex === -1) return;
 
@@ -351,7 +460,7 @@ class HwlinkTerminalExecSession {
     this.resolveReady(this);
   }
 
-  runExec(command, options = {}) {
+  runExec(command: unknown, options: ExecOptions = {}): Promise<HwlinkExecResult> {
     if (this.state !== 'ready') {
       return Promise.reject(
         new WebSocketExecError('hwlink terminal exec session is not ready', 1, {
@@ -365,7 +474,7 @@ class HwlinkTerminalExecSession {
     const markers = buildMarkers();
     const { doneCommand } = buildShellCommands(markers);
 
-    return new Promise((resolve, reject) => {
+    return new Promise<HwlinkExecResult>((resolve, reject) => {
       this.pending = {
         buffer: '',
         command: shellCommand,
@@ -388,7 +497,7 @@ class HwlinkTerminalExecSession {
     });
   }
 
-  tryCompletePending() {
+  tryCompletePending(): void {
     const pending = this.pending;
     if (!pending) return;
 
@@ -419,24 +528,28 @@ class HwlinkTerminalExecSession {
     });
   }
 
-  sendLine(line) {
+  sendLine(line: string): void {
     this.term.sendInput(encoder.encode(`${line}\n`));
   }
 }
 
-async function connectHwlinkTerminalSession(options = {}) {
+async function connectHwlinkTerminalSession(
+  options: HwlinkTerminalSessionOptions = {},
+): Promise<HwlinkTerminalExecSession> {
   const session = new HwlinkTerminalExecSession(options);
   await session.ready();
   return session;
 }
 
-async function connectHwlinkInteractiveTerminal(options = {}) {
+async function connectHwlinkInteractiveTerminal(
+  options: CreateHwlinkTerminalOptions = {},
+): Promise<HwlinkTerminalHandle> {
   const terminal = createHwlinkTerminal(options);
   await terminal.ready;
   return terminal;
 }
 
-async function executeHwlinkCommand(options = {}) {
+async function executeHwlinkCommand(options: ExecuteHwlinkCommandOptions = {}): Promise<HwlinkExecResult> {
   const { command, timeoutMs = DEFAULT_TIMEOUT_MS, ...sessionOptions } = options;
   const shellCommand = normalizeCommand(command);
   const normalizedTimeoutMs = normalizeTimeout(timeoutMs);

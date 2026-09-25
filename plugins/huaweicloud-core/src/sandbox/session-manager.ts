@@ -79,7 +79,8 @@ interface HwlinkTunnelChannel {
   close(): void;
 }
 
-// Structural surface of the untyped ./ws-exec/index.js bundle. Only the members
+// Structural surface of the untyped ws-exec barrel resolved by
+// resolveWsExecIndexUrl() (index.js in dist, index.ts in-repo). Only the members
 // this module calls are modeled; the dynamic import is cast to this shape (same
 // pattern as proxy-agent.ts's UndiciModule cast). The cast is honest because the
 // target is our own bundled module, not parsed/untrusted data.
@@ -209,12 +210,21 @@ const DEVBRIDGE_TUNNEL_DOMAIN = 'devbridge-s2.hwtunnel.com';
 const DEVBRIDGE_MIGRATION_MARKER = '服务已迁移';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-export const WS_EXEC_INDEX_URL = pathToFileURL(join(__dirname, '..', 'ws-exec', 'index.js')).href;
+
+// ws-exec's sources are TypeScript now, but runtime entry points read the
+// compiled dist bundle. Prefer the compiled barrel when it exists (dist/sandbox
+// -> dist/ws-exec/index.js) and fall back to the source barrel for in-repo runs
+// (src/sandbox -> src/ws-exec/index.ts, stripped by Node outside node_modules).
+export function resolveWsExecIndexUrl(): string {
+  const compiled = pathToFileURL(join(__dirname, '..', 'ws-exec', 'index.js'));
+  if (existsSync(compiled)) return compiled.href;
+  return pathToFileURL(join(__dirname, '..', 'ws-exec', 'index.ts')).href;
+}
 
 export const TUNNEL_URL_PATTERN = /TUNNEL_URL:(https:\/\/[A-Za-z0-9_-]+-\d+\.devbridge-s2\.hwtunnel\.com)/;
 
 async function loadWsExec(): Promise<WsExecModule> {
-  return (await import(WS_EXEC_INDEX_URL)) as WsExecModule;
+  return (await import(resolveWsExecIndexUrl())) as WsExecModule;
 }
 
 let currentWorkspaceId: string | null = process.env.HW_WORKSPACE_ID || null;
