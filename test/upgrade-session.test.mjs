@@ -9,7 +9,7 @@ import {
   _decorateResult,
   _isHintConsumed,
   _resetHintConsumption,
-} from '../plugins/huaweicloud-core/src/mcp-protocol.mjs';
+} from '../plugins/huaweicloud-core/src/mcp-protocol.ts';
 import * as updateCheck from '../plugins/huaweicloud-core/src/update-check.mjs';
 
 // ============================================================================

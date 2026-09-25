@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 const { getProxyDispatcher, clearProxyDispatcherCache, PROXY_TLS_OPTIONS } =
-  await import('../plugins/huaweicloud-core/src/proxy/proxy-agent.mjs');
+  await import('../plugins/huaweicloud-core/src/proxy/proxy-agent.ts');
 
 function pushProxyEnv() {
   return {

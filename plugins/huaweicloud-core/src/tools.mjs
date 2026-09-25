@@ -10,7 +10,7 @@ import { evaluateArtifacts, evaluateCommandRisk, evaluateDeployPlan } from './ri
 import { classifyTextCommand, redactSecrets } from './safety-policy.mjs';
 import { planHcloudCommand, runHcloud, consumeApprovalToken, hashArgs } from './hcloud-cli.mjs';
 import { searchMarketplace } from './search-market.mjs';
-import { getServiceIcon } from './icon-library.mjs';
+import { getServiceIcon } from './icon-library.ts';
 import { detectFramework } from './detect-framework.mjs';
 import {
   execWithSession,
@@ -49,7 +49,7 @@ import {
   resolveCredentialsWithRuntime,
 } from './auth/credentials.mjs';
 import { trackToolInvoke, trackSkillRetrieve, clearUserHash } from './telemetry/telemetry.mjs';
-import { fetchWithProxy } from './proxy/proxy-agent.mjs';
+import { fetchWithProxy } from './proxy/proxy-agent.ts';
 import { fingerprint, runHcloudConfigure, resolveManagedProfile } from './auth/reconcile.mjs';
 import {
   getCachedUpdateInfo,
@@ -62,7 +62,7 @@ import {
   resolveSkipFilePath,
   upgradePackage,
 } from './update-check.mjs';
-import { hcloudProbeNextStep, probeHcloud } from './hcloud-probe.mjs';
+import { hcloudProbeNextStep, probeHcloud } from './hcloud-probe.ts';
 import { isUsableOfficeaceRoot, readOfficeaceRootMarker } from './officeace-paths.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

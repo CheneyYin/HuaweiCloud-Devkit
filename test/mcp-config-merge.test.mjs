@@ -8,7 +8,7 @@ import {
   extractUserDelta,
   applyUserDelta,
   inheritPeerUserEnv,
-} from '../plugins/huaweicloud-core/src/mcp-config-merge.mjs';
+} from '../plugins/huaweicloud-core/src/mcp-config-merge.ts';
 
 const MCP_PATH = '/home/u/.config/opencode/huaweicloud-plugins/src/mcp-server.mjs';
 

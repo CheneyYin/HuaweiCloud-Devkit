@@ -6,7 +6,7 @@ import { join, dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-import { fetchWithProxy } from './proxy/proxy-agent.mjs';
+import { fetchWithProxy } from './proxy/proxy-agent.ts';
 import { SUPPORTED_AGENT_TARGETS } from './auth/agent-registration.mjs';
 
 const IS_WINDOWS = process.platform === 'win32';

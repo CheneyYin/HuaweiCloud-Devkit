@@ -455,7 +455,7 @@ test('tools.mjs resolves skills from the codearts directory', () => {
 
 test('setup-cli.mjs handles KooCLI sandbox blockers and privacy agreement', () => {
   const setup = readSource(join('src', 'setup-cli.mjs'));
-  const hcloudProbe = readSource(join('src', 'hcloud-probe.mjs'));
+  const hcloudProbe = readSource(join('src', 'hcloud-probe.ts'));
   // sandbox detection reads the CodeArts permission config
   assert.match(setup, /function detectCodeartsSandbox\(\)/);
   assert.match(setup, /codearts-data', 'storage', 'permission', 'config\.json'/);
@@ -743,7 +743,7 @@ test('tools.mjs registers version-update tools', () => {
 test('stdio server warms update cache; shared protocol decorates first tool call', () => {
   const server = readSource(join('src', 'mcp-server.mjs'));
   assert.match(server, /getCachedUpdateInfo\(readInstalledVersion\(\)/);
-  const protocol = readSource(join('src', 'mcp-protocol.mjs'));
+  const protocol = readSource(join('src', 'mcp-protocol.ts'));
   assert.match(protocol, /applyUpdateHint\(/);
   assert.match(protocol, /peekCachedUpdateInfo\(\)/);
 });

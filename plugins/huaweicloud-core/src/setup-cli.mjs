@@ -35,7 +35,7 @@ import {
   writeProxyConfig,
   clearProxyConfig,
   getProxySettings,
-} from './proxy/proxy-config.mjs';
+} from './proxy/proxy-config.ts';
 import { removeKooCli, removeObsConfig } from './sandbox/uninstall-cleanup.ts';
 import {
   mergeCommandStyle,
@@ -43,12 +43,12 @@ import {
   extractUserDelta,
   applyUserDelta,
   inheritPeerUserEnv,
-} from './mcp-config-merge.mjs';
+} from './mcp-config-merge.ts';
 import { readAgentDelta, saveAgentDelta, takeAgentDelta, purgeBackup } from './mcp-config-backup.ts';
 import { isUsableOfficeaceRoot, readOfficeaceRootMarker, writeOfficeaceRootMarker } from './officeace-paths.ts';
 import { queryDistTagsFetch, determineTarget, semverCompare } from './update-check.mjs';
 import { getKooCliVersion, compareVersion, kooCliDownloadBase, KOO_CLI_BASE } from './koocli-version.ts';
-import { findHcloudBin, hcloudProbeNextStep, probeHcloud } from './hcloud-probe.mjs';
+import { findHcloudBin, hcloudProbeNextStep, probeHcloud } from './hcloud-probe.ts';
 
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
 

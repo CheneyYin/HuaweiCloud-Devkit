@@ -98,7 +98,7 @@ export default [
     },
   },
   {
-    files: ['plugins/huaweicloud-core/src/proxy/proxy-agent.mjs'],
+    files: ['plugins/huaweicloud-core/src/proxy/proxy-agent.ts'],
     rules: {
       'n/prefer-node-protocol': 'off',
       'n/no-missing-import': ['error', { allowModules: ['undici'] }],

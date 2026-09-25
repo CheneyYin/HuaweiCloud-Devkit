@@ -3,17 +3,20 @@
 // Program-owned fields (the node executable + mcp-server.mjs path, required env
 // keys) are corrected by the installer; everything else belongs to the user.
 
-function isPlainObject(value) {
+function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function sameJson(a, b) {
+function sameJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
 // Merge env maps: our required keys are only set when absent; user-set values
 // always win. Returns null when nothing needs to change.
-function mergeEnv(userEnv = {}, requiredEnv = {}) {
+function mergeEnv(
+  userEnv: Record<string, unknown> = {},
+  requiredEnv: Record<string, unknown> = {},
+): Record<string, unknown> | null {
   const merged = { ...userEnv };
   let changed = false;
   for (const [key, value] of Object.entries(requiredEnv)) {
@@ -26,14 +29,36 @@ function mergeEnv(userEnv = {}, requiredEnv = {}) {
   return merged;
 }
 
-function withDefaultTimeout(entry, defaultTimeout) {
+function withDefaultTimeout(
+  entry: Record<string, unknown>,
+  defaultTimeout: number | null | undefined,
+): Record<string, unknown> {
   // Pass null explicitly to omit the timeout field (defaults only apply to undefined).
   if (defaultTimeout) entry.timeout = defaultTimeout;
   return entry;
 }
 
+interface CommandStyleOptions {
+  mcpPath?: string;
+  defaultTimeout?: number | null;
+}
+
+interface ArgsStyleOptions {
+  mcpPath?: string;
+  env?: Record<string, unknown>;
+  defaultTimeout?: number | null;
+}
+
+export interface MergeResult {
+  entry: Record<string, unknown>;
+  changed: boolean;
+}
+
 // OpenCode style entry: { type, command: ['node', mcpPath, ...userArgs], ... }
-export function mergeCommandStyle(existing, { mcpPath, defaultTimeout = 300000 } = {}) {
+export function mergeCommandStyle(
+  existing: unknown,
+  { mcpPath, defaultTimeout = 300000 }: CommandStyleOptions = {},
+): MergeResult {
   if (!isPlainObject(existing)) {
     return {
       entry: withDefaultTimeout({ type: 'local', command: ['node', mcpPath], enabled: true }, defaultTimeout),
@@ -48,14 +73,22 @@ export function mergeCommandStyle(existing, { mcpPath, defaultTimeout = 300000 }
       changed: true,
     };
   }
-  const merged = { ...existing, type: 'local', command: ['node', mcpPath, ...existing.command.slice(2)] };
+  const command = Array.isArray(existing.command) ? existing.command : [];
+  const merged: Record<string, unknown> = {
+    ...existing,
+    type: 'local',
+    command: ['node', mcpPath, ...command.slice(2)],
+  };
   if (merged.timeout === undefined && defaultTimeout) merged.timeout = defaultTimeout;
   if (merged.enabled === undefined) merged.enabled = true;
   return { entry: merged, changed: !sameJson(merged, existing) };
 }
 
 // WorkBuddy/AtomCode/CodeArts style entry: { command: 'node', args: [mcpPath, ...userArgs], env, ... }
-export function mergeArgsStyle(existing, { mcpPath, env = {}, defaultTimeout = 300000 } = {}) {
+export function mergeArgsStyle(
+  existing: unknown,
+  { mcpPath, env = {}, defaultTimeout = 300000 }: ArgsStyleOptions = {},
+): MergeResult {
   if (!isPlainObject(existing)) {
     return {
       entry: withDefaultTimeout({ command: 'node', args: [mcpPath], env: { ...env } }, defaultTimeout),
@@ -69,7 +102,7 @@ export function mergeArgsStyle(existing, { mcpPath, env = {}, defaultTimeout = 3
       changed: true,
     };
   }
-  const merged = {
+  const merged: Record<string, unknown> = {
     ...existing,
     command: 'node',
     args: [mcpPath, ...(Array.isArray(existing.args) ? existing.args.slice(1) : [])],
@@ -82,11 +115,16 @@ export function mergeArgsStyle(existing, { mcpPath, env = {}, defaultTimeout = 3
 
 // Codex Desktop / OpenClaw .mcp.json style: { mcpServers: { 'huaweicloud-devkit': entry } }
 // Fresh entries keep the historical shape (no timeout field); user-set timeouts are preserved.
-export function mergeMcpServersFile(config, { mcpPath, env = {} } = {}) {
-  const existing = isPlainObject(config) ? config.mcpServers?.['huaweicloud-devkit'] : undefined;
+export function mergeMcpServersFile(
+  config: unknown,
+  { mcpPath, env = {} }: { mcpPath?: string; env?: Record<string, unknown> } = {},
+): MergeResult & { config: Record<string, unknown> } {
+  const existing =
+    isPlainObject(config) && isPlainObject(config.mcpServers) ? config.mcpServers['huaweicloud-devkit'] : undefined;
   const { entry, changed } = mergeArgsStyle(existing, { mcpPath, env, defaultTimeout: null });
-  const next = isPlainObject(config) ? { ...config } : {};
-  next.mcpServers = { ...(isPlainObject(config) ? config.mcpServers : {}), 'huaweicloud-devkit': entry };
+  const next: Record<string, unknown> = isPlainObject(config) ? { ...config } : {};
+  const servers = isPlainObject(config) && isPlainObject(config.mcpServers) ? config.mcpServers : {};
+  next.mcpServers = { ...servers, 'huaweicloud-devkit': entry };
   return { entry, config: next, changed: changed || !isPlainObject(config) || !existing };
 }
 
@@ -95,9 +133,9 @@ export function mergeMcpServersFile(config, { mcpPath, env = {} } = {}) {
 const REQUIRED_ENV_KEYS = new Set(['HUAWEICLOUD_AGENT_TOOLKIT_MODE', 'HCLOUD_BIN']);
 
 // Extract the user-owned delta of an entry for backup before uninstall removes it.
-export function extractUserDelta(entry, style) {
+export function extractUserDelta(entry: unknown, style: string): Record<string, unknown> | null {
   if (!isPlainObject(entry)) return null;
-  const delta = {};
+  const delta: Record<string, unknown> = {};
   if (style === 'command') {
     if (Array.isArray(entry.command) && entry.command.length > 2) delta.commandExtra = entry.command.slice(2);
   } else if (style === 'args') {
@@ -115,13 +153,15 @@ export function extractUserDelta(entry, style) {
 }
 
 // Apply a previously saved delta onto a freshly written default entry.
-export function applyUserDelta(entry, delta, style) {
+export function applyUserDelta(entry: unknown, delta: unknown, style: string): unknown {
   if (!isPlainObject(entry) || !isPlainObject(delta)) return entry;
-  const merged = { ...entry };
+  const merged: Record<string, unknown> = { ...entry };
   if (style === 'command' && Array.isArray(delta.commandExtra)) {
-    merged.command = [...entry.command, ...delta.commandExtra];
+    const base = Array.isArray(entry.command) ? entry.command : [];
+    merged.command = [...base, ...delta.commandExtra];
   } else if (style === 'args' && Array.isArray(delta.argsExtra)) {
-    merged.args = [...entry.args, ...delta.argsExtra];
+    const base = Array.isArray(entry.args) ? entry.args : [];
+    merged.args = [...base, ...delta.argsExtra];
   }
   if (isPlainObject(delta.env)) {
     merged.env = { ...(isPlainObject(entry.env) ? entry.env : {}), ...delta.env };
@@ -137,13 +177,17 @@ export function applyUserDelta(entry, delta, style) {
 // When the installer writes a NEW `huaweicloud-devkit` entry these must be inherited
 // so the freshly installed key also has the user's credentials (the CodeArts Work
 // UI never surfaces them; they live only in mcp_settings.json).
-export function inheritPeerUserEnv(mcpMap) {
+export function inheritPeerUserEnv(mcpMap: unknown): Record<string, unknown> | null {
   if (!isPlainObject(mcpMap)) return null;
-  const collected = {};
+  const collected: Record<string, string> = {};
   for (const [key, entry] of Object.entries(mcpMap)) {
     if (key === 'huaweicloud-devkit') continue;
     if (!/^huaweicloud-devkit(?:_|$)/i.test(key) && key !== 'HuaweiCloud DevKit') continue;
-    const env = isPlainObject(entry?.environment) ? entry.environment : isPlainObject(entry?.env) ? entry.env : null;
+    let env: Record<string, unknown> | null = null;
+    if (isPlainObject(entry)) {
+      if (isPlainObject(entry.environment)) env = entry.environment;
+      else if (isPlainObject(entry.env)) env = entry.env;
+    }
     if (!env) continue;
     for (const [k, v] of Object.entries(env)) {
       if (REQUIRED_ENV_KEYS.has(k)) continue;

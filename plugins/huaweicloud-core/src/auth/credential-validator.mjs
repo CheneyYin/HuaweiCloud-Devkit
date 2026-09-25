@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 
-import { getProxyDispatcher } from '../proxy/proxy-agent.mjs';
+import { getProxyDispatcher } from '../proxy/proxy-agent.ts';
 
 function iamBaseUrl() {
   return process.env.HW_IAM_ENDPOINT || 'https://iam.myhuaweicloud.com';

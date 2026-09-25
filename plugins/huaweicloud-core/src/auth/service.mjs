@@ -20,7 +20,7 @@ import {
   resolveManagedProfile,
   runHcloudConfigure,
 } from './reconcile.mjs';
-import { hcloudProbeNextStep, probeHcloud } from '../hcloud-probe.mjs';
+import { hcloudProbeNextStep, probeHcloud } from '../hcloud-probe.ts';
 
 function isCodeArtsHome() {
   return (

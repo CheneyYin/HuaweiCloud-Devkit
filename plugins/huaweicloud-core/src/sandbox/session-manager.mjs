@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { createConnection, getCredentials } from './hwlink-api.mjs';
-import { getWebSocketImpl } from '../proxy/proxy-agent.mjs';
+import { getWebSocketImpl } from '../proxy/proxy-agent.ts';
 import { trackSandboxConnect, trackSandboxDisconnect } from '../telemetry/telemetry.mjs';
 
 const execFileAsync = promisify(execFile);

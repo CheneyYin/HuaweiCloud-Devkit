@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { format } from 'node:util';
 
-import { dispatch } from './mcp-protocol.mjs';
+import { dispatch } from './mcp-protocol.ts';
 
 export const DEFAULT_PORT = 9528;
 export const DEFAULT_HOST = '127.0.0.1';

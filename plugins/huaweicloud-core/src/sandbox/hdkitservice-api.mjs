@@ -1,5 +1,5 @@
 import { getCredentials } from './hwlink-api.mjs';
-import { getProxyDispatcher } from '../proxy/proxy-agent.mjs';
+import { getProxyDispatcher } from '../proxy/proxy-agent.ts';
 import { cacheUserHash } from '../telemetry/telemetry.mjs';
 import { readInstalledVersion } from '../update-check.mjs';
 

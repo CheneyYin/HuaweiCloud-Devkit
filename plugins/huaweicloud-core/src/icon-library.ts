@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { getProxyDispatcher } from './proxy/proxy-agent.mjs';
+import { getProxyDispatcher } from './proxy/proxy-agent.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SNAPSHOT_PATH = join(__dirname, 'data', 'icons-manifest.v1.json');
@@ -11,43 +11,141 @@ const ICONS_PAGE_URL = 'https://open.huaweicloud.com/openplatform/icons.html';
 const HTTP_TIMEOUT_MS = 10000;
 const MAX_RESULTS = 5;
 
-let cachedManifest = null;
+interface IconLogo {
+  source_url?: string;
+  local_path?: string;
+}
 
-export function clearIconCache() {
+interface IconArchitecture {
+  status?: string;
+  local_path?: string;
+}
+
+interface IconEntry {
+  id: string;
+  name: string;
+  category: string;
+  subcategory: string;
+  description: string;
+  product_url: string;
+  aliases: string[];
+  tags: string[];
+  logo: IconLogo;
+  architecture?: IconArchitecture;
+}
+
+interface IconManifest {
+  generated_at?: string;
+  icons: IconEntry[];
+}
+
+interface IconIndex {
+  aliases: Record<string, string[]>;
+  tags: Record<string, string[]>;
+  categories: Record<string, string>;
+  descriptions: Record<string, string>;
+}
+
+interface IconResult {
+  id: string;
+  name: string;
+  category: string;
+  subcategory?: string;
+  description?: string;
+  aliases: string[];
+  product_url: string;
+  logo: IconLogo;
+  architecture?: IconArchitecture;
+  score: number;
+  matched: string[];
+}
+
+let cachedManifest: { manifest: IconManifest; source: 'snapshot' | 'live' } | null = null;
+
+export function clearIconCache(): void {
   cachedManifest = null;
 }
 
-async function fetchLiveManifest() {
+// Narrow parsed JSON at the boundary: unknown fields are validated field by
+// field into a fully typed manifest, so scoring code never touches `unknown`.
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function toIconLogo(value: unknown): IconLogo {
+  const raw = asRecord(value);
+  return {
+    source_url: typeof raw.source_url === 'string' ? raw.source_url : undefined,
+    local_path: typeof raw.local_path === 'string' ? raw.local_path : undefined,
+  };
+}
+
+function toIconArchitecture(value: unknown): IconArchitecture | undefined {
+  if (value === null || typeof value !== 'object') return undefined;
+  const raw = asRecord(value);
+  return {
+    status: typeof raw.status === 'string' ? raw.status : undefined,
+    local_path: typeof raw.local_path === 'string' ? raw.local_path : undefined,
+  };
+}
+
+function toIconEntry(value: unknown): IconEntry {
+  const raw = asRecord(value);
+  return {
+    id: typeof raw.id === 'string' ? raw.id : '',
+    name: typeof raw.name === 'string' ? raw.name : '',
+    category: typeof raw.category === 'string' ? raw.category : '',
+    subcategory: typeof raw.subcategory === 'string' ? raw.subcategory : '',
+    description: typeof raw.description === 'string' ? raw.description : '',
+    product_url: typeof raw.product_url === 'string' ? raw.product_url : '',
+    aliases: Array.isArray(raw.aliases) ? raw.aliases.map((a) => String(a)) : [],
+    tags: Array.isArray(raw.tags) ? raw.tags.map((t) => String(t)) : [],
+    logo: toIconLogo(raw.logo),
+    architecture: toIconArchitecture(raw.architecture),
+  };
+}
+
+function parseManifest(value: unknown): IconManifest | null {
+  const raw = asRecord(value);
+  if (!Array.isArray(raw.icons)) return null;
+  return {
+    generated_at: typeof raw.generated_at === 'string' ? raw.generated_at : undefined,
+    icons: raw.icons.map((icon) => toIconEntry(icon)),
+  };
+}
+
+async function fetchLiveManifest(): Promise<IconManifest> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
   try {
     const dispatcher = await getProxyDispatcher(MANIFEST_URL);
-    const fetchOpts = {
+    const fetchOpts: RequestInit & { dispatcher?: unknown } = {
       headers: { 'User-Agent': 'huaweicloud-devkit/1.0' },
       signal: controller.signal,
     };
     if (dispatcher) fetchOpts.dispatcher = dispatcher;
     const resp = await fetch(MANIFEST_URL, fetchOpts);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const data = await resp.json();
-    if (!data || !Array.isArray(data.icons)) {
+    const data: unknown = await resp.json();
+    const manifest = parseManifest(data);
+    if (!manifest) {
       throw new Error('Manifest is missing the icons array.');
     }
-    return data;
+    return manifest;
   } finally {
     clearTimeout(timer);
   }
 }
 
-function loadSnapshot() {
-  const manifest = JSON.parse(readFileSync(SNAPSHOT_PATH, 'utf8'));
-  if (!manifest || !Array.isArray(manifest.icons)) {
+function loadSnapshot(): IconManifest {
+  const manifest = parseManifest(JSON.parse(readFileSync(SNAPSHOT_PATH, 'utf8')));
+  if (!manifest) {
     throw new Error('Bundled icons manifest is corrupted.');
   }
   return manifest;
 }
 
-async function loadManifest() {
+async function loadManifest(): Promise<{ manifest: IconManifest; source: 'snapshot' | 'live' }> {
   if (cachedManifest) return cachedManifest;
   if (process.env.HUAWEICLOUD_ICONS_OFFLINE === '1') {
     cachedManifest = { manifest: loadSnapshot(), source: 'snapshot' };
@@ -62,13 +160,13 @@ async function loadManifest() {
   return cachedManifest;
 }
 
-function normalizeToken(token) {
+function normalizeToken(token: string): string {
   return token.toLowerCase();
 }
 
-function scoreIcon(icon, tokens, index) {
+function scoreIcon(icon: IconEntry, tokens: string[], index: IconIndex): [number, string[]] {
   let total = 0;
-  const matched = [];
+  const matched: string[] = [];
   for (const token of tokens) {
     let best = 0;
     const id = (icon.id || '').toLowerCase();
@@ -100,7 +198,7 @@ function scoreIcon(icon, tokens, index) {
   return [total, matched];
 }
 
-export async function getServiceIcon(service = '', category = '') {
+export async function getServiceIcon(service: string = '', category: string = '') {
   const query = String(service || '').trim();
   const catFilter = String(category || '')
     .trim()
@@ -120,7 +218,7 @@ export async function getServiceIcon(service = '', category = '') {
     .filter(Boolean)
     .map((t) => normalizeToken(t));
 
-  const index = { aliases: {}, tags: {}, categories: {}, descriptions: {} };
+  const index: IconIndex = { aliases: {}, tags: {}, categories: {}, descriptions: {} };
   for (const icon of manifest.icons) {
     const id = (icon.id || '').toLowerCase();
     index.aliases[id] = (icon.aliases || []).map((a) => String(a).toLowerCase());
@@ -132,11 +230,11 @@ export async function getServiceIcon(service = '', category = '') {
     index.descriptions[id] = String(icon.description || '').toLowerCase();
   }
 
-  const results = [];
+  const results: IconResult[] = [];
   for (const icon of manifest.icons) {
     const categoryMatches = !catFilter || String(icon.category || '').toLowerCase() === catFilter;
     if (!categoryMatches) continue;
-    const [score, matched] = tokens.length ? scoreIcon(icon, tokens, index) : [0, []];
+    const [score, matched]: [number, string[]] = tokens.length ? scoreIcon(icon, tokens, index) : [0, []];
     if (tokens.length && score === 0) continue;
     results.push({
       id: icon.id,

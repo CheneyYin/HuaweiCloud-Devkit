@@ -3,7 +3,7 @@ import test from 'node:test';
 
 process.env.HUAWEICLOUD_ICONS_OFFLINE = '1';
 
-const { getServiceIcon } = await import('../plugins/huaweicloud-core/src/icon-library.mjs');
+const { getServiceIcon } = await import('../plugins/huaweicloud-core/src/icon-library.ts');
 
 test('icon library resolves english service ids from the bundled snapshot', async () => {
   const result = await getServiceIcon('ecs');

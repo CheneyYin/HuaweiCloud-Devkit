@@ -8,7 +8,41 @@ import { redactSecrets } from './safety-policy.mjs';
 
 const VERSION_RE = /KooCLI|Current.*version|当前KooCLI/i;
 
-export function findHcloudBin() {
+export interface HcloudCommandOptions {
+  executable?: string;
+  executableArgs?: unknown;
+}
+
+export interface HcloudCommand {
+  executable: string;
+  argsPrefix: string[];
+}
+
+export interface HcloudProbeResultLike {
+  status?: number | null;
+  stdout?: unknown;
+  stderr?: unknown;
+  error?: { code?: unknown; message?: unknown } | null;
+}
+
+export interface HcloudProbeClassification {
+  status: string;
+  installed: boolean;
+  ok: boolean;
+  errorCode?: string;
+  installedVersion?: string | null;
+  requiredVersion?: string;
+  versionMismatch?: boolean;
+}
+
+export interface ProbeHcloudOptions {
+  executable?: string;
+  executableArgs?: unknown;
+  timeoutMs?: number;
+  requiredVersion?: string | null;
+}
+
+export function findHcloudBin(): string | null {
   if (process.env.HCLOUD_BIN && existsSync(process.env.HCLOUD_BIN)) return process.env.HCLOUD_BIN;
   const candidates =
     process.platform === 'win32'
@@ -36,23 +70,26 @@ export function findHcloudBin() {
   return null;
 }
 
-function envHcloudArgs() {
+function envHcloudArgs(): string[] {
   if (!process.env.HCLOUD_BIN_ARGS_JSON) return [];
   try {
-    const parsed = JSON.parse(process.env.HCLOUD_BIN_ARGS_JSON);
+    const parsed: unknown = JSON.parse(process.env.HCLOUD_BIN_ARGS_JSON);
     if (Array.isArray(parsed)) return parsed.map((item) => String(item));
   } catch {}
   return [];
 }
 
-export function resolveHcloudCommand(options = {}) {
+export function resolveHcloudCommand(options: HcloudCommandOptions = {}): HcloudCommand {
   return {
     executable: options.executable || findHcloudBin() || 'hcloud',
     argsPrefix: Array.isArray(options.executableArgs) ? options.executableArgs : envHcloudArgs(),
   };
 }
 
-export function classifyHcloudProbe(result, requiredVersion = getKooCliVersion()) {
+export function classifyHcloudProbe(
+  result: HcloudProbeResultLike,
+  requiredVersion: string | null = getKooCliVersion(),
+): HcloudProbeClassification {
   const stdout = String(result.stdout || '');
   const stderr = String(result.stderr || '');
   const output = `${stdout}${stderr}`;
@@ -113,7 +150,7 @@ export function classifyHcloudProbe(result, requiredVersion = getKooCliVersion()
   };
 }
 
-export function probeHcloud(options = {}) {
+export function probeHcloud(options: ProbeHcloudOptions = {}) {
   const { executable, argsPrefix } = resolveHcloudCommand(options);
   const r = spawnSync(executable, [...argsPrefix, 'version'], {
     shell: false,
@@ -135,7 +172,7 @@ export function probeHcloud(options = {}) {
   };
 }
 
-export function hcloudProbeNextStep(probe) {
+export function hcloudProbeNextStep(probe: HcloudProbeClassification): string {
   if (probe.status === 'ok')
     return 'Use huaweicloud_show_profile_redacted to inspect the active KooCLI profile safely.';
   if (probe.status === 'version_mismatch') {

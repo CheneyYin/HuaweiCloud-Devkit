@@ -1,4 +1,4 @@
-import { getProxyDispatcher } from './proxy/proxy-agent.mjs';
+import { getProxyDispatcher } from './proxy/proxy-agent.ts';
 
 const INDEX_URL =
   'https://gitcode.com/api/v5/repos/2501_91318609/skills-for-index/contents/skills-index/index.json?ref=main';

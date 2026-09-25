@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 
 import { resolveCredentialsWithRuntime } from '../auth/credentials.mjs';
-import { getProxyDispatcher } from '../proxy/proxy-agent.mjs';
+import { getProxyDispatcher } from '../proxy/proxy-agent.ts';
 
 const BASE_URL = process.env.HWLINK_ENDPOINT || 'https://devstation.myhuaweicloud.com';
 

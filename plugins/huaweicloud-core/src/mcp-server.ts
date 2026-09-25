@@ -5,7 +5,7 @@ import { resolve, dirname } from 'node:path';
 import { platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-import { dispatch } from './mcp-protocol.mjs';
+import { dispatch } from './mcp-protocol.ts';
 import { DEFAULT_PORT, DEFAULT_HOST } from './mcp-server-remote.mjs';
 import { getCachedUpdateInfo, readInstalledVersion } from './update-check.mjs';
 import { detectAgent } from './telemetry/agent-detect.ts';
@@ -33,7 +33,7 @@ if (telemetryEndpointIdx > -1 && process.argv[telemetryEndpointIdx + 1]) {
 }
 
 try {
-  const { readProxyConfig } = await import('./proxy/proxy-config.mjs');
+  const { readProxyConfig } = await import('./proxy/proxy-config.ts');
   const proxyConfig = readProxyConfig();
   if (proxyConfig) {
     if (proxyConfig.https_proxy || proxyConfig.HTTPS_PROXY) {
