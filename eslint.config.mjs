@@ -4,12 +4,19 @@ import importPlugin from 'eslint-plugin-import-x';
 import unicornPlugin from 'eslint-plugin-unicorn';
 import prettier from 'eslint-config-prettier';
 import globals from 'globals';
+import tseslint from 'typescript-eslint';
+
+// Scope every typescript-eslint config to TS sources. Recommended applies
+// globally by default, which would run TS-only rules (no-require-imports,
+// no-unused-vars) against the repo's .mjs files.
+const tsFiles = ['**/*.ts', '**/*.tsx', '**/*.mts', '**/*.cts'];
 
 export default [
   {
-    ignores: ['node_modules/', 'dist/', '.codeartsdoer/', '*.zst', '*.db'],
+    ignores: ['node_modules/', '**/dist/**', '.codeartsdoer/', '*.zst', '*.db'],
   },
   js.configs.recommended,
+  ...tseslint.configs.recommended.map((config) => ({ ...config, files: config.files ?? tsFiles })),
   nodePlugin.configs['flat/recommended'],
   prettier,
   {
@@ -24,13 +31,13 @@ export default [
     settings: {
       'import/resolver': {
         node: {
-          extensions: ['.js', '.mjs', '.cjs'],
+          extensions: ['.js', '.mjs', '.cjs', '.ts'],
         },
       },
     },
     rules: {
       // --- Import rules ---
-      'import/extensions': ['error', 'ignorePackages', { js: 'always', mjs: 'always', cjs: 'always' }],
+      'import/extensions': ['error', 'ignorePackages', { js: 'always', mjs: 'always', cjs: 'always', ts: 'always' }],
       'import/no-unresolved': ['error', { ignore: ['^node:'] }],
       'import/order': [
         'warn',
@@ -69,6 +76,19 @@ export default [
       'n/no-missing-import': 'error',
       'n/no-unsupported-features/es-syntax': 'off',
       'n/no-unsupported-features/node-builtins': 'off',
+    },
+  },
+  {
+    files: ['**/*.ts'],
+    rules: {
+      // TypeScript resolves types itself, and eslint-plugin-n does not resolve
+      // explicit ".ts" specifiers. Keep both out of the .ts path.
+      'no-undef': 'off',
+      'n/no-missing-import': 'off',
+      '@typescript-eslint/no-unused-vars': [
+        'warn',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrors: 'none' },
+      ],
     },
   },
   {
