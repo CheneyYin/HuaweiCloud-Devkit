@@ -11,6 +11,17 @@ function readJson(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
+// Runtime sources migrate from .mjs to .ts phase by phase. Resolve whichever
+// extension exists so path assertions survive each rename.
+function readSource(relativePath) {
+  const candidates = [relativePath, relativePath.replace(/\.mjs$/, '.ts')];
+  for (const candidate of candidates) {
+    const full = join(pluginRoot, candidate);
+    if (existsSync(full)) return readFileSync(full, 'utf8');
+  }
+  assert.fail(`source file not found: ${relativePath}`);
+}
+
 test('Codex plugin manifest and marketplace are installable', () => {
   const manifest = readJson(join(pluginRoot, '.codex-plugin', 'plugin.json'));
   assert.equal(manifest.name, 'huaweicloud-devkit');
@@ -202,7 +213,7 @@ test('web/static-site deployment intent offers target options with sandbox first
 
 test('devbridge uses the valid `list` command, not the non-existent `ls`', () => {
   const sandbox = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
-  const sessionManager = readFileSync(join(pluginRoot, 'src', 'sandbox', 'session-manager.mjs'), 'utf8');
+  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.mjs'));
 
   assert.doesNotMatch(sandbox, /devbridge ls\b/);
   assert.match(sandbox, /devbridge list\b/);
@@ -221,7 +232,7 @@ test('huawei-sandbox skill documents devbridge description and host/connect trap
 
 test('devbridge tunnel handling is migrated to the s2 gateway domain', () => {
   const sandbox = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
-  const sessionManager = readFileSync(join(pluginRoot, 'src', 'sandbox', 'session-manager.mjs'), 'utf8');
+  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.mjs'));
 
   // Code must construct tunnel URLs exclusively from the s2 gateway domain.
   // The guard must also catch regex-literal occurrences where dots are escaped
@@ -239,7 +250,7 @@ test('devbridge tunnel handling is migrated to the s2 gateway domain', () => {
 
 test('devbridge 0.2.x flow: auth capability probe, version detection, in-place upgrade guidance', () => {
   const sandbox = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
-  const tools = readFileSync(join(pluginRoot, 'src', 'tools.mjs'), 'utf8');
+  const tools = readSource(join('src', 'tools.mjs'));
 
   // SKILL.md must never teach the removed 0.1.x login flow (--huaweicloud SSO flag is
   // gone from every 0.2.x build), and the obsolete warning row must stay gone.
@@ -381,7 +392,7 @@ test('.mcp.json is valid and references existing server script', () => {
 });
 
 test('setup-cli.mjs supports the codearts target end to end', () => {
-  const setup = readFileSync(join(pluginRoot, 'src', 'setup-cli.mjs'), 'utf8');
+  const setup = readSource(join('src', 'setup-cli.mjs'));
   // parseTarget accepts codearts
   assert.match(setup, /'codearts'/);
   // install / uninstall / status functions exist
@@ -429,7 +440,7 @@ test('setup-cli.mjs supports the codearts target end to end', () => {
 });
 
 test('tools.mjs resolves skills from the codearts directory', () => {
-  const tools = readFileSync(join(pluginRoot, 'src', 'tools.mjs'), 'utf8');
+  const tools = readSource(join('src', 'tools.mjs'));
   assert.match(tools, /function codeartsSkillsDir\(\)/);
   assert.match(tools, /return join\(home, '\.codeartsdoer', 'skills'\);/);
   // candidates only count when they contain at least one skill with SKILL.md
@@ -443,14 +454,14 @@ test('tools.mjs resolves skills from the codearts directory', () => {
 });
 
 test('setup-cli.mjs handles KooCLI sandbox blockers and privacy agreement', () => {
-  const setup = readFileSync(join(pluginRoot, 'src', 'setup-cli.mjs'), 'utf8');
-  const hcloudProbe = readFileSync(join(pluginRoot, 'src', 'hcloud-probe.mjs'), 'utf8');
+  const setup = readSource(join('src', 'setup-cli.mjs'));
+  const hcloudProbe = readSource(join('src', 'hcloud-probe.mjs'));
   // sandbox detection reads the CodeArts permission config
   assert.match(setup, /function detectCodeartsSandbox\(\)/);
   assert.match(setup, /codearts-data', 'storage', 'permission', 'config\.json'/);
   assert.match(setup, /config\.bash_mode/);
   // hcloud lookup covers HCLOUD_BIN and ~/hcloud on Windows
-  assert.match(setup, /from '\.\/hcloud-probe\.mjs'/);
+  assert.match(setup, /from '\.\/hcloud-probe\.(?:mjs|ts)'/);
   assert.match(hcloudProbe, /function findHcloudBin\(\)/);
   assert.match(hcloudProbe, /process\.env\.HCLOUD_BIN/);
   assert.match(hcloudProbe, /homedir\(\), 'hcloud', 'hcloud\.exe'/);
@@ -470,7 +481,7 @@ test('setup-cli.mjs handles KooCLI sandbox blockers and privacy agreement', () =
 });
 
 test('setup-cli.mjs covers hermes restart hints, unix auto-install, and grouped status (#280)', () => {
-  const setup = readFileSync(join(pluginRoot, 'src', 'setup-cli.mjs'), 'utf8');
+  const setup = readSource(join('src', 'setup-cli.mjs'));
   // Hermes .installed marker is read for restart hints (#280-4)
   assert.match(setup, /hermesPluginsDir\(\), '\.installed'/);
   // Unix install-hcloud executes for real: download → extract → install → verify (#280-3)
@@ -483,7 +494,7 @@ test('setup-cli.mjs covers hermes restart hints, unix auto-install, and grouped 
 });
 
 test('setup-cli.mjs supports the dsh target end to end', () => {
-  const setup = readFileSync(join(pluginRoot, 'src', 'setup-cli.mjs'), 'utf8');
+  const setup = readSource(join('src', 'setup-cli.mjs'));
   // SUPPORTED_AGENT_TARGETS includes dsh and parseTarget uses it
   assert.match(setup, /'dsh'/);
   // DSH path helpers and managed patch constants exist
@@ -535,7 +546,7 @@ test('setup-cli.mjs supports the dsh target end to end', () => {
 });
 
 test('tools.mjs resolves skills from the dsh directory', () => {
-  const tools = readFileSync(join(pluginRoot, 'src', 'tools.mjs'), 'utf8');
+  const tools = readSource(join('src', 'tools.mjs'));
   assert.match(tools, /function dshSkillsDir\(\)/);
   assert.match(tools, /process\.env\.DSH_HOME \|\| join\(homedir\(\), '\.dsh'\)/);
   assert.match(tools, /return join\(home, 'skills'\);/);
@@ -549,7 +560,7 @@ test('tools.mjs resolves skills from the dsh directory', () => {
 });
 
 test('tools.mjs resolves skills from the officeace directory', () => {
-  const tools = readFileSync(join(pluginRoot, 'src', 'tools.mjs'), 'utf8');
+  const tools = readSource(join('src', 'tools.mjs'));
   assert.match(tools, /function officeaceSkillsRoot\(\)/);
   assert.match(tools, /function readOfficeaceRegistryInstallDir\(\)/);
   assert.match(tools, /office-claw/);
@@ -557,7 +568,7 @@ test('tools.mjs resolves skills from the officeace directory', () => {
 });
 
 test('setup-cli.mjs supports the officeace target end to end', () => {
-  const setup = readFileSync(join(pluginRoot, 'src', 'setup-cli.mjs'), 'utf8');
+  const setup = readSource(join('src', 'setup-cli.mjs'));
   assert.match(setup, /'officeace'/);
   assert.match(setup, /async function installOfficeAce\(\)/);
   assert.match(setup, /function uninstallOfficeAce\(\)/);
@@ -587,7 +598,7 @@ test('setup-cli.mjs supports the officeace target end to end', () => {
 });
 
 test('setup-cli.mjs supports the hermes target end to end', () => {
-  const setup = readFileSync(join(pluginRoot, 'src', 'setup-cli.mjs'), 'utf8');
+  const setup = readSource(join('src', 'setup-cli.mjs'));
   assert.match(setup, /'hermes'/);
   assert.match(setup, /async function installHermes\(\)/);
   assert.match(setup, /function uninstallHermes\(\)/);
@@ -640,7 +651,7 @@ test('setup-cli.mjs supports the hermes target end to end', () => {
 });
 
 test('setup-cli.mjs supports the version command', () => {
-  const setup = readFileSync(join(pluginRoot, 'src', 'setup-cli.mjs'), 'utf8');
+  const setup = readSource(join('src', 'setup-cli.mjs'));
   assert.match(setup, /function cmdVersion\(\)/);
   assert.match(setup, /function readInstalledVersion\(/);
   assert.match(setup, /case '--version'/);
@@ -648,14 +659,14 @@ test('setup-cli.mjs supports the version command', () => {
 });
 
 test('setup-cli.mjs wires the auth reconcile subcommand', () => {
-  const setup = readFileSync(join(pluginRoot, 'src', 'setup-cli.mjs'), 'utf8');
+  const setup = readSource(join('src', 'setup-cli.mjs'));
   assert.match(setup, /function cmdAuthReconcile\(\)/);
   assert.match(setup, /sub === 'reconcile'/);
   assert.match(setup, /return cmdAuthReconcile\(\)/);
 });
 
 test('setup-cli.mjs resolves the active KooCLI profile for configureHcloud', () => {
-  const setup = readFileSync(join(pluginRoot, 'src', 'setup-cli.mjs'), 'utf8');
+  const setup = readSource(join('src', 'setup-cli.mjs'));
   assert.match(setup, /function configuredProfileName\(\)/);
   assert.match(setup, /resolveManagedProfile\(\)/);
   assert.match(setup, /return name \|\| 'default'/);
@@ -664,7 +675,7 @@ test('setup-cli.mjs resolves the active KooCLI profile for configureHcloud', () 
 });
 
 test('setup-cli.mjs checks for updates on install/update via shared query', () => {
-  const setup = readFileSync(join(pluginRoot, 'src', 'setup-cli.mjs'), 'utf8');
+  const setup = readSource(join('src', 'setup-cli.mjs'));
   assert.match(setup, /async function checkForUpdate\(\)/);
   assert.match(setup, /queryDistTagsFetch\(/);
   assert.match(setup, /semverCompare\(/);
@@ -673,7 +684,7 @@ test('setup-cli.mjs checks for updates on install/update via shared query', () =
 });
 
 test('tools.mjs resolves skills from the hermes directory', () => {
-  const tools = readFileSync(join(pluginRoot, 'src', 'tools.mjs'), 'utf8');
+  const tools = readSource(join('src', 'tools.mjs'));
   assert.match(tools, /function hermesSkillsDir\(\)/);
   assert.match(tools, /process\.env\.HERMES_HOME/);
   assert.match(tools, /LOCALAPPDATA/);
@@ -682,7 +693,7 @@ test('tools.mjs resolves skills from the hermes directory', () => {
 });
 
 test('tools.mjs resolves skills from the atomcode directory', () => {
-  const tools = readFileSync(join(pluginRoot, 'src', 'tools.mjs'), 'utf8');
+  const tools = readSource(join('src', 'tools.mjs'));
   assert.match(tools, /function atomcodeSkillsDir\(\)/);
   assert.match(tools, /process\.env\.ATOMCODE_HOME/);
   assert.match(tools, /return join\(home, '\.atomcode', 'skills'\)/);
@@ -690,14 +701,14 @@ test('tools.mjs resolves skills from the atomcode directory', () => {
 });
 
 test('agent-registration reports openclaw registration status', () => {
-  const registration = readFileSync(join(pluginRoot, 'src', 'auth', 'agent-registration.mjs'), 'utf8');
+  const registration = readSource(join('src', 'auth', 'agent-registration.mjs'));
   assert.match(registration, /function openclawRegistered\(\)/);
   assert.match(registration, /agent === 'openclaw'/);
   assert.match(registration, /'\.agents', 'huaweicloud-plugins', '\.mcp\.json'/);
 });
 
 test('official Huawei Cloud Icons library is integrated', () => {
-  const tools = readFileSync(join(pluginRoot, 'src', 'tools.mjs'), 'utf8');
+  const tools = readSource(join('src', 'tools.mjs'));
   assert.match(tools, /name: 'huaweicloud_get_service_icon'/);
   assert.match(tools, /getServiceIcon\(args\.service/);
 
@@ -721,24 +732,24 @@ test('official Huawei Cloud Icons library is integrated', () => {
 });
 
 test('tools.mjs registers version-update tools', () => {
-  const tools = readFileSync(join(pluginRoot, 'src', 'tools.mjs'), 'utf8');
+  const tools = readSource(join('src', 'tools.mjs'));
   for (const name of ['huaweicloud_check_update', 'huaweicloud_upgrade']) {
     assert.match(tools, new RegExp(`name: '${name}'`));
     assert.match(tools, new RegExp(`case '${name}':`));
   }
-  assert.match(tools, /from '\.\/update-check\.mjs'/);
+  assert.match(tools, /from '\.\/update-check\.(?:mjs|ts)'/);
 });
 
 test('stdio server warms update cache; shared protocol decorates first tool call', () => {
-  const server = readFileSync(join(pluginRoot, 'src', 'mcp-server.mjs'), 'utf8');
+  const server = readSource(join('src', 'mcp-server.mjs'));
   assert.match(server, /getCachedUpdateInfo\(readInstalledVersion\(\)/);
-  const protocol = readFileSync(join(pluginRoot, 'src', 'mcp-protocol.mjs'), 'utf8');
+  const protocol = readSource(join('src', 'mcp-protocol.mjs'));
   assert.match(protocol, /applyUpdateHint\(/);
   assert.match(protocol, /peekCachedUpdateInfo\(\)/);
 });
 
 test('hdkitservice-api sends X-HW-Client-Version; SKILL session-start wording', () => {
-  const api = readFileSync(join(pluginRoot, 'src', 'sandbox', 'hdkitservice-api.mjs'), 'utf8');
+  const api = readSource(join('src', 'sandbox', 'hdkitservice-api.mjs'));
   assert.match(api, /X-HW-Client-Version/);
   assert.match(api, /readInstalledVersion\(\)/);
   const skill = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-core', 'SKILL.md'), 'utf8');
@@ -754,7 +765,7 @@ test('READMEs recommend @latest for updates', () => {
 });
 
 test('cmdUpdate has no trailing unreachable reinstall; cmdReinstall keeps it', () => {
-  const setup = readFileSync(join(pluginRoot, 'src', 'setup-cli.mjs'), 'utf8');
+  const setup = readSource(join('src', 'setup-cli.mjs'));
   // cmdUpdate（'update'/'upgrade' 入口）本身不得做"卸载+重装"；各 target 分支均 return。
   const cmdUpdateBody = setup.slice(
     setup.indexOf('async function cmdUpdate()'),
@@ -772,7 +783,33 @@ test('cmdUpdate has no trailing unreachable reinstall; cmdReinstall keeps it', (
 });
 
 test('doctor success message does not demand a restart', () => {
-  const setupCli = readFileSync(join(root, 'plugins', 'huaweicloud-core', 'src', 'setup-cli.mjs'), 'utf8');
+  const setupCli = readSource(join('src', 'setup-cli.mjs'));
   assert.match(setupCli, /You can now describe your Huawei Cloud task/);
   assert.doesNotMatch(setupCli, /Restart your session, then describe/);
+});
+
+test('shipped runtime entry points are plain JavaScript, never TypeScript', () => {
+  const pkg = readJson(join(root, 'package.json'));
+  for (const [name, target] of Object.entries(pkg.bin ?? {})) {
+    assert.doesNotMatch(target, /\.ts$/, `bin ${name} must not point at a TypeScript file`);
+  }
+
+  const mcp = readJson(join(pluginRoot, '.mcp.json'));
+  for (const server of Object.values(mcp.mcpServers ?? {})) {
+    for (const arg of server.args ?? []) {
+      assert.doesNotMatch(arg, /\.ts$/, `.mcp.json arg ${arg} must not point at a TypeScript file`);
+    }
+  }
+
+  const hooks = readJson(join(pluginRoot, 'hooks', 'hooks.json'));
+  for (const entries of Object.values(hooks.hooks ?? {})) {
+    for (const entry of entries) {
+      for (const hook of entry.hooks ?? []) {
+        assert.doesNotMatch(hook.command ?? '', /\.ts\b/, `hook must not run TypeScript: ${hook.command}`);
+      }
+    }
+  }
+
+  const cordis = readFileSync(join(root, 'cordis.patch.yml'), 'utf8');
+  assert.doesNotMatch(cordis, /\.ts\b/, 'cordis.patch.yml must not reference TypeScript files');
 });

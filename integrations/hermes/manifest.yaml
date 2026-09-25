@@ -18,7 +18,8 @@ install:
   type: git
   url: https://github.com/huaweicloud/huaweicloud-devkit
   bootstrap:
-    - 'npm ci --omit=dev'
+    - 'npm ci'
+    - 'npm run build'
     - 'node plugins/huaweicloud-core/src/setup-cli.mjs install --target hermes --skip-mcp-server'
 
 auth:
