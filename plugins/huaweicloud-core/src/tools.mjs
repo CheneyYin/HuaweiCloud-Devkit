@@ -22,7 +22,7 @@ import {
   deployCheck,
   getCurrentWorkspaceId,
   setWorkspaceId,
-} from './sandbox/session-manager.mjs';
+} from './sandbox/session-manager.ts';
 import {
   hdkitCheckUser,
   hdkitSignAgreement,

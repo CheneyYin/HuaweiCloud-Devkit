@@ -22,6 +22,185 @@ import { trackSandboxConnect, trackSandboxDisconnect } from '../telemetry/teleme
 
 const execFileAsync = promisify(execFile);
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+// Thrown values cross the JS boundary as `unknown` under strict mode; only a
+// non-empty message string is surfaced (same pattern as update-check.ts).
+function errorMessage(error: unknown): string | undefined {
+  if (error instanceof Error && error.message) return error.message;
+  if (error && typeof error === 'object' && !Array.isArray(error)) {
+    const message = (error as Record<string, unknown>).message;
+    if (typeof message === 'string' && message) return message;
+  }
+  return undefined;
+}
+
+// Mirrors the original `error.code || error.name || 'unknown'` fallback.
+function errorLabel(error: unknown): string {
+  if (error && typeof error === 'object' && !Array.isArray(error)) {
+    const record = error as Record<string, unknown>;
+    if (typeof record.code === 'string' && record.code) return record.code;
+    if (typeof record.name === 'string' && record.name) return record.name;
+  }
+  if (error instanceof Error && error.name) return error.name;
+  return 'unknown';
+}
+
+// Result shape returned by ws-exec's exec / executeHwlinkCommand. `error` is
+// never set by ws-exec (failures reject), but the existing fallbacks read it.
+interface HwlinkExecResult {
+  stdout: string;
+  exitCode: number;
+  url?: string;
+  source?: number;
+  username?: string;
+  command?: string;
+  error?: string;
+}
+
+interface HwlinkTerminalSession {
+  exec(_command: string, _options?: { timeoutMs?: number }): Promise<HwlinkExecResult>;
+  close(): void;
+}
+
+interface HwlinkMultiplexer {
+  readyState: number;
+  onClose?: () => void;
+  onError?: (_error: unknown) => void;
+  close(): void;
+}
+
+interface HwlinkTunnelChannel {
+  localPort: number;
+  ready: Promise<unknown>;
+  attach(_mux: HwlinkMultiplexer): void;
+  close(): void;
+}
+
+// Structural surface of the untyped ./ws-exec/index.js bundle. Only the members
+// this module calls are modeled; the dynamic import is cast to this shape (same
+// pattern as proxy-agent.ts's UndiciModule cast). The cast is honest because the
+// target is our own bundled module, not parsed/untrusted data.
+interface WsExecModule {
+  connectHwlinkTerminalSession(_options: {
+    url: string;
+    source: unknown;
+    username: string;
+    timeoutMs?: number;
+    WebSocketImpl: unknown;
+  }): Promise<HwlinkTerminalSession>;
+  executeHwlinkCommand(_options: {
+    url: string;
+    source: unknown;
+    username: string;
+    command: string;
+    timeoutMs: number;
+    WebSocketImpl: unknown;
+  }): Promise<HwlinkExecResult>;
+  HwlinkWebSocketMultiplexer: new (
+    _url: string,
+    _source: unknown,
+    _options: { WebSocketImpl: unknown; protocol: string },
+  ) => HwlinkMultiplexer;
+  HwlinkTunnelChannel: new (_options: { localPort: number; remotePort: number }) => HwlinkTunnelChannel;
+}
+
+interface TunnelSession {
+  mux: HwlinkMultiplexer;
+  close: () => void;
+}
+
+interface NodeExecResult {
+  error?: string;
+  data?: string;
+  exitCode: number;
+  [key: string]: unknown;
+}
+
+interface UploadTunnelResponse {
+  bytes?: number;
+  md5?: string;
+  [key: string]: unknown;
+}
+
+interface UploadFileResult {
+  ok: boolean;
+  localPath: string;
+  remotePath: string;
+  bytes: number;
+  chunks: number;
+  md5: string;
+  md5Verified: boolean;
+}
+
+interface UploadProjectOptions {
+  exclude?: string[];
+  sandboxPort?: number;
+  verify?: boolean;
+  extract?: boolean;
+}
+
+interface UploadProjectResult {
+  ok: boolean;
+  localDir: string;
+  remotePath: string;
+  bytes: number;
+  md5: string;
+  md5Verified: boolean;
+  extracted: boolean;
+}
+
+interface DeployNginxOptions {
+  nginxType?: string;
+  port?: number;
+  project?: string;
+  outputDir?: string;
+  nodePort?: number;
+  publicPort?: number;
+  configName?: string;
+}
+
+interface DeployNginxResult {
+  ok: boolean;
+  nginxType: string;
+  port: number;
+  nodePort: number | undefined;
+  outputPath: string;
+  projectPath: string;
+  exitCode: number;
+  stdout: string;
+  nextStep: string;
+  warning: string | undefined;
+}
+
+interface DeployCheckOptions {
+  port: number;
+  project: string;
+  outputDir: string;
+  frameworkType?: string;
+}
+
+interface DeployCheckEntry {
+  status: string;
+  detail: string;
+}
+
+interface DeployCheckResult {
+  ok: boolean;
+  complete: boolean;
+  checkType: string;
+  checks: Record<string, DeployCheckEntry>;
+  score: { pass: number; total: number } | null;
+  publicUrl: string | undefined;
+  missingSteps: string | undefined;
+  parseWarning: string | undefined;
+  rawOutput: string | undefined;
+  nextStep: string;
+  remediation: string | undefined;
+}
+
 // Public tunnel URL domain for the DevBridge s2 gateway. The pre-migration Huawei Cloud
 // bridge domain was retired in Sep 2026 and now serves a 「服务已迁移」 placeholder page with
 // HTTP 200 — never construct tunnel URLs from it.
@@ -34,36 +213,42 @@ export const WS_EXEC_INDEX_URL = pathToFileURL(join(__dirname, '..', 'ws-exec', 
 
 export const TUNNEL_URL_PATTERN = /TUNNEL_URL:(https:\/\/[A-Za-z0-9_-]+-\d+\.devbridge-s2\.hwtunnel\.com)/;
 
-let currentWorkspaceId = process.env.HW_WORKSPACE_ID || null;
+async function loadWsExec(): Promise<WsExecModule> {
+  return (await import(WS_EXEC_INDEX_URL)) as WsExecModule;
+}
 
-function getCurrentWorkspaceId() {
+let currentWorkspaceId: string | null = process.env.HW_WORKSPACE_ID || null;
+
+function getCurrentWorkspaceId(): string | null {
   return currentWorkspaceId;
 }
 
-function setWorkspaceId(id) {
+function setWorkspaceId(id: string | null): void {
   if (id && id !== currentWorkspaceId) {
     trackSandboxConnect();
   }
   currentWorkspaceId = id;
-  process.env.HW_WORKSPACE_ID = id;
+  // Node coerces env assignments to strings (`null` -> "null"); String() keeps
+  // that behavior while satisfying the typed ProcessEnv setter.
+  process.env.HW_WORKSPACE_ID = String(id);
 }
 
-function resolveEnv() {
+function resolveEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
   env.PATH = `${env.HOME || '/root'}/.huawei/bin:${env.PATH || ''}`;
   return env;
 }
 
-async function runNodeExec(args, timeoutMs = 30000) {
+async function runNodeExec(args: string[], timeoutMs = 30000): Promise<NodeExecResult> {
   const env = resolveEnv();
-  return new Promise((resolve) => {
+  return new Promise<NodeExecResult>((resolve) => {
     const proc = spawn('node', args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
-    proc.stdout.on('data', (d) => {
+    proc.stdout.on('data', (d: Buffer) => {
       stdout += d.toString();
     });
-    proc.stderr.on('data', (d) => {
+    proc.stderr.on('data', (d: Buffer) => {
       stderr += d.toString();
     });
 
@@ -77,7 +262,8 @@ async function runNodeExec(args, timeoutMs = 30000) {
       const out = stdout.trim();
       if (out) {
         try {
-          resolve({ ...JSON.parse(out), exitCode: code || 0 });
+          const parsed: unknown = JSON.parse(out);
+          resolve({ ...asRecord(parsed), exitCode: code || 0 });
           return;
         } catch {}
       }
@@ -90,19 +276,20 @@ async function runNodeExec(args, timeoutMs = 30000) {
   });
 }
 
-const sessions = new Map();
+const sessions = new Map<string, HwlinkTerminalSession>();
 
-async function getSession(workspaceId, username, timeoutMs) {
+async function getSession(workspaceId: string, username: string, timeoutMs?: number): Promise<HwlinkTerminalSession> {
   const key = `${workspaceId}:${username}`;
-  if (sessions.has(key)) return sessions.get(key);
+  const existing = sessions.get(key);
+  if (existing) return existing;
 
   const { ak, sk, securitytoken } = getCredentials();
   const { wsUrl, source } = await createConnection(workspaceId, ak, sk, securitytoken);
 
   const WebSocketImpl = await getWebSocketImpl(wsUrl);
 
-  const { connectHwlinkTerminalSession } = await import(WS_EXEC_INDEX_URL);
-  const session = await connectHwlinkTerminalSession({
+  const wsExec = await loadWsExec();
+  const session = await wsExec.connectHwlinkTerminalSession({
     url: wsUrl,
     source,
     username,
@@ -114,15 +301,15 @@ async function getSession(workspaceId, username, timeoutMs) {
   return session;
 }
 
-async function createTunnelSession(workspaceId, username, timeoutMs = 30000) {
+async function createTunnelSession(workspaceId: string, username: string, timeoutMs = 30000): Promise<TunnelSession> {
   const { ak, sk, securitytoken } = getCredentials();
   const { wsUrl, source } = await createConnection(workspaceId, ak, sk, securitytoken);
   const WebSocketImpl = await getWebSocketImpl(wsUrl);
 
-  const { HwlinkWebSocketMultiplexer } = await import(WS_EXEC_INDEX_URL);
-  const mux = new HwlinkWebSocketMultiplexer(wsUrl, source, { WebSocketImpl, protocol: 'devenv' });
+  const wsExec = await loadWsExec();
+  const mux = new wsExec.HwlinkWebSocketMultiplexer(wsUrl, source, { WebSocketImpl, protocol: 'devenv' });
 
-  await new Promise((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
       clearInterval(interval);
       reject(new Error('tunnel session WebSocket open timeout'));
@@ -153,14 +340,19 @@ async function createTunnelSession(workspaceId, username, timeoutMs = 30000) {
   return { mux, close: () => mux.close() };
 }
 
-export async function execOneShot(workspaceId, command, username, timeoutMs) {
+export async function execOneShot(
+  workspaceId: string,
+  command: string,
+  username: string,
+  timeoutMs: number,
+): Promise<HwlinkExecResult> {
   const { ak, sk, securitytoken } = getCredentials();
   const { wsUrl, source } = await createConnection(workspaceId, ak, sk, securitytoken);
 
   const WebSocketImpl = await getWebSocketImpl(wsUrl);
 
-  const { executeHwlinkCommand } = await import(WS_EXEC_INDEX_URL);
-  return await executeHwlinkCommand({
+  const wsExec = await loadWsExec();
+  return await wsExec.executeHwlinkCommand({
     url: wsUrl,
     source,
     username,
@@ -170,7 +362,12 @@ export async function execOneShot(workspaceId, command, username, timeoutMs) {
   });
 }
 
-export async function execWithSession(workspaceId, command, username, timeoutMs) {
+export async function execWithSession(
+  workspaceId: string,
+  command: string,
+  username: string,
+  timeoutMs?: number,
+): Promise<HwlinkExecResult> {
   const session = await getSession(workspaceId, username, timeoutMs);
   return await session.exec(command, { timeoutMs });
 }
@@ -181,33 +378,39 @@ export const UPLOAD_BATCH_SIZE = 2;
 
 export const UPLOAD_MAX_RETRIES = 3;
 
-export function splitBase64Chunks(base64, chunkSize = UPLOAD_CHUNK_SIZE) {
-  const chunks = [];
+export function splitBase64Chunks(base64: string, chunkSize = UPLOAD_CHUNK_SIZE): string[] {
+  const chunks: string[] = [];
   for (let offset = 0; offset < base64.length; offset += chunkSize) {
     chunks.push(base64.slice(offset, offset + chunkSize));
   }
   return chunks;
 }
 
-export function formatPortConflictWarning(basePort, targetPort) {
+export function formatPortConflictWarning(basePort: number, targetPort: number): string | undefined {
   return targetPort !== basePort ? `Port ${basePort} is in use — auto-assigned port ${targetPort}` : undefined;
 }
 
-export function formatPortDriftWarning(basePort, targetPort) {
+export function formatPortDriftWarning(basePort: number, targetPort: number): string | undefined {
   if (targetPort === basePort) return undefined;
   return `Port ${basePort} was occupied — nginx now listens on port ${targetPort}. Any DevBridge tunnel bound to port ${basePort} is detached: run "devbridge port create <tunnelId> -p ${targetPort} --protocol http -a" and restart "devbridge host" for the new port.`;
 }
 
-export function formatProxyPortWarning(basePort, targetPort) {
+export function formatProxyPortWarning(basePort: number, targetPort: number): string | undefined {
   if (targetPort === basePort) return undefined;
   return `Port ${basePort} is in use — the proxy template still listens on port ${basePort}: auto-increment does not apply to proxy configs, so nginx may fail to bind. Free the port or deploy a static/spa build instead.`;
 }
 
-export function buildExposeRemediation(port) {
+export function buildExposeRemediation(port: number): string {
   return `In the sandbox: source /tmp/hw_creds.sh; source /tmp/hw_api_key 2>/dev/null; devbridge delete-all; devbridge create <name>; devbridge port create <tunnelId> -p ${port} --protocol http -a; nohup devbridge host <tunnelId> -p ${port} > /tmp/host.log 2>&1 & If deploy_nginx reported a different (auto-incremented) port in its "port" field, use THAT port instead of the one shown here. Full procedure in huawei-sandbox skill, Step 7 (Expose via DevBridge).`;
 }
 
-export async function uploadFileWithSession(workspaceId, localPath, remotePath, username = 'root', timeoutMs = 30000) {
+export async function uploadFileWithSession(
+  workspaceId: string,
+  localPath: string,
+  remotePath: string,
+  username = 'root',
+  timeoutMs = 30000,
+): Promise<UploadFileResult> {
   if (!existsSync(localPath)) {
     throw new Error(`sandbox upload: local file not found: ${localPath}`);
   }
@@ -233,7 +436,7 @@ export async function uploadFileWithSession(workspaceId, localPath, remotePath, 
     const cmd = `printf '%s' '${combinedChunk}' >> "${tmp}"`;
 
     let batchOk = false;
-    let lastError;
+    let lastError: string | number | undefined;
     for (let retry = 0; retry < UPLOAD_MAX_RETRIES; retry++) {
       const res = await execWithSession(workspaceId, cmd, username, timeoutMs);
       if (res.exitCode === 0) {
@@ -300,7 +503,7 @@ const SERVER_HEALTH_MAX_RETRIES = 30;
 const SERVER_HEALTH_INTERVAL_MS = 1000;
 const UPLOAD_LOG_PATH = join(tmpdir(), 'sandbox-upload.log');
 
-function uploadLog(message) {
+function uploadLog(message: string): void {
   const ts = new Date().toISOString();
   const line = `[${ts}] ${message}\n`;
   console.error(line.trimEnd());
@@ -309,7 +512,7 @@ function uploadLog(message) {
   } catch {}
 }
 
-function rotateUploadLog(maxBytes = 100 * 1024) {
+function rotateUploadLog(maxBytes = 100 * 1024): void {
   try {
     if (existsSync(UPLOAD_LOG_PATH)) {
       const stat = statSync(UPLOAD_LOG_PATH);
@@ -320,11 +523,11 @@ function rotateUploadLog(maxBytes = 100 * 1024) {
   } catch {}
 }
 
-function generateUploadToken() {
+function generateUploadToken(): string {
   return randomBytes(16).toString('hex');
 }
 
-async function createTarGz(localDir, exclude = []) {
+async function createTarGz(localDir: string, exclude: string[] = []): Promise<string> {
   const archiveName = `${basename(localDir)}.tar.gz`;
   const archiveDir = join(tmpdir(), `sandbox-upload-${Date.now()}`);
   mkdirSync(archiveDir, { recursive: true });
@@ -342,7 +545,7 @@ async function createTarGz(localDir, exclude = []) {
       'HEAD',
     ]);
   } else {
-    const args = [];
+    const args: string[] = [];
     for (const pattern of exclude) {
       if (pattern.startsWith('**/')) {
         const base = pattern.slice(3);
@@ -361,23 +564,28 @@ async function createTarGz(localDir, exclude = []) {
   return archivePath;
 }
 
-async function computeMd5(filePath) {
+async function computeMd5(filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const hash = createHash('md5');
     createReadStream(filePath)
-      .on('data', (chunk) => hash.update(chunk))
+      .on('data', (chunk: string | Buffer) => hash.update(chunk))
       .on('end', () => resolve(hash.digest('hex')))
       .on('error', reject);
   });
 }
 
-function cleanupLocalArchive(archivePath) {
+function cleanupLocalArchive(archivePath: string): void {
   try {
     rmSync(dirname(archivePath), { recursive: true, force: true });
   } catch {}
 }
 
-async function deployFileServer(workspaceId, username, port = 8888, token = '') {
+async function deployFileServer(
+  workspaceId: string,
+  username: string,
+  port = 8888,
+  token = '',
+): Promise<HwlinkExecResult> {
   const scriptPath = '/tmp/sandbox-file-server.py';
   const pidFile = '/tmp/sandbox-file-server.pid';
   uploadLog(`deployFileServer: killing old server (pidFile=${pidFile})`);
@@ -396,7 +604,14 @@ async function deployFileServer(workspaceId, username, port = 8888, token = '') 
   return startResult;
 }
 
-async function uploadViaTunnel(localPort, archivePath, archiveSize, archiveRemotePath, uploadToken, timeoutMs) {
+async function uploadViaTunnel(
+  localPort: number,
+  archivePath: string,
+  archiveSize: number,
+  archiveRemotePath: string,
+  uploadToken: string,
+  timeoutMs: number,
+): Promise<UploadTunnelResponse> {
   const archiveBuffer = readFileSync(archivePath);
   const headers = [
     'POST /upload HTTP/1.1',
@@ -409,9 +624,9 @@ async function uploadViaTunnel(localPort, archivePath, archiveSize, archiveRemot
     '',
     '',
   ].join('\r\n');
-  return new Promise((resolve, reject) => {
+  return new Promise<UploadTunnelResponse>((resolve, reject) => {
     let settled = false;
-    const done = (fn) => {
+    const done = (fn: () => void): void => {
       if (!settled) {
         settled = true;
         clearTimeout(timer);
@@ -452,7 +667,8 @@ async function uploadViaTunnel(localPort, archivePath, archiveSize, archiveRemot
               return;
             }
             try {
-              resolve(JSON.parse(body));
+              const parsed: unknown = JSON.parse(body);
+              resolve(asRecord(parsed));
             } catch (error) {
               reject(new Error(`invalid JSON response: ${body.slice(0, 200)}`));
             }
@@ -473,7 +689,8 @@ async function uploadViaTunnel(localPort, archivePath, archiveSize, archiveRemot
           return;
         }
         try {
-          resolve(JSON.parse(body));
+          const parsed: unknown = JSON.parse(body);
+          resolve(asRecord(parsed));
         } catch (error) {
           reject(new Error(`invalid JSON response: ${body.slice(0, 200)}`));
         }
@@ -488,13 +705,13 @@ async function uploadViaTunnel(localPort, archivePath, archiveSize, archiveRemot
   });
 }
 
-async function waitForServerReady(localPort) {
+async function waitForServerReady(localPort: number): Promise<void> {
   for (let i = 0; i < SERVER_HEALTH_MAX_RETRIES; i++) {
     try {
       uploadLog(`waitForServerReady: attempt ${i + 1}, checking http://localhost:${localPort}/health`);
-      const ok = await new Promise((resolve) => {
+      const ok = await new Promise<boolean>((resolve) => {
         let settled = false;
-        const done = (val) => {
+        const done = (val: boolean): void => {
           if (!settled) {
             settled = true;
             sock.destroy();
@@ -519,7 +736,7 @@ async function waitForServerReady(localPort) {
       }
       uploadLog(`waitForServerReady: health check returned non-200 (retry ${i + 1})`);
     } catch (error) {
-      uploadLog(`waitForServerReady: health check failed: ${error.message} (retry ${i + 1})`);
+      uploadLog(`waitForServerReady: health check failed: ${errorMessage(error)} (retry ${i + 1})`);
     }
     await new Promise((r) => setTimeout(r, SERVER_HEALTH_INTERVAL_MS));
   }
@@ -528,13 +745,20 @@ async function waitForServerReady(localPort) {
   );
 }
 
-async function cleanupFileServer(workspaceId, username) {
+async function cleanupFileServer(workspaceId: string, username: string): Promise<void> {
   const pidFile = '/tmp/sandbox-file-server.pid';
   const scriptPath = '/tmp/sandbox-file-server.py';
   await execWithSession(workspaceId, `kill $(cat ${pidFile}) 2>/dev/null; rm -f ${pidFile} ${scriptPath}`, username);
 }
 
-async function uploadViaHttpTunnel(workspaceId, archivePath, archiveRemotePath, username, timeoutMs, options) {
+async function uploadViaHttpTunnel(
+  workspaceId: string,
+  archivePath: string,
+  archiveRemotePath: string,
+  username: string,
+  timeoutMs: number,
+  options: UploadProjectOptions,
+): Promise<UploadTunnelResponse> {
   const sandboxPort = options.sandboxPort || 8888;
   const uploadToken = generateUploadToken();
   const archiveSize = statSync(archivePath).size;
@@ -550,8 +774,8 @@ async function uploadViaHttpTunnel(workspaceId, archivePath, archiveRemotePath, 
   const tunnelSession = await createTunnelSession(workspaceId, username);
 
   uploadLog(`uploadViaHttpTunnel: creating tunnel channel (localPort=0, remotePort=${sandboxPort})`);
-  const { HwlinkTunnelChannel } = await import(WS_EXEC_INDEX_URL);
-  const tunnel = new HwlinkTunnelChannel({
+  const wsExec = await loadWsExec();
+  const tunnel = new wsExec.HwlinkTunnelChannel({
     localPort: 0,
     remotePort: sandboxPort,
   });
@@ -570,10 +794,10 @@ async function uploadViaHttpTunnel(workspaceId, archivePath, archiveRemotePath, 
     ]);
     uploadLog(`uploadViaHttpTunnel: tunnel ready, localPort=${tunnel.localPort}`);
   } catch (tunnelReadyError) {
-    uploadLog(`uploadViaHttpTunnel: TUNNEL READY FAILED: ${tunnelReadyError.message}`);
+    uploadLog(`uploadViaHttpTunnel: TUNNEL READY FAILED: ${errorMessage(tunnelReadyError)}`);
     tunnel.close();
     throw new Error(
-      `HTTP tunnel failed to establish: ${tunnelReadyError.message}. ` +
+      `HTTP tunnel failed to establish: ${errorMessage(tunnelReadyError)}. ` +
         `This means the WebSocket port-forwarding channel to sandbox port ${sandboxPort} could not be opened. ` +
         `Common causes: (1) Python file server not running on sandbox, (2) sandbox port ${sandboxPort} blocked, ` +
         `(3) hwlink multiplexer channel rejected. ` +
@@ -598,7 +822,7 @@ async function uploadViaHttpTunnel(workspaceId, archivePath, archiveRemotePath, 
     uploadLog(`uploadViaHttpTunnel: upload complete (bytes=${result.bytes}, md5=${result.md5})`);
     return result;
   } catch (uploadError) {
-    uploadLog(`uploadViaHttpTunnel: UPLOAD FAILED: ${uploadError.message}`);
+    uploadLog(`uploadViaHttpTunnel: UPLOAD FAILED: ${errorMessage(uploadError)}`);
     throw uploadError;
   } finally {
     tunnel.close();
@@ -607,13 +831,13 @@ async function uploadViaHttpTunnel(workspaceId, archivePath, archiveRemotePath, 
 }
 
 export async function uploadProjectWithSession(
-  workspaceId,
-  localDir,
-  remoteDir,
+  workspaceId: string,
+  localDir: string,
+  remoteDir: string | undefined,
   username = 'root',
   timeoutMs = 300000,
-  options = {},
-) {
+  options: UploadProjectOptions = {},
+): Promise<UploadProjectResult> {
   if (!workspaceId) {
     throw new Error(
       'sandbox upload project: workspace_id is required. ' +
@@ -648,8 +872,8 @@ export async function uploadProjectWithSession(
     );
   }
 
-  let result;
-  let tunnelError;
+  let result: UploadTunnelResponse = {};
+  let tunnelError: unknown;
   for (let attempt = 0; attempt < UPLOAD_MAX_RETRIES; attempt++) {
     try {
       await cleanupFileServer(workspaceId, username).catch(() => {});
@@ -658,19 +882,21 @@ export async function uploadProjectWithSession(
       break;
     } catch (error) {
       tunnelError = error;
-      const errorType = error.code || error.name || 'unknown';
-      uploadLog(`uploadProject: attempt ${attempt + 1}/${UPLOAD_MAX_RETRIES} failed [${errorType}]: ${error.message}`);
+      const errorType = errorLabel(error);
+      uploadLog(
+        `uploadProject: attempt ${attempt + 1}/${UPLOAD_MAX_RETRIES} failed [${errorType}]: ${errorMessage(error)}`,
+      );
       await new Promise((r) => setTimeout(r, 5000));
     }
   }
   if (tunnelError) {
-    uploadLog(`uploadProject: all ${UPLOAD_MAX_RETRIES} attempts failed: ${tunnelError.message}`);
+    uploadLog(`uploadProject: all ${UPLOAD_MAX_RETRIES} attempts failed: ${errorMessage(tunnelError)}`);
     uploadLog(`uploadProject: NOT falling back to base64 (removed). Rethrowing with diagnostics.`);
     cleanupLocalArchive(archivePath);
     throw new Error(
       `sandbox upload failed after ${UPLOAD_MAX_RETRIES} attempts: HTTP tunnel could not transfer the project archive. ` +
         `Archive size: ${(archiveSize / 1024).toFixed(1)}KB. ` +
-        `Root cause: ${tunnelError.message}. ` +
+        `Root cause: ${errorMessage(tunnelError)}. ` +
         `Diagnostic log: ${UPLOAD_LOG_PATH}`,
       { cause: tunnelError },
     );
@@ -722,11 +948,11 @@ export async function uploadProjectWithSession(
 }
 
 export async function deployNginx(
-  workspaceId,
-  { nginxType, port, project, outputDir, nodePort, publicPort, configName },
+  workspaceId: string,
+  { nginxType, port, project, outputDir, nodePort, publicPort, configName }: DeployNginxOptions,
   username = 'root',
   timeoutMs = 60000,
-) {
+): Promise<DeployNginxResult> {
   if (!workspaceId) {
     throw new Error('sandbox deploy nginx: workspace_id is required.');
   }
@@ -787,7 +1013,7 @@ if [ "\${REAL_PROJECT}" != "${projectPath}" ]; then
   REAL_OUTPUT="\${REAL_PROJECT}/\${REL_OUTPUT}"
 fi`;
 
-  const templates = {
+  const templates: Record<string, string> = {
     spa: `server {
     listen ${targetPort};
     root ${outputPath};
@@ -900,11 +1126,11 @@ fi`;
 }
 
 export async function deployCheck(
-  workspaceId,
-  { port, project, outputDir, frameworkType },
+  workspaceId: string,
+  { port, project, outputDir, frameworkType }: DeployCheckOptions,
   username = 'root',
   timeoutMs = 30000,
-) {
+): Promise<DeployCheckResult> {
   if (!workspaceId) {
     throw new Error('sandbox deploy check: workspace_id is required.');
   }
@@ -1041,7 +1267,7 @@ fi
   const csiRe = new RegExp(ESC + '\\[[0-9;]*[a-zA-Z]', 'g');
   const oscRe = new RegExp(ESC + '\\][^' + ESC + '\x07]*(?:\x07|' + ESC + '\\\\)', 'g');
   const cleanStdout = stdout.replace(csiRe, '').replace(oscRe, '');
-  const checks = {};
+  const checks: Record<string, DeployCheckEntry> = {};
   const lines = cleanStdout.split(new RegExp('\\r\\n|\\r|\\n'));
   for (const line of lines) {
     const trimmed = line.trim();
@@ -1052,7 +1278,7 @@ fi
   const tunnelMatch = cleanStdout.match(TUNNEL_URL_PATTERN);
   const complete = /VERDICT:COMPLETE/.test(cleanStdout);
 
-  const missing = [];
+  const missing: string[] = [];
   if (!complete) {
     for (const [key, val] of Object.entries(checks)) {
       if (val.status === 'FAIL') missing.push(key);
@@ -1092,7 +1318,7 @@ fi
   };
 }
 
-export async function closeSession(workspaceId, username) {
+export async function closeSession(workspaceId: string, username: string): Promise<boolean> {
   const key = `${workspaceId}:${username}`;
   const session = sessions.get(key);
   if (!session) return false;
@@ -1104,7 +1330,7 @@ export async function closeSession(workspaceId, username) {
   return true;
 }
 
-export async function closeAllSessions() {
+export async function closeAllSessions(): Promise<void> {
   for (const [key, session] of sessions) {
     sessions.delete(key);
     try {

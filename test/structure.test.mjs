@@ -213,7 +213,7 @@ test('web/static-site deployment intent offers target options with sandbox first
 
 test('devbridge uses the valid `list` command, not the non-existent `ls`', () => {
   const sandbox = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
-  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.mjs'));
+  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
 
   assert.doesNotMatch(sandbox, /devbridge ls\b/);
   assert.match(sandbox, /devbridge list\b/);
@@ -232,7 +232,7 @@ test('huawei-sandbox skill documents devbridge description and host/connect trap
 
 test('devbridge tunnel handling is migrated to the s2 gateway domain', () => {
   const sandbox = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
-  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.mjs'));
+  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
 
   // Code must construct tunnel URLs exclusively from the s2 gateway domain.
   // The guard must also catch regex-literal occurrences where dots are escaped
