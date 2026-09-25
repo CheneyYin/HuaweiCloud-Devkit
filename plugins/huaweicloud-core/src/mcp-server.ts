@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { dispatch } from './mcp-protocol.mjs';
 import { DEFAULT_PORT, DEFAULT_HOST } from './mcp-server-remote.mjs';
 import { getCachedUpdateInfo, readInstalledVersion } from './update-check.mjs';
-import { detectAgent } from './telemetry/agent-detect.mjs';
+import { detectAgent } from './telemetry/agent-detect.ts';
 
 const transportIdx = process.argv.indexOf('--transport');
 const transport = transportIdx > -1 && process.argv[transportIdx + 1] ? process.argv[transportIdx + 1] : 'stdio';

@@ -10,7 +10,7 @@ import {
   saveAgentDelta,
   takeAgentDelta,
   purgeBackup,
-} from '../plugins/huaweicloud-core/src/mcp-config-backup.mjs';
+} from '../plugins/huaweicloud-core/src/mcp-config-backup.ts';
 
 function tempBase() {
   return mkdtempSync(join(tmpdir(), 'devkit-mcp-backup-'));

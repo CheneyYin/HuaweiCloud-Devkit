@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { compareVersion, getKooCliVersion, parseHcloudVersion } from './koocli-version.mjs';
+import { compareVersion, getKooCliVersion, parseHcloudVersion } from './koocli-version.ts';
 import { redactSecrets } from './safety-policy.mjs';
 
 const VERSION_RE = /KooCLI|Current.*version|当前KooCLI/i;

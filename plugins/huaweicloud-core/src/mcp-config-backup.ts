@@ -11,26 +11,28 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 
-export function mcpBackupFilePath(base = process.env.HUAWEICLOUD_HOME || homedir()) {
+type BackupMap = Record<string, unknown>;
+
+export function mcpBackupFilePath(base: string = process.env.HUAWEICLOUD_HOME || homedir()): string {
   return join(base, '.config', 'huaweicloud', 'devkit-mcp-backup.json');
 }
 
-function readBackup(file) {
+function readBackup(file: string): BackupMap {
   if (!existsSync(file)) return {};
   try {
-    const data = JSON.parse(readFileSync(file, 'utf8'));
-    return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+    const data: unknown = JSON.parse(readFileSync(file, 'utf8'));
+    return data && typeof data === 'object' && !Array.isArray(data) ? (data as BackupMap) : {};
   } catch {
     return {};
   }
 }
 
-export function readAgentDelta(agentKey, file = mcpBackupFilePath()) {
+export function readAgentDelta(agentKey: string, file: string = mcpBackupFilePath()): Record<string, unknown> | null {
   const delta = readBackup(file)[agentKey];
-  return delta && typeof delta === 'object' ? delta : null;
+  return delta && typeof delta === 'object' ? (delta as Record<string, unknown>) : null;
 }
 
-export function saveAgentDelta(agentKey, delta, file = mcpBackupFilePath()) {
+export function saveAgentDelta(agentKey: string, delta: unknown, file: string = mcpBackupFilePath()): boolean {
   if (!agentKey || !delta || typeof delta !== 'object') return false;
   const backup = readBackup(file);
   backup[agentKey] = { ...delta, savedAt: new Date().toISOString() };
@@ -44,7 +46,7 @@ export function saveAgentDelta(agentKey, delta, file = mcpBackupFilePath()) {
 }
 
 // Consume the delta for an agent: returns it and removes it from the backup file.
-export function takeAgentDelta(agentKey, file = mcpBackupFilePath()) {
+export function takeAgentDelta(agentKey: string, file: string = mcpBackupFilePath()): Record<string, unknown> | null {
   const delta = readAgentDelta(agentKey, file);
   if (!delta) return null;
   const backup = readBackup(file);
@@ -59,7 +61,7 @@ export function takeAgentDelta(agentKey, file = mcpBackupFilePath()) {
   return delta;
 }
 
-export function purgeBackup(file = mcpBackupFilePath()) {
+export function purgeBackup(file: string = mcpBackupFilePath()): boolean {
   if (!existsSync(file)) return false;
   try {
     rmSync(file, { force: true });

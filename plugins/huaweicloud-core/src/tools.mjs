@@ -63,7 +63,7 @@ import {
   upgradePackage,
 } from './update-check.mjs';
 import { hcloudProbeNextStep, probeHcloud } from './hcloud-probe.mjs';
-import { isUsableOfficeaceRoot, readOfficeaceRootMarker } from './officeace-paths.mjs';
+import { isUsableOfficeaceRoot, readOfficeaceRootMarker } from './officeace-paths.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILLS_ROOT_DEV = join(__dirname, '..', 'skills');

@@ -12,11 +12,11 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { homedir } from 'node:os';
 
-function markerPath() {
+function markerPath(): string {
   return join(process.env.HUAWEICLOUD_HOME || homedir(), '.config', 'huaweicloud', 'devkit-officeace-root.json');
 }
 
-function sqliteSibling(dir) {
+function sqliteSibling(dir: string): string {
   return join(resolve(dir, '..'), 'data', 'mcp-connectors.sqlite');
 }
 
@@ -24,7 +24,7 @@ function sqliteSibling(dir) {
 // OfficeAce evidence — capabilities.json, the connector DB, or DevKit's own
 // installed artifacts. Deliberately more lenient than "capabilities.json must
 // exist" so uninstall/update still find the root after it was removed.
-export function isUsableOfficeaceRoot(dir) {
+export function isUsableOfficeaceRoot(dir: string): boolean {
   if (!dir || !existsSync(dir)) return false;
   return (
     existsSync(join(dir, 'capabilities.json')) ||
@@ -34,16 +34,16 @@ export function isUsableOfficeaceRoot(dir) {
   );
 }
 
-export function readOfficeaceRootMarker() {
+export function readOfficeaceRootMarker(): string | null {
   try {
-    const marker = JSON.parse(readFileSync(markerPath(), 'utf8'));
-    return isUsableOfficeaceRoot(marker.root) ? marker.root : null;
+    const marker: { root?: unknown } = JSON.parse(readFileSync(markerPath(), 'utf8'));
+    return typeof marker.root === 'string' && isUsableOfficeaceRoot(marker.root) ? marker.root : null;
   } catch {
     return null;
   }
 }
 
-export function writeOfficeaceRootMarker(root) {
+export function writeOfficeaceRootMarker(root: string): void {
   try {
     mkdirSync(dirname(markerPath()), { recursive: true });
     writeFileSync(markerPath(), JSON.stringify({ root, savedAt: new Date().toISOString() }, null, 2));

@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 
 import { getAuthStatus, syncAuth } from './auth/service.mjs';
-import { resolveAndApplyProjectId } from './auth/project-id.mjs';
+import { resolveAndApplyProjectId } from './auth/project-id.ts';
 import { SUPPORTED_AGENT_TARGETS } from './auth/agent-registration.mjs';
 import { fingerprint, readKooCliProfiles, resolveManagedProfile } from './auth/reconcile.mjs';
 import { redactSecrets } from './safety-policy.mjs';
@@ -36,7 +36,7 @@ import {
   clearProxyConfig,
   getProxySettings,
 } from './proxy/proxy-config.mjs';
-import { removeKooCli, removeObsConfig } from './sandbox/uninstall-cleanup.mjs';
+import { removeKooCli, removeObsConfig } from './sandbox/uninstall-cleanup.ts';
 import {
   mergeCommandStyle,
   mergeArgsStyle,
@@ -44,10 +44,10 @@ import {
   applyUserDelta,
   inheritPeerUserEnv,
 } from './mcp-config-merge.mjs';
-import { readAgentDelta, saveAgentDelta, takeAgentDelta, purgeBackup } from './mcp-config-backup.mjs';
-import { isUsableOfficeaceRoot, readOfficeaceRootMarker, writeOfficeaceRootMarker } from './officeace-paths.mjs';
+import { readAgentDelta, saveAgentDelta, takeAgentDelta, purgeBackup } from './mcp-config-backup.ts';
+import { isUsableOfficeaceRoot, readOfficeaceRootMarker, writeOfficeaceRootMarker } from './officeace-paths.ts';
 import { queryDistTagsFetch, determineTarget, semverCompare } from './update-check.mjs';
-import { getKooCliVersion, compareVersion, kooCliDownloadBase, KOO_CLI_BASE } from './koocli-version.mjs';
+import { getKooCliVersion, compareVersion, kooCliDownloadBase, KOO_CLI_BASE } from './koocli-version.ts';
 import { findHcloudBin, hcloudProbeNextStep, probeHcloud } from './hcloud-probe.mjs';
 
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');

@@ -9,22 +9,22 @@ export const KOO_CLI_BASE = 'https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaw
 
 const VERSION_RE = /\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?/;
 
-export function getKooCliVersion() {
+export function getKooCliVersion(): string | null {
   try {
-    const pkg = JSON.parse(readFileSync(PACKAGE_JSON, 'utf8'));
-    return pkg.kooCliVersion || null;
+    const pkg: { kooCliVersion?: unknown } = JSON.parse(readFileSync(PACKAGE_JSON, 'utf8'));
+    return typeof pkg.kooCliVersion === 'string' && pkg.kooCliVersion ? pkg.kooCliVersion : null;
   } catch {
     return null;
   }
 }
 
-export function parseHcloudVersion(out) {
+export function parseHcloudVersion(out: unknown): string | null {
   if (!out) return null;
   const match = String(out).match(VERSION_RE);
   return match ? match[0] : null;
 }
 
-export function compareVersion(a, b) {
+export function compareVersion(a: unknown, b: unknown): number {
   const pa = String(a || '')
     .split(/[-+]/)[0]
     .split('.')
@@ -42,6 +42,6 @@ export function compareVersion(a, b) {
   return 0;
 }
 
-export function kooCliDownloadBase() {
+export function kooCliDownloadBase(): string {
   return `${KOO_CLI_BASE}/${getKooCliVersion() || 'latest'}`;
 }

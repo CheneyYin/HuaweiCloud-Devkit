@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { removeKooCli, removeObsConfig } from '../plugins/huaweicloud-core/src/sandbox/uninstall-cleanup.mjs';
+import { removeKooCli, removeObsConfig } from '../plugins/huaweicloud-core/src/sandbox/uninstall-cleanup.ts';
 
 test('removeKooCli removes default hcloud binary and config dir', () => {
   const home = mkdtempSync(join(tmpdir(), 'cleanup-kocli-'));

@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { getAgentRegistrationStatuses } from './agent-registration.mjs';
-import { resolveAndApplyProjectId } from './project-id.mjs';
+import { resolveAndApplyProjectId } from './project-id.ts';
 import {
   globalCredentialsPath,
   isPlaceholder,

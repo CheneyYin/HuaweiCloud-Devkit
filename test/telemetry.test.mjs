@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { AGENTS } from '../plugins/huaweicloud-core/src/telemetry/agent-registry.mjs';
-import { detectAgentHarness } from '../plugins/huaweicloud-core/src/telemetry/agent-detect.mjs';
+import { detectAgentHarness } from '../plugins/huaweicloud-core/src/telemetry/agent-detect.ts';
 
 const DETECTION_ENV_KEYS = ['AGENT_HARNESS', ...new Set(AGENTS.flatMap((agent) => agent.envVars || []))];
 

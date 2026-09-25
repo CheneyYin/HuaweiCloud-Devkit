@@ -16,7 +16,7 @@ import {
   resolveCredentialsWithRuntime,
   setRuntimeCredentials,
 } from '../plugins/huaweicloud-core/src/auth/credentials.mjs';
-import { getKooCliVersion } from '../plugins/huaweicloud-core/src/koocli-version.mjs';
+import { getKooCliVersion } from '../plugins/huaweicloud-core/src/koocli-version.ts';
 
 test('runVersionCheck uses hcloud version instead of --version', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'huaweicloud-toolkit-version-'));

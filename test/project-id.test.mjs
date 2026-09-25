@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { resolveAndApplyProjectId } from '../plugins/huaweicloud-core/src/auth/project-id.mjs';
+import { resolveAndApplyProjectId } from '../plugins/huaweicloud-core/src/auth/project-id.ts';
 
 function fakeHcloudScript(source) {
   const dir = mkdtempSync(join(tmpdir(), 'huaweicloud-project-id-'));

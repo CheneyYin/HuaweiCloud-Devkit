@@ -6,7 +6,7 @@ import {
   parseHcloudVersion,
   compareVersion,
   kooCliDownloadBase,
-} from '../plugins/huaweicloud-core/src/koocli-version.mjs';
+} from '../plugins/huaweicloud-core/src/koocli-version.ts';
 
 test('kooCliVersion is declared in package.json and is semver', () => {
   const v = getKooCliVersion();

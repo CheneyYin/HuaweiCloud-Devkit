@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { classifyHcloudProbe, hcloudProbeNextStep } from '../plugins/huaweicloud-core/src/hcloud-probe.mjs';
-import { getKooCliVersion } from '../plugins/huaweicloud-core/src/koocli-version.mjs';
+import { getKooCliVersion } from '../plugins/huaweicloud-core/src/koocli-version.ts';
 
 test('hcloud probe classifies matching KooCLI version as ok', () => {
   const result = classifyHcloudProbe({ status: 0, stdout: `当前KooCLI版本:${getKooCliVersion()}`, stderr: '' });
