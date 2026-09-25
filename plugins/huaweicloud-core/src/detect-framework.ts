@@ -1,7 +1,44 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
-const FRAMEWORKS = {
+interface FrameworkSpec {
+  type: string;
+  framework: string;
+  installCmd: string | null;
+  buildCmd: string | null;
+  outputDir: string | null;
+  port: number;
+  serveCmd: string | null;
+  checkUrl: string;
+  nginxType: string;
+}
+
+export interface SubApp {
+  name: string;
+  path: string;
+  framework: string;
+  type: string;
+}
+
+// Detection results vary by branch: framework results carry the full spec,
+// monorepo results carry only tooling + sub-apps. Optional fields cover both.
+export interface FrameworkDetection {
+  type: string;
+  framework: string;
+  packageManager: string;
+  rootDir: string;
+  installCmd?: string | null;
+  buildCmd?: string | null;
+  outputDir?: string | null;
+  port?: number;
+  serveCmd?: string | null;
+  checkUrl?: string;
+  nginxType?: string;
+  monorepoTool?: string;
+  subApps?: SubApp[];
+}
+
+const FRAMEWORKS: Record<string, FrameworkSpec> = {
   nextjs: {
     type: 'ssr',
     framework: 'Next.js',
@@ -147,33 +184,40 @@ const FRAMEWORKS = {
   },
 };
 
-function readPkg(projectPath) {
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function readPkg(projectPath: string): Record<string, unknown> | null {
   const pkgPath = join(projectPath, 'package.json');
   if (!existsSync(pkgPath)) return null;
   try {
-    return JSON.parse(readFileSync(pkgPath, 'utf8'));
+    const parsed: unknown = JSON.parse(readFileSync(pkgPath, 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
   } catch {
     return null;
   }
 }
 
-function detectPackageManager(projectPath, pkg) {
+function detectPackageManager(projectPath: string, pkg: Record<string, unknown> | null): string {
   if (existsSync(join(projectPath, 'pnpm-lock.yaml'))) return 'pnpm';
   if (existsSync(join(projectPath, 'yarn.lock'))) return 'yarn';
   if (existsSync(join(projectPath, 'package-lock.json'))) return 'npm';
   if (existsSync(join(projectPath, 'bun.lockb'))) return 'bun';
-  const declared = (pkg?.packageManager || '').split('@')[0];
+  const declaredValue = pkg?.packageManager;
+  const declared = typeof declaredValue === 'string' ? declaredValue.split('@')[0] : '';
   if (declared && ['pnpm', 'yarn', 'npm', 'bun'].includes(declared)) return declared;
   return 'npm';
 }
 
-function collectDeps(pkg) {
+function collectDeps(pkg: Record<string, unknown> | null): Record<string, unknown> {
   if (!pkg) return {};
-  return { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+  return { ...asRecord(pkg.dependencies), ...asRecord(pkg.devDependencies) };
 }
 
-function scanSubApps(projectPath) {
-  const apps = [];
+function scanSubApps(projectPath: string): SubApp[] {
+  const apps: SubApp[] = [];
   for (const dir of ['apps', 'packages']) {
     const dirPath = join(projectPath, dir);
     if (!existsSync(dirPath)) continue;
@@ -186,8 +230,9 @@ function scanSubApps(projectPath) {
         if (!subPkg) continue;
         const result = detectFramework(subPath);
         if (!result) continue;
+        const nameValue = subPkg.name;
         apps.push({
-          name: subPkg.name || entry.name,
+          name: typeof nameValue === 'string' && nameValue ? nameValue : entry.name,
           path: `${dir}/${entry.name}`,
           framework: result.framework,
           type: result.type,
@@ -200,24 +245,32 @@ function scanSubApps(projectPath) {
   return apps;
 }
 
-function resolveAngularOutput(projectPath, pkg) {
+function resolveAngularOutput(projectPath: string, pkg: Record<string, unknown> | null): string {
   try {
     const angularJson = join(projectPath, 'angular.json');
     if (existsSync(angularJson)) {
-      const config = JSON.parse(readFileSync(angularJson, 'utf8'));
-      const defaultProject = config.defaultProject || Object.keys(config.projects || {})[0];
-      if (defaultProject && config.projects?.[defaultProject]?.architect?.build?.options?.outputPath) {
-        return config.projects[defaultProject].architect.build.options.outputPath;
+      const config = asRecord(JSON.parse(readFileSync(angularJson, 'utf8')));
+      const projects = asRecord(config.projects);
+      const defaultProjectValue = config.defaultProject;
+      const defaultProject =
+        typeof defaultProjectValue === 'string' && defaultProjectValue ? defaultProjectValue : Object.keys(projects)[0];
+      const project = asRecord(projects[defaultProject]);
+      const architect = asRecord(project.architect);
+      const build = asRecord(architect.build);
+      const outputPath = asRecord(build.options).outputPath;
+      if (defaultProject && typeof outputPath === 'string' && outputPath) {
+        return outputPath;
       }
     }
   } catch {
     // ignore parse errors
   }
-  const name = pkg?.name || 'app';
+  const nameValue = pkg?.name;
+  const name = typeof nameValue === 'string' && nameValue ? nameValue : 'app';
   return `dist/${name}`;
 }
 
-function patchCommands(result, pm) {
+function patchCommands(result: FrameworkDetection, pm: string): FrameworkDetection {
   if (result.installCmd && result.installCmd.startsWith('npm install')) {
     if (pm === 'pnpm') result.installCmd = 'pnpm install';
     else if (pm === 'yarn') result.installCmd = 'yarn install';
@@ -233,11 +286,11 @@ function patchCommands(result, pm) {
   return result;
 }
 
-function frameworkResult(fw, pm, projectPath) {
+function frameworkResult(fw: FrameworkSpec, pm: string, projectPath: string): FrameworkDetection {
   return patchCommands({ ...fw, packageManager: pm, rootDir: projectPath }, pm);
 }
 
-function readVitepressOutDir(projectPath) {
+function readVitepressOutDir(projectPath: string): string | null {
   const configFiles = ['config.mts', 'config.ts', 'config.mjs', 'config.js'];
   for (const cf of configFiles) {
     const configPath = join(projectPath, '.vitepress', cf);
@@ -251,7 +304,7 @@ function readVitepressOutDir(projectPath) {
   return null;
 }
 
-export function detectFramework(projectPath) {
+export function detectFramework(projectPath: string): FrameworkDetection | null {
   const pkg = readPkg(projectPath);
   const deps = collectDeps(pkg);
   const pm = detectPackageManager(projectPath, pkg);

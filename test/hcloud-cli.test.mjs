@@ -14,7 +14,7 @@ import {
   runHcloud,
   extractApiError,
   redactOutput,
-} from '../plugins/huaweicloud-core/src/hcloud-cli.mjs';
+} from '../plugins/huaweicloud-core/src/hcloud-cli.ts';
 import { clearRuntimeCredentials, setRuntimeCredentials } from '../plugins/huaweicloud-core/src/auth/credentials.mjs';
 import { callTool } from '../plugins/huaweicloud-core/src/tools.mjs';
 

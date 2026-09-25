@@ -8,10 +8,10 @@ import { createHmac, createHash } from 'node:crypto';
 
 import { evaluateArtifacts, evaluateCommandRisk, evaluateDeployPlan } from './risk-rule-engine.ts';
 import { classifyTextCommand, redactSecrets } from './safety-policy.ts';
-import { planHcloudCommand, runHcloud, consumeApprovalToken, hashArgs } from './hcloud-cli.mjs';
+import { planHcloudCommand, runHcloud, consumeApprovalToken, hashArgs } from './hcloud-cli.ts';
 import { searchMarketplace } from './search-market.ts';
 import { getServiceIcon } from './icon-library.ts';
-import { detectFramework } from './detect-framework.mjs';
+import { detectFramework } from './detect-framework.ts';
 import {
   execWithSession,
   execOneShot,
@@ -61,7 +61,7 @@ import {
   writeSkipState,
   resolveSkipFilePath,
   upgradePackage,
-} from './update-check.mjs';
+} from './update-check.ts';
 import { hcloudProbeNextStep, probeHcloud } from './hcloud-probe.ts';
 import { isUsableOfficeaceRoot, readOfficeaceRootMarker } from './officeace-paths.ts';
 

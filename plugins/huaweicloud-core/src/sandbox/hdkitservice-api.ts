@@ -1,6 +1,6 @@
 import { getProxyDispatcher } from '../proxy/proxy-agent.ts';
 import { cacheUserHash } from '../telemetry/telemetry.ts';
-import { readInstalledVersion } from '../update-check.mjs';
+import { readInstalledVersion } from '../update-check.ts';
 import { getCredentials } from './hwlink-api.ts';
 
 interface HdkitError extends Error {

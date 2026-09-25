@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 import { dispatch } from './mcp-protocol.ts';
 import { DEFAULT_PORT, DEFAULT_HOST } from './mcp-server-remote.ts';
-import { getCachedUpdateInfo, readInstalledVersion } from './update-check.mjs';
+import { getCachedUpdateInfo, readInstalledVersion } from './update-check.ts';
 import { detectAgent } from './telemetry/agent-detect.ts';
 
 const transportIdx = process.argv.indexOf('--transport');

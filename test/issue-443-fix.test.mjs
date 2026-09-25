@@ -45,7 +45,7 @@ console.log(JSON.stringify({
   const restoreHcloud = setFakeHcloud(script);
 
   try {
-    const { planHcloudCommand } = await import('../plugins/huaweicloud-core/src/hcloud-cli.mjs');
+    const { planHcloudCommand } = await import('../plugins/huaweicloud-core/src/hcloud-cli.ts');
 
     const plan = planHcloudCommand(
       [
@@ -97,7 +97,7 @@ console.log(JSON.stringify({
   const restoreHcloud = setFakeHcloud(script);
 
   try {
-    const { planHcloudCommand } = await import('../plugins/huaweicloud-core/src/hcloud-cli.mjs');
+    const { planHcloudCommand } = await import('../plugins/huaweicloud-core/src/hcloud-cli.ts');
 
     const plan = planHcloudCommand(
       [
@@ -147,7 +147,7 @@ console.log(JSON.stringify({
   const restoreHcloud = setFakeHcloud(script);
 
   try {
-    const { planHcloudCommand } = await import('../plugins/huaweicloud-core/src/hcloud-cli.mjs');
+    const { planHcloudCommand } = await import('../plugins/huaweicloud-core/src/hcloud-cli.ts');
 
     const plan = planHcloudCommand(
       [

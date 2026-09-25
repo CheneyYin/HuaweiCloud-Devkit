@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 
-import { detectFramework } from '../plugins/huaweicloud-core/src/detect-framework.mjs';
+import { detectFramework } from '../plugins/huaweicloud-core/src/detect-framework.ts';
 
 function tmpDir() {
   const dir = join(tmpdir(), 'devkit-test-' + randomUUID());

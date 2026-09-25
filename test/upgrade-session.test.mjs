@@ -10,7 +10,7 @@ import {
   _isHintConsumed,
   _resetHintConsumption,
 } from '../plugins/huaweicloud-core/src/mcp-protocol.ts';
-import * as updateCheck from '../plugins/huaweicloud-core/src/update-check.mjs';
+import * as updateCheck from '../plugins/huaweicloud-core/src/update-check.ts';
 
 // ============================================================================
 // 第一部分：mcp-protocol — hintConsumed 会话隔离

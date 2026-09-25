@@ -22,7 +22,7 @@ import {
   invalidateUpdateCache,
   applyUpdateHint,
   upgradePackage,
-} from '../plugins/huaweicloud-core/src/update-check.mjs';
+} from '../plugins/huaweicloud-core/src/update-check.ts';
 
 test('semverParse 解析稳定版与 prerelease', () => {
   assert.deepEqual(semverParse('1.1.1-next.15'), {
@@ -438,7 +438,7 @@ test('#607: judgeUpdate 对 truthy 但空 distTags 也应 check_failed', async (
 });
 
 test('#607: getUpdateDistTags 在查询失败态(check_failed)应返回 null', async () => {
-  const m = await import('../plugins/huaweicloud-core/src/update-check.mjs');
+  const m = await import('../plugins/huaweicloud-core/src/update-check.ts');
   invalidateUpdateCache();
   // doQuery 失败 → getCachedUpdateInfo 返回 check_failed；getUpdateDistTags 应折叠为 null
   const dt = await m.getUpdateDistTags('1.1.0', { doQuery: async () => null });
@@ -446,7 +446,7 @@ test('#607: getUpdateDistTags 在查询失败态(check_failed)应返回 null', a
 });
 
 test('#607: dismiss + 查询失败 → 折叠为 check_failed（不落伪冷却）', async () => {
-  const m = await import('../plugins/huaweicloud-core/src/update-check.mjs');
+  const m = await import('../plugins/huaweicloud-core/src/update-check.ts');
   invalidateUpdateCache();
   const f = m.resolveSkipFilePath('sess-607');
   const { rmSync } = await import('node:fs');

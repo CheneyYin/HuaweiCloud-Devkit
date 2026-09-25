@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { classifyUnsupported, readServiceCatalogs, runHcloud } from '../plugins/huaweicloud-core/src/hcloud-cli.mjs';
+import { classifyUnsupported, readServiceCatalogs, runHcloud } from '../plugins/huaweicloud-core/src/hcloud-cli.ts';
 
 function withCatalog(files) {
   const dir = mkdtempSync(join(tmpdir(), 'koocli-meta-'));

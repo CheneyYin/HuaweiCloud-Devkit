@@ -1,7 +1,7 @@
 // Version-update detection & auto-upgrade for huaweicloud-devkit (session-level).
 // Spec: docs/superpowers/specs/2026-09-07-version-upgrade-design.md (internal, not committed).
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, rmSync } from 'node:fs';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams, type SpawnSyncOptions } from 'node:child_process';
 import { join, dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -16,14 +16,93 @@ const TTL_MS = 60 * 60 * 1000;
 const FAIL_THROTTLE_MS = 5 * 60 * 1000;
 const COOLDOWN_DAYS = 3;
 
-export function semverParse(input) {
+export interface ParsedSemver {
+  major: number;
+  minor: number;
+  patch: number;
+  pre: string[] | null;
+  raw: string;
+}
+
+// dist-tags payload from `npm view` (or the registry). Untyped at the boundary:
+// only string versions survive, missing/malformed tags read as null.
+export interface DistTags {
+  latest?: string | null;
+  next?: string | null;
+}
+
+export interface SkipState {
+  dismissedVersion: string;
+  dismissedAt: string;
+  expireAt: string;
+}
+
+export type UpdateResult = 'update_available' | 'up_to_date' | 'check_failed' | 'dismissed';
+
+export interface UpdateHint {
+  currentVersion: string;
+  latestStable: string | null;
+  latestNext: string | null;
+  targetVersion: string | null;
+  updateAvailable: boolean;
+  dismissed: boolean;
+  dismissExpiresAt: string | null;
+  result: UpdateResult;
+  note?: string;
+}
+
+// Structural view of the fields applyUpdateHint reads; partial so callers with
+// minimal hints (tests, protocol layer) still typecheck.
+export interface UpdateHintLike {
+  updateAvailable?: boolean;
+  currentVersion?: string;
+  targetVersion?: string | null;
+}
+
+interface BuildResultExtra {
+  target?: string | null;
+  result?: UpdateResult;
+  dismissExpiresAt?: string | null;
+  note?: string;
+}
+
+interface SpawnResultLike {
+  status?: number | null;
+  stdout?: unknown;
+  stderr?: unknown;
+  error?: { message?: string } | null;
+}
+
+type UpgradeSpawnFn = (command: string, args: readonly string[], options: SpawnSyncOptions) => SpawnResultLike;
+
+// One-property read with validation, for the JS boundary of thrown values:
+// only a non-empty `message` string is surfaced.
+function errorMessage(error: unknown): string | undefined {
+  if (error instanceof Error && error.message) return error.message;
+  if (error && typeof error === 'object' && !Array.isArray(error)) {
+    const record = error as Record<string, unknown>;
+    if (typeof record.message === 'string' && record.message) return record.message;
+  }
+  return undefined;
+}
+
+function toDistTags(value: unknown): DistTags | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  return {
+    latest: typeof record.latest === 'string' ? record.latest : null,
+    next: typeof record.next === 'string' ? record.next : null,
+  };
+}
+
+export function semverParse(input: unknown): ParsedSemver | null {
   const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(String(input).trim());
   if (!m) return null;
   const pre = m[4] ? m[4].split('.') : null;
   return { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]), pre, raw: String(input).trim() };
 }
 
-function comparePre(a, b) {
+function comparePre(a: readonly (string | undefined)[] | null, b: readonly (string | undefined)[] | null): number {
   if (a === null && b === null) return 0;
   if (a === null) return 1; // 无 prerelease（正式版）更大
   if (b === null) return -1;
@@ -50,7 +129,7 @@ function comparePre(a, b) {
   return 0;
 }
 
-export function semverCompare(a, b) {
+export function semverCompare(a: unknown, b: unknown): number {
   const A = semverParse(a);
   const B = semverParse(b);
   if (!A || !B) {
@@ -64,37 +143,32 @@ export function semverCompare(a, b) {
   return comparePre(A.pre, B.pre);
 }
 
-export function hasPrerelease(v) {
+export function hasPrerelease(v: unknown): boolean {
   const parsed = semverParse(v);
   return Boolean(parsed && parsed.pre);
 }
 
-export function determineTarget(current, distTags = {}) {
+export function determineTarget(current: unknown, distTags: DistTags = {}): string | null {
   const isPre = hasPrerelease(current);
-  const candidates = [];
+  const candidates: string[] = [];
   if (distTags.latest) candidates.push(distTags.latest);
   if (isPre && distTags.next) candidates.push(distTags.next);
   if (!candidates.length) return null;
-  return candidates.slice().sort(semverCompare).pop();
+  return candidates.slice().sort(semverCompare).pop() ?? null;
 }
 
-export function parseDistTagsOutput(stdout) {
+export function parseDistTagsOutput(stdout: unknown): DistTags | null {
   try {
     const text = String(stdout || '').trim();
     if (!text) return null; // 空输出视为 npm view 失败
-    const parsed = JSON.parse(text);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-    return {
-      latest: typeof parsed.latest === 'string' ? parsed.latest : null,
-      next: typeof parsed.next === 'string' ? parsed.next : null,
-    };
+    return toDistTags(JSON.parse(text));
   } catch {
     return null;
   }
 }
 
-function buildResult(current, distTags, extra = {}) {
-  const result = {
+function buildResult(current: string, distTags: DistTags | null, extra: BuildResultExtra = {}): UpdateHint {
+  const result: UpdateHint = {
     currentVersion: current,
     latestStable: distTags?.latest ?? null,
     latestNext: distTags?.next ?? null,
@@ -108,7 +182,12 @@ function buildResult(current, distTags, extra = {}) {
   return result;
 }
 
-export function judgeUpdate(current, distTags, skipState, now = Date.now()) {
+export function judgeUpdate(
+  current: string,
+  distTags: DistTags | null,
+  skipState: SkipState | null | undefined,
+  now = Date.now(),
+): UpdateHint {
   if (process.env.HUAWEICLOUD_DEVKIT_SKIP_UPDATE === '1') {
     return buildResult(current, distTags ?? null);
   }
@@ -125,14 +204,18 @@ export function judgeUpdate(current, distTags, skipState, now = Date.now()) {
   }
   const expiresAt = skipState?.expireAt ? new Date(skipState.expireAt).getTime() : 0;
   const inCooldown =
-    Boolean(skipState) && now < expiresAt && semverCompare(target, String(skipState.dismissedVersion)) <= 0;
+    skipState != null && now < expiresAt && semverCompare(target, String(skipState.dismissedVersion)) <= 0;
   if (inCooldown) {
-    return buildResult(current, distTags, { result: 'dismissed', target, dismissExpiresAt: skipState.expireAt });
+    return buildResult(current, distTags, {
+      result: 'dismissed',
+      target,
+      dismissExpiresAt: skipState?.expireAt ?? null,
+    });
   }
   return buildResult(current, distTags, { result: 'update_available', target });
 }
 
-function selfDir() {
+function selfDir(): string {
   return dirname(fileURLToPath(import.meta.url));
 }
 
@@ -149,41 +232,41 @@ const VERSION_MANIFEST_RELS = [
   'openclaw.plugin.json',
 ];
 
-export function readInstalledVersion() {
+export function readInstalledVersion(): string | null {
   const pluginRoot = resolve(selfDir(), '..');
   const packageRoot = resolve(pluginRoot, '..', '..');
   for (const base of [pluginRoot, packageRoot]) {
     try {
-      const version = JSON.parse(readFileSync(join(base, 'package.json'), 'utf8')).version;
-      if (typeof version === 'string' && version) return version;
+      const pkg: { version?: unknown } = JSON.parse(readFileSync(join(base, 'package.json'), 'utf8'));
+      if (typeof pkg.version === 'string' && pkg.version) return pkg.version;
     } catch {}
   }
   for (const rel of VERSION_MANIFEST_RELS) {
     try {
-      const version = JSON.parse(readFileSync(join(pluginRoot, rel), 'utf8')).version;
-      if (typeof version === 'string' && version) return version;
+      const manifest: { version?: unknown } = JSON.parse(readFileSync(join(pluginRoot, rel), 'utf8'));
+      if (typeof manifest.version === 'string' && manifest.version) return manifest.version;
     } catch {}
   }
   return null;
 }
 
-export function skipFilePath() {
+export function skipFilePath(): string {
   return join(resolve(selfDir(), '..'), '.update-skip.json');
 }
 
-export function fallbackSkipFilePath() {
+export function fallbackSkipFilePath(): string {
   const base = process.env.HUAWEICLOUD_HOME || homedir();
   return join(base, '.config', 'huaweicloud', 'devkit-skip.json');
 }
 
 // 会话化 skip 文件：remote 多会话按 sessionId 拆分，stdio/默认保持原文件(向后兼容)。
-function sanitizeSessionId(sessionId) {
+function sanitizeSessionId(sessionId: unknown): string {
   return String(sessionId || '').replace(/[^0-9a-zA-Z-]/g, '_');
 }
 
 // A1 定稿: 标准 agent 用插件目录副本(有 package.json); codex 等无副本时回退共享文件
-export function resolveSkipFilePath(sessionId = null) {
-  let base;
+export function resolveSkipFilePath(sessionId: string | null = null): string {
+  let base: string;
   try {
     if (existsSync(join(dirname(skipFilePath()), 'package.json'))) {
       base = skipFilePath();
@@ -198,19 +281,35 @@ export function resolveSkipFilePath(sessionId = null) {
   return `${base}.${sanitizeSessionId(sessionId)}`;
 }
 
-export function readSkipState(file) {
+export function readSkipState(file: string): SkipState | null {
   if (!existsSync(file)) return null;
   try {
-    const parsed = JSON.parse(readFileSync(file, 'utf8'));
-    if (!parsed || typeof parsed.dismissedVersion !== 'string' || !parsed.dismissedAt || !parsed.expireAt) return null;
-    return parsed;
+    const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const record = parsed as Record<string, unknown>;
+    if (
+      typeof record.dismissedVersion !== 'string' ||
+      typeof record.dismissedAt !== 'string' ||
+      typeof record.expireAt !== 'string'
+    ) {
+      return null;
+    }
+    return {
+      dismissedVersion: record.dismissedVersion,
+      dismissedAt: record.dismissedAt,
+      expireAt: record.expireAt,
+    };
   } catch {
     return null;
   }
 }
 
-export function writeSkipState(file, dismissedVersion, { at = Date.now(), days = COOLDOWN_DAYS } = {}) {
-  const state = {
+export function writeSkipState(
+  file: string,
+  dismissedVersion: unknown,
+  { at = Date.now(), days = COOLDOWN_DAYS }: { at?: number; days?: number } = {},
+): SkipState {
+  const state: SkipState = {
     dismissedVersion: String(dismissedVersion),
     dismissedAt: new Date(at).toISOString(),
     expireAt: new Date(at + days * 24 * 60 * 60 * 1000).toISOString(),
@@ -227,33 +326,35 @@ export function writeSkipState(file, dismissedVersion, { at = Date.now(), days =
   return state;
 }
 
-function debugLog(message) {
+function debugLog(message: string): void {
   if (process.env.HUAWEICLOUD_DEVKIT_DEBUG === '1' || process.env.HUAWEICLOUD_DEVKIT_DEBUG === 'true') {
     console.error(`[debug] ${message}`);
   }
 }
 
-export function queryDistTagsFetch({ timeoutMs = 15000 } = {}) {
+export async function queryDistTagsFetch({ timeoutMs = 15000 }: { timeoutMs?: number } = {}): Promise<DistTags | null> {
   let registry = 'https://registry.npmjs.org';
   if (process.env.HUAWEICLOUD_NPM_REGISTRY) {
     registry = process.env.HUAWEICLOUD_NPM_REGISTRY.replace(/\/+$/, '');
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  return fetchWithProxy(`${registry}/-/package/huaweicloud-devkit/dist-tags`)
-    .then((resp) => {
-      clearTimeout(timer);
-      if (!resp || !resp.ok) return null;
-      return resp.json().catch(() => null);
-    })
-    .catch((error) => {
-      clearTimeout(timer);
-      debugLog(`queryDistTagsFetch: ${error?.message || error}`);
-      return null;
-    });
+  try {
+    const resp = await fetchWithProxy(`${registry}/-/package/huaweicloud-devkit/dist-tags`);
+    clearTimeout(timer);
+    if (!resp || !resp.ok) return null;
+    return toDistTags(await resp.json().catch(() => null));
+  } catch (error) {
+    clearTimeout(timer);
+    debugLog(`queryDistTagsFetch: ${errorMessage(error) || String(error)}`);
+    return null;
+  }
 }
 
-export function queryDistTagsSync({ timeoutMs = 15000, cwd } = {}) {
+export function queryDistTagsSync({
+  timeoutMs = 15000,
+  cwd,
+}: { timeoutMs?: number; cwd?: string } = {}): DistTags | null {
   try {
     const result = spawnSync(NPM_BIN, ['view', 'huaweicloud-devkit', 'dist-tags', '--json'], {
       encoding: 'utf8',
@@ -270,14 +371,17 @@ export function queryDistTagsSync({ timeoutMs = 15000, cwd } = {}) {
     }
     return parseDistTagsOutput(result.stdout);
   } catch (error) {
-    debugLog(`queryDistTagsSync: ${error?.message || error}`);
+    debugLog(`queryDistTagsSync: ${errorMessage(error) || String(error)}`);
     return null;
   }
 }
 
-export function queryDistTags({ timeoutMs = 15000, cwd } = {}) {
-  return new Promise((resolve) => {
-    let child;
+export function queryDistTags({
+  timeoutMs = 15000,
+  cwd,
+}: { timeoutMs?: number; cwd?: string } = {}): Promise<DistTags | null> {
+  return new Promise<DistTags | null>((resolve) => {
+    let child: ChildProcessWithoutNullStreams;
     try {
       child = spawn(NPM_BIN, ['view', 'huaweicloud-devkit', 'dist-tags', '--json'], {
         windowsHide: true,
@@ -285,7 +389,7 @@ export function queryDistTags({ timeoutMs = 15000, cwd } = {}) {
         shell: true,
       });
     } catch (error) {
-      debugLog(`queryDistTags: ${error?.message || error}`);
+      debugLog(`queryDistTags: ${errorMessage(error) || String(error)}`);
       resolve(null);
       return;
     }
@@ -302,7 +406,7 @@ export function queryDistTags({ timeoutMs = 15000, cwd } = {}) {
     });
     child.on('error', (error) => {
       clearTimeout(timer);
-      debugLog(`queryDistTags: ${error?.message || error}`);
+      debugLog(`queryDistTags: ${errorMessage(error) || String(error)}`);
       resolve(null);
     });
     child.on('close', (code) => {
@@ -317,13 +421,13 @@ export function queryDistTags({ timeoutMs = 15000, cwd } = {}) {
   });
 }
 
-let cachedDistTags = null;
+let cachedDistTags: DistTags | null = null;
 let cachedAt = 0;
 let failedAt = 0;
-let inflightQuery = null;
-let lastHint = null;
+let inflightQuery: Promise<DistTags | null> | null = null;
+let lastHint: UpdateHint | null = null;
 
-export function invalidateUpdateCache() {
+export function invalidateUpdateCache(): void {
   cachedDistTags = null;
   cachedAt = 0;
   failedAt = 0;
@@ -331,14 +435,20 @@ export function invalidateUpdateCache() {
   lastHint = null;
 }
 
-function cacheValid(now = Date.now()) {
+function cacheValid(now = Date.now()): boolean {
   return Boolean(cachedDistTags) && now - cachedAt <= TTL_MS;
 }
 
+export interface GetCachedUpdateInfoOptions {
+  doQuery?: () => Promise<DistTags | null>;
+  now?: number;
+  sessionId?: string | null;
+}
+
 export async function getCachedUpdateInfo(
-  current,
-  { doQuery = queryDistTags, now = Date.now(), sessionId = null } = {},
-) {
+  current: string,
+  { doQuery = queryDistTags, now = Date.now(), sessionId = null }: GetCachedUpdateInfoOptions = {},
+): Promise<UpdateHint> {
   if (process.env.HUAWEICLOUD_DEVKIT_SKIP_UPDATE === '1') {
     lastHint = judgeUpdate(current, null, undefined, now);
     return lastHint;
@@ -372,37 +482,50 @@ export async function getCachedUpdateInfo(
   return lastHint;
 }
 
-export function peekCachedUpdateInfo() {
+export function peekCachedUpdateInfo(): UpdateHint | null {
   return lastHint && lastHint.updateAvailable && lastHint.targetVersion ? lastHint : null;
 }
 
-export async function getUpdateDistTags(current, { sessionId = null, doQuery } = {}) {
+export async function getUpdateDistTags(
+  current: string,
+  { sessionId = null, doQuery }: { sessionId?: string | null; doQuery?: () => Promise<DistTags | null> } = {},
+): Promise<{ latest: string | null; next: string | null } | null> {
   const result = await getCachedUpdateInfo(current, { sessionId, doQuery });
   if (!result || result.result === 'check_failed') return null;
   return { latest: result.latestStable ?? null, next: result.latestNext ?? null };
 }
 
-export function applyUpdateHint(result, name, hint) {
+export function applyUpdateHint(result: unknown, name: string, hint: UpdateHintLike | null): unknown {
   if (!hint || !hint.updateAvailable || !hint.targetVersion) return result;
   if (name === 'huaweicloud_check_update' || name === 'huaweicloud_upgrade') return result;
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
   return {
-    ...result,
+    ...(result as Record<string, unknown>),
     _updateInfo: { currentVersion: hint.currentVersion, latestVersion: hint.targetVersion },
   };
 }
 
-function defaultSpawn(command, args, options) {
+function defaultSpawn(command: string, args: readonly string[], options: SpawnSyncOptions): SpawnResultLike {
   return spawnSync(command, args, options);
 }
 
-function restartMessage(target) {
+function restartMessage(target: string): string {
   if (target === 'officeace') {
     return '升级完成，请打开连接器 → 我的连接器 → huaweicloud-devkit → 重新连接后使用新版本。';
   }
   return '升级完成，请重启当前会话使新版本生效。';
 }
 
-export async function upgradePackage({ target = 'all', version = 'latest' } = {}, options = {}) {
+export interface UpgradeOptions {
+  doQuery?: () => Promise<DistTags | null>;
+  spawnFn?: UpgradeSpawnFn;
+  currentVersion?: string;
+}
+
+export async function upgradePackage(
+  { target = 'all', version = 'latest' }: { target?: string; version?: string } = {},
+  options: UpgradeOptions = {},
+) {
   if (version !== 'latest') {
     return { success: false, error: 'version 参数仅支持 latest。目标版本由插件自动判定。' };
   }
@@ -417,13 +540,13 @@ export async function upgradePackage({ target = 'all', version = 'latest' } = {}
   // Tests inject currentVersion explicitly - the repo package.json version changes
   // between prerelease and stable lines, which must not flip the upgrade-tag logic.
   const previousVersion = options.currentVersion || readInstalledVersion();
-  let distTags;
+  let distTags: DistTags | null;
   try {
     distTags = await doQuery();
   } catch (error) {
     return {
       success: false,
-      error: error?.message || '无法确认最新版本（registry 查询失败）。',
+      error: errorMessage(error) || '无法确认最新版本（registry 查询失败）。',
       manual: `npx --yes huaweicloud-devkit@latest update --target ${target}`,
     };
   }
@@ -441,13 +564,13 @@ export async function upgradePackage({ target = 'all', version = 'latest' } = {}
   const isNextTarget = Boolean(distTags.next && semverCompare(targetVersion, distTags.next) === 0);
   const tag = isNextTarget ? 'next' : 'latest';
   const command = ['--yes', `huaweicloud-devkit@${tag}`, 'update', '--target', String(target)];
-  let execResult;
+  let execResult: SpawnResultLike;
   try {
     execResult = spawnFn(NPX_BIN, command, { encoding: 'utf8', timeout: 300000, windowsHide: true, shell: true });
   } catch (error) {
     return {
       success: false,
-      error: error?.message || '升级命令执行失败。',
+      error: errorMessage(error) || '升级命令执行失败。',
       manual: `npx --yes huaweicloud-devkit@${tag} update --target ${target}`,
     };
   }

@@ -46,7 +46,7 @@ import {
 } from './mcp-config-merge.ts';
 import { readAgentDelta, saveAgentDelta, takeAgentDelta, purgeBackup } from './mcp-config-backup.ts';
 import { isUsableOfficeaceRoot, readOfficeaceRootMarker, writeOfficeaceRootMarker } from './officeace-paths.ts';
-import { queryDistTagsFetch, determineTarget, semverCompare } from './update-check.mjs';
+import { queryDistTagsFetch, determineTarget, semverCompare } from './update-check.ts';
 import { getKooCliVersion, compareVersion, kooCliDownloadBase, KOO_CLI_BASE } from './koocli-version.ts';
 import { findHcloudBin, hcloudProbeNextStep, probeHcloud } from './hcloud-probe.ts';
 
