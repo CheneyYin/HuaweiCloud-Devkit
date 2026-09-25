@@ -57,11 +57,28 @@ if (transport === 'remote') {
   const { startRemoteServer } = await import('./mcp-server-remote.mjs');
   startRemoteServer({ port: remotePort, host: remoteHost }).catch((error) => {
     process.stderr.write(`Failed to start MCP remote server: ${error.message}\n`);
-    // eslint-disable-next-line n/no-process-exit -- fatal startup error; no active session to keep alive
     process.exit(1);
   });
 } else {
   runStdioServer();
+}
+
+type JsonRpcRequest = { id?: unknown; method?: string; params?: unknown };
+type JsonRpcResponse = {
+  jsonrpc: '2.0';
+  id: unknown;
+  result?: unknown;
+  error?: { code: number; message: string };
+};
+
+// JSON-RPC errors carry a numeric code; anything thrown may not. This reads the
+// code off unknown without pretending the whole value is a shaped error.
+function jsonRpcErrorFrom(error: unknown): { code: number; message: string } {
+  const code = (error as { code?: unknown }).code;
+  return {
+    code: Number.isSafeInteger(code) ? (code as number) : -32603,
+    message: error instanceof Error ? error.message : String(error),
+  };
 }
 
 function runStdioServer() {
@@ -87,13 +104,12 @@ function runStdioServer() {
   // 版本升级检测预热：异步、非阻塞；失败静默（离线/超时不影响会话）。
   process.nextTick(updatePrewarm);
 
-  let keepAlive = null;
+  let keepAlive: NodeJS.Timeout | null = null;
   function onStdinClose() {
     if (keepAlive) return;
     if (NEEDS_KEEPALIVE) {
       keepAlive = setInterval(() => {}, 60000);
     } else {
-      // eslint-disable-next-line n/no-process-exit -- stdin close is the shutdown signal; exit now without waiting for stdout
       process.exit(0);
     }
   }
@@ -142,7 +158,7 @@ function runStdioServer() {
     }
   }
 
-  function parseContentLengthFrame(headerEnd) {
+  function parseContentLengthFrame(headerEnd: number): boolean {
     const header = buffer.subarray(0, headerEnd).toString('utf8');
     const match = header.match(/Content-Length:\s*(\d+)/i);
     if (!match) {
@@ -163,33 +179,31 @@ function runStdioServer() {
     return true;
   }
 
-  async function handleMessage(message) {
+  async function handleMessage(raw: unknown) {
     // Valid JSON that is not an object (null / array / string) is an invalid
     // request per JSON-RPC 2.0 — reply -32600 rather than silently dropping it.
-    if (!message || typeof message !== 'object' || Array.isArray(message)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
       writeJsonRpcError(-32600, 'Invalid Request');
       return;
     }
+    const message = raw as JsonRpcRequest;
     if (!Object.hasOwn(message, 'id')) {
       if (message.method === 'notifications/initialized') return;
       return;
     }
     try {
-      const result = await dispatch(message.method, message.params || {}, { sessionId: 'stdin' });
+      const result = await dispatch(message.method ?? '', message.params || {}, { sessionId: 'stdin' });
       writeMessage({ jsonrpc: '2.0', id: message.id, result });
     } catch (error) {
       writeMessage({
         jsonrpc: '2.0',
         id: message.id,
-        error: {
-          code: Number.isSafeInteger(error.code) ? error.code : -32603,
-          message: error.message,
-        },
+        error: jsonRpcErrorFrom(error),
       });
     }
   }
 
-  function writeMessage(message) {
+  function writeMessage(message: JsonRpcResponse) {
     const json = JSON.stringify(message);
     if (useContentLengthFraming) {
       stdout.write(`Content-Length: ${Buffer.byteLength(json, 'utf8')}\r\n\r\n${json}`);
@@ -198,7 +212,7 @@ function runStdioServer() {
     }
   }
 
-  function writeJsonRpcError(code, message) {
+  function writeJsonRpcError(code: number, message: string) {
     writeMessage({
       jsonrpc: '2.0',
       id: null,

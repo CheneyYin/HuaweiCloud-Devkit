@@ -6,7 +6,7 @@ import test from 'node:test';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const srcDir = join(root, 'plugins', 'huaweicloud-core', 'src');
-const serverPath = join(srcDir, 'mcp-server.mjs');
+const serverPath = join(srcDir, 'mcp-server.ts');
 
 let server;
 let base;
@@ -153,7 +153,7 @@ function spawnRemote(flags) {
   return { child, whenListening };
 }
 
-test('mcp-server.mjs --transport remote honors --host and --port flags', async () => {
+test('mcp-server.ts --transport remote honors --host and --port flags', async () => {
   const { child, whenListening } = spawnRemote(['--host', '0.0.0.0', '--port', '0']);
   try {
     const addr = await whenListening;

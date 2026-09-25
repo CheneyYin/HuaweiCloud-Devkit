@@ -109,6 +109,7 @@ export default [
       'scripts/**/*.mjs',
       'bin/*.cjs',
       'plugins/huaweicloud-core/src/setup-cli.mjs',
+      'plugins/huaweicloud-core/src/mcp-server.ts',
       'test/huaweicloud-agent-toolkit-test/scripts/invoke-mcp.mjs',
       'test/fixtures/**',
     ],

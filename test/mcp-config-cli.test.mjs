@@ -88,12 +88,16 @@ function backupFile(home) {
 
 test('CLI update merges drifted entry: corrects path, keeps user args and timeout', () => {
   const home = makeHome();
-  const mcpPath = seedInstalled(home, { stalePath: true });
+  seedInstalled(home, { stalePath: true });
   const res = run('opencode', home, 'update');
   assert.equal(res.status, 0, res.stderr || res.stdout);
   assert.match(res.stdout, /merged/);
   const entry = readMcpEntry(home);
-  assert.deepEqual(entry.command, ['node', mcpPath, ...ENDPOINT_ARGS]);
+  const correctedPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js').replace(
+    /\\/g,
+    '/',
+  );
+  assert.deepEqual(entry.command, ['node', correctedPath, ...ENDPOINT_ARGS]);
   assert.equal(entry.timeout, 600000);
 });
 
@@ -116,7 +120,7 @@ test('CLI install restores backed-up user fields and consumes the backup', () =>
   assert.ok(existsSync(backupFile(home)));
   const res = run('opencode', home, 'install');
   assert.equal(res.status, 0, res.stderr || res.stdout);
-  const mcpPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'src', 'mcp-server.mjs').replace(/\\/g, '/');
+  const mcpPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js').replace(/\\/g, '/');
   const entry = readMcpEntry(home);
   assert.deepEqual(entry.command, ['node', mcpPath, ...ENDPOINT_ARGS]);
   assert.equal(entry.timeout, 600000);

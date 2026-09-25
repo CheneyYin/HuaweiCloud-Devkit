@@ -10,7 +10,7 @@ source: https://github.com/huaweicloud/huaweicloud-devkit
 transport:
   type: stdio
   command: 'node'
-  args: ['plugins/huaweicloud-core/src/mcp-server.mjs']
+  args: ['plugins/huaweicloud-core/dist/mcp-server.js']
   env:
     HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local'
 
@@ -20,7 +20,7 @@ install:
   bootstrap:
     - 'npm ci'
     - 'npm run build'
-    - 'node plugins/huaweicloud-core/src/setup-cli.mjs install --target hermes --skip-mcp-server'
+    - 'node plugins/huaweicloud-core/dist/setup-cli.mjs install --target hermes --skip-mcp-server'
 
 auth:
   type: none

@@ -12,9 +12,11 @@ const selfPath = (() => {
 
 export function installSegment() {
   const parts = selfPath.split('/').filter(Boolean);
-  const srcIdx = parts.lastIndexOf('src');
-  if (srcIdx < 1) return null;
-  const parentIdx = srcIdx - 1;
+  // Installs before 2.0.0 ran from a src/ directory; current installs run from
+  // dist/. Take whichever segment is rightmost so both layouts resolve.
+  const layoutIdx = Math.max(parts.lastIndexOf('src'), parts.lastIndexOf('dist'));
+  if (layoutIdx < 1) return null;
+  const parentIdx = layoutIdx - 1;
   const firstHidden = parts.findIndex((p, i) => i < parentIdx && p.startsWith('.'));
   if (firstHidden >= 0) return parts.slice(firstHidden, parentIdx).join('/') || null;
   return parts[parentIdx - 1] || null;

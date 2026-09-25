@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const serverPath = join(root, 'plugins', 'huaweicloud-core', 'src', 'mcp-server.mjs');
+const serverPath = join(root, 'plugins', 'huaweicloud-core', 'src', 'mcp-server.ts');
 
 function frame(message) {
   const json = JSON.stringify(message);
@@ -258,13 +258,13 @@ test('MCP server reports version from plugin package.json in installed layout', 
   const dir = mkdtempSync(join(tmpdir(), 'hwc-version-'));
   try {
     const pluginRoot = join(dir, 'huaweicloud-plugins');
-    cpSync(join(root, 'plugins', 'huaweicloud-core', 'src'), join(pluginRoot, 'src'), { recursive: true });
+    cpSync(join(root, 'plugins', 'huaweicloud-core', 'dist'), join(pluginRoot, 'dist'), { recursive: true });
     cpSync(join(root, 'plugins', 'huaweicloud-core', 'safety'), join(pluginRoot, 'safety'), { recursive: true });
     writeFileSync(
       join(pluginRoot, 'package.json'),
       JSON.stringify({ name: 'huaweicloud-plugins', version: '9.9.9-test' }),
     );
-    const client = createClient(join(pluginRoot, 'src', 'mcp-server.mjs'));
+    const client = createClient(join(pluginRoot, 'dist', 'mcp-server.js'));
     try {
       const initialized = await client.request('initialize', {
         protocolVersion: '2024-11-05',
@@ -287,14 +287,14 @@ test('MCP server reports version from plugin manifest in Codex cache layout (#57
     // the candidate paths — the version must come from the plugin manifest.
     const codexRoot = join(dir, 'huaweicloud-devkit', 'huaweicloud-devkit', '1.1.5');
     mkdirSync(codexRoot, { recursive: true });
-    cpSync(join(root, 'plugins', 'huaweicloud-core', 'src'), join(codexRoot, 'src'), { recursive: true });
+    cpSync(join(root, 'plugins', 'huaweicloud-core', 'dist'), join(codexRoot, 'dist'), { recursive: true });
     cpSync(join(root, 'plugins', 'huaweicloud-core', 'safety'), join(codexRoot, 'safety'), { recursive: true });
     mkdirSync(join(codexRoot, '.codex-plugin'), { recursive: true });
     writeFileSync(
       join(codexRoot, '.codex-plugin', 'plugin.json'),
       JSON.stringify({ name: 'huaweicloud-devkit', version: '1.1.5-codex' }),
     );
-    const client = createClient(join(codexRoot, 'src', 'mcp-server.mjs'));
+    const client = createClient(join(codexRoot, 'dist', 'mcp-server.js'));
     try {
       const initialized = await client.request('initialize', {
         protocolVersion: '2024-11-05',

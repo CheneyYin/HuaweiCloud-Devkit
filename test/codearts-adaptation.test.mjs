@@ -66,8 +66,8 @@ test('codearts install copies skills, MCP server, and safety policy', () => {
     assert.equal(projSkills, userSkills, 'project skills match user skills');
 
     const pluginDir = join(home, '.codeartsdoer', 'huaweicloud-plugins');
-    assert.ok(existsSync(join(pluginDir, 'src', 'mcp-server.mjs')));
-    assert.ok(existsSync(join(pluginDir, 'src', 'tools.mjs')));
+    assert.ok(existsSync(join(pluginDir, 'dist', 'mcp-server.js')));
+    assert.ok(existsSync(join(pluginDir, 'dist', 'tools.mjs')));
     assert.ok(existsSync(join(pluginDir, 'safety', 'policy.json')));
     assert.ok(existsSync(join(pluginDir, '.installed')), '.installed marker in codearts plugins dir');
     assert.equal(mcpConfig(join(pluginDir, 'package.json'))?.version, pkg.version);
@@ -94,8 +94,8 @@ test('codearts install writes correct mcp_settings.json at user and project leve
       assert.ok(server, `huaweicloud-devkit server registered in ${configPath}`);
       assert.equal(server.command, 'node');
       assert.ok(
-        server.args[0].endsWith('huaweicloud-plugins/src/mcp-server.mjs'),
-        `args[0] points to mcp-server.mjs: ${server.args[0]}`,
+        server.args[0].endsWith('huaweicloud-plugins/dist/mcp-server.js'),
+        `args[0] points to mcp-server.js: ${server.args[0]}`,
       );
       assert.equal(server.enabled, true);
       assert.equal(server.env?.HUAWEICLOUD_AGENT_TOOLKIT_MODE, 'local');
@@ -224,7 +224,7 @@ test('codearts-work install copies skills, MCP server, and safety policy', () =>
     assert.ok(userSkills >= 6, `user skills (${userSkills})`);
 
     const pluginDir = join(home, '.codeartswork', 'huaweicloud-plugins');
-    assert.ok(existsSync(join(pluginDir, 'src', 'mcp-server.mjs')), 'MCP server');
+    assert.ok(existsSync(join(pluginDir, 'dist', 'mcp-server.js')), 'MCP server');
     assert.ok(existsSync(join(pluginDir, 'safety', 'policy.json')), 'safety policy');
     assert.ok(existsSync(join(pluginDir, '.installed')), '.installed marker');
   } finally {
@@ -248,7 +248,7 @@ test('codearts-work install writes correct mcp_settings.json', () => {
     assert.equal(server.enabled, true);
     assert.equal(server.timeout, 300000);
     assert.equal(server.command[0], 'node');
-    assert.match(server.command[1], /huaweicloud-plugins.src.mcp-server/);
+    assert.match(server.command[1], /huaweicloud-plugins[\\/]dist[\\/]mcp-server\.js/);
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });

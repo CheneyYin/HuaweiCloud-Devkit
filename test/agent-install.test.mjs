@@ -125,8 +125,8 @@ test('opencode install creates skills, MCP server, and safety policy', () => {
     assert.match(res.stdout, /Installation complete/);
     assert.ok(countSkills(join(home, '.config', 'opencode', 'skills')) >= 6);
     const pd = join(home, '.config', 'opencode', 'huaweicloud-plugins');
-    assert.ok(existsSync(join(pd, 'src', 'mcp-server.mjs')));
-    assert.ok(existsSync(join(pd, 'src', 'tools.mjs')));
+    assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
+    assert.ok(existsSync(join(pd, 'dist', 'tools.mjs')));
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
     assert.ok(existsSync(join(pd, '.installed')));
     assert.equal(pluginVersion(pd), pkg.version);
@@ -188,8 +188,8 @@ test('workbuddy install creates skills, MCP server, and safety policy', () => {
     assert.match(res.stdout, /Installation complete/);
     assert.ok(countSkills(join(home, '.workbuddy', 'skills')) >= 6);
     const pd = join(home, '.workbuddy', 'huaweicloud-plugins');
-    assert.ok(existsSync(join(pd, 'src', 'mcp-server.mjs')));
-    assert.ok(existsSync(join(pd, 'src', 'tools.mjs')));
+    assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
+    assert.ok(existsSync(join(pd, 'dist', 'tools.mjs')));
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
     assert.equal(pluginVersion(pd), pkg.version);
   } finally {
@@ -276,8 +276,8 @@ test('codex-desktop install creates skills, MCP server, and safety policy', () =
     assert.match(res.stdout, /Installation complete/);
     assert.ok(countSkills(join(home, 'plugins', 'huaweicloud-devkit', 'skills')) >= 6);
     const pd = join(home, 'plugins', 'huaweicloud-devkit');
-    assert.ok(existsSync(join(pd, 'src', 'mcp-server.mjs')));
-    assert.ok(existsSync(join(pd, 'src', 'tools.mjs')));
+    assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
+    assert.ok(existsSync(join(pd, 'dist', 'tools.mjs')));
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
     assert.equal(pluginVersion(pd), pkg.version);
   } finally {
@@ -330,8 +330,8 @@ test('openclaw install creates skills, MCP server, and safety policy in .agents'
     assert.match(res.stdout, /Installation complete/);
     assert.ok(countSkills(join(home, '.agents', 'skills')) >= 6);
     const pd = join(home, '.agents', 'huaweicloud-plugins');
-    assert.ok(existsSync(join(pd, 'src', 'mcp-server.mjs')));
-    assert.ok(existsSync(join(pd, 'src', 'tools.mjs')));
+    assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
+    assert.ok(existsSync(join(pd, 'dist', 'tools.mjs')));
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
     assert.ok(existsSync(join(pd, '.installed')));
     assert.equal(pluginVersion(pd), pkg.version);
@@ -366,7 +366,7 @@ test('hermes install creates skills, MCP server, and safety policy', () => {
     assert.match(res.stdout, /Installation complete/);
     assert.ok(countSkills(join(home, '.hermes', 'skills')) >= 6);
     const pd = join(home, '.hermes', 'huaweicloud-plugins');
-    assert.ok(existsSync(join(pd, 'src', 'mcp-server.mjs')));
+    assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
     assert.equal(pluginVersion(pd), pkg.version);
     const allowlistPath = join(home, '.hermes', 'shell-hooks-allowlist.json');
@@ -430,13 +430,13 @@ test('atomcode install creates skills, MCP server, and safety policy', () => {
     assert.match(res.stdout, /Installation complete/);
     assert.ok(countSkills(join(home, '.atomcode', 'skills')) >= 6);
     const pd = join(home, '.atomcode', 'huaweicloud-plugins');
-    assert.ok(existsSync(join(pd, 'src', 'mcp-server.mjs')));
-    assert.ok(existsSync(join(pd, 'src', 'tools.mjs')));
+    assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
+    assert.ok(existsSync(join(pd, 'dist', 'tools.mjs')));
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
     assert.equal(pluginVersion(pd), pkg.version);
     const mcpCfg = JSON.parse(readFileSync(join(home, '.atomcode', 'mcp.json'), 'utf8'));
     assert.equal(mcpCfg.mcpServers['huaweicloud-devkit'].command, 'node');
-    assert.ok(mcpCfg.mcpServers['huaweicloud-devkit'].args[0].endsWith('huaweicloud-plugins/src/mcp-server.mjs'));
+    assert.ok(mcpCfg.mcpServers['huaweicloud-devkit'].args[0].endsWith('huaweicloud-plugins/dist/mcp-server.js'));
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });

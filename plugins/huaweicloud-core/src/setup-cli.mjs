@@ -264,7 +264,7 @@ function ensureOfficeaceMcpInSqlite() {
     return 'db-missing';
   }
 
-  const mcpPath = join(officeacePluginsDir(), 'src', 'mcp-server.mjs').replace(/\\/g, '/');
+  const mcpPath = join(officeacePluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
   const env = [{ key: 'HUAWEICLOUD_AGENT_TOOLKIT_MODE', value: 'local', sensitive: false }];
   const hcloudBin = findHcloudBin();
   if (hcloudBin) env.push({ key: 'HCLOUD_BIN', value: hcloudBin.replace(/\\/g, '/'), sensitive: false });
@@ -552,6 +552,12 @@ function writeMcpSettingsFile(configPath, config) {
   }
 }
 
+// Installs before 2.0.0 kept the server at src/mcp-server.mjs. Treat either
+// layout as installed so doctor/status/update can see and migrate old installs.
+function mcpServerInstalled(baseDir) {
+  return existsSync(join(baseDir, 'dist', 'mcp-server.js')) || existsSync(join(baseDir, 'src', 'mcp-server.mjs'));
+}
+
 function copyDir(src, dest) {
   if (!existsSync(src)) return;
   mkdirSync(dest, { recursive: true });
@@ -634,7 +640,7 @@ function removeIfExists(p) {
 
 function updateOpenCodeConfig(pluginDir) {
   const configPath = opencodeConfigFile();
-  const mcpPath = join(pluginDir, 'src', 'mcp-server.mjs').replace(/\\/g, '/');
+  const mcpPath = join(pluginDir, 'dist', 'mcp-server.js').replace(/\\/g, '/');
   let config = {};
   if (existsSync(configPath)) {
     try {
@@ -853,7 +859,7 @@ function codexStatus() {
 async function installOpenCode() {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
-  const srcDir = join(PLUGIN_ROOT, 'src');
+  const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'hooks', 'skill-tracker.js');
   const pluginDest = opencodePluginsDir();
@@ -862,8 +868,8 @@ async function installOpenCode() {
   console.log(`  Skills -> ${opencodeSkillsDir()}`);
   copyDir(commandsSrc, opencodeCommandsDir());
   console.log(`  Commands -> ${opencodeCommandsDir()}`);
-  copyDir(srcDir, join(pluginDest, 'src'));
-  console.log(`  MCP Server -> ${join(pluginDest, 'src')}`);
+  copyDir(distDir, join(pluginDest, 'dist'));
+  console.log(`  MCP Server -> ${join(pluginDest, 'dist')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
   const opcPlugins = join(configRoot('opencode'), 'plugins');
@@ -928,7 +934,7 @@ function pruneStale(targetDir, sourceDir) {
 async function updateOpenCode() {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
-  const srcDir = join(PLUGIN_ROOT, 'src');
+  const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'hooks', 'skill-tracker.js');
   const pluginDest = opencodePluginsDir();
@@ -941,8 +947,8 @@ async function updateOpenCode() {
   console.log(
     `  Commands updated -> ${opencodeCommandsDir()}${staleCommands > 0 ? ` (removed ${staleCommands} stale)` : ''}`,
   );
-  copyDir(srcDir, join(pluginDest, 'src'));
-  console.log(`  MCP Server updated -> ${join(pluginDest, 'src')}`);
+  copyDir(distDir, join(pluginDest, 'dist'));
+  console.log(`  MCP Server updated -> ${join(pluginDest, 'dist')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
   const opcPlugins = join(configRoot('opencode'), 'plugins');
@@ -1032,7 +1038,7 @@ function removeCodexMarketplaceEntry() {
 async function installOpenClaw() {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
-  const srcDir = join(PLUGIN_ROOT, 'src');
+  const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = openclawPluginsDir();
 
@@ -1041,12 +1047,12 @@ async function installOpenClaw() {
   console.log(`  Skills -> ${openclawSkillsDir()}`);
   copyDir(commandsSrc, join(homedir(), '.agents', 'commands'));
   console.log(`  Commands -> ${join(homedir(), '.agents', 'commands')}`);
-  copyDir(srcDir, join(pluginDest, 'src'));
-  console.log(`  MCP Server -> ${join(pluginDest, 'src')}`);
+  copyDir(distDir, join(pluginDest, 'dist'));
+  console.log(`  MCP Server -> ${join(pluginDest, 'dist')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
 
-  const mcpServerAbsPath = join(pluginDest, 'src', 'mcp-server.mjs').replace(/\\/g, '/');
+  const mcpServerAbsPath = join(pluginDest, 'dist', 'mcp-server.js').replace(/\\/g, '/');
   writeMcpServersFile(pluginDest, mcpServerAbsPath, 'openclaw');
 
   const codexPluginSrc = join(PLUGIN_ROOT, '.codex-plugin');
@@ -1091,7 +1097,7 @@ function uninstallOpenClaw() {
 async function updateOpenClaw() {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
-  const srcDir = join(PLUGIN_ROOT, 'src');
+  const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = openclawPluginsDir();
 
@@ -1101,12 +1107,12 @@ async function updateOpenClaw() {
   console.log(`  Skills updated -> ${openclawSkillsDir()}${staleSkills > 0 ? ` (removed ${staleSkills} stale)` : ''}`);
   copyDir(commandsSrc, join(homedir(), '.agents', 'commands'));
   console.log(`  Commands updated -> ${join(homedir(), '.agents', 'commands')}`);
-  copyDir(srcDir, join(pluginDest, 'src'));
-  console.log(`  MCP Server updated -> ${join(pluginDest, 'src')}`);
+  copyDir(distDir, join(pluginDest, 'dist'));
+  console.log(`  MCP Server updated -> ${join(pluginDest, 'dist')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
 
-  const mcpServerAbsPath = join(pluginDest, 'src', 'mcp-server.mjs').replace(/\\/g, '/');
+  const mcpServerAbsPath = join(pluginDest, 'dist', 'mcp-server.js').replace(/\\/g, '/');
   writeMcpServersFile(pluginDest, mcpServerAbsPath, 'openclaw');
 
   const codexPluginSrc = join(PLUGIN_ROOT, '.codex-plugin');
@@ -1122,7 +1128,7 @@ async function updateOpenClaw() {
 async function installCodexDesktop() {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
-  const srcDir = join(PLUGIN_ROOT, 'src');
+  const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = codexDesktopPluginsDir();
 
@@ -1131,8 +1137,8 @@ async function installCodexDesktop() {
   console.log(`  Skills -> ${join(pluginDest, 'skills')}`);
   copyDir(commandsSrc, join(pluginDest, 'commands'));
   console.log(`  Commands -> ${join(pluginDest, 'commands')}`);
-  copyDir(srcDir, join(pluginDest, 'src'));
-  console.log(`  MCP Server -> ${join(pluginDest, 'src')}`);
+  copyDir(distDir, join(pluginDest, 'dist'));
+  console.log(`  MCP Server -> ${join(pluginDest, 'dist')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
 
@@ -1144,7 +1150,7 @@ async function installCodexDesktop() {
   }
 
   // Generate .mcp.json for Codex plugin MCP server discovery
-  const mcpServerAbsPath = join(pluginDest, 'src', 'mcp-server.mjs').replace(/\\/g, '/');
+  const mcpServerAbsPath = join(pluginDest, 'dist', 'mcp-server.js').replace(/\\/g, '/');
   writeMcpServersFile(pluginDest, mcpServerAbsPath, 'codex-desktop');
 
   // Copy .codex-plugin manifest for Codex Desktop plugin registration
@@ -1174,7 +1180,7 @@ async function installCodexDesktop() {
 async function updateCodexDesktop() {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
-  const srcDir = join(PLUGIN_ROOT, 'src');
+  const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = codexDesktopPluginsDir();
 
@@ -1189,8 +1195,8 @@ async function updateCodexDesktop() {
   console.log(
     `  Commands updated -> ${join(pluginDest, 'commands')}${staleCommands > 0 ? ` (removed ${staleCommands} stale)` : ''}`,
   );
-  copyDir(srcDir, join(pluginDest, 'src'));
-  console.log(`  MCP Server updated -> ${join(pluginDest, 'src')}`);
+  copyDir(distDir, join(pluginDest, 'dist'));
+  console.log(`  MCP Server updated -> ${join(pluginDest, 'dist')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
 
@@ -1201,7 +1207,7 @@ async function updateCodexDesktop() {
     console.log(`  Assets updated -> ${join(pluginDest, 'assets')}`);
   }
 
-  const mcpServerAbsPath = join(pluginDest, 'src', 'mcp-server.mjs').replace(/\\/g, '/');
+  const mcpServerAbsPath = join(pluginDest, 'dist', 'mcp-server.js').replace(/\\/g, '/');
   writeMcpServersFile(pluginDest, mcpServerAbsPath, 'codex-desktop');
 
   const codexPluginSrc = join(PLUGIN_ROOT, '.codex-plugin');
@@ -1271,7 +1277,7 @@ function uninstallCodexDesktop() {
 }
 
 function registerCodeartsMcp(configPath, agentKey = 'codearts') {
-  const mcpPath = join(codeartsPluginsDir(), 'src', 'mcp-server.mjs').replace(/\\/g, '/');
+  const mcpPath = join(codeartsPluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
   const hcloudBin = findHcloudBin();
   const env = { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local' };
   if (hcloudBin) env.HCLOUD_BIN = hcloudBin.replace(/\\/g, '/');
@@ -1314,7 +1320,7 @@ function registerCodeartsMcp(configPath, agentKey = 'codearts') {
 
 async function installCodeArts() {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const srcDir = join(PLUGIN_ROOT, 'src');
+  const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'hooks', 'skill-tracker.js');
 
@@ -1324,8 +1330,8 @@ async function installCodeArts() {
   console.log(`  Skills -> ${codeartsProjectSkillsDir()}`);
 
   const pluginDest = codeartsPluginsDir();
-  copyDir(srcDir, join(pluginDest, 'src'));
-  console.log(`  MCP Server -> ${join(pluginDest, 'src')}`);
+  copyDir(distDir, join(pluginDest, 'dist'));
+  console.log(`  MCP Server -> ${join(pluginDest, 'dist')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
 
@@ -1343,7 +1349,7 @@ async function installCodeArts() {
 // Incremental update: overwrite copied files, prune stale ones, and only touch the config when necessary.
 async function updateCodeArts() {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const srcDir = join(PLUGIN_ROOT, 'src');
+  const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'hooks', 'skill-tracker.js');
   const pluginDest = codeartsPluginsDir();
@@ -1353,8 +1359,8 @@ async function updateCodeArts() {
     const stale = pruneStale(dir, skillsSrc);
     console.log(`  Skills updated -> ${dir}${stale > 0 ? ` (removed ${stale} stale)` : ''}`);
   }
-  copyDir(srcDir, join(pluginDest, 'src'));
-  console.log(`  MCP Server updated -> ${join(pluginDest, 'src')}`);
+  copyDir(distDir, join(pluginDest, 'dist'));
+  console.log(`  MCP Server updated -> ${join(pluginDest, 'dist')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
 
@@ -1412,7 +1418,7 @@ function uninstallCodeArts() {
 function codeartsStatus() {
   const pluginDir = codeartsPluginsDir();
   console.log(
-    `  MCP Server: ${existsSync(join(pluginDir, 'src', 'mcp-server.mjs')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
+    `  MCP Server: ${mcpServerInstalled(pluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
   console.log(
     `  Safety Policy: ${existsSync(join(pluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
@@ -1442,7 +1448,7 @@ function codeartsStatus() {
 
 function registerCodeartsWorkMcp() {
   const configPath = codeartsWorkMcpSettingsFile();
-  const mcpPath = join(codeartsWorkPluginsDir(), 'src', 'mcp-server.mjs').replace(/\\/g, '/');
+  const mcpPath = join(codeartsWorkPluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
   const environment = { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local' };
   const hcloudBin = findHcloudBin();
   if (hcloudBin) environment.HCLOUD_BIN = hcloudBin.replace(/\\/g, '/');
@@ -1501,15 +1507,15 @@ function isPlainLocal(value) {
 
 async function installCodeArtsWork() {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const srcDir = join(PLUGIN_ROOT, 'src');
+  const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
 
   copyDir(skillsSrc, codeartsWorkSkillsDir());
   console.log(`  Skills -> ${codeartsWorkSkillsDir()}`);
 
   const pluginDest = codeartsWorkPluginsDir();
-  copyDir(srcDir, join(pluginDest, 'src'));
-  console.log(`  MCP Server -> ${join(pluginDest, 'src')}`);
+  copyDir(distDir, join(pluginDest, 'dist'));
+  console.log(`  MCP Server -> ${join(pluginDest, 'dist')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
 
@@ -1519,14 +1525,14 @@ async function installCodeArtsWork() {
 
 async function updateCodeArtsWork() {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const srcDir = join(PLUGIN_ROOT, 'src');
+  const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = codeartsWorkPluginsDir();
 
   copyDir(skillsSrc, codeartsWorkSkillsDir());
   console.log(`  Skills updated -> ${codeartsWorkSkillsDir()}`);
-  copyDir(srcDir, join(pluginDest, 'src'));
-  console.log(`  MCP Server updated -> ${join(pluginDest, 'src')}`);
+  copyDir(distDir, join(pluginDest, 'dist'));
+  console.log(`  MCP Server updated -> ${join(pluginDest, 'dist')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
   registerCodeartsWorkMcp();
@@ -1571,7 +1577,7 @@ function uninstallCodeArtsWork() {
 function codeartsWorkStatus() {
   const pluginDir = codeartsWorkPluginsDir();
   console.log(
-    `  MCP Server: ${existsSync(join(pluginDir, 'src', 'mcp-server.mjs')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
+    `  MCP Server: ${mcpServerInstalled(pluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
   console.log(
     `  Safety Policy: ${existsSync(join(pluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
@@ -1600,7 +1606,7 @@ function codeartsWorkStatus() {
 // Returns true when the config file was written, false when it was already correct.
 function ensureWorkbuddyMcpConfig() {
   const configPath = workbuddyMcpConfigFile();
-  const mcpPath = join(workbuddyPluginsDir(), 'src', 'mcp-server.mjs').replace(/\\/g, '/');
+  const mcpPath = join(workbuddyPluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
   const env = { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local' };
   const hcloudBin = findHcloudBin();
   if (hcloudBin) env.HCLOUD_BIN = hcloudBin.replace(/\\/g, '/');
@@ -1781,15 +1787,15 @@ function removeAtomcodeHooks() {
 
 async function installWorkBuddy() {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const srcDir = join(PLUGIN_ROOT, 'src');
+  const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = workbuddyPluginsDir();
 
   copyDir(skillsSrc, workbuddySkillsDir());
   console.log(`  Skills -> ${workbuddySkillsDir()}`);
 
-  copyDir(srcDir, join(pluginDest, 'src'));
-  console.log(`  MCP Server -> ${join(pluginDest, 'src')}`);
+  copyDir(distDir, join(pluginDest, 'dist'));
+  console.log(`  MCP Server -> ${join(pluginDest, 'dist')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
 
@@ -1803,15 +1809,15 @@ async function installWorkBuddy() {
 // Incremental update: overwrite copied files, prune stale ones, and only touch the config when necessary.
 async function updateWorkBuddy() {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const srcDir = join(PLUGIN_ROOT, 'src');
+  const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = workbuddyPluginsDir();
 
   copyDir(skillsSrc, workbuddySkillsDir());
   const stale = pruneStale(workbuddySkillsDir(), skillsSrc);
   console.log(`  Skills updated -> ${workbuddySkillsDir()}${stale > 0 ? ` (removed ${stale} stale)` : ''}`);
-  copyDir(srcDir, join(pluginDest, 'src'));
-  console.log(`  MCP Server updated -> ${join(pluginDest, 'src')}`);
+  copyDir(distDir, join(pluginDest, 'dist'));
+  console.log(`  MCP Server updated -> ${join(pluginDest, 'dist')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
   ensureWorkbuddyMcpConfig();
@@ -1891,7 +1897,7 @@ function workbuddyStatus() {
   const pluginDir = workbuddyPluginsDir();
   const skillsDir = workbuddySkillsDir();
   console.log(
-    `  MCP Server: ${existsSync(join(pluginDir, 'src', 'mcp-server.mjs')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
+    `  MCP Server: ${mcpServerInstalled(pluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
   console.log(
     `  Safety Policy: ${existsSync(join(pluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
@@ -1932,7 +1938,7 @@ function workbuddyStatus() {
 
 function ensureAtomcodeMcpConfig() {
   const configPath = atomcodeMcpConfigFile();
-  const mcpPath = join(atomcodePluginsDir(), 'src', 'mcp-server.mjs').replace(/\\/g, '/');
+  const mcpPath = join(atomcodePluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
   const env = { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local', AGENT_HARNESS: 'atomcode' };
   const hcloudBin = findHcloudBin();
   if (hcloudBin) env.HCLOUD_BIN = hcloudBin.replace(/\\/g, '/');
@@ -1974,15 +1980,15 @@ function ensureAtomcodeMcpConfig() {
 
 async function installAtomCode() {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const srcDir = join(PLUGIN_ROOT, 'src');
+  const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = atomcodePluginsDir();
 
   copyDir(skillsSrc, atomcodeSkillsDir());
   console.log(`  Skills -> ${atomcodeSkillsDir()}`);
 
-  copyDir(srcDir, join(pluginDest, 'src'));
-  console.log(`  MCP Server -> ${join(pluginDest, 'src')}`);
+  copyDir(distDir, join(pluginDest, 'dist'));
+  console.log(`  MCP Server -> ${join(pluginDest, 'dist')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
 
@@ -1994,15 +2000,15 @@ async function installAtomCode() {
 // Incremental update: overwrite copied files, prune stale ones, and only touch the config when necessary.
 async function updateAtomCode() {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const srcDir = join(PLUGIN_ROOT, 'src');
+  const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = atomcodePluginsDir();
 
   copyDir(skillsSrc, atomcodeSkillsDir());
   const stale = pruneStale(atomcodeSkillsDir(), skillsSrc);
   console.log(`  Skills updated -> ${atomcodeSkillsDir()}${stale > 0 ? ` (removed ${stale} stale)` : ''}`);
-  copyDir(srcDir, join(pluginDest, 'src'));
-  console.log(`  MCP Server updated -> ${join(pluginDest, 'src')}`);
+  copyDir(distDir, join(pluginDest, 'dist'));
+  console.log(`  MCP Server updated -> ${join(pluginDest, 'dist')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
   ensureAtomcodeMcpConfig();
@@ -2051,7 +2057,7 @@ function atomcodeStatus() {
   const pluginDir = atomcodePluginsDir();
   const skillsDir = atomcodeSkillsDir();
   console.log(
-    `  MCP Server: ${existsSync(join(pluginDir, 'src', 'mcp-server.mjs')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
+    `  MCP Server: ${mcpServerInstalled(pluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
   console.log(
     `  Safety Policy: ${existsSync(join(pluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
@@ -2079,7 +2085,7 @@ function atomcodeStatus() {
 }
 
 function dshMcpServerPath() {
-  return join(dshPluginsDir(), 'src', 'mcp-server.mjs').replace(/\\/g, '/');
+  return join(dshPluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
 }
 
 function dshPatchBlock() {
@@ -2282,7 +2288,7 @@ function tryInstallDshMcpClient() {
 
 async function installDsh() {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const srcDir = join(PLUGIN_ROOT, 'src');
+  const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = dshPluginsDir();
   const hookSrc = join(PACKAGE_ROOT, 'integrations', 'dsh', 'hook-plugin.mjs');
@@ -2290,8 +2296,8 @@ async function installDsh() {
   mkdirSync(pluginDest, { recursive: true });
   copyDir(skillsSrc, dshSkillsDir());
   console.log(`  Skills -> ${dshSkillsDir()}`);
-  copyDir(srcDir, join(pluginDest, 'src'));
-  console.log(`  MCP Server -> ${join(pluginDest, 'src')}`);
+  copyDir(distDir, join(pluginDest, 'dist'));
+  console.log(`  MCP Server -> ${join(pluginDest, 'dist')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
   copyFileSync(hookSrc, join(pluginDest, 'hook-plugin.mjs'));
@@ -2304,7 +2310,7 @@ async function installDsh() {
 
 async function updateDsh() {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const srcDir = join(PLUGIN_ROOT, 'src');
+  const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = dshPluginsDir();
   const hookSrc = join(PACKAGE_ROOT, 'integrations', 'dsh', 'hook-plugin.mjs');
@@ -2313,8 +2319,8 @@ async function updateDsh() {
   copyDir(skillsSrc, dshSkillsDir());
   const stale = pruneStale(dshSkillsDir(), skillsSrc);
   console.log(`  Skills updated -> ${dshSkillsDir()}${stale > 0 ? ` (removed ${stale} stale)` : ''}`);
-  copyDir(srcDir, join(pluginDest, 'src'));
-  console.log(`  MCP Server updated -> ${join(pluginDest, 'src')}`);
+  copyDir(distDir, join(pluginDest, 'dist'));
+  console.log(`  MCP Server updated -> ${join(pluginDest, 'dist')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
   copyFileSync(hookSrc, join(pluginDest, 'hook-plugin.mjs'));
@@ -2357,7 +2363,7 @@ function dshStatus() {
   const pluginDir = dshPluginsDir();
   const skillsDir = dshSkillsDir();
   console.log(
-    `  MCP Server: ${existsSync(join(pluginDir, 'src', 'mcp-server.mjs')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
+    `  MCP Server: ${mcpServerInstalled(pluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
   console.log(
     `  Safety Policy: ${existsSync(join(pluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
@@ -2414,15 +2420,15 @@ async function installOfficeAce() {
     }
   }
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const srcDir = join(PLUGIN_ROOT, 'src');
+  const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = officeacePluginsDir();
 
   copyDir(skillsSrc, officeaceSkillsDir());
   console.log(`  Skills -> ${officeaceSkillsDir()}`);
 
-  copyDir(srcDir, join(pluginDest, 'src'));
-  console.log(`  MCP Server -> ${join(pluginDest, 'src')}`);
+  copyDir(distDir, join(pluginDest, 'dist'));
+  console.log(`  MCP Server -> ${join(pluginDest, 'dist')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
 
@@ -2442,15 +2448,15 @@ async function installOfficeAce() {
 
 async function updateOfficeAce() {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const srcDir = join(PLUGIN_ROOT, 'src');
+  const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = officeacePluginsDir();
 
   copyDir(skillsSrc, officeaceSkillsDir());
   const stale = pruneStale(officeaceSkillsDir(), skillsSrc);
   console.log(`  Skills updated -> ${officeaceSkillsDir()}${stale > 0 ? ` (removed ${stale} stale)` : ''}`);
-  copyDir(srcDir, join(pluginDest, 'src'));
-  console.log(`  MCP Server updated -> ${join(pluginDest, 'src')}`);
+  copyDir(distDir, join(pluginDest, 'dist'));
+  console.log(`  MCP Server updated -> ${join(pluginDest, 'dist')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
   installRuntimeDeps(pluginDest);
@@ -2496,7 +2502,7 @@ function officeaceStatus() {
   const pluginDir = officeacePluginsDir();
   const skillsDir = officeaceSkillsDir();
   console.log(
-    `  MCP Server: ${existsSync(join(pluginDir, 'src', 'mcp-server.mjs')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
+    `  MCP Server: ${mcpServerInstalled(pluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
   console.log(
     `  Safety Policy: ${existsSync(join(pluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
@@ -2566,7 +2572,7 @@ function hermesConfigFile() {
 // Returns true when the config file was written, false when it was already correct.
 function ensureHermesMcpConfig() {
   const configPath = hermesConfigFile();
-  const mcpPath = join(hermesPluginsDir(), 'src', 'mcp-server.mjs').replace(/\\/g, '/');
+  const mcpPath = join(hermesPluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
   const hcloudBin = findHcloudBin();
 
   const blockLines = [
@@ -2934,7 +2940,7 @@ function hermesMcpSdkOk() {
 
 async function installHermes() {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const srcDir = join(PLUGIN_ROOT, 'src');
+  const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
   const hooksDir = join(PLUGIN_ROOT, 'hooks');
   const integrationsHooksDir = resolve(PLUGIN_ROOT, '..', '..', 'integrations', 'hermes', 'hooks');
@@ -2945,8 +2951,8 @@ async function installHermes() {
   console.log(`  Skills -> ${hermesSkillsDir()}`);
 
   if (!skipMcp) {
-    copyDir(srcDir, join(pluginDest, 'src'));
-    console.log(`  MCP Server -> ${join(pluginDest, 'src')}`);
+    copyDir(distDir, join(pluginDest, 'dist'));
+    console.log(`  MCP Server -> ${join(pluginDest, 'dist')}`);
   }
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
@@ -2968,7 +2974,7 @@ async function installHermes() {
 
 async function updateHermes() {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const srcDir = join(PLUGIN_ROOT, 'src');
+  const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
   const hooksDir = join(PLUGIN_ROOT, 'hooks');
   const integrationsHooksDir = resolve(PLUGIN_ROOT, '..', '..', 'integrations', 'hermes', 'hooks');
@@ -2977,8 +2983,8 @@ async function updateHermes() {
   copyDir(skillsSrc, hermesSkillsDir());
   const stale = pruneStale(hermesSkillsDir(), skillsSrc);
   console.log(`  Skills updated -> ${hermesSkillsDir()}${stale > 0 ? ` (removed ${stale} stale)` : ''}`);
-  copyDir(srcDir, join(pluginDest, 'src'));
-  console.log(`  MCP Server updated -> ${join(pluginDest, 'src')}`);
+  copyDir(distDir, join(pluginDest, 'dist'));
+  console.log(`  MCP Server updated -> ${join(pluginDest, 'dist')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
   copyDir(hooksDir, join(pluginDest, 'hooks'));
@@ -3078,7 +3084,7 @@ function hermesStatus() {
   const pluginDir = hermesPluginsDir();
   const skillsDir = hermesSkillsDir();
   console.log(
-    `  MCP Server: ${existsSync(join(pluginDir, 'src', 'mcp-server.mjs')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
+    `  MCP Server: ${mcpServerInstalled(pluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
   console.log(
     `  Safety Policy: ${existsSync(join(pluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
@@ -3127,7 +3133,7 @@ function opencodeStatus() {
   const pluginDir = opencodePluginsDir();
   const skillsDir = opencodeSkillsDir();
   console.log(
-    `  MCP Server: ${existsSync(join(pluginDir, 'src', 'mcp-server.mjs')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
+    `  MCP Server: ${mcpServerInstalled(pluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
   console.log(
     `  Safety Policy: ${existsSync(join(pluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
@@ -3787,7 +3793,7 @@ function openclawStatus() {
   const cdPluginDir = openclawPluginsDir();
   const cdSkillsDir = openclawSkillsDir();
   console.log(
-    `  MCP Server: ${existsSync(join(cdPluginDir, 'src', 'mcp-server.mjs')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
+    `  MCP Server: ${mcpServerInstalled(cdPluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
   console.log(
     `  Safety Policy: ${existsSync(join(cdPluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
@@ -3902,32 +3908,32 @@ async function cmdDoctor() {
   const hermesPluginDir = hermesPluginsDir();
   const atomcodePluginDir = atomcodePluginsDir();
   const mcpOk =
-    existsSync(join(opencodePluginDir, 'src', 'mcp-server.mjs')) ||
-    existsSync(join(codexPluginDir, 'src', 'mcp-server.mjs')) ||
-    existsSync(join(codeartsPluginDir, 'src', 'mcp-server.mjs')) ||
-    existsSync(join(codeartsWorkPluginDir, 'src', 'mcp-server.mjs')) ||
-    existsSync(join(workbuddyPluginDir, 'src', 'mcp-server.mjs')) ||
-    existsSync(join(dshPluginDir, 'src', 'mcp-server.mjs')) ||
-    existsSync(join(officeacePluginDir, 'src', 'mcp-server.mjs')) ||
-    existsSync(join(hermesPluginDir, 'src', 'mcp-server.mjs')) ||
-    existsSync(join(atomcodePluginDir, 'src', 'mcp-server.mjs'));
-  const mcpTarget = existsSync(join(opencodePluginDir, 'src', 'mcp-server.mjs'))
+    mcpServerInstalled(opencodePluginDir) ||
+    mcpServerInstalled(codexPluginDir) ||
+    mcpServerInstalled(codeartsPluginDir) ||
+    mcpServerInstalled(codeartsWorkPluginDir) ||
+    mcpServerInstalled(workbuddyPluginDir) ||
+    mcpServerInstalled(dshPluginDir) ||
+    mcpServerInstalled(officeacePluginDir) ||
+    mcpServerInstalled(hermesPluginDir) ||
+    mcpServerInstalled(atomcodePluginDir);
+  const mcpTarget = mcpServerInstalled(opencodePluginDir)
     ? 'OpenCode'
-    : existsSync(join(codexPluginDir, 'src', 'mcp-server.mjs'))
+    : mcpServerInstalled(codexPluginDir)
       ? 'Codex Desktop'
-      : existsSync(join(codeartsPluginDir, 'src', 'mcp-server.mjs'))
+      : mcpServerInstalled(codeartsPluginDir)
         ? 'CodeArts'
-        : existsSync(join(codeartsWorkPluginDir, 'src', 'mcp-server.mjs'))
+        : mcpServerInstalled(codeartsWorkPluginDir)
           ? 'CodeArts Work'
-          : existsSync(join(workbuddyPluginDir, 'src', 'mcp-server.mjs'))
+          : mcpServerInstalled(workbuddyPluginDir)
             ? 'WorkBuddy'
-            : existsSync(join(dshPluginDir, 'src', 'mcp-server.mjs'))
+            : mcpServerInstalled(dshPluginDir)
               ? 'DSH'
-              : existsSync(join(officeacePluginDir, 'src', 'mcp-server.mjs'))
+              : mcpServerInstalled(officeacePluginDir)
                 ? 'OfficeAce'
-                : existsSync(join(hermesPluginDir, 'src', 'mcp-server.mjs'))
+                : mcpServerInstalled(hermesPluginDir)
                   ? 'Hermes Agent'
-                  : existsSync(join(atomcodePluginDir, 'src', 'mcp-server.mjs'))
+                  : mcpServerInstalled(atomcodePluginDir)
                     ? 'AtomCode'
                     : '';
   check('MCP server installed', mcpOk, 'Run: npx huaweicloud-devkit install');
@@ -4229,7 +4235,7 @@ async function cmdUpdate() {
   await checkForUpdate();
 
   if (target === 'opencode') {
-    if (!existsSync(join(opencodePluginsDir(), 'src', 'mcp-server.mjs'))) {
+    if (!mcpServerInstalled(opencodePluginsDir())) {
       console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
       return;
     }
@@ -4241,7 +4247,7 @@ async function cmdUpdate() {
   }
 
   if (target === 'codex-desktop') {
-    if (!existsSync(join(codexDesktopPluginsDir(), 'src', 'mcp-server.mjs'))) {
+    if (!mcpServerInstalled(codexDesktopPluginsDir())) {
       console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
       return;
     }
@@ -4270,7 +4276,7 @@ async function cmdUpdate() {
   }
 
   if (target === 'codearts') {
-    if (!existsSync(join(codeartsPluginsDir(), 'src', 'mcp-server.mjs'))) {
+    if (!mcpServerInstalled(codeartsPluginsDir())) {
       console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
       return;
     }
@@ -4282,7 +4288,7 @@ async function cmdUpdate() {
   }
 
   if (target === 'codearts-work') {
-    if (!existsSync(join(codeartsWorkPluginsDir(), 'src', 'mcp-server.mjs'))) {
+    if (!mcpServerInstalled(codeartsWorkPluginsDir())) {
       console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
       return;
     }
@@ -4294,7 +4300,7 @@ async function cmdUpdate() {
   }
 
   if (target === 'workbuddy') {
-    if (!existsSync(join(workbuddyPluginsDir(), 'src', 'mcp-server.mjs'))) {
+    if (!mcpServerInstalled(workbuddyPluginsDir())) {
       console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
       return;
     }
@@ -4306,7 +4312,7 @@ async function cmdUpdate() {
   }
 
   if (target === 'dsh') {
-    if (!existsSync(join(dshPluginsDir(), 'src', 'mcp-server.mjs'))) {
+    if (!mcpServerInstalled(dshPluginsDir())) {
       console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
       return;
     }
@@ -4318,7 +4324,7 @@ async function cmdUpdate() {
   }
 
   if (target === 'officeace') {
-    if (!existsSync(join(officeacePluginsDir(), 'src', 'mcp-server.mjs'))) {
+    if (!mcpServerInstalled(officeacePluginsDir())) {
       console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
       return;
     }
@@ -4330,7 +4336,7 @@ async function cmdUpdate() {
   }
 
   if (target === 'hermes') {
-    if (!existsSync(join(hermesPluginsDir(), 'src', 'mcp-server.mjs'))) {
+    if (!mcpServerInstalled(hermesPluginsDir())) {
       console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
       return;
     }
@@ -4342,7 +4348,7 @@ async function cmdUpdate() {
   }
 
   if (target === 'openclaw') {
-    if (!existsSync(join(codexDesktopPluginsDir(), 'src', 'mcp-server.mjs'))) {
+    if (!mcpServerInstalled(codexDesktopPluginsDir())) {
       console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
       return;
     }
@@ -4354,7 +4360,7 @@ async function cmdUpdate() {
   }
 
   if (target === 'atomcode') {
-    if (!existsSync(join(atomcodePluginsDir(), 'src', 'mcp-server.mjs'))) {
+    if (!mcpServerInstalled(atomcodePluginsDir())) {
       console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
       return;
     }
@@ -4367,52 +4373,52 @@ async function cmdUpdate() {
 
   if (target === 'all') {
     let updatedAny = false;
-    if (existsSync(join(opencodePluginsDir(), 'src', 'mcp-server.mjs'))) {
+    if (mcpServerInstalled(opencodePluginsDir())) {
       console.log('[OpenCode]');
       await updateOpenCode();
       updatedAny = true;
     }
-    if (existsSync(join(codexDesktopPluginsDir(), 'src', 'mcp-server.mjs'))) {
+    if (mcpServerInstalled(codexDesktopPluginsDir())) {
       console.log('\n[Codex Desktop]');
       await updateCodexDesktop();
       updatedAny = true;
     }
-    if (existsSync(join(codeartsPluginsDir(), 'src', 'mcp-server.mjs'))) {
+    if (mcpServerInstalled(codeartsPluginsDir())) {
       console.log('\n[CodeArts]');
       await updateCodeArts();
       updatedAny = true;
     }
-    if (existsSync(join(codeartsWorkPluginsDir(), 'src', 'mcp-server.mjs'))) {
+    if (mcpServerInstalled(codeartsWorkPluginsDir())) {
       console.log('\n[CodeArts Work]');
       await updateCodeArtsWork();
       updatedAny = true;
     }
-    if (existsSync(join(workbuddyPluginsDir(), 'src', 'mcp-server.mjs'))) {
+    if (mcpServerInstalled(workbuddyPluginsDir())) {
       console.log('\n[WorkBuddy]');
       await updateWorkBuddy();
       updatedAny = true;
     }
-    if (existsSync(join(dshPluginsDir(), 'src', 'mcp-server.mjs'))) {
+    if (mcpServerInstalled(dshPluginsDir())) {
       console.log('\n[DSH]');
       await updateDsh();
       updatedAny = true;
     }
-    if (existsSync(join(officeacePluginsDir(), 'src', 'mcp-server.mjs'))) {
+    if (mcpServerInstalled(officeacePluginsDir())) {
       console.log('\n[OfficeAce]');
       await updateOfficeAce();
       updatedAny = true;
     }
-    if (existsSync(join(hermesPluginsDir(), 'src', 'mcp-server.mjs'))) {
+    if (mcpServerInstalled(hermesPluginsDir())) {
       console.log('\n[Hermes Agent]');
       await updateHermes();
       updatedAny = true;
     }
-    if (existsSync(join(openclawPluginsDir(), 'src', 'mcp-server.mjs'))) {
+    if (mcpServerInstalled(openclawPluginsDir())) {
       console.log('\n[OpenClaw]');
       await updateOpenClaw();
       updatedAny = true;
     }
-    if (existsSync(join(atomcodePluginsDir(), 'src', 'mcp-server.mjs'))) {
+    if (mcpServerInstalled(atomcodePluginsDir())) {
       console.log('\n[AtomCode]');
       await updateAtomCode();
       updatedAny = true;

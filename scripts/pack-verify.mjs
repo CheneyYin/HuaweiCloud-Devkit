@@ -104,6 +104,24 @@ try {
     serverRun.stdout.includes('huaweicloud_'),
     'Installed MCP server tools/list returned no Huawei Cloud tools',
   );
+
+  // Agent harnesses launch whatever .mcp.json declares, not what the tarball
+  // contains — so the declared server must run from the installed layout.
+  const installedMcpJson = JSON.parse(
+    readFileSync(join(installed, 'plugins', 'huaweicloud-core', '.mcp.json'), 'utf8'),
+  );
+  for (const server of Object.values(installedMcpJson.mcpServers ?? {})) {
+    const declared = join(installed, 'plugins', 'huaweicloud-core', ...(server.args ?? []));
+    const declaredRun = spawnSync(process.execPath, [declared], {
+      input: framed,
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+    assert.ok(
+      declaredRun.stdout.includes('"result"'),
+      `.mcp.json server ${JSON.stringify(server.args)} did not answer tools/list: ${declaredRun.stderr}`,
+    );
+  }
   if (dshPatch) {
     assert.ok(
       existsSync(join(installed, dshPatch.replace(/^\.\//, ''))),

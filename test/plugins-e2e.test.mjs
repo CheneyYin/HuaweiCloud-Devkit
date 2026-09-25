@@ -247,7 +247,7 @@ for (const target of targets) {
       assert.match(res.stdout, /Installation complete!/);
 
       const pluginDir = target.pluginsDir(home);
-      assert.ok(existsSync(join(pluginDir, 'src', 'mcp-server.mjs')), `${target.name}: mcp-server.mjs installed`);
+      assert.ok(existsSync(join(pluginDir, 'dist', 'mcp-server.js')), `${target.name}: mcp-server.js installed`);
       assert.ok(existsSync(join(pluginDir, 'safety', 'policy.json')), `${target.name}: safety policy installed`);
       assert.ok(existsSync(join(pluginDir, '.installed')), `${target.name}: .installed marker present`);
       assert.ok(countSkills(target.skillsDir(home)) >= 6, `${target.name}: expected >= 6 skills`);
@@ -285,7 +285,7 @@ for (const target of targets) {
       const install = runCli(home, cwd, ['install', '--target', target.name]);
       assert.equal(install.status, 0, install.stderr);
 
-      const mcpServerPath = join(target.pluginsDir(home), 'src', 'mcp-server.mjs');
+      const mcpServerPath = join(target.pluginsDir(home), 'dist', 'mcp-server.js');
       assert.ok(existsSync(mcpServerPath), `${target.name}: MCP server file exists`);
 
       const responses = await invokeMcpTools(mcpServerPath, makeEnv(home, cwd));
@@ -314,7 +314,7 @@ test('MCP tools/list includes all required core tools with valid schemas', async
     const install = runCli(home, cwd, ['install', '--target', 'opencode']);
     assert.equal(install.status, 0, install.stderr);
 
-    const mcpServerPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'src', 'mcp-server.mjs');
+    const mcpServerPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js');
     const responses = await invokeMcpTools(mcpServerPath, makeEnv(home, cwd));
     const tools = responses[1].result.tools;
     const toolNames = tools.map((t) => t.name);
@@ -358,7 +358,7 @@ test('huaweicloud_search_docs returns relevant skill results', async () => {
     const install = runCli(home, cwd, ['install', '--target', 'opencode']);
     assert.equal(install.status, 0, install.stderr);
 
-    const mcpServerPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'src', 'mcp-server.mjs');
+    const mcpServerPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js');
 
     // Search for ECS skills — should return results containing ECS-related content
     const responses = await invokeMcpToolCall(mcpServerPath, makeEnv(home, cwd), 'huaweicloud_search_docs', {
@@ -409,7 +409,7 @@ test('huaweicloud_service_catalog returns capability recommendations', async () 
     const install = runCli(home, cwd, ['install', '--target', 'opencode']);
     assert.equal(install.status, 0, install.stderr);
 
-    const mcpServerPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'src', 'mcp-server.mjs');
+    const mcpServerPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js');
 
     // Verify English intent: deploy a static website recommends sandbox first
     const enResponses = await invokeMcpToolCall(mcpServerPath, makeEnv(home, cwd), 'huaweicloud_service_catalog', {
@@ -469,7 +469,7 @@ test('MCP tools/call with unknown tool name returns error', async () => {
     const install = runCli(home, cwd, ['install', '--target', 'opencode']);
     assert.equal(install.status, 0, install.stderr);
 
-    const mcpServerPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'src', 'mcp-server.mjs');
+    const mcpServerPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js');
     const responses = await invokeMcpToolCall(mcpServerPath, makeEnv(home, cwd), 'huaweicloud_nonexistent_tool', {});
 
     assert.ok(responses[0].result, 'initialize returned result');

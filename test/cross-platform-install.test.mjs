@@ -41,7 +41,7 @@ test('install creates opencode config with normalized forward-slash paths', () =
     assert.equal(res.status, 0, `stderr: ${res.stderr}`);
     const config = readJson(join(home, '.config', 'opencode', 'opencode.json'));
     const cmd = config.mcp['huaweicloud-devkit'].command;
-    assert.ok(cmd[1].includes('mcp-server.mjs'));
+    assert.ok(cmd[1].includes('mcp-server.js'));
     assert.doesNotMatch(cmd[1], /\\/, 'MCP path must not contain backslashes');
   } finally {
     rmSync(home, { recursive: true, force: true });
@@ -54,7 +54,7 @@ test('install creates correct dir structure under homedir', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'cp-proj-'));
   try {
     assert.equal(runCli(home, cwd, ['install', '--target', 'opencode']).status, 0);
-    assert.ok(existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins', 'src', 'mcp-server.mjs')));
+    assert.ok(existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js')));
     assert.ok(existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins', 'safety', 'policy.json')));
   } finally {
     rmSync(home, { recursive: true, force: true });
@@ -68,7 +68,7 @@ test('install works with home dir containing spaces', () => {
   try {
     const res = runCli(home, cwd, ['install', '--target', 'opencode']);
     assert.equal(res.status, 0, `stderr: ${res.stderr}`);
-    assert.ok(existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins', 'src', 'mcp-server.mjs')));
+    assert.ok(existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js')));
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
@@ -124,7 +124,7 @@ test('MCP server path is normalized to forward slashes', () => {
     runCli(home, cwd, ['install', '--target', 'opencode']);
     const cfg = readJson(join(home, '.config', 'opencode', 'opencode.json'));
     const serverPath = cfg.mcp['huaweicloud-devkit'].command[1];
-    assert.match(serverPath, /mcp-server\.mjs$/);
+    assert.match(serverPath, /mcp-server\.js$/);
     assert.doesNotMatch(serverPath, /\\/, 'paths must use forward slashes');
   } finally {
     rmSync(home, { recursive: true, force: true });

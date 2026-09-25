@@ -66,8 +66,8 @@ test('dsh install copies skills, MCP server, safety policy, and patch row', () =
 
     assert.ok(countSkills(join(dshHome, 'skills')) >= 6, 'DSH skills installed');
     const pluginDir = join(dshHome, 'huaweicloud-plugins');
-    assert.ok(existsSync(join(pluginDir, 'src', 'mcp-server.mjs')));
-    assert.ok(existsSync(join(pluginDir, 'src', 'tools.mjs')));
+    assert.ok(existsSync(join(pluginDir, 'dist', 'mcp-server.js')));
+    assert.ok(existsSync(join(pluginDir, 'dist', 'tools.mjs')));
     assert.ok(existsSync(join(pluginDir, 'safety', 'policy.json')));
     assert.ok(existsSync(join(pluginDir, '.installed')));
     assert.equal(
@@ -86,7 +86,7 @@ test('dsh install copies skills, MCP server, safety policy, and patch row', () =
     assert.match(patch, /id: huaweicloud-hook/);
     assert.match(patch, /huaweicloud-plugins\/hook-plugin\.mjs/);
     assert.doesNotMatch(patch, /\\/);
-    assert.match(patch, /huaweicloud-plugins\/src\/mcp-server\.mjs/);
+    assert.match(patch, /huaweicloud-plugins\/dist\/mcp-server\.js/);
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
@@ -153,7 +153,7 @@ test('dsh update refreshes installed files and keeps one patch row', () => {
     assert.equal(update.status, 0, update.stderr);
     assert.match(update.stdout, /Update complete/);
 
-    assert.ok(existsSync(join(dshHome, 'huaweicloud-plugins', 'src', 'mcp-server.mjs')));
+    assert.ok(existsSync(join(dshHome, 'huaweicloud-plugins', 'dist', 'mcp-server.js')));
     assert.ok(countSkills(join(dshHome, 'skills')) >= 6);
     assert.equal(countMcpRows(readPatch(dshHome)), 1);
   } finally {
@@ -261,11 +261,11 @@ test('dsh bundle postinstall rewrites relative MCP path to absolute', () => {
 
     const patch = readFileSync(join(stage, 'cordis.patch.yml'), 'utf8');
     assert.match(patch, /id: huaweicloud-devkit/);
-    assert.match(patch, /mcp-server\.mjs/);
+    assert.match(patch, /mcp-server\.js/);
     assert.doesNotMatch(patch, /'\.\//, 'no relative MCP path left');
     assert.doesNotMatch(patch, /\\/, 'forward slashes only');
     assert.ok(
-      patch.includes(`'${stage.replaceAll('\\', '/')}/plugins/huaweicloud-core/src/mcp-server.mjs'`),
+      patch.includes(`'${stage.replaceAll('\\', '/')}/plugins/huaweicloud-core/dist/mcp-server.js'`),
       'absolute staged package path',
     );
   } finally {

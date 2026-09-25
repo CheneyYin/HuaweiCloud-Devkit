@@ -72,7 +72,7 @@ test('Hermes MCP Catalog manifest is present and valid', () => {
   assert.match(yaml, /transport:/);
   assert.match(yaml, /type:\s*stdio/);
   assert.match(yaml, /command:\s*['"]node['"]/);
-  assert.match(yaml, /mcp-server\.mjs/);
+  assert.match(yaml, /mcp-server\.js/);
   assert.match(yaml, /install:/);
   assert.match(yaml, /type:\s*git/);
   assert.match(yaml, /huaweicloud\/huaweicloud-devkit/);
@@ -512,7 +512,7 @@ test('setup-cli.mjs supports the dsh target end to end', () => {
   assert.match(setup, /function dshStatus\(\)/);
   // install copies skills/server/safety and registers MCP through cordis.patch.yml
   assert.match(setup, /copyDir\(skillsSrc, dshSkillsDir\(\)\)/);
-  assert.match(setup, /copyDir\(srcDir, join\(pluginDest, 'src'\)\)/);
+  assert.match(setup, /copyDir\(distDir, join\(pluginDest, 'dist'\)\)/);
   assert.match(setup, /copyDir\(safetyDir, join\(pluginDest, 'safety'\)\)/);
   assert.match(setup, /ensureDshMcpPatch\(\)/);
   assert.match(setup, /tryInstallDshMcpClient\(\)/);
@@ -788,16 +788,18 @@ test('doctor success message does not demand a restart', () => {
   assert.doesNotMatch(setupCli, /Restart your session, then describe/);
 });
 
-test('shipped runtime entry points are plain JavaScript, never TypeScript', () => {
+test('shipped runtime entry points point at built dist JavaScript', () => {
   const pkg = readJson(join(root, 'package.json'));
   for (const [name, target] of Object.entries(pkg.bin ?? {})) {
     assert.doesNotMatch(target, /\.ts$/, `bin ${name} must not point at a TypeScript file`);
+    assert.ok(!target.includes('/src/'), `bin ${name} must not reference src/`);
   }
 
   const mcp = readJson(join(pluginRoot, '.mcp.json'));
   for (const server of Object.values(mcp.mcpServers ?? {})) {
     for (const arg of server.args ?? []) {
       assert.doesNotMatch(arg, /\.ts$/, `.mcp.json arg ${arg} must not point at a TypeScript file`);
+      assert.ok(!arg.includes('/src/') && !arg.startsWith('./src/'), `.mcp.json arg ${arg} must not reference src/`);
     }
   }
 
@@ -810,6 +812,21 @@ test('shipped runtime entry points are plain JavaScript, never TypeScript', () =
     }
   }
 
+  const hookWrapper = readFileSync(join(pluginRoot, 'hooks', 'huaweicloud-safety.mjs'), 'utf8');
+  assert.doesNotMatch(hookWrapper, /from '\.\.\/src\//, 'hook wrapper must import the built dist, not src');
+
   const cordis = readFileSync(join(root, 'cordis.patch.yml'), 'utf8');
   assert.doesNotMatch(cordis, /\.ts\b/, 'cordis.patch.yml must not reference TypeScript files');
+  assert.doesNotMatch(cordis, /plugins\/huaweicloud-core\/src\//, 'cordis.patch.yml must not reference src/');
+
+  const hermesManifest = readFileSync(join(root, 'integrations', 'hermes', 'manifest.yaml'), 'utf8');
+  assert.doesNotMatch(hermesManifest, /plugins\/huaweicloud-core\/src\//, 'hermes manifest must not reference src/');
+
+  const setupCli = readSource(join('src', 'setup-cli.mjs'));
+  assert.doesNotMatch(
+    setupCli,
+    /'src', 'mcp-server\.js'/,
+    'setup-cli must not point at a src mcp-server.js (built output lives in dist)',
+  );
+  assert.doesNotMatch(setupCli, /join\(PLUGIN_ROOT, 'src'\)/, 'setup-cli must copy dist, not src');
 });
