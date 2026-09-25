@@ -701,7 +701,7 @@ test('tools.mjs resolves skills from the atomcode directory', () => {
 });
 
 test('agent-registration reports openclaw registration status', () => {
-  const registration = readSource(join('src', 'auth', 'agent-registration.mjs'));
+  const registration = readSource(join('src', 'auth', 'agent-registration.ts'));
   assert.match(registration, /function openclawRegistered\(\)/);
   assert.match(registration, /agent === 'openclaw'/);
   assert.match(registration, /'\.agents', 'huaweicloud-plugins', '\.mcp\.json'/);

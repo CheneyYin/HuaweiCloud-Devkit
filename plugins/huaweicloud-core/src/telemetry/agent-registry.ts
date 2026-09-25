@@ -10,7 +10,7 @@ const selfPath = (() => {
   }
 })();
 
-export function installSegment() {
+export function installSegment(): string | null {
   const parts = selfPath.split('/').filter(Boolean);
   // Installs before 2.0.0 ran from a src/ directory; current installs run from
   // dist/. Take whichever segment is rightmost so both layouts resolve.
@@ -22,7 +22,19 @@ export function installSegment() {
   return parts[parentIdx - 1] || null;
 }
 
-export const AGENTS = [
+export interface AgentVersionConfig {
+  type: string;
+}
+
+export interface AgentDefinition {
+  id: string;
+  pathPatterns: string[] | null;
+  envVars: string[] | null;
+  clientNames?: string[];
+  version: AgentVersionConfig | null;
+}
+
+export const AGENTS: AgentDefinition[] = [
   {
     id: 'codearts',
     pathPatterns: ['/.codeartsdoer/'],
@@ -167,7 +179,11 @@ export const AGENTS = [
   },
 ];
 
-export function matchAgent(agent, clientInfo = {}) {
+export interface AgentMatchClientInfo {
+  name?: unknown;
+}
+
+export function matchAgent(agent: AgentDefinition, clientInfo: AgentMatchClientInfo = {}): boolean {
   if (agent.pathPatterns && agent.pathPatterns.some((p) => selfPath.includes(p))) return true;
   if (agent.envVars && agent.envVars.some((v) => process.env[v])) return true;
   const name = clientInfo.name;
@@ -179,7 +195,7 @@ export function matchAgent(agent, clientInfo = {}) {
 }
 
 const _codeartsSearchBases = (() => {
-  const bases = [];
+  const bases: string[] = [];
   if (process.env.ProgramFiles) bases.push(join(process.env.ProgramFiles, 'CodeArts Agent'));
   if (process.env['ProgramFiles(x86)']) bases.push(join(process.env['ProgramFiles(x86)'], 'CodeArts Agent'));
   if (process.env.ProgramW6432) bases.push(join(process.env.ProgramW6432, 'CodeArts Agent'));
@@ -187,25 +203,39 @@ const _codeartsSearchBases = (() => {
   return bases;
 })();
 
-function detectCodeArtsVersion() {
+// One-property read off unknown parsed JSON, coerced only when truthy so the
+// original `|| null` / `|| ''` fallbacks stay intact.
+function jsonField(value: unknown, field: string): unknown {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)[field]
+    : undefined;
+}
+
+function detectCodeArtsVersion(): string | null {
   for (const base of _codeartsSearchBases) {
     const p = join(base, 'resources', 'app', 'package.json');
     try {
-      if (existsSync(p)) return JSON.parse(readFileSync(p, 'utf8')).version || null;
+      if (existsSync(p)) {
+        const v = jsonField(JSON.parse(readFileSync(p, 'utf8')), 'version');
+        return v ? String(v) : null;
+      }
     } catch {}
   }
   for (let d = 'A'.charCodeAt(0); d <= 'Z'.charCodeAt(0); d++) {
     const drive = String.fromCharCode(d) + ':';
     try {
       const p = join(drive, '/', 'Program Files', 'CodeArts Agent', 'resources', 'app', 'package.json');
-      if (existsSync(p)) return JSON.parse(readFileSync(p, 'utf8')).version || null;
+      if (existsSync(p)) {
+        const v = jsonField(JSON.parse(readFileSync(p, 'utf8')), 'version');
+        return v ? String(v) : null;
+      }
     } catch {}
   }
   return null;
 }
 
-function detectDshVersion() {
-  const candidates = [];
+function detectDshVersion(): string | null {
+  const candidates: string[] = [];
   // Standard npm global location
   if (process.env.APPDATA) {
     candidates.push(join(process.env.APPDATA, 'npm', 'node_modules', '@deepseek-ai', 'dsh', 'package.json'));
@@ -224,15 +254,18 @@ function detectDshVersion() {
   }
   for (const p of candidates) {
     try {
-      if (existsSync(p)) return JSON.parse(readFileSync(p, 'utf8')).version || null;
+      if (existsSync(p)) {
+        const v = jsonField(JSON.parse(readFileSync(p, 'utf8')), 'version');
+        return v ? String(v) : null;
+      }
     } catch {}
   }
   return null;
 }
 
-function detectHermesVersion() {
+function detectHermesVersion(): string | null {
   if (process.env.HERMES_VERSION) return process.env.HERMES_VERSION;
-  const candidates = [];
+  const candidates: string[] = [];
   if (process.env.HERMES_HOME) candidates.push(process.env.HERMES_HOME);
   if (process.env.LOCALAPPDATA) candidates.push(join(process.env.LOCALAPPDATA, 'hermes', 'hermes-agent'));
   candidates.push(join(homedir(), '.hermes', 'hermes-agent'));
@@ -249,16 +282,16 @@ function detectHermesVersion() {
   return null;
 }
 
-function detectWorkBuddyVersion() {
+function detectWorkBuddyVersion(): string | null {
   const username = process.env.USERNAME || basename(homedir());
   const relPath = join('Users', username, 'AppData', 'Local', 'Programs', 'WorkBuddy');
 
-  function tryBase(base) {
+  function tryBase(base: string): string | null {
     const manifest = join(base, 'resources', 'install-manifest.json');
     try {
       if (existsSync(manifest)) {
-        const m = JSON.parse(readFileSync(manifest, 'utf8'));
-        if (m.appVersion) return `v${m.appVersion}`;
+        const v = jsonField(JSON.parse(readFileSync(manifest, 'utf8')), 'appVersion');
+        if (v) return `v${String(v)}`;
       }
     } catch {}
     const verFile = join(base, 'version');
@@ -281,15 +314,15 @@ function detectWorkBuddyVersion() {
   return null;
 }
 
-function detectOfficeAceVersion() {
+function detectOfficeAceVersion(): string | null {
   if (process.env.OFFICEACE_VERSION) return process.env.OFFICEACE_VERSION;
 
-  function tryReleaseAt(base) {
+  function tryReleaseAt(base: string): string | null {
     const releaseFile = join(base, '.office-claw-release.json');
     try {
       if (existsSync(releaseFile)) {
-        const v = JSON.parse(readFileSync(releaseFile, 'utf8')).version;
-        if (v) return `V${v}`;
+        const v = jsonField(JSON.parse(readFileSync(releaseFile, 'utf8')), 'version');
+        if (v) return `V${String(v)}`;
       }
     } catch {}
     return null;
@@ -319,7 +352,7 @@ function detectOfficeAceVersion() {
   return null;
 }
 
-const VERSION_DETECTORS = {
+const VERSION_DETECTORS: Record<string, () => string | null> = {
   codearts: detectCodeArtsVersion,
   dsh: detectDshVersion,
   hermes: detectHermesVersion,
@@ -327,13 +360,13 @@ const VERSION_DETECTORS = {
   officeace: detectOfficeAceVersion,
 };
 
-export function detectVersion(versionConfig) {
+export function detectVersion(versionConfig: AgentVersionConfig | null): string | null {
   if (process.env.AGENT_VERSION) return process.env.AGENT_VERSION;
   if (!versionConfig) return null;
   const fn = VERSION_DETECTORS[versionConfig.type];
   return fn ? fn() : null;
 }
 
-export function findAgentById(id) {
+export function findAgentById(id: string): AgentDefinition | null {
   return AGENTS.find((a) => a.id === id) || null;
 }

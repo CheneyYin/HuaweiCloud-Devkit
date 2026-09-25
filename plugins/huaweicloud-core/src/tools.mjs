@@ -33,8 +33,8 @@ import {
   hdkitGenerateUserHash,
 } from './sandbox/hdkitservice-api.ts';
 import { getCredentials } from './sandbox/hwlink-api.ts';
-import { getAuthStatus, syncAuth } from './auth/service.mjs';
-import { validateIamCredentials } from './auth/credential-validator.mjs';
+import { getAuthStatus, syncAuth } from './auth/service.ts';
+import { validateIamCredentials } from './auth/credential-validator.ts';
 import {
   readGlobalCredentials,
   writeGlobalCredentials,
@@ -48,9 +48,9 @@ import {
   globalCredentialsPath,
   resolveCredentialsWithRuntime,
 } from './auth/credentials.mjs';
-import { trackToolInvoke, trackSkillRetrieve, clearUserHash } from './telemetry/telemetry.mjs';
+import { trackToolInvoke, trackSkillRetrieve, clearUserHash } from './telemetry/telemetry.ts';
 import { fetchWithProxy } from './proxy/proxy-agent.ts';
-import { fingerprint, runHcloudConfigure, resolveManagedProfile } from './auth/reconcile.mjs';
+import { fingerprint, runHcloudConfigure, resolveManagedProfile } from './auth/reconcile.ts';
 import {
   getCachedUpdateInfo,
   getUpdateDistTags,

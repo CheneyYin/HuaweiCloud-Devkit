@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import test from 'node:test';
 
-import { validateIamCredentials } from '../plugins/huaweicloud-core/src/auth/credential-validator.mjs';
+import { validateIamCredentials } from '../plugins/huaweicloud-core/src/auth/credential-validator.ts';
 
 async function withIamServer(handler, fn) {
   const server = createServer(handler);

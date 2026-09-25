@@ -11,7 +11,7 @@ import {
   kooCliConfigPath,
   readKooCliProfiles,
   scanState,
-} from '../plugins/huaweicloud-core/src/auth/reconcile.mjs';
+} from '../plugins/huaweicloud-core/src/auth/reconcile.ts';
 import {
   clearRuntimeCredentials,
   lastSyncPath,

@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { getAgentRegistrationStatuses } from './agent-registration.mjs';
+import { getAgentRegistrationStatuses, type AgentRegistrationStatus } from './agent-registration.ts';
 import { resolveAndApplyProjectId } from './project-id.ts';
 import {
   globalCredentialsPath,
@@ -19,10 +19,32 @@ import {
   hasRuntimeCredentials,
   resolveManagedProfile,
   runHcloudConfigure,
-} from './reconcile.mjs';
+} from './reconcile.ts';
 import { hcloudProbeNextStep, probeHcloud } from '../hcloud-probe.ts';
 
-function isCodeArtsHome() {
+interface CredentialRecord {
+  ak?: string;
+  sk?: string;
+  securityToken?: string;
+  region?: string;
+  endpoint?: string;
+}
+
+// Boundary narrowing for the untyped credentials.mjs readers: only string
+// fields survive, so callers can keep truthiness checks and string plumbing.
+function asCredentialRecord(value: unknown): CredentialRecord | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const result: CredentialRecord = {};
+  if (typeof record.ak === 'string') result.ak = record.ak;
+  if (typeof record.sk === 'string') result.sk = record.sk;
+  if (typeof record.securityToken === 'string') result.securityToken = record.securityToken;
+  if (typeof record.region === 'string') result.region = record.region;
+  if (typeof record.endpoint === 'string') result.endpoint = record.endpoint;
+  return result;
+}
+
+function isCodeArtsHome(): boolean {
   return (
     existsSync(join(process.cwd(), '.codeartsdoer')) ||
     existsSync(join(homedir(), '.codeartsdoer')) ||
@@ -30,7 +52,7 @@ function isCodeArtsHome() {
   );
 }
 
-function envHasRealTriplet() {
+function envHasRealTriplet(): boolean {
   return (
     !isPlaceholder(process.env.HW_ACCESS_KEY) &&
     Boolean(process.env.HW_ACCESS_KEY) &&
@@ -41,14 +63,34 @@ function envHasRealTriplet() {
   );
 }
 
+export interface OnboardingStep {
+  order?: number;
+  action: string;
+  args?: Record<string, string>;
+  label?: string;
+  target?: string;
+}
+
+export interface OnboardingResult {
+  needsSetup: boolean;
+  scenario: number;
+  reason: string;
+  message: string;
+  steps: OnboardingStep[];
+  accountHint: string | null;
+}
+
 // Onboarding guidance (scenarios 1-4) for credential setup.
 // scenario: 1=S1 exists, no env/…; 2=conflict (S1 vs injected); 3=everything
 // missing (fresh user); 4=S1 empty but injected creds exist (import candidate).
-export function computeOnboarding({ credentials, reconciled } = {}) {
-  const creds = credentials ?? readGlobalCredentials();
+export function computeOnboarding({
+  credentials,
+  reconciled,
+}: { credentials?: CredentialRecord | null; reconciled?: { hasRuntime?: boolean } } = {}): OnboardingResult {
+  const creds = credentials ?? asCredentialRecord(readGlobalCredentials());
   const scan = reconciled ?? exportStateForStatus();
   const s1Has = Boolean(creds?.ak && creds?.sk && !isPlaceholder(creds.ak) && !isPlaceholder(creds.sk));
-  const s4Creds = readCodeArtsCredentials();
+  const s4Creds = asCredentialRecord(readCodeArtsCredentials());
   const s4Has = Boolean(s4Creds?.ak && s4Creds?.sk);
   const injected = envHasRealTriplet();
   // env has real non-triplet creds that are NOT placeholders (e.g. devspace AK/SK w/o token)
@@ -56,12 +98,12 @@ export function computeOnboarding({ credentials, reconciled } = {}) {
   const envRealSk = !isPlaceholder(process.env.HW_SECRET_KEY) && Boolean(process.env.HW_SECRET_KEY);
   const envHasCreds = envRealAk && envRealSk;
   const codeArts = isCodeArtsHome();
-  const accountHint = s1Has ? fingerprint(creds.ak, creds.sk) : null;
+  const accountHint = s1Has ? fingerprint(creds?.ak, creds?.sk) : null;
 
-  let scenario;
-  let reason;
-  let message;
-  let steps;
+  let scenario: number;
+  let reason: string;
+  let message: string;
+  let steps: OnboardingStep[];
 
   if (scan.hasRuntime) {
     scenario = 0;
@@ -163,10 +205,10 @@ export function computeOnboarding({ credentials, reconciled } = {}) {
 }
 
 export function getAuthStatus(target = 'all') {
-  const credentials = readGlobalCredentials();
+  const credentials = asCredentialRecord(readGlobalCredentials());
   const reconciled = { ...exportStateForStatus(), runtimeActive: hasRuntimeCredentials() };
   const hcloud = probeHcloud();
-  const s4Creds = readCodeArtsCredentials();
+  const s4Creds = asCredentialRecord(readCodeArtsCredentials());
   const onboarding = computeOnboarding({ credentials, reconciled });
   return {
     target,
@@ -185,8 +227,34 @@ export function getAuthStatus(target = 'all') {
   };
 }
 
-export function syncAuth(target = 'all') {
-  const credentials = readGlobalCredentials();
+interface ObsSyncTarget {
+  configured: boolean;
+  path: string;
+  endpoint: string;
+}
+
+export interface SyncAuthFailure {
+  ok: false;
+  error: string;
+  nextStep: string;
+  obs?: ObsSyncTarget;
+}
+
+export interface SyncAuthSuccess {
+  ok: true;
+  profile: string;
+  obs: ObsSyncTarget;
+  hcloud: { ok: boolean; message: string };
+  credentialsConfigured: boolean;
+  agents: Record<string, AgentRegistrationStatus>;
+  note: string;
+  projectId?: string;
+}
+
+export type SyncAuthResult = SyncAuthSuccess | SyncAuthFailure;
+
+export function syncAuth(target = 'all'): SyncAuthResult {
+  const credentials = asCredentialRecord(readGlobalCredentials());
   if (!credentials?.ak || !credentials?.sk) {
     return {
       ok: false,
@@ -202,14 +270,14 @@ export function syncAuth(target = 'all') {
     };
   }
 
-  let obs;
+  let obs: { path: string; endpoint: string };
   try {
     obs = writeObsConfig(credentials);
   } catch (error) {
     const missingRegion = !String(credentials?.region || '').trim();
     return {
       ok: false,
-      error: error.message,
+      error: error instanceof Error ? error.message : String(error),
       nextStep: missingRegion
         ? 'Credential region is missing — run huaweicloud_auth_switch action=persist with --region, or add "region" to creds-import.json and re-import.'
         : 'Run "npx huaweicloud-devkit auth init" to refresh credentials and region.',
@@ -255,7 +323,7 @@ export function syncAuth(target = 'all') {
 
   writeLastSync({ kooCliProfile: profile, s1Fingerprint: fingerprint(credentials.ak, credentials.sk) });
 
-  const result = {
+  const result: SyncAuthSuccess = {
     ok: true,
     profile,
     obs: { configured: true, path: obs.path, endpoint: obs.endpoint },

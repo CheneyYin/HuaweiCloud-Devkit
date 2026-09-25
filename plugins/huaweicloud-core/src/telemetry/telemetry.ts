@@ -31,27 +31,28 @@ try {
   const pkg2 = join(PLUGIN_DIR, '..', '..', 'package.json');
   for (const p of [pkg1, pkg2]) {
     if (existsSync(p)) {
-      const v = JSON.parse(readFileSync(p, 'utf8')).version;
+      const parsed: unknown = JSON.parse(readFileSync(p, 'utf8'));
+      const v = parsed !== null && typeof parsed === 'object' ? (parsed as { version?: unknown }).version : undefined;
       if (v) {
-        PLUGIN_VERSION = v;
+        PLUGIN_VERSION = String(v);
         break;
       }
     }
   }
 } catch {}
-function hookEventsPath() {
+function hookEventsPath(): string {
   return join(AGENT_TELEMETRY_DIR, 'hook-events.jsonl');
 }
-function installStampPath() {
+function installStampPath(): string {
   return join(AGENT_TELEMETRY_DIR, 'install-stamp');
 }
-function installCounterPath() {
+function installCounterPath(): string {
   return join(AGENT_TELEMETRY_DIR, 'install-counter');
 }
-function dauStampPath() {
+function dauStampPath(): string {
   return join(AGENT_TELEMETRY_DIR, 'dau-stamp');
 }
-function firstUseStampPath() {
+function firstUseStampPath(): string {
   return join(AGENT_TELEMETRY_DIR, 'first-use-stamp');
 }
 const MACHINE_FINGER_PATH = join(GLOBAL_TELEMETRY_DIR, 'machine-finger');
@@ -67,23 +68,45 @@ const MAX_RETRIES = 3;
 
 const DEFAULT_ENDPOINT = 'https://devkit.huaweicloud.com/rest/developer/server/hdkitservice/telemetry/events';
 
-let eventQueue = [];
+// `value` stays unknown at the boundary: callers pass strings, but hook-event
+// JSON is parsed and validated before it reaches buildEvent.
+interface TelemetryEventInput {
+  key: string;
+  value?: unknown;
+  capability?: string;
+}
+
+interface TelemetryEvent {
+  key: string;
+  value: string;
+  installId: string | null;
+  userHash: string | null;
+  version: string;
+  harness: string;
+  agentVersion: string;
+  os: string;
+  osVersion: string;
+  capability?: string;
+  _retries?: number;
+}
+
+let eventQueue: TelemetryEvent[] = [];
 let isFlushing = false;
-let flushTimer = null;
+let flushTimer: NodeJS.Timeout | null = null;
 let lastCheckedDate = '';
-let installId = null;
-let userHash = null;
+let installId: string | null = null;
+let userHash: string | null = null;
 let agentHarness = 'unknown';
 let agentVersion = '0.0.0';
 const osTypeStr = osType();
 const osVersionStr = osRelease();
 
 const DEBUG = process.env.HUAWEICLOUD_DEVKIT_DEBUG === 'true';
-function debugLogPath() {
+function debugLogPath(): string {
   return join(AGENT_TELEMETRY_DIR, 'telemetry-debug.log');
 }
 
-function debugLog(msg) {
+function debugLog(msg: string): void {
   if (!DEBUG) return;
   try {
     const path = debugLogPath();
@@ -92,13 +115,13 @@ function debugLog(msg) {
   } catch (_) {}
 }
 
-function ensureDir(dirPath = GLOBAL_TELEMETRY_DIR) {
+function ensureDir(dirPath: string = GLOBAL_TELEMETRY_DIR): void {
   if (!existsSync(dirPath)) {
     mkdirSync(dirPath, { recursive: true });
   }
 }
 
-function readTextFile(filePath) {
+function readTextFile(filePath: string): string | null {
   try {
     return readFileSync(filePath, 'utf8').trim();
   } catch {
@@ -106,21 +129,21 @@ function readTextFile(filePath) {
   }
 }
 
-function writeTextFile(filePath, content) {
+function writeTextFile(filePath: string, content: string): void {
   ensureDir(dirname(filePath));
   writeFileSync(filePath, content, 'utf8');
 }
 
-function touchFile(filePath) {
+function touchFile(filePath: string): void {
   ensureDir(dirname(filePath));
   writeFileSync(filePath, '', 'utf8');
 }
 
-function stampExists(filePath) {
+function stampExists(filePath: string): boolean {
   return existsSync(filePath);
 }
 
-function getStampUTCDate(filePath) {
+function getStampUTCDate(filePath: string): string | null {
   try {
     return new Date(statSync(filePath).mtime).toISOString().slice(0, 10);
   } catch {
@@ -128,16 +151,18 @@ function getStampUTCDate(filePath) {
   }
 }
 
-function getUTCToday() {
+function getUTCToday(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function generateMachineFinger() {
+function generateMachineFinger(): string {
   const host = hostname();
   const nets = networkInterfaces();
   let firstMac = '';
   for (const key of Object.keys(nets).sort((a, b) => a.localeCompare(b))) {
-    const iface = nets[key].find((a) => a.mac && a.mac !== '00:00:00:00:00:00');
+    const list = nets[key];
+    if (!list) continue;
+    const iface = list.find((a) => a.mac && a.mac !== '00:00:00:00:00:00');
     if (iface) {
       firstMac = iface.mac;
       break;
@@ -147,7 +172,7 @@ function generateMachineFinger() {
   return createHash('sha256').update(factor).digest('hex');
 }
 
-export function generateOrRecoverInstallId() {
+export function generateOrRecoverInstallId(): string {
   ensureDir();
   if (existsSync(INSTALLATION_ID_PATH)) {
     const cached = readTextFile(INSTALLATION_ID_PATH);
@@ -165,38 +190,38 @@ export function generateOrRecoverInstallId() {
   return id;
 }
 
-function loadUserHash() {
+function loadUserHash(): void {
   if (existsSync(USER_HASH_PATH)) {
     const cached = readTextFile(USER_HASH_PATH);
     if (cached) userHash = cached;
   }
 }
 
-export function isTelemetryEnabled() {
+export function isTelemetryEnabled(): boolean {
   return process.env.HUAWEICLOUD_DEVKIT_TELEMETRY !== 'off';
 }
 
-function getEndpoint() {
+function getEndpoint(): string {
   return process.env.HUAWEICLOUD_DEVKIT_TELEMETRY_ENDPOINT || DEFAULT_ENDPOINT;
 }
 
-function capabilityFromKey(key) {
+function capabilityFromKey(key: string): string | undefined {
   if (key.startsWith('tool:')) return 'mcp';
   if (key.startsWith('cli:')) return 'cli';
   return undefined;
 }
 
-export function sanitizeValue(value) {
-  if (typeof value !== 'string') value = value == null ? '' : String(value);
-  value = value.replace(/[\r\n\t]+/g, ' ').trim();
-  if (value.length > MAX_VALUE_LENGTH) {
-    value = value.slice(0, MAX_VALUE_LENGTH - 3) + '...';
+export function sanitizeValue(value: unknown): string {
+  let text = typeof value === 'string' ? value : value == null ? '' : String(value);
+  text = text.replace(/[\r\n\t]+/g, ' ').trim();
+  if (text.length > MAX_VALUE_LENGTH) {
+    text = text.slice(0, MAX_VALUE_LENGTH - 3) + '...';
   }
-  return value;
+  return text;
 }
 
-function buildEvent(raw) {
-  const event = {
+function buildEvent(raw: TelemetryEventInput): TelemetryEvent {
+  const event: TelemetryEvent = {
     key: raw.key,
     value: sanitizeValue(raw.value),
     installId: installId,
@@ -212,7 +237,18 @@ function buildEvent(raw) {
   return event;
 }
 
-export function enqueueEvent(raw) {
+// Hook-event JSON arrives as text; only an object carrying a non-empty string
+// key is accepted. Malformed lines are dropped rather than queued.
+function toTelemetryEventInput(value: unknown): TelemetryEventInput | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.key !== 'string' || record.key === '') return null;
+  const input: TelemetryEventInput = { key: record.key, value: record.value };
+  if (typeof record.capability === 'string') input.capability = record.capability;
+  return input;
+}
+
+export function enqueueEvent(raw: TelemetryEventInput): void {
   if (!isTelemetryEnabled()) return;
   if (!installId) return;
 
@@ -230,7 +266,7 @@ export function enqueueEvent(raw) {
   if (eventQueue.length >= BATCH_SIZE) setImmediate(() => flushEvents());
 }
 
-function checkDauPing() {
+function checkDauPing(): void {
   const today = getUTCToday();
   if (today === lastCheckedDate) return;
   lastCheckedDate = today;
@@ -239,11 +275,11 @@ function checkDauPing() {
   }
 }
 
-function shouldSendFirstUsePing() {
+function shouldSendFirstUsePing(): boolean {
   return !stampExists(firstUseStampPath());
 }
 
-export function trackInstall() {
+export function trackInstall(): void {
   if (!isTelemetryEnabled()) return;
   ensureDir(AGENT_TELEMETRY_DIR);
 
@@ -253,7 +289,7 @@ export function trackInstall() {
   writeTextFile(installCounterPath(), String(count + 1));
 }
 
-function consumeInstallCounter() {
+function consumeInstallCounter(): number {
   ensureDir(AGENT_TELEMETRY_DIR);
   const existing = readTextFile(installCounterPath());
   if (!existing) return 0;
@@ -263,7 +299,7 @@ function consumeInstallCounter() {
   return count;
 }
 
-export function ingestHookEvents() {
+export function ingestHookEvents(): void {
   const hookPath = hookEventsPath();
   const processingPath = hookPath + '.processing';
   if (existsSync(processingPath)) {
@@ -271,8 +307,9 @@ export function ingestHookEvents() {
       const lines = readFileSync(processingPath, 'utf8').trim().split('\n').filter(Boolean);
       for (const line of lines) {
         try {
-          const parsed = JSON.parse(line);
-          eventQueue.push(buildEvent(parsed));
+          const parsed: unknown = JSON.parse(line);
+          const input = toTelemetryEventInput(parsed);
+          if (input) eventQueue.push(buildEvent(input));
         } catch {}
       }
     } catch {
@@ -290,41 +327,41 @@ export function ingestHookEvents() {
   }
 }
 
-export function trackToolInvoke(toolName, value = '1') {
+export function trackToolInvoke(toolName: string, value = '1'): void {
   if (!isTelemetryEnabled()) return;
   enqueueEvent({ key: `tool:${toolName}`, value });
 }
 
-export function trackSkillRetrieve(skillName) {
+export function trackSkillRetrieve(skillName: string): void {
   if (!isTelemetryEnabled()) return;
   enqueueEvent({ key: 'skill:retrieve', value: skillName });
 }
 
-export function trackSandboxConnect() {
+export function trackSandboxConnect(): void {
   if (!isTelemetryEnabled()) return;
   enqueueEvent({ key: 'sandbox:connect', value: '1' });
 }
 
-export function trackSandboxDisconnect() {
+export function trackSandboxDisconnect(): void {
   if (!isTelemetryEnabled()) return;
   enqueueEvent({ key: 'sandbox:disconnect', value: '1' });
 }
 
-export function cacheUserHash(hash) {
-  if (!hash) return;
+export function cacheUserHash(hash: unknown): void {
+  if (typeof hash !== 'string' || !hash) return;
   userHash = hash;
   ensureDir();
   writeTextFile(USER_HASH_PATH, hash);
 }
 
-export function clearUserHash() {
+export function clearUserHash(): void {
   userHash = null;
   try {
     unlinkSync(USER_HASH_PATH);
   } catch {}
 }
 
-function flushEvents() {
+function flushEvents(): void {
   if (isFlushing) return;
   if (eventQueue.length === 0) return;
   isFlushing = true;
@@ -361,16 +398,16 @@ function flushEvents() {
       }
       isFlushing = false;
     })
-    .catch((error) => {
+    .catch((error: unknown) => {
       clearTimeout(timer);
-      debugLog(`POST FAIL err=${error.message} events=${batch.length}`);
+      debugLog(`POST FAIL err=${error instanceof Error ? error.message : String(error)} events=${batch.length}`);
       requeueEvents(batch);
       isFlushing = false;
     });
 }
 
-function requeueEvents(batch) {
-  const kept = [];
+function requeueEvents(batch: TelemetryEvent[]): void {
+  const kept: TelemetryEvent[] = [];
   for (const event of batch) {
     const retries = event._retries || 0;
     if (retries >= MAX_RETRIES) {
@@ -383,7 +420,12 @@ function requeueEvents(batch) {
   if (kept.length > 0) eventQueue = [...kept, ...eventQueue];
 }
 
-export function initTelemetry({ harness, version }) {
+export interface InitTelemetryOptions {
+  harness?: string;
+  version?: string;
+}
+
+export function initTelemetry({ harness, version }: InitTelemetryOptions): void {
   installId = generateOrRecoverInstallId();
   agentHarness = harness || 'unknown';
   agentVersion = version || '0.0.0';

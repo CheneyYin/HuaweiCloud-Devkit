@@ -7,7 +7,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { fetchWithProxy } from './proxy/proxy-agent.ts';
-import { SUPPORTED_AGENT_TARGETS } from './auth/agent-registration.mjs';
+import { SUPPORTED_AGENT_TARGETS } from './auth/agent-registration.ts';
 
 const IS_WINDOWS = process.platform === 'win32';
 const NPM_BIN = IS_WINDOWS ? 'npm.cmd' : 'npm';

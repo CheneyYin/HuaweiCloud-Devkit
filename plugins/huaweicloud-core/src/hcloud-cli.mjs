@@ -446,7 +446,7 @@ async function runHcloudOnceWithRetries(plan, options) {
 
 async function runtimeCurrentMismatchWarning() {
   try {
-    const { hasRuntimeCredentials, scanState } = await import('./auth/reconcile.mjs');
+    const { hasRuntimeCredentials, scanState } = await import('./auth/reconcile.ts');
     if (!hasRuntimeCredentials()) return null;
     const scan = scanState();
     const { runtimeFingerprint, currentFingerprint } = scan.stores;

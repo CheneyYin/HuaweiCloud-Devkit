@@ -1,4 +1,4 @@
-import { AGENTS, matchAgent, detectVersion, installSegment } from './agent-registry.mjs';
+import { AGENTS, matchAgent, detectVersion, installSegment } from './agent-registry.ts';
 
 export interface ClientInfo {
   name?: string | null;

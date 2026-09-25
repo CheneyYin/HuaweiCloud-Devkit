@@ -25,8 +25,8 @@ import {
   writeLastSync,
   writeObsConfig,
 } from '../plugins/huaweicloud-core/src/auth/credentials.mjs';
-import { fingerprint, runHcloudConfigure, scanState } from '../plugins/huaweicloud-core/src/auth/reconcile.mjs';
-import { syncAuth } from '../plugins/huaweicloud-core/src/auth/service.mjs';
+import { fingerprint, runHcloudConfigure, scanState } from '../plugins/huaweicloud-core/src/auth/reconcile.ts';
+import { syncAuth } from '../plugins/huaweicloud-core/src/auth/service.ts';
 import { callTool } from '../plugins/huaweicloud-core/src/tools.mjs';
 
 const FAKE_HCLOUD = fileURLToPath(new URL('./fixtures/fake-hcloud.mjs', import.meta.url));

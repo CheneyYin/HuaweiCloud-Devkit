@@ -17,10 +17,10 @@ import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 
-import { getAuthStatus, syncAuth } from './auth/service.mjs';
+import { getAuthStatus, syncAuth } from './auth/service.ts';
 import { resolveAndApplyProjectId } from './auth/project-id.ts';
-import { SUPPORTED_AGENT_TARGETS } from './auth/agent-registration.mjs';
-import { fingerprint, readKooCliProfiles, resolveManagedProfile } from './auth/reconcile.mjs';
+import { SUPPORTED_AGENT_TARGETS } from './auth/agent-registration.ts';
+import { fingerprint, readKooCliProfiles, resolveManagedProfile } from './auth/reconcile.ts';
 import { redactSecrets } from './safety-policy.ts';
 import {
   globalCredentialsPath,
@@ -4865,7 +4865,7 @@ async function cmdAuthReconcile() {
   console.log(BANNER);
   console.log('HuaweiCloud DevKit Credential Reconciliation\n');
 
-  const { scanState, runHcloudConfigure, resolveManagedProfile } = await import('./auth/reconcile.mjs');
+  const { scanState, runHcloudConfigure, resolveManagedProfile } = await import('./auth/reconcile.ts');
   const state = scanState();
   if (state.inconsistencies.length === 0) {
     console.log('All credential files are consistent. ✓');

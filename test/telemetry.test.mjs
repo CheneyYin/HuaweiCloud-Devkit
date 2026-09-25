@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { AGENTS } from '../plugins/huaweicloud-core/src/telemetry/agent-registry.mjs';
+import { AGENTS } from '../plugins/huaweicloud-core/src/telemetry/agent-registry.ts';
 import { detectAgentHarness } from '../plugins/huaweicloud-core/src/telemetry/agent-detect.ts';
 
 const DETECTION_ENV_KEYS = ['AGENT_HARNESS', ...new Set(AGENTS.flatMap((agent) => agent.envVars || []))];
@@ -29,7 +29,7 @@ async function withIsolatedTelemetry(fn) {
   const prevHome = process.env.HUAWEICLOUD_DEVKIT_HOME;
   process.env.HUAWEICLOUD_DEVKIT_HOME = tmp;
   try {
-    const telemetry = await import(`../plugins/huaweicloud-core/src/telemetry/telemetry.mjs?iso=${Date.now()}`);
+    const telemetry = await import(`../plugins/huaweicloud-core/src/telemetry/telemetry.ts?iso=${Date.now()}`);
     return await fn(telemetry);
   } finally {
     if (prevHome === undefined) delete process.env.HUAWEICLOUD_DEVKIT_HOME;
@@ -110,7 +110,7 @@ test('generateOrRecoverInstallId returns consistent string', async () => {
 });
 
 test('isTelemetryEnabled defaults to true', async () => {
-  const { isTelemetryEnabled } = await import('../plugins/huaweicloud-core/src/telemetry/telemetry.mjs');
+  const { isTelemetryEnabled } = await import('../plugins/huaweicloud-core/src/telemetry/telemetry.ts');
   assert.equal(isTelemetryEnabled(), true);
 });
 
@@ -118,7 +118,7 @@ test('isTelemetryEnabled returns false when env set to off', async () => {
   const prev = process.env.HUAWEICLOUD_DEVKIT_TELEMETRY;
   process.env.HUAWEICLOUD_DEVKIT_TELEMETRY = 'off';
   try {
-    const { isTelemetryEnabled } = await import('../plugins/huaweicloud-core/src/telemetry/telemetry.mjs');
+    const { isTelemetryEnabled } = await import('../plugins/huaweicloud-core/src/telemetry/telemetry.ts');
     assert.equal(isTelemetryEnabled(), false);
   } finally {
     if (prev) process.env.HUAWEICLOUD_DEVKIT_TELEMETRY = prev;
@@ -143,24 +143,24 @@ test('trackSandboxConnect and trackSandboxDisconnect do not throw', async () => 
 });
 
 test('sanitizeValue truncates long values to 255', async () => {
-  const { sanitizeValue } = await import('../plugins/huaweicloud-core/src/telemetry/telemetry.mjs');
+  const { sanitizeValue } = await import('../plugins/huaweicloud-core/src/telemetry/telemetry.ts');
   const out = sanitizeValue('x'.repeat(500));
   assert.equal(out.length, 255);
   assert.ok(out.endsWith('...'));
 });
 
 test('sanitizeValue replaces newlines and tabs with spaces', async () => {
-  const { sanitizeValue } = await import('../plugins/huaweicloud-core/src/telemetry/telemetry.mjs');
+  const { sanitizeValue } = await import('../plugins/huaweicloud-core/src/telemetry/telemetry.ts');
   assert.equal(sanitizeValue('a\nb\tc'), 'a b c');
 });
 
 test('sanitizeValue keeps short values intact', async () => {
-  const { sanitizeValue } = await import('../plugins/huaweicloud-core/src/telemetry/telemetry.mjs');
+  const { sanitizeValue } = await import('../plugins/huaweicloud-core/src/telemetry/telemetry.ts');
   assert.equal(sanitizeValue('hcloud version'), 'hcloud version');
 });
 
 test('sanitizeValue coerces non-strings and nulls safely', async () => {
-  const { sanitizeValue } = await import('../plugins/huaweicloud-core/src/telemetry/telemetry.mjs');
+  const { sanitizeValue } = await import('../plugins/huaweicloud-core/src/telemetry/telemetry.ts');
   assert.equal(sanitizeValue(null), '');
   assert.equal(sanitizeValue(undefined), '');
   assert.equal(sanitizeValue(123), '123');

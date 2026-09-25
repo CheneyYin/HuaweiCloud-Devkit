@@ -1,6 +1,6 @@
 import { TOOL_DEFINITIONS, callTool } from './tools.mjs';
 import { peekCachedUpdateInfo, applyUpdateHint, readInstalledVersion } from './update-check.mjs';
-import { initTelemetry } from './telemetry/telemetry.mjs';
+import { initTelemetry } from './telemetry/telemetry.ts';
 import { detectAgent } from './telemetry/agent-detect.ts';
 
 const pkgVersion = readInstalledVersion() || '0.0.0';

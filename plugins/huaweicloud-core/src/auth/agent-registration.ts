@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
-export const SUPPORTED_AGENT_TARGETS = [
+export const SUPPORTED_AGENT_TARGETS: string[] = [
   'opencode',
   'codex',
   'codex-desktop',
@@ -18,17 +18,17 @@ export const SUPPORTED_AGENT_TARGETS = [
   'atomcode',
 ];
 
-function baseHome() {
+function baseHome(): string {
   return process.env.HUAWEICLOUD_HOME || homedir();
 }
 
-function opencodeConfigFile() {
+function opencodeConfigFile(): string {
   const jsonc = join(baseHome(), '.config', 'opencode', 'opencode.jsonc');
   if (existsSync(jsonc)) return jsonc;
   return join(baseHome(), '.config', 'opencode', 'opencode.json');
 }
 
-function readJsonSafe(path) {
+function readJsonSafe(path: string): unknown {
   if (!existsSync(path)) return null;
   try {
     return JSON.parse(readFileSync(path, 'utf8'));
@@ -37,13 +37,17 @@ function readJsonSafe(path) {
   }
 }
 
-function opencodeRegistered() {
-  const path = opencodeConfigFile();
-  const cfg = readJsonSafe(path);
-  return Boolean(cfg?.mcp?.['huaweicloud-devkit']);
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
-function codexDesktopRegistered() {
+function opencodeRegistered(): boolean {
+  const path = opencodeConfigFile();
+  const cfg = asRecord(readJsonSafe(path));
+  return Boolean(asRecord(cfg.mcp)['huaweicloud-devkit']);
+}
+
+function codexDesktopRegistered(): boolean {
   const path = join(baseHome(), '.codex', 'config.toml');
   if (!existsSync(path)) return false;
   try {
@@ -53,7 +57,7 @@ function codexDesktopRegistered() {
   }
 }
 
-function codexCliRegistered() {
+function codexCliRegistered(): boolean {
   try {
     const r = spawnSync('codex', ['plugin', 'list'], {
       shell: false,
@@ -68,33 +72,33 @@ function codexCliRegistered() {
   }
 }
 
-function codeartsRegistered() {
+function codeartsRegistered(): boolean {
   const paths = [
     join(baseHome(), '.codeartsdoer', 'mcp', 'mcp_settings.json'),
     join(process.cwd(), '.codeartsdoer', 'mcp', 'mcp_settings.json'),
   ];
   return paths.some((path) => {
-    const cfg = readJsonSafe(path);
-    return Boolean(cfg?.mcpServers?.['huaweicloud-devkit']);
+    const cfg = asRecord(readJsonSafe(path));
+    return Boolean(asRecord(cfg.mcpServers)['huaweicloud-devkit']);
   });
 }
 
-function codeartsWorkRegistered() {
+function codeartsWorkRegistered(): boolean {
   const path = join(baseHome(), '.codeartswork', 'mcp', 'mcp_settings.json');
-  const cfg = readJsonSafe(path);
-  return Boolean(cfg?.mcp?.['huaweicloud-devkit']);
+  const cfg = asRecord(readJsonSafe(path));
+  return Boolean(asRecord(cfg.mcp)['huaweicloud-devkit']);
 }
 
-function workbuddyRegistered() {
-  const cfg = readJsonSafe(join(baseHome(), '.workbuddy', 'mcp.json'));
-  return Boolean(cfg?.mcpServers?.['huaweicloud-devkit']);
+function workbuddyRegistered(): boolean {
+  const cfg = asRecord(readJsonSafe(join(baseHome(), '.workbuddy', 'mcp.json')));
+  return Boolean(asRecord(cfg.mcpServers)['huaweicloud-devkit']);
 }
 
-function dshRoot() {
+function dshRoot(): string {
   return process.env.DSH_HOME || join(baseHome(), '.dsh');
 }
 
-function dshRegistered() {
+function dshRegistered(): boolean {
   const patchPath = join(dshRoot(), 'profiles', 'web', 'cordis.patch.yml');
   if (!existsSync(patchPath)) return false;
   try {
@@ -109,7 +113,7 @@ function dshRegistered() {
   }
 }
 
-function readOfficeaceRegistryInstallDir() {
+function readOfficeaceRegistryInstallDir(): string | null {
   if (process.platform !== 'win32') return null;
   try {
     const r = spawnSync('reg', ['query', 'HKCU\\SOFTWARE\\OfficeAce\\OfficeAce', '/v', 'InstallDir'], {
@@ -125,7 +129,7 @@ function readOfficeaceRegistryInstallDir() {
   return null;
 }
 
-function officeaceCapabilitiesDir() {
+function officeaceCapabilitiesDir(): string | null {
   const configRoot = process.env.OFFICE_CLAW_CONFIG_ROOT;
   if (configRoot && existsSync(join(configRoot, 'capabilities.json'))) return configRoot;
   const regDir = readOfficeaceRegistryInstallDir();
@@ -134,7 +138,7 @@ function officeaceCapabilitiesDir() {
     if (existsSync(join(dir, 'capabilities.json'))) return dir;
   }
   if (process.platform === 'win32') {
-    const bases = [process.env.ProgramFiles, 'C:\\Program Files', 'D:\\Program Files'];
+    const bases: Array<string | undefined> = [process.env.ProgramFiles, 'C:\\Program Files', 'D:\\Program Files'];
     if (process.env.LOCALAPPDATA) bases.push(join(process.env.LOCALAPPDATA, 'Programs'));
     for (const base of bases) {
       if (!base) continue;
@@ -145,62 +149,90 @@ function officeaceCapabilitiesDir() {
   return null;
 }
 
-function officeaceCapabilitiesDirSafe() {
+function officeaceCapabilitiesDirSafe(): string {
   return officeaceCapabilitiesDir() || join(baseHome(), '.office-claw');
 }
 
-function officeaceSqlitePath() {
+function officeaceSqlitePath(): string {
   const capDir = officeaceCapabilitiesDirSafe();
   return join(resolve(capDir, '..'), 'data', 'mcp-connectors.sqlite');
 }
 
-function officeaceRegistered() {
+// node:sqlite is a runtime-only builtin loaded through createRequire; only the
+// DatabaseSync constructor this module calls is modeled.
+interface SqliteStatement {
+  get: () => unknown;
+}
+
+interface SqliteDatabase {
+  prepare: (_sql: string) => SqliteStatement;
+  close: () => void;
+}
+
+interface SqliteModule {
+  DatabaseSync: new (_path: string, _options?: { readonly?: boolean }) => SqliteDatabase;
+}
+
+function toSqliteModule(value: unknown): SqliteModule | null {
+  if (!value || typeof value !== 'object') return null;
+  const ctor = (value as { DatabaseSync?: unknown }).DatabaseSync;
+  return typeof ctor === 'function' ? (value as SqliteModule) : null;
+}
+
+function officeaceRegistered(): boolean {
   let hasMcp = false;
   const dbPath = officeaceSqlitePath();
   if (existsSync(dbPath)) {
     const nodeMajor = Number(process.versions.node.split('.')[0]);
     if (nodeMajor >= 22) {
       try {
-        const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
-        const db = new DatabaseSync(dbPath, { readonly: true });
-        const row = db.prepare("SELECT enabled FROM mcp_connectors WHERE name = 'huaweicloud-devkit'").get();
-        db.close();
-        hasMcp = Boolean(row?.enabled);
+        const sqlite = toSqliteModule(createRequire(import.meta.url)('node:sqlite'));
+        if (sqlite) {
+          const db = new sqlite.DatabaseSync(dbPath, { readonly: true });
+          const row = db.prepare("SELECT enabled FROM mcp_connectors WHERE name = 'huaweicloud-devkit'").get();
+          db.close();
+          hasMcp = Boolean(asRecord(row).enabled);
+        }
       } catch {}
     }
   }
 
   const capFile = join(officeaceCapabilitiesDirSafe(), 'capabilities.json');
-  const cfg = readJsonSafe(capFile);
-  const hasSkills = cfg?.capabilities?.some((c) => c.id === 'huaweicloud-core' && c.type === 'skill') ?? false;
+  const cfg = asRecord(readJsonSafe(capFile));
+  const capabilities = Array.isArray(cfg.capabilities) ? cfg.capabilities : [];
+  const hasSkills = capabilities.some((c) => {
+    const cap = asRecord(c);
+    return cap.id === 'huaweicloud-core' && cap.type === 'skill';
+  });
 
   return hasMcp || hasSkills;
 }
 
-function atomcodeHome() {
+function atomcodeHome(): string {
   return process.env.ATOMCODE_HOME || join(baseHome(), '.atomcode');
 }
 
-function atomcodeRegistered() {
-  const cfg = readJsonSafe(join(atomcodeHome(), 'mcp.json'));
-  return Boolean(cfg?.mcpServers?.['huaweicloud-devkit']);
+function atomcodeRegistered(): boolean {
+  const cfg = asRecord(readJsonSafe(join(atomcodeHome(), 'mcp.json')));
+  return Boolean(asRecord(cfg.mcpServers)['huaweicloud-devkit']);
 }
 
-function openclawMcpConfigured(cfg) {
+function openclawMcpConfigured(cfg: unknown): boolean {
   if (!cfg) return false;
-  if (cfg.mcpServers?.['huaweicloud-devkit']) return true;
-  if (cfg.mcp?.servers?.['huaweicloud-devkit']) return true;
+  const record = asRecord(cfg);
+  if (asRecord(record.mcpServers)['huaweicloud-devkit']) return true;
+  if (asRecord(asRecord(record.mcp).servers)['huaweicloud-devkit']) return true;
   return false;
 }
 
-function openclawRegistered() {
+function openclawRegistered(): boolean {
   const pluginCfg = readJsonSafe(join(baseHome(), '.agents', 'huaweicloud-plugins', '.mcp.json'));
   if (openclawMcpConfigured(pluginCfg)) return true;
   const nativeCfg = readJsonSafe(join(baseHome(), '.openclaw', 'openclaw.json'));
   return openclawMcpConfigured(nativeCfg);
 }
 
-function hermesHome() {
+function hermesHome(): string {
   if (process.env.HERMES_HOME) return process.env.HERMES_HOME;
   // Hermes on Windows stores under LOCALAPPDATA, not ~/.hermes
   if (process.platform === 'win32' && process.env.LOCALAPPDATA) {
@@ -209,7 +241,7 @@ function hermesHome() {
   return join(baseHome(), '.hermes');
 }
 
-function hermesRegistered() {
+function hermesRegistered(): boolean {
   const configPath = join(hermesHome(), 'config.yaml');
   if (!existsSync(configPath)) return false;
   try {
@@ -220,9 +252,18 @@ function hermesRegistered() {
   }
 }
 
-export function getAgentRegistrationStatuses(target = 'all') {
+export interface AgentRegistrationStatus {
+  configured: boolean;
+}
+
+export interface AgentRegistrationResult {
+  target: string;
+  agents: Record<string, AgentRegistrationStatus>;
+}
+
+export function getAgentRegistrationStatuses(target = 'all'): AgentRegistrationResult {
   const requested = target === 'all' ? SUPPORTED_AGENT_TARGETS : [target];
-  const result = { target, agents: {} };
+  const result: AgentRegistrationResult = { target, agents: {} };
   for (const agent of requested) {
     let configured = false;
     if (agent === 'opencode') configured = opencodeRegistered();

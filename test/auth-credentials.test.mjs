@@ -23,8 +23,8 @@ import {
   writeLastSync,
   writeObsConfig,
 } from '../plugins/huaweicloud-core/src/auth/credentials.mjs';
-import { getAgentRegistrationStatuses } from '../plugins/huaweicloud-core/src/auth/agent-registration.mjs';
-import { getAuthStatus, syncAuth } from '../plugins/huaweicloud-core/src/auth/service.mjs';
+import { getAgentRegistrationStatuses } from '../plugins/huaweicloud-core/src/auth/agent-registration.ts';
+import { getAuthStatus, syncAuth } from '../plugins/huaweicloud-core/src/auth/service.ts';
 
 const FAKE_HCLOUD = fileURLToPath(new URL('./fixtures/fake-hcloud.mjs', import.meta.url));
 
