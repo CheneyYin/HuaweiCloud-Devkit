@@ -157,8 +157,8 @@ function invokeMcpToolCall(mcpServerPath, env, toolName, toolArgs, timeout = 150
   });
 }
 
-// Core tools that must always be present. Keep in sync with tools.mjs TOOL_DEFINITIONS.
-// When a new tool is added to tools.mjs, add it here too.
+// Core tools that must always be present. Keep in sync with tools.ts TOOL_DEFINITIONS.
+// When a new tool is added to tools.ts, add it here too.
 const REQUIRED_TOOLS = [
   'huaweicloud_check_cli',
   'huaweicloud_plan_cli_command',

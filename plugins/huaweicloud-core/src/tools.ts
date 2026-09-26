@@ -6,9 +6,9 @@ import { spawnSync, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHmac, createHash } from 'node:crypto';
 
-import { evaluateArtifacts, evaluateCommandRisk, evaluateDeployPlan } from './risk-rule-engine.ts';
+import { evaluateArtifacts, evaluateCommandRisk, evaluateDeployPlan, type RiskEvaluation } from './risk-rule-engine.ts';
 import { classifyTextCommand, redactSecrets } from './safety-policy.ts';
-import { planHcloudCommand, runHcloud, consumeApprovalToken, hashArgs } from './hcloud-cli.ts';
+import { planHcloudCommand, runHcloud, consumeApprovalToken, hashArgs, type HcloudRunResult } from './hcloud-cli.ts';
 import { searchMarketplace } from './search-market.ts';
 import { getServiceIcon } from './icon-library.ts';
 import { detectFramework } from './detect-framework.ts';
@@ -51,6 +51,8 @@ import {
 import { trackToolInvoke, trackSkillRetrieve, clearUserHash } from './telemetry/telemetry.ts';
 import { fetchWithProxy } from './proxy/proxy-agent.ts';
 import { fingerprint, runHcloudConfigure, resolveManagedProfile } from './auth/reconcile.ts';
+import { hcloudProbeNextStep, probeHcloud, type ProbeHcloudOptions } from './hcloud-probe.ts';
+import { isUsableOfficeaceRoot, readOfficeaceRootMarker } from './officeace-paths.ts';
 import {
   getCachedUpdateInfo,
   getUpdateDistTags,
@@ -61,12 +63,50 @@ import {
   writeSkipState,
   resolveSkipFilePath,
   upgradePackage,
+  type DistTags,
 } from './update-check.ts';
-import { hcloudProbeNextStep, probeHcloud } from './hcloud-probe.ts';
-import { isUsableOfficeaceRoot, readOfficeaceRootMarker } from './officeace-paths.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILLS_ROOT_DEV = join(__dirname, '..', 'skills');
+
+// ── Boundary narrowing helpers ──
+// Tool arguments, import-file JSON, and JS-module returns are untrusted at this
+// boundary: values land as unknown and are narrowed with typeof/Array.isArray
+// checks (same guarded-asRecord style as mcp-protocol.ts / hcloud-cli.ts).
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+// Mirrors the JS `a || b || ''` chain for string fields: the first non-empty
+// string wins, everything else falls through.
+function pickString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value) return value;
+  }
+  return '';
+}
+
+// Boundary narrowing for the untyped credentials.mjs reader: only string fields
+// survive, so callers keep truthiness checks and string plumbing.
+interface CredentialLike {
+  ak?: string;
+  sk?: string;
+  securityToken?: string;
+  region?: string;
+}
+
+function asCredentialRecord(value: unknown): CredentialLike | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const result: CredentialLike = {};
+  if (typeof record.ak === 'string') result.ak = record.ak;
+  if (typeof record.sk === 'string') result.sk = record.sk;
+  if (typeof record.securityToken === 'string') result.securityToken = record.securityToken;
+  if (typeof record.region === 'string') result.region = record.region;
+  return result;
+}
+
 function opencodeSkillsDir() {
   const home = homedir();
   return join(home, '.config', 'opencode', 'skills');
@@ -149,7 +189,7 @@ function codexDesktopSkillsDir() {
   return join(homedir(), '.agents', 'skills');
 }
 
-export function listSkillDirs(root) {
+export function listSkillDirs(root: string): string[] {
   if (!existsSync(root)) return [];
   try {
     return readdirSync(root, { withFileTypes: true })
@@ -160,8 +200,11 @@ export function listSkillDirs(root) {
   }
 }
 
-export function findSkillsRoot(candidates) {
+export function findSkillsRoot(candidates: Array<string | null | undefined>): string | null {
   for (const dir of candidates) {
+    // A missing optional root (e.g. officeaceSkillsRoot() → null) behaves like a
+    // non-existent dir: no skills, keep walking the fallback chain.
+    if (!dir) continue;
     if (listSkillDirs(dir).length > 0) return dir;
   }
   return null;
@@ -185,7 +228,21 @@ function resolveSkillsRoot() {
 }
 const SKILLS_ROOT = resolveSkillsRoot();
 
-export const TOOL_DEFINITIONS = [
+// ── Tool registry ──
+// TOOL_DEFINITIONS_LITERALS is the single source of truth. `as const` keeps the
+// tool names literal so ToolName is derived from the registry itself; adding a
+// registry entry without a matching callTool case is a compile error via the
+// never-guard on the dispatch default. The exported TOOL_DEFINITIONS widens the
+// literal view to the structural ToolDefinition shape so consumers (mcp-protocol)
+// can read optional schema fields like `required` normally.
+export type ToolInputSchema = {
+  type: string;
+  properties?: Record<string, unknown>;
+  required?: readonly string[];
+  [key: string]: unknown;
+};
+
+const TOOL_DEFINITIONS_LITERALS = [
   {
     name: 'huaweicloud_check_cli',
     description:
@@ -887,9 +944,106 @@ export const TOOL_DEFINITIONS = [
       required: ['action', 'bucket', 'region'],
     },
   },
-];
+] as const;
 
-function toolInvokeValue(name, args) {
+export type ToolName = (typeof TOOL_DEFINITIONS_LITERALS)[number]['name'];
+
+export interface ToolDefinition {
+  name: ToolName;
+  description: string;
+  inputSchema: ToolInputSchema;
+}
+
+export const TOOL_DEFINITIONS: readonly ToolDefinition[] = TOOL_DEFINITIONS_LITERALS;
+
+// Tool arguments as declared by the per-tool inputSchemas above. Only
+// required-field presence is validated upstream (mcp-protocol) and the numeric
+// fields are re-derived by normalizeNumericArgs (#530); the remaining field
+// types follow the declared contract. Kept as a type alias (not an interface)
+// so it stays assignable to/from Record<string, unknown> at the dispatch
+// boundary without casts.
+export type ToolArgs = {
+  args?: string[];
+  allowWrites?: boolean;
+  timeoutMs?: number;
+  maxRetries?: number;
+  cwd?: string;
+  stdin?: string;
+  service?: string;
+  profile?: string;
+  command?: string;
+  artifacts?: unknown[];
+  plan?: unknown;
+  intent?: string;
+  errorCode?: string;
+  message?: string;
+  requestId?: string;
+  query?: string;
+  topic?: string;
+  name?: string;
+  region?: string;
+  category?: string;
+  projectPath?: string;
+  target?: string;
+  ak?: string;
+  sk?: string;
+  securityToken?: string;
+  clear?: boolean;
+  mode?: string;
+  action?: string;
+  approvalToken?: string;
+  approvedByUser?: boolean;
+  bucket?: string;
+  token?: string;
+  decision?: string;
+  workspace_id?: string;
+  username?: string;
+  timeout_ms?: number;
+  local_path?: string;
+  remote_path?: string;
+  local_dir?: string;
+  remote_dir?: string;
+  exclude?: string[];
+  extract?: boolean;
+  nginx_type?: string;
+  port?: number;
+  project?: string;
+  output_dir?: string;
+  node_port?: number;
+  public_port?: number;
+  config_name?: string;
+  framework_type?: string;
+  source?: string;
+  template_id?: string;
+  flavor_id?: string;
+  env?: Record<string, unknown>;
+  git?: SandboxGitConfig;
+  session_id?: string;
+  dev_stage_id?: string;
+  enable_sts?: boolean;
+  api_key?: string;
+  domain_id?: string;
+  dismiss?: boolean;
+  dismissVersion?: string;
+  version?: string;
+  indexDocument?: string;
+  errorDocument?: string;
+};
+
+interface SandboxGitConfig {
+  repo_url?: string;
+  repo_branch?: string;
+  repo_name?: string;
+  target_path?: string;
+  open_type?: string;
+}
+
+export interface CallToolOptions {
+  sessionId?: string | null;
+  doQuery?: () => Promise<DistTags | null>;
+}
+
+function toolInvokeValue(name: ToolName, args: ToolArgs): string {
   if (name === 'huaweicloud_run_readonly_command' || name === 'huaweicloud_run_approved_command') {
     const cmdArgs = args.args || [];
     const filtered = cmdArgs.filter((a) => !a.startsWith('--') && !a.startsWith('-') && !a.includes('='));
@@ -920,7 +1074,7 @@ async function isGitAvailable() {
   }
 }
 
-async function gitCloneToLocal(repoUrl, branch, targetBasename) {
+async function gitCloneToLocal(repoUrl: string, branch: string | undefined, targetBasename: string) {
   const tempRoot = join(tmpdir(), `hw-sandbox-git-${Date.now()}`);
   const cloneDir = join(tempRoot, targetBasename);
   mkdirSync(tempRoot, { recursive: true });
@@ -931,7 +1085,7 @@ async function gitCloneToLocal(repoUrl, branch, targetBasename) {
   return { cloneDir, tempRoot };
 }
 
-async function transferGitRepo(args, devStageId, connectResult) {
+async function transferGitRepo(args: ToolArgs, devStageId: string, connectResult: Record<string, unknown>) {
   const git = args.git;
   if (!git?.repo_url || !git?.target_path) return;
 
@@ -988,18 +1142,29 @@ async function transferGitRepo(args, devStageId, connectResult) {
   connectResult._repoStatus = 'cloned_in_sandbox';
 }
 
-const pendingConfirms = new Map();
+interface PendingConfirm {
+  newAk: string;
+  newSk: string;
+  newSecurityToken: string;
+  newRegion: string;
+  oldFingerprint: string;
+  newFingerprint: string;
+  fromImport: boolean;
+}
+
+const pendingConfirms = new Map<string, PendingConfirm>();
 
 function readImportFile() {
   const path = join(dirname(globalCredentialsPath()), 'creds-import.json');
   try {
     if (!existsSync(path)) return null;
-    const data = JSON.parse(readFileSync(path, 'utf8'));
+    const data: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    const record = asRecord(data);
     return {
-      ak: String(data.ak || ''),
-      sk: String(data.sk || ''),
-      securityToken: String(data.securityToken || ''),
-      region: String(data.region || ''),
+      ak: String(record.ak || ''),
+      sk: String(record.sk || ''),
+      securityToken: String(record.securityToken || ''),
+      region: String(record.region || ''),
     };
   } catch {
     // Malformed/undecodable import file is un-replayable — wipe it. A VALID
@@ -1022,7 +1187,7 @@ function clearImportFile() {
   }
 }
 
-function persistCredentials(ak, sk, securityToken, region) {
+function persistCredentials(ak: string, sk: string, securityToken: string, region: string) {
   if (String(securityToken || '')) {
     return {
       status: 'error',
@@ -1033,15 +1198,15 @@ function persistCredentials(ak, sk, securityToken, region) {
   const before = backupGlobalCredentials();
   writeGlobalCredentials({ ak, sk: String(sk), securityToken: '', region, configuredBySession: true });
   setConfiguredBySession(true);
-  let obs;
+  let obs: { ok: boolean; error?: string };
   try {
     writeObsConfigFile({ ak, sk, securityToken, region });
     obs = { ok: true };
   } catch (error) {
-    obs = { ok: false, error: error.message };
+    obs = { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
   const profile = resolveManagedProfile();
-  let hcloud;
+  let hcloud: { ok: boolean; error?: string; reason?: string };
   if (!profile) {
     hcloud = { ok: false, reason: 'KooCLI current profile unresolved' };
   } else {
@@ -1060,7 +1225,7 @@ function persistCredentials(ak, sk, securityToken, region) {
   };
 }
 
-function refreshUserHashAfterAuthChange({ regenerate = true } = {}) {
+function refreshUserHashAfterAuthChange({ regenerate = true }: { regenerate?: boolean } = {}) {
   clearUserHash();
   if (regenerate) {
     hdkitGenerateUserHash().catch(() => {});
@@ -1069,10 +1234,10 @@ function refreshUserHashAfterAuthChange({ regenerate = true } = {}) {
 
 // Reject invalid numeric args up front instead of silently coercing them to
 // NaN (which downstream defaults would absorb as "no timeout set") — see #530.
-const NUMERIC_ARG_KEYS = ['timeoutMs', 'maxRetries', 'timeout_ms'];
+const NUMERIC_ARG_KEYS = ['timeoutMs', 'maxRetries', 'timeout_ms'] as const;
 
-function normalizeNumericArgs(args) {
-  const out = { ...args };
+function normalizeNumericArgs(args: ToolArgs): ToolArgs {
+  const out: ToolArgs = { ...args };
   for (const key of NUMERIC_ARG_KEYS) {
     const value = out[key];
     if (value === undefined || value === null) continue;
@@ -1090,7 +1255,7 @@ function normalizeNumericArgs(args) {
   return out;
 }
 
-export async function callTool(name, rawArgs = {}, opts = {}) {
+export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: CallToolOptions = {}): Promise<unknown> {
   const args = normalizeNumericArgs(rawArgs);
   const toolValue = toolInvokeValue(name, args);
   trackToolInvoke(name, toolValue);
@@ -1256,9 +1421,9 @@ export async function callTool(name, rawArgs = {}, opts = {}) {
       return persisted;
     }
     case 'huaweicloud_auth_confirm': {
-      const pending = pendingConfirms.get(args.token);
+      const pending = pendingConfirms.get(args.token || '');
       if (!pending) throw new Error('confirmToken not found or expired.');
-      pendingConfirms.delete(args.token);
+      pendingConfirms.delete(args.token || '');
       if (args.decision === 's1') {
         return { status: 'ok', outcome: 'aborted', message: '保持 S1 现有账号，未覆盖。' };
       }
@@ -1277,7 +1442,7 @@ export async function callTool(name, rawArgs = {}, opts = {}) {
       }
       const sandboxUser2 = args.username || 'root';
       const sandboxTimeout2 = args.timeout_ms || 120000;
-      const sandboxResult2 = await execWithSession(sandboxWsId2, args.command, sandboxUser2, sandboxTimeout2);
+      const sandboxResult2 = await execWithSession(sandboxWsId2, args.command || '', sandboxUser2, sandboxTimeout2);
       return { stdout: sandboxResult2.stdout, exitCode: sandboxResult2.exitCode };
     }
     case 'huaweicloud_sandbox_exec_one_shot': {
@@ -1290,7 +1455,7 @@ export async function callTool(name, rawArgs = {}, opts = {}) {
       }
       const sandboxUser3 = args.username || 'root';
       const sandboxTimeout3 = args.timeout_ms || 120000;
-      const sandboxResult3 = await execOneShot(sandboxWsId3, args.command, sandboxUser3, sandboxTimeout3);
+      const sandboxResult3 = await execOneShot(sandboxWsId3, args.command || '', sandboxUser3, sandboxTimeout3);
       return { stdout: sandboxResult3.stdout, exitCode: sandboxResult3.exitCode };
     }
     case 'huaweicloud_sandbox_close_session': {
@@ -1410,7 +1575,8 @@ export async function callTool(name, rawArgs = {}, opts = {}) {
       return await hdkitSignAgreement();
     case 'huaweicloud_sandbox_connect': {
       const connectResult = await hdkitConnect(args);
-      const devStageId = connectResult?.dev_stage_id || connectResult?.devStageId;
+      const rawDevStageId = connectResult?.dev_stage_id || connectResult?.devStageId;
+      const devStageId = typeof rawDevStageId === 'string' ? rawDevStageId : undefined;
       if (devStageId) {
         setWorkspaceId(devStageId);
         try {
@@ -1425,9 +1591,9 @@ export async function callTool(name, rawArgs = {}, opts = {}) {
     }
     case 'huaweicloud_sandbox_credentials': {
       const devStageId = args.dev_stage_id || getCurrentWorkspaceId();
-      let resolved;
+      let resolved: CredentialLike | null;
       try {
-        resolved = resolveCredentialsWithRuntime();
+        resolved = asCredentialRecord(resolveCredentialsWithRuntime());
       } catch {
         resolved = null;
       }
@@ -1493,7 +1659,7 @@ export async function callTool(name, rawArgs = {}, opts = {}) {
           }
         } catch {}
       }
-      const result = {
+      const result: Record<string, unknown> = {
         ...credResult,
         credentialValidation: validation.warning ? 'passed-with-warning' : 'passed',
       };
@@ -1520,12 +1686,16 @@ export async function callTool(name, rawArgs = {}, opts = {}) {
       return await handleUpgrade(args, { sessionId: opts?.sessionId });
     case 'huaweicloud_obs_set_website_config':
       return await handleObsWebsiteConfig(args);
-    default:
-      throw new Error(`Unknown tool: ${name}`);
+    default: {
+      // Compile-time exhaustiveness guard: adding a TOOL_DEFINITIONS entry
+      // without a matching case makes `name` non-never here and fails the build.
+      const _exhaustive: never = name;
+      throw new Error(`Unknown tool: ${String(_exhaustive)}`);
+    }
   }
 }
 
-async function handleCheckUpdate(args = {}, opts = {}) {
+async function handleCheckUpdate(args: ToolArgs = {}, opts: CallToolOptions = {}) {
   const { sessionId = null, doQuery } = opts;
   const current = readInstalledVersion() || '0.0.0';
   if (args.dismiss === true) {
@@ -1545,7 +1715,7 @@ async function handleCheckUpdate(args = {}, opts = {}) {
   return getCachedUpdateInfo(current, { sessionId, doQuery });
 }
 
-async function handleUpgrade(args = {}, opts = {}) {
+async function handleUpgrade(args: ToolArgs = {}, opts: CallToolOptions = {}) {
   const sessionId = opts?.sessionId || null;
   const target = typeof args.target === 'string' && args.target ? args.target : 'all';
   const version = typeof args.version === 'string' && args.version ? args.version : 'latest';
@@ -1563,7 +1733,7 @@ async function handleUpgrade(args = {}, opts = {}) {
   return upgradePackage({ target, version });
 }
 
-function hookResult(result) {
+function hookResult(result: RiskEvaluation) {
   return {
     ok: result.decision !== 'deny',
     decision: result.decision,
@@ -1577,7 +1747,7 @@ function hookResult(result) {
   };
 }
 
-export async function runVersionCheck(options = {}) {
+export async function runVersionCheck(options: ProbeHcloudOptions = {}) {
   const result = probeHcloud(options);
   return {
     installed: result.installed,
@@ -1594,16 +1764,20 @@ export async function runVersionCheck(options = {}) {
   };
 }
 
-async function showProfileRedacted(profile) {
+async function showProfileRedacted(profile?: string) {
   const args = ['configure', 'show'];
   if (profile) {
     args.push('--cli-profile', String(profile));
   }
-  const result = await runHcloud(args, { allowWrites: false, allowCredentialRead: true }).catch((error) => ({
-    ok: false,
-    blocked: true,
-    reason: error.message,
-  }));
+  // The catch fallback adds the blocked/reason markers on top of a run result.
+  type ProfileRunResult = HcloudRunResult & { blocked?: boolean; reason?: string };
+  const result: ProfileRunResult = await runHcloud(args, { allowWrites: false, allowCredentialRead: true }).catch(
+    (error): ProfileRunResult => ({
+      ok: false,
+      blocked: true,
+      reason: error instanceof Error ? error.message : String(error),
+    }),
+  );
   if (result.blocked) {
     return {
       ok: false,
@@ -1622,11 +1796,11 @@ async function showProfileRedacted(profile) {
   };
 }
 
-async function setupObsConfig(profile) {
-  const stored = readGlobalCredentials();
+async function setupObsConfig(profile?: string) {
+  const stored = asCredentialRecord(readGlobalCredentials());
   if (stored?.ak && stored?.sk) {
     try {
-      const obs = writeObsConfigFile(stored);
+      const obs: { path: string; endpoint: string } = writeObsConfigFile(stored);
       return {
         ok: true,
         existed: false,
@@ -1640,7 +1814,7 @@ async function setupObsConfig(profile) {
     } catch (error) {
       return {
         ok: false,
-        error: error.message,
+        error: error instanceof Error ? error.message : String(error),
         nextStep: 'Run "npx huaweicloud-devkit auth init" to refresh credentials and region.',
       };
     }
@@ -1649,7 +1823,7 @@ async function setupObsConfig(profile) {
   return setupObsConfigFromHcloud(profile);
 }
 
-async function setupObsConfigFromHcloud(profile) {
+async function setupObsConfigFromHcloud(profile?: string) {
   const obsConfigPath = join(homedir(), '.obsutilconfig');
   if (existsSync(obsConfigPath)) {
     return {
@@ -1673,16 +1847,16 @@ async function setupObsConfigFromHcloud(profile) {
     };
   }
 
-  let accessKeyId;
-  let secretAccessKey;
-  let region;
+  let accessKeyId: string;
+  let secretAccessKey: string;
+  let region: string;
 
   try {
-    const parsed = typeof result.stdout === 'string' ? JSON.parse(result.stdout) : result.stdout;
-    const cred = parsed.currentCredential || {};
-    accessKeyId = cred.accessKeyId || cred.ak || cred.access_key || '';
-    secretAccessKey = cred.secretAccessKey || cred.sk || cred.secret_key || '';
-    region = parsed.currentRegion || parsed.region || '';
+    const parsed: unknown = typeof result.stdout === 'string' ? JSON.parse(result.stdout) : result.stdout;
+    const cred = asRecord(asRecord(parsed).currentCredential);
+    accessKeyId = pickString(cred.accessKeyId, cred.ak, cred.access_key);
+    secretAccessKey = pickString(cred.secretAccessKey, cred.sk, cred.secret_key);
+    region = pickString(asRecord(parsed).currentRegion, asRecord(parsed).region);
   } catch {
     return {
       ok: false,
@@ -1717,7 +1891,7 @@ async function setupObsConfigFromHcloud(profile) {
     return {
       ok: false,
       error: 'Failed to write OBS config file.',
-      detail: error.message,
+      detail: error instanceof Error ? error.message : String(error),
       path: obsConfigPath,
     };
   }
@@ -1733,7 +1907,7 @@ async function setupObsConfigFromHcloud(profile) {
   };
 }
 
-const SERVICE_EXAMPLES = {
+const SERVICE_EXAMPLES: Record<string, { list: string; create: string; show: string }> = {
   ECS: { list: 'ECS ListServersDetails', create: 'ECS CreateServers', show: 'IMS GlanceShowImage' },
   VPC: { list: 'VPC ListVpcs', create: 'VPC CreateVpc', show: 'VPC ShowVpc' },
   FUNCTIONGRAPH: {
@@ -1750,7 +1924,7 @@ const SERVICE_EXAMPLES = {
   DCS: { list: 'DCS ListInstances', create: 'DCS CreateInstance', show: 'DCS ShowInstance' },
 };
 
-async function listOperations(service, options = {}) {
+async function listOperations(service: string | undefined, options: { timeoutMs?: number } = {}) {
   const serviceName = String(service || '').trim();
   if (!/^[A-Za-z][A-Za-z0-9-]{1,63}$/.test(serviceName)) {
     throw new Error('service must be a KooCLI service name such as ECS, VPC, IMS, OBS, RDS, or CDN.');
@@ -1779,7 +1953,7 @@ async function listOperations(service, options = {}) {
   };
 }
 
-async function runApprovedCommand(args = {}) {
+async function runApprovedCommand(args: ToolArgs = {}) {
   if (args.approvedByUser !== true) {
     throw new Error('approvedByUser must be true after explicit user approval for this exact command.');
   }
@@ -1807,12 +1981,12 @@ async function runApprovedCommand(args = {}) {
     cwd: args.cwd,
     stdin: args.stdin,
   });
-  result.approved = true;
-  result.plan = strictPlan;
-  return result;
+  // Spread instead of in-place mutation: identical serialized content, minus a
+  // write to the HcloudRunResult shape owned by hcloud-cli.ts.
+  return { ...result, approved: true, plan: strictPlan };
 }
 
-function serviceCatalog(intent = '') {
+function serviceCatalog(intent: string = '') {
   const it = String(intent).toLowerCase();
   const routeMap = [
     {
@@ -1964,18 +2138,18 @@ function serviceCatalog(intent = '') {
   };
 }
 
-function explainError({ service = 'unknown', errorCode = '', message = '', requestId = '' } = {}) {
+function explainError({ service = 'unknown', errorCode = '', message = '', requestId = '' }: ToolArgs = {}) {
   const combined = `${errorCode} ${message}`.toLowerCase();
-  const suggestions = [];
+  const suggestions: string[] = [];
   const svc = String(service).toLowerCase();
 
-  const SERVICE_ALIASES = {
+  const SERVICE_ALIASES: Record<string, string> = {
     functiongraph: 'FSS',
     fgs: 'FSS',
   };
   const patternKey = SERVICE_ALIASES[svc] || service;
 
-  const hwErrorPatterns = {
+  const hwErrorPatterns: Record<string, Record<string, string>> = {
     OBS: {
       InvalidAccessKeyId:
         'OBS uses AK/SK directly (not IAM tokens). Verify AK/SK validity, OBS endpoint, and OBS permissions.',
@@ -2009,7 +2183,7 @@ function explainError({ service = 'unknown', errorCode = '', message = '', reque
   if (hwErrorPatterns[patternKey] && hwErrorPatterns[patternKey][errorCode]) {
     suggestions.push(hwErrorPatterns[patternKey][errorCode]);
   }
-  const svcPatterns = hwErrorPatterns[patternKey] || {};
+  const svcPatterns: Record<string, string> = hwErrorPatterns[patternKey] || {};
   for (const [code, tip] of Object.entries(svcPatterns)) {
     if (errorCode && code.includes(errorCode)) {
       if (!suggestions.includes(tip)) suggestions.push(tip);
@@ -2081,10 +2255,10 @@ function explainError({ service = 'unknown', errorCode = '', message = '', reque
   };
 }
 
-async function searchDocs(query, topic = 'all') {
+async function searchDocs(query: string, topic: string = 'all') {
   const q = String(query || '').toLowerCase();
   const tokens = q.split(/\s+/).filter((t) => t.length > 0);
-  const results = [];
+  const results: Array<{ source: string; name: string; snippet: string; relevance: number }> = [];
   try {
     if (existsSync(SKILLS_ROOT)) {
       const dirs = listSkillDirs(SKILLS_ROOT);
@@ -2128,13 +2302,13 @@ async function searchDocs(query, topic = 'all') {
       }
     }
   } catch (error) {
-    return { ok: false, error: error.message, results: [] };
+    return { ok: false, error: error instanceof Error ? error.message : String(error), results: [] };
   }
   results.sort((a, b) => b.relevance - a.relevance);
   return { ok: true, query: q, topic, count: results.length, results: results.slice(0, 10) };
 }
 
-async function retrieveSkill(name) {
+async function retrieveSkill(name: string) {
   const skillName = String(name || '').trim();
   if (!skillName) return { ok: false, error: 'Skill name is required.' };
   const skillPath = join(SKILLS_ROOT, skillName, 'SKILL.md');
@@ -2143,7 +2317,7 @@ async function retrieveSkill(name) {
     return { ok: false, error: 'Skill "' + skillName + '" not found. Available: ' + dirs.join(', ') };
   }
   const content = readFileSync(skillPath, 'utf8');
-  const references = [];
+  const references: Array<{ filename: string; content: string }> = [];
   const refDir = join(SKILLS_ROOT, skillName, 'references');
   if (existsSync(refDir)) {
     readdirSync(refDir).forEach((f) => {
@@ -2152,7 +2326,7 @@ async function retrieveSkill(name) {
     });
   }
   const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  let version = 1,
+  let version: string | number = 1,
     description = '';
   if (frontmatter) {
     const fm = frontmatter[1];
@@ -2166,9 +2340,9 @@ async function retrieveSkill(name) {
 
 async function listRegions() {
   const result = await runHcloud(['IAM', 'KeystoneListRegions'], { timeoutMs: 30000, maxRetries: 0 }).catch(
-    (error) => ({
+    (error): HcloudRunResult => ({
       ok: false,
-      error: error.message,
+      error: error instanceof Error ? error.message : String(error),
     }),
   );
   if (!result.ok) {
@@ -2190,16 +2364,20 @@ async function listRegions() {
       note: 'hcloud unavailable. Showing static region list. For the complete list, visit the fallback URL.',
     };
   }
-  let regions;
+  let regions: Array<Record<string, unknown>>;
   try {
-    const parsed = typeof result.stdout === 'string' ? JSON.parse(result.stdout) : result.stdout;
-    const rawRegions = parsed.regions || [];
-    regions = rawRegions.map((r) => ({
-      id: r.id,
-      description: r.description || r.names,
-      type: r.type,
-      locales: r.locales,
-    }));
+    const parsed: unknown = typeof result.stdout === 'string' ? JSON.parse(result.stdout) : result.stdout;
+    const rawRegionsValue = asRecord(parsed).regions;
+    const rawRegions = Array.isArray(rawRegionsValue) ? rawRegionsValue : [];
+    regions = rawRegions.map((r) => {
+      const record = asRecord(r);
+      return {
+        id: record.id,
+        description: record.description || record.names,
+        type: record.type,
+        locales: record.locales,
+      };
+    });
   } catch {
     regions = [{ raw: String(result.stdout).substring(0, 1000) }];
   }
@@ -2207,7 +2385,7 @@ async function listRegions() {
   return { ok: true, count: regions.length, regions };
 }
 
-async function getRegionalAvailability(service, region) {
+async function getRegionalAvailability(service: string, region: string) {
   const svc = String(service || '')
     .toLowerCase()
     .trim();
@@ -2215,7 +2393,7 @@ async function getRegionalAvailability(service, region) {
     .toLowerCase()
     .trim();
   if (!svc || !reg) return { ok: false, error: 'Both service and region are required.' };
-  const known = {
+  const known: Record<string, string[]> = {
     ecs: [
       'cn-south-1',
       'cn-north-4',
@@ -2333,32 +2511,35 @@ async function getRegionalAvailability(service, region) {
   };
 }
 
-export function classifyRawCommand(command) {
+export function classifyRawCommand(command: unknown) {
   return classifyTextCommand(command);
 }
 
 // ── OBS Static Website Hosting (AWS4 signed REST API) ──
 
-async function handleObsWebsiteConfig(args) {
+async function handleObsWebsiteConfig(args: ToolArgs) {
   const { action, bucket, region, indexDocument, errorDocument } = args;
   if (!bucket || !region) {
     throw new Error('bucket and region are required');
   }
-  const creds = resolveCredentialsWithRuntime({});
-  if (!creds?.ak || !creds?.sk) {
+  const creds = asCredentialRecord(resolveCredentialsWithRuntime({}));
+  const obsAk = creds?.ak;
+  const obsSk = creds?.sk;
+  if (!obsAk || !obsSk) {
     throw new Error('OBS website config requires AK/SK credentials. Run huaweicloud_auth_init first.');
   }
+  const signedCreds = { ak: obsAk, sk: obsSk, securityToken: creds?.securityToken };
 
   const host = `${bucket}.obs.${region}.myhuaweicloud.com`;
   const endpoint = `https://${host}`;
 
   if (action === 'get') {
-    const res = await obsSignedRequest('GET', endpoint, '/?website', '', creds, region);
+    const res = await obsSignedRequest('GET', endpoint, '/?website', '', signedCreds, region);
     return { ok: res.status === 200, status: res.status, body: res.body };
   }
 
   if (action === 'delete') {
-    const res = await obsSignedRequest('DELETE', endpoint, '/?website', '', creds, region);
+    const res = await obsSignedRequest('DELETE', endpoint, '/?website', '', signedCreds, region);
     return { ok: res.status === 204, status: res.status };
   }
 
@@ -2372,7 +2553,7 @@ async function handleObsWebsiteConfig(args) {
     }
     xmlParts.push('</WebsiteConfiguration>');
     const body = xmlParts.join('\n');
-    const res = await obsSignedRequest('PUT', endpoint, '/?website', body, creds, region);
+    const res = await obsSignedRequest('PUT', endpoint, '/?website', body, signedCreds, region);
     const websiteUrl = `http://${bucket}.obs-website.${region}.myhuaweicloud.com`;
     return {
       ok: res.status === 200,
@@ -2388,7 +2569,15 @@ async function handleObsWebsiteConfig(args) {
   throw new Error(`Unknown action: ${action}. Use set, get, or delete.`);
 }
 
-async function obsSignedRequest(method, endpoint, pathAndQuery, body, creds, region) {
+async function obsSignedRequest(
+  method: string,
+  endpoint: string,
+  pathAndQuery: string,
+  body: string,
+  // Callers throw unless ak and sk are present, so they are required here.
+  creds: CredentialLike & { ak: string; sk: string },
+  region: string,
+): Promise<{ status: number; body: string }> {
   const now = new Date();
   const dateStamp = now.toISOString().slice(0, 10).replace(/-/g, '');
   const amzDate = dateStamp + 'T' + now.toISOString().slice(11, 19).replace(/:/g, '') + 'Z';
@@ -2428,7 +2617,7 @@ async function obsSignedRequest(method, endpoint, pathAndQuery, body, creds, reg
     `AWS4-HMAC-SHA256 Credential=${creds.ak}/${credentialScope}, ` +
     `SignedHeaders=${signedHeaders}, Signature=${signature}`;
 
-  const headers = {
+  const headers: Record<string, string> = {
     Host: url.host,
     'x-amz-content-sha256': payloadHash,
     'x-amz-date': amzDate,

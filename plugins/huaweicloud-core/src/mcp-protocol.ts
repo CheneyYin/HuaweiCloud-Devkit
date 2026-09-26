@@ -1,4 +1,4 @@
-import { TOOL_DEFINITIONS, callTool } from './tools.mjs';
+import { TOOL_DEFINITIONS, callTool } from './tools.ts';
 import { peekCachedUpdateInfo, applyUpdateHint, readInstalledVersion } from './update-check.ts';
 import { initTelemetry } from './telemetry/telemetry.ts';
 import { detectAgent } from './telemetry/agent-detect.ts';
@@ -104,7 +104,9 @@ export async function dispatch(method: string, params: unknown, opts: DispatchOp
         `Invalid params: missing required field(s) ${missing.map((key) => JSON.stringify(key)).join(', ')} for tool "${String(p.name)}".`,
       );
     }
-    const result = await callTool(p.name, args);
+    // tool.name === p.name (the find predicate above), so this passes the
+    // registry-typed name to the exhaustively-checked dispatch.
+    const result = await callTool(tool.name, args);
     const decorated = _decorateResult(sessionId, String(p.name), result);
     return {
       content: [

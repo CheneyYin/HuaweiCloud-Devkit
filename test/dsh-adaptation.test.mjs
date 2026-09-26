@@ -67,7 +67,7 @@ test('dsh install copies skills, MCP server, safety policy, and patch row', () =
     assert.ok(countSkills(join(dshHome, 'skills')) >= 6, 'DSH skills installed');
     const pluginDir = join(dshHome, 'huaweicloud-plugins');
     assert.ok(existsSync(join(pluginDir, 'dist', 'mcp-server.js')));
-    assert.ok(existsSync(join(pluginDir, 'dist', 'tools.mjs')));
+    assert.ok(existsSync(join(pluginDir, 'dist', 'tools.js')));
     assert.ok(existsSync(join(pluginDir, 'safety', 'policy.json')));
     assert.ok(existsSync(join(pluginDir, '.installed')));
     assert.equal(

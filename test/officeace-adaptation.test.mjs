@@ -99,7 +99,7 @@ test('officeace install copies skills, MCP server, and safety policy', () => {
     assert.ok(countSkills(join(oaHome, 'skills')) >= 6);
     const pd = join(oaHome, 'huaweicloud-plugins');
     assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
-    assert.ok(existsSync(join(pd, 'dist', 'tools.mjs')));
+    assert.ok(existsSync(join(pd, 'dist', 'tools.js')));
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
     assert.equal(
       JSON.parse(readFileSync(join(pd, 'package.json'), 'utf8')).version,

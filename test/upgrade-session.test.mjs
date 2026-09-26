@@ -169,7 +169,7 @@ function dirname(file) {
 
 // ===== #607 回归: dismiss + 查询失败（走 callTool, 注入失败 doQuery）=====
 test('#607: callTool dismiss + doQuery 失败 → check_failed 且不写冷却', async () => {
-  const { callTool } = await import('../plugins/huaweicloud-core/src/tools.mjs');
+  const { callTool } = await import('../plugins/huaweicloud-core/src/tools.ts');
   const fs = await import('node:fs');
   updateCheck.invalidateUpdateCache();
   const f = updateCheck.resolveSkipFilePath('sess-607e');

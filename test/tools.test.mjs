@@ -10,7 +10,7 @@ import {
   TOOL_DEFINITIONS,
   findSkillsRoot,
   listSkillDirs,
-} from '../plugins/huaweicloud-core/src/tools.mjs';
+} from '../plugins/huaweicloud-core/src/tools.ts';
 import {
   clearRuntimeCredentials,
   resolveCredentialsWithRuntime,

@@ -250,7 +250,7 @@ test('devbridge tunnel handling is migrated to the s2 gateway domain', () => {
 
 test('devbridge 0.2.x flow: auth capability probe, version detection, in-place upgrade guidance', () => {
   const sandbox = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
-  const tools = readSource(join('src', 'tools.mjs'));
+  const tools = readSource(join('src', 'tools.ts'));
 
   // SKILL.md must never teach the removed 0.1.x login flow (--huaweicloud SSO flag is
   // gone from every 0.2.x build), and the obsolete warning row must stay gone.
@@ -287,7 +287,7 @@ test('devbridge 0.2.x flow: auth capability probe, version detection, in-place u
 
   // The API Key must NOT be written into the shared AK/SK creds script.
   const credsWrite = tools.match(/const credsScript = \[[\s\S]*?\]/);
-  assert.ok(credsWrite, 'credsScript block not found in tools.mjs');
+  assert.ok(credsWrite, 'credsScript block not found in tools.ts');
   assert.doesNotMatch(credsWrite[0], /HW_API_KEY/);
 
   // The CodeArts Doer sidecopy must mirror the probe-branch flow and not regress
@@ -439,8 +439,8 @@ test('setup-cli.mjs supports the codearts target end to end', () => {
   assert.match(setup, /install --target codearts/);
 });
 
-test('tools.mjs resolves skills from the codearts directory', () => {
-  const tools = readSource(join('src', 'tools.mjs'));
+test('tools.ts resolves skills from the codearts directory', () => {
+  const tools = readSource(join('src', 'tools.ts'));
   assert.match(tools, /function codeartsSkillsDir\(\)/);
   assert.match(tools, /return join\(home, '\.codeartsdoer', 'skills'\);/);
   // candidates only count when they contain at least one skill with SKILL.md
@@ -545,8 +545,8 @@ test('setup-cli.mjs supports the dsh target end to end', () => {
   assert.match(setup, /install --target dsh/);
 });
 
-test('tools.mjs resolves skills from the dsh directory', () => {
-  const tools = readSource(join('src', 'tools.mjs'));
+test('tools.ts resolves skills from the dsh directory', () => {
+  const tools = readSource(join('src', 'tools.ts'));
   assert.match(tools, /function dshSkillsDir\(\)/);
   assert.match(tools, /process\.env\.DSH_HOME \|\| join\(homedir\(\), '\.dsh'\)/);
   assert.match(tools, /return join\(home, 'skills'\);/);
@@ -559,8 +559,8 @@ test('tools.mjs resolves skills from the dsh directory', () => {
   );
 });
 
-test('tools.mjs resolves skills from the officeace directory', () => {
-  const tools = readSource(join('src', 'tools.mjs'));
+test('tools.ts resolves skills from the officeace directory', () => {
+  const tools = readSource(join('src', 'tools.ts'));
   assert.match(tools, /function officeaceSkillsRoot\(\)/);
   assert.match(tools, /function readOfficeaceRegistryInstallDir\(\)/);
   assert.match(tools, /office-claw/);
@@ -683,8 +683,8 @@ test('setup-cli.mjs checks for updates on install/update via shared query', () =
   assert.ok(calls && calls.length >= 2, 'checkForUpdate should be awaited in both cmdInstall and cmdUpdate');
 });
 
-test('tools.mjs resolves skills from the hermes directory', () => {
-  const tools = readSource(join('src', 'tools.mjs'));
+test('tools.ts resolves skills from the hermes directory', () => {
+  const tools = readSource(join('src', 'tools.ts'));
   assert.match(tools, /function hermesSkillsDir\(\)/);
   assert.match(tools, /process\.env\.HERMES_HOME/);
   assert.match(tools, /LOCALAPPDATA/);
@@ -692,8 +692,8 @@ test('tools.mjs resolves skills from the hermes directory', () => {
   assert.match(tools, /hermesSkillsDir\(\)/);
 });
 
-test('tools.mjs resolves skills from the atomcode directory', () => {
-  const tools = readSource(join('src', 'tools.mjs'));
+test('tools.ts resolves skills from the atomcode directory', () => {
+  const tools = readSource(join('src', 'tools.ts'));
   assert.match(tools, /function atomcodeSkillsDir\(\)/);
   assert.match(tools, /process\.env\.ATOMCODE_HOME/);
   assert.match(tools, /return join\(home, '\.atomcode', 'skills'\)/);
@@ -708,7 +708,7 @@ test('agent-registration reports openclaw registration status', () => {
 });
 
 test('official Huawei Cloud Icons library is integrated', () => {
-  const tools = readSource(join('src', 'tools.mjs'));
+  const tools = readSource(join('src', 'tools.ts'));
   assert.match(tools, /name: 'huaweicloud_get_service_icon'/);
   assert.match(tools, /getServiceIcon\(args\.service/);
 
@@ -731,8 +731,8 @@ test('official Huawei Cloud Icons library is integrated', () => {
   assert.match(discovery, /open\.huaweicloud\.com\/openplatform\/icons\.html/);
 });
 
-test('tools.mjs registers version-update tools', () => {
-  const tools = readSource(join('src', 'tools.mjs'));
+test('tools.ts registers version-update tools', () => {
+  const tools = readSource(join('src', 'tools.ts'));
   for (const name of ['huaweicloud_check_update', 'huaweicloud_upgrade']) {
     assert.match(tools, new RegExp(`name: '${name}'`));
     assert.match(tools, new RegExp(`case '${name}':`));

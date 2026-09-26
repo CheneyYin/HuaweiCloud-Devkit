@@ -67,7 +67,7 @@ test('codearts install copies skills, MCP server, and safety policy', () => {
 
     const pluginDir = join(home, '.codeartsdoer', 'huaweicloud-plugins');
     assert.ok(existsSync(join(pluginDir, 'dist', 'mcp-server.js')));
-    assert.ok(existsSync(join(pluginDir, 'dist', 'tools.mjs')));
+    assert.ok(existsSync(join(pluginDir, 'dist', 'tools.js')));
     assert.ok(existsSync(join(pluginDir, 'safety', 'policy.json')));
     assert.ok(existsSync(join(pluginDir, '.installed')), '.installed marker in codearts plugins dir');
     assert.equal(mcpConfig(join(pluginDir, 'package.json'))?.version, pkg.version);

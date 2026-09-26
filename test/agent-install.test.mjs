@@ -126,7 +126,7 @@ test('opencode install creates skills, MCP server, and safety policy', () => {
     assert.ok(countSkills(join(home, '.config', 'opencode', 'skills')) >= 6);
     const pd = join(home, '.config', 'opencode', 'huaweicloud-plugins');
     assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
-    assert.ok(existsSync(join(pd, 'dist', 'tools.mjs')));
+    assert.ok(existsSync(join(pd, 'dist', 'tools.js')));
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
     assert.ok(existsSync(join(pd, '.installed')));
     assert.equal(pluginVersion(pd), pkg.version);
@@ -189,7 +189,7 @@ test('workbuddy install creates skills, MCP server, and safety policy', () => {
     assert.ok(countSkills(join(home, '.workbuddy', 'skills')) >= 6);
     const pd = join(home, '.workbuddy', 'huaweicloud-plugins');
     assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
-    assert.ok(existsSync(join(pd, 'dist', 'tools.mjs')));
+    assert.ok(existsSync(join(pd, 'dist', 'tools.js')));
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
     assert.equal(pluginVersion(pd), pkg.version);
   } finally {
@@ -277,7 +277,7 @@ test('codex-desktop install creates skills, MCP server, and safety policy', () =
     assert.ok(countSkills(join(home, 'plugins', 'huaweicloud-devkit', 'skills')) >= 6);
     const pd = join(home, 'plugins', 'huaweicloud-devkit');
     assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
-    assert.ok(existsSync(join(pd, 'dist', 'tools.mjs')));
+    assert.ok(existsSync(join(pd, 'dist', 'tools.js')));
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
     assert.equal(pluginVersion(pd), pkg.version);
   } finally {
@@ -331,7 +331,7 @@ test('openclaw install creates skills, MCP server, and safety policy in .agents'
     assert.ok(countSkills(join(home, '.agents', 'skills')) >= 6);
     const pd = join(home, '.agents', 'huaweicloud-plugins');
     assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
-    assert.ok(existsSync(join(pd, 'dist', 'tools.mjs')));
+    assert.ok(existsSync(join(pd, 'dist', 'tools.js')));
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
     assert.ok(existsSync(join(pd, '.installed')));
     assert.equal(pluginVersion(pd), pkg.version);
@@ -431,7 +431,7 @@ test('atomcode install creates skills, MCP server, and safety policy', () => {
     assert.ok(countSkills(join(home, '.atomcode', 'skills')) >= 6);
     const pd = join(home, '.atomcode', 'huaweicloud-plugins');
     assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
-    assert.ok(existsSync(join(pd, 'dist', 'tools.mjs')));
+    assert.ok(existsSync(join(pd, 'dist', 'tools.js')));
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
     assert.equal(pluginVersion(pd), pkg.version);
     const mcpCfg = JSON.parse(readFileSync(join(home, '.atomcode', 'mcp.json'), 'utf8'));
