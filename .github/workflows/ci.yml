@@ -113,7 +113,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: node --test test/agent-install.test.mjs test/cross-platform-*.test.mjs
+      - run: node --test test/agent-install.test.ts test/cross-platform-*.test.ts
 
   pack:
     runs-on: ubuntu-24.04

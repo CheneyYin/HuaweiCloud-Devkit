@@ -11,7 +11,7 @@ import {
   readGlobalCredentials,
   readLastSync,
   resolveCredentialsWithRuntime,
-} from './credentials.mjs';
+} from './credentials.ts';
 import { resolveHcloudCommand } from '../hcloud-probe.ts';
 import { redactSecrets } from '../safety-policy.ts';
 

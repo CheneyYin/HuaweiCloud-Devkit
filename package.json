@@ -34,7 +34,7 @@
     "typecheck": "tsc -p plugins/huaweicloud-core/tsconfig.json --noEmit",
     "pretest": "npm run build",
     "prepack": "npm run build",
-    "test": "node --experimental-test-module-mocks --test \"test/*.test.mjs\"",
+    "test": "node --experimental-test-module-mocks --test \"test/*.test.ts\"",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#.git\" \"#test/**\" \"#docs/**\" \"#.superpowers/**\"",

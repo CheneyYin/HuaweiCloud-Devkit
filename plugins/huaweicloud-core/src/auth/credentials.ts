@@ -11,10 +11,49 @@ import {
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
+// The credential vault is JSON on disk shaped like this. Fields stay `unknown`
+// until a typeof/Array.isArray guard surfaces a string, because the file (and
+// platform-injected JSON) is untrusted input.
+export interface StoredCredentials {
+  ak?: unknown;
+  sk?: unknown;
+  securityToken?: unknown;
+  region?: unknown;
+  endpoint?: unknown;
+  configuredBySession?: unknown;
+}
+
+export interface CodeArtsCredentials {
+  ak: string;
+  sk: string;
+  securityToken: string;
+  region: string;
+}
+
+export interface ResolvedCredentials {
+  ak: string;
+  sk: string;
+  securityToken: string;
+  region: string;
+}
+
+export interface LastSyncRecord {
+  ts?: unknown;
+  kooCliProfile?: unknown;
+  s1Fingerprint?: unknown;
+}
+
+// Narrow untrusted parsed JSON to a record. Non-objects collapse to an empty
+// record so property reads stay safe (same guarded-asRecord style as the other
+// JSON boundaries).
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
 // Verify a credential file ended up with 0600. On Windows-mounted drives inside WSL
 // (drvfs/9p) chmod is silently ignored, so the file can be world-readable (0777).
 // Native Windows has no POSIX modes (statSync always reports 0666), so skip the check there.
-function ensurePrivateMode(path) {
+function ensurePrivateMode(path: string): void {
   if (process.platform === 'win32') return;
   try {
     chmodSync(path, 0o600);
@@ -34,25 +73,28 @@ function ensurePrivateMode(path) {
   } catch {}
 }
 
-function baseHome() {
+function baseHome(): string {
   return process.env.HUAWEICLOUD_HOME || homedir();
 }
 
-export function globalCredentialsPath() {
+export function globalCredentialsPath(): string {
   return join(baseHome(), '.config', 'huaweicloud', 'credentials.json');
 }
 
-export function obsConfigPath() {
+export function obsConfigPath(): string {
   // obsutil reads its config from a fixed location (~/.obsutilconfig), independent
   // of HUAWEICLOUD_HOME. HCLOUD_OBS_CONFIG_PATH exists solely for hermetic test injection.
   return process.env.HCLOUD_OBS_CONFIG_PATH || join(homedir(), '.obsutilconfig');
 }
 
-export function readGlobalCredentials() {
+export function readGlobalCredentials(): StoredCredentials | null {
   const path = globalCredentialsPath();
   if (!existsSync(path)) return null;
   try {
-    return JSON.parse(readFileSync(path, 'utf8'));
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as StoredCredentials)
+      : null;
   } catch {
     return null;
   }
@@ -63,7 +105,7 @@ export function readGlobalCredentials() {
 // (e.g. "<HW_ACCESS_KEY>" or "${SECRET_KEY}") must not shadow the user's real
 // S1 vault. Real AK/SK are >=20 char alphanumeric strings, so none of the
 // template/masked patterns below can match a genuine credential.
-export function isPlaceholder(value) {
+export function isPlaceholder(value: unknown): boolean {
   if (typeof value !== 'string' || value.length === 0) return false;
   // <HW_ACCESS_KEY> / <your-ak> / <...>
   if (/^<[^>]*>$/.test(value)) return true;
@@ -81,7 +123,9 @@ export function isPlaceholder(value) {
   return false;
 }
 
-function present(v) {
+// Type guard so callers can narrow an untrusted value to a real, non-placeholder
+// string and keep string plumbing later.
+function present(v: unknown): v is string {
   return typeof v === 'string' && v.length > 0 && !isPlaceholder(v);
 }
 
@@ -92,12 +136,12 @@ function present(v) {
 // Deterministically choose the Huawei Cloud DevKit MCP server entry from a map.
 // Priority (stable, independent of object key order):
 //   1. exact `huaweicloud-devkit` (installer-managed key)
-//   2. `HuaweiCloud DevKit`
+//   2. `HuaweiCloud Dev Kit`
 //   3. prefixed instances `huaweicloud-devkit_N` sorted by ascending N
-export function pickDevkitMcpServer(mcpMap) {
-  if (!mcpMap || typeof mcpMap !== 'object') return null;
-  const keys = Object.keys(mcpMap);
-  const rank = (k) => {
+export function pickDevkitMcpServer(mcpMap: unknown): Record<string, unknown> | null {
+  const map = asRecord(mcpMap);
+  const keys = Object.keys(map);
+  const rank = (k: string): number => {
     if (k === 'huaweicloud-devkit') return -2;
     if (k === 'HuaweiCloud DevKit') return -1;
     const m = /^huaweicloud-devkit_(\d+)$/i.exec(k);
@@ -107,9 +151,14 @@ export function pickDevkitMcpServer(mcpMap) {
     .filter((k) => /^huaweicloud-devkit(?:_|$)/i.test(k) || k === 'HuaweiCloud DevKit')
     .sort((a, b) => rank(a) - rank(b));
   for (const k of candidates) {
-    if (mcpMap[k]) return mcpMap[k];
+    if (map[k]) return map[k] as Record<string, unknown>;
   }
   return null;
+}
+
+export interface StsExpiryInput {
+  securityToken?: unknown;
+  expiresAtEnv?: unknown;
 }
 
 // Derive the expiry (epoch ms) of a temporary STS credential set.
@@ -117,7 +166,8 @@ export function pickDevkitMcpServer(mcpMap) {
 // security token (JWT payload or bare URL-safe base64 JSON) reading common
 // expiry fields (exp, timeout_at, expires_at, id_expires_at; issued_at+duration).
 // Returns null when unknown/unparseable. Never throws.
-export function parseStsExpiry({ securityToken, expiresAtEnv = process.env.HW_STS_EXPIRES_AT } = {}) {
+export function parseStsExpiry({ securityToken, expiresAtEnv = process.env.HW_STS_EXPIRES_AT }: StsExpiryInput = {}):
+  number | null {
   if (expiresAtEnv) {
     const v = String(expiresAtEnv).trim();
     if (!v) return null;
@@ -131,7 +181,7 @@ export function parseStsExpiry({ securityToken, expiresAtEnv = process.env.HW_ST
   const token = String(securityToken).trim();
   if (!token) return null;
 
-  const payload = (() => {
+  const payload: unknown = (() => {
     try {
       if (token.includes('.')) {
         const parts = token.split('.');
@@ -147,34 +197,43 @@ export function parseStsExpiry({ securityToken, expiresAtEnv = process.env.HW_ST
     }
   })();
   if (!payload || typeof payload !== 'object') return null;
+  const record = payload as Record<string, unknown>;
 
-  const exp = Number(payload.exp ?? payload.expires_at ?? payload.timeout_at ?? Number.NaN);
+  const exp = Number(record.exp ?? record.expires_at ?? record.timeout_at ?? Number.NaN);
   if (Number.isFinite(exp) && exp > 0) return exp * 1000;
-  const issued = Number(payload.issued_at ?? payload.iat ?? Number.NaN);
-  const duration = Number(payload.duration ?? payload.expires_in ?? payload.lifetime ?? Number.NaN);
+  const issued = Number(record.issued_at ?? record.iat ?? Number.NaN);
+  const duration = Number(record.duration ?? record.expires_in ?? record.lifetime ?? Number.NaN);
   if (Number.isFinite(issued) && issued > 0 && Number.isFinite(duration) && duration > 0) {
     return (issued + duration) * 1000;
   }
   return null;
 }
 
-function readWorkEnvironmentEntry(config) {
-  const server = pickDevkitMcpServer(config?.mcp);
-  if (!server?.environment) return null;
-  const ak = server.environment.HW_ACCESS_KEY;
-  const sk = server.environment.HW_SECRET_KEY;
+function readWorkEnvironmentEntry(config: unknown): CodeArtsCredentials | null {
+  const server = pickDevkitMcpServer(asRecord(config).mcp);
+  const environment = asRecord(server?.environment);
+  const ak = environment.HW_ACCESS_KEY;
+  const sk = environment.HW_SECRET_KEY;
   if (present(ak) && present(sk)) {
     return {
       ak,
       sk,
-      securityToken: present(server.environment.HW_SECURITY_TOKEN) ? server.environment.HW_SECURITY_TOKEN : '',
-      region: server.environment.HW_REGION || server.environment.HUAWEICLOUD_REGION || '',
+      securityToken: present(environment.HW_SECURITY_TOKEN) ? environment.HW_SECURITY_TOKEN : '',
+      region: String(environment.HW_REGION || environment.HUAWEICLOUD_REGION || ''),
     };
   }
   return null;
 }
 
-export function writeGlobalCredentials(credentials = {}) {
+export interface WriteGlobalCredentialsInput {
+  ak?: unknown;
+  sk?: unknown;
+  securityToken?: unknown;
+  region?: unknown;
+  configuredBySession?: unknown;
+}
+
+export function writeGlobalCredentials(credentials: WriteGlobalCredentialsInput = {}): string {
   const path = globalCredentialsPath();
   mkdirSync(dirname(path), { recursive: true });
   const payload = {
@@ -191,13 +250,21 @@ export function writeGlobalCredentials(credentials = {}) {
   return path;
 }
 
-export function setConfiguredBySession(flag) {
+export function setConfiguredBySession(flag: unknown): void {
   const stored = readGlobalCredentials();
   const next = { ...(stored || {}), configuredBySession: Boolean(flag) };
   writeGlobalCredentials(next);
 }
 
-export function writeObsConfig(credentials = {}) {
+export interface WriteObsConfigInput {
+  ak?: unknown;
+  sk?: unknown;
+  securityToken?: unknown;
+  region?: unknown;
+  endpoint?: unknown;
+}
+
+export function writeObsConfig(credentials: WriteObsConfigInput = {}): { path: string; endpoint: string } {
   const region = String(credentials.region || '');
   const ak = String(credentials.ak || '');
   const sk = String(credentials.sk || '');
@@ -206,7 +273,7 @@ export function writeObsConfig(credentials = {}) {
     throw new Error('region, ak, and sk are required to write OBS config');
   }
   const path = obsConfigPath();
-  const endpoint = credentials.endpoint || `https://obs.${region}.myhuaweicloud.com`;
+  const endpoint = String(credentials.endpoint || `https://obs.${region}.myhuaweicloud.com`);
   // Flat key=value format (no [default] section) as written by KooCLI 7.x `hcloud OBS config`.
   const content = `endpoint=${endpoint}\nak=${ak}\nsk=${sk}${securityToken ? `\ntoken=${securityToken}` : ''}\n`;
   writeFileSync(path, content, { encoding: 'utf8', mode: 0o600 });
@@ -214,11 +281,18 @@ export function writeObsConfig(credentials = {}) {
   return { path, endpoint };
 }
 
-export function resolveCredentials(options = {}) {
+export interface ResolveCredentialsOptions {
+  allowMissing?: boolean;
+}
+
+export function resolveCredentials(options: ResolveCredentialsOptions = {}): ResolvedCredentials | null {
   // R11: placeholder/masked env values are "not configured", never credentials.
-  let ak = present(process.env.HW_ACCESS_KEY) ? process.env.HW_ACCESS_KEY : '';
-  let sk = present(process.env.HW_SECRET_KEY) ? process.env.HW_SECRET_KEY : '';
-  let securityToken = present(process.env.HW_SECURITY_TOKEN) ? process.env.HW_SECURITY_TOKEN : '';
+  const envAk = process.env.HW_ACCESS_KEY;
+  const envSk = process.env.HW_SECRET_KEY;
+  const envSecurityToken = process.env.HW_SECURITY_TOKEN;
+  let ak = present(envAk) ? envAk : '';
+  let sk = present(envSk) ? envSk : '';
+  let securityToken = present(envSecurityToken) ? envSecurityToken : '';
   let region = process.env.HW_REGION || process.env.HUAWEICLOUD_REGION || '';
 
   const codeartsCreds = isCodeArtsContext() ? readCodeArtsCredentials() : null;
@@ -236,7 +310,7 @@ export function resolveCredentials(options = {}) {
     if (!ak && present(stored.ak)) ak = stored.ak;
     if (!sk && present(stored.sk)) sk = stored.sk;
     if (!securityToken && present(stored.securityToken)) securityToken = stored.securityToken;
-    if (!region && stored.region) region = stored.region;
+    if (!region && typeof stored.region === 'string' && stored.region) region = stored.region;
   }
 
   // R9: S1 written by `auth_switch persist` (configuredBySession) is the session's
@@ -246,26 +320,25 @@ export function resolveCredentials(options = {}) {
     ak = stored.ak;
     sk = stored.sk;
     if (!securityToken) securityToken = present(stored.securityToken) ? stored.securityToken : '';
-    if (!region) region = stored.region || '';
+    if (!region && typeof stored.region === 'string' && stored.region) region = stored.region;
   }
 
   // Sandbox/platform-injected temporary STS credentials (env vars carrying a
   // security token) must not shadow the user's explicit permanent credentials
   // from `auth init`. Prefer the stored file when both exist.
-  const envHasFullTriplet =
-    present(process.env.HW_ACCESS_KEY) && present(process.env.HW_SECRET_KEY) && present(process.env.HW_SECURITY_TOKEN);
+  const envHasFullTriplet = present(envAk) && present(envSk) && present(envSecurityToken);
   if (envHasFullTriplet && stored && present(stored.ak) && present(stored.sk)) {
     ak = stored.ak;
     sk = stored.sk;
     securityToken = present(stored.securityToken) ? stored.securityToken : '';
-    region = stored.region || region;
+    region = typeof stored.region === 'string' && stored.region ? stored.region : region;
   }
 
   if (!ak || !sk) {
     if (options.allowMissing) return null;
     const err = new Error(
       'Huawei Cloud credentials are not configured. Run "npx huaweicloud-devkit auth init" or set HW_ACCESS_KEY/HW_SECRET_KEY.',
-    );
+    ) as CredentialError;
     err.code = 'HDKIT_CRED_MISSING';
     // Lightweight onboarding hint. HDKIT_CRED_MISSING fires when no credential
     // resolved: with env empty/masked and S1 absent, the scenario is 3 by
@@ -307,9 +380,21 @@ export function resolveCredentials(options = {}) {
   return { ak, sk, securityToken, region };
 }
 
-let _parentCwd = undefined;
+interface OnboardingHint {
+  scenario: number;
+  reason: string;
+  message: string;
+  steps: Array<Record<string, unknown>>;
+}
 
-export function getParentCwd() {
+interface CredentialError extends Error {
+  code?: string;
+  onboarding?: OnboardingHint;
+}
+
+let _parentCwd: string | null | undefined = undefined;
+
+export function getParentCwd(): string | null {
   if (_parentCwd !== undefined) return _parentCwd;
   try {
     _parentCwd = readlinkSync(`/proc/${process.ppid}/cwd`);
@@ -320,7 +405,7 @@ export function getParentCwd() {
   }
 }
 
-function isCodeArtsContext() {
+function isCodeArtsContext(): boolean {
   return (
     existsSync(join(process.cwd(), '.codeartsdoer')) ||
     existsSync(join(homedir(), '.codeartsdoer')) ||
@@ -329,7 +414,7 @@ function isCodeArtsContext() {
   );
 }
 
-export function readCodeArtsCredentials() {
+export function readCodeArtsCredentials(): CodeArtsCredentials | null {
   const parentCwd = getParentCwd();
   const searchDirs = [process.env.CODEARTS_PROJECT_DIR, parentCwd, process.cwd(), homedir()];
 
@@ -338,18 +423,19 @@ export function readCodeArtsCredentials() {
     const path = join(dir, '.codeartsdoer', 'mcp', 'mcp_settings.json');
     try {
       if (!existsSync(path)) continue;
-      const config = JSON.parse(readFileSync(path, 'utf8'));
-      const server = pickDevkitMcpServer(config?.mcpServers);
-      if (!server?.env) continue;
+      const config: unknown = JSON.parse(readFileSync(path, 'utf8'));
+      const server = pickDevkitMcpServer(asRecord(config).mcpServers);
+      const env = asRecord(server?.env);
+      if (!server || !server.env) continue;
 
-      const ak = server.env.HW_ACCESS_KEY;
-      const sk = server.env.HW_SECRET_KEY;
+      const ak = env.HW_ACCESS_KEY;
+      const sk = env.HW_SECRET_KEY;
       if (present(ak) && present(sk)) {
         return {
           ak,
           sk,
-          securityToken: present(server.env.HW_SECURITY_TOKEN) ? server.env.HW_SECURITY_TOKEN : '',
-          region: server.env.HW_REGION || server.env.HUAWEICLOUD_REGION || '',
+          securityToken: present(env.HW_SECURITY_TOKEN) ? env.HW_SECURITY_TOKEN : '',
+          region: String(env.HW_REGION || env.HUAWEICLOUD_REGION || ''),
         };
       }
     } catch {
@@ -368,7 +454,7 @@ export function readCodeArtsCredentials() {
   for (const path of workPaths) {
     try {
       if (!existsSync(path)) continue;
-      const config = JSON.parse(readFileSync(path, 'utf8'));
+      const config: unknown = JSON.parse(readFileSync(path, 'utf8'));
       const entry = readWorkEnvironmentEntry(config);
       if (entry) return entry;
     } catch {
@@ -379,21 +465,26 @@ export function readCodeArtsCredentials() {
   return null;
 }
 
-let runtimeCredentials = null;
+let runtimeCredentials: ResolvedCredentials | null = null;
 
-export function setRuntimeCredentials(ak, sk, securityToken, region) {
-  runtimeCredentials = { ak, sk, securityToken: securityToken || '', region: region || '' };
+export function setRuntimeCredentials(ak: unknown, sk: unknown, securityToken?: unknown, region?: unknown): void {
+  runtimeCredentials = {
+    ak: String(ak ?? ''),
+    sk: String(sk ?? ''),
+    securityToken: String(securityToken || ''),
+    region: String(region || ''),
+  };
 }
 
-export function clearRuntimeCredentials() {
+export function clearRuntimeCredentials(): void {
   runtimeCredentials = null;
 }
 
-export function hasRuntimeCredentials() {
+export function hasRuntimeCredentials(): boolean {
   return runtimeCredentials !== null;
 }
 
-export function resolveCredentialsWithRuntime(options = {}) {
+export function resolveCredentialsWithRuntime(options: ResolveCredentialsOptions = {}): ResolvedCredentials | null {
   if (runtimeCredentials) {
     return {
       ak: runtimeCredentials.ak,
@@ -406,21 +497,27 @@ export function resolveCredentialsWithRuntime(options = {}) {
   return resolveCredentials(options);
 }
 
-export function lastSyncPath() {
+export function lastSyncPath(): string {
   return join(baseHome(), '.config', 'huaweicloud', '.last_sync');
 }
 
-export function readLastSync() {
+export function readLastSync(): LastSyncRecord | null {
   const path = lastSyncPath();
   if (!existsSync(path)) return null;
   try {
-    return JSON.parse(readFileSync(path, 'utf8'));
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as LastSyncRecord) : null;
   } catch {
     return null;
   }
 }
 
-export function writeLastSync(metadata = {}) {
+export interface LastSyncMetadata {
+  kooCliProfile?: unknown;
+  s1Fingerprint?: unknown;
+}
+
+export function writeLastSync(metadata: LastSyncMetadata = {}): void {
   const path = lastSyncPath();
   mkdirSync(dirname(path), { recursive: true });
   const payload = {
@@ -432,7 +529,7 @@ export function writeLastSync(metadata = {}) {
   ensurePrivateMode(path);
 }
 
-export function backupGlobalCredentials() {
+export function backupGlobalCredentials(): string | null {
   const path = globalCredentialsPath();
   if (!existsSync(path)) return null;
   const bakPath = `${path}.bak`;
@@ -445,7 +542,7 @@ export function backupGlobalCredentials() {
   }
 }
 
-export function restoreGlobalCredentialsBackup() {
+export function restoreGlobalCredentialsBackup(): boolean {
   const path = globalCredentialsPath();
   const bakPath = `${path}.bak`;
   if (!existsSync(bakPath)) return false;

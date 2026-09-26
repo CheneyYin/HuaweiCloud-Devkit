@@ -15,7 +15,7 @@ import {
   clearRuntimeCredentials,
   resolveCredentialsWithRuntime,
   setRuntimeCredentials,
-} from '../plugins/huaweicloud-core/src/auth/credentials.mjs';
+} from '../plugins/huaweicloud-core/src/auth/credentials.ts';
 import { getKooCliVersion } from '../plugins/huaweicloud-core/src/koocli-version.ts';
 
 test('runVersionCheck uses hcloud version instead of --version', async () => {

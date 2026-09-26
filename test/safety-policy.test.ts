@@ -158,7 +158,7 @@ test('classifyHcloudArgs allows local help for Apply operations', () => {
 });
 
 test('classifyTextCommand blocks credential env-var references incl. HW_ prefix (#650 D4-2)', () => {
-  // HW_ is the plugin's own documented credential prefix (auth/credentials.mjs).
+  // HW_ is the plugin's own documented credential prefix (auth/credentials.ts).
   const bypasses = [
     'echo $HW_SECRET_KEY',
     'printenv HW_ACCESS_KEY',

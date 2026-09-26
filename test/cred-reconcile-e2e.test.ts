@@ -24,13 +24,13 @@ import {
   writeGlobalCredentials,
   writeLastSync,
   writeObsConfig,
-} from '../plugins/huaweicloud-core/src/auth/credentials.mjs';
+} from '../plugins/huaweicloud-core/src/auth/credentials.ts';
 import { fingerprint, runHcloudConfigure, scanState } from '../plugins/huaweicloud-core/src/auth/reconcile.ts';
 import { syncAuth } from '../plugins/huaweicloud-core/src/auth/service.ts';
 import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
 
-const FAKE_HCLOUD = fileURLToPath(new URL('./fixtures/fake-hcloud.mjs', import.meta.url));
-const FAKE_HCLOUD_FAIL = fileURLToPath(new URL('./fixtures/fake-hcloud-fail-config.mjs', import.meta.url));
+const FAKE_HCLOUD = fileURLToPath(new URL('./fixtures/fake-hcloud.ts', import.meta.url));
+const FAKE_HCLOUD_FAIL = fileURLToPath(new URL('./fixtures/fake-hcloud-fail-config.ts', import.meta.url));
 
 const ENV_KEYS = [
   'HUAWEICLOUD_HOME',

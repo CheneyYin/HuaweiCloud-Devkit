@@ -2,7 +2,7 @@ import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
-import { obsConfigPath } from '../auth/credentials.mjs';
+import { obsConfigPath } from '../auth/credentials.ts';
 
 // Remove the KooCLI (hcloud) binary and its config directory. Only touches the
 // default install locations; a user-managed binary behind HCLOUD_BIN or a

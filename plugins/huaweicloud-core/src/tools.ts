@@ -47,7 +47,7 @@ import {
   readCodeArtsCredentials,
   globalCredentialsPath,
   resolveCredentialsWithRuntime,
-} from './auth/credentials.mjs';
+} from './auth/credentials.ts';
 import { trackToolInvoke, trackSkillRetrieve, clearUserHash } from './telemetry/telemetry.ts';
 import { fetchWithProxy } from './proxy/proxy-agent.ts';
 import { fingerprint, runHcloudConfigure, resolveManagedProfile } from './auth/reconcile.ts';
@@ -87,8 +87,8 @@ function pickString(...values: unknown[]): string {
   return '';
 }
 
-// Boundary narrowing for the untyped credentials.mjs reader: only string fields
-// survive, so callers keep truthiness checks and string plumbing.
+// Boundary narrowing for credential-shaped values: only string fields survive,
+// so callers keep truthiness checks and string plumbing.
 interface CredentialLike {
   ak?: string;
   sk?: string;

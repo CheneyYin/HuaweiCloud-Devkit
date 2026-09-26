@@ -15,7 +15,7 @@ import {
   extractApiError,
   redactOutput,
 } from '../plugins/huaweicloud-core/src/hcloud-cli.ts';
-import { clearRuntimeCredentials, setRuntimeCredentials } from '../plugins/huaweicloud-core/src/auth/credentials.mjs';
+import { clearRuntimeCredentials, setRuntimeCredentials } from '../plugins/huaweicloud-core/src/auth/credentials.ts';
 import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
 
 async function withTempAuthHome(fn) {

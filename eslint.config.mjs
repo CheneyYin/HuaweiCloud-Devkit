@@ -119,7 +119,7 @@ export default [
     },
   },
   {
-    files: ['test/**/*.mjs'],
+    files: ['test/**/*.ts'],
     rules: {
       'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrors: 'none' }],
     },

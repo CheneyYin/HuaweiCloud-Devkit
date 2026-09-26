@@ -17,7 +17,7 @@ import {
   lastSyncPath,
   setRuntimeCredentials,
   writeGlobalCredentials,
-} from '../plugins/huaweicloud-core/src/auth/credentials.mjs';
+} from '../plugins/huaweicloud-core/src/auth/credentials.ts';
 
 function withTempHome(fn) {
   const dir = mkdtempSync(join(tmpdir(), 'huaweicloud-rec-'));

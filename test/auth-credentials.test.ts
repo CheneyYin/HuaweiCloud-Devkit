@@ -22,11 +22,11 @@ import {
   writeGlobalCredentials,
   writeLastSync,
   writeObsConfig,
-} from '../plugins/huaweicloud-core/src/auth/credentials.mjs';
+} from '../plugins/huaweicloud-core/src/auth/credentials.ts';
 import { getAgentRegistrationStatuses } from '../plugins/huaweicloud-core/src/auth/agent-registration.ts';
 import { getAuthStatus, syncAuth } from '../plugins/huaweicloud-core/src/auth/service.ts';
 
-const FAKE_HCLOUD = fileURLToPath(new URL('./fixtures/fake-hcloud.mjs', import.meta.url));
+const FAKE_HCLOUD = fileURLToPath(new URL('./fixtures/fake-hcloud.ts', import.meta.url));
 
 function withTempHome(fn) {
   const dir = mkdtempSync(join(tmpdir(), 'huaweicloud-auth-'));

@@ -8,7 +8,7 @@ import { classifyHcloudArgs, redactSecrets, assertAllowed, type ClassifyOptions 
 import type { RiskDecision } from './risk-rule-engine.ts';
 import { getProxySettings } from './proxy/proxy-config.ts';
 import { findHcloudBin, resolveHcloudCommand } from './hcloud-probe.ts';
-import { parseStsExpiry, resolveCredentialsWithRuntime } from './auth/credentials.mjs';
+import { parseStsExpiry, resolveCredentialsWithRuntime } from './auth/credentials.ts';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_FORCE_KILL_AFTER_MS = 2_000;
@@ -25,8 +25,8 @@ function asString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
-// Boundary narrowing for the untyped credentials.mjs reader: only string fields
-// survive, so callers keep truthiness checks and string plumbing.
+// Boundary narrowing for credential-shaped values: only string fields survive,
+// so callers keep truthiness checks and string plumbing.
 interface CredentialLike {
   ak?: string;
   sk?: string;
@@ -398,12 +398,7 @@ export function resolveStsInjectArgs(rawArgs: unknown): string[] {
   // expiring, skip injection — using a dead token would make a doomed IAM round
   // trip. If expiry is unknown/unparseable we keep the existing "inject anyway"
   // behavior (can't prove it's stale).
-  // The untyped .mjs reader exposes only its defaulted field through inference;
-  // declare the real input shape locally so the security token is passed honestly.
-  const stsExpiryInput: { securityToken: string; expiresAtEnv?: string } = {
-    securityToken: creds.securityToken,
-  };
-  const expiry = parseStsExpiry(stsExpiryInput);
+  const expiry = parseStsExpiry({ securityToken: creds.securityToken });
   if (expiry !== null) {
     const grace = 60 * 1000;
     if (expiry <= Date.now() + grace) return [];
@@ -512,7 +507,7 @@ export interface HcloudRunOptions extends ClassifyOptions {
   maxRetries?: number;
   retryBaseDelayMs?: number;
   cwd?: string;
-  stdin?: string | ((stream: NodeJS.WritableStream) => void);
+  stdin?: string | ((_stream: NodeJS.WritableStream) => void);
   executable?: string;
   executableArgs?: unknown;
   env?: Record<string, string | undefined>;

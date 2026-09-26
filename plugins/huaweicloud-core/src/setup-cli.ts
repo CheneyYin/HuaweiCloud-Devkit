@@ -28,7 +28,7 @@ import {
   writeGlobalCredentials,
   writeLastSync,
   writeObsConfig,
-} from './auth/credentials.mjs';
+} from './auth/credentials.ts';
 import {
   proxyConfigPath,
   readProxyConfig,
@@ -4904,9 +4904,9 @@ async function readSecret(prompt: string): Promise<string> {
   });
 }
 
-// credentials.mjs is still untyped JavaScript; narrow its parsed vault shape at
-// this boundary. The cast keeps the same object reference, so callers that pass
-// it back to writeObsConfig/writeGlobalCredentials behave exactly as before.
+// Narrow the parsed vault shape at this boundary. The cast keeps the same object
+// reference, so callers that pass it back to writeObsConfig/writeGlobalCredentials
+// behave exactly as before.
 interface StoredCredentials {
   ak?: unknown;
   sk?: unknown;

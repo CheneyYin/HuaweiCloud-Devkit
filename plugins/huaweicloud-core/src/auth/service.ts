@@ -12,7 +12,7 @@ import {
   readGlobalCredentials,
   writeLastSync,
   writeObsConfig,
-} from './credentials.mjs';
+} from './credentials.ts';
 import {
   fingerprint,
   exportStateForStatus,
@@ -30,8 +30,8 @@ interface CredentialRecord {
   endpoint?: string;
 }
 
-// Boundary narrowing for the untyped credentials.mjs readers: only string
-// fields survive, so callers can keep truthiness checks and string plumbing.
+// Boundary narrowing for credential-shaped values: only string fields survive,
+// so callers can keep truthiness checks and string plumbing.
 function asCredentialRecord(value: unknown): CredentialRecord | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;

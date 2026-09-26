@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -67,7 +67,7 @@ console.log(JSON.stringify({
   } finally {
     restoreHcloud();
     try {
-      require('node:fs').rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true });
     } catch {}
   }
 });
@@ -117,7 +117,7 @@ console.log(JSON.stringify({
   } finally {
     restoreHcloud();
     try {
-      require('node:fs').rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true });
     } catch {}
   }
 });
@@ -167,7 +167,7 @@ console.log(JSON.stringify({
   } finally {
     restoreHcloud();
     try {
-      require('node:fs').rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true });
     } catch {}
   }
 });
