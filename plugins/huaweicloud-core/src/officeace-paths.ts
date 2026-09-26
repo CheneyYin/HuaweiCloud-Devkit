@@ -1,5 +1,5 @@
 // Shared OfficeAce config-root resolution used by both the installer
-// (setup-cli.mjs) and the MCP runtime (tools.ts), so skills are installed
+// (setup-cli.ts) and the MCP runtime (tools.ts), so skills are installed
 // to and read from the same location (#559).
 //
 // OfficeAce exposes no API for the plugin to query the current user or

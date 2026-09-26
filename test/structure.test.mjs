@@ -391,8 +391,8 @@ test('.mcp.json is valid and references existing server script', () => {
   assert.ok(mcpConfig.mcpServers || mcpConfig.mcp);
 });
 
-test('setup-cli.mjs supports the codearts target end to end', () => {
-  const setup = readSource(join('src', 'setup-cli.mjs'));
+test('setup-cli.ts supports the codearts target end to end', () => {
+  const setup = readSource(join('src', 'setup-cli.ts'));
   // parseTarget accepts codearts
   assert.match(setup, /'codearts'/);
   // install / uninstall / status functions exist
@@ -422,10 +422,10 @@ test('setup-cli.mjs supports the codearts target end to end', () => {
     `codearts dispatch branches: ${(branches?.length ?? 0) + (installDispatch?.length ?? 0)}`,
   );
   // .installed marker goes to the codearts plugins dir
-  assert.match(setup, /function installMarkerDirForTarget\(target\)/);
+  assert.match(setup, /function installMarkerDirForTarget\(target: string\)/);
   assert.match(setup, /if \(target === 'codex'\) return null;/);
   assert.match(setup, /if \(target === 'codearts'\) return codeartsPluginsDir\(\);/);
-  assert.match(setup, /function writeInstallMarker\(target\)/);
+  assert.match(setup, /function writeInstallMarker\(target: string\)/);
   // doctor checks the codearts skills dir alongside opencode
   assert.match(
     setup,
@@ -453,8 +453,8 @@ test('tools.ts resolves skills from the codearts directory', () => {
   );
 });
 
-test('setup-cli.mjs handles KooCLI sandbox blockers and privacy agreement', () => {
-  const setup = readSource(join('src', 'setup-cli.mjs'));
+test('setup-cli.ts handles KooCLI sandbox blockers and privacy agreement', () => {
+  const setup = readSource(join('src', 'setup-cli.ts'));
   const hcloudProbe = readSource(join('src', 'hcloud-probe.ts'));
   // sandbox detection reads the CodeArts permission config
   assert.match(setup, /function detectCodeartsSandbox\(\)/);
@@ -480,8 +480,8 @@ test('setup-cli.mjs handles KooCLI sandbox blockers and privacy agreement', () =
   assert.match(setup, /设置 → 对话流 → 智能体 终端命令运行模式 → 自动运行/);
 });
 
-test('setup-cli.mjs covers hermes restart hints, unix auto-install, and grouped status (#280)', () => {
-  const setup = readSource(join('src', 'setup-cli.mjs'));
+test('setup-cli.ts covers hermes restart hints, unix auto-install, and grouped status (#280)', () => {
+  const setup = readSource(join('src', 'setup-cli.ts'));
   // Hermes .installed marker is read for restart hints (#280-4)
   assert.match(setup, /hermesPluginsDir\(\), '\.installed'/);
   // Unix install-hcloud executes for real: download → extract → install → verify (#280-3)
@@ -493,8 +493,8 @@ test('setup-cli.mjs covers hermes restart hints, unix auto-install, and grouped 
   assert.match(setup, /已安装: /);
 });
 
-test('setup-cli.mjs supports the dsh target end to end', () => {
-  const setup = readSource(join('src', 'setup-cli.mjs'));
+test('setup-cli.ts supports the dsh target end to end', () => {
+  const setup = readSource(join('src', 'setup-cli.ts'));
   // SUPPORTED_AGENT_TARGETS includes dsh and parseTarget uses it
   assert.match(setup, /'dsh'/);
   // DSH path helpers and managed patch constants exist
@@ -567,8 +567,8 @@ test('tools.ts resolves skills from the officeace directory', () => {
   assert.match(tools, /capabilities\.json/);
 });
 
-test('setup-cli.mjs supports the officeace target end to end', () => {
-  const setup = readSource(join('src', 'setup-cli.mjs'));
+test('setup-cli.ts supports the officeace target end to end', () => {
+  const setup = readSource(join('src', 'setup-cli.ts'));
   assert.match(setup, /'officeace'/);
   assert.match(setup, /async function installOfficeAce\(\)/);
   assert.match(setup, /function uninstallOfficeAce\(\)/);
@@ -597,8 +597,8 @@ test('setup-cli.mjs supports the officeace target end to end', () => {
   assert.match(setup, /install --target officeace/);
 });
 
-test('setup-cli.mjs supports the hermes target end to end', () => {
-  const setup = readSource(join('src', 'setup-cli.mjs'));
+test('setup-cli.ts supports the hermes target end to end', () => {
+  const setup = readSource(join('src', 'setup-cli.ts'));
   assert.match(setup, /'hermes'/);
   assert.match(setup, /async function installHermes\(\)/);
   assert.match(setup, /function uninstallHermes\(\)/);
@@ -650,23 +650,23 @@ test('setup-cli.mjs supports the hermes target end to end', () => {
   assert.match(setup, /function hermesMcpSdkOk\(\)/);
 });
 
-test('setup-cli.mjs supports the version command', () => {
-  const setup = readSource(join('src', 'setup-cli.mjs'));
+test('setup-cli.ts supports the version command', () => {
+  const setup = readSource(join('src', 'setup-cli.ts'));
   assert.match(setup, /function cmdVersion\(\)/);
   assert.match(setup, /function readInstalledVersion\(/);
   assert.match(setup, /case '--version'/);
   assert.match(setup, /case 'version'/);
 });
 
-test('setup-cli.mjs wires the auth reconcile subcommand', () => {
-  const setup = readSource(join('src', 'setup-cli.mjs'));
+test('setup-cli.ts wires the auth reconcile subcommand', () => {
+  const setup = readSource(join('src', 'setup-cli.ts'));
   assert.match(setup, /function cmdAuthReconcile\(\)/);
   assert.match(setup, /sub === 'reconcile'/);
   assert.match(setup, /return cmdAuthReconcile\(\)/);
 });
 
-test('setup-cli.mjs resolves the active KooCLI profile for configureHcloud', () => {
-  const setup = readSource(join('src', 'setup-cli.mjs'));
+test('setup-cli.ts resolves the active KooCLI profile for configureHcloud', () => {
+  const setup = readSource(join('src', 'setup-cli.ts'));
   assert.match(setup, /function configuredProfileName\(\)/);
   assert.match(setup, /resolveManagedProfile\(\)/);
   assert.match(setup, /return name \|\| 'default'/);
@@ -674,8 +674,8 @@ test('setup-cli.mjs resolves the active KooCLI profile for configureHcloud', () 
   assert.doesNotMatch(setup, /hcloud configure init/);
 });
 
-test('setup-cli.mjs checks for updates on install/update via shared query', () => {
-  const setup = readSource(join('src', 'setup-cli.mjs'));
+test('setup-cli.ts checks for updates on install/update via shared query', () => {
+  const setup = readSource(join('src', 'setup-cli.ts'));
   assert.match(setup, /async function checkForUpdate\(\)/);
   assert.match(setup, /queryDistTagsFetch\(/);
   assert.match(setup, /semverCompare\(/);
@@ -765,7 +765,7 @@ test('READMEs recommend @latest for updates', () => {
 });
 
 test('cmdUpdate has no trailing unreachable reinstall; cmdReinstall keeps it', () => {
-  const setup = readSource(join('src', 'setup-cli.mjs'));
+  const setup = readSource(join('src', 'setup-cli.ts'));
   // cmdUpdate（'update'/'upgrade' 入口）本身不得做"卸载+重装"；各 target 分支均 return。
   const cmdUpdateBody = setup.slice(
     setup.indexOf('async function cmdUpdate()'),
@@ -783,7 +783,7 @@ test('cmdUpdate has no trailing unreachable reinstall; cmdReinstall keeps it', (
 });
 
 test('doctor success message does not demand a restart', () => {
-  const setupCli = readSource(join('src', 'setup-cli.mjs'));
+  const setupCli = readSource(join('src', 'setup-cli.ts'));
   assert.match(setupCli, /You can now describe your Huawei Cloud task/);
   assert.doesNotMatch(setupCli, /Restart your session, then describe/);
 });
@@ -822,7 +822,7 @@ test('shipped runtime entry points point at built dist JavaScript', () => {
   const hermesManifest = readFileSync(join(root, 'integrations', 'hermes', 'manifest.yaml'), 'utf8');
   assert.doesNotMatch(hermesManifest, /plugins\/huaweicloud-core\/src\//, 'hermes manifest must not reference src/');
 
-  const setupCli = readSource(join('src', 'setup-cli.mjs'));
+  const setupCli = readSource(join('src', 'setup-cli.ts'));
   assert.doesNotMatch(
     setupCli,
     /'src', 'mcp-server\.js'/,

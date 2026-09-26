@@ -13,7 +13,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir, platform, tmpdir } from 'node:os';
 import { createInterface } from 'node:readline';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncOptions, type SpawnSyncReturns } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 
@@ -35,6 +35,7 @@ import {
   writeProxyConfig,
   clearProxyConfig,
   getProxySettings,
+  type ProxyConfigFile,
 } from './proxy/proxy-config.ts';
 import { removeKooCli, removeObsConfig } from './sandbox/uninstall-cleanup.ts';
 import {
@@ -50,7 +51,52 @@ import { queryDistTagsFetch, determineTarget, semverCompare } from './update-che
 import { getKooCliVersion, compareVersion, kooCliDownloadBase, KOO_CLI_BASE } from './koocli-version.ts';
 import { findHcloudBin, hcloudProbeNextStep, probeHcloud } from './hcloud-probe.ts';
 
-const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
+// node:sqlite is a runtime-only builtin loaded through createRequire; only the
+// DatabaseSync surface this module calls is modeled (see auth/agent-registration.ts).
+interface SqliteRunResult {
+  changes?: unknown;
+}
+
+interface SqliteStatement {
+  get: (..._params: unknown[]) => unknown;
+  run: (..._params: unknown[]) => SqliteRunResult;
+}
+
+interface SqliteDatabase {
+  prepare: (_sql: string) => SqliteStatement;
+  close: () => void;
+}
+
+interface SqliteModule {
+  DatabaseSync: new (_path: string) => SqliteDatabase;
+}
+
+function toSqliteModule(value: unknown): SqliteModule | null {
+  if (!value || typeof value !== 'object') return null;
+  const ctor = (value as { DatabaseSync?: unknown }).DatabaseSync;
+  return typeof ctor === 'function' ? (value as SqliteModule) : null;
+}
+
+const sqliteModule = toSqliteModule(createRequire(import.meta.url)('node:sqlite'));
+if (!sqliteModule) {
+  throw new Error('node:sqlite is unavailable; the OfficeAce integration requires Node.js >= 22');
+}
+const { DatabaseSync } = sqliteModule;
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function spawnErrorCode(res: SpawnSyncReturns<unknown>): string | undefined {
+  const error = res.error;
+  if (!error || !('code' in error)) return undefined;
+  const code: unknown = error.code;
+  return typeof code === 'string' ? code : undefined;
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = resolve(__dirname, '..');
@@ -58,7 +104,8 @@ const PACKAGE_ROOT = resolve(PLUGIN_ROOT, '..', '..');
 
 let pkgVersion = '0.0.0';
 try {
-  pkgVersion = JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8')).version;
+  const pkg: { version?: unknown } = JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8'));
+  if (typeof pkg.version === 'string') pkgVersion = pkg.version;
 } catch {}
 
 const BANNER = `
@@ -68,68 +115,68 @@ const BANNER = `
 ╚══════════════════════════════════════════════╝
 `;
 
-function configRoot(target = 'opencode') {
+function configRoot(target = 'opencode'): string {
   const home = homedir();
   return join(home, '.config', target);
 }
 
-function opencodeSkillsDir() {
+function opencodeSkillsDir(): string {
   return join(configRoot('opencode'), 'skills');
 }
-function opencodeCommandsDir() {
+function opencodeCommandsDir(): string {
   return join(configRoot('opencode'), 'commands');
 }
-function opencodePluginsDir() {
+function opencodePluginsDir(): string {
   return join(configRoot('opencode'), 'huaweicloud-plugins');
 }
-function opencodeConfigFile() {
+function opencodeConfigFile(): string {
   const jsonc = join(configRoot('opencode'), 'opencode.jsonc');
   if (existsSync(jsonc)) return jsonc;
   return join(configRoot('opencode'), 'opencode.json');
 }
 
-function codexDesktopSkillsDir() {
+function codexDesktopSkillsDir(): string {
   return join(codexDesktopPluginsDir(), 'skills');
 }
-function codexDesktopPluginsDir() {
+function codexDesktopPluginsDir(): string {
   return join(homedir(), 'plugins', 'huaweicloud-devkit');
 }
 
 // OpenClaw paths (separate from Codex Desktop)
-function openclawSkillsDir() {
+function openclawSkillsDir(): string {
   return join(homedir(), '.agents', 'skills');
 }
-function openclawPluginsDir() {
+function openclawPluginsDir(): string {
   return join(homedir(), '.agents', 'huaweicloud-plugins');
 }
 
-function codeartsSkillsDir() {
+function codeartsSkillsDir(): string {
   return join(homedir(), '.codeartsdoer', 'skills');
 }
-function codeartsMcpSettingsDir() {
+function codeartsMcpSettingsDir(): string {
   return join(homedir(), '.codeartsdoer', 'mcp');
 }
-function codeartsMcpSettingsFile() {
+function codeartsMcpSettingsFile(): string {
   return join(codeartsMcpSettingsDir(), 'mcp_settings.json');
 }
-function codeartsProjectDir() {
+function codeartsProjectDir(): string {
   return join(process.cwd(), '.codeartsdoer');
 }
-function codeartsProjectSkillsDir() {
+function codeartsProjectSkillsDir(): string {
   return join(codeartsProjectDir(), 'skills');
 }
-function codeartsProjectMcpSettingsFile() {
+function codeartsProjectMcpSettingsFile(): string {
   return join(codeartsProjectDir(), 'mcp', 'mcp_settings.json');
 }
-function codeartsPluginsDir() {
+function codeartsPluginsDir(): string {
   return join(homedir(), '.codeartsdoer', 'huaweicloud-plugins');
 }
 
 // CodeArts Work (CodeArts Space) — user-level only
-function codeartsWorkSkillsDir() {
+function codeartsWorkSkillsDir(): string {
   return join(homedir(), '.codeartswork', 'skills');
 }
-function codeartsWorkMcpSettingsFile() {
+function codeartsWorkMcpSettingsFile(): string {
   // Post platform migration the marketplace presets the plugin under ~/.codearts
   // (new layout); legacy ~/.codeartswork is kept as fallback while still in
   // service. Default to the new dir when it exists, otherwise legacy.
@@ -137,50 +184,50 @@ function codeartsWorkMcpSettingsFile() {
   const legacy = join(homedir(), '.codeartswork', 'mcp', 'mcp_settings.json');
   return existsSync(newDir) ? join(newDir, 'mcp_settings.json') : legacy;
 }
-function codeartsWorkPluginsDir() {
+function codeartsWorkPluginsDir(): string {
   return join(homedir(), '.codeartswork', 'huaweicloud-plugins');
 }
 
-function workbuddySkillsDir() {
+function workbuddySkillsDir(): string {
   return join(homedir(), '.workbuddy', 'skills');
 }
-function workbuddyMcpConfigFile() {
+function workbuddyMcpConfigFile(): string {
   return join(homedir(), '.workbuddy', 'mcp.json');
 }
-function workbuddyPluginsDir() {
+function workbuddyPluginsDir(): string {
   return join(homedir(), '.workbuddy', 'huaweicloud-plugins');
 }
 
-function atomcodeHome() {
+function atomcodeHome(): string {
   return process.env.ATOMCODE_HOME || join(homedir(), '.atomcode');
 }
-function atomcodeSkillsDir() {
+function atomcodeSkillsDir(): string {
   return join(atomcodeHome(), 'skills');
 }
-function atomcodeMcpConfigFile() {
+function atomcodeMcpConfigFile(): string {
   return join(atomcodeHome(), 'mcp.json');
 }
-function atomcodePluginsDir() {
+function atomcodePluginsDir(): string {
   return join(atomcodeHome(), 'huaweicloud-plugins');
 }
 
-function dshRoot() {
+function dshRoot(): string {
   return process.env.DSH_HOME || join(homedir(), '.dsh');
 }
-function dshSkillsDir() {
+function dshSkillsDir(): string {
   return join(dshRoot(), 'skills');
 }
-function dshProfileDir() {
+function dshProfileDir(): string {
   return join(dshRoot(), 'profiles', 'web');
 }
-function dshPatchFile() {
+function dshPatchFile(): string {
   return join(dshProfileDir(), 'cordis.patch.yml');
 }
-function dshPluginsDir() {
+function dshPluginsDir(): string {
   return join(dshRoot(), 'huaweicloud-plugins');
 }
 
-function readOfficeaceRegistryInstallDir() {
+function readOfficeaceRegistryInstallDir(): string | null {
   if (platform() !== 'win32') return null;
   try {
     const r = spawnSync('reg', ['query', 'HKCU\\SOFTWARE\\OfficeAce\\OfficeAce', '/v', 'InstallDir'], {
@@ -196,9 +243,11 @@ function readOfficeaceRegistryInstallDir() {
   return null;
 }
 
-function officeaceCapabilitiesDir() {
+function officeaceCapabilitiesDir(): string | null {
   const configRoot = process.env.OFFICE_CLAW_CONFIG_ROOT;
-  if (isUsableOfficeaceRoot(configRoot)) return configRoot;
+  // isUsableOfficeaceRoot rejects empty/undefined roots, so the truthiness guard
+  // preserves the original call's outcome for a missing env var.
+  if (configRoot && isUsableOfficeaceRoot(configRoot)) return configRoot;
   const markerRoot = readOfficeaceRootMarker();
   if (markerRoot) return markerRoot;
   // Skip system probes (registry / Program Files) so automated environments can
@@ -211,7 +260,7 @@ function officeaceCapabilitiesDir() {
     if (isUsableOfficeaceRoot(dir)) return dir;
   }
   if (platform() === 'win32') {
-    const bases = [process.env.ProgramFiles, 'C:\\Program Files', 'D:\\Program Files'];
+    const bases: Array<string | undefined> = [process.env.ProgramFiles, 'C:\\Program Files', 'D:\\Program Files'];
     if (process.env.LOCALAPPDATA) bases.push(join(process.env.LOCALAPPDATA, 'Programs'));
     for (const base of bases) {
       if (!base) continue;
@@ -222,41 +271,44 @@ function officeaceCapabilitiesDir() {
   return null;
 }
 
-function officeaceCapabilitiesDirSafe() {
+function officeaceCapabilitiesDirSafe(): string {
   return officeaceCapabilitiesDir() || join(homedir(), '.office-claw');
 }
-function officeaceCapabilitiesFile() {
+function officeaceCapabilitiesFile(): string {
   return join(officeaceCapabilitiesDirSafe(), 'capabilities.json');
 }
-function officeaceSkillsDir() {
+function officeaceSkillsDir(): string {
   return join(officeaceCapabilitiesDirSafe(), 'skills');
 }
-function officeacePluginsDir() {
+function officeacePluginsDir(): string {
   return join(officeaceCapabilitiesDirSafe(), 'huaweicloud-plugins');
 }
 
-function officeaceSqlitePath() {
+function officeaceSqlitePath(): string {
   const capDir = officeaceCapabilitiesDirSafe();
   return join(resolve(capDir, '..'), 'data', 'mcp-connectors.sqlite');
 }
 
-function openOfficeaceDb() {
+function openOfficeaceDb(): SqliteDatabase {
   return new DatabaseSync(officeaceSqlitePath());
 }
 
-function officeaceGetOwnerUserId() {
+function officeaceGetOwnerUserId(): string | number | null {
   if (!existsSync(officeaceSqlitePath())) return null;
   try {
     const db = openOfficeaceDb();
-    const row = db.prepare('SELECT owner_user_id FROM mcp_connectors WHERE owner_user_id IS NOT NULL LIMIT 1').get();
+    const row: unknown = db
+      .prepare('SELECT owner_user_id FROM mcp_connectors WHERE owner_user_id IS NOT NULL LIMIT 1')
+      .get();
     db.close();
-    return row?.owner_user_id || null;
+    const value = asRecord(row).owner_user_id;
+    return typeof value === 'string' || typeof value === 'number' ? value : null;
   } catch {
     return null;
   }
 }
 
-function ensureOfficeaceMcpInSqlite() {
+function ensureOfficeaceMcpInSqlite(): 'db-missing' | 'ok' | 'owner-missing' | 'error' {
   const dbPath = officeaceSqlitePath();
   if (!existsSync(dbPath)) {
     console.log(`  \x1b[31mOfficeAce database not found: ${dbPath}\x1b[0m`);
@@ -265,35 +317,38 @@ function ensureOfficeaceMcpInSqlite() {
   }
 
   const mcpPath = join(officeacePluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
-  const env = [{ key: 'HUAWEICLOUD_AGENT_TOOLKIT_MODE', value: 'local', sensitive: false }];
+  const env: Array<{ key: string; value: string; sensitive: boolean }> = [
+    { key: 'HUAWEICLOUD_AGENT_TOOLKIT_MODE', value: 'local', sensitive: false },
+  ];
   const hcloudBin = findHcloudBin();
   if (hcloudBin) env.push({ key: 'HCLOUD_BIN', value: hcloudBin.replace(/\\/g, '/'), sensitive: false });
 
   const now = Date.now();
-  let db;
+  let db: SqliteDatabase | null = null;
   try {
     db = openOfficeaceDb();
 
-    const existing = db
+    const existingRow: unknown = db
       .prepare("SELECT id, command, args_json, env_json FROM mcp_connectors WHERE name = 'huaweicloud-devkit'")
       .get();
+    const existing = asRecord(existingRow);
 
     const argsJson = JSON.stringify([mcpPath]);
     const envJson = JSON.stringify(env);
 
-    if (existing) {
+    if ('id' in existing) {
       // Merge: keep user's extra args/env values, only correct program-owned fields (issue #615).
-      let existingArgs = [];
-      let existingEnv = [];
+      let existingArgs: unknown = [];
+      let existingEnv: unknown = [];
       try {
-        existingArgs = JSON.parse(existing.args_json || '[]');
-        existingEnv = JSON.parse(existing.env_json || '[]');
+        existingArgs = JSON.parse(String(existing.args_json || '[]'));
+        existingEnv = JSON.parse(String(existing.env_json || '[]'));
       } catch {}
-      const userArgs = Array.isArray(existingArgs) ? existingArgs.slice(1) : [];
+      const userArgs: unknown[] = Array.isArray(existingArgs) ? existingArgs.slice(1) : [];
       // Start from the user's env and add our required keys only when absent (user values win).
-      const envMerged = [...(Array.isArray(existingEnv) ? existingEnv : [])];
+      const envMerged: unknown[] = [...(Array.isArray(existingEnv) ? existingEnv : [])];
       for (const e of env) {
-        if (e && e.key && !envMerged.some((x) => x && x.key === e.key)) envMerged.push(e);
+        if (e && e.key && !envMerged.some((x) => asRecord(x).key === e.key)) envMerged.push(e);
       }
       const nextArgsJson = JSON.stringify([mcpPath, ...userArgs]);
       const nextEnvJson = JSON.stringify(envMerged);
@@ -312,7 +367,10 @@ function ensureOfficeaceMcpInSqlite() {
       // row, and fall back to the value backed up before a prior uninstall so
       // an emptied table does not make registration permanently impossible.
       const officeaceDelta = readAgentDelta('officeace');
-      const ownerUserId = officeaceGetOwnerUserId() || (officeaceDelta && officeaceDelta.ownerUserId);
+      const deltaOwner: unknown = officeaceDelta ? officeaceDelta.ownerUserId : undefined;
+      const ownerUserId =
+        officeaceGetOwnerUserId() ||
+        (typeof deltaOwner === 'string' || typeof deltaOwner === 'number' ? deltaOwner : null);
       if (!ownerUserId) {
         console.log(`  \x1b[31mCannot determine owner_user_id for the huaweicloud-devkit connector.\x1b[0m`);
         console.log(
@@ -341,28 +399,29 @@ function ensureOfficeaceMcpInSqlite() {
         db.close();
       } catch {}
     }
-    console.log(`  \x1b[31mFailed to write MCP config: ${error.message}\x1b[0m`);
+    console.log(`  \x1b[31mFailed to write MCP config: ${errorMessage(error)}\x1b[0m`);
     return 'error';
   }
 }
 
-function removeOfficeaceMcpFromSqlite() {
+function removeOfficeaceMcpFromSqlite(): void {
   const dbPath = officeaceSqlitePath();
   if (!existsSync(dbPath)) return;
-  let db;
+  let db: SqliteDatabase | null = null;
   try {
     db = openOfficeaceDb();
     // Back up user identity + args before deleting the connector row:
     // owner_user_id is copied from existing rows on reinstall, so an empty
     // table after this delete would make registration impossible (#559).
     try {
-      const row = db
+      const row: unknown = db
         .prepare("SELECT owner_user_id, args_json FROM mcp_connectors WHERE name = 'huaweicloud-devkit'")
         .get();
-      const delta = {};
-      if (row?.owner_user_id) delta.ownerUserId = row.owner_user_id;
+      const delta: Record<string, unknown> = {};
+      const ownerUserId = asRecord(row).owner_user_id;
+      if (ownerUserId) delta.ownerUserId = ownerUserId;
       try {
-        const parsed = row ? JSON.parse(row.args_json || '[]') : [];
+        const parsed: unknown = row ? JSON.parse(String(asRecord(row).args_json || '[]')) : [];
         if (Array.isArray(parsed) && parsed.length > 1) delta.argsExtra = parsed.slice(1);
       } catch {}
       if (Object.keys(delta).length > 0) saveAgentDelta('officeace', delta);
@@ -375,7 +434,8 @@ function removeOfficeaceMcpFromSqlite() {
       ).run();
     } catch {}
     const result2 = db.prepare("DELETE FROM mcp_connectors WHERE name = 'huaweicloud-devkit'").run();
-    if (result2.changes > 0) {
+    const changes: unknown = result2.changes;
+    if ((typeof changes === 'number' || typeof changes === 'bigint') && changes > 0) {
       console.log(`  MCP config removed: ${dbPath}`);
     }
     db.close();
@@ -385,50 +445,64 @@ function removeOfficeaceMcpFromSqlite() {
         db.close();
       } catch {}
     }
-    console.log(`  \x1b[31mFailed to remove MCP config: ${error.message}\x1b[0m`);
+    console.log(`  \x1b[31mFailed to remove MCP config: ${errorMessage(error)}\x1b[0m`);
   }
 }
 
-function readCapabilitiesJson() {
+// capabilities.json is written back verbatim apart from the managed entries, so
+// every non-`capabilities` field stays unknown and round-trips untouched.
+interface OfficeaceCapabilitiesConfig {
+  capabilities?: unknown;
+}
+
+function toCapabilitiesConfig(value: unknown): OfficeaceCapabilitiesConfig {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as OfficeaceCapabilitiesConfig)
+    : {};
+}
+
+function readCapabilitiesJson(): OfficeaceCapabilitiesConfig {
   const capFile = officeaceCapabilitiesFile();
   if (!existsSync(capFile)) return { capabilities: [] };
   try {
-    return JSON.parse(readFileSync(capFile, 'utf8'));
+    return toCapabilitiesConfig(JSON.parse(readFileSync(capFile, 'utf8')));
   } catch {
     return { capabilities: [] };
   }
 }
 
-function writeCapabilitiesJson(config) {
+function writeCapabilitiesJson(config: OfficeaceCapabilitiesConfig): void {
   mkdirSync(officeaceCapabilitiesDirSafe(), { recursive: true });
   writeFileSync(officeaceCapabilitiesFile(), JSON.stringify(config, null, 2));
 }
 
-function removeOfficeaceSkillCapabilities() {
+function removeOfficeaceSkillCapabilities(): void {
   const capFile = officeaceCapabilitiesFile();
   if (!existsSync(capFile)) return;
-  let config;
+  let config: OfficeaceCapabilitiesConfig;
   try {
-    config = JSON.parse(readFileSync(capFile, 'utf8'));
+    config = toCapabilitiesConfig(JSON.parse(readFileSync(capFile, 'utf8')));
   } catch {
     return;
   }
   if (!Array.isArray(config.capabilities)) return;
-  const origLen = config.capabilities.length;
-  config.capabilities = config.capabilities.filter(
-    (c) =>
-      !(
-        (c.id === 'huaweicloud-core' && c.type === 'skill') ||
-        (c.source === 'custom' && c.id && c.id.startsWith('huawei'))
-      ),
-  );
-  if (config.capabilities.length !== origLen) {
+  const capabilities: unknown[] = config.capabilities;
+  const origLen = capabilities.length;
+  config.capabilities = capabilities.filter((c) => {
+    const cap = asRecord(c);
+    const capId: unknown = cap.id;
+    return !(
+      (cap.id === 'huaweicloud-core' && cap.type === 'skill') ||
+      (cap.source === 'custom' && capId && typeof capId === 'string' && capId.startsWith('huawei'))
+    );
+  });
+  if (asRecord(config).capabilities && Array.isArray(config.capabilities) && config.capabilities.length !== origLen) {
     writeCapabilitiesJson(config);
     console.log(`  Skill capabilities cleaned: ${capFile}`);
   }
 }
 
-function registerOfficeaceSkillEntries() {
+function registerOfficeaceSkillEntries(): void {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   if (!existsSync(skillsSrc)) return;
   const skillNames = readdirSync(skillsSrc, { withFileTypes: true })
@@ -436,12 +510,18 @@ function registerOfficeaceSkillEntries() {
     .map((d) => d.name);
 
   const config = readCapabilitiesJson();
+  if (!Array.isArray(config.capabilities)) {
+    // Pre-migration this crashed on config.capabilities.findIndex, failing the
+    // install step; the zero-detect install-all test pins that outcome.
+    throw new TypeError('OfficeAce capabilities.json has no capabilities array');
+  }
+  const capabilities: unknown[] = config.capabilities;
   let changed = false;
 
   for (const name of skillNames) {
-    const existingIdx = config.capabilities.findIndex((c) => c.id === name && c.type === 'skill');
+    const existingIdx = capabilities.findIndex((c) => asRecord(c).id === name && asRecord(c).type === 'skill');
     if (existingIdx >= 0) continue;
-    config.capabilities.push({
+    capabilities.push({
       id: name,
       type: 'skill',
       enabled: true,
@@ -452,8 +532,8 @@ function registerOfficeaceSkillEntries() {
     changed = true;
   }
 
-  if (!config.capabilities.some((c) => c.id === 'huaweicloud-core' && c.type === 'skill')) {
-    config.capabilities.push({
+  if (!capabilities.some((c) => asRecord(c).id === 'huaweicloud-core' && asRecord(c).type === 'skill')) {
+    capabilities.push({
       id: 'huaweicloud-core',
       type: 'skill',
       enabled: true,
@@ -474,18 +554,18 @@ const DSH_MCP_PATCH_START = '# HuaweiCloud DevKit DSH integration start';
 const DSH_MCP_PATCH_END = '# HuaweiCloud DevKit DSH integration end';
 
 // Detect CodeArts sandbox mode (bash_mode in permission config).
-function detectCodeartsSandbox() {
+function detectCodeartsSandbox(): string | null {
   try {
     const configPath = join(homedir(), '.codeartsdoer', 'codearts-data', 'storage', 'permission', 'config.json');
     if (!existsSync(configPath)) return null;
-    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    const config: { bash_mode?: unknown } = JSON.parse(readFileSync(configPath, 'utf8'));
     return typeof config.bash_mode === 'string' ? config.bash_mode : null;
   } catch {
     return null;
   }
 }
 
-function printSandboxWarning(reason) {
+function printSandboxWarning(reason: string): void {
   console.log(`\n\x1b[1m\x1b[31m⚠ 检测到码道沙箱模式 (bash_mode: sandbox)\x1b[0m`);
   console.log(`\x1b[31m  ${reason}\x1b[0m`);
   console.log(`\x1b[31m  请任选其一继续:\x1b[0m`);
@@ -495,7 +575,7 @@ function printSandboxWarning(reason) {
   console.log(`\x1b[31m  关闭沙箱后重新运行: npx huaweicloud-devkit install-hcloud\x1b[0m`);
 }
 
-function checkNode() {
+function checkNode(): void {
   const v = process.versions.node.split('.').map(Number);
   if (v[0] < 22) {
     console.error(`\x1b[31mNode.js >= 22 required (current: ${process.version})\x1b[0m`);
@@ -504,7 +584,7 @@ function checkNode() {
   console.log(`  Node.js ${process.version} \x1b[32mOK\x1b[0m`);
 }
 
-function sleepSync(ms) {
+function sleepSync(ms: number): void {
   try {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
   } catch {
@@ -516,7 +596,7 @@ function sleepSync(ms) {
   }
 }
 
-function copyFileVerified(src, dest) {
+function copyFileVerified(src: string, dest: string): void {
   const expected = statSync(src).size;
   for (let attempt = 1; attempt <= 3; attempt++) {
     copyFileSync(src, dest);
@@ -539,7 +619,7 @@ function copyFileVerified(src, dest) {
 // R5: write an MCP settings JSON file with least-privilege permissions
 // (parent dir 0700, file 0600) so the platform-injected temporary credentials
 // (HW_ACCESS_KEY/HW_SECRET_KEY/HW_SECURITY_TOKEN) are not world-readable.
-function writeMcpSettingsFile(configPath, config) {
+function writeMcpSettingsFile(configPath: string, config: unknown): void {
   mkdirSync(dirname(configPath), { recursive: true, mode: 0o700 });
   writeFileSync(configPath, JSON.stringify(config, null, 2), { encoding: 'utf8', mode: 0o600 });
   try {
@@ -554,11 +634,11 @@ function writeMcpSettingsFile(configPath, config) {
 
 // Installs before 2.0.0 kept the server at src/mcp-server.mjs. Treat either
 // layout as installed so doctor/status/update can see and migrate old installs.
-function mcpServerInstalled(baseDir) {
+function mcpServerInstalled(baseDir: string): boolean {
   return existsSync(join(baseDir, 'dist', 'mcp-server.js')) || existsSync(join(baseDir, 'src', 'mcp-server.mjs'));
 }
 
-function copyDir(src, dest) {
+function copyDir(src: string, dest: string): void {
   if (!existsSync(src)) return;
   mkdirSync(dest, { recursive: true });
   for (const entry of readdirSync(src, { withFileTypes: true })) {
@@ -572,7 +652,7 @@ function copyDir(src, dest) {
   }
 }
 
-function installRuntimeDeps(pluginsDir) {
+function installRuntimeDeps(pluginsDir: string): void {
   const pkgJson = {
     name: 'huaweicloud-devkit',
     version: pkgVersion,
@@ -581,7 +661,7 @@ function installRuntimeDeps(pluginsDir) {
   };
   mkdirSync(pluginsDir, { recursive: true });
   writeFileSync(join(pluginsDir, 'package.json'), JSON.stringify(pkgJson, null, 2));
-  const spawnOpts = {
+  const spawnOpts: SpawnSyncOptions = {
     cwd: pluginsDir,
     shell: true,
     windowsHide: true,
@@ -589,10 +669,10 @@ function installRuntimeDeps(pluginsDir) {
     timeout: 120000,
   };
   let r = spawnSync('npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], spawnOpts);
-  const isRetryable = (res) => {
+  const isRetryable = (res: SpawnSyncReturns<unknown>): boolean => {
     if (res.status === 0) return false;
-    const stderr = (res.stderr || '').toString();
-    return res.error?.code === 'EPERM' || res.error?.code === 'EBUSY' || /EPERM|EBUSY/.test(stderr);
+    const stderr = String(res.stderr || '');
+    return spawnErrorCode(res) === 'EPERM' || spawnErrorCode(res) === 'EBUSY' || /EPERM|EBUSY/.test(stderr);
   };
   if (r.status !== 0 && isRetryable(r)) {
     console.log(`  \x1b[33m[WARN]\x1b[0m npm install hit file-lock error, retrying in 2s...`);
@@ -608,7 +688,7 @@ function installRuntimeDeps(pluginsDir) {
   if (r.status === 0 && existsSync(undiciDir)) {
     console.log(`  Runtime deps installed -> ${join(pluginsDir, 'node_modules')}`);
   } else {
-    const errCode = r.error?.code;
+    const errCode = spawnErrorCode(r);
     const err = (r.stderr || '').toString().trim().split(/\r?\n/).slice(-2).join(' ');
     const hint = errCode === 'ENOENT' ? ' (npm not found — ensure Node.js/npm is in PATH)' : '';
     const msg = `npm install failed in ${pluginsDir}${err ? `: ${err}` : ''}${hint}`;
@@ -622,7 +702,7 @@ function installRuntimeDeps(pluginsDir) {
   }
 }
 
-function removeIfExists(p) {
+function removeIfExists(p: string): boolean {
   if (existsSync(p)) {
     try {
       // Retry transient EBUSY/EPERM/ENOTEMPTY (locked files on Windows) before
@@ -631,59 +711,66 @@ function removeIfExists(p) {
       rmSync(p, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
       return true;
     } catch (error) {
-      console.log(`  \x1b[33m[WARN]\x1b[0m Could not remove ${p}: ${error.message}`);
+      console.log(`  \x1b[33m[WARN]\x1b[0m Could not remove ${p}: ${errorMessage(error)}`);
       return false;
     }
   }
   return false;
 }
 
-function updateOpenCodeConfig(pluginDir) {
+function updateOpenCodeConfig(pluginDir: string): void {
   const configPath = opencodeConfigFile();
   const mcpPath = join(pluginDir, 'dist', 'mcp-server.js').replace(/\\/g, '/');
-  let config = {};
+  let config: Record<string, unknown> = {};
   if (existsSync(configPath)) {
     try {
-      config = JSON.parse(readFileSync(configPath, 'utf8'));
+      config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
     } catch {
       console.log(
         `  \x1b[33m[WARN]\x1b[0m Could not parse ${configPath} (jsonc comments?). Skipping MCP config write; ensure "mcp.huaweicloud-devkit" points to ${mcpPath}.`,
       );
       return;
     }
-    const existing = config.mcp?.['huaweicloud-devkit'];
+    const existing: unknown = asRecord(config.mcp)['huaweicloud-devkit'];
     const { entry, changed } = mergeCommandStyle(existing, { mcpPath });
     if (existing && !changed) {
       console.log(`  OpenCode MCP config unchanged: ${configPath}`);
       return;
     }
     if (existing && changed) {
-      config.mcp['huaweicloud-devkit'] = entry;
+      const mcpMap = asRecord(config.mcp);
+      mcpMap['huaweicloud-devkit'] = entry;
+      config.mcp = mcpMap;
       writeMcpSettingsFile(configPath, config);
       console.log(`  OpenCode MCP config merged (user fields preserved): ${configPath}`);
       return;
     }
   }
-  config.mcp = config.mcp || {};
-  config.mcp['huaweicloud-devkit'] = mergeCommandStyle(undefined, { mcpPath }).entry;
+  const mcpMap: Record<string, unknown> = asRecord(config.mcp);
+  mcpMap['huaweicloud-devkit'] = mergeCommandStyle(undefined, { mcpPath }).entry;
+  config.mcp = mcpMap;
   // Restore user fields saved by a previous uninstall (issue #615).
   const delta = takeAgentDelta('opencode');
-  if (delta) config.mcp['huaweicloud-devkit'] = applyUserDelta(config.mcp['huaweicloud-devkit'], delta, 'command');
+  if (delta) mcpMap['huaweicloud-devkit'] = applyUserDelta(mcpMap['huaweicloud-devkit'], delta, 'command');
   writeMcpSettingsFile(configPath, config);
   console.log(`  OpenCode config updated: ${configPath}`);
 }
 
 // Read-merge-write for pluginDir/.mcp.json (OpenClaw, Codex Desktop).
 // Preserves user extra args/env; restores a prior uninstall's backup on fresh install (issue #615).
-function writeMcpServersFile(pluginDest, mcpPath, agentKey) {
+function writeMcpServersFile(pluginDest: string, mcpPath: string, agentKey: string): void {
   const configPath = join(pluginDest, '.mcp.json');
-  let config;
+  let config: unknown;
   try {
     config = existsSync(configPath) ? JSON.parse(readFileSync(configPath, 'utf8')) : undefined;
   } catch {
     config = undefined;
   }
-  const existing = config && typeof config === 'object' ? config.mcpServers?.['huaweicloud-devkit'] : undefined;
+  const configRecord: Record<string, unknown> | undefined =
+    config !== null && typeof config === 'object' && !Array.isArray(config)
+      ? (config as Record<string, unknown>)
+      : undefined;
+  const existing: unknown = configRecord ? asRecord(configRecord.mcpServers)['huaweicloud-devkit'] : undefined;
   const { entry, changed } = mergeArgsStyle(existing, {
     mcpPath,
     env: { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local' },
@@ -693,47 +780,52 @@ function writeMcpServersFile(pluginDest, mcpPath, agentKey) {
     console.log(`  MCP Config unchanged: ${configPath}`);
     return;
   }
-  const next = config && typeof config === 'object' && !Array.isArray(config) ? { ...config } : {};
-  next.mcpServers = { ...(config && typeof config === 'object' ? config.mcpServers : {}), 'huaweicloud-devkit': entry };
+  const next: Record<string, unknown> = configRecord ? { ...configRecord } : {};
+  const nextServers: Record<string, unknown> = {
+    ...asRecord(configRecord ? configRecord.mcpServers : undefined),
+    'huaweicloud-devkit': entry,
+  };
+  next.mcpServers = nextServers;
   if (!existing) {
     const delta = takeAgentDelta(agentKey);
-    if (delta)
-      next.mcpServers['huaweicloud-devkit'] = applyUserDelta(next.mcpServers['huaweicloud-devkit'], delta, 'args');
+    if (delta) nextServers['huaweicloud-devkit'] = applyUserDelta(nextServers['huaweicloud-devkit'], delta, 'args');
   }
   writeMcpSettingsFile(configPath, next);
   console.log(`  MCP Config -> ${configPath}`);
 }
 
 // Back up the user delta from a pluginDir/.mcp.json before the directory is removed (issue #615).
-function backupDeltaFromMcpServersFile(pluginDest, agentKey) {
+function backupDeltaFromMcpServersFile(pluginDest: string, agentKey: string): void {
   const configPath = join(pluginDest, '.mcp.json');
   try {
-    const config = JSON.parse(readFileSync(configPath, 'utf8'));
-    const delta = extractUserDelta(config?.mcpServers?.['huaweicloud-devkit'], 'args');
+    const config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
+    const delta = extractUserDelta(asRecord(config.mcpServers)['huaweicloud-devkit'], 'args');
     if (delta) saveAgentDelta(agentKey, delta);
   } catch {}
 }
 
-function removeOpenCodeConfig() {
+function removeOpenCodeConfig(): void {
   const configPath = opencodeConfigFile();
   if (!existsSync(configPath)) return;
-  let config;
+  let config: Record<string, unknown>;
   try {
-    config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
   } catch {
     return;
   }
-  if (!config.mcp?.['huaweicloud-devkit']) return;
+  const mcpMap = asRecord(config.mcp);
+  if (!mcpMap['huaweicloud-devkit']) return;
   // Back up user-customized fields before removal so a later reinstall can restore them (issue #615).
-  const delta = extractUserDelta(config.mcp['huaweicloud-devkit'], 'command');
+  const delta = extractUserDelta(mcpMap['huaweicloud-devkit'], 'command');
   if (delta) saveAgentDelta('opencode', delta);
-  delete config.mcp['huaweicloud-devkit'];
-  if (Object.keys(config.mcp).length === 0) delete config.mcp;
+  delete mcpMap['huaweicloud-devkit'];
+  config.mcp = mcpMap;
+  if (Object.keys(mcpMap).length === 0) delete config.mcp;
   writeMcpSettingsFile(configPath, config);
   console.log(`  OpenCode MCP config cleaned: ${configPath}`);
 }
 
-function hasCodexCLI() {
+function hasCodexCLI(): boolean {
   const r = spawnSync('codex --version', [], { shell: true, windowsHide: true, stdio: 'pipe' });
   if (r.status === 0 && r.stdout && r.stdout.toString().includes('codex')) return true;
   // WindowsApps codex.exe may fail with "Access is denied"
@@ -745,31 +837,32 @@ function hasCodexCLI() {
   return false;
 }
 
-function getMarketplaceName() {
+function getMarketplaceName(): string {
   const marketplacePath = join(PACKAGE_ROOT, '.agents', 'plugins', 'marketplace.json');
   try {
-    const manifest = JSON.parse(readFileSync(marketplacePath, 'utf8'));
-    if (manifest.name) return manifest.name;
+    const manifest = asRecord(JSON.parse(readFileSync(marketplacePath, 'utf8')));
+    if (typeof manifest.name === 'string' && manifest.name) return manifest.name;
   } catch {}
   return 'huaweicloud-devkit';
 }
 
-function getCodexPluginName() {
+function getCodexPluginName(): string {
   const marketplacePath = join(PACKAGE_ROOT, '.agents', 'plugins', 'marketplace.json');
   try {
-    const marketplace = JSON.parse(readFileSync(marketplacePath, 'utf8'));
-    const pluginName = marketplace.plugins?.[0]?.name;
-    if (pluginName) return pluginName;
+    const marketplace = asRecord(JSON.parse(readFileSync(marketplacePath, 'utf8')));
+    const plugins: unknown[] = Array.isArray(marketplace.plugins) ? marketplace.plugins : [];
+    const pluginName: unknown = asRecord(plugins[0]).name;
+    if (typeof pluginName === 'string' && pluginName) return pluginName;
   } catch {}
   const codexManifestPath = join(PLUGIN_ROOT, '.codex-plugin', 'plugin.json');
   try {
-    const manifest = JSON.parse(readFileSync(codexManifestPath, 'utf8'));
-    if (manifest.name) return manifest.name;
+    const manifest = asRecord(JSON.parse(readFileSync(codexManifestPath, 'utf8')));
+    if (typeof manifest.name === 'string' && manifest.name) return manifest.name;
   } catch {}
   return 'huaweicloud-devkit';
 }
 
-function installCodex() {
+function installCodex(): boolean {
   const marketplaceRoot = PACKAGE_ROOT;
   const pluginName = getCodexPluginName();
   const marketplaceName = getMarketplaceName();
@@ -813,7 +906,7 @@ function installCodex() {
   return true;
 }
 
-function uninstallCodex() {
+function uninstallCodex(): void {
   const pluginName = getCodexPluginName();
   const marketplaceName = getMarketplaceName();
   for (const name of new Set([pluginName, 'huaweicloud-core'])) {
@@ -837,7 +930,7 @@ function uninstallCodex() {
   }
 }
 
-function codexStatus() {
+function codexStatus(): boolean {
   // Parse the structured output instead of substring-matching the table: the
   // plugin's SOURCE path (…/plugins/huaweicloud-devkit) also contains the name,
   // so a naive includes() reports "installed" even when the status column says
@@ -846,17 +939,18 @@ function codexStatus() {
   const out = r.stdout ? r.stdout.toString() : '';
   const name = getCodexPluginName();
   try {
-    const data = JSON.parse(out);
-    const installed = Array.isArray(data?.installed) ? data.installed : [];
-    return installed.some(
-      (p) => p && (p.name === name || (typeof p.pluginId === 'string' && p.pluginId.startsWith(`${name}@`))),
-    );
+    const data = asRecord(JSON.parse(out));
+    const installed: unknown[] = Array.isArray(data.installed) ? data.installed : [];
+    return installed.some((p) => {
+      const record = asRecord(p);
+      return record.name === name || (typeof record.pluginId === 'string' && record.pluginId.startsWith(`${name}@`));
+    });
   } catch {
     return false;
   }
 }
 
-async function installOpenCode() {
+async function installOpenCode(): Promise<void> {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
   const distDir = join(PLUGIN_ROOT, 'dist');
@@ -880,7 +974,7 @@ async function installOpenCode() {
   installRuntimeDeps(pluginDest);
 }
 
-function uninstallOpenCode() {
+function uninstallOpenCode(): void {
   let removed = 0;
 
   const skills = opencodeSkillsDir();
@@ -917,7 +1011,7 @@ function uninstallOpenCode() {
 }
 
 // Remove huawei* entries in targetDir that no longer exist in sourceDir (stale files from an older version).
-function pruneStale(targetDir, sourceDir) {
+function pruneStale(targetDir: string, sourceDir: string): number {
   if (!existsSync(targetDir) || !existsSync(sourceDir)) return 0;
   const sourceNames = new Set(readdirSync(sourceDir));
   let removed = 0;
@@ -931,7 +1025,7 @@ function pruneStale(targetDir, sourceDir) {
 }
 
 // Incremental update: overwrite copied files, prune stale ones, and only touch the config when necessary.
-async function updateOpenCode() {
+async function updateOpenCode(): Promise<void> {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
   const distDir = join(PLUGIN_ROOT, 'dist');
@@ -961,11 +1055,11 @@ async function updateOpenCode() {
   installRuntimeDeps(pluginDest);
 }
 
-function codexMarketplacePath() {
+function codexMarketplacePath(): string {
   return join(homedir(), '.agents', 'plugins', 'marketplace.json');
 }
 
-function ensureCodexMarketplaceEntry() {
+function ensureCodexMarketplaceEntry(): void {
   const mpPath = codexMarketplacePath();
   const pluginName = 'huaweicloud-devkit';
   const entry = {
@@ -975,10 +1069,10 @@ function ensureCodexMarketplaceEntry() {
     category: 'Cloud',
   };
 
-  let marketplace;
+  let marketplace: Record<string, unknown> | null = null;
   if (existsSync(mpPath)) {
     try {
-      marketplace = JSON.parse(readFileSync(mpPath, 'utf8'));
+      marketplace = asRecord(JSON.parse(readFileSync(mpPath, 'utf8')));
     } catch {
       marketplace = null;
     }
@@ -992,24 +1086,26 @@ function ensureCodexMarketplaceEntry() {
     };
   }
 
-  const existingIdx = marketplace.plugins.findIndex((p) => p.name === pluginName);
+  const plugins: unknown[] = Array.isArray(marketplace.plugins) ? marketplace.plugins : [];
+  const existingIdx = plugins.findIndex((p) => asRecord(p).name === pluginName);
   let changed = false;
   if (existingIdx >= 0) {
-    const existing = marketplace.plugins[existingIdx];
+    const existing = asRecord(plugins[existingIdx]);
     if (
-      existing.source?.path !== entry.source.path ||
-      existing.policy?.installation !== entry.policy.installation ||
-      existing.policy?.authentication !== entry.policy.authentication
+      asRecord(existing.source).path !== entry.source.path ||
+      asRecord(existing.policy).installation !== entry.policy.installation ||
+      asRecord(existing.policy).authentication !== entry.policy.authentication
     ) {
-      marketplace.plugins[existingIdx] = entry;
+      plugins[existingIdx] = entry;
       changed = true;
     }
   } else {
-    marketplace.plugins.push(entry);
+    plugins.push(entry);
     changed = true;
   }
 
   if (changed) {
+    marketplace.plugins = plugins;
     mkdirSync(dirname(mpPath), { recursive: true });
     writeFileSync(mpPath, JSON.stringify(marketplace, null, 2) + '\n');
     console.log(`  Marketplace updated: ${mpPath}`);
@@ -1018,24 +1114,26 @@ function ensureCodexMarketplaceEntry() {
   }
 }
 
-function removeCodexMarketplaceEntry() {
+function removeCodexMarketplaceEntry(): void {
   const mpPath = codexMarketplacePath();
   if (!existsSync(mpPath)) return;
-  let marketplace;
+  let marketplace: Record<string, unknown>;
   try {
-    marketplace = JSON.parse(readFileSync(mpPath, 'utf8'));
+    marketplace = asRecord(JSON.parse(readFileSync(mpPath, 'utf8')));
   } catch {
     return;
   }
   if (!marketplace.plugins) return;
-  const before = marketplace.plugins.length;
-  marketplace.plugins = marketplace.plugins.filter((p) => p.name !== 'huaweicloud-devkit');
-  if (marketplace.plugins.length === before) return;
+  const plugins: unknown[] = Array.isArray(marketplace.plugins) ? marketplace.plugins : [];
+  const before = plugins.length;
+  const filtered = plugins.filter((p) => asRecord(p).name !== 'huaweicloud-devkit');
+  if (filtered.length === before) return;
+  marketplace.plugins = filtered;
   writeFileSync(mpPath, JSON.stringify(marketplace, null, 2) + '\n');
   console.log('  Marketplace entry removed');
 }
 
-async function installOpenClaw() {
+async function installOpenClaw(): Promise<void> {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
   const distDir = join(PLUGIN_ROOT, 'dist');
@@ -1065,7 +1163,7 @@ async function installOpenClaw() {
   installRuntimeDeps(pluginDest);
 }
 
-function uninstallOpenClaw() {
+function uninstallOpenClaw(): void {
   const skillsDir = openclawSkillsDir();
   let removed = 0;
   if (existsSync(skillsDir)) {
@@ -1094,7 +1192,7 @@ function uninstallOpenClaw() {
   }
 }
 
-async function updateOpenClaw() {
+async function updateOpenClaw(): Promise<void> {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
   const distDir = join(PLUGIN_ROOT, 'dist');
@@ -1125,7 +1223,7 @@ async function updateOpenClaw() {
   installRuntimeDeps(pluginDest);
 }
 
-async function installCodexDesktop() {
+async function installCodexDesktop(): Promise<void> {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
   const distDir = join(PLUGIN_ROOT, 'dist');
@@ -1177,7 +1275,7 @@ async function installCodexDesktop() {
 }
 
 // Incremental update: overwrite copied files, prune stale ones, and only touch the config when necessary.
-async function updateCodexDesktop() {
+async function updateCodexDesktop(): Promise<void> {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
   const distDir = join(PLUGIN_ROOT, 'dist');
@@ -1221,7 +1319,7 @@ async function updateCodexDesktop() {
   installRuntimeDeps(pluginDest);
 }
 
-function uninstallCodexDesktop() {
+function uninstallCodexDesktop(): void {
   const pluginDest = codexDesktopPluginsDir();
   let removed = 0;
   const skillsDir = join(pluginDest, 'skills');
@@ -1261,7 +1359,7 @@ function uninstallCodexDesktop() {
   const configPath = join(homedir(), '.codex', 'config.toml');
   if (existsSync(configPath)) {
     const lines = readFileSync(configPath, 'utf8').split(/\r?\n/);
-    const out = [];
+    const out: string[] = [];
     let skip = false;
     for (const line of lines) {
       if (/^\[mcp_servers\.huaweicloud-devkit(\]|\.)/.test(line)) {
@@ -1276,49 +1374,52 @@ function uninstallCodexDesktop() {
   }
 }
 
-function registerCodeartsMcp(configPath, agentKey = 'codearts') {
+function registerCodeartsMcp(configPath: string, agentKey = 'codearts'): void {
   const mcpPath = join(codeartsPluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
   const hcloudBin = findHcloudBin();
-  const env = { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local' };
+  const env: Record<string, string> = { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local' };
   if (hcloudBin) env.HCLOUD_BIN = hcloudBin.replace(/\\/g, '/');
-  let config = {};
-  let existing;
+  let config: Record<string, unknown> = {};
+  let existing: unknown;
   if (existsSync(configPath)) {
     try {
-      config = JSON.parse(readFileSync(configPath, 'utf8'));
+      config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
     } catch {
       console.log(
         `  \x1b[33m[WARN]\x1b[0m Could not parse ${configPath}. Skipping MCP config write; ensure "mcpServers.huaweicloud-devkit" points to ${mcpPath}.`,
       );
       return;
     }
-    existing = config.mcpServers?.['huaweicloud-devkit'];
+    existing = asRecord(config.mcpServers)['huaweicloud-devkit'];
     if (existing) {
       const { entry, changed } = mergeArgsStyle(existing, { mcpPath, env });
       if (!changed) {
         console.log(`  MCP config unchanged: ${configPath}`);
         return;
       }
-      config.mcpServers['huaweicloud-devkit'] = entry;
+      const servers = asRecord(config.mcpServers);
+      servers['huaweicloud-devkit'] = entry;
+      config.mcpServers = servers;
       mkdirSync(dirname(configPath), { recursive: true });
       writeMcpSettingsFile(configPath, config);
       console.log(`  MCP config merged (user fields preserved): ${configPath}`);
       return;
     }
   }
-  config.mcpServers = config.mcpServers || {};
+  const servers: Record<string, unknown> = asRecord(config.mcpServers);
+  config.mcpServers = servers;
   let entry = mergeArgsStyle(undefined, { mcpPath, env }).entry;
   entry.enabled = true;
   // Restore user fields saved by a previous uninstall (issue #615).
   const delta = takeAgentDelta(agentKey);
-  if (delta) entry = applyUserDelta(entry, delta, 'args');
-  config.mcpServers['huaweicloud-devkit'] = entry;
+  if (delta) entry = asRecord(applyUserDelta(entry, delta, 'args'));
+  servers['huaweicloud-devkit'] = entry;
   mkdirSync(dirname(configPath), { recursive: true });
   writeMcpSettingsFile(configPath, config);
   console.log(`  MCP config updated: ${configPath}`);
 }
 
-async function installCodeArts() {
+async function installCodeArts(): Promise<void> {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
@@ -1347,7 +1448,7 @@ async function installCodeArts() {
 }
 
 // Incremental update: overwrite copied files, prune stale ones, and only touch the config when necessary.
-async function updateCodeArts() {
+async function updateCodeArts(): Promise<void> {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
@@ -1377,7 +1478,7 @@ async function updateCodeArts() {
   installRuntimeDeps(pluginDest);
 }
 
-function uninstallCodeArts() {
+function uninstallCodeArts(): void {
   let removed = 0;
   for (const skillsDir of [codeartsSkillsDir(), codeartsProjectSkillsDir()]) {
     if (!existsSync(skillsDir)) continue;
@@ -1400,22 +1501,24 @@ function uninstallCodeArts() {
   }
   for (const configPath of [codeartsMcpSettingsFile(), codeartsProjectMcpSettingsFile()]) {
     if (!existsSync(configPath)) continue;
-    let config = {};
+    let config: Record<string, unknown> = {};
     try {
-      config = JSON.parse(readFileSync(configPath, 'utf8'));
+      config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
     } catch {}
-    if (config.mcpServers?.['huaweicloud-devkit']) {
-      const delta = extractUserDelta(config.mcpServers['huaweicloud-devkit'], 'args');
+    const servers = asRecord(config.mcpServers);
+    if (servers['huaweicloud-devkit']) {
+      const delta = extractUserDelta(servers['huaweicloud-devkit'], 'args');
       if (delta) saveAgentDelta('codearts', delta);
-      delete config.mcpServers['huaweicloud-devkit'];
-      if (Object.keys(config.mcpServers).length === 0) delete config.mcpServers;
+      delete servers['huaweicloud-devkit'];
+      config.mcpServers = servers;
+      if (Object.keys(servers).length === 0) delete config.mcpServers;
       writeMcpSettingsFile(configPath, config);
       console.log(`  Config cleaned: ${configPath}`);
     }
   }
 }
 
-function codeartsStatus() {
+function codeartsStatus(): void {
   const pluginDir = codeartsPluginsDir();
   console.log(
     `  MCP Server: ${mcpServerInstalled(pluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
@@ -1434,9 +1537,9 @@ function codeartsStatus() {
   );
   if (existsSync(codeartsMcpSettingsFile())) {
     try {
-      const config = JSON.parse(readFileSync(codeartsMcpSettingsFile(), 'utf8'));
+      const config = asRecord(JSON.parse(readFileSync(codeartsMcpSettingsFile(), 'utf8')));
       console.log(
-        `  MCP config: ${config.mcpServers?.['huaweicloud-devkit'] ? '\x1b[32mConfigured\x1b[0m' : '\x1b[31mNot configured\x1b[0m'}`,
+        `  MCP config: ${asRecord(config.mcpServers)['huaweicloud-devkit'] ? '\x1b[32mConfigured\x1b[0m' : '\x1b[31mNot configured\x1b[0m'}`,
       );
     } catch {
       console.log(`  MCP config: \x1b[31mInvalid\x1b[0m`);
@@ -1446,23 +1549,23 @@ function codeartsStatus() {
 
 // --- CodeArts Work (CodeArts Space) ---
 
-function registerCodeartsWorkMcp() {
+function registerCodeartsWorkMcp(): void {
   const configPath = codeartsWorkMcpSettingsFile();
   const mcpPath = join(codeartsWorkPluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
-  const environment = { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local' };
+  const environment: Record<string, string> = { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local' };
   const hcloudBin = findHcloudBin();
   if (hcloudBin) environment.HCLOUD_BIN = hcloudBin.replace(/\\/g, '/');
-  let config = {};
+  let config: Record<string, unknown> = {};
   if (existsSync(configPath)) {
     try {
-      config = JSON.parse(readFileSync(configPath, 'utf8'));
+      config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
     } catch {
       console.log(
         `  \x1b[33m[WARN]\x1b[0m Could not parse ${configPath}. Skipping MCP config write; ensure "mcp.huaweicloud-devkit" points to ${mcpPath}.`,
       );
       return;
     }
-    const existing = config.mcp?.['huaweicloud-devkit'];
+    const existing: unknown = asRecord(config.mcp)['huaweicloud-devkit'];
     if (existing) {
       // codearts-work uses `command` array + `environment` naming; adapt via mergeCommandStyle.
       const { entry, changed } = mergeCommandStyle(existing, { mcpPath });
@@ -1470,42 +1573,47 @@ function registerCodeartsWorkMcp() {
         console.log(`  MCP config unchanged: ${configPath}`);
         return;
       }
-      const merged = { ...entry };
+      const merged: Record<string, unknown> = { ...entry };
+      const existingEnv: unknown = asRecord(existing).environment;
       merged.environment = {
-        ...(isPlainLocal(existing.environment) ? existing.environment : {}),
+        ...(isPlainLocal(existingEnv) ? asRecord(existingEnv) : {}),
         HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local',
       };
-      if (hcloudBin && merged.environment.HCLOUD_BIN === undefined) {
-        merged.environment.HCLOUD_BIN = hcloudBin.replace(/\\/g, '/');
+      const mergedEnv = asRecord(merged.environment);
+      if (hcloudBin && mergedEnv.HCLOUD_BIN === undefined) {
+        mergedEnv.HCLOUD_BIN = hcloudBin.replace(/\\/g, '/');
       }
-      config.mcp['huaweicloud-devkit'] = merged;
+      const mcpMap = asRecord(config.mcp);
+      mcpMap['huaweicloud-devkit'] = merged;
+      config.mcp = mcpMap;
       mkdirSync(dirname(configPath), { recursive: true });
       writeMcpSettingsFile(configPath, config);
       console.log(`  MCP config merged (user fields preserved): ${configPath}`);
       return;
     }
   }
-  config.mcp = config.mcp || {};
+  const mcpMap: Record<string, unknown> = asRecord(config.mcp);
+  config.mcp = mcpMap;
   let entry = mergeCommandStyle(undefined, { mcpPath }).entry;
   entry.environment = { ...environment };
   // Inherit user-owned env (e.g. market-preset `huaweicloud-devkit_1` carrying the
   // user's temporary STS credentials) so a freshly installed key also has them.
-  const peerEnv = inheritPeerUserEnv(config.mcp);
-  if (peerEnv) entry.environment = { ...peerEnv, ...entry.environment };
+  const peerEnv = inheritPeerUserEnv(mcpMap);
+  if (peerEnv) entry.environment = { ...peerEnv, ...asRecord(entry.environment) };
   // Restore user fields saved by a previous uninstall (issue #615).
   const delta = takeAgentDelta('codearts-work');
-  if (delta) entry = applyUserDelta(entry, delta, 'command');
-  config.mcp['huaweicloud-devkit'] = entry;
+  if (delta) entry = asRecord(applyUserDelta(entry, delta, 'command'));
+  mcpMap['huaweicloud-devkit'] = entry;
   mkdirSync(dirname(configPath), { recursive: true });
   writeMcpSettingsFile(configPath, config);
   console.log(`  MCP config updated: ${configPath}`);
 }
 
-function isPlainLocal(value) {
+function isPlainLocal(value: unknown): boolean {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-async function installCodeArtsWork() {
+async function installCodeArtsWork(): Promise<void> {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
@@ -1523,7 +1631,7 @@ async function installCodeArtsWork() {
   installRuntimeDeps(pluginDest);
 }
 
-async function updateCodeArtsWork() {
+async function updateCodeArtsWork(): Promise<void> {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
@@ -1541,7 +1649,7 @@ async function updateCodeArtsWork() {
   installRuntimeDeps(pluginDest);
 }
 
-function uninstallCodeArtsWork() {
+function uninstallCodeArtsWork(): void {
   const skillsDir = codeartsWorkSkillsDir();
   if (existsSync(skillsDir)) {
     let removed = 0;
@@ -1559,22 +1667,24 @@ function uninstallCodeArtsWork() {
 
   const configPath = codeartsWorkMcpSettingsFile();
   if (existsSync(configPath)) {
-    let config = {};
+    let config: Record<string, unknown> = {};
     try {
-      config = JSON.parse(readFileSync(configPath, 'utf8'));
+      config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
     } catch {}
-    if (config.mcp?.['huaweicloud-devkit']) {
-      const delta = extractUserDelta(config.mcp['huaweicloud-devkit'], 'command');
+    const mcpMap = asRecord(config.mcp);
+    if (mcpMap['huaweicloud-devkit']) {
+      const delta = extractUserDelta(mcpMap['huaweicloud-devkit'], 'command');
       if (delta) saveAgentDelta('codearts-work', delta);
-      delete config.mcp['huaweicloud-devkit'];
-      if (Object.keys(config.mcp).length === 0) delete config.mcp;
+      delete mcpMap['huaweicloud-devkit'];
+      config.mcp = mcpMap;
+      if (Object.keys(mcpMap).length === 0) delete config.mcp;
       writeMcpSettingsFile(configPath, config);
       console.log(`  Config cleaned: ${configPath}`);
     }
   }
 }
 
-function codeartsWorkStatus() {
+function codeartsWorkStatus(): void {
   const pluginDir = codeartsWorkPluginsDir();
   console.log(
     `  MCP Server: ${mcpServerInstalled(pluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
@@ -1593,9 +1703,9 @@ function codeartsWorkStatus() {
   );
   if (existsSync(codeartsWorkMcpSettingsFile())) {
     try {
-      const config = JSON.parse(readFileSync(codeartsWorkMcpSettingsFile(), 'utf8'));
+      const config = asRecord(JSON.parse(readFileSync(codeartsWorkMcpSettingsFile(), 'utf8')));
       console.log(
-        `  MCP config: ${config.mcp?.['huaweicloud-devkit'] ? '\x1b[32mConfigured\x1b[0m' : '\x1b[31mNot configured\x1b[0m'}`,
+        `  MCP config: ${asRecord(config.mcp)['huaweicloud-devkit'] ? '\x1b[32mConfigured\x1b[0m' : '\x1b[31mNot configured\x1b[0m'}`,
       );
     } catch {
       console.log(`  MCP config: \x1b[31mInvalid\x1b[0m`);
@@ -1604,42 +1714,45 @@ function codeartsWorkStatus() {
 }
 
 // Returns true when the config file was written, false when it was already correct.
-function ensureWorkbuddyMcpConfig() {
+function ensureWorkbuddyMcpConfig(): boolean {
   const configPath = workbuddyMcpConfigFile();
   const mcpPath = join(workbuddyPluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
-  const env = { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local' };
+  const env: Record<string, string> = { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local' };
   const hcloudBin = findHcloudBin();
   if (hcloudBin) env.HCLOUD_BIN = hcloudBin.replace(/\\/g, '/');
-  let config = {};
+  let config: Record<string, unknown> = {};
   if (existsSync(configPath)) {
     try {
-      config = JSON.parse(readFileSync(configPath, 'utf8'));
+      config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
     } catch {
       console.log(
         `  \x1b[33m[WARN]\x1b[0m Could not parse ${configPath}. Skipping MCP config write; ensure "mcpServers.huaweicloud-devkit" points to ${mcpPath}.`,
       );
       return false;
     }
-    const existing = config.mcpServers?.['huaweicloud-devkit'];
+    const existing: unknown = asRecord(config.mcpServers)['huaweicloud-devkit'];
     if (existing) {
       const { entry, changed } = mergeArgsStyle(existing, { mcpPath, env });
       if (!changed) {
         console.log(`  MCP config unchanged: ${configPath}`);
         return false;
       }
-      config.mcpServers['huaweicloud-devkit'] = entry;
+      const servers = asRecord(config.mcpServers);
+      servers['huaweicloud-devkit'] = entry;
+      config.mcpServers = servers;
       mkdirSync(dirname(configPath), { recursive: true });
       writeMcpSettingsFile(configPath, config);
       console.log(`  MCP config merged (user fields preserved): ${configPath}`);
       return true;
     }
   }
-  config.mcpServers = config.mcpServers || {};
+  const servers: Record<string, unknown> = asRecord(config.mcpServers);
+  config.mcpServers = servers;
   let entry = mergeArgsStyle(undefined, { mcpPath, env }).entry;
   // Restore user fields saved by a previous uninstall (issue #615).
   const delta = takeAgentDelta('workbuddy');
-  if (delta) entry = applyUserDelta(entry, delta, 'args');
-  config.mcpServers['huaweicloud-devkit'] = entry;
+  if (delta) entry = asRecord(applyUserDelta(entry, delta, 'args'));
+  servers['huaweicloud-devkit'] = entry;
   mkdirSync(dirname(configPath), { recursive: true });
   writeMcpSettingsFile(configPath, config);
   console.log(`  MCP config updated: ${configPath}`);
@@ -1648,7 +1761,7 @@ function ensureWorkbuddyMcpConfig() {
 
 // Resolve WorkBuddy's managed Python binary to run the hook tracker.
 // Falls back to a version-specific path if "current" symlink doesn't exist.
-function resolveWorkBuddyPython() {
+function resolveWorkBuddyPython(): string | null {
   const versionsDir = join(homedir(), '.workbuddy', 'binaries', 'python', 'versions');
   const candidates = [
     join(versionsDir, 'current', 'python.exe'),
@@ -1664,7 +1777,7 @@ function resolveWorkBuddyPython() {
 
 // Deploy hook-based telemetry (PostToolUse tracker) and plugin safety hooks
 // for WorkBuddy. Idempotent — safe to run on install and update.
-function deployWorkBuddyHooks() {
+function deployWorkBuddyHooks(): void {
   const pythonBin = resolveWorkBuddyPython();
   if (!pythonBin) return;
 
@@ -1693,24 +1806,26 @@ function deployWorkBuddyHooks() {
     hooks: [{ type: 'command', command: trackerCmd, timeout: 3 }],
   };
 
-  let settings = {};
+  let settings: Record<string, unknown> = {};
   if (existsSync(settingsPath)) {
     try {
-      settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+      settings = asRecord(JSON.parse(readFileSync(settingsPath, 'utf8')));
     } catch {
       console.log(`  \x1b[33m[WARN]\x1b[0m Could not parse ${settingsPath}; hook config not merged.`);
       settings = {};
     }
   }
 
-  settings.hooks = settings.hooks || {};
-  if (!settings.hooks.PostToolUse) {
-    settings.hooks.PostToolUse = [newEntry];
+  const hooksMap: Record<string, unknown> = asRecord(settings.hooks);
+  settings.hooks = hooksMap;
+  const postToolUse: unknown[] = Array.isArray(hooksMap.PostToolUse) ? hooksMap.PostToolUse : [];
+  if (postToolUse.length === 0) {
+    hooksMap.PostToolUse = [newEntry];
   } else {
     // Avoid duplicate: only add if our matcher isn't already present
-    const matchers = settings.hooks.PostToolUse.map((e) => e?.matcher || '');
+    const matchers: unknown[] = postToolUse.map((e) => asRecord(e).matcher || '');
     if (!matchers.includes('*')) {
-      settings.hooks.PostToolUse.push(newEntry);
+      postToolUse.push(newEntry);
     }
   }
 
@@ -1725,7 +1840,7 @@ function deployWorkBuddyHooks() {
 
 // ── AtomCode hooks deployment ────────────────────────────────
 
-function deployAtomcodeHooks() {
+function deployAtomcodeHooks(): void {
   const hooksDestDir = join(atomcodePluginsDir(), 'hooks');
   const hooksSrc = join(PACKAGE_ROOT, 'integrations', 'atomcode', 'hooks', 'huaweicloud-telemetry.js');
 
@@ -1741,18 +1856,19 @@ function deployAtomcodeHooks() {
   const nodeBin = process.execPath;
   const hookCmd = `${nodeBin} ${join(atomcodePluginsDir(), 'hooks', 'huaweicloud-telemetry.js').replace(/\\/g, '/')}`;
 
-  let hooksConfig = {};
+  let hooksConfig: Record<string, unknown> = {};
   if (existsSync(hooksConfigPath)) {
     try {
-      hooksConfig = JSON.parse(readFileSync(hooksConfigPath, 'utf8'));
+      hooksConfig = asRecord(JSON.parse(readFileSync(hooksConfigPath, 'utf8')));
     } catch {
       console.log(`  \x1b[33m[WARN]\x1b[0m Could not parse ${hooksConfigPath}; hook config not merged.`);
       hooksConfig = {};
     }
   }
 
-  hooksConfig.hooks = hooksConfig.hooks || {};
-  hooksConfig.hooks['hw-telemetry'] = {
+  const hooksMap: Record<string, unknown> = asRecord(hooksConfig.hooks);
+  hooksConfig.hooks = hooksMap;
+  hooksMap['hw-telemetry'] = {
     event: 'pre_tool_use',
     command: hookCmd,
     timeout_ms: 2000,
@@ -1763,29 +1879,31 @@ function deployAtomcodeHooks() {
   console.log(`  Hook config -> ${hooksConfigPath}`);
 }
 
-function removeAtomcodeHooks() {
+function removeAtomcodeHooks(): void {
   // Remove hook script
   removeIfExists(join(atomcodePluginsDir(), 'hooks', 'huaweicloud-telemetry.js'));
 
   // Remove hw-telemetry entry from hooks.json
   const hooksConfigPath = join(atomcodeHome(), 'hooks.json');
   if (existsSync(hooksConfigPath)) {
-    let hooksConfig;
+    let hooksConfig: Record<string, unknown>;
     try {
-      hooksConfig = JSON.parse(readFileSync(hooksConfigPath, 'utf8'));
+      hooksConfig = asRecord(JSON.parse(readFileSync(hooksConfigPath, 'utf8')));
     } catch {
       return;
     }
-    if (hooksConfig.hooks?.['hw-telemetry']) {
-      delete hooksConfig.hooks['hw-telemetry'];
-      if (Object.keys(hooksConfig.hooks).length === 0) delete hooksConfig.hooks;
+    const hooksMap = asRecord(hooksConfig.hooks);
+    if (hooksMap['hw-telemetry']) {
+      delete hooksMap['hw-telemetry'];
+      hooksConfig.hooks = hooksMap;
+      if (Object.keys(hooksMap).length === 0) delete hooksConfig.hooks;
       writeFileSync(hooksConfigPath, JSON.stringify(hooksConfig, null, 2) + '\n');
       console.log(`  Hook config cleaned: ${hooksConfigPath}`);
     }
   }
 }
 
-async function installWorkBuddy() {
+async function installWorkBuddy(): Promise<void> {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
@@ -1807,7 +1925,7 @@ async function installWorkBuddy() {
 }
 
 // Incremental update: overwrite copied files, prune stale ones, and only touch the config when necessary.
-async function updateWorkBuddy() {
+async function updateWorkBuddy(): Promise<void> {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
@@ -1828,7 +1946,7 @@ async function updateWorkBuddy() {
   deployWorkBuddyHooks();
 }
 
-function uninstallWorkBuddy() {
+function uninstallWorkBuddy(): void {
   const skillsDir = workbuddySkillsDir();
   let removed = 0;
   if (existsSync(skillsDir)) {
@@ -1846,15 +1964,17 @@ function uninstallWorkBuddy() {
 
   const configPath = workbuddyMcpConfigFile();
   if (existsSync(configPath)) {
-    let config = {};
+    let config: Record<string, unknown> = {};
     try {
-      config = JSON.parse(readFileSync(configPath, 'utf8'));
+      config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
     } catch {}
-    if (config.mcpServers?.['huaweicloud-devkit']) {
-      const delta = extractUserDelta(config.mcpServers['huaweicloud-devkit'], 'args');
+    const servers = asRecord(config.mcpServers);
+    if (servers['huaweicloud-devkit']) {
+      const delta = extractUserDelta(servers['huaweicloud-devkit'], 'args');
       if (delta) saveAgentDelta('workbuddy', delta);
-      delete config.mcpServers['huaweicloud-devkit'];
-      if (Object.keys(config.mcpServers).length === 0) delete config.mcpServers;
+      delete servers['huaweicloud-devkit'];
+      config.mcpServers = servers;
+      if (Object.keys(servers).length === 0) delete config.mcpServers;
       writeMcpSettingsFile(configPath, config);
       console.log(`  MCP config cleaned: ${configPath}`);
     }
@@ -1863,17 +1983,20 @@ function uninstallWorkBuddy() {
   // Clean up hook-based telemetry artifacts
   const settingsPath = join(homedir(), '.workbuddy', 'settings.json');
   if (existsSync(settingsPath)) {
-    let settings = {};
+    let settings: Record<string, unknown> = {};
     try {
-      settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+      settings = asRecord(JSON.parse(readFileSync(settingsPath, 'utf8')));
     } catch {}
-    if (settings.hooks?.PostToolUse) {
-      const before = settings.hooks.PostToolUse.length;
-      settings.hooks.PostToolUse = settings.hooks.PostToolUse.filter((e) => e?.matcher !== '*');
-      const after = settings.hooks.PostToolUse.length;
-      if (after === 0) delete settings.hooks.PostToolUse;
-      if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
-      if (before !== after) {
+    const hooksMap = asRecord(settings.hooks);
+    if (hooksMap.PostToolUse) {
+      const postToolUse: unknown[] = Array.isArray(hooksMap.PostToolUse) ? hooksMap.PostToolUse : [];
+      const before = postToolUse.length;
+      hooksMap.PostToolUse = postToolUse.filter((e) => asRecord(e).matcher !== '*');
+      const after: unknown[] = Array.isArray(hooksMap.PostToolUse) ? hooksMap.PostToolUse : [];
+      if (after.length === 0) delete hooksMap.PostToolUse;
+      settings.hooks = hooksMap;
+      if (Object.keys(hooksMap).length === 0) delete settings.hooks;
+      if (before !== after.length) {
         writeFileSync(settingsPath, JSON.stringify(settings, null, 4) + '\n');
         console.log(`  PostToolUse hook removed from ${settingsPath}`);
       }
@@ -1893,7 +2016,7 @@ function uninstallWorkBuddy() {
   }
 }
 
-function workbuddyStatus() {
+function workbuddyStatus(): void {
   const pluginDir = workbuddyPluginsDir();
   const skillsDir = workbuddySkillsDir();
   console.log(
@@ -1914,9 +2037,9 @@ function workbuddyStatus() {
   const configPath = workbuddyMcpConfigFile();
   if (existsSync(configPath)) {
     try {
-      const config = JSON.parse(readFileSync(configPath, 'utf8'));
+      const config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
       console.log(
-        `  MCP config: ${config.mcpServers?.['huaweicloud-devkit'] ? '\x1b[32mConfigured\x1b[0m' : '\x1b[31mNot configured\x1b[0m'}`,
+        `  MCP config: ${asRecord(config.mcpServers)['huaweicloud-devkit'] ? '\x1b[32mConfigured\x1b[0m' : '\x1b[31mNot configured\x1b[0m'}`,
       );
     } catch {
       console.log(`  MCP config: \x1b[31mInvalid\x1b[0m`);
@@ -1926,8 +2049,9 @@ function workbuddyStatus() {
   let hookConfigured = false;
   if (existsSync(settingsPath)) {
     try {
-      const s = JSON.parse(readFileSync(settingsPath, 'utf8'));
-      hookConfigured = s.hooks?.PostToolUse?.some((e) => e?.matcher === '*') || false;
+      const s = asRecord(JSON.parse(readFileSync(settingsPath, 'utf8')));
+      const postToolUse: unknown = asRecord(s.hooks).PostToolUse;
+      hookConfigured = Array.isArray(postToolUse) && postToolUse.some((e) => asRecord(e).matcher === '*');
     } catch {}
   }
   const hookTrackerInstalled = existsSync(join(homedir(), '.codebuddy', 'hooks', 'telemetry-tracker.py'));
@@ -1936,49 +2060,52 @@ function workbuddyStatus() {
   );
 }
 
-function ensureAtomcodeMcpConfig() {
+function ensureAtomcodeMcpConfig(): boolean {
   const configPath = atomcodeMcpConfigFile();
   const mcpPath = join(atomcodePluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
-  const env = { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local', AGENT_HARNESS: 'atomcode' };
+  const env: Record<string, string> = { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local', AGENT_HARNESS: 'atomcode' };
   const hcloudBin = findHcloudBin();
   if (hcloudBin) env.HCLOUD_BIN = hcloudBin.replace(/\\/g, '/');
-  let config = {};
+  let config: Record<string, unknown> = {};
   if (existsSync(configPath)) {
     try {
-      config = JSON.parse(readFileSync(configPath, 'utf8'));
+      config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
     } catch {
       console.log(
         `  \x1b[33m[WARN]\x1b[0m Could not parse ${configPath}. Skipping MCP config write; ensure "mcpServers.huaweicloud-devkit" points to ${mcpPath}.`,
       );
       return false;
     }
-    const existing = config.mcpServers?.['huaweicloud-devkit'];
+    const existing: unknown = asRecord(config.mcpServers)['huaweicloud-devkit'];
     if (existing) {
       const { entry, changed } = mergeArgsStyle(existing, { mcpPath, env });
       if (!changed) {
         console.log(`  MCP config unchanged: ${configPath}`);
         return false;
       }
-      config.mcpServers['huaweicloud-devkit'] = entry;
+      const servers = asRecord(config.mcpServers);
+      servers['huaweicloud-devkit'] = entry;
+      config.mcpServers = servers;
       mkdirSync(dirname(configPath), { recursive: true });
       writeMcpSettingsFile(configPath, config);
       console.log(`  MCP config merged (user fields preserved): ${configPath}`);
       return true;
     }
   }
-  config.mcpServers = config.mcpServers || {};
+  const servers: Record<string, unknown> = asRecord(config.mcpServers);
+  config.mcpServers = servers;
   let entry = mergeArgsStyle(undefined, { mcpPath, env }).entry;
   // Restore user fields saved by a previous uninstall (issue #615).
   const delta = takeAgentDelta('atomcode');
-  if (delta) entry = applyUserDelta(entry, delta, 'args');
-  config.mcpServers['huaweicloud-devkit'] = entry;
+  if (delta) entry = asRecord(applyUserDelta(entry, delta, 'args'));
+  servers['huaweicloud-devkit'] = entry;
   mkdirSync(dirname(configPath), { recursive: true });
   writeMcpSettingsFile(configPath, config);
   console.log(`  MCP config updated: ${configPath}`);
   return true;
 }
 
-async function installAtomCode() {
+async function installAtomCode(): Promise<void> {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
@@ -1998,7 +2125,7 @@ async function installAtomCode() {
 }
 
 // Incremental update: overwrite copied files, prune stale ones, and only touch the config when necessary.
-async function updateAtomCode() {
+async function updateAtomCode(): Promise<void> {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
@@ -2018,7 +2145,7 @@ async function updateAtomCode() {
   installRuntimeDeps(pluginDest);
 }
 
-function uninstallAtomCode() {
+function uninstallAtomCode(): void {
   const skillsDir = atomcodeSkillsDir();
   let removed = 0;
   if (existsSync(skillsDir)) {
@@ -2038,22 +2165,24 @@ function uninstallAtomCode() {
 
   const configPath = atomcodeMcpConfigFile();
   if (existsSync(configPath)) {
-    let config = {};
+    let config: Record<string, unknown> = {};
     try {
-      config = JSON.parse(readFileSync(configPath, 'utf8'));
+      config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
     } catch {}
-    if (config.mcpServers?.['huaweicloud-devkit']) {
-      const delta = extractUserDelta(config.mcpServers['huaweicloud-devkit'], 'args');
+    const servers = asRecord(config.mcpServers);
+    if (servers['huaweicloud-devkit']) {
+      const delta = extractUserDelta(servers['huaweicloud-devkit'], 'args');
       if (delta) saveAgentDelta('atomcode', delta);
-      delete config.mcpServers['huaweicloud-devkit'];
-      if (Object.keys(config.mcpServers).length === 0) delete config.mcpServers;
+      delete servers['huaweicloud-devkit'];
+      config.mcpServers = servers;
+      if (Object.keys(servers).length === 0) delete config.mcpServers;
       writeMcpSettingsFile(configPath, config);
       console.log(`  MCP config cleaned: ${configPath}`);
     }
   }
 }
 
-function atomcodeStatus() {
+function atomcodeStatus(): void {
   const pluginDir = atomcodePluginsDir();
   const skillsDir = atomcodeSkillsDir();
   console.log(
@@ -2074,9 +2203,9 @@ function atomcodeStatus() {
   const configPath = atomcodeMcpConfigFile();
   if (existsSync(configPath)) {
     try {
-      const config = JSON.parse(readFileSync(configPath, 'utf8'));
+      const config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
       console.log(
-        `  MCP config: ${config.mcpServers?.['huaweicloud-devkit'] ? '\x1b[32mConfigured\x1b[0m' : '\x1b[31mNot configured\x1b[0m'}`,
+        `  MCP config: ${asRecord(config.mcpServers)['huaweicloud-devkit'] ? '\x1b[32mConfigured\x1b[0m' : '\x1b[31mNot configured\x1b[0m'}`,
       );
     } catch {
       console.log(`  MCP config: \x1b[31mInvalid\x1b[0m`);
@@ -2084,13 +2213,13 @@ function atomcodeStatus() {
   }
 }
 
-function dshMcpServerPath() {
+function dshMcpServerPath(): string {
   return join(dshPluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
 }
 
-function dshPatchBlock() {
+function dshPatchBlock(): string {
   const hcloudBin = findHcloudBin();
-  const envLines = ['          HUAWEICLOUD_AGENT_TOOLKIT_MODE: local'];
+  const envLines: string[] = ['          HUAWEICLOUD_AGENT_TOOLKIT_MODE: local'];
   if (hcloudBin) {
     envLines.push(`          HCLOUD_BIN: '${hcloudBin.replace(/\\/g, '/').replace(/'/g, "''")}'`);
   }
@@ -2114,11 +2243,11 @@ function dshPatchBlock() {
   ].join('\n');
 }
 
-function escapeRegExp(value) {
+function escapeRegExp(value: unknown): string {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function removeManagedDshPatchBlock(content) {
+function removeManagedDshPatchBlock(content: unknown): string {
   const pattern = new RegExp(
     `\\n?${escapeRegExp(DSH_MCP_PATCH_START)}[\\s\\S]*?${escapeRegExp(DSH_MCP_PATCH_END)}\\s*`,
     'g',
@@ -2129,7 +2258,7 @@ function removeManagedDshPatchBlock(content) {
     .trimEnd();
 }
 
-function dshPatchHasOnlyCommentsOrEmptyList(content) {
+function dshPatchHasOnlyCommentsOrEmptyList(content: unknown): boolean {
   const meaningful = String(content || '')
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -2137,7 +2266,7 @@ function dshPatchHasOnlyCommentsOrEmptyList(content) {
   return meaningful.length === 0 || (meaningful.length === 1 && meaningful[0] === '[]');
 }
 
-function ensureDshMcpPatch() {
+function ensureDshMcpPatch(): boolean {
   const patchFile = dshPatchFile();
   let existing = existsSync(patchFile) ? readFileSync(patchFile, 'utf8') : '';
 
@@ -2158,7 +2287,7 @@ function ensureDshMcpPatch() {
 
   // Fallback for standalone usage: write a managed block when no bundle.
   const block = dshPatchBlock();
-  let next;
+  let next: string;
   if (dshPatchHasOnlyCommentsOrEmptyList(cleaned)) {
     const prefix = cleaned
       .split(/\r?\n/)
@@ -2179,7 +2308,7 @@ function ensureDshMcpPatch() {
   return true;
 }
 
-function removeDshMcpPatch() {
+function removeDshMcpPatch(): boolean {
   const patchFile = dshPatchFile();
   if (!existsSync(patchFile)) return false;
   const existing = readFileSync(patchFile, 'utf8');
@@ -2196,7 +2325,7 @@ function removeDshMcpPatch() {
   return true;
 }
 
-function dshPatchConfigured() {
+function dshPatchConfigured(): boolean {
   const patchFile = dshPatchFile();
   if (!existsSync(patchFile)) return false;
   try {
@@ -2212,7 +2341,7 @@ function dshPatchConfigured() {
   }
 }
 
-function commandAvailable(command, args = ['--version']) {
+function commandAvailable(command: string, args: string[] = ['--version']): boolean {
   try {
     const r = spawnSync(command, args, { shell: false, windowsHide: true, stdio: 'pipe', timeout: 10000 });
     if (r.status === 0) return true;
@@ -2226,7 +2355,7 @@ function commandAvailable(command, args = ['--version']) {
   return false;
 }
 
-function dshMcpClientAvailable() {
+function dshMcpClientAvailable(): boolean {
   const modulePath = join('node_modules', '@deepseek-ai', 'dsh-mcp-client', 'package.json');
   const candidates = [
     join(dshProfileDir(), modulePath),
@@ -2237,16 +2366,17 @@ function dshMcpClientAvailable() {
   const pkgPath = join(dshProfileDir(), 'package.json');
   if (!existsSync(pkgPath)) return false;
   try {
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+    const pkg = asRecord(JSON.parse(readFileSync(pkgPath, 'utf8')));
     return Boolean(
-      pkg.dependencies?.['@deepseek-ai/dsh-mcp-client'] || pkg.devDependencies?.['@deepseek-ai/dsh-mcp-client'],
+      asRecord(pkg.dependencies)['@deepseek-ai/dsh-mcp-client'] ||
+      asRecord(pkg.devDependencies)['@deepseek-ai/dsh-mcp-client'],
     );
   } catch {
     return false;
   }
 }
 
-function tryInstallDshMcpClient() {
+function tryInstallDshMcpClient(): boolean {
   if (process.env.HUAWEICLOUD_DEVKIT_SKIP_DSH_PLUGIN_INSTALL === '1') {
     console.log('  DSH MCP client install skipped by environment');
     return false;
@@ -2286,7 +2416,7 @@ function tryInstallDshMcpClient() {
   return false;
 }
 
-async function installDsh() {
+async function installDsh(): Promise<void> {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
@@ -2308,7 +2438,7 @@ async function installDsh() {
   writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
 }
 
-async function updateDsh() {
+async function updateDsh(): Promise<void> {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
@@ -2331,7 +2461,7 @@ async function updateDsh() {
   writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
 }
 
-function uninstallDsh() {
+function uninstallDsh(): void {
   const skillsDir = dshSkillsDir();
   const oldHookFile = join(dshRoot(), 'plugins', 'skill-tracker.js');
   let removed = 0;
@@ -2359,7 +2489,7 @@ function uninstallDsh() {
   removeDshMcpPatch();
 }
 
-function dshStatus() {
+function dshStatus(): void {
   const pluginDir = dshPluginsDir();
   const skillsDir = dshSkillsDir();
   console.log(
@@ -2386,9 +2516,9 @@ function dshStatus() {
   );
 }
 
-async function promptOfficeaceInstallDir() {
+async function promptOfficeaceInstallDir(): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const ask = (q) => new Promise((resolve) => rl.question(q, resolve));
+  const ask = (q: string): Promise<string> => new Promise((resolve) => rl.question(q, resolve));
   while (true) {
     const path = (await ask('  Install directory: ')).trim();
     if (!path) {
@@ -2405,7 +2535,7 @@ async function promptOfficeaceInstallDir() {
   }
 }
 
-async function installOfficeAce() {
+async function installOfficeAce(): Promise<void> {
   if (!officeaceCapabilitiesDir()) {
     if (process.stdin.isTTY) {
       console.log('  \x1b[33mOfficeAce install directory not found automatically.\x1b[0m');
@@ -2446,7 +2576,7 @@ async function installOfficeAce() {
   if (resolvedRoot) writeOfficeaceRootMarker(resolvedRoot);
 }
 
-async function updateOfficeAce() {
+async function updateOfficeAce(): Promise<void> {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
@@ -2473,7 +2603,7 @@ async function updateOfficeAce() {
   writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
 }
 
-function uninstallOfficeAce() {
+function uninstallOfficeAce(): void {
   const skillsDir = officeaceSkillsDir();
   let removed = 0;
   if (existsSync(skillsDir)) {
@@ -2498,7 +2628,7 @@ function uninstallOfficeAce() {
   removeOfficeaceMcpFromSqlite();
 }
 
-function officeaceStatus() {
+function officeaceStatus(): void {
   const pluginDir = officeacePluginsDir();
   const skillsDir = officeaceSkillsDir();
   console.log(
@@ -2520,11 +2650,15 @@ function officeaceStatus() {
   if (existsSync(dbPath)) {
     try {
       const db = openOfficeaceDb();
-      const row = db.prepare("SELECT enabled, status FROM mcp_connectors WHERE name = 'huaweicloud-devkit'").get();
+      const row: unknown = db
+        .prepare("SELECT enabled, status FROM mcp_connectors WHERE name = 'huaweicloud-devkit'")
+        .get();
       db.close();
       if (row) {
-        const statusIcon = row.status === 'connected' ? '\x1b[32m' : '\x1b[33m';
-        console.log(`  MCP config: ${statusIcon}${row.status}\x1b[0m (enabled: ${row.enabled ? 'yes' : 'no'})`);
+        const record = asRecord(row);
+        const status: unknown = record.status;
+        const statusIcon = status === 'connected' ? '\x1b[32m' : '\x1b[33m';
+        console.log(`  MCP config: ${statusIcon}${String(status)}\x1b[0m (enabled: ${record.enabled ? 'yes' : 'no'})`);
       } else {
         console.log(`  MCP config: \x1b[31mNot configured\x1b[0m`);
       }
@@ -2544,38 +2678,38 @@ function officeaceStatus() {
 // Default: ~/.hermes (i.e., join(homedir(), '.hermes'))
 // No --home CLI option exists; home redirection is via env vars only.
 // This matches the pattern used by other agents (ATOMCODE_HOME, DSH_HOME, etc.)
-function hermesHomeDir() {
+function hermesHomeDir(): string {
   if (process.env.HERMES_HOME) return process.env.HERMES_HOME;
   return join(homedir(), '.hermes');
 }
 
-function hermesSkillsDir() {
+function hermesSkillsDir(): string {
   return join(hermesHomeDir(), 'skills');
 }
 
-function hermesPluginsDir() {
+function hermesPluginsDir(): string {
   return join(hermesHomeDir(), 'huaweicloud-plugins');
 }
 
-function hermesPythonPluginsDir() {
+function hermesPythonPluginsDir(): string {
   return join(hermesHomeDir(), 'plugins');
 }
 
-function hermesSafetyPluginDir() {
+function hermesSafetyPluginDir(): string {
   return join(hermesPythonPluginsDir(), 'huaweicloud-safety');
 }
 
-function hermesConfigFile() {
+function hermesConfigFile(): string {
   return join(hermesHomeDir(), 'config.yaml');
 }
 
 // Returns true when the config file was written, false when it was already correct.
-function ensureHermesMcpConfig() {
+function ensureHermesMcpConfig(): boolean {
   const configPath = hermesConfigFile();
   const mcpPath = join(hermesPluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
   const hcloudBin = findHcloudBin();
 
-  const blockLines = [
+  const blockLines: string[] = [
     'mcp_servers:',
     '  huaweicloud-devkit:',
     '    command: "node"',
@@ -2625,11 +2759,11 @@ function ensureHermesMcpConfig() {
   return true;
 }
 
-function removeHermesMcpConfigBlock() {
+function removeHermesMcpConfigBlock(): void {
   const configPath = hermesConfigFile();
   if (!existsSync(configPath)) return;
   const lines = readFileSync(configPath, 'utf8').split(/\r?\n/);
-  const out = [];
+  const out: string[] = [];
   let skip = false;
   for (const line of lines) {
     if (/^\s*huaweicloud-devkit\s*:/.test(line)) {
@@ -2654,30 +2788,30 @@ function removeHermesMcpConfigBlock() {
   console.log('  MCP config cleaned');
 }
 
-function hermesHookScript() {
+function hermesHookScript(): string {
   return join(hermesPluginsDir(), 'hooks', 'huaweicloud-safety.py').replace(/\\/g, '/');
 }
 
-function hermesHookCommand() {
+function hermesHookCommand(): string {
   const pythonBin = process.platform === 'win32' ? 'python' : 'python3';
   return `${pythonBin} ${hermesHookScript()}`;
 }
 
-function hermesTelemetryHookScript() {
+function hermesTelemetryHookScript(): string {
   return join(hermesPluginsDir(), 'hooks', 'huaweicloud-telemetry.py').replace(/\\/g, '/');
 }
 
-function hermesTelemetryHookCommand() {
+function hermesTelemetryHookCommand(): string {
   const pythonBin = process.platform === 'win32' ? 'python' : 'python3';
   return `${pythonBin} ${hermesTelemetryHookScript()}`;
 }
 
-function ensureHermesHooksConfig() {
+function ensureHermesHooksConfig(): boolean {
   const configPath = hermesConfigFile();
   const hookCommand = hermesHookCommand();
   const telemetryHookCommand = hermesTelemetryHookCommand();
 
-  const blockLines = [
+  const blockLines: string[] = [
     'hooks:',
     '  pre_tool_call:',
     '    - matcher: "terminal"',
@@ -2720,7 +2854,7 @@ function ensureHermesHooksConfig() {
   return true;
 }
 
-function hermesHookScriptMtime() {
+function hermesHookScriptMtime(): string | null {
   const scriptPath = hermesHookScript();
   try {
     return statSync(scriptPath).mtime.toISOString();
@@ -2729,31 +2863,35 @@ function hermesHookScriptMtime() {
   }
 }
 
-function hermesAllowlistPath() {
+function hermesAllowlistPath(): string {
   return join(hermesHomeDir(), 'shell-hooks-allowlist.json');
 }
 
-function ensureHermesHookAllowlist() {
+// shell-hooks-allowlist.json keeps user approvals under a single `approvals`
+// array; all other fields round-trip as unknown.
+interface HermesAllowlist {
+  approvals?: unknown;
+}
+
+function ensureHermesHookAllowlist(): boolean {
   const hookCommand = hermesHookCommand();
   const telemetryHookCommand = hermesTelemetryHookCommand();
   const allowlistPath = hermesAllowlistPath();
 
-  let data = { approvals: [] };
+  let data: HermesAllowlist = { approvals: [] };
   if (existsSync(allowlistPath)) {
     try {
-      const parsed = JSON.parse(readFileSync(allowlistPath, 'utf8'));
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        data = parsed;
+      const parsed: unknown = JSON.parse(readFileSync(allowlistPath, 'utf8'));
+      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        data = parsed as HermesAllowlist;
       }
     } catch {}
   }
-  const approvals = Array.isArray(data.approvals) ? data.approvals : [];
+  const approvals: unknown[] = Array.isArray(data.approvals) ? data.approvals : [];
 
   let changed = false;
   for (const cmd of [hookCommand, telemetryHookCommand]) {
-    const already = approvals.some(
-      (a) => a && typeof a === 'object' && a.event === 'pre_tool_call' && a.command === cmd,
-    );
+    const already = approvals.some((a) => asRecord(a).event === 'pre_tool_call' && asRecord(a).command === cmd);
     if (!already) {
       const entry = {
         event: 'pre_tool_call',
@@ -2778,22 +2916,23 @@ function ensureHermesHookAllowlist() {
   return true;
 }
 
-function hermesHookAllowlisted() {
+function hermesHookAllowlisted(): boolean {
   const allowlistPath = hermesAllowlistPath();
   if (!existsSync(allowlistPath)) return false;
   try {
-    const data = JSON.parse(readFileSync(allowlistPath, 'utf8'));
+    const data: unknown = JSON.parse(readFileSync(allowlistPath, 'utf8'));
     const cmd = hermesHookCommand();
+    const approvals: unknown = asRecord(data).approvals;
     return (
-      Array.isArray(data?.approvals) &&
-      data.approvals.some((a) => a && typeof a === 'object' && a.event === 'pre_tool_call' && a.command === cmd)
+      Array.isArray(approvals) &&
+      approvals.some((a) => asRecord(a).event === 'pre_tool_call' && asRecord(a).command === cmd)
     );
   } catch {
     return false;
   }
 }
 
-function hermesHookPluginInit() {
+function hermesHookPluginInit(): string {
   const script = hermesHookScript();
   return [
     'import importlib.util',
@@ -2828,7 +2967,7 @@ function hermesHookPluginInit() {
   ].join('\n');
 }
 
-function ensureHermesHookPlugin() {
+function ensureHermesHookPlugin(): boolean {
   const pluginDir = hermesSafetyPluginDir();
   const manifestPath = join(pluginDir, 'plugin.yaml');
   const initPath = join(pluginDir, '__init__.py');
@@ -2858,7 +2997,7 @@ function ensureHermesHookPlugin() {
   return true;
 }
 
-function removeHermesHookPlugin() {
+function removeHermesHookPlugin(): boolean {
   const pluginDir = hermesSafetyPluginDir();
   if (!existsSync(pluginDir)) return false;
   rmSync(pluginDir, { recursive: true, force: true });
@@ -2872,18 +3011,18 @@ function removeHermesHookPlugin() {
   return true;
 }
 
-function hermesHookPluginInstalled() {
+function hermesHookPluginInstalled(): boolean {
   return (
     existsSync(join(hermesSafetyPluginDir(), 'plugin.yaml')) && existsSync(join(hermesSafetyPluginDir(), '__init__.py'))
   );
 }
 
-function removeHermesHooksConfigBlock() {
+function removeHermesHooksConfigBlock(): void {
   const configPath = hermesConfigFile();
   if (!existsSync(configPath)) return;
   const lines = readFileSync(configPath, 'utf8').split(/\r?\n/);
   let inHooksBlock = false;
-  const out = [];
+  const out: string[] = [];
   for (const line of lines) {
     const trimmed = line.trim();
     if (trimmed === 'hooks:' && !inHooksBlock) {
@@ -2903,7 +3042,7 @@ function removeHermesHooksConfigBlock() {
   console.log('  Hooks config cleaned');
 }
 
-function ensureHermesMcpSdk() {
+function ensureHermesMcpSdk(): boolean {
   const pythonBin = process.platform === 'win32' ? 'python' : 'python3';
   try {
     const r = spawnSync(pythonBin, ['-c', 'import mcp; print("ok")'], { encoding: 'utf8', timeout: 5000 });
@@ -2922,13 +3061,13 @@ function ensureHermesMcpSdk() {
     console.log(`  MCP Python SDK: \x1b[33mInstall failed\x1b[0m`);
     console.log(`  \x1b[33m  Run manually: ${pythonBin} -m pip install mcp\x1b[0m`);
   } catch (error) {
-    console.log(`  MCP Python SDK: \x1b[33m${error.message}\x1b[0m`);
+    console.log(`  MCP Python SDK: \x1b[33m${errorMessage(error)}\x1b[0m`);
     console.log(`  \x1b[33m  Run manually: ${pythonBin} -m pip install mcp\x1b[0m`);
   }
   return false;
 }
 
-function hermesMcpSdkOk() {
+function hermesMcpSdkOk(): boolean {
   const pythonBin = process.platform === 'win32' ? 'python' : 'python3';
   try {
     const r = spawnSync(pythonBin, ['-c', 'import mcp; print("ok")'], { encoding: 'utf8', timeout: 5000 });
@@ -2938,7 +3077,7 @@ function hermesMcpSdkOk() {
   }
 }
 
-async function installHermes() {
+async function installHermes(): Promise<void> {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
@@ -2972,7 +3111,7 @@ async function installHermes() {
   if (!skipMcp) ensureHermesMcpSdk();
 }
 
-async function updateHermes() {
+async function updateHermes(): Promise<void> {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const distDir = join(PLUGIN_ROOT, 'dist');
   const safetyDir = join(PLUGIN_ROOT, 'safety');
@@ -3004,7 +3143,7 @@ async function updateHermes() {
   installRuntimeDeps(pluginDest);
 }
 
-function uninstallHermes() {
+function uninstallHermes(): void {
   const skillsDir = hermesSkillsDir();
   let removed = 0;
 
@@ -3020,15 +3159,17 @@ function uninstallHermes() {
   const allowlistPath = join(hermesHome, 'shell-hooks-allowlist.json');
   if (existsSync(allowlistPath)) {
     try {
-      const allowlist = JSON.parse(readFileSync(allowlistPath, 'utf8'));
-      const before = (allowlist.approvals || []).length;
-      allowlist.approvals = (allowlist.approvals || []).filter((a) => {
-        const cmd = typeof a === 'string' ? a : a?.command;
+      const allowlist = asRecord(JSON.parse(readFileSync(allowlistPath, 'utf8')));
+      const approvals: unknown[] = Array.isArray(allowlist.approvals) ? allowlist.approvals : [];
+      const before = approvals.length;
+      const filtered = approvals.filter((a) => {
+        const cmd = typeof a === 'string' ? a : asRecord(a).command;
         return !(typeof cmd === 'string' && cmd.includes('huaweicloud-safety.py'));
       });
-      if (allowlist.approvals.length < before) {
+      allowlist.approvals = filtered;
+      if (filtered.length < before) {
         writeFileSync(allowlistPath, JSON.stringify(allowlist, null, 2));
-        console.log(`  Removed ${before - allowlist.approvals.length} hook approvals from allowlist`);
+        console.log(`  Removed ${before - filtered.length} hook approvals from allowlist`);
       }
     } catch {
       removeIfExists(allowlistPath);
@@ -3043,7 +3184,7 @@ function uninstallHermes() {
       const text = readFileSync(hermesConfig, 'utf8');
       const argsLine = text.match(/^\s*args:\s*\[([^\]]*)\]\s*$/m);
       if (argsLine) {
-        let parsed;
+        let parsed: unknown;
         try {
           parsed = JSON.parse(`[${argsLine[1].replace(/'/g, '"')}]`);
         } catch {
@@ -3080,7 +3221,7 @@ function uninstallHermes() {
   }
 }
 
-function hermesStatus() {
+function hermesStatus(): void {
   const pluginDir = hermesPluginsDir();
   const skillsDir = hermesSkillsDir();
   console.log(
@@ -3129,7 +3270,7 @@ function hermesStatus() {
   }
 }
 
-function opencodeStatus() {
+function opencodeStatus(): void {
   const pluginDir = opencodePluginsDir();
   const skillsDir = opencodeSkillsDir();
   console.log(
@@ -3150,9 +3291,9 @@ function opencodeStatus() {
   const configPath = opencodeConfigFile();
   if (existsSync(configPath)) {
     try {
-      const config = JSON.parse(readFileSync(configPath, 'utf8'));
+      const config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
       console.log(
-        `  MCP config: ${config.mcp?.['huaweicloud-devkit'] ? '\x1b[32mConfigured\x1b[0m' : '\x1b[31mNot configured\x1b[0m'}`,
+        `  MCP config: ${asRecord(config.mcp)['huaweicloud-devkit'] ? '\x1b[32mConfigured\x1b[0m' : '\x1b[31mNot configured\x1b[0m'}`,
       );
     } catch {
       console.log(`  MCP config: \x1b[31mInvalid\x1b[0m`);
@@ -3160,8 +3301,8 @@ function opencodeStatus() {
   }
 }
 
-function detectAgents() {
-  const checks = [
+function detectAgents(): string[] {
+  const checks: Array<[string, () => boolean]> = [
     ['opencode', () => existsSync(join(homedir(), '.config', 'opencode'))],
     ['codex-desktop', () => existsSync(join(homedir(), '.codex'))],
     ['codearts', () => existsSync(join(homedir(), '.codeartsdoer'))],
@@ -3174,7 +3315,15 @@ function detectAgents() {
         return existsSync(dsh);
       },
     ],
-    ['officeace', () => existsSync(officeaceCapabilitiesDir())],
+    // existsSync rejects non-string paths; officeaceCapabilitiesDir() returning
+    // null means "no OfficeAce" exactly like the original existsSync(null) did.
+    [
+      'officeace',
+      () => {
+        const dir = officeaceCapabilitiesDir();
+        return dir !== null && existsSync(dir);
+      },
+    ],
     ['hermes', () => existsSync(hermesHomeDir())],
     ['openclaw', () => existsSync(join(homedir(), '.openclaw'))],
     ['atomcode', () => existsSync(atomcodeHome())],
@@ -3182,7 +3331,7 @@ function detectAgents() {
   return checks.filter(([, check]) => check()).map(([name]) => name);
 }
 
-function autoDetectTarget() {
+function autoDetectTarget(): string {
   const detected = detectAgents();
   if (detected.length === 0) {
     console.error('No supported agent detected.');
@@ -3194,7 +3343,7 @@ function autoDetectTarget() {
   return 'all';
 }
 
-const AGENT_LABELS = {
+const AGENT_LABELS: Record<string, string> = {
   opencode: 'OpenCode',
   'codex-desktop': 'Codex Desktop',
   codearts: 'CodeArts',
@@ -3207,7 +3356,7 @@ const AGENT_LABELS = {
   atomcode: 'AtomCode',
 };
 
-function promptSelectAgents(detected) {
+function promptSelectAgents(detected: string[]): Promise<string[] | null> {
   if (!process.stdin.isTTY) {
     console.error(
       `Multiple agents detected (${detected.join(', ')}). Cannot prompt in a non-interactive shell — ` +
@@ -3220,7 +3369,7 @@ function promptSelectAgents(detected) {
     ...detected.map((name, i) => `  ${i + 1}) ${AGENT_LABELS[name] || name}`),
     'Enter numbers separated by commas/spaces, "all" for every detected, Enter to install all detected, or "0" to cancel: ',
   ].join('\n');
-  return new Promise((resolve) => {
+  return new Promise<string[] | null>((resolve) => {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     rl.question(question, (a) => {
       rl.close();
@@ -3234,7 +3383,7 @@ function promptSelectAgents(detected) {
         return;
       }
       const parts = answer.split(/[\s,，]+/).filter(Boolean);
-      const indices = new Set();
+      const indices = new Set<number>();
       for (const part of parts) {
         const n = Number(part);
         if (Number.isSafeInteger(n) && n >= 1 && n <= detected.length) {
@@ -3255,7 +3404,17 @@ const MCP_ENTRY = {
   args: ['-y', '-p', 'huaweicloud-devkit', 'huaweicloud-devkit-mcp'],
 };
 
-function promptZeroDetect() {
+// resolveInstallTarget/promptZeroDetect results share the original JS duck-typed
+// shape: each command path fills only the fields it cares about.
+interface InstallPlan {
+  abort?: boolean;
+  mcp?: boolean;
+  explicit?: boolean;
+  target?: string;
+  subset?: string[];
+}
+
+function promptZeroDetect(): Promise<InstallPlan> {
   if (!process.stdin.isTTY) {
     console.error('No supported agent detected.');
     console.error(`Supported: ${SUPPORTED_AGENT_TARGETS.join(', ')} (or "all")`);
@@ -3271,9 +3430,9 @@ function promptZeroDetect() {
     '  0) Exit',
     'Enter choice: ',
   ].join('\n');
-  return new Promise((resolve) => {
+  return new Promise<InstallPlan>((resolve) => {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
-    const ask = () => {
+    const ask = (): void => {
       rl.question(question, (a) => {
         const answer = (a || '').trim().toLowerCase();
         if (answer === '1') {
@@ -3313,7 +3472,7 @@ function promptZeroDetect() {
   });
 }
 
-function printMCPConfigSnippet(reason) {
+function printMCPConfigSnippet(reason: string): void {
   console.log(`  ${reason}`);
   console.log('  Add this to your agent MCP config (stdio):');
   const snippet = JSON.stringify({ mcpServers: { 'huaweicloud-devkit': MCP_ENTRY } }, null, 2)
@@ -3326,19 +3485,30 @@ function printMCPConfigSnippet(reason) {
   console.log('  See README → "Other Agents" for details.');
 }
 
-function configureMCPAgent(targetFile, agentLabel) {
-  let config = {};
+// Generic MCP agent configs keep arbitrary user keys, so only mcpServers is
+// validated (and normalized to a record) before the managed entry is written.
+interface AgentMcpConfig {
+  [key: string]: unknown;
+  mcpServers: Record<string, unknown>;
+}
+
+function configureMCPAgent(targetFile: string, agentLabel: string): boolean {
+  let config: AgentMcpConfig = { mcpServers: {} };
   let existed = false;
   if (existsSync(targetFile)) {
     existed = true;
     try {
-      config = JSON.parse(readFileSync(targetFile, 'utf8'));
+      const parsed: unknown = JSON.parse(readFileSync(targetFile, 'utf8'));
+      config =
+        parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+          ? (parsed as AgentMcpConfig)
+          : { mcpServers: {} };
     } catch {
       console.error(`  [${agentLabel}] ${targetFile} is not valid JSON; leaving it untouched.`);
       return false;
     }
   }
-  config.mcpServers = config.mcpServers || {};
+  config.mcpServers = asRecord(config.mcpServers);
   if (config.mcpServers['huaweicloud-devkit']) {
     console.log(`  [${agentLabel}] mcpServers.huaweicloud-devkit already configured; skipping.`);
     return true;
@@ -3351,9 +3521,9 @@ function configureMCPAgent(targetFile, agentLabel) {
   return true;
 }
 
-function configureGenericMCP() {
+function configureGenericMCP(): boolean {
   console.log('Configuring a generic MCP agent (MCP tools only; skills/hooks are not installed)...');
-  const targets = [];
+  const targets: Array<[string, string]> = [];
   const claudeFile = process.env.CLAUDE_CONFIG_DIR
     ? join(process.env.CLAUDE_CONFIG_DIR, '.claude.json')
     : join(homedir(), '.claude.json');
@@ -3377,7 +3547,7 @@ function configureGenericMCP() {
   return anyConfigured;
 }
 
-async function resolveInstallTarget() {
+async function resolveInstallTarget(): Promise<InstallPlan> {
   const idx = process.argv.indexOf('--target');
   if (idx >= 0) {
     const val = (process.argv[idx + 1] || '').toLowerCase();
@@ -3396,7 +3566,7 @@ async function resolveInstallTarget() {
   return { explicit: false, subset: chosen };
 }
 
-function parseTarget() {
+function parseTarget(): string {
   const idx = process.argv.indexOf('--target');
   if (idx < 0) return autoDetectTarget();
   const val = (process.argv[idx + 1] || '').toLowerCase();
@@ -3406,19 +3576,21 @@ function parseTarget() {
   process.exit(1);
 }
 
-async function checkForUpdate() {
+async function checkForUpdate(): Promise<void> {
   if (pkgVersion === '0.0.0') return;
   const distTags = await queryDistTagsFetch({ timeoutMs: 15000 });
   const target = determineTarget(pkgVersion, distTags ?? {});
   if (target && semverCompare(target, pkgVersion) > 0) {
-    const tag = distTags.next && semverCompare(target, distTags.next) === 0 ? 'next' : 'latest';
+    // target can only be non-null when distTags carried a candidate, so the
+    // optional chain never short-circuits a reachable path.
+    const tag = distTags?.next && semverCompare(target, distTags.next) === 0 ? 'next' : 'latest';
     console.log(
       `\n\x1b[33mℹ️ 检测到新版本：${target}（当前 ${pkgVersion}，${tag} 频道）。建议运行 \`npx --yes huaweicloud-devkit@${tag} update\` 更新。\x1b[0m`,
     );
   }
 }
 
-function installMarkerDirForTarget(target) {
+function installMarkerDirForTarget(target: string): string | null {
   if (target === 'codex') return null;
   if (target === 'dsh') return dshPluginsDir();
   if (target === 'codearts') return codeartsPluginsDir();
@@ -3433,14 +3605,14 @@ function installMarkerDirForTarget(target) {
   return null;
 }
 
-function writeInstallMarker(target) {
+function writeInstallMarker(target: string): void {
   const markerDir = installMarkerDirForTarget(target);
   if (!markerDir) return;
   mkdirSync(markerDir, { recursive: true });
   writeFileSync(join(markerDir, '.installed'), new Date().toISOString());
 }
 
-async function cmdInstall() {
+async function cmdInstall(): Promise<void> {
   console.log(BANNER);
   const plan = await resolveInstallTarget();
   if (plan.abort) {
@@ -3452,9 +3624,9 @@ async function cmdInstall() {
     process.exitCode = ok ? 0 : 1;
     return;
   }
-  const hasExplicitTarget = plan.explicit;
-  const target = plan.explicit ? plan.target : null;
-  const selected = new Set(plan.explicit ? [] : plan.subset);
+  const hasExplicitTarget = Boolean(plan.explicit);
+  const target: string | undefined = plan.explicit ? plan.target : undefined;
+  const selected: Set<string> = new Set(plan.explicit ? [] : (plan.subset ?? []));
 
   if (hasExplicitTarget) {
     console.log(`Installing HuaweiCloud DevKit for ${target}...\n`);
@@ -3464,15 +3636,19 @@ async function cmdInstall() {
 
   checkNode();
   await checkForUpdate();
-  const installFailures = [];
+  const installFailures: string[] = [];
 
-  function shouldInstall(name) {
+  function shouldInstall(name: string): boolean {
     if (name === 'codex') return hasExplicitTarget && (target === 'codex' || target === 'all');
     if (hasExplicitTarget) return target === name || target === 'all';
     return selected.has(name);
   }
 
-  async function runInstallStep(stepTarget, title, fn) {
+  async function runInstallStep(
+    stepTarget: string,
+    title: string,
+    fn: () => boolean | void | Promise<boolean | void>,
+  ): Promise<boolean> {
     console.log(title);
     try {
       const result = await fn();
@@ -3484,7 +3660,7 @@ async function cmdInstall() {
       return true;
     } catch (error) {
       installFailures.push(stepTarget);
-      console.log(`  \x1b[31m${stepTarget} install failed: ${error.message}\x1b[0m`);
+      console.log(`  \x1b[31m${stepTarget} install failed: ${errorMessage(error)}\x1b[0m`);
       return false;
     }
   }
@@ -3584,15 +3760,15 @@ async function cmdInstall() {
   const pad = ' '.repeat(24 - appName.length);
   if (target === 'officeace') {
     console.log(`\n\x1b[1m\x1b[33m╔══════════════════════════════════════════════════════════╗`);
-    console.log(`\x1b[1m\x1b[33m║  打开连接器 → 我的连接器 → huaweicloud-devkit      �`);
-    console.log(`\x1b[1m\x1b[33m║  → 连接 → 回到对话 → 输入框开启连接器                  �`);
-    console.log(`\x1b[1m\x1b[33m╚══════════════════════════════════════════════════════╝\x1b[0m`);
+    console.log(`\x1b[1m\x1b[33m║  打开连接器 → 我的连接器 → huaweicloud-devkit      ║`);
+    console.log(`\x1b[1m\x1b[33m║  → 连接 → 回到对话 → 输入框开启连接器                  ║`);
+    console.log(`\x1b[1m\x1b[33m╚══════════════════════════════════════════════════════════╝\x1b[0m`);
   } else if (target === 'workbuddy') {
     console.log(`\n\x1b[1m\x1b[33m╔══════════════════════════════════════════════════════════╗`);
-    console.log(`\x1b[1m\x1b[33m║  MCP 工具即时生效，无需重启会话                    �`);
-    console.log(`\x1b[1m\x1b[33m║  前往连接器 → 自定义连接器，确认 huaweicloud-devkit    �`);
-    console.log(`\x1b[1m\x1b[33m║  已添加信任并启用                                   �`);
-    console.log(`\x1b[1m\x1b[33m╚══════════════════════════════════════════════════════╝\x1b[0m`);
+    console.log(`\x1b[1m\x1b[33m║  MCP 工具即时生效，无需重启会话                    ║`);
+    console.log(`\x1b[1m\x1b[33m║  前往连接器 → 自定义连接器，确认 huaweicloud-devkit    ║`);
+    console.log(`\x1b[1m\x1b[33m║  已添加信任并启用                                   ║`);
+    console.log(`\x1b[1m\x1b[33m╚══════════════════════════════════════════════════════════╝\x1b[0m`);
   } else if (target === 'codex-desktop') {
     console.log(`\n\x1b[1m\x1b[33m╔══════════════════════════════════════════════════════╗`);
     console.log(`\x1b[1m\x1b[33m║  插件已安装到 Codex Desktop，新会话中生效              ║`);
@@ -3662,7 +3838,7 @@ async function cmdInstall() {
   }
 }
 
-async function cmdUninstall() {
+async function cmdUninstall(): Promise<void> {
   const target = parseTarget();
   console.log(BANNER);
   console.log(`Uninstalling HuaweiCloud DevKit${target !== 'opencode' ? ` from ${target}` : ''}...\n`);
@@ -3742,7 +3918,7 @@ async function cmdUninstall() {
   }
 }
 
-function removeKooCliWithMessage() {
+function removeKooCliWithMessage(): void {
   const removed = removeKooCli();
   if (removed.length) {
     console.log(`  KooCLI removed: ${removed.join(', ')}`);
@@ -3751,7 +3927,7 @@ function removeKooCliWithMessage() {
   }
 }
 
-function removeObsConfigWithMessage() {
+function removeObsConfigWithMessage(): void {
   const removed = removeObsConfig();
   if (removed.length) {
     console.log(`  OBS config removed: ${removed.join(', ')}`);
@@ -3760,8 +3936,8 @@ function removeObsConfigWithMessage() {
   }
 }
 
-async function promptGlobalCleanup() {
-  const hasFlag = (name) => process.argv.includes(name);
+async function promptGlobalCleanup(): Promise<void> {
+  const hasFlag = (name: string): boolean => process.argv.includes(name);
   const cleanKocli = hasFlag('--clean-kocli') || hasFlag('--clean-global');
   const cleanObs = hasFlag('--clean-obs') || hasFlag('--clean-global');
 
@@ -3789,7 +3965,7 @@ async function promptGlobalCleanup() {
   }
 }
 
-function openclawStatus() {
+function openclawStatus(): void {
   const cdPluginDir = openclawPluginsDir();
   const cdSkillsDir = openclawSkillsDir();
   console.log(
@@ -3809,7 +3985,7 @@ function openclawStatus() {
   );
 }
 
-function codexSectionStatus() {
+function codexSectionStatus(): void {
   if (!hasCodexCLI()) {
     console.log('  \x1b[33mCodex CLI not found.\x1b[0m');
   } else {
@@ -3817,12 +3993,12 @@ function codexSectionStatus() {
   }
 }
 
-async function cmdStatus() {
+async function cmdStatus(): Promise<void> {
   const scope = parseTarget();
   console.log(BANNER);
   console.log(`HuaweiCloud DevKit Status\n`);
 
-  const sections = [
+  const sections: Array<{ name: string; run: () => void; on: (_target: string) => boolean }> = [
     { name: 'OpenCode', run: opencodeStatus, on: (target) => target === 'opencode' || target === 'all' },
     { name: 'CodeArts', run: codeartsStatus, on: (target) => target === 'codearts' || target === 'all' },
     { name: 'CodeArts Work', run: codeartsWorkStatus, on: (target) => target === 'codearts-work' || target === 'all' },
@@ -3838,11 +4014,11 @@ async function cmdStatus() {
   // Capture each section's output so results can be grouped by install state
   // (installed first) instead of the fixed agent order.
   const originalLog = console.log;
-  const results = [];
+  const results: Array<{ name: string; lines: string[]; state: string }> = [];
   for (const section of sections) {
     if (!section.on(scope)) continue;
-    const lines = [];
-    console.log = (...args) => lines.push(args.map((a) => String(a)).join(' '));
+    const lines: string[] = [];
+    console.log = (...args: unknown[]) => lines.push(args.map((a) => String(a)).join(' '));
     try {
       section.run();
     } finally {
@@ -3855,11 +4031,11 @@ async function cmdStatus() {
     results.push({ name: section.name, lines, state });
   }
 
-  const stateOrder = { installed: 0, partial: 1, unknown: 2, not: 3 };
+  const stateOrder = { installed: 0, partial: 1, unknown: 2, not: 3 } as Record<string, number>;
   results.sort((a, b) => stateOrder[a.state] - stateOrder[b.state]);
 
-  const namesIn = (state) => results.filter((r) => r.state === state).map((r) => r.name);
-  const summaryParts = [];
+  const namesIn = (state: string): string[] => results.filter((r) => r.state === state).map((r) => r.name);
+  const summaryParts: string[] = [];
   if (namesIn('installed').length) summaryParts.push(`已安装: ${namesIn('installed').join(', ')}`);
   if (namesIn('partial').length) summaryParts.push(`部分安装: ${namesIn('partial').join(', ')}`);
   if (namesIn('not').length) summaryParts.push(`未安装: ${namesIn('not').join(', ')}`);
@@ -3876,7 +4052,7 @@ async function cmdStatus() {
   console.log(`  Platform: ${platform()}`);
 }
 
-async function cmdDoctor() {
+async function cmdDoctor(): Promise<void> {
   console.log(BANNER);
   console.log('HuaweiCloud DevKit Doctor\n');
 
@@ -3884,7 +4060,7 @@ async function cmdDoctor() {
     warn = 0,
     fail = 0;
 
-  function check(label, ok, msg) {
+  function check(label: string, ok: boolean, msg: string): void {
     if (ok) {
       console.log(`  \x1b[32m[PASS]\x1b[0m ${label}`);
       pass++;
@@ -3895,7 +4071,7 @@ async function cmdDoctor() {
   }
 
   // Node.js
-  check('Node.js >= 22', process.versions.node.split('.')[0] >= 22, 'Run: nvm install 22 && nvm use 22');
+  check('Node.js >= 22', Number(process.versions.node.split('.')[0]) >= 22, 'Run: nvm install 22 && nvm use 22');
 
   // MCP server — check OpenCode, Codex Desktop, CodeArts, WorkBuddy, and DSH paths
   const opencodePluginDir = opencodePluginsDir();
@@ -3988,8 +4164,8 @@ async function cmdDoctor() {
   const opencodeCfg = opencodeConfigFile();
   if (existsSync(opencodeCfg)) {
     try {
-      const cfg = JSON.parse(readFileSync(opencodeCfg, 'utf8'));
-      if (cfg.mcp && cfg.mcp['huaweicloud-devkit']) {
+      const cfg = asRecord(JSON.parse(readFileSync(opencodeCfg, 'utf8')));
+      if (cfg.mcp && asRecord(cfg.mcp)['huaweicloud-devkit']) {
         mcpConfigured = true;
         mcpCfgTarget = 'OpenCode';
       }
@@ -3998,8 +4174,11 @@ async function cmdDoctor() {
   const mpPath = codexMarketplacePath();
   if (!mcpConfigured && existsSync(mpPath)) {
     try {
-      const mp = JSON.parse(readFileSync(mpPath, 'utf8'));
-      if (mp.plugins && mp.plugins.some((p) => p.name === 'huaweicloud-devkit')) {
+      const mp = asRecord(JSON.parse(readFileSync(mpPath, 'utf8')));
+      if (
+        mp.plugins &&
+        (Array.isArray(mp.plugins) ? mp.plugins : []).some((p) => asRecord(p).name === 'huaweicloud-devkit')
+      ) {
         mcpConfigured = true;
         mcpCfgTarget = 'Codex Desktop';
       }
@@ -4008,8 +4187,8 @@ async function cmdDoctor() {
   const codeartsCfg = codeartsMcpSettingsFile();
   if (!mcpConfigured && existsSync(codeartsCfg)) {
     try {
-      const cfg = JSON.parse(readFileSync(codeartsCfg, 'utf8'));
-      if (cfg.mcpServers && cfg.mcpServers['huaweicloud-devkit']) {
+      const cfg = asRecord(JSON.parse(readFileSync(codeartsCfg, 'utf8')));
+      if (cfg.mcpServers && asRecord(cfg.mcpServers)['huaweicloud-devkit']) {
         mcpConfigured = true;
         mcpCfgTarget = 'CodeArts';
       }
@@ -4018,8 +4197,8 @@ async function cmdDoctor() {
   const codeartsWorkCfg = codeartsWorkMcpSettingsFile();
   if (!mcpConfigured && existsSync(codeartsWorkCfg)) {
     try {
-      const cfg = JSON.parse(readFileSync(codeartsWorkCfg, 'utf8'));
-      if (cfg.mcp && cfg.mcp['huaweicloud-devkit']) {
+      const cfg = asRecord(JSON.parse(readFileSync(codeartsWorkCfg, 'utf8')));
+      if (cfg.mcp && asRecord(cfg.mcp)['huaweicloud-devkit']) {
         mcpConfigured = true;
         mcpCfgTarget = 'CodeArts Work';
       }
@@ -4028,8 +4207,8 @@ async function cmdDoctor() {
   const workbuddyCfg = workbuddyMcpConfigFile();
   if (!mcpConfigured && existsSync(workbuddyCfg)) {
     try {
-      const cfg = JSON.parse(readFileSync(workbuddyCfg, 'utf8'));
-      if (cfg.mcpServers && cfg.mcpServers['huaweicloud-devkit']) {
+      const cfg = asRecord(JSON.parse(readFileSync(workbuddyCfg, 'utf8')));
+      if (cfg.mcpServers && asRecord(cfg.mcpServers)['huaweicloud-devkit']) {
         mcpConfigured = true;
         mcpCfgTarget = 'WorkBuddy';
       }
@@ -4043,11 +4222,9 @@ async function cmdDoctor() {
     const officeaceCfg = officeaceCapabilitiesFile();
     if (existsSync(officeaceCfg)) {
       try {
-        const cfg = JSON.parse(readFileSync(officeaceCfg, 'utf8'));
-        if (
-          Array.isArray(cfg.capabilities) &&
-          cfg.capabilities.some((c) => c.id === 'huaweicloud-devkit' && c.type === 'mcp')
-        ) {
+        const cfg = asRecord(JSON.parse(readFileSync(officeaceCfg, 'utf8')));
+        const capabilities: unknown[] = Array.isArray(cfg.capabilities) ? cfg.capabilities : [];
+        if (capabilities.some((c) => asRecord(c).id === 'huaweicloud-devkit' && asRecord(c).type === 'mcp')) {
           mcpConfigured = true;
           mcpCfgTarget = 'OfficeAce';
         }
@@ -4070,8 +4247,8 @@ async function cmdDoctor() {
     const atomcodeCfg = atomcodeMcpConfigFile();
     if (existsSync(atomcodeCfg)) {
       try {
-        const cfg = JSON.parse(readFileSync(atomcodeCfg, 'utf8'));
-        if (cfg.mcpServers && cfg.mcpServers['huaweicloud-devkit']) {
+        const cfg = asRecord(JSON.parse(readFileSync(atomcodeCfg, 'utf8')));
+        if (cfg.mcpServers && asRecord(cfg.mcpServers)['huaweicloud-devkit']) {
           mcpConfigured = true;
           mcpCfgTarget = 'AtomCode';
         }
@@ -4160,7 +4337,7 @@ async function cmdDoctor() {
     atomcodeSkillsDir(),
   ];
   let skillCount = 0;
-  const missingSkills = [];
+  const missingSkills: string[] = [];
   for (const dir of skillsOptions) {
     if (!existsSync(dir)) continue;
     const entries = readdirSync(dir, { withFileTypes: true }).filter(
@@ -4184,11 +4361,11 @@ async function cmdDoctor() {
   }
 
   const proxyConfig = readProxyConfig();
-  const proxyEnv =
+  const proxyEnv: string | undefined =
     process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy;
   if (proxyConfig || proxyEnv) {
     const source = proxyEnv ? 'env' : 'file';
-    const proxyUrl = proxyEnv || proxyConfig.https_proxy || proxyConfig.http_proxy;
+    const proxyUrl = proxyEnv || proxyConfig?.https_proxy || proxyConfig?.http_proxy;
     console.log(`  \x1b[36m[INFO]\x1b[0m Proxy configured (${source}): ${proxyUrl}`);
   }
 
@@ -4229,7 +4406,7 @@ async function cmdDoctor() {
   }
 }
 
-async function cmdUpdate() {
+async function cmdUpdate(): Promise<void> {
   console.log(BANNER);
   const target = parseTarget();
   await checkForUpdate();
@@ -4438,7 +4615,7 @@ async function cmdUpdate() {
   }
 }
 
-async function cmdReinstall() {
+async function cmdReinstall(): Promise<void> {
   console.log(BANNER);
   if (!(await confirm('This will remove and reinstall all HuaweiCloud DevKit files. Continue?'))) {
     console.log('Cancelled.');
@@ -4451,14 +4628,14 @@ async function cmdReinstall() {
 }
 
 let confirmed = false;
-async function confirm(msg) {
+async function confirm(msg: string): Promise<boolean> {
   if (confirmed) return true;
   if (!process.stdin.isTTY) {
     console.log('Non-interactive shell: skipping confirmation (declined).');
     return false;
   }
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((ok) => {
+  return new Promise<boolean>((ok) => {
     rl.question(`${msg} [y/N] `, (a) => {
       rl.close();
       ok(a.toLowerCase() === 'y' || a.toLowerCase() === 'yes');
@@ -4466,7 +4643,7 @@ async function confirm(msg) {
   });
 }
 
-async function cmdInstallHcloud() {
+async function cmdInstallHcloud(): Promise<void> {
   console.log(BANNER);
   console.log('Installing KooCLI (hcloud)...\n');
 
@@ -4539,7 +4716,7 @@ async function cmdInstallHcloud() {
 
       // Ask user before accepting the privacy agreement — never auto-accept.
       const rl = createInterface({ input: process.stdin, output: process.stdout });
-      const agree = await new Promise((resolve) => {
+      const agree = await new Promise<boolean>((resolve) => {
         rl.question('\n  KooCLI requires accepting its privacy agreement. Do you accept? (y/N) ', (answer) => {
           rl.close();
           resolve(/^\s*y\s*$/i.test(answer));
@@ -4563,7 +4740,7 @@ async function cmdInstallHcloud() {
 
       console.log('  Or restart terminal and: hcloud version');
     } catch (error) {
-      console.log(`\n\x1b[33mAuto-install failed: ${error.message}\x1b[0m`);
+      console.log(`\n\x1b[33mAuto-install failed: ${errorMessage(error)}\x1b[0m`);
       console.log(`  Manual: download ${url}, unzip to ${installDir}, add to PATH`);
       console.log(`  Guide: https://support.huaweicloud.com/qs-hcli/hcli_02_003_01.html`);
       if (detectCodeartsSandbox() === 'sandbox') {
@@ -4584,7 +4761,7 @@ async function cmdInstallHcloud() {
     const binDir = os === 'linux' ? join(homedir(), '.local', 'bin') : '/usr/local/bin';
     const binPath = join(binDir, 'hcloud');
 
-    const printManual = () => {
+    const printManual = (): void => {
       console.log(`\n[${label}] Manual install (pinned to KooCLI ${kooCliVersion || ''}):`);
       console.log(`  curl -LO "${url}"`);
       console.log(`  tar -zxvf huaweicloud-cli-${pkg}.tar.gz`);
@@ -4635,7 +4812,7 @@ async function cmdInstallHcloud() {
         // Ask user before accepting the privacy agreement — never auto-accept.
         if (process.stdin.isTTY && process.stdout.isTTY) {
           const rl = createInterface({ input: process.stdin, output: process.stdout });
-          const agree = await new Promise((resolve) => {
+          const agree = await new Promise<boolean>((resolve) => {
             rl.question('\n  KooCLI requires accepting its privacy agreement. Do you accept? (y/N) ', (answer) => {
               rl.close();
               resolve(/^\s*y\s*$/i.test(answer));
@@ -4659,7 +4836,7 @@ async function cmdInstallHcloud() {
           console.log('  \x1b[33m非交互会话：请稍后在终端运行 hcloud version 并按提示接受隐私协议\x1b[0m');
         }
       } catch (error) {
-        console.log(`\n\x1b[33mAuto-install failed: ${error.message}\x1b[0m`);
+        console.log(`\n\x1b[33mAuto-install failed: ${errorMessage(error)}\x1b[0m`);
         printManual();
         if (detectCodeartsSandbox() === 'sandbox') {
           printSandboxWarning('沙箱模式拦截了 KooCLI 自动安装（无法创建/写入安装目录）。');
@@ -4675,8 +4852,8 @@ async function cmdInstallHcloud() {
   console.log('\nThen run: npx huaweicloud-devkit doctor');
 }
 
-function readLineQuestion(prompt) {
-  return new Promise((resolve) => {
+function readLineQuestion(prompt: string): Promise<string> {
+  return new Promise<string>((resolve) => {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     rl.question(prompt, (answer) => {
       rl.close();
@@ -4685,7 +4862,7 @@ function readLineQuestion(prompt) {
   });
 }
 
-async function readSecret(prompt) {
+async function readSecret(prompt: string): Promise<string> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new Error(
       `Cannot read "${prompt.trim()}" securely in a non-interactive session. Set HW_ACCESS_KEY/HW_SECRET_KEY environment variables instead, or run "npx huaweicloud-devkit auth init" in a real terminal.`,
@@ -4693,13 +4870,13 @@ async function readSecret(prompt) {
   }
 
   process.stdout.write(prompt);
-  const wasRaw = process.stdin.isRaw;
+  const wasRaw: boolean = process.stdin.isRaw === true;
   process.stdin.setRawMode(true);
   process.stdin.resume();
 
-  return new Promise((resolve) => {
+  return new Promise<string>((resolve) => {
     let value = '';
-    const onData = (chunk) => {
+    const onData = (chunk: Buffer): void => {
       for (const ch of chunk.toString('utf8')) {
         if (ch === '\r' || ch === '\n') {
           cleanup();
@@ -4717,7 +4894,7 @@ async function readSecret(prompt) {
         value += ch;
       }
     };
-    const cleanup = () => {
+    const cleanup = (): void => {
       process.stdin.setRawMode(wasRaw);
       process.stdin.pause();
       process.stdin.off('data', onData);
@@ -4727,12 +4904,30 @@ async function readSecret(prompt) {
   });
 }
 
-function configuredProfileName() {
+// credentials.mjs is still untyped JavaScript; narrow its parsed vault shape at
+// this boundary. The cast keeps the same object reference, so callers that pass
+// it back to writeObsConfig/writeGlobalCredentials behave exactly as before.
+interface StoredCredentials {
+  ak?: unknown;
+  sk?: unknown;
+  securityToken?: unknown;
+  region?: unknown;
+}
+
+function asStoredCredentials(value: unknown): StoredCredentials | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as StoredCredentials) : null;
+}
+
+function configuredProfileName(): string {
   const name = resolveManagedProfile();
   return name || 'default';
 }
 
-function configureHcloud(credentials) {
+function configureHcloud(credentials: { ak: unknown; sk: unknown; region?: unknown }): {
+  ok: boolean;
+  code: number | null;
+  error: string;
+} {
   const hcloudBin = findHcloudBin() || process.env.HCLOUD_BIN || 'hcloud';
   const args = [
     'configure',
@@ -4759,23 +4954,34 @@ function configureHcloud(credentials) {
   };
 }
 
-function printAuthAgents(agents = {}) {
+function printAuthAgents(agents: Record<string, unknown> = {}): void {
   for (const [agent, info] of Object.entries(agents)) {
-    console.log(`  ${agent}: ${info.configured ? '[OK]' : '[MISSING]'}`);
+    console.log(`  ${agent}: ${asRecord(info).configured ? '[OK]' : '[MISSING]'}`);
   }
 }
 
-function printAuthStatus(status) {
-  console.log(
-    `Credentials vault: ${status.credentialsConfigured ? 'configured' : 'missing'} (${status.credentialsPath})`,
-  );
-  console.log(`OBS config: ${status.obsConfigured ? 'configured' : 'missing'} (${status.obsConfigPath})`);
-  console.log(`KooCLI: ${status.kooCliInstalled ? 'installed' : 'missing'}`);
-  console.log('Agent MCP registration:');
-  printAuthAgents(status.agents);
+// getAuthStatus returns an inferred shape; only the fields printed here are
+// consumed, so the printer declares just those.
+interface AuthStatusSummary {
+  credentialsConfigured: unknown;
+  credentialsPath: unknown;
+  obsConfigured: unknown;
+  obsConfigPath: unknown;
+  kooCliInstalled: unknown;
+  agents: unknown;
 }
 
-async function cmdAuthInit() {
+function printAuthStatus(status: AuthStatusSummary): void {
+  console.log(
+    `Credentials vault: ${status.credentialsConfigured ? 'configured' : 'missing'} (${String(status.credentialsPath)})`,
+  );
+  console.log(`OBS config: ${status.obsConfigured ? 'configured' : 'missing'} (${String(status.obsConfigPath)})`);
+  console.log(`KooCLI: ${status.kooCliInstalled ? 'installed' : 'missing'}`);
+  console.log('Agent MCP registration:');
+  printAuthAgents(asRecord(status.agents));
+}
+
+async function cmdAuthInit(): Promise<void> {
   console.log(BANNER);
   console.log('HuaweiCloud DevKit Unified Authentication Setup\n');
   console.log('\x1b[1m获取 AK/SK（如果还没有）：\x1b[0m');
@@ -4787,11 +4993,13 @@ async function cmdAuthInit() {
 
   try {
     const kooCli = readKooCliProfiles();
-    const currentProfile = kooCli.profiles?.find((p) => p.name === kooCli.current);
-    if (currentProfile?.accessKeyId) {
-      console.log(
-        `\x1b[33m检测到 KooCLI 已配置 profile "${currentProfile.name}"（AK 已存储）。SK 为加密存储无法导出，请直接输入或通过环境变量提供凭据。\x1b[0m\n`,
-      );
+    if (!('error' in kooCli)) {
+      const currentProfile = kooCli.profiles.find((p) => p.name === kooCli.current);
+      if (currentProfile?.accessKeyId) {
+        console.log(
+          `\x1b[33m检测到 KooCLI 已配置 profile "${currentProfile.name}"（AK 已存储）。SK 为加密存储无法导出，请直接输入或通过环境变量提供凭据。\x1b[0m\n`,
+        );
+      }
     }
   } catch {}
 
@@ -4833,7 +5041,7 @@ async function cmdAuthInit() {
   try {
     writeObsConfig({ ak, sk, securityToken, region });
   } catch (error) {
-    console.log(`OBS config sync failed: ${error.message}`);
+    console.log(`OBS config sync failed: ${errorMessage(error)}`);
   }
 
   if (findHcloudBin()) {
@@ -4861,7 +5069,7 @@ async function cmdAuthInit() {
   console.log('  Restart your agent sessions.');
 }
 
-async function cmdAuthReconcile() {
+async function cmdAuthReconcile(): Promise<void> {
   console.log(BANNER);
   console.log('HuaweiCloud DevKit Credential Reconciliation\n');
 
@@ -4891,7 +5099,7 @@ async function cmdAuthReconcile() {
     console.log('Aborted.');
     return;
   }
-  const credentials = readGlobalCredentials();
+  const credentials = asStoredCredentials(readGlobalCredentials());
   if (!credentials?.ak || !credentials?.sk) {
     console.error('No global credentials found after confirmation; aborting.');
     process.exitCode = 1;
@@ -4900,12 +5108,15 @@ async function cmdAuthReconcile() {
   try {
     writeObsConfig(credentials);
   } catch (error) {
-    console.log(`OBS sync failed: ${error.message}`);
+    console.log(`OBS sync failed: ${errorMessage(error)}`);
   }
   const profile = resolveManagedProfile();
   let hcloudSynced = false;
   if (profile) {
-    const r = runHcloudConfigure(profile, credentials.ak, credentials.sk, credentials.region);
+    // runHcloudConfigure declares string params; the vault fields are guarded
+    // truthy above, so String() is identity for real credential values.
+    const region = typeof credentials.region === 'string' ? credentials.region : undefined;
+    const r = runHcloudConfigure(profile, String(credentials.ak), String(credentials.sk), region);
     hcloudSynced = r.ok;
     console.log(`  KooCLI ${r.ok ? 'synced' : 'sync failed'}: profile=${profile} ${r.error || ''}`);
   }
@@ -4917,12 +5128,12 @@ async function cmdAuthReconcile() {
   }
 }
 
-async function cmdAuthSync() {
+async function cmdAuthSync(): Promise<void> {
   const target = parseTarget();
   console.log(BANNER);
   console.log('Synchronizing Huawei Cloud authentication...\n');
 
-  const credentials = readGlobalCredentials();
+  const credentials = asStoredCredentials(readGlobalCredentials());
   if (!credentials?.ak || !credentials?.sk) {
     console.error('No global credentials found. Run "npx huaweicloud-devkit auth init" first.');
     process.exitCode = 1;
@@ -4937,14 +5148,14 @@ async function cmdAuthSync() {
   }
 }
 
-async function cmdAuthStatus() {
+async function cmdAuthStatus(): Promise<void> {
   const target = parseTarget();
   console.log(BANNER);
   console.log('HuaweiCloud DevKit Authentication Status\n');
   printAuthStatus(getAuthStatus(target));
 }
 
-async function cmdAuth() {
+async function cmdAuth(): Promise<void> {
   const sub = (process.argv[3] || 'status').toLowerCase();
   if (sub === 'init' || sub === 'setup') return cmdAuthInit();
   if (sub === 'sync' || sub === 'refresh') return cmdAuthSync();
@@ -4952,13 +5163,13 @@ async function cmdAuth() {
   return cmdAuthStatus();
 }
 
-async function cmdProxyInit() {
+async function cmdProxyInit(): Promise<void> {
   console.log(BANNER);
   console.log('HuaweiCloud DevKit Proxy Configuration\n');
   console.log('Configure HTTP/HTTPS proxy for connections to Huawei Cloud services.');
   console.log('Proxy settings are saved to ~/.config/huaweicloud/proxy.json\n');
 
-  const existing = readProxyConfig() || {};
+  const existing: ProxyConfigFile = readProxyConfig() || {};
   const interactive = process.stdin.isTTY && process.stdout.isTTY;
 
   if (!interactive) {
@@ -4992,7 +5203,7 @@ async function cmdProxyInit() {
   console.log('\nEnvironment variables (HTTPS_PROXY, HTTP_PROXY, NO_PROXY) override file settings.');
 }
 
-async function cmdProxyShow() {
+async function cmdProxyShow(): Promise<void> {
   console.log(BANNER);
   console.log('HuaweiCloud DevKit Proxy Configuration\n');
 
@@ -5025,7 +5236,7 @@ async function cmdProxyShow() {
   }
 }
 
-async function cmdProxyClear() {
+async function cmdProxyClear(): Promise<void> {
   const removed = clearProxyConfig();
   if (removed) {
     console.log('Proxy configuration removed.');
@@ -5034,28 +5245,28 @@ async function cmdProxyClear() {
   }
 }
 
-async function cmdProxy() {
+async function cmdProxy(): Promise<void> {
   const sub = (process.argv[3] || 'show').toLowerCase();
   if (sub === 'init' || sub === 'setup') return cmdProxyInit();
   if (sub === 'clear' || sub === 'remove' || sub === 'reset') return cmdProxyClear();
   return cmdProxyShow();
 }
 
-function readInstalledVersion(pluginsDir) {
+function readInstalledVersion(pluginsDir: string): string | null {
   const p = join(pluginsDir, 'package.json');
   if (!existsSync(p)) return null;
   try {
-    const v = JSON.parse(readFileSync(p, 'utf8')).version;
+    const v: unknown = JSON.parse(readFileSync(p, 'utf8')).version;
     return typeof v === 'string' && v ? v : null;
   } catch {
     return null;
   }
 }
 
-function cmdVersion() {
+function cmdVersion(): void {
   console.log(`HuaweiCloud DevKit CLI: ${pkgVersion}`);
 
-  const agents = [
+  const agents: Array<[string, string]> = [
     ['OpenCode', opencodePluginsDir()],
     ['Codex Desktop', codexDesktopPluginsDir()],
     ['OpenClaw', openclawPluginsDir()],
@@ -5067,7 +5278,7 @@ function cmdVersion() {
     ['Hermes', hermesPluginsDir()],
     ['AtomCode', atomcodePluginsDir()],
   ];
-  const installed = [];
+  const installed: Array<[string, string]> = [];
   for (const [label, dir] of agents) {
     const v = dir ? readInstalledVersion(dir) : null;
     if (!v) continue;
@@ -5087,7 +5298,7 @@ function cmdVersion() {
   console.log('\nRun `npx huaweicloud-devkit update --target <agent>` to refresh installed agent plugins.');
 }
 
-async function main() {
+async function main(): Promise<void> {
   const cmd = process.argv[2] || 'help';
 
   switch (cmd) {
@@ -5177,7 +5388,7 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(`\x1b[31mError: ${error.message}\x1b[0m`);
+main().catch((error: unknown) => {
+  console.error(`\x1b[31mError: ${errorMessage(error)}\x1b[0m`);
   process.exit(1);
 });

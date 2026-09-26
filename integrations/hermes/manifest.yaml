@@ -20,7 +20,7 @@ install:
   bootstrap:
     - 'npm ci'
     - 'npm run build'
-    - 'node plugins/huaweicloud-core/dist/setup-cli.mjs install --target hermes --skip-mcp-server'
+    - 'node plugins/huaweicloud-core/dist/setup-cli.js install --target hermes --skip-mcp-server'
 
 auth:
   type: none
