@@ -113,6 +113,9 @@ record(
 for (const target of SUPPORTED_AGENT_TARGETS) {
   console.log(`[smoke] target: ${target}`);
   const home = mkdtempSync(join(tmpdir(), `hwc-smoke-${target}-`));
+  // codearts resolves its PROJECT-level install dir from process.cwd(); give
+  // every install a throwaway cwd so nothing lands in the repo checkout.
+  const installCwd = mkdtempSync(join(tmpdir(), `hwc-smoke-cwd-${target}-`));
   const env = { HOME: home };
   if (target === 'officeace') {
     const fakeRoot = join(home, '.office-claw');
@@ -121,7 +124,7 @@ for (const target of SUPPORTED_AGENT_TARGETS) {
     env.OFFICE_CLAW_CONFIG_ROOT = fakeRoot;
   }
 
-  const install = run(process.execPath, [bin, 'install', '--target', target], { env });
+  const install = run(process.execPath, [bin, 'install', '--target', target], { env, cwd: installCwd });
   if (target === 'officeace') {
     const documented = /OfficeAce database not found|OfficeAce MCP connector registration failed/.test(install.stdout);
     record(
@@ -138,7 +141,7 @@ for (const target of SUPPORTED_AGENT_TARGETS) {
     // exists, cmdStatus does not cover it). Its proof is the copied
     // marketplace server below.
     if (target !== 'codex-desktop') {
-      const status = run(process.execPath, [bin, 'status', '--target', target], { env });
+      const status = run(process.execPath, [bin, 'status', '--target', target], { env, cwd: installCwd });
       const expected = target === 'codex' ? /Plugin:.*Installed/ : /MCP Server:.*Installed/;
       record(target, 'status reports the target installed', expected.test(status.stdout), firstErrorLine(status));
     }
@@ -150,6 +153,7 @@ for (const target of SUPPORTED_AGENT_TARGETS) {
       const registered = /plugins\."huaweicloud-devkit@/.test(toml);
       record(target, 'codex config.toml registers the plugin', registered, 'marketplace-managed server');
       rmSync(home, { recursive: true, force: true });
+      rmSync(installCwd, { recursive: true, force: true });
       continue;
     }
 
@@ -170,6 +174,7 @@ for (const target of SUPPORTED_AGENT_TARGETS) {
     }
   }
   rmSync(home, { recursive: true, force: true });
+  rmSync(installCwd, { recursive: true, force: true });
 }
 
 // ---- 3. hook from an installed plugin copy ----
