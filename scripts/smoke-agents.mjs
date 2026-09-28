@@ -1,0 +1,240 @@
+// Pre-release smoke: prove the packed tarball installs and runs for every
+// supported agent target, from the installed (npx-equivalent) layout.
+//
+//   node scripts/smoke-agents.mjs
+//
+// Chain verified per target: npm pack → tarball install → bin/setup.cjs
+// install → agent config written by the installer → the configured MCP server
+// answers tools/list over stdio. OfficeAce has no real app on a plain Linux
+// box; its step must fail with the documented "database not found" message
+// instead of crashing elsewhere.
+
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { SUPPORTED_AGENT_TARGETS } from '../plugins/huaweicloud-core/src/auth/agent-registration.ts';
+
+const root = fileURLToPath(new URL('..', import.meta.url));
+const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+
+const run = (command, args, opts = {}) =>
+  spawnSync(command, args, {
+    encoding: 'utf8',
+    timeout: 180_000,
+    ...opts,
+    env: cleanEnv(opts.env),
+  });
+
+function cleanEnv(extra = {}) {
+  const env = { ...process.env, ...extra };
+  for (const key of ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'all_proxy', 'ALL_PROXY']) {
+    delete env[key];
+  }
+  return env;
+}
+
+const results = [];
+const record = (target, check, ok, detail) => {
+  results.push({ target, check, ok, detail });
+  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${target}: ${check}${detail ? ` — ${detail}` : ''}`);
+};
+
+const TOOLS_LIST_REQUEST = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} });
+const TOOLS_LIST_FRAME = `Content-Length: ${Buffer.byteLength(TOOLS_LIST_REQUEST, 'utf8')}\r\n\r\n${TOOLS_LIST_REQUEST}`;
+
+function mcpRoundtrip(serverPath) {
+  const res = run(process.execPath, [serverPath], { input: TOOLS_LIST_FRAME, timeout: 30_000 });
+  if (res.status !== 0) return { ok: false, detail: `exit ${res.status}: ${String(res.stderr).slice(0, 200)}` };
+  if (!res.stdout.includes('"result"')) return { ok: false, detail: 'no JSON-RPC result in stdout' };
+  if (!res.stdout.includes('huaweicloud_')) return { ok: false, detail: 'no huaweicloud_ tools in response' };
+  return { ok: true, detail: `${(res.stdout.match(/"name":\s*"huaweicloud_[a-z_]+"/g) || []).length} tools` };
+}
+
+// Agent configs the installer writes. Anything else in HOME (dist copies,
+// node_modules, skills) is not a consumer contract.
+const CONFIG_EXTENSIONS = new Set(['.json', '.jsonc', '.yaml', '.yml', '.toml']);
+function findConfiguredServerPaths(home) {
+  const paths = new Set();
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name === 'skills') continue;
+        walk(join(dir, entry.name));
+      } else if (CONFIG_EXTENSIONS.has(extensionOf(entry.name))) {
+        const text = readFileSync(join(dir, entry.name), 'utf8');
+        for (const match of text.matchAll(/[^\s"'`,]+huaweicloud[^\s"'`,]*mcp-server\.js/g)) {
+          if (existsSync(match[0])) paths.add(match[0]);
+        }
+      }
+    }
+  };
+  walk(home);
+  return [...paths];
+}
+
+function extensionOf(name) {
+  const dot = name.lastIndexOf('.');
+  return dot === -1 ? '' : name.slice(dot);
+}
+
+// ---- 1. pack + install the tarball (the npx-equivalent layout) ----
+console.log('[smoke] packing tarball...');
+const packed = JSON.parse(execFileSync(npm, ['pack', '--json'], { encoding: 'utf8', cwd: root, env: cleanEnv() }));
+const tarball = join(root, packed[0].filename);
+const prefix = mkdtempSync(join(tmpdir(), 'hwc-smoke-prefix-'));
+execFileSync(npm, ['install', '--no-audit', '--no-fund', tarball], {
+  encoding: 'utf8',
+  cwd: prefix,
+  env: cleanEnv(),
+  stdio: 'ignore',
+});
+const installed = join(prefix, 'node_modules', 'huaweicloud-devkit');
+const bin = join(installed, 'bin', 'setup.cjs');
+if (!existsSync(bin)) {
+  console.error(`[smoke] installed bin missing: ${bin}`);
+  process.exit(1);
+}
+
+const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+const versionRun = run(process.execPath, [bin, 'version'], {
+  env: { HOME: mkdtempSync(join(tmpdir(), 'hwc-smoke-home-')) },
+});
+record(
+  'package',
+  'installed bin version',
+  versionRun.status === 0 && versionRun.stdout.includes(pkg.version),
+  String(versionRun.stdout).split('\n')[0],
+);
+
+// ---- 2. per-target install → status → configured server roundtrip ----
+for (const target of SUPPORTED_AGENT_TARGETS) {
+  console.log(`[smoke] target: ${target}`);
+  const home = mkdtempSync(join(tmpdir(), `hwc-smoke-${target}-`));
+  const env = { HOME: home };
+  if (target === 'officeace') {
+    const fakeRoot = join(home, '.office-claw');
+    mkdirSync(fakeRoot, { recursive: true });
+    writeFileSync(join(fakeRoot, 'capabilities.json'), '{}');
+    env.OFFICE_CLAW_CONFIG_ROOT = fakeRoot;
+  }
+
+  const install = run(process.execPath, [bin, 'install', '--target', target], { env });
+  if (target === 'officeace') {
+    const documented = /OfficeAce database not found|OfficeAce MCP connector registration failed/.test(install.stdout);
+    record(
+      target,
+      'install reaches the documented OfficeAce failure',
+      install.status !== 0 && documented,
+      'no real OfficeAce on this host',
+    );
+  } else {
+    record(target, 'install exits 0', install.status === 0, firstErrorLine(install));
+    if (install.status !== 0) continue;
+
+    // codex-desktop has no status section (pre-existing gap: install target
+    // exists, cmdStatus does not cover it). Its proof is the copied
+    // marketplace server below.
+    if (target !== 'codex-desktop') {
+      const status = run(process.execPath, [bin, 'status', '--target', target], { env });
+      const expected = target === 'codex' ? /Plugin:.*Installed/ : /MCP Server:.*Installed/;
+      record(target, 'status reports the target installed', expected.test(status.stdout), firstErrorLine(status));
+    }
+
+    if (target === 'codex') {
+      // Codex manages the server through its marketplace; the consumer
+      // contract is the registration in config.toml, not a direct path.
+      const toml = readFileSync(join(home, '.codex', 'config.toml'), 'utf8');
+      const registered = /plugins\."huaweicloud-devkit@/.test(toml);
+      record(target, 'codex config.toml registers the plugin', registered, 'marketplace-managed server');
+      rmSync(home, { recursive: true, force: true });
+      continue;
+    }
+
+    const servers = findConfiguredServerPaths(home);
+    if (servers.length === 0) {
+      const copied = findCopiedServer(home);
+      record(target, 'no agent-config reference; copied plugin server runs', copied.ok, copied.detail);
+    } else {
+      for (const server of servers) {
+        const roundtrip = mcpRoundtrip(server);
+        record(
+          target,
+          `configured server answers tools/list (${shortHome(server, home)})`,
+          roundtrip.ok,
+          roundtrip.detail,
+        );
+      }
+    }
+  }
+  rmSync(home, { recursive: true, force: true });
+}
+
+// ---- 3. hook from an installed plugin copy ----
+console.log('[smoke] hook check...');
+const hookHome = mkdtempSync(join(tmpdir(), 'hwc-smoke-hook-'));
+run(process.execPath, [bin, 'install', '--target', 'hermes'], { env: { HOME: hookHome } });
+const hookPath = findFile(join(hookHome, '.hermes'), 'huaweicloud-safety.mjs');
+if (!hookPath) {
+  record('hook', 'installed hook wrapper found', false, 'hermes install did not copy hooks');
+} else {
+  const hookRun = run(process.execPath, [hookPath], {
+    input: JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: {
+        command:
+          'hcloud VPC CreateSecurityGroupRule --security_group_rule.port_range_min=22 --security_group_rule.remote_ip_prefix=0.0.0.0/0',
+      },
+    }),
+  });
+  const denied = hookRun.status === 0 && /"permissionDecision":"deny"/.test(hookRun.stdout);
+  record('hook', 'installed PreToolUse hook denies a public write', denied, String(hookRun.stderr).slice(0, 200));
+}
+rmSync(hookHome, { recursive: true, force: true });
+
+// ---- summary ----
+rmSync(prefix, { recursive: true, force: true });
+rmSync(tarball, { force: true });
+
+const failed = results.filter((r) => !r.ok);
+console.log(`\n[smoke] ${results.length - failed.length}/${results.length} checks passed.`);
+if (failed.length > 0) {
+  for (const f of failed) console.error(`  FAIL ${f.target}: ${f.check} — ${f.detail}`);
+  process.exit(1);
+}
+
+function firstErrorLine(res) {
+  if (res.status === 0) return '';
+  return (
+    String(res.stderr || res.stdout)
+      .trim()
+      .split('\n')[0] || ''
+  ).slice(0, 160);
+}
+
+function shortHome(path, home) {
+  return path.startsWith(home) ? path.slice(home.length) : path;
+}
+
+function findCopiedServer(home) {
+  const server = findFile(home, 'mcp-server.js');
+  if (!server || !server.split(sep).includes('dist')) return { ok: false, detail: 'no copied dist server found' };
+  return mcpRoundtrip(server);
+}
+
+function findFile(dir, name) {
+  if (!existsSync(dir)) return null;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === 'node_modules') continue;
+      const hit = findFile(full, name);
+      if (hit) return hit;
+    } else if (entry.name === name) {
+      return full;
+    }
+  }
+  return null;
+}

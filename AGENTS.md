@@ -13,6 +13,7 @@ npm run format           # Prettier format all files
 npm run format:check     # Prettier check (no write)
 npm run validate         # structural validation + README beta badge sync check
 npm run badge:sync       # rewrite README beta badge to the next stable version
+npm run smoke:agents     # pre-release smoke: pack → install tarball → per-agent install + MCP roundtrip
 node --test test/structure.test.ts    # single test file
 node ./scripts/validate-package.mjs   # validation alone
 ```

@@ -42,6 +42,7 @@
     "lint": "npm run lint:md && npm run lint:js",
     "validate": "node ./scripts/validate-package.mjs && node ./scripts/sync-readme-badge.mjs",
     "badge:sync": "node ./scripts/sync-readme-badge.mjs --write",
+    "smoke:agents": "node ./scripts/smoke-agents.mjs",
     "pack:verify": "node ./scripts/pack-verify.mjs",
     "postinstall": "node ./bin/dsh-postinstall.cjs"
   },
