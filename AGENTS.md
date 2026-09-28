@@ -26,7 +26,7 @@ This is an **agent guidance + safety package**, not a service encyclopedia. Six 
 ```
 plugins/huaweicloud-core/
   skills/           ← 6 meta-skills + service skills
-  src/              ← TypeScript MCP server sources (stdio/remote JSON-RPC, 39 tools in tools.ts)
+  src/              ← TypeScript MCP server sources (stdio/remote JSON-RPC, 40 tools in tools.ts)
   dist/             ← tsc output; every runtime entry point loads this
   safety/           ← shared policy.json + risk rules
   hooks/            ← PreToolUse hook (Node huaweicloud-safety.mjs, wired via hooks.json; .py variant kept for compatibility)
@@ -167,3 +167,4 @@ If you changed a SKILL.md, add or update a guard in `test/structure.test.ts` and
 - Codex plugin marketplace name is read from `.agents/plugins/marketplace.json`. `getMarketplaceName()` must match, never hardcode.
 - OpenCode integration lives in `integrations/opencode/` (separate from the plugin).
 - Node >= 22 required, ESM only. Running the `.ts` test suite directly needs Node >= 22.18 (type stripping); the published `engines` stays `>= 22`.
+- npm tarballs ship a built `dist/` (prepack). A raw git clone or marketplace file copy does not: run `npm run build` before using `.mcp.json`/`bin/setup.cjs` from a checkout. The safety hook wrapper falls back to the `.ts` source on its own, but the MCP server config does not.

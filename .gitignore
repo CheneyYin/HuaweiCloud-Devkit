@@ -3,6 +3,7 @@ npm-debug.log*
 .DS_Store
 coverage/
 dist/
+dist.new/
 __pycache__/
 *.pyc
 .env

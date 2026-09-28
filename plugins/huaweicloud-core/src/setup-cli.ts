@@ -2278,6 +2278,19 @@ function ensureDshMcpPatch(): boolean {
     existing = cleaned;
   }
 
+  // Pre-2.0 installs rewrote the bundled patch to an absolute
+  // src/mcp-server.mjs path (see bin/dsh-postinstall.cjs history). That file
+  // no longer ships, so rewrite it to this install's dist location before the
+  // "already configured" short-circuit below, or the server would silently
+  // point at nothing.
+  const distServerPath = join(PLUGIN_ROOT, 'dist', 'mcp-server.js').replace(/\\/g, '/');
+  const migrated = cleaned.replace(/([^\s'"]*)\/plugins\/huaweicloud-core\/src\/mcp-server\.mjs/g, distServerPath);
+  if (migrated !== cleaned) {
+    writeFileSync(patchFile, migrated);
+    console.log(`  DSH patch MCP path migrated to dist: ${patchFile}`);
+    existing = migrated;
+  }
+
   // If the bundled cordis.patch.yml already provides the MCP config, skip
   // writing a managed block to avoid duplicate entries.
   if (cleaned.includes('@deepseek-ai/dsh-mcp-client') && cleaned.includes('serverName: huaweicloud')) {

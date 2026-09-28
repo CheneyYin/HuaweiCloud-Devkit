@@ -11,15 +11,11 @@ function readJson(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
-// Runtime sources migrate from .mjs to .ts phase by phase. Resolve whichever
-// extension exists so path assertions survive each rename.
+// Sources are TypeScript; a few call sites still pass legacy .mjs paths.
 function readSource(relativePath) {
-  const candidates = [relativePath, relativePath.replace(/\.mjs$/, '.ts')];
-  for (const candidate of candidates) {
-    const full = join(pluginRoot, candidate);
-    if (existsSync(full)) return readFileSync(full, 'utf8');
-  }
-  assert.fail(`source file not found: ${relativePath}`);
+  const full = join(pluginRoot, relativePath.replace(/\.mjs$/, '.ts'));
+  assert.ok(existsSync(full), `source file not found: ${relativePath}`);
+  return readFileSync(full, 'utf8');
 }
 
 test('Codex plugin manifest and marketplace are installable', () => {
@@ -741,7 +737,7 @@ test('tools.ts registers version-update tools', () => {
 });
 
 test('stdio server warms update cache; shared protocol decorates first tool call', () => {
-  const server = readSource(join('src', 'mcp-server.mjs'));
+  const server = readSource(join('src', 'mcp-server.ts'));
   assert.match(server, /getCachedUpdateInfo\(readInstalledVersion\(\)/);
   const protocol = readSource(join('src', 'mcp-protocol.ts'));
   assert.match(protocol, /applyUpdateHint\(/);
@@ -813,7 +809,13 @@ test('shipped runtime entry points point at built dist JavaScript', () => {
   }
 
   const hookWrapper = readFileSync(join(pluginRoot, 'hooks', 'huaweicloud-safety.mjs'), 'utf8');
-  assert.doesNotMatch(hookWrapper, /from '\.\.\/src\//, 'hook wrapper must import the built dist, not src');
+  assert.match(hookWrapper, /dist\/safety-policy\.js/, 'hook wrapper must prefer the built dist module');
+  assert.doesNotMatch(hookWrapper, /from '\.\.\/src\//, 'hook wrapper must not statically import src');
+
+  // A raw git or marketplace copy of the plugin has no dist; the wrapper must
+  // still run the safety gate from the TypeScript source in that layout.
+  const hookFallback = /existsSync\([^)]*dist[^)]*safety-policy\.js[\s\S]*import\('\.\.\/src\/safety-policy\.ts'\)/;
+  assert.match(hookWrapper, hookFallback, 'hook wrapper needs a src fallback for unbuilt copies');
 
   const cordis = readFileSync(join(root, 'cordis.patch.yml'), 'utf8');
   assert.doesNotMatch(cordis, /\.ts\b/, 'cordis.patch.yml must not reference TypeScript files');
@@ -829,4 +831,17 @@ test('shipped runtime entry points point at built dist JavaScript', () => {
     'setup-cli must not point at a src mcp-server.js (built output lives in dist)',
   );
   assert.doesNotMatch(setupCli, /join\(PLUGIN_ROOT, 'src'\)/, 'setup-cli must copy dist, not src');
+});
+
+test('plugin src tree is TypeScript only', () => {
+  const walk = (dir) =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory() ? walk(join(dir, entry.name)) : [join(dir, entry.name)],
+    );
+  const scripts = walk(join(pluginRoot, 'src')).filter((file) => /\.(mjs|cjs|js)$/.test(file));
+  assert.deepEqual(
+    scripts,
+    [],
+    `src must hold only TypeScript scripts plus data assets; found JavaScript: ${scripts.join(', ')}`,
+  );
 });

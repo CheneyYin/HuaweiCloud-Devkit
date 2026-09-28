@@ -27,25 +27,31 @@ export interface ClassifyOptions {
   _segmentDepth?: number;
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+// An absent field normalizes to [] (older policies). A field that is present
+// but not an array throws: the pre-migration module crashed on first use of a
+// malformed policy, and silently emptying e.g. writeOperationPrefixes would
+// reclassify write commands as safe — the enforcement layer must fail closed.
+function toStringArray(value: unknown, field: string): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new TypeError(`safety policy field "${field}" must be an array of strings`);
+  }
+  return value.filter((item): item is string => typeof item === 'string');
 }
 
-// Missing / non-array fields normalize to []. Valid policy.json always has all
-// six arrays; malformed fields that used to throw at first use become empty.
-function toStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
-}
-
-export function loadPolicy(): Policy {
-  const raw = asRecord(JSON.parse(readFileSync(policyPath, 'utf8')));
+export function loadPolicy(path: string = policyPath): Policy {
+  const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new TypeError('safety policy must be a JSON object');
+  }
+  const raw = parsed as Record<string, unknown>;
   return {
-    secretKeyNamePatterns: toStringArray(raw.secretKeyNamePatterns),
-    credentialFilePatterns: toStringArray(raw.credentialFilePatterns),
-    blockedConfigureSubcommands: toStringArray(raw.blockedConfigureSubcommands),
-    blockedSecretOperations: toStringArray(raw.blockedSecretOperations),
-    writeOperationPrefixes: toStringArray(raw.writeOperationPrefixes),
-    readOperationPrefixes: toStringArray(raw.readOperationPrefixes),
+    secretKeyNamePatterns: toStringArray(raw.secretKeyNamePatterns, 'secretKeyNamePatterns'),
+    credentialFilePatterns: toStringArray(raw.credentialFilePatterns, 'credentialFilePatterns'),
+    blockedConfigureSubcommands: toStringArray(raw.blockedConfigureSubcommands, 'blockedConfigureSubcommands'),
+    blockedSecretOperations: toStringArray(raw.blockedSecretOperations, 'blockedSecretOperations'),
+    writeOperationPrefixes: toStringArray(raw.writeOperationPrefixes, 'writeOperationPrefixes'),
+    readOperationPrefixes: toStringArray(raw.readOperationPrefixes, 'readOperationPrefixes'),
   };
 }
 

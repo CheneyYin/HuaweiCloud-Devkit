@@ -1,6 +1,6 @@
 // Pure helpers for merging HuaweiCloud DevKit MCP config entries without
 // dropping user-customized fields (extra command args, env, timeout, enabled).
-// Program-owned fields (the node executable + mcp-server.mjs path, required env
+// Program-owned fields (the node executable + dist/mcp-server.js path, required env
 // keys) are corrected by the installer; everything else belongs to the user.
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
