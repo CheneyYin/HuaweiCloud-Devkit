@@ -8,6 +8,11 @@ import test from 'node:test';
 import { TOOL_DEFINITIONS } from '../plugins/huaweicloud-core/src/tools.ts';
 import { PACK_OF, PACKS } from '../plugins/huaweicloud-core/src/packs/registry.ts';
 import { UPDATE_TOOLS } from '../plugins/huaweicloud-core/src/packs/update/tools.ts';
+import { AUTH_TOOLS } from '../plugins/huaweicloud-core/src/packs/auth/tools.ts';
+import { OBS_TOOLS } from '../plugins/huaweicloud-core/src/packs/obs/tools.ts';
+import { VOUCHER_TOOLS } from '../plugins/huaweicloud-core/src/packs/voucher/tools.ts';
+import { DISCOVERY_TOOLS } from '../plugins/huaweicloud-core/src/packs/discovery/tools.ts';
+import { SANDBOX_TOOLS } from '../plugins/huaweicloud-core/src/packs/sandbox/tools.ts';
 import { checkPackBoundaries } from '../scripts/lib/pack-boundaries.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -252,7 +257,9 @@ test('devbridge tunnel handling is migrated to the s2 gateway domain', () => {
 
 test('devbridge 0.2.x flow: auth capability probe, version detection, in-place upgrade guidance', () => {
   const sandbox = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
-  const tools = readSource(join('src', 'tools.ts'));
+  // The credentials tool handler moved to the sandbox pack
+  // (src/packs/sandbox/tools.ts) with the P2 pack program.
+  const sandboxPack = readSource(join('src', 'packs', 'sandbox', 'tools.ts'));
 
   // SKILL.md must never teach the removed 0.1.x login flow (--huaweicloud SSO flag is
   // gone from every 0.2.x build), and the obsolete warning row must stay gone.
@@ -282,14 +289,14 @@ test('devbridge 0.2.x flow: auth capability probe, version detection, in-place u
   // The credentials tool must support injecting the DevBridge API Key:
   // - env-first precedence (keeps the long-lived key out of the conversation)
   // - separate storage from the temporary AK/SK (/tmp/hw_api_key vs /tmp/hw_creds.sh)
-  assert.match(tools, /api_key/);
-  assert.match(tools, /process\.env\.HW_API_KEY \|\| args\.api_key/);
-  assert.match(tools, /\/tmp\/hw_api_key/);
+  assert.match(sandboxPack, /api_key/);
+  assert.match(sandboxPack, /process\.env\.HW_API_KEY \|\| args\.api_key/);
+  assert.match(sandboxPack, /\/tmp\/hw_api_key/);
   assert.match(sandbox, /\/tmp\/hw_api_key/);
 
   // The API Key must NOT be written into the shared AK/SK creds script.
-  const credsWrite = tools.match(/const credsScript = \[[\s\S]*?\]/);
-  assert.ok(credsWrite, 'credsScript block not found in tools.ts');
+  const credsWrite = sandboxPack.match(/const credsScript = \[[\s\S]*?\]/);
+  assert.ok(credsWrite, 'credsScript block not found in packs/sandbox/tools.ts');
   assert.doesNotMatch(credsWrite[0], /HW_API_KEY/);
 
   // The CodeArts Doer sidecopy must mirror the probe-branch flow and not regress
@@ -779,6 +786,38 @@ test('update pack registers version-update tools; tools.ts delegates dispatch', 
     const definition = TOOL_DEFINITIONS.find((entry) => entry.name === tool.name);
     assert.ok(definition, `${tool.name} missing from TOOL_DEFINITIONS`);
     assert.equal(tool.description, definition.description);
+  }
+});
+
+test('five P2 packs register their tools; tools.ts delegates dispatch', () => {
+  // Same contract as the update pack, asserted for the five packs
+  // materialized in P2: sandbox (11), auth (5), obs (2), voucher (2),
+  // discovery (3) — 23 tools total.
+  const packs = [
+    { id: 'sandbox', tools: SANDBOX_TOOLS, count: 11 },
+    { id: 'auth', tools: AUTH_TOOLS, count: 5 },
+    { id: 'obs', tools: OBS_TOOLS, count: 2 },
+    { id: 'voucher', tools: VOUCHER_TOOLS, count: 2 },
+    { id: 'discovery', tools: DISCOVERY_TOOLS, count: 3 },
+  ];
+  const tools = readSource(join('src', 'tools.ts'));
+  for (const { id, tools: packTools, count } of packs) {
+    assert.equal(packTools.length, count, `${id} pack tool count`);
+    const packSource = readSource(join('src', 'packs', id, 'tools.ts'));
+    for (const tool of packTools) {
+      assert.match(packSource, new RegExp(`name: '${tool.name}'`));
+      assert.match(tools, new RegExp(`case '${tool.name}':`));
+      const definition = TOOL_DEFINITIONS.find((entry) => entry.name === tool.name);
+      assert.ok(definition, `${tool.name} missing from TOOL_DEFINITIONS`);
+      assert.equal(tool.description, definition.description);
+    }
+    // Behavioral lockstep: the pack tool list equals the PACK_OF ownership.
+    const owned = Object.keys(PACK_OF).filter((tool) => PACK_OF[tool] === id);
+    assert.deepEqual(
+      packTools.map((tool) => tool.name).sort((a, b) => a.localeCompare(b)),
+      [...owned].sort((a, b) => a.localeCompare(b)),
+      `${id} pack tools must match PACK_OF ownership`,
+    );
   }
 });
 

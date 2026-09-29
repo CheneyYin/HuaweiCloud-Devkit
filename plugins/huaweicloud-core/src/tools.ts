@@ -1,30 +1,13 @@
-import { readFileSync, readdirSync, existsSync, rmSync, mkdirSync } from 'node:fs';
-import { join, dirname, basename } from 'node:path';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { homedir, tmpdir } from 'node:os';
-import { spawnSync, execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { homedir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { z } from 'zod';
 
 import { evaluateArtifacts, evaluateCommandRisk, evaluateDeployPlan, type RiskEvaluation } from './risk-rule-engine.ts';
 import { classifyTextCommand, redactSecrets } from './safety-policy.ts';
 import { planHcloudCommand, runHcloud, consumeApprovalToken, hashArgs, type HcloudRunResult } from './hcloud-cli.ts';
-import {
-  execWithSession,
-  execOneShot,
-  closeSession,
-  uploadFileWithSession,
-  uploadProjectWithSession,
-  deployNginx,
-  deployCheck,
-  getCurrentWorkspaceId,
-  setWorkspaceId,
-} from './sandbox/session-manager.ts';
-import { hdkitCheckUser, hdkitSignAgreement, hdkitConnect, hdkitCredentials } from './lib/hdkit/hdkitservice-api.ts';
-import { getCredentials } from './lib/hdkit/hwlink-api.ts';
-import { validateIamCredentials } from './auth/credential-validator.ts';
-import { resolveCredentialsWithRuntime } from './auth/credentials.ts';
-import { asCredentialRecord, type CredentialLike } from './lib/credentials.ts';
 import { trackToolInvoke, trackSkillRetrieve } from './telemetry/telemetry.ts';
 import { hcloudProbeNextStep, probeHcloud, type ProbeHcloudOptions } from './hcloud-probe.ts';
 import { isUsableOfficeaceRoot, readOfficeaceRootMarker } from './officeace-paths.ts';
@@ -38,6 +21,7 @@ import { AUTH_TOOL_HANDLERS } from './packs/auth/tools.ts';
 import { OBS_TOOL_HANDLERS } from './packs/obs/tools.ts';
 import { VOUCHER_TOOL_HANDLERS } from './packs/voucher/tools.ts';
 import { DISCOVERY_TOOL_HANDLERS } from './packs/discovery/tools.ts';
+import { SANDBOX_TOOL_HANDLERS } from './packs/sandbox/tools.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILLS_ROOT_DEV = join(__dirname, '..', 'skills');
@@ -505,85 +489,6 @@ function toolInvokeValue(name: ToolName, args: ToolArgs): string {
   return '1';
 }
 
-const execFilePromise = promisify(execFile);
-
-async function isGitAvailable() {
-  try {
-    await execFilePromise('git', ['--version'], { timeout: 5000 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function gitCloneToLocal(repoUrl: string, branch: string | undefined, targetBasename: string) {
-  const tempRoot = join(tmpdir(), `hw-sandbox-git-${Date.now()}`);
-  const cloneDir = join(tempRoot, targetBasename);
-  mkdirSync(tempRoot, { recursive: true });
-  const args = ['clone', '--depth', '1'];
-  if (branch) args.push('-b', branch);
-  args.push(repoUrl, cloneDir);
-  await execFilePromise('git', args, { timeout: 120000 });
-  return { cloneDir, tempRoot };
-}
-
-async function transferGitRepo(args: ToolArgs, devStageId: string, connectResult: Record<string, unknown>) {
-  const git = args.git;
-  if (!git?.repo_url || !git?.target_path) return;
-
-  const { repo_url, repo_branch, target_path } = git;
-
-  try {
-    const existsCheck = await execOneShot(
-      devStageId,
-      `test -d "${target_path}/.git" && echo "EXISTS" || echo "NOT_EXISTS"`,
-      'root',
-      10000,
-    );
-    if (String(existsCheck.stdout || '').includes('EXISTS')) {
-      connectResult._repoStatus = 'already_exists';
-      return;
-    }
-  } catch {
-    /* 检查失败继续 */
-  }
-
-  const hasGit = await isGitAvailable();
-  if (hasGit) {
-    let tempRoot = null;
-    try {
-      const targetName = basename(target_path);
-      const { cloneDir, tempRoot: root } = await gitCloneToLocal(repo_url, repo_branch, targetName);
-      tempRoot = root;
-      await uploadProjectWithSession(devStageId, cloneDir, dirname(target_path), 'root', 300000, {
-        extract: true,
-        exclude: ['.git', 'node_modules'],
-      });
-      connectResult._repoStatus = 'uploaded_from_local';
-      return;
-    } catch {
-      /* 本地方式失败，进入兜底 */
-    } finally {
-      if (tempRoot) {
-        try {
-          rmSync(tempRoot, { recursive: true, force: true });
-        } catch {
-          /* 清理失败忽略 */
-        }
-      }
-    }
-  }
-
-  const branchFlag = repo_branch ? `-b ${repo_branch}` : '';
-  await execOneShot(
-    devStageId,
-    `mkdir -p $(dirname "${target_path}") && git clone --depth 1 ${branchFlag} "${repo_url}" "${target_path}"`,
-    'root',
-    120000,
-  );
-  connectResult._repoStatus = 'cloned_in_sandbox';
-}
-
 // Reject invalid numeric args up front instead of silently coercing them to
 // NaN (which downstream defaults would absorb as "no timeout set") — see #530.
 const NUMERIC_ARG_KEYS = ['timeoutMs', 'maxRetries', 'timeout_ms'] as const;
@@ -669,250 +574,31 @@ export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: Cal
       return await AUTH_TOOL_HANDLERS['huaweicloud_auth_switch'](args, opts);
     case 'huaweicloud_auth_confirm':
       return await AUTH_TOOL_HANDLERS['huaweicloud_auth_confirm'](args, opts);
-    case 'huaweicloud_sandbox_exec_with_session': {
-      const sandboxWsId2 = args.workspace_id || getCurrentWorkspaceId();
-      if (!sandboxWsId2) {
-        throw new Error(
-          'workspace_id is required. No sandbox connected — call huaweicloud_sandbox_connect first, ' +
-            'or set HW_WORKSPACE_ID environment variable before starting the agent.',
-        );
-      }
-      const sandboxUser2 = args.username || 'root';
-      const sandboxTimeout2 = args.timeout_ms || 120000;
-      const sandboxResult2 = await execWithSession(sandboxWsId2, args.command || '', sandboxUser2, sandboxTimeout2);
-      return { stdout: sandboxResult2.stdout, exitCode: sandboxResult2.exitCode };
-    }
-    case 'huaweicloud_sandbox_exec_one_shot': {
-      const sandboxWsId3 = args.workspace_id || getCurrentWorkspaceId();
-      if (!sandboxWsId3) {
-        throw new Error(
-          'workspace_id is required. No sandbox connected — call huaweicloud_sandbox_connect first, ' +
-            'or set HW_WORKSPACE_ID environment variable before starting the agent.',
-        );
-      }
-      const sandboxUser3 = args.username || 'root';
-      const sandboxTimeout3 = args.timeout_ms || 120000;
-      const sandboxResult3 = await execOneShot(sandboxWsId3, args.command || '', sandboxUser3, sandboxTimeout3);
-      return { stdout: sandboxResult3.stdout, exitCode: sandboxResult3.exitCode };
-    }
-    case 'huaweicloud_sandbox_close_session': {
-      const sandboxWsId4 = args.workspace_id || getCurrentWorkspaceId();
-      if (!sandboxWsId4) {
-        throw new Error(
-          'workspace_id is required. No sandbox connected — call huaweicloud_sandbox_connect first, ' +
-            'or set HW_WORKSPACE_ID environment variable before starting the agent.',
-        );
-      }
-      const sandboxUser4 = args.username || 'root';
-      const closed = await closeSession(sandboxWsId4, sandboxUser4);
-      return closed ? 'ok' : 'not_connected';
-    }
-    case 'huaweicloud_sandbox_upload_file': {
-      if (!args.local_path || !args.remote_path) {
-        throw new Error('local_path and remote_path are required.');
-      }
-      const sandboxWsId5 = args.workspace_id || getCurrentWorkspaceId();
-      if (!sandboxWsId5) {
-        throw new Error(
-          'workspace_id is required. No sandbox connected — call huaweicloud_sandbox_connect first, ' +
-            'or set HW_WORKSPACE_ID environment variable before starting the agent.',
-        );
-      }
-      const sandboxUser5 = args.username || 'root';
-      const sandboxTimeout5 = args.timeout_ms || 120000;
-      return await uploadFileWithSession(
-        sandboxWsId5,
-        args.local_path,
-        args.remote_path,
-        sandboxUser5,
-        sandboxTimeout5,
-      );
-    }
-    case 'huaweicloud_sandbox_upload_project': {
-      if (!args.local_dir) {
-        throw new Error('local_dir is required.');
-      }
-      const sandboxWsId6 = args.workspace_id || getCurrentWorkspaceId();
-      if (!sandboxWsId6) {
-        throw new Error(
-          'workspace_id is required. No sandbox connected — call huaweicloud_sandbox_connect first, ' +
-            'or set HW_WORKSPACE_ID environment variable before starting the agent.',
-        );
-      }
-      const sandboxUser6 = args.username || 'root';
-      const sandboxTimeout6 = args.timeout_ms || 120000;
-      return await uploadProjectWithSession(
-        sandboxWsId6,
-        args.local_dir,
-        args.remote_dir,
-        sandboxUser6,
-        sandboxTimeout6,
-        {
-          exclude: args.exclude,
-          extract: args.extract,
-        },
-      );
-    }
-    case 'huaweicloud_sandbox_deploy_nginx': {
-      if (!args.nginx_type || !args.port || !args.project || !args.output_dir) {
-        throw new Error('nginx_type, port, project, and output_dir are required.');
-      }
-      const sandboxWsId7 = args.workspace_id || getCurrentWorkspaceId();
-      if (!sandboxWsId7) {
-        throw new Error(
-          'workspace_id is required. No sandbox connected — call huaweicloud_sandbox_connect first, ' +
-            'or set HW_WORKSPACE_ID environment variable before starting the agent.',
-        );
-      }
-      const sandboxUser7 = args.username || 'root';
-      const sandboxTimeout7 = args.timeout_ms || 60000;
-      return await deployNginx(
-        sandboxWsId7,
-        {
-          nginxType: args.nginx_type,
-          port: args.port,
-          project: args.project,
-          outputDir: args.output_dir,
-          nodePort: args.node_port,
-          publicPort: args.public_port,
-          configName: args.config_name,
-        },
-        sandboxUser7,
-        sandboxTimeout7,
-      );
-    }
-    case 'huaweicloud_sandbox_deploy_check': {
-      if (!args.port || !args.project || !args.output_dir) {
-        throw new Error('port, project, and output_dir are required.');
-      }
-      const sandboxWsId8 = args.workspace_id || getCurrentWorkspaceId();
-      if (!sandboxWsId8) {
-        throw new Error(
-          'workspace_id is required. No sandbox connected — call huaweicloud_sandbox_connect first, ' +
-            'or set HW_WORKSPACE_ID environment variable before starting the agent.',
-        );
-      }
-      const sandboxUser8 = args.username || 'root';
-      const sandboxTimeout8 = args.timeout_ms || 30000;
-      return await deployCheck(
-        sandboxWsId8,
-        {
-          port: args.port,
-          project: args.project,
-          outputDir: args.output_dir,
-          frameworkType: args.framework_type,
-        },
-        sandboxUser8,
-        sandboxTimeout8,
-      );
-    }
+    // Sandbox tools delegate to the sandbox pack's handler map
+    // (src/packs/sandbox/tools.ts); the git repo transfer chain moved with
+    // the connect handler.
+    case 'huaweicloud_sandbox_exec_with_session':
+      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_exec_with_session'](args, opts);
+    case 'huaweicloud_sandbox_exec_one_shot':
+      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_exec_one_shot'](args, opts);
+    case 'huaweicloud_sandbox_close_session':
+      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_close_session'](args, opts);
+    case 'huaweicloud_sandbox_upload_file':
+      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_upload_file'](args, opts);
+    case 'huaweicloud_sandbox_upload_project':
+      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_upload_project'](args, opts);
+    case 'huaweicloud_sandbox_deploy_nginx':
+      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_deploy_nginx'](args, opts);
+    case 'huaweicloud_sandbox_deploy_check':
+      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_deploy_check'](args, opts);
     case 'huaweicloud_sandbox_check_user':
-      return await hdkitCheckUser();
+      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_check_user'](args, opts);
     case 'huaweicloud_sandbox_sign_agreement':
-      return await hdkitSignAgreement();
-    case 'huaweicloud_sandbox_connect': {
-      const connectResult = await hdkitConnect(args);
-      const rawDevStageId = connectResult?.dev_stage_id || connectResult?.devStageId;
-      const devStageId = typeof rawDevStageId === 'string' ? rawDevStageId : undefined;
-      if (devStageId) {
-        setWorkspaceId(devStageId);
-        try {
-          await execOneShot(devStageId, 'devbridge delete-all 2>/dev/null || true', 'root', 15000);
-        } catch {}
-        try {
-          await execWithSession(devStageId, 'export PATH=$HOME/.huawei/bin${PATH:+:$PATH}', 'root', 10000);
-        } catch {}
-        await transferGitRepo(args, devStageId, connectResult);
-      }
-      return connectResult;
-    }
-    case 'huaweicloud_sandbox_credentials': {
-      const devStageId = args.dev_stage_id || getCurrentWorkspaceId();
-      let resolved: CredentialLike | null;
-      try {
-        resolved = asCredentialRecord(resolveCredentialsWithRuntime());
-      } catch {
-        resolved = null;
-      }
-      if (!resolved?.ak || !resolved?.sk) {
-        return {
-          ok: false,
-          error: 'Huawei Cloud credentials are not configured. Nothing was injected into the sandbox.',
-          hint: 'Run "npx huaweicloud-devkit auth init" or set HW_ACCESS_KEY/HW_SECRET_KEY, then retry.',
-        };
-      }
-      const validation = await validateIamCredentials({
-        ak: resolved.ak,
-        sk: resolved.sk,
-        securityToken: resolved.securityToken,
-        region: args.region || resolved.region,
-      });
-      if (!validation.valid && !validation.skipped) {
-        return {
-          ok: false,
-          error: 'Credential validation failed before injection: ' + validation.error,
-          hint: 'Credentials were NOT injected into the sandbox. Fix AK/SK first: run "npx huaweicloud-devkit auth init" or correct HW_ACCESS_KEY/HW_SECRET_KEY, then retry.',
-        };
-      }
-      const credResult = await hdkitCredentials(args.session_id, devStageId, args.enable_sts !== false);
-      const sandboxWsIdCred = args.dev_stage_id || getCurrentWorkspaceId();
-      // The DevBridge API Key is a LONG-LIVED account-level credential (no expiry, manual
-      // revocation only) — unlike the temporary STS AK/SK. It is stored in its own file
-      // (/tmp/hw_api_key, 0600) so an accidental dump of /tmp/hw_creds.sh never exposes it,
-      // and the local HW_API_KEY env takes precedence over the tool param so the key can be
-      // delivered without entering the conversation.
-      const apiKey = process.env.HW_API_KEY || args.api_key || '';
-      const apiKeyFile = '/tmp/hw_api_key';
-      if (sandboxWsIdCred) {
-        try {
-          const { ak, sk, securitytoken } = getCredentials();
-          const credsScript = [
-            `export HW_ACCESS_KEY='${ak}'`,
-            `export HW_SECRET_KEY='${sk}'`,
-            securitytoken ? `export HW_SECURITY_TOKEN='${securitytoken}'` : '',
-            securitytoken ? `export X_HW_SECURITY_TOKEN='${securitytoken}'` : '',
-            validation.projectId ? `export HW_PROJECT_ID='${validation.projectId}'` : '',
-          ]
-            .filter(Boolean)
-            .join('\n');
-          const credsFile = '/tmp/hw_creds.sh';
-          await execOneShot(
-            sandboxWsIdCred,
-            `cat > ${credsFile} << 'HWCREDS_EOF'\n${credsScript}\nHWCREDS_EOF\nchmod 600 ${credsFile}`,
-            'root',
-            15000,
-          );
-          await execWithSession(sandboxWsIdCred, `source ${credsFile} && echo "CREDS_SOURCED"`, 'root', 15000);
-          if (apiKey) {
-            await execOneShot(
-              sandboxWsIdCred,
-              `cat > ${apiKeyFile} << 'HWAPIKEY_EOF'\nexport HW_API_KEY='${apiKey}'\nHWAPIKEY_EOF\nchmod 600 ${apiKeyFile}`,
-              'root',
-              15000,
-            );
-          } else {
-            // Refresh with no key → drop any stale copy, same semantics as the creds file rewrite.
-            await execOneShot(sandboxWsIdCred, `rm -f ${apiKeyFile}`, 'root', 15000);
-          }
-        } catch {}
-      }
-      const result: Record<string, unknown> = {
-        ...credResult,
-        credentialValidation: validation.warning ? 'passed-with-warning' : 'passed',
-      };
-      if (sandboxWsIdCred) result.apiKeyInjected = Boolean(apiKey);
-      if (apiKey) {
-        result.apiKeyHint =
-          'DevBridge API Key written to /tmp/hw_api_key (0600, kept separate from the temporary AK/SK in /tmp/hw_creds.sh — it is a long-lived account-level credential). Release builds of devbridge 0.2.x use it via: source /tmp/hw_api_key && devbridge auth login --api-key "$HW_API_KEY". Image builds retain AK/SK login — the huawei-sandbox skill probes the capability at expose time. Never echo the key into logs.';
-      } else {
-        result.apiKeyHint =
-          'No DevBridge API Key provided — release builds of devbridge 0.2.x cannot log in with AK/SK (image builds retain AK/SK; the huawei-sandbox skill probes the build at expose time and uses the injected AK/SK directly when supported). For release builds, ask the user for an API Key (created at https://devstation.connect.huaweicloud.com/space/devbridge/apikey) and re-run with api_key, or set the local HW_API_KEY environment variable (preferred — keeps the key out of the conversation).';
-      }
-      if (validation.projectId) result.projectId = validation.projectId;
-      if (validation.warning) result.warning = validation.warning;
-      if (validation.skipped) result.warning = validation.error;
-      return result;
-    }
+      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_sign_agreement'](args, opts);
+    case 'huaweicloud_sandbox_connect':
+      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_connect'](args, opts);
+    case 'huaweicloud_sandbox_credentials':
+      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_credentials'](args, opts);
     case 'huaweicloud_voucher_status':
       return await VOUCHER_TOOL_HANDLERS['huaweicloud_voucher_status'](args, opts);
     case 'huaweicloud_voucher_claim':

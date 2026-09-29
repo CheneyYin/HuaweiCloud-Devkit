@@ -1,6 +1,7 @@
 import type { ToolName } from '../tools.ts';
 import type { Pack, PackId } from '../lib/pack-types.ts';
 import { updatePack } from './update/pack.ts';
+import { sandboxPack } from './sandbox/pack.ts';
 import { authPack } from './auth/pack.ts';
 import { obsPack } from './obs/pack.ts';
 import { voucherPack } from './voucher/pack.ts';
@@ -101,14 +102,7 @@ export const PACKS: readonly Pack[] = [
     ],
     tools: toolsFor('core'),
   },
-  {
-    id: 'sandbox',
-    title: 'Sandbox',
-    description:
-      'Cloud sandbox workspace terminals: session and one-shot execution, file and project upload, nginx deployment and deployment checks, and hdkitservice onboarding.',
-    skills: ['huawei-sandbox'],
-    tools: toolsFor('sandbox'),
-  },
+  sandboxPack,
   authPack,
   obsPack,
   voucherPack,

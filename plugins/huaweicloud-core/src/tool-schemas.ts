@@ -2,12 +2,13 @@ import { z } from 'zod';
 
 import type { ToolName } from './tools.ts';
 import type { LooseToolSchema } from './lib/pack-types.ts';
-import { looseObject, numericArg, gitConfig, workspaceId, username } from './lib/tool-schema-parts.ts';
+import { looseObject, numericArg } from './lib/tool-schema-parts.ts';
 import { UPDATE_TOOL_SCHEMAS } from './packs/update/tools.ts';
 import { AUTH_TOOL_SCHEMAS } from './packs/auth/tools.ts';
 import { OBS_TOOL_SCHEMAS } from './packs/obs/tools.ts';
 import { VOUCHER_TOOL_SCHEMAS } from './packs/voucher/tools.ts';
 import { DISCOVERY_TOOL_SCHEMAS } from './packs/discovery/tools.ts';
+import { SANDBOX_TOOL_SCHEMAS } from './packs/sandbox/tools.ts';
 
 // LooseToolSchema now lives in src/lib/pack-types.ts (shared pack vocabulary);
 // re-exported here so existing import sites keep working.
@@ -110,108 +111,10 @@ const TOOL_SCHEMAS = {
   // spread keeps them in TOOL_SCHEMAS so the satisfies check below still
   // covers all 42 ToolName keys.
   ...AUTH_TOOL_SCHEMAS,
-  huaweicloud_sandbox_exec_with_session: z.looseObject({
-    command: z.string().describe('The shell command to execute on the remote workspace'),
-    workspace_id: workspaceId,
-    username,
-    timeout_ms: numericArg.optional().describe('Execution timeout in milliseconds (default: 120000)'),
-  }),
-  huaweicloud_sandbox_exec_one_shot: z.looseObject({
-    command: z.string().describe('The shell command to execute on the remote workspace'),
-    workspace_id: workspaceId,
-    username,
-    timeout_ms: numericArg.optional().describe('Execution timeout in milliseconds (default: 120000)'),
-  }),
-  huaweicloud_sandbox_close_session: z.looseObject({
-    workspace_id: workspaceId,
-    username,
-  }),
-  huaweicloud_sandbox_upload_file: z.looseObject({
-    local_path: z.string().describe('Absolute path to the local file to upload.'),
-    remote_path: z.string().describe('Target path in the sandbox, e.g. /workspace/<repo>/index.html.'),
-    workspace_id: workspaceId,
-    username,
-    timeout_ms: numericArg.optional().describe('Execution timeout in milliseconds (default: 60000)'),
-  }),
-  huaweicloud_sandbox_upload_project: z.looseObject({
-    local_dir: z.string().describe('Local project directory to upload.'),
-    remote_dir: z
-      .string()
-      .optional()
-      .describe(
-        'Remote parent directory where project will be extracted (default: /workspace). Final layout: <remote_dir>/<dirname>/',
-      ),
-    workspace_id: workspaceId,
-    username,
-    exclude: z
-      .array(z.string())
-      .optional()
-      .describe('Patterns to exclude from archive (default: .git, node_modules, __pycache__, .venv)'),
-    extract: z.boolean().optional().describe('Extract tar.gz on sandbox after upload (default: true)'),
-    timeout_ms: numericArg.optional().describe('Execution timeout in milliseconds (default: 300000)'),
-  }),
-  huaweicloud_sandbox_deploy_nginx: z.looseObject({
-    nginx_type: z
-      .enum(['spa', 'proxy', 'static'])
-      .describe(
-        'Nginx config type from framework detection: spa (try_files fallback for SPA/SSG/cross-platform), proxy (reverse proxy for SSR), or static (plain root for Hugo/Hexo).',
-      ),
-    port: z.number().describe('Listen port (from framework detection).'),
-    project: z.string().describe('Project directory name under /workspace, e.g. movie-ticket.'),
-    output_dir: z.string().describe('Build output directory relative to /workspace/<project>, e.g. dist/build/h5.'),
-    node_port: z.number().optional().describe('Node.js app port for SSR (required when nginx_type=proxy).'),
-    public_port: z.number().optional().describe('Public listen port for SSR proxy (optional, defaults to port).'),
-    config_name: z
-      .string()
-      .optional()
-      .describe(
-        'Config file name (without .conf suffix). Defaults to the project name, ensuring each project gets its own config. Override with distinct names (e.g. admin, docs) for sub-app deployments.',
-      ),
-    workspace_id: workspaceId,
-    username,
-    timeout_ms: numericArg.optional().describe('Execution timeout in milliseconds (default: 30000)'),
-  }),
-  huaweicloud_sandbox_deploy_check: z.looseObject({
-    port: z.number().describe('App listen port (from framework detection).'),
-    project: z.string().describe('Project directory name under /workspace.'),
-    output_dir: z.string().describe('Build output directory relative to /workspace/<project>, e.g. dist/build/h5.'),
-    framework_type: z
-      .enum(['spa', 'ssr', 'ssg', 'cross-platform', 'monorepo', 'static'])
-      .optional()
-      .describe('Framework type from detect_framework. Set to cross-platform for QR code check.'),
-    workspace_id: workspaceId,
-    username,
-    timeout_ms: numericArg.optional().describe('Execution timeout in milliseconds (default: 30000)'),
-  }),
-  huaweicloud_sandbox_check_user: z.looseObject({}),
-  huaweicloud_sandbox_sign_agreement: z.looseObject({}),
-  huaweicloud_sandbox_connect: z.looseObject({
-    source: z
-      .string()
-      .optional()
-      .describe('Source identifier (default: WEB). Options: VSCODE, CLI, WEB, WEBVNC, WEBPTY, WEBIDE, CURSOR, etc.'),
-    template_id: z.string().optional().describe('Template ID; overrides server default (only for new sandbox)'),
-    flavor_id: z.string().optional().describe('Flavor ID; overrides server default (only for new sandbox)'),
-    env: looseObject.optional().describe('Environment variables to set in the sandbox (only for new sandbox)'),
-    git: gitConfig.optional().describe('Git repo config (only for new sandbox)'),
-  }),
-  huaweicloud_sandbox_credentials: z.looseObject({
-    session_id: z.string().optional().describe('Session ID from huaweicloud_sandbox_connect'),
-    dev_stage_id: z.string().optional().describe('DevStation environment ID (alternative to session_id)'),
-    enable_sts: z.boolean().optional().describe('Whether to enable STS temporary AK/SK (default: true)'),
-    region: z
-      .string()
-      .optional()
-      .describe(
-        'Region used for IAM credential validation and project_id resolution (defaults to the configured region)',
-      ),
-    api_key: z
-      .string()
-      .optional()
-      .describe(
-        'DevBridge API Key (devbridge_...), injected into the sandbox as HW_API_KEY for devbridge 0.2.x auth. The local HW_API_KEY environment variable takes precedence over this param (preferred delivery — keeps the long-lived key out of the conversation). Users create one at https://devstation.connect.huaweicloud.com/space/devbridge/apikey (full value shown once at creation). Required for exposing web apps via devbridge 0.2.x; if missing, guide the user through creating one.',
-      ),
-  }),
+  // The sandbox pack owns its tool schemas (src/packs/sandbox/tools.ts);
+  // the spread keeps them in TOOL_SCHEMAS so the satisfies check below still
+  // covers all 42 ToolName keys.
+  ...SANDBOX_TOOL_SCHEMAS,
   // The update pack owns its tool schemas (src/packs/update/tools.ts); the
   // spread keeps them in TOOL_SCHEMAS so the satisfies check below still
   // covers all 42 ToolName keys.
