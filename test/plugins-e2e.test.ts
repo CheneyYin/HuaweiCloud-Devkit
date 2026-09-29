@@ -384,6 +384,44 @@ test('MCP tools/list includes all required core tools with valid schemas', async
   }
 });
 
+test('DEVKIT_PACKS=sandbox trims tools/list to core 17 + sandbox 11', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'mcp-trim-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'mcp-trim-proj-'));
+  try {
+    const install = runCli(home, cwd, ['install', '--target', 'opencode']);
+    assert.equal(install.status, 0, install.stderr);
+
+    const mcpServerPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js');
+    // DEVKIT_PACKS rides the spawn env into the stdio server; without it the
+    // suite's other tests above still see the full 42.
+    const responses = await invokeMcpTools(mcpServerPath, { ...makeEnv(home, cwd), DEVKIT_PACKS: 'sandbox' });
+
+    assert.ok(responses[0].result, 'initialize returned result');
+    assert.ok(responses[1].result, 'tools/list returned result');
+    const toolNames = responses[1].result.tools.map((t) => t.name);
+    assert.equal(toolNames.length, 28, `expected core 17 + sandbox 11, got ${toolNames.length}`);
+
+    // The always-on core surface survives any trimming...
+    for (const required of REQUIRED_TOOLS) {
+      assert.ok(toolNames.includes(required), `Missing core tool: ${required}`);
+    }
+    // ...the opted-in sandbox pack registers fully...
+    for (const name of PER_PACK_TOOLS.sandbox) {
+      assert.ok(toolNames.includes(name), `Missing sandbox tool: ${name}`);
+    }
+    // ...and every other pack's tools are absent.
+    for (const [packId, names] of Object.entries(PER_PACK_TOOLS)) {
+      if (packId === 'sandbox') continue;
+      for (const name of names) {
+        assert.ok(!toolNames.includes(name), `${name} from disabled pack ${packId} must not be registered`);
+      }
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test('huaweicloud_search_docs returns relevant skill results', async () => {
   const home = mkdtempSync(join(tmpdir(), 'mcp-search-'));
   const cwd = mkdtempSync(join(tmpdir(), 'mcp-search-proj-'));
