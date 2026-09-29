@@ -1,7 +1,9 @@
 import type { ToolName } from '../tools.ts';
+import type { Pack, PackId } from '../lib/pack-types.ts';
 import { updatePack } from './update/pack.ts';
 
-export type PackId = 'core' | 'sandbox' | 'auth' | 'obs' | 'voucher' | 'update' | 'discovery';
+// PackId and the Pack interface live in src/lib/pack-types.ts alongside
+// PackToolDefinition, so packs and the registry share one vocabulary module.
 
 // PACK_OF is the single source of truth for tool → pack ownership. The
 // satisfies check turns a missing or extra key into a compile error, so this
@@ -55,15 +57,6 @@ export const PACK_OF = {
 // pack can never claim an unassigned or non-existent tool.
 function toolsFor(id: PackId): ToolName[] {
   return (Object.keys(PACK_OF) as ToolName[]).filter((tool) => PACK_OF[tool] === id);
-}
-
-export interface Pack {
-  id: PackId;
-  title: string;
-  description: string;
-  /** skills/ directory names this pack ships. */
-  skills: string[];
-  tools: ToolName[];
 }
 
 // skills are hand-written claims over the plugin skills/ directories; the pack

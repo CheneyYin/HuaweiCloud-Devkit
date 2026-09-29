@@ -32,8 +32,8 @@ import {
   hdkitVoucherStatus,
   hdkitVoucherClaim,
   hdkitGenerateUserHash,
-} from './sandbox/hdkitservice-api.ts';
-import { getCredentials } from './sandbox/hwlink-api.ts';
+} from './lib/hdkit/hdkitservice-api.ts';
+import { getCredentials } from './lib/hdkit/hwlink-api.ts';
 import { getAuthStatus, syncAuth } from './auth/service.ts';
 import { validateIamCredentials } from './auth/credential-validator.ts';
 import {

@@ -1,4 +1,4 @@
-import type { Pack } from '../registry.ts';
+import type { Pack } from '../../lib/pack-types.ts';
 import { UPDATE_TOOLS } from './tools.ts';
 
 // The update pack manifest. registry.ts references this from PACKS; the tool

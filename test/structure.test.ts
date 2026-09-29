@@ -813,7 +813,7 @@ test('SDK migration invariants: setup-cli stays out of the bundled module graph'
 });
 
 test('hdkitservice-api sends X-HW-Client-Version; SKILL session-start wording', () => {
-  const api = readSource(join('src', 'sandbox', 'hdkitservice-api.ts'));
+  const api = readSource(join('src', 'lib', 'hdkit', 'hdkitservice-api.ts'));
   assert.match(api, /X-HW-Client-Version/);
   assert.match(api, /readInstalledVersion\(\)/);
   const skill = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-core', 'SKILL.md'), 'utf8');
@@ -925,7 +925,10 @@ test('pack registry partitions the tool registry and claims every skill director
     assert.ok(!toolClaims.has(tool), `tool ${tool} is claimed by more than one pack`);
     toolClaims.add(tool);
   }
-  assert.deepEqual([...toolClaims].sort((a, b) => a.localeCompare(b)), allToolNames);
+  assert.deepEqual(
+    [...toolClaims].sort((a, b) => a.localeCompare(b)),
+    allToolNames,
+  );
 
   const skillsDirs = readdirSync(join(pluginRoot, 'skills'), { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
@@ -938,5 +941,8 @@ test('pack registry partitions the tool registry and claims every skill director
       skillClaims.add(skill);
     }
   }
-  assert.deepEqual([...skillClaims].sort((a, b) => a.localeCompare(b)), skillsDirs);
+  assert.deepEqual(
+    [...skillClaims].sort((a, b) => a.localeCompare(b)),
+    skillsDirs,
+  );
 });

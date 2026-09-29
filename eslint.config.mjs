@@ -101,7 +101,9 @@ export default [
       'plugins/huaweicloud-core/src/mcp-server-remote.ts',
       'plugins/huaweicloud-core/src/tool-schemas.ts',
       'plugins/huaweicloud-core/src/tools.ts',
-      'plugins/huaweicloud-core/src/packs/update/tools.ts',
+      'plugins/huaweicloud-core/src/lib/pack-types.ts',
+      'plugins/huaweicloud-core/src/lib/tool-schema-parts.ts',
+      'plugins/huaweicloud-core/src/packs/*/tools.ts',
       'test/upgrade-session.test.ts',
       'test/remote-mcp-server.test.ts',
     ],
@@ -110,7 +112,7 @@ export default [
     },
   },
   {
-    files: ['plugins/huaweicloud-core/src/sandbox/hdkitservice-api.ts'],
+    files: ['plugins/huaweicloud-core/src/lib/hdkit/hdkitservice-api.ts'],
     rules: {
       'n/no-missing-import': ['error', { allowModules: ['undici'] }],
     },

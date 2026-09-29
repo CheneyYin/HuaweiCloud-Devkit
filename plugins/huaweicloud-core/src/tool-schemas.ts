@@ -1,12 +1,13 @@
 import { z } from 'zod';
 
 import type { ToolName } from './tools.ts';
+import type { LooseToolSchema } from './lib/pack-types.ts';
+import { looseObject, numericArg, gitConfig, workspaceId, username } from './lib/tool-schema-parts.ts';
 import { UPDATE_TOOL_SCHEMAS } from './packs/update/tools.ts';
 
-// The runtime class behind z.looseObject (constructor name ZodObject): a
-// constructed passthrough object schema. Named once so registry entries,
-// accessor signatures, and the runtime guard all share it.
-export type LooseToolSchema = ReturnType<typeof z.looseObject<Record<string, unknown>>>;
+// LooseToolSchema now lives in src/lib/pack-types.ts (shared pack vocabulary);
+// re-exported here so existing import sites keep working.
+export type { LooseToolSchema };
 
 // Keys stripped from z.toJSONSchema() output before huaweicloud_pack_info
 // returns a tool schema: the MCP SDK renders tools/list through its draft-7
@@ -14,33 +15,15 @@ export type LooseToolSchema = ReturnType<typeof z.looseObject<Record<string, unk
 // $schema discriminator is the only key that differs between the two renders.
 export const SCHEMA_DRIFT_IGNORED_KEYS = ['$schema'] as const;
 
-// number | "123" | null | undefined — the exact input space the old
-// presence-only validation accepted for NUMERIC_ARG_KEYS fields.
-const numericArg = z.union([z.number(), z.string()]).nullable();
-
-// Free-form object the tool narrows itself (env vars, deploy plans).
-const looseObject = z.record(z.string(), z.unknown());
+// Shared zod building blocks (numericArg, looseObject, gitConfig,
+// workspaceId, username) moved to src/lib/tool-schema-parts.ts so the sandbox
+// pack can value-import them without a cycle against this file's pack schema
+// spreads.
 
 const artifactsItem = z.looseObject({
   path: z.string(),
   content: z.string(),
 });
-
-const gitConfig = z.looseObject({
-  repo_url: z.string().optional(),
-  repo_branch: z.string().optional(),
-  repo_name: z.string().optional(),
-  target_path: z.string().optional(),
-  open_type: z.string().optional(),
-});
-
-const workspaceId = z
-  .string()
-  .optional()
-  .describe(
-    'Workspace ID from huaweicloud_sandbox_connect return value. Required - must be passed explicitly when HW_WORKSPACE_ID is not set.',
-  );
-const username = z.string().optional().describe('Login username (default: root)');
 
 const TOOL_SCHEMAS = {
   huaweicloud_check_cli: z.looseObject({}),

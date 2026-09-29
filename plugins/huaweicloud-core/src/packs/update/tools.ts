@@ -11,19 +11,8 @@ import {
   resolveSkipFilePath,
   upgradePackage,
 } from '../../update-check.ts';
-import type { LooseToolSchema } from '../../tool-schemas.ts';
-import type { CallToolOptions, ToolArgs, ToolName } from '../../tools.ts';
-
-// One pack tool wires its four registration facts in a single place: identity
-// (name/description), the zod input schema, and the callTool handler. The
-// satisfies check on UPDATE_TOOLS turns a missing element into a compile
-// error, so a pack entry can never ship half-wired.
-export interface PackToolDefinition {
-  name: ToolName;
-  description: string;
-  schema: LooseToolSchema;
-  handler: (_args: ToolArgs, _opts: CallToolOptions) => Promise<unknown>;
-}
+import type { PackToolDefinition, LooseToolSchema } from '../../lib/pack-types.ts';
+import type { CallToolOptions, ToolArgs } from '../../tools.ts';
 
 // Handlers migrated verbatim from src/tools.ts; the doQuery injection seam on
 // CallToolOptions is passed through unchanged (test/upgrade-session.test.ts

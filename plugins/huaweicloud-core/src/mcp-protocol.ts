@@ -64,7 +64,7 @@ export function toClientInfo(params: unknown): { name: string | null; version: s
 
 export async function runInitializeSideEffects(params: unknown): Promise<void> {
   try {
-    const { hdkitGenerateUserHash } = await import('./sandbox/hdkitservice-api.ts');
+    const { hdkitGenerateUserHash } = await import('./lib/hdkit/hdkitservice-api.ts');
     await Promise.race([
       hdkitGenerateUserHash(),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000)),
