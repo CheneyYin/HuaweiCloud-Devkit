@@ -13,17 +13,18 @@ Use this skill to turn vague developer intent into a precise Huawei Cloud capabi
 
 1. Classify the goal: application hosting, compute, container, serverless, storage, database, network, security, observability, AI, data, migration, cost, or troubleshooting.
 2. Search Huawei Cloud Skills first when the task is scenario-based or operational.
-3. Use official docs for exact service limits, API request/response fields, regions, and pricing-sensitive behavior.
-4. Prefer KooCLI for local read-only discovery after auth is configured.
-5. Before using KooCLI, discover exact operation names with `hcloud <Service> --help`; do not guess from intuition. Examples: list ECS instances with `ECS ListServersDetails`, create ECS with `ECS CreateServers`, inspect images through `IMS GlanceShowImage`.
-6. Prefer SDK docs when the deliverable is application code.
-7. Prefer MCP only when an approved Huawei Cloud MCP tool exists for the needed operation.
-8. Treat Terraform as a secondary V1 path for reviewed IaC, not the default.
-9. When no built-in devkit skill matches:
-   a. Search: use `huaweicloud_search_marketplace` to find a matching skill in the community marketplace
-   b. Install: run `npx skills add huaweicloud/huaweicloud-skills --skill <skill-name> -y -g`
-   c. Execute: load the installed skill and follow its procedure
-10. When the deliverable is a PPT, architecture diagram (draw.io), or frontend page that needs official Huawei Cloud service logos, use the `huaweicloud_get_service_icon` MCP tool to get logo URLs from the official Icons library instead of guessing or hotlinking unofficial images.
+3. Discover devkit capability packs: call `huaweicloud_list_packs` for the pack overview, then `huaweicloud_pack_info` for a pack's tools and claimed skills, then load the skill with `huaweicloud_retrieve_skill`.
+4. Use official docs for exact service limits, API request/response fields, regions, and pricing-sensitive behavior.
+5. Prefer KooCLI for local read-only discovery after auth is configured.
+6. Before using KooCLI, discover exact operation names with `hcloud <Service> --help`; do not guess from intuition. Examples: list ECS instances with `ECS ListServersDetails`, create ECS with `ECS CreateServers`, inspect images through `IMS GlanceShowImage`.
+7. Prefer SDK docs when the deliverable is application code.
+8. Prefer MCP only when an approved Huawei Cloud MCP tool exists for the needed operation.
+9. Treat Terraform as a secondary V1 path for reviewed IaC, not the default.
+10. When no built-in devkit skill matches:
+    a. Search: use `huaweicloud_search_marketplace` to find a matching skill in the community marketplace
+    b. Install: run `npx skills add huaweicloud/huaweicloud-skills --skill <skill-name> -y -g`
+    c. Execute: load the installed skill and follow its procedure
+11. When the deliverable is a PPT, architecture diagram (draw.io), or frontend page that needs official Huawei Cloud service logos, use the `huaweicloud_get_service_icon` MCP tool to get logo URLs from the official Icons library instead of guessing or hotlinking unofficial images.
 
 ## Scenario Routing
 

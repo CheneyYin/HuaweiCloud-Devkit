@@ -104,6 +104,8 @@ test('TOOL_DEFINITIONS includes all required tools including sandbox', () => {
     'huaweicloud_sandbox_credentials',
     'huaweicloud_voucher_status',
     'huaweicloud_voucher_claim',
+    'huaweicloud_list_packs',
+    'huaweicloud_pack_info',
   ];
   for (const name of required) {
     assert.ok(names.includes(name), `Missing tool: ${name}`);

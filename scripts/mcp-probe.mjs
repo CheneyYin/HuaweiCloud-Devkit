@@ -59,7 +59,14 @@ function makeDecoder(onMessage) {
   };
 }
 
-export async function probe({ out, env = {}, calls = [], framing = 'content-length', settleMs = 1200 }) {
+export async function probe({
+  out,
+  env = {},
+  calls = [],
+  framing = 'content-length',
+  settleMs = 1200,
+  splitWrite = false,
+}) {
   const DEBUG = process.env.PROBE_DEBUG === '1';
   const log = (...a) => DEBUG && console.error('[probe]', ...a);
   log('start', { out, calls: calls.length, framing });
@@ -95,7 +102,15 @@ export async function probe({ out, env = {}, calls = [], framing = 'content-leng
   const send = (message) => {
     const wire = frame(message, framing);
     transcript.sent.push(message);
-    child.stdin.write(wire);
+    if (splitWrite && wire.length > 8) {
+      // Half-open write: the first chunk lands without the frame terminator,
+      // so the server must buffer and reassemble before responding.
+      const cut = Math.floor(wire.length / 2);
+      child.stdin.write(wire.slice(0, cut));
+      setTimeout(() => child.stdin.write(wire.slice(cut)), 150);
+    } else {
+      child.stdin.write(wire);
+    }
     return new Promise((res) => {
       if (message.id !== undefined) pending.set(message.id, res);
       else res();
@@ -149,6 +164,7 @@ if (invokedDirectly) {
   const out = args[0] ?? '/tmp/opencode/probe-transcript.json';
   const framing =
     args.includes('--framing') && args[args.indexOf('--framing') + 1] === 'nl' ? 'newline' : 'content-length';
+  const splitWrite = args.includes('--split');
   const calls = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] !== '--call') continue;
@@ -156,7 +172,7 @@ if (invokedDirectly) {
     calls.push({ name, args: rawArgs ? JSON.parse(rawArgs) : {} });
     i++;
   }
-  const { results, transcript } = await probe({ out, calls, framing });
+  const { results, transcript } = await probe({ out, calls, framing, splitWrite });
   const toolCount = results.toolsList?.result?.tools?.length;
   const callOk = calls.every((c) => results[c.name] !== undefined);
   const pass = Number.isSafeInteger(toolCount) && toolCount > 0 && callOk;

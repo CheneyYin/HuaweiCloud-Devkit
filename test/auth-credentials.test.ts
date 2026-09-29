@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -27,6 +27,51 @@ import { getAgentRegistrationStatuses } from '../plugins/huaweicloud-core/src/au
 import { getAuthStatus, syncAuth } from '../plugins/huaweicloud-core/src/auth/service.ts';
 
 const FAKE_HCLOUD = fileURLToPath(new URL('./fixtures/fake-hcloud.ts', import.meta.url));
+
+// CodeArts project isolation. isCodeArtsContext() detects CodeArts by a
+// .codeartsdoer marker under process.cwd(), and readCodeArtsCredentials()
+// searches CODEARTS_PROJECT_DIR / parent cwd / cwd / homedir — so a test
+// writing the marker into the repo root leaks it into every parallel test
+// process (cred-reconcile-e2e "clear" then resolves CodeArts creds instead of
+// throwing). These tests run from a temp project dir with CODEARTS_PROJECT_DIR
+// pointing at it, which exercises the same lookup without the shared-state
+// leak.
+function withCodeArtsProject(fn) {
+  const dir = mkdtempSync(join(tmpdir(), 'huaweicloud-codearts-'));
+  const prevCwd = process.cwd();
+  const prevProjectDir = process.env.CODEARTS_PROJECT_DIR;
+  process.env.CODEARTS_PROJECT_DIR = dir;
+  process.chdir(dir);
+  try {
+    return fn(dir);
+  } finally {
+    process.chdir(prevCwd);
+    if (prevProjectDir === undefined) delete process.env.CODEARTS_PROJECT_DIR;
+    else process.env.CODEARTS_PROJECT_DIR = prevProjectDir;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// Home-marker isolation for the ~/.codearts and ~/.codeartswork layout tests.
+// The CodeArts markers live under os.homedir(), which every parallel test
+// process shares — writing them into the real home makes isCodeArtsContext()
+// true everywhere for the write window, and readCodeArtsCredentials() then
+// resolves the injected S4 credentials in unrelated tests (cred-reconcile-e2e
+// "clear", hcloud-cli "no STS injection"). os.homedir() reads $HOME at call
+// time, so pointing HOME at a temp dir keeps the marker process-private while
+// the join(homedir(), ...) reads below keep exercising the real lookup paths.
+function withCodeArtsHome(fn) {
+  const dir = mkdtempSync(join(tmpdir(), 'huaweicloud-codearts-home-'));
+  const prevHome = process.env.HOME;
+  process.env.HOME = dir;
+  try {
+    return fn(dir);
+  } finally {
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 function withTempHome(fn) {
   const dir = mkdtempSync(join(tmpdir(), 'huaweicloud-auth-'));
@@ -249,32 +294,30 @@ test('resolveCredentials reads CodeArts project mcp_settings.json', () => {
     delete process.env.HW_ACCESS_KEY;
     delete process.env.HW_SECRET_KEY;
 
-    const codeartsDir = join(process.cwd(), '.codeartsdoer', 'mcp');
-    mkdirSync(codeartsDir, { recursive: true });
-    writeFileSync(
-      join(codeartsDir, 'mcp_settings.json'),
-      JSON.stringify({
-        mcpServers: {
-          'huaweicloud-devkit': {
-            env: {
-              HW_ACCESS_KEY: 'CODEARTS_AK',
-              HW_SECRET_KEY: 'CODEARTS_SK',
-              HW_REGION: 'cn-south-1',
+    withCodeArtsProject((projectDir) => {
+      const codeartsDir = join(projectDir, '.codeartsdoer', 'mcp');
+      mkdirSync(codeartsDir, { recursive: true });
+      writeFileSync(
+        join(codeartsDir, 'mcp_settings.json'),
+        JSON.stringify({
+          mcpServers: {
+            'huaweicloud-devkit': {
+              env: {
+                HW_ACCESS_KEY: 'CODEARTS_AK',
+                HW_SECRET_KEY: 'CODEARTS_SK',
+                HW_REGION: 'cn-south-1',
+              },
             },
           },
-        },
-      }),
-      'utf8',
-    );
+        }),
+        'utf8',
+      );
 
-    try {
       const creds = resolveCredentials();
       assert.equal(creds.ak, 'CODEARTS_AK');
       assert.equal(creds.sk, 'CODEARTS_SK');
       assert.equal(creds.region, 'cn-south-1');
-    } finally {
-      rmSync(codeartsDir, { recursive: true, force: true });
-    }
+    });
   });
 });
 
@@ -284,31 +327,27 @@ test('resolveCredentials uses env vars over CodeArts mcp_settings.json', () => {
     process.env.HW_ACCESS_KEY = 'ENV_AK';
     process.env.HW_SECRET_KEY = 'ENV_SK';
 
-    const codeartsDir = join(process.cwd(), '.codeartsdoer', 'mcp');
-    mkdirSync(codeartsDir, { recursive: true });
-    writeFileSync(
-      join(codeartsDir, 'mcp_settings.json'),
-      JSON.stringify({
-        mcpServers: {
-          'huaweicloud-devkit': {
-            env: {
-              HW_ACCESS_KEY: 'CODEARTS_AK',
-              HW_SECRET_KEY: 'CODEARTS_SK',
+    withCodeArtsProject((projectDir) => {
+      const codeartsDir = join(projectDir, '.codeartsdoer', 'mcp');
+      mkdirSync(codeartsDir, { recursive: true });
+      writeFileSync(
+        join(codeartsDir, 'mcp_settings.json'),
+        JSON.stringify({
+          mcpServers: {
+            'huaweicloud-devkit': {
+              env: {
+                HW_ACCESS_KEY: 'CODEARTS_AK',
+                HW_SECRET_KEY: 'CODEARTS_SK',
+              },
             },
           },
-        },
-      }),
-      'utf8',
-    );
+        }),
+        'utf8',
+      );
 
-    try {
       const creds = resolveCredentials();
       assert.equal(creds.ak, 'ENV_AK');
-    } finally {
-      delete process.env.HW_ACCESS_KEY;
-      delete process.env.HW_SECRET_KEY;
-      rmSync(codeartsDir, { recursive: true, force: true });
-    }
+    });
   });
 });
 
@@ -387,8 +426,13 @@ test('resolveCredentials reads CodeArts credentials from CODEARTS_PROJECT_DIR', 
     delete process.env.HW_ACCESS_KEY;
     delete process.env.HW_SECRET_KEY;
 
-    const projectDir = join(process.cwd(), 'fake-project');
-
+    // The project dir is distinct from the process cwd: CODEARTS_PROJECT_DIR
+    // must carry the lookup on its own, the way an explicitly configured
+    // project does inside a CodeArts workspace.
+    const projectDir = mkdtempSync(join(tmpdir(), 'huaweicloud-codearts-project-'));
+    const cwdDir = mkdtempSync(join(tmpdir(), 'huaweicloud-codearts-cwd-'));
+    const prevCwd = process.cwd();
+    const prevProjectDir = process.env.CODEARTS_PROJECT_DIR;
     try {
       const codeartsDir = join(projectDir, '.codeartsdoer', 'mcp');
       mkdirSync(codeartsDir, { recursive: true });
@@ -408,20 +452,22 @@ test('resolveCredentials reads CodeArts credentials from CODEARTS_PROJECT_DIR', 
         'utf8',
       );
 
-      const prev = process.env.CODEARTS_PROJECT_DIR;
+      // CodeArts context marker sits in the process cwd (marker only, no
+      // mcp_settings.json there), credentials live under CODEARTS_PROJECT_DIR.
+      mkdirSync(join(cwdDir, '.codeartsdoer'), { recursive: true });
       process.env.CODEARTS_PROJECT_DIR = projectDir;
+      process.chdir(cwdDir);
 
-      try {
-        const creds = resolveCredentials();
-        assert.equal(creds.ak, 'PROJECT_DIR_AK');
-        assert.equal(creds.sk, 'PROJECT_DIR_SK');
-        assert.equal(creds.region, 'cn-east-3');
-      } finally {
-        if (prev === undefined) delete process.env.CODEARTS_PROJECT_DIR;
-        else process.env.CODEARTS_PROJECT_DIR = prev;
-      }
+      const creds = resolveCredentials();
+      assert.equal(creds.ak, 'PROJECT_DIR_AK');
+      assert.equal(creds.sk, 'PROJECT_DIR_SK');
+      assert.equal(creds.region, 'cn-east-3');
     } finally {
+      process.chdir(prevCwd);
+      if (prevProjectDir === undefined) delete process.env.CODEARTS_PROJECT_DIR;
+      else process.env.CODEARTS_PROJECT_DIR = prevProjectDir;
       rmSync(projectDir, { recursive: true, force: true });
+      rmSync(cwdDir, { recursive: true, force: true });
     }
   });
 });
@@ -594,35 +640,33 @@ test('resolveCredentials reads CodeArts Work new layout ~/.codearts with prefixe
     delete process.env.HW_SECRET_KEY;
     delete process.env.HW_SECURITY_TOKEN;
 
-    const workDir = join(homedir(), '.codearts', 'mcp');
-    mkdirSync(workDir, { recursive: true });
-    writeFileSync(
-      join(workDir, 'mcp_settings.json'),
-      JSON.stringify({
-        mcp: {
-          'huaweicloud-devkit_1': {
-            type: 'local',
-            command: ['npx', '-y', '-p', 'huaweicloud-devkit@latest', 'huaweicloud-devkit-mcp'],
-            environment: {
-              HW_ACCESS_KEY: 'NEW_WORK_AK',
-              HW_SECRET_KEY: 'NEW_WORK_SK',
-              HW_SECURITY_TOKEN: 'NEW_WORK_TOKEN',
-              HW_REGION: 'cn-north-4',
+    withCodeArtsHome((home) => {
+      const workDir = join(home, '.codearts', 'mcp');
+      mkdirSync(workDir, { recursive: true });
+      writeFileSync(
+        join(workDir, 'mcp_settings.json'),
+        JSON.stringify({
+          mcp: {
+            'huaweicloud-devkit_1': {
+              type: 'local',
+              command: ['npx', '-y', '-p', 'huaweicloud-devkit@latest', 'huaweicloud-devkit-mcp'],
+              environment: {
+                HW_ACCESS_KEY: 'NEW_WORK_AK',
+                HW_SECRET_KEY: 'NEW_WORK_SK',
+                HW_SECURITY_TOKEN: 'NEW_WORK_TOKEN',
+                HW_REGION: 'cn-north-4',
+              },
             },
           },
-        },
-      }),
-      'utf8',
-    );
+        }),
+        'utf8',
+      );
 
-    try {
       const creds = resolveCredentials();
       assert.equal(creds.ak, 'NEW_WORK_AK');
       assert.equal(creds.sk, 'NEW_WORK_SK');
       assert.equal(creds.securityToken, 'NEW_WORK_TOKEN');
-    } finally {
-      rmSync(join(homedir(), '.codearts'), { recursive: true, force: true });
-    }
+    });
   });
 });
 
@@ -633,25 +677,23 @@ test('resolveCredentials falls back to legacy ~/.codeartswork when new ~/.codear
     delete process.env.HW_SECRET_KEY;
     delete process.env.HW_SECURITY_TOKEN;
 
-    const legacyDir = join(homedir(), '.codeartswork', 'mcp');
-    mkdirSync(legacyDir, { recursive: true });
-    writeFileSync(
-      join(legacyDir, 'mcp_settings.json'),
-      JSON.stringify({
-        mcp: {
-          'huaweicloud-devkit': { environment: { HW_ACCESS_KEY: 'LEGACY_WORK_AK', HW_SECRET_KEY: 'LEGACY_WORK_SK' } },
-        },
-      }),
-      'utf8',
-    );
+    withCodeArtsHome((home) => {
+      const legacyDir = join(home, '.codeartswork', 'mcp');
+      mkdirSync(legacyDir, { recursive: true });
+      writeFileSync(
+        join(legacyDir, 'mcp_settings.json'),
+        JSON.stringify({
+          mcp: {
+            'huaweicloud-devkit': { environment: { HW_ACCESS_KEY: 'LEGACY_WORK_AK', HW_SECRET_KEY: 'LEGACY_WORK_SK' } },
+          },
+        }),
+        'utf8',
+      );
 
-    try {
       const creds = resolveCredentials();
       assert.equal(creds.ak, 'LEGACY_WORK_AK');
       assert.equal(creds.sk, 'LEGACY_WORK_SK');
-    } finally {
-      rmSync(join(homedir(), '.codeartswork'), { recursive: true, force: true });
-    }
+    });
   });
 });
 
@@ -660,28 +702,26 @@ test('auth_status reports mcpSettingsConfigured and mcp-settings-injected onboar
     delete process.env.HW_ACCESS_KEY;
     delete process.env.HW_SECRET_KEY;
     delete process.env.HW_SECURITY_TOKEN;
-    const workDir = join(homedir(), '.codearts', 'mcp');
-    mkdirSync(workDir, { recursive: true });
-    writeFileSync(
-      join(workDir, 'mcp_settings.json'),
-      JSON.stringify({
-        mcp: {
-          'huaweicloud-devkit_1': {
-            environment: { HW_ACCESS_KEY: 'S4_AK', HW_SECRET_KEY: 'S4_SK', HW_SECURITY_TOKEN: 'S4_TOKEN' },
+    withCodeArtsHome((home) => {
+      const workDir = join(home, '.codearts', 'mcp');
+      mkdirSync(workDir, { recursive: true });
+      writeFileSync(
+        join(workDir, 'mcp_settings.json'),
+        JSON.stringify({
+          mcp: {
+            'huaweicloud-devkit_1': {
+              environment: { HW_ACCESS_KEY: 'S4_AK', HW_SECRET_KEY: 'S4_SK', HW_SECURITY_TOKEN: 'S4_TOKEN' },
+            },
           },
-        },
-      }),
-      'utf8',
-    );
-    try {
+        }),
+        'utf8',
+      );
       const status = getAuthStatus('all');
       assert.equal(status.credentialsConfigured, false);
       assert.equal(status.mcpSettingsConfigured, true);
       assert.equal(status.onboarding.reason, 'mcp-settings-injected');
       assert.equal(status.onboarding.needsSetup, false);
-    } finally {
-      rmSync(join(homedir(), '.codearts'), { recursive: true, force: true });
-    }
+    });
   });
 });
 

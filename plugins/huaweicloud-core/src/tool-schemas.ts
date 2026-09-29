@@ -7,6 +7,12 @@ import type { ToolName } from './tools.ts';
 // accessor signatures, and the runtime guard all share it.
 export type LooseToolSchema = ReturnType<typeof z.looseObject<Record<string, unknown>>>;
 
+// Keys stripped from z.toJSONSchema() output before huaweicloud_pack_info
+// returns a tool schema: the MCP SDK renders tools/list through its draft-7
+// compatibility layer while z.toJSONSchema() defaults to 2020-12, so the
+// $schema discriminator is the only key that differs between the two renders.
+export const SCHEMA_DRIFT_IGNORED_KEYS = ['$schema'] as const;
+
 // number | "123" | null | undefined — the exact input space the old
 // presence-only validation accepted for NUMERIC_ARG_KEYS fields.
 const numericArg = z.union([z.number(), z.string()]).nullable();
@@ -295,6 +301,12 @@ const TOOL_SCHEMAS = {
     region: z.string().describe('OBS 桶所在区域，如 cn-north-4'),
     indexDocument: z.string().optional().describe('首页文件名（action=set 时必填），如 index.html'),
     errorDocument: z.string().optional().describe('错误页面文件名（action=set 时可选），如 404.html 或 error.html'),
+  }),
+  huaweicloud_list_packs: z.looseObject({}),
+  huaweicloud_pack_info: z.looseObject({
+    pack: z
+      .string()
+      .describe('Pack id from huaweicloud_list_packs, such as core, sandbox, auth, obs, voucher, update, discovery.'),
   }),
 } satisfies Record<ToolName, LooseToolSchema>;
 

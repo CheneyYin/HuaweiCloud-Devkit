@@ -5,6 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { TOOL_DEFINITIONS } from '../plugins/huaweicloud-core/src/tools.ts';
+import { PACKS } from '../plugins/huaweicloud-core/src/packs/registry.ts';
+
 const root = fileURLToPath(new URL('..', import.meta.url));
 const pluginRoot = join(root, 'plugins', 'huaweicloud-core');
 
@@ -288,18 +291,22 @@ test('devbridge 0.2.x flow: auth capability probe, version detection, in-place u
   assert.doesNotMatch(credsWrite[0], /HW_API_KEY/);
 
   // The CodeArts Doer sidecopy must mirror the probe-branch flow and not regress
-  // to the removed 0.1.x flow either.
-  const sidecopy = readFileSync(join(root, '.codeartsdoer', 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
-  assert.doesNotMatch(sidecopy, /auth login --huaweicloud/);
-  assert.doesNotMatch(sidecopy, /res-hd\.hc-cdn\.cn/);
-  assert.doesNotMatch(sidecopy, /devbridge ls\b/);
-  assert.doesNotMatch(sidecopy, /https:\/\/<id>-<port>\.cn-north-4-bridge/);
-  assert.match(sidecopy, /auth login --help 2>&1 \| grep -q -- '--access-key'/);
-  assert.match(sidecopy, /AUTH_MODE=AKSK_SUPPORTED/);
-  assert.match(sidecopy, /AUTH_MODE=API_KEY_ONLY/);
-  assert.match(sidecopy, /auth login --api-key "\$HW_API_KEY"/);
-  assert.match(sidecopy, /devbridge-s2\.hwtunnel\.com/);
-  assert.match(sidecopy, /\/tmp\/hw_api_key/);
+  // to the removed 0.1.x flow either. .codeartsdoer is a gitignored install
+  // copy (never tracked), so a clean checkout has no sidecopy to check.
+  const sidecopyPath = join(root, '.codeartsdoer', 'skills', 'huawei-sandbox', 'SKILL.md');
+  if (existsSync(sidecopyPath)) {
+    const sidecopy = readFileSync(sidecopyPath, 'utf8');
+    assert.doesNotMatch(sidecopy, /auth login --huaweicloud/);
+    assert.doesNotMatch(sidecopy, /res-hd\.hc-cdn\.cn/);
+    assert.doesNotMatch(sidecopy, /devbridge ls\b/);
+    assert.doesNotMatch(sidecopy, /https:\/\/<id>-<port>\.cn-north-4-bridge/);
+    assert.match(sidecopy, /auth login --help 2>&1 \| grep -q -- '--access-key'/);
+    assert.match(sidecopy, /AUTH_MODE=AKSK_SUPPORTED/);
+    assert.match(sidecopy, /AUTH_MODE=API_KEY_ONLY/);
+    assert.match(sidecopy, /auth login --api-key "\$HW_API_KEY"/);
+    assert.match(sidecopy, /devbridge-s2\.hwtunnel\.com/);
+    assert.match(sidecopy, /\/tmp\/hw_api_key/);
+  }
 });
 
 test('all plugin manifests are valid JSON', () => {
@@ -883,4 +890,31 @@ test('plugin src tree is TypeScript only', () => {
     [],
     `src must hold only TypeScript scripts plus data assets; found JavaScript: ${scripts.join(', ')}`,
   );
+});
+
+test('pack registry partitions the tool registry and claims every skill directory', () => {
+  // Mirrors test/packs-registry.test.ts: every tool lands in exactly one pack,
+  // the pack union equals the full TOOL_DEFINITIONS registry, and every
+  // skills/ directory is claimed exactly once.
+  const allToolNames = TOOL_DEFINITIONS.map((tool) => tool.name).sort((a, b) => a.localeCompare(b));
+  const packTools = PACKS.flatMap((pack) => pack.tools);
+  const toolClaims = new Set();
+  for (const tool of packTools) {
+    assert.ok(!toolClaims.has(tool), `tool ${tool} is claimed by more than one pack`);
+    toolClaims.add(tool);
+  }
+  assert.deepEqual([...toolClaims].sort((a, b) => a.localeCompare(b)), allToolNames);
+
+  const skillsDirs = readdirSync(join(pluginRoot, 'skills'), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort((a, b) => a.localeCompare(b));
+  const skillClaims = new Set();
+  for (const pack of PACKS) {
+    for (const skill of pack.skills) {
+      assert.ok(!skillClaims.has(skill), `skill ${skill} is claimed by more than one pack (${pack.id})`);
+      skillClaims.add(skill);
+    }
+  }
+  assert.deepEqual([...skillClaims].sort((a, b) => a.localeCompare(b)), skillsDirs);
 });
