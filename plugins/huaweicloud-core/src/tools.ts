@@ -54,20 +54,12 @@ import { fetchWithProxy } from './proxy/proxy-agent.ts';
 import { fingerprint, runHcloudConfigure, resolveManagedProfile } from './auth/reconcile.ts';
 import { hcloudProbeNextStep, probeHcloud, type ProbeHcloudOptions } from './hcloud-probe.ts';
 import { isUsableOfficeaceRoot, readOfficeaceRootMarker } from './officeace-paths.ts';
-import {
-  getCachedUpdateInfo,
-  getUpdateDistTags,
-  invalidateUpdateCache,
-  judgeUpdate,
-  determineTarget,
-  readInstalledVersion,
-  writeSkipState,
-  resolveSkipFilePath,
-  upgradePackage,
-  type DistTags,
-} from './update-check.ts';
+// The update tool handlers live in the update pack; only the DistTags type
+// for the CallToolOptions doQuery seam is still needed here.
+import type { DistTags } from './update-check.ts';
 import { getToolSchema, SCHEMA_DRIFT_IGNORED_KEYS } from './tool-schemas.ts';
 import { PACKS } from './packs/registry.ts';
+import { UPDATE_TOOL_HANDLERS } from './packs/update/tools.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILLS_ROOT_DEV = join(__dirname, '..', 'skills');
@@ -1178,10 +1170,16 @@ export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: Cal
       return await hdkitVoucherStatus(args.domain_id);
     case 'huaweicloud_voucher_claim':
       return await hdkitVoucherClaim(args.domain_id);
+    // Update tools delegate to the update pack's handler map
+    // (src/packs/update/tools.ts); the doQuery test-injection seam rides the
+    // per-case opts exactly as before the migration.
     case 'huaweicloud_check_update':
-      return await handleCheckUpdate(args, { sessionId: opts?.sessionId, doQuery: opts?.doQuery });
+      return await UPDATE_TOOL_HANDLERS['huaweicloud_check_update'](args, {
+        sessionId: opts?.sessionId,
+        doQuery: opts?.doQuery,
+      });
     case 'huaweicloud_upgrade':
-      return await handleUpgrade(args, { sessionId: opts?.sessionId });
+      return await UPDATE_TOOL_HANDLERS['huaweicloud_upgrade'](args, { sessionId: opts?.sessionId });
     case 'huaweicloud_obs_set_website_config':
       return await handleObsWebsiteConfig(args);
     case 'huaweicloud_list_packs':
@@ -1195,44 +1193,6 @@ export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: Cal
       throw new Error(`Unknown tool: ${String(_exhaustive)}`);
     }
   }
-}
-
-async function handleCheckUpdate(args: ToolArgs = {}, opts: CallToolOptions = {}) {
-  const { sessionId = null, doQuery } = opts;
-  const current = readInstalledVersion() || '0.0.0';
-  if (args.dismiss === true) {
-    const distTags = await getUpdateDistTags(current, { sessionId, doQuery });
-    if (!distTags) {
-      // 查询失败：不降级为 current 冷却、不写 skip，返回 check_failed。
-      // 不调 invalidateUpdateCache()，以保留 failedAt 的 5 分钟失败节流。
-      return judgeUpdate(current, null, null);
-    }
-    const target = determineTarget(current, distTags);
-    const dismissedVersion =
-      typeof args.dismissVersion === 'string' && args.dismissVersion ? args.dismissVersion : target || current;
-    const state = writeSkipState(resolveSkipFilePath(sessionId), dismissedVersion);
-    invalidateUpdateCache();
-    return judgeUpdate(current, distTags, state);
-  }
-  return getCachedUpdateInfo(current, { sessionId, doQuery });
-}
-
-async function handleUpgrade(args: ToolArgs = {}, opts: CallToolOptions = {}) {
-  const sessionId = opts?.sessionId || null;
-  const target = typeof args.target === 'string' && args.target ? args.target : 'all';
-  const version = typeof args.version === 'string' && args.version ? args.version : 'latest';
-  const current = readInstalledVersion() || '0.0.0';
-  const info = await getCachedUpdateInfo(current, { sessionId });
-  if (info && info.result === 'up_to_date') {
-    return {
-      success: false,
-      requiresRestart: false,
-      message: '已是最新版本，无需升级。',
-      currentVersion: info.currentVersion,
-      targetVersion: info.targetVersion,
-    };
-  }
-  return upgradePackage({ target, version });
 }
 
 function hookResult(result: RiskEvaluation) {
