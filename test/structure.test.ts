@@ -8,6 +8,7 @@ import test from 'node:test';
 import { TOOL_DEFINITIONS } from '../plugins/huaweicloud-core/src/tools.ts';
 import { PACK_OF, PACKS } from '../plugins/huaweicloud-core/src/packs/registry.ts';
 import { UPDATE_TOOLS } from '../plugins/huaweicloud-core/src/packs/update/tools.ts';
+import { checkPackBoundaries } from '../scripts/lib/pack-boundaries.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const pluginRoot = join(root, 'plugins', 'huaweicloud-core');
@@ -737,6 +738,15 @@ test('official Huawei Cloud Icons library is integrated', () => {
   const discovery = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-capability-discovery', 'SKILL.md'), 'utf8');
   assert.match(discovery, /huaweicloud_get_service_icon/);
   assert.match(discovery, /open\.huaweicloud\.com\/openplatform\/icons\.html/);
+});
+
+test('per-pack modules stay inside the pack boundary allowlist', () => {
+  // Same implementation as scripts/validate-package.mjs (second entry):
+  // packs import only their own root, src/lib, the core shared whitelist,
+  // node:/zod/undici, and type-only edges into core. registry.ts is the
+  // composition root and is not scanned.
+  const result = checkPackBoundaries({ root });
+  assert.deepEqual(result.lines, [], `pack boundary violations:\n${result.lines.join('\n')}`);
 });
 
 test('update pack registers version-update tools; tools.ts delegates dispatch', () => {

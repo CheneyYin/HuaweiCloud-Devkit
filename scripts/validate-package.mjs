@@ -143,6 +143,18 @@ for (const file of walk(join(pluginRoot, 'skills')).concat(walk(join(pluginRoot,
 }
 console.log(`Validated KooCLI version pairing: ${kooCliVersion}.`);
 
+// Pack boundary guard (scripts/lib/pack-boundaries.mjs is the single
+// implementation; this is the authoritative CI entry). Per-pack modules may
+// only import their own pack root, src/lib, the core shared whitelist,
+// node:/zod/undici, and type-only edges into core.
+const { checkPackBoundaries } = await import('./lib/pack-boundaries.mjs');
+const boundaries = checkPackBoundaries({ root });
+if (!boundaries.ok) {
+  for (const line of boundaries.lines) console.error(line);
+  process.exit(1);
+}
+console.log(`Validated pack boundaries: ${boundaries.packFiles} pack module(s) checked.`);
+
 const readmePaths = [join(root, 'README.md'), join(root, 'README.zh-CN.md')];
 
 readmePaths.forEach((path) => {
