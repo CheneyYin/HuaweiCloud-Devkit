@@ -27,13 +27,13 @@ test('the pack tool union equals the full TOOL_DEFINITIONS registry', () => {
 });
 
 test('pack tool counts match the P0 grouping', () => {
-  const expected = { core: 15, sandbox: 11, auth: 5, obs: 2, voucher: 2, update: 2, discovery: 3 };
+  const expected = { core: 17, sandbox: 11, auth: 5, obs: 2, voucher: 2, update: 2, discovery: 3 };
   let total = 0;
   for (const pack of PACKS) {
     assert.equal(pack.tools.length, expected[pack.id], `${pack.id} tool count`);
     total += pack.tools.length;
   }
-  assert.equal(total, 40);
+  assert.equal(total, 42);
 });
 
 test('every skills/ directory is claimed by exactly one pack', () => {
@@ -48,5 +48,8 @@ test('every skills/ directory is claimed by exactly one pack', () => {
       claimed.add(skill);
     }
   }
-  assert.deepEqual([...claimed].sort((a, b) => a.localeCompare(b)), dirs);
+  assert.deepEqual(
+    [...claimed].sort((a, b) => a.localeCompare(b)),
+    dirs,
+  );
 });

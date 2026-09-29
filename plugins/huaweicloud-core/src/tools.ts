@@ -5,6 +5,7 @@ import { homedir, tmpdir } from 'node:os';
 import { spawnSync, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHmac, createHash } from 'node:crypto';
+import { z } from 'zod';
 
 import { evaluateArtifacts, evaluateCommandRisk, evaluateDeployPlan, type RiskEvaluation } from './risk-rule-engine.ts';
 import { classifyTextCommand, redactSecrets } from './safety-policy.ts';
@@ -65,6 +66,8 @@ import {
   upgradePackage,
   type DistTags,
 } from './update-check.ts';
+import { getToolSchema, SCHEMA_DRIFT_IGNORED_KEYS } from './tool-schemas.ts';
+import { PACKS } from './packs/registry.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILLS_ROOT_DEV = join(__dirname, '..', 'skills');
@@ -429,6 +432,16 @@ const TOOL_DEFINITIONS_LITERALS = [
     description:
       '配置 OBS 桶的静态网站托管。KooCLI OBS 不支持 SetBucketWebsite API，此工具内部实现 AWS4 签名调用 OBS REST API，屏蔽签名细节。支持 set（配置）、get（查询）、delete（删除）三种操作。操作前需确保桶已创建且已设置 public-read ACL。',
   },
+  {
+    name: 'huaweicloud_list_packs',
+    description:
+      'List the devkit capability packs. Returns each pack with id, title, description, tool name list, and enabled flag. Use when the agent needs an overview of the available capability bundles before inspecting one with huaweicloud_pack_info.',
+  },
+  {
+    name: 'huaweicloud_pack_info',
+    description:
+      'Inspect one capability pack. Takes pack (a pack id from huaweicloud_list_packs) and returns the pack title, description, claimed skills, enabled flag, and every tool in the pack with name, description, and JSON Schema. Use to decide which pack covers a task before loading a skill with huaweicloud_retrieve_skill.',
+  },
 ] as const;
 
 export type ToolName = (typeof TOOL_DEFINITIONS_LITERALS)[number]['name'];
@@ -467,6 +480,7 @@ export type ToolArgs = {
   name?: string;
   region?: string;
   category?: string;
+  pack?: string;
   projectPath?: string;
   target?: string;
   ak?: string;
@@ -1170,6 +1184,10 @@ export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: Cal
       return await handleUpgrade(args, { sessionId: opts?.sessionId });
     case 'huaweicloud_obs_set_website_config':
       return await handleObsWebsiteConfig(args);
+    case 'huaweicloud_list_packs':
+      return listPacks();
+    case 'huaweicloud_pack_info':
+      return packInfo(args.pack || '');
     default: {
       // Compile-time exhaustiveness guard: adding a TOOL_DEFINITIONS entry
       // without a matching case makes `name` non-never here and fails the build.
@@ -1619,6 +1637,52 @@ function serviceCatalog(intent: string = '') {
       mcp: 'Prefer approved MCP tools when available because tools can carry structured schemas.',
       terraform: 'Keep low priority in V1; suggest it for reviewed infrastructure changes, not quick diagnosis.',
     },
+  };
+}
+
+// ── Pack meta tools ──
+// Both tools read the pack registry (PACK_OF inversion in packs/registry.ts),
+// the tool definitions (name/description), and the zod schemas, so their
+// output can never disagree with tools/list. Pack enable/disable state lands
+// with pack-level installs in later v2 units; the flag is reported now so
+// clients can rely on the response shape.
+
+function listPacks() {
+  return {
+    ok: true,
+    count: PACKS.length,
+    packs: PACKS.map((pack) => ({
+      id: pack.id,
+      title: pack.title,
+      description: pack.description,
+      tools: pack.tools,
+      enabled: true,
+    })),
+  };
+}
+
+function packInfo(pack: string) {
+  const packId = String(pack || '').trim();
+  if (!packId) return { ok: false, error: 'Pack id is required.' };
+  const found = PACKS.find((entry) => entry.id === packId);
+  if (!found) {
+    const available = PACKS.map((entry) => entry.id).join(', ');
+    return { ok: false, error: 'Pack "' + packId + '" not found. Available: ' + available };
+  }
+  const tools = found.tools.map((name) => {
+    const definition = TOOL_DEFINITIONS.find((tool) => tool.name === name);
+    const schema = z.toJSONSchema(getToolSchema(name)) as Record<string, unknown>;
+    for (const key of SCHEMA_DRIFT_IGNORED_KEYS) delete schema[key];
+    return { name, description: definition?.description ?? '', schema };
+  });
+  return {
+    ok: true,
+    pack: found.id,
+    title: found.title,
+    description: found.description,
+    skills: found.skills,
+    tools,
+    enabled: true,
   };
 }
 

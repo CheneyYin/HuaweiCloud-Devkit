@@ -21,6 +21,8 @@ export const PACK_OF = {
   huaweicloud_retrieve_skill: 'core',
   huaweicloud_list_regions: 'core',
   huaweicloud_get_regional_availability: 'core',
+  huaweicloud_list_packs: 'core',
+  huaweicloud_pack_info: 'core',
   huaweicloud_search_marketplace: 'discovery',
   huaweicloud_get_service_icon: 'discovery',
   huaweicloud_detect_framework: 'discovery',

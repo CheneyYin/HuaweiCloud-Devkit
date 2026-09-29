@@ -19,6 +19,11 @@ const snapshotPath = join(root, 'test', 'fixtures', 'legacy-registry-snapshot.js
 
 const IGNORED_KEYS = new Set(['$schema', 'additionalProperties', 'description']);
 
+// Tools registered after the legacy snapshot was extracted. They have no git
+// history to regenerate the fixture from, so the snapshot cannot cover them;
+// listed here instead of weakening the check for the remaining legacy tools.
+const EXEMPT_TOOLS = new Set(['huaweicloud_list_packs', 'huaweicloud_pack_info']);
+
 // Declared, intentional drifts from the legacy literals. Each entry names the
 // semantic reason the zod render is allowed to differ.
 const INTENTIONAL_DRIFTS = [
@@ -96,7 +101,10 @@ assertConstructedSchemas();
 const snapshot = JSON.parse(readFileSync(snapshotPath, 'utf8'));
 const failures = [];
 
+let compared = 0;
 for (const tool of TOOL_DEFINITIONS) {
+  if (EXEMPT_TOOLS.has(tool.name)) continue;
+  compared++;
   const legacy = snapshot[tool.name];
   if (!legacy) {
     failures.push(`${tool.name}: no legacy snapshot entry (regenerate the fixture from git history)`);
@@ -146,4 +154,6 @@ if (failures.length > 0) {
   for (const failure of failures) console.error(`  - ${failure}`);
   process.exit(1);
 }
-console.log(`registry snapshot diff OK: ${TOOL_DEFINITIONS.length} tools structurally identical.`);
+console.log(
+  `registry snapshot diff OK: ${compared} tools structurally identical (${TOOL_DEFINITIONS.length - compared} exempt, no legacy snapshot).`,
+);
