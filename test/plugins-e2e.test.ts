@@ -157,8 +157,10 @@ function invokeMcpToolCall(mcpServerPath, env, toolName, toolArgs, timeout = 150
   });
 }
 
-// Core tools that must always be present. Keep in sync with tools.ts TOOL_DEFINITIONS.
-// When a new tool is added to tools.ts, add it here too.
+// Core-pack tools that must always be present, including the pack meta tools
+// (both registered in the core pack). Keep in sync with tools.ts
+// TOOL_DEFINITIONS and packs/registry.ts. When a new tool is added to tools.ts,
+// add it here or under its pack below.
 const REQUIRED_TOOLS = [
   'huaweicloud_check_cli',
   'huaweicloud_plan_cli_command',
@@ -166,26 +168,47 @@ const REQUIRED_TOOLS = [
   'huaweicloud_list_operations',
   'huaweicloud_run_approved_command',
   'huaweicloud_show_profile_redacted',
+  'huaweicloud_hook_check_command',
+  'huaweicloud_hook_check_artifacts',
+  'huaweicloud_hook_check_deploy_plan',
   'huaweicloud_service_catalog',
   'huaweicloud_explain_error',
   'huaweicloud_search_docs',
   'huaweicloud_retrieve_skill',
   'huaweicloud_list_regions',
   'huaweicloud_get_regional_availability',
-  'huaweicloud_search_marketplace',
-  'huaweicloud_setup_obs_config',
-  'huaweicloud_auth_status',
-  'huaweicloud_auth_sync',
-  'huaweicloud_sandbox_exec_with_session',
-  'huaweicloud_sandbox_upload_file',
-  'huaweicloud_sandbox_close_session',
-  'huaweicloud_sandbox_check_user',
-  'huaweicloud_sandbox_sign_agreement',
-  'huaweicloud_sandbox_connect',
-  'huaweicloud_sandbox_credentials',
-  'huaweicloud_voucher_status',
-  'huaweicloud_voucher_claim',
+  'huaweicloud_list_packs',
+  'huaweicloud_pack_info',
 ];
+
+// Optional-pack tools, grouped by pack id (same grouping as
+// packs/registry.ts). Together with REQUIRED_TOOLS these cover all 42 tools.
+const PER_PACK_TOOLS = {
+  sandbox: [
+    'huaweicloud_sandbox_exec_with_session',
+    'huaweicloud_sandbox_exec_one_shot',
+    'huaweicloud_sandbox_close_session',
+    'huaweicloud_sandbox_upload_file',
+    'huaweicloud_sandbox_upload_project',
+    'huaweicloud_sandbox_deploy_nginx',
+    'huaweicloud_sandbox_deploy_check',
+    'huaweicloud_sandbox_check_user',
+    'huaweicloud_sandbox_sign_agreement',
+    'huaweicloud_sandbox_connect',
+    'huaweicloud_sandbox_credentials',
+  ],
+  auth: [
+    'huaweicloud_auth_status',
+    'huaweicloud_auth_sync',
+    'huaweicloud_auth_init',
+    'huaweicloud_auth_switch',
+    'huaweicloud_auth_confirm',
+  ],
+  obs: ['huaweicloud_setup_obs_config', 'huaweicloud_obs_set_website_config'],
+  voucher: ['huaweicloud_voucher_status', 'huaweicloud_voucher_claim'],
+  update: ['huaweicloud_check_update', 'huaweicloud_upgrade'],
+  discovery: ['huaweicloud_search_marketplace', 'huaweicloud_get_service_icon', 'huaweicloud_detect_framework'],
+};
 
 const targets = [
   {
@@ -323,6 +346,16 @@ test('MCP tools/list includes all required core tools with valid schemas', async
     for (const required of REQUIRED_TOOLS) {
       assert.ok(toolNames.includes(required), `Missing tool: ${required}`);
     }
+    // Plus every optional-pack tool: tools/list must carry the full 42.
+    const perPackNames = Object.values(PER_PACK_TOOLS).flat();
+    for (const name of perPackNames) {
+      assert.ok(toolNames.includes(name), `Missing tool: ${name}`);
+    }
+    assert.equal(
+      REQUIRED_TOOLS.length + perPackNames.length,
+      42,
+      'always-on + per-pack lists must cover the full registry',
+    );
     assert.ok(toolNames.length >= 25, `Expected >= 25 tools, got ${toolNames.length}`);
 
     // Verify every tool has valid schema fields
