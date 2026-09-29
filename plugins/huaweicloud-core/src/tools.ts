@@ -33,29 +33,15 @@ import {
   hdkitVoucherClaim,
 } from './lib/hdkit/hdkitservice-api.ts';
 import { getCredentials } from './lib/hdkit/hwlink-api.ts';
-import { getAuthStatus, syncAuth } from './auth/service.ts';
 import { validateIamCredentials } from './auth/credential-validator.ts';
 import {
   readGlobalCredentials,
   writeObsConfig as writeObsConfigFile,
-  setRuntimeCredentials,
-  clearRuntimeCredentials,
-  backupGlobalCredentials,
-  readCodeArtsCredentials,
   resolveCredentialsWithRuntime,
 } from './auth/credentials.ts';
-import {
-  asCredentialRecord,
-  persistCredentials,
-  readImportFile,
-  clearImportFile,
-  pendingConfirms,
-  refreshUserHashAfterAuthChange,
-  type CredentialLike,
-} from './lib/credentials.ts';
+import { asCredentialRecord, type CredentialLike } from './lib/credentials.ts';
 import { trackToolInvoke, trackSkillRetrieve } from './telemetry/telemetry.ts';
 import { fetchWithProxy } from './proxy/proxy-agent.ts';
-import { fingerprint } from './auth/reconcile.ts';
 import { hcloudProbeNextStep, probeHcloud, type ProbeHcloudOptions } from './hcloud-probe.ts';
 import { isUsableOfficeaceRoot, readOfficeaceRootMarker } from './officeace-paths.ts';
 // The update tool handlers live in the update pack; only the DistTags type
@@ -64,6 +50,7 @@ import type { DistTags } from './update-check.ts';
 import { getToolSchema, SCHEMA_DRIFT_IGNORED_KEYS } from './tool-schemas.ts';
 import { PACKS } from './packs/registry.ts';
 import { UPDATE_TOOL_HANDLERS } from './packs/update/tools.ts';
+import { AUTH_TOOL_HANDLERS } from './packs/auth/tools.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILLS_ROOT_DEV = join(__dirname, '..', 'skills');
@@ -699,126 +686,18 @@ export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: Cal
     }
     case 'huaweicloud_setup_obs_config':
       return setupObsConfig(args.profile);
+    // Auth tools delegate to the auth pack's handler map
+    // (src/packs/auth/tools.ts).
     case 'huaweicloud_auth_status':
-      return getAuthStatus(args.target || 'all');
-    case 'huaweicloud_auth_sync': {
-      const result = syncAuth(args.target || 'all');
-      refreshUserHashAfterAuthChange();
-      return result;
-    }
+      return await AUTH_TOOL_HANDLERS['huaweicloud_auth_status'](args, opts);
+    case 'huaweicloud_auth_sync':
+      return await AUTH_TOOL_HANDLERS['huaweicloud_auth_sync'](args, opts);
     case 'huaweicloud_auth_init':
-      if (args.clear) {
-        clearRuntimeCredentials();
-        refreshUserHashAfterAuthChange({ regenerate: false });
-        return { status: 'cleared', message: 'Runtime credentials cleared. Fallback to env/file.' };
-      }
-      if (!args.ak || !args.sk) {
-        throw new Error('ak and sk are required. Set clear=true to clear runtime credentials.');
-      }
-      setRuntimeCredentials(args.ak, args.sk, undefined, args.region);
-      refreshUserHashAfterAuthChange();
-      return { status: 'ok', message: 'Runtime credentials set for this MCP session.' };
-    case 'huaweicloud_auth_switch': {
-      const action = args.action || 'temporary';
-      if (action === 'clear') {
-        clearRuntimeCredentials();
-        refreshUserHashAfterAuthChange({ regenerate: false });
-        return { status: 'cleared', message: 'Runtime credentials cleared. Fallback to env/file/S1.' };
-      }
-
-      let ak = args.ak || '';
-      let sk = args.sk || '';
-      let securityToken = args.securityToken || '';
-      let region = args.region || '';
-      const sourceChannel = args.mode || 'memory';
-      let importedFromFile = false;
-
-      if (sourceChannel === 'import' && (!ak || !sk)) {
-        const imported = readImportFile();
-        if (imported) {
-          ({ ak, sk, securityToken, region } = imported);
-          importedFromFile = true;
-        }
-      }
-      if (sourceChannel === 'mcp-config' && (!ak || !sk)) {
-        const cc = readCodeArtsCredentials();
-        if (cc) {
-          ak = cc.ak;
-          sk = cc.sk;
-          securityToken = cc.securityToken || '';
-          region = cc.region || region;
-        }
-      }
-
-      if (!ak || !sk) {
-        throw new Error('ak and sk are required (or provide creds-import.json for mode=import).');
-      }
-
-      if (action === 'persist' && !String(region || '').trim()) {
-        return {
-          status: 'error',
-          scope: 'invalid_region',
-          error:
-            'region is required to persist credentials. Pass --region, or include "region" in creds-import.json (mode=import).',
-        };
-      }
-
-      if (action === 'temporary') {
-        setRuntimeCredentials(ak, sk, securityToken || undefined, region);
-        refreshUserHashAfterAuthChange();
-        if (importedFromFile) clearImportFile();
-        return {
-          status: 'ok',
-          scope: 'temporary',
-          note: 'Runtime credentials active for this MCP process. hcloud commands still use the KooCLI current profile; use action=persist to align files.',
-        };
-      }
-
-      // action === 'persist'
-      const prev = readGlobalCredentials();
-      const conflict = prev?.ak && prev.ak !== ak;
-      if (conflict) {
-        backupGlobalCredentials();
-        const token = `switch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        pendingConfirms.set(token, {
-          newAk: ak,
-          newSk: sk,
-          newSecurityToken: securityToken,
-          newRegion: region,
-          oldFingerprint: fingerprint(prev.ak, prev.sk),
-          newFingerprint: fingerprint(ak, sk),
-          fromImport: importedFromFile,
-        });
-        return {
-          status: 'needs_confirmation',
-          confirmToken: token,
-          options: [
-            { key: 's1', label: '以 S1 现有账号为准（不切换，恢复 backup）' },
-            { key: 'newImported', label: `以新账号（${fingerprint(ak, sk)}）为准，覆盖 S1 并同步全部凭证文件` },
-          ],
-        };
-      }
-
-      const persisted = persistCredentials(ak, sk, securityToken, region);
-      // Clear the import file for non-replayable outcomes (success, or an
-      // unfixable rejection such as STS R3). Keep it only for a retryable
-      // 'partial' (S1 written but a mirror failed).
-      if (importedFromFile && persisted.status !== 'partial') clearImportFile();
-      refreshUserHashAfterAuthChange();
-      return persisted;
-    }
-    case 'huaweicloud_auth_confirm': {
-      const pending = pendingConfirms.get(args.token || '');
-      if (!pending) throw new Error('confirmToken not found or expired.');
-      pendingConfirms.delete(args.token || '');
-      if (args.decision === 's1') {
-        return { status: 'ok', outcome: 'aborted', message: '保持 S1 现有账号，未覆盖。' };
-      }
-      const confirmed = persistCredentials(pending.newAk, pending.newSk, pending.newSecurityToken, pending.newRegion);
-      if (pending.fromImport && confirmed.status !== 'partial') clearImportFile();
-      refreshUserHashAfterAuthChange();
-      return confirmed;
-    }
+      return await AUTH_TOOL_HANDLERS['huaweicloud_auth_init'](args, opts);
+    case 'huaweicloud_auth_switch':
+      return await AUTH_TOOL_HANDLERS['huaweicloud_auth_switch'](args, opts);
+    case 'huaweicloud_auth_confirm':
+      return await AUTH_TOOL_HANDLERS['huaweicloud_auth_confirm'](args, opts);
     case 'huaweicloud_sandbox_exec_with_session': {
       const sandboxWsId2 = args.workspace_id || getCurrentWorkspaceId();
       if (!sandboxWsId2) {

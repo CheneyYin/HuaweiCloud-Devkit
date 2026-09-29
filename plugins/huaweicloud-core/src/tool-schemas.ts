@@ -4,6 +4,7 @@ import type { ToolName } from './tools.ts';
 import type { LooseToolSchema } from './lib/pack-types.ts';
 import { looseObject, numericArg, gitConfig, workspaceId, username } from './lib/tool-schema-parts.ts';
 import { UPDATE_TOOL_SCHEMAS } from './packs/update/tools.ts';
+import { AUTH_TOOL_SCHEMAS } from './packs/auth/tools.ts';
 
 // LooseToolSchema now lives in src/lib/pack-types.ts (shared pack vocabulary);
 // re-exported here so existing import sites keep working.
@@ -115,40 +116,10 @@ const TOOL_SCHEMAS = {
   huaweicloud_setup_obs_config: z.looseObject({
     profile: z.string().optional().describe('Optional KooCLI profile name. Uses the active profile by default.'),
   }),
-  huaweicloud_auth_status: z.looseObject({
-    target: z
-      .string()
-      .optional()
-      .describe(
-        'Agent target to check: opencode, codex, codex-desktop, codearts, codearts-work, workbuddy, dsh, officeace, hermes, openclaw, atomcode, or all (default).',
-      ),
-  }),
-  huaweicloud_auth_sync: z.looseObject({
-    target: z
-      .string()
-      .optional()
-      .describe(
-        'Agent target to report after sync: opencode, codex, codex-desktop, codearts, codearts-work, workbuddy, dsh, officeace, hermes, or all (default).',
-      ),
-  }),
-  huaweicloud_auth_init: z.looseObject({
-    ak: z.string().optional().describe('Huawei Cloud Access Key (required unless clear=true)'),
-    sk: z.string().optional().describe('Huawei Cloud Secret Key (required unless clear=true)'),
-    region: z.string().optional().describe('Default region (optional)'),
-    clear: z.boolean().optional().describe('Set to true to clear runtime credentials and revert to env/file'),
-  }),
-  huaweicloud_auth_switch: z.looseObject({
-    mode: z.enum(['import', 'memory', 'mcp-config']).optional().describe('Credential source channel'),
-    action: z.enum(['persist', 'temporary', 'clear']).optional().describe('Apply scope'),
-    ak: z.string().optional(),
-    sk: z.string().optional(),
-    securityToken: z.string().optional(),
-    region: z.string().optional(),
-  }),
-  huaweicloud_auth_confirm: z.looseObject({
-    token: z.string().optional().describe('confirmation token from the needs_confirmation response'),
-    decision: z.enum(['s1', 'newImported']).optional(),
-  }),
+  // The auth pack owns its tool schemas (src/packs/auth/tools.ts); the
+  // spread keeps them in TOOL_SCHEMAS so the satisfies check below still
+  // covers all 42 ToolName keys.
+  ...AUTH_TOOL_SCHEMAS,
   huaweicloud_sandbox_exec_with_session: z.looseObject({
     command: z.string().describe('The shell command to execute on the remote workspace'),
     workspace_id: workspaceId,

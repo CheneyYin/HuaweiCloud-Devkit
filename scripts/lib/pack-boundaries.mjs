@@ -146,7 +146,7 @@ function classify({ specifier, isTypeOnly, file, packId, packRoot, srcDir, packs
     if (target === join(pluginRoot, coreFile)) return null;
   }
   for (const coreDir of CORE_VALUE_DIRS) {
-    if (contains(join(srcDir, coreDir), target)) return null;
+    if (contains(join(pluginRoot, coreDir), target)) return null;
   }
   // Any other core src/ file is allowed type-only.
   if (contains(srcDir, target)) {

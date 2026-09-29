@@ -560,10 +560,11 @@ test('tools.ts resolves skills from the dsh directory', () => {
   assert.match(tools, /resolveSkillsRoot[\s\S]*?findSkillsRoot\(\[/);
   assert.match(tools, /\|\|\s*SKILLS_ROOT_DEV/);
   // The agent-target list moved to the zod schema descriptions when the
-  // JSON-Schema registry was replaced (tool-schemas.ts).
-  const schemas = readSource(join('src', 'tool-schemas.ts'));
+  // JSON-Schema registry was replaced, and into the auth pack when the
+  // schemas were materialized per pack (src/packs/auth/tools.ts).
+  const authPack = readSource(join('src', 'packs', 'auth', 'tools.ts'));
   assert.match(
-    schemas,
+    authPack,
     /opencode, codex, codex-desktop, codearts, codearts-work, workbuddy, dsh, officeace, hermes, openclaw, atomcode, or all/,
   );
 });

@@ -1,6 +1,7 @@
 import type { ToolName } from '../tools.ts';
 import type { Pack, PackId } from '../lib/pack-types.ts';
 import { updatePack } from './update/pack.ts';
+import { authPack } from './auth/pack.ts';
 
 // PackId and the Pack interface live in src/lib/pack-types.ts alongside
 // PackToolDefinition, so packs and the registry share one vocabulary module.
@@ -105,14 +106,7 @@ export const PACKS: readonly Pack[] = [
     skills: ['huawei-sandbox'],
     tools: toolsFor('sandbox'),
   },
-  {
-    id: 'auth',
-    title: 'Auth',
-    description:
-      'Unified Huawei Cloud credential status, vault sync, runtime injection, and reconciliation across KooCLI, OBS, and agent MCP registrations.',
-    skills: [],
-    tools: toolsFor('auth'),
-  },
+  authPack,
   {
     id: 'obs',
     title: 'OBS',
