@@ -36,11 +36,15 @@ if (tsc.status !== 0) {
 }
 
 // tsc emits scripts only. Assets read through __dirname (icons manifest, sandbox
-// helper) must land next to the emitted code or dist fails at runtime.
+// helper) must land next to the emitted code or dist fails at runtime. The
+// pack-owned skill sources (src/packs/*/skills/) are markdown, not runtime
+// assets — skipping them keeps dist free of copies that per-agent installs
+// would otherwise drag along permanently.
 const scriptExtensions = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.mjs', '.cjs', '.jsx']);
 let copied = 0;
 for (const file of walk(srcDir)) {
   if (scriptExtensions.has(extname(file))) continue;
+  if (/^packs[/\\][^/\\]+[/\\]skills[/\\]/.test(relative(srcDir, file))) continue;
   const dest = join(stagingDir, relative(srcDir, file));
   mkdirSync(dirname(dest), { recursive: true });
   cpSync(file, dest);

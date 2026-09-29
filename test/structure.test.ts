@@ -204,12 +204,15 @@ test('web/static-site deployment intent offers target options with sandbox first
   assert.match(core, /Sandbox \(DevStation\) — recommended/);
   assert.match(core, /NEVER default to a single service such as OBS/);
 
-  const obs = readFileSync(join(pluginRoot, 'skills', 'huawei-obs', 'SKILL.md'), 'utf8');
+  const obs = readFileSync(join(pluginRoot, 'src', 'packs', 'obs', 'skills', 'huawei-obs', 'SKILL.md'), 'utf8');
   assert.match(obs, /Routing Guard: Deploy vs Store/);
   assert.match(obs, /do NOT default to OBS/);
   assert.match(obs, /① huawei-sandbox \(recommended\)/);
 
-  const sandbox = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
+  const sandbox = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'SKILL.md'),
+    'utf8',
+  );
   assert.match(sandbox, /present options, sandbox first/i);
   assert.match(sandbox, /建议优先部署到沙箱/);
 
@@ -219,7 +222,10 @@ test('web/static-site deployment intent offers target options with sandbox first
 });
 
 test('devbridge uses the valid `list` command, not the non-existent `ls`', () => {
-  const sandbox = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
+  const sandbox = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'SKILL.md'),
+    'utf8',
+  );
   const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
 
   assert.doesNotMatch(sandbox, /devbridge ls\b/);
@@ -230,7 +236,10 @@ test('devbridge uses the valid `list` command, not the non-existent `ls`', () =>
 });
 
 test('huawei-sandbox skill documents devbridge description and host/connect traps', () => {
-  const body = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
+  const body = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'SKILL.md'),
+    'utf8',
+  );
   assert.match(body, /only Chinese characters, digits, letters/);
   assert.match(body, /Connection failed, retrying/);
   assert.match(body, /devbridge host/);
@@ -238,7 +247,10 @@ test('huawei-sandbox skill documents devbridge description and host/connect trap
 });
 
 test('devbridge tunnel handling is migrated to the s2 gateway domain', () => {
-  const sandbox = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
+  const sandbox = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'SKILL.md'),
+    'utf8',
+  );
   const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
 
   // Code must construct tunnel URLs exclusively from the s2 gateway domain.
@@ -256,7 +268,10 @@ test('devbridge tunnel handling is migrated to the s2 gateway domain', () => {
 });
 
 test('devbridge 0.2.x flow: auth capability probe, version detection, in-place upgrade guidance', () => {
-  const sandbox = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
+  const sandbox = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'SKILL.md'),
+    'utf8',
+  );
   // The credentials tool handler moved to the sandbox pack
   // (src/packs/sandbox/tools.ts) with the P2 pack program.
   const sandboxPack = readSource(join('src', 'packs', 'sandbox', 'tools.ts'));

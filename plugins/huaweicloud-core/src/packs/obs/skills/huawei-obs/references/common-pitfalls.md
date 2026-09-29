@@ -1,4 +1,3 @@
-<!-- generated from src/packs/obs/skills/huawei-obs - do not edit -->
 # OBS Common Pitfalls
 
 基于真实测试暴露的陷阱和避坑方法。

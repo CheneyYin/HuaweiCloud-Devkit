@@ -1,4 +1,3 @@
-<!-- generated from src/packs/obs/skills/huawei-obs - do not edit -->
 # OBS Bucket Creation Reference
 
 From Huawei Cloud marketplace best practices.

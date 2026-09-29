@@ -1,4 +1,3 @@
-<!-- generated from src/packs/sandbox/skills/huawei-sandbox - do not edit -->
 # Nginx Configuration Templates
 
 Nginx is the primary serving mechanism for web apps deployed to the sandbox. Python `http.server` is a fallback when nginx is unavailable.
