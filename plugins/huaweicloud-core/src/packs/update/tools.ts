@@ -1,0 +1,118 @@
+import { z } from 'zod';
+
+import {
+  getCachedUpdateInfo,
+  getUpdateDistTags,
+  invalidateUpdateCache,
+  judgeUpdate,
+  determineTarget,
+  readInstalledVersion,
+  writeSkipState,
+  resolveSkipFilePath,
+  upgradePackage,
+} from '../../update-check.ts';
+import type { LooseToolSchema } from '../../tool-schemas.ts';
+import type { CallToolOptions, ToolArgs, ToolName } from '../../tools.ts';
+
+// One pack tool wires its four registration facts in a single place: identity
+// (name/description), the zod input schema, and the callTool handler. The
+// satisfies check on UPDATE_TOOLS turns a missing element into a compile
+// error, so a pack entry can never ship half-wired.
+export interface PackToolDefinition {
+  name: ToolName;
+  description: string;
+  schema: LooseToolSchema;
+  handler: (_args: ToolArgs, _opts: CallToolOptions) => Promise<unknown>;
+}
+
+// Handlers migrated verbatim from src/tools.ts; the doQuery injection seam on
+// CallToolOptions is passed through unchanged (test/upgrade-session.test.ts
+// #607 depends on it reaching getUpdateDistTags/getCachedUpdateInfo).
+async function handleCheckUpdate(args: ToolArgs = {}, opts: CallToolOptions = {}) {
+  const { sessionId = null, doQuery } = opts;
+  const current = readInstalledVersion() || '0.0.0';
+  if (args.dismiss === true) {
+    const distTags = await getUpdateDistTags(current, { sessionId, doQuery });
+    if (!distTags) {
+      // 查询失败：不降级为 current 冷却、不写 skip，返回 check_failed。
+      // 不调 invalidateUpdateCache()，以保留 failedAt 的 5 分钟失败节流。
+      return judgeUpdate(current, null, null);
+    }
+    const target = determineTarget(current, distTags);
+    const dismissedVersion =
+      typeof args.dismissVersion === 'string' && args.dismissVersion ? args.dismissVersion : target || current;
+    const state = writeSkipState(resolveSkipFilePath(sessionId), dismissedVersion);
+    invalidateUpdateCache();
+    return judgeUpdate(current, distTags, state);
+  }
+  return getCachedUpdateInfo(current, { sessionId, doQuery });
+}
+
+async function handleUpgrade(args: ToolArgs = {}, opts: CallToolOptions = {}) {
+  const sessionId = opts?.sessionId || null;
+  const target = typeof args.target === 'string' && args.target ? args.target : 'all';
+  const version = typeof args.version === 'string' && args.version ? args.version : 'latest';
+  const current = readInstalledVersion() || '0.0.0';
+  const info = await getCachedUpdateInfo(current, { sessionId });
+  if (info && info.result === 'up_to_date') {
+    return {
+      success: false,
+      requiresRestart: false,
+      message: '已是最新版本，无需升级。',
+      currentVersion: info.currentVersion,
+      targetVersion: info.targetVersion,
+    };
+  }
+  return upgradePackage({ target, version });
+}
+
+const checkUpdateSchema = z.looseObject({
+  dismiss: z.boolean().optional().describe('用户拒绝升级时传 true，记录冷却状态。'),
+  dismissVersion: z
+    .string()
+    .optional()
+    .describe('与 dismiss:true 搭配，用户拒绝的版本号。缺省时用当前检测到的 targetVersion。'),
+});
+
+const upgradeSchema = z.looseObject({
+  version: z.string().optional().describe('仅支持 "latest"（默认）。'),
+  target: z
+    .string()
+    .optional()
+    .describe('agent 目标（opencode/codex/codearts/.../all）。缺省时用 all（仅更新已安装的）。'),
+});
+
+export const UPDATE_TOOLS = [
+  {
+    name: 'huaweicloud_check_update',
+    description:
+      '检查 huaweicloud-devkit 插件是否有新版本。结果含 currentVersion / latestStable / latestNext / targetVersion / updateAvailable / dismissExpiresAt / result。支持 dismiss:true 记录用户拒绝（3 天冷却，新版本会重新提醒）。',
+    schema: checkUpdateSchema,
+    handler: handleCheckUpdate,
+  },
+  {
+    name: 'huaweicloud_upgrade',
+    description:
+      '升级 huaweicloud-devkit 到最新版本。执行前必须先征得用户同意。version 仅支持 "latest"。完成后需重启会话生效。',
+    schema: upgradeSchema,
+    handler: handleUpgrade,
+  },
+] as const satisfies readonly PackToolDefinition[];
+
+export type UpdateToolName = (typeof UPDATE_TOOLS)[number]['name'];
+
+// Schema map keyed by tool name for src/tool-schemas.ts: TOOL_SCHEMAS spreads
+// it in place, keeping the satisfies Record<ToolName, LooseToolSchema>
+// completeness check over all 42 tools.
+export const UPDATE_TOOL_SCHEMAS: Readonly<Record<UpdateToolName, LooseToolSchema>> = {
+  huaweicloud_check_update: checkUpdateSchema,
+  huaweicloud_upgrade: upgradeSchema,
+};
+
+// Dispatch map for the callTool case labels in src/tools.ts. Typed over
+// UpdateToolName, so a tool added to UPDATE_TOOLS without a handler entry
+// here — or the reverse — fails to compile instead of failing at runtime.
+export const UPDATE_TOOL_HANDLERS: Readonly<Record<UpdateToolName, PackToolDefinition['handler']>> = {
+  huaweicloud_check_update: handleCheckUpdate,
+  huaweicloud_upgrade: handleUpgrade,
+};

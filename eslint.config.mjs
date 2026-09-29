@@ -101,6 +101,7 @@ export default [
       'plugins/huaweicloud-core/src/mcp-server-remote.ts',
       'plugins/huaweicloud-core/src/tool-schemas.ts',
       'plugins/huaweicloud-core/src/tools.ts',
+      'plugins/huaweicloud-core/src/packs/update/tools.ts',
       'test/upgrade-session.test.ts',
       'test/remote-mcp-server.test.ts',
     ],

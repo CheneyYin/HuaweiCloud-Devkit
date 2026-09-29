@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import type { ToolName } from './tools.ts';
+import { UPDATE_TOOL_SCHEMAS } from './packs/update/tools.ts';
 
 // The runtime class behind z.looseObject (constructor name ZodObject): a
 // constructed passthrough object schema. Named once so registry entries,
@@ -279,20 +280,10 @@ const TOOL_SCHEMAS = {
       .optional()
       .describe('Optional. Leave empty in production — account is resolved from IAM automatically.'),
   }),
-  huaweicloud_check_update: z.looseObject({
-    dismiss: z.boolean().optional().describe('用户拒绝升级时传 true，记录冷却状态。'),
-    dismissVersion: z
-      .string()
-      .optional()
-      .describe('与 dismiss:true 搭配，用户拒绝的版本号。缺省时用当前检测到的 targetVersion。'),
-  }),
-  huaweicloud_upgrade: z.looseObject({
-    version: z.string().optional().describe('仅支持 "latest"（默认）。'),
-    target: z
-      .string()
-      .optional()
-      .describe('agent 目标（opencode/codex/codearts/.../all）。缺省时用 all（仅更新已安装的）。'),
-  }),
+  // The update pack owns its tool schemas (src/packs/update/tools.ts); the
+  // spread keeps them in TOOL_SCHEMAS so the satisfies check below still
+  // covers all 42 ToolName keys.
+  ...UPDATE_TOOL_SCHEMAS,
   huaweicloud_obs_set_website_config: z.looseObject({
     action: z
       .enum(['set', 'get', 'delete'])

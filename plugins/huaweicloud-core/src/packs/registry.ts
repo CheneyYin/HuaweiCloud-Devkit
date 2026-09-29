@@ -1,4 +1,5 @@
 import type { ToolName } from '../tools.ts';
+import { updatePack } from './update/pack.ts';
 
 export type PackId = 'core' | 'sandbox' | 'auth' | 'obs' | 'voucher' | 'update' | 'discovery';
 
@@ -133,13 +134,7 @@ export const PACKS: readonly Pack[] = [
     skills: ['huawei-voucher'],
     tools: toolsFor('voucher'),
   },
-  {
-    id: 'update',
-    title: 'Update',
-    description: 'Plugin version check and consent-gated in-place upgrade for huaweicloud-devkit.',
-    skills: [],
-    tools: toolsFor('update'),
-  },
+  updatePack,
   {
     id: 'discovery',
     title: 'Discovery',
