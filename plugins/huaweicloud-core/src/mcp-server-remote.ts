@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import { format } from 'node:util';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 
 import { createDevkitMcpServer, runInitializeSideEffects, normalizeToolCallParams } from './mcp-protocol.ts';
@@ -25,7 +25,7 @@ export async function startRemoteServer({
 }: RemoteServerOptions = {}): Promise<StartedRemoteServer> {
   const server = createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader(
       'Access-Control-Allow-Headers',
       'Content-Type, MCP-Protocol-Version, Mcp-Session-Id, Accept, Authorization',
@@ -84,28 +84,50 @@ export async function startRemoteServer({
     const sessionId =
       (typeof req.headers['mcp-session-id'] === 'string' ? req.headers['mcp-session-id'] : '').trim() || 'default';
 
-    // Stateless per-request transport: no session id, no resumability. The
-    // response format stays JSON (enableJsonResponse) for dual-Accept
-    // clients; Accept headers lacking either application/json or
-    // text/event-stream are rejected 406 by the transport.
-    const transport = new StreamableHTTPServerTransport({
+    // The shell owns the request headers. undici's fetch stamps a default
+    // `text/plain;charset=UTF-8` on bodies sent without a Content-Type, and
+    // the SDK would 415 them; the legacy shell accepted bare `curl -d`
+    // bodies. Normalize the undici default back to JSON; explicit
+    // non-default types still 415. enableJsonResponse keeps successful
+    // responses as JSON bodies for dual-Accept clients; Accept headers
+    // lacking either application/json or text/event-stream are rejected 406
+    // by the transport.
+    const headers = new Headers();
+    for (const [name, value] of Object.entries(req.headers)) {
+      if (Array.isArray(value)) continue;
+      if (value !== undefined) headers.set(name, value);
+    }
+    const rawContentType = headers.get('content-type');
+    if (!rawContentType || /^text\/plain\b/i.test(rawContentType)) {
+      headers.set('content-type', 'application/json');
+    }
+    headers.set('accept', req.headers.accept || 'application/json, text/event-stream');
+
+    const webRequest = new Request(`http://${req.headers.host ?? 'localhost'}${req.url}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(message),
+    });
+
+    const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
     });
     const mcpServer = createDevkitMcpServer({ sessionId });
     transport.onerror = (error) => {
-      const reason = error instanceof Error ? error.message : String(error);
-      process.stderr.write(`remote transport error: ${reason}\n`);
+      process.stderr.write(`remote transport error: ${error.message}\n`);
     };
-
-    res.on('close', () => {
-      void mcpServer.close().catch(() => {});
-      void transport.close().catch(() => {});
-    });
 
     try {
       await mcpServer.connect(transport);
-      await transport.handleRequest(req, res, normalizeToolCallParams(message as JSONRPCMessage));
+      const response = await transport.handleRequest(webRequest, {
+        parsedBody: normalizeToolCallParams(message as JSONRPCMessage),
+      });
+      res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
+      if (response.body) {
+        for await (const chunk of response.body) res.write(chunk);
+      }
+      res.end();
     } catch (error) {
       const code = (error as { code?: unknown }).code;
       if (!res.headersSent) {
@@ -118,7 +140,9 @@ export async function startRemoteServer({
           }),
         );
       }
+    } finally {
       await mcpServer.close().catch(() => {});
+      await transport.close().catch(() => {});
     }
   });
 

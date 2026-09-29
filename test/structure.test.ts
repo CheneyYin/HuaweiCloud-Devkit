@@ -764,44 +764,23 @@ test('zod tool schemas match the legacy registry snapshot (deep structural diff)
   assert.equal(run.status, 0, `registry snapshot diff failed:\n${run.stdout}\n${run.stderr}`);
 });
 
-test('SDK migration invariants: custom stdio framing, bundle-only SDK imports, zod registry', () => {
-  const transport = readSource(join('src', 'mcp-stdio-transport.ts'));
-  // Content-Length framing must survive: the release smoke gate and the
-  // Hermes-on-Windows workaround speak LSP-style frames.
-  assert.match(transport, /Content-Length:/);
-  assert.match(transport, /-32700/);
-  assert.match(transport, /-32600/);
-  // Keepalive stays scoped to hermes+win32; every other agent exits 0.
-  assert.match(transport, /'hermes'/);
-  assert.match(transport, /'win32'/);
-
-  // Only the bundled server entry may import the SDK or zod: everything the
-  // installer copies must resolve without SDK node_modules. setup-cli must
-  // never gain a tools/mcp-protocol import (it runs before any bundling).
+test('SDK migration invariants: setup-cli stays out of the bundled module graph', () => {
+  // The framing, keepalive, 406, and hint behaviors are pinned by the
+  // process-level suites (mcp-server / remote-mcp-server / dist-bundle);
+  // source-regex assertions on them broke on unrelated refactors. The one
+  // policy no behavioral test can catch: setup-cli runs from the raw tsc
+  // output before any bundling, in agent dirs without SDK node_modules — a
+  // single tools/mcp-protocol/SDK import there breaks production installs
+  // while every in-repo gate stays green.
   const setup = readSource(join('src', 'setup-cli.ts'));
-  assert.doesNotMatch(setup, /@modelcontextprotocol/);
-  assert.doesNotMatch(setup, /from 'zod'/);
-  assert.doesNotMatch(setup, /from '\.\/tools\.ts'/);
-  assert.doesNotMatch(setup, /from '\.\/mcp-protocol\.ts'/);
-
-  const schemas = readSource(join('src', 'tool-schemas.ts'));
-  // zod is the single source of truth for tool input schemas.
-  assert.match(schemas, /from 'zod'/);
-  assert.match(schemas, /z\.looseObject\(/);
-  // The #530 leniency must stay declared at the boundary.
-  assert.match(schemas, /numericArg/);
-
-  const protocol = readSource(join('src', 'mcp-protocol.ts'));
-  // Hint decoration rides the registerTool callback; sessionId flows into
-  // callTool so session-scoped skip state is reachable over the wire.
-  assert.match(protocol, /callTool\(tool\.name, args as Record<string, never>, \{ sessionId \}\)/);
-
-  const remote = readSource(join('src', 'mcp-server-remote.ts'));
-  // Remote keeps JSON responses for dual-Accept clients and stays stateless.
-  assert.match(remote, /enableJsonResponse: true/);
-  assert.match(remote, /sessionIdGenerator: undefined/);
-  // The shell method filter keeps GET as 405.
-  assert.match(remote, /405/);
+  assert.doesNotMatch(setup, /@modelcontextprotocol/, 'setup-cli must not import the SDK (unbundled entry)');
+  assert.doesNotMatch(setup, /from 'zod'/, 'setup-cli must not import zod (unbundled entry)');
+  assert.doesNotMatch(setup, /from '\.\/tools\.ts'/, 'setup-cli must not import tools.ts (pulls the SDK graph)');
+  assert.doesNotMatch(
+    setup,
+    /from '\.\/mcp-protocol\.ts'/,
+    'setup-cli must not import mcp-protocol.ts (pulls the SDK graph)',
+  );
 });
 
 test('hdkitservice-api sends X-HW-Client-Version; SKILL session-start wording', () => {

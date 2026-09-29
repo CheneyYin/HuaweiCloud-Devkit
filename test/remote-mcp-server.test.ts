@@ -138,6 +138,22 @@ test('remote MCP server responds JSON bodies for dual-Accept clients (enableJson
   assert.ok(body.result.tools.length > 0);
 });
 
+test('remote MCP server defaults a missing Content-Type instead of 415 (legacy curl behavior)', async () => {
+  const res = await fetch(`${base}/`, {
+    method: 'POST',
+    headers: { Accept: DUAL_ACCEPT },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 11,
+      method: 'tools/call',
+      params: { name: 'huaweicloud_explain_error', arguments: { service: 'ECS' } },
+    }),
+  });
+  assert.equal(res.status, 200, `bare curl-style body must not 415: ${res.status}`);
+  const body = await res.json();
+  assert.equal(body.result.isError, false);
+});
+
 test('resources/list falls through to -32601 (capability never advertised)', async () => {
   // tools-only registration: the SDK registers no resource handlers, so the
   // old {resources: []} answer is gone. Declared wire change from the
