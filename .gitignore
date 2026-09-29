@@ -26,3 +26,6 @@ docs/mcp-remote-transport.md
 
 # Project-level CodeArts config written by installs/tests can leak into repo root
 .codeartsdoer/
+
+# Runtime logs written by MCP servers run from the repo root during local testing
+logs/
