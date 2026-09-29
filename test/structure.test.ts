@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { TOOL_DEFINITIONS } from '../plugins/huaweicloud-core/src/tools.ts';
-import { PACKS } from '../plugins/huaweicloud-core/src/packs/registry.ts';
+import { PACK_OF, PACKS } from '../plugins/huaweicloud-core/src/packs/registry.ts';
+import { UPDATE_TOOLS } from '../plugins/huaweicloud-core/src/packs/update/tools.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const pluginRoot = join(root, 'plugins', 'huaweicloud-core');
@@ -738,13 +739,34 @@ test('official Huawei Cloud Icons library is integrated', () => {
   assert.match(discovery, /open\.huaweicloud\.com\/openplatform\/icons\.html/);
 });
 
-test('tools.ts registers version-update tools', () => {
+test('update pack registers version-update tools; tools.ts delegates dispatch', () => {
+  // The update pack (src/packs/update/tools.ts) owns the tool wiring
+  // (name/description/schema/handler); tools.ts keeps the delegation case
+  // labels in callTool. Semantics unchanged: both update tools are registered
+  // and wired end to end.
+  const packTools = readSource(join('src', 'packs', 'update', 'tools.ts'));
+  for (const name of ['huaweicloud_check_update', 'huaweicloud_upgrade']) {
+    assert.match(packTools, new RegExp(`name: '${name}'`));
+  }
+  assert.match(packTools, /from '\.\.\/\.\.\/update-check\.(?:mjs|ts)'/);
+
   const tools = readSource(join('src', 'tools.ts'));
   for (const name of ['huaweicloud_check_update', 'huaweicloud_upgrade']) {
-    assert.match(tools, new RegExp(`name: '${name}'`));
     assert.match(tools, new RegExp(`case '${name}':`));
   }
-  assert.match(tools, /from '\.\/update-check\.(?:mjs|ts)'/);
+
+  // Behavioral lockstep: the pack tool list equals the PACK_OF ownership for
+  // 'update', and the pack descriptions match the tools/list definitions.
+  const ownedByUpdate = Object.keys(PACK_OF).filter((tool) => PACK_OF[tool] === 'update');
+  assert.deepEqual(
+    UPDATE_TOOLS.map((tool) => tool.name).sort((a, b) => a.localeCompare(b)),
+    [...ownedByUpdate].sort((a, b) => a.localeCompare(b)),
+  );
+  for (const tool of UPDATE_TOOLS) {
+    const definition = TOOL_DEFINITIONS.find((entry) => entry.name === tool.name);
+    assert.ok(definition, `${tool.name} missing from TOOL_DEFINITIONS`);
+    assert.equal(tool.description, definition.description);
+  }
 });
 
 test('stdio server warms update cache; shared protocol decorates first tool call', () => {
