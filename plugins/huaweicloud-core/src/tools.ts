@@ -1,10 +1,9 @@
-import { readFileSync, readdirSync, existsSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, rmSync, mkdirSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir, tmpdir } from 'node:os';
 import { spawnSync, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createHmac, createHash } from 'node:crypto';
 import { z } from 'zod';
 
 import { evaluateArtifacts, evaluateCommandRisk, evaluateDeployPlan, type RiskEvaluation } from './risk-rule-engine.ts';
@@ -34,14 +33,9 @@ import {
 } from './lib/hdkit/hdkitservice-api.ts';
 import { getCredentials } from './lib/hdkit/hwlink-api.ts';
 import { validateIamCredentials } from './auth/credential-validator.ts';
-import {
-  readGlobalCredentials,
-  writeObsConfig as writeObsConfigFile,
-  resolveCredentialsWithRuntime,
-} from './auth/credentials.ts';
+import { resolveCredentialsWithRuntime } from './auth/credentials.ts';
 import { asCredentialRecord, type CredentialLike } from './lib/credentials.ts';
 import { trackToolInvoke, trackSkillRetrieve } from './telemetry/telemetry.ts';
-import { fetchWithProxy } from './proxy/proxy-agent.ts';
 import { hcloudProbeNextStep, probeHcloud, type ProbeHcloudOptions } from './hcloud-probe.ts';
 import { isUsableOfficeaceRoot, readOfficeaceRootMarker } from './officeace-paths.ts';
 // The update tool handlers live in the update pack; only the DistTags type
@@ -51,6 +45,7 @@ import { getToolSchema, SCHEMA_DRIFT_IGNORED_KEYS } from './tool-schemas.ts';
 import { PACKS } from './packs/registry.ts';
 import { UPDATE_TOOL_HANDLERS } from './packs/update/tools.ts';
 import { AUTH_TOOL_HANDLERS } from './packs/auth/tools.ts';
+import { OBS_TOOL_HANDLERS } from './packs/obs/tools.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILLS_ROOT_DEV = join(__dirname, '..', 'skills');
@@ -64,17 +59,8 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
-// Mirrors the JS `a || b || ''` chain for string fields: the first non-empty
-// string wins, everything else falls through.
-function pickString(...values: unknown[]): string {
-  for (const value of values) {
-    if (typeof value === 'string' && value) return value;
-  }
-  return '';
-}
-
-// Boundary narrowing for credential-shaped values moved to
-// src/lib/credentials.ts (shared with the auth and sandbox packs).
+// Boundary narrowing helpers that migrated with the pack tools:
+// pickString (obs pack), asCredentialRecord (lib/credentials.ts).
 
 function opencodeSkillsDir() {
   const home = homedir();
@@ -685,7 +671,7 @@ export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: Cal
       return { ok: true, ...result };
     }
     case 'huaweicloud_setup_obs_config':
-      return setupObsConfig(args.profile);
+      return await OBS_TOOL_HANDLERS['huaweicloud_setup_obs_config'](args, opts);
     // Auth tools delegate to the auth pack's handler map
     // (src/packs/auth/tools.ts).
     case 'huaweicloud_auth_status':
@@ -957,7 +943,7 @@ export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: Cal
     case 'huaweicloud_upgrade':
       return await UPDATE_TOOL_HANDLERS['huaweicloud_upgrade'](args, { sessionId: opts?.sessionId });
     case 'huaweicloud_obs_set_website_config':
-      return await handleObsWebsiteConfig(args);
+      return await OBS_TOOL_HANDLERS['huaweicloud_obs_set_website_config'](args, opts);
     case 'huaweicloud_list_packs':
       return listPacks();
     case 'huaweicloud_pack_info':
@@ -1031,117 +1017,6 @@ async function showProfileRedacted(profile?: string) {
       ? 'Profile information was returned through the toolkit redaction pipeline.'
       : 'Failed to retrieve profile — hcloud may not be installed or configured.',
     result: redactSecrets(result),
-  };
-}
-
-async function setupObsConfig(profile?: string) {
-  const stored = asCredentialRecord(readGlobalCredentials());
-  if (stored?.ak && stored?.sk) {
-    try {
-      const obs: { path: string; endpoint: string } = writeObsConfigFile(stored);
-      return {
-        ok: true,
-        existed: false,
-        created: true,
-        path: obs.path,
-        region: stored.region,
-        endpoint: obs.endpoint,
-        source: 'global-credentials',
-        note: 'OBS credentials synced from the global credential vault. OBS commands (hcloud OBS ls, mb, cp, etc.) should now work.',
-      };
-    } catch (error) {
-      return {
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-        nextStep: 'Run "npx huaweicloud-devkit auth init" to refresh credentials and region.',
-      };
-    }
-  }
-
-  return setupObsConfigFromHcloud(profile);
-}
-
-async function setupObsConfigFromHcloud(profile?: string) {
-  const obsConfigPath = join(homedir(), '.obsutilconfig');
-  if (existsSync(obsConfigPath)) {
-    return {
-      ok: true,
-      existed: true,
-      path: obsConfigPath,
-      note: 'OBS config already exists. Delete ~/.obsutilconfig first if you need to re-sync.',
-    };
-  }
-
-  const args = ['configure', 'show'];
-  if (profile) args.push('--cli-profile', String(profile));
-  const result = await runHcloud(args, { allowWrites: false, allowCredentialRead: true });
-
-  if (!result.ok) {
-    return {
-      ok: false,
-      error: 'Failed to read hcloud profile.',
-      detail: result.error || result.stderr || 'hcloud not installed or not configured',
-      nextStep: 'Run "npx huaweicloud-devkit auth init" outside agent chat, then retry.',
-    };
-  }
-
-  let accessKeyId: string;
-  let secretAccessKey: string;
-  let region: string;
-
-  try {
-    const parsed: unknown = typeof result.stdout === 'string' ? JSON.parse(result.stdout) : result.stdout;
-    const cred = asRecord(asRecord(parsed).currentCredential);
-    accessKeyId = pickString(cred.accessKeyId, cred.ak, cred.access_key);
-    secretAccessKey = pickString(cred.secretAccessKey, cred.sk, cred.secret_key);
-    region = pickString(asRecord(parsed).currentRegion, asRecord(parsed).region);
-  } catch {
-    return {
-      ok: false,
-      error: 'Failed to parse hcloud profile output.',
-      detail: 'hcloud configure show returned unexpected format',
-    };
-  }
-
-  if (!accessKeyId || !secretAccessKey) {
-    return {
-      ok: false,
-      error: 'No credentials found in hcloud profile.',
-      nextStep: 'Run "npx huaweicloud-devkit auth init" outside agent chat to set up credentials first.',
-    };
-  }
-
-  if (!region) {
-    return {
-      ok: false,
-      error: 'No region found in hcloud profile.',
-      nextStep: 'Run "npx huaweicloud-devkit auth init" outside agent chat to configure credentials and region.',
-    };
-  }
-
-  const endpoint = `https://obs.${region}.myhuaweicloud.com`;
-  // Flat key=value format (no [default] section) as written by KooCLI 7.x `hcloud OBS config`.
-  const configContent = `endpoint=${endpoint}\nak=${accessKeyId}\nsk=${secretAccessKey}\n`;
-
-  try {
-    writeFileSync(obsConfigPath, configContent, { encoding: 'utf8', mode: 0o600 });
-  } catch (error) {
-    return {
-      ok: false,
-      error: 'Failed to write OBS config file.',
-      detail: error instanceof Error ? error.message : String(error),
-      path: obsConfigPath,
-    };
-  }
-
-  return {
-    ok: true,
-    existed: false,
-    created: true,
-    path: obsConfigPath,
-    region,
-    endpoint,
-    note: 'OBS credentials synced from hcloud profile. OBS commands (hcloud OBS ls, mb, cp, etc.) should now work.',
   };
 }
 
@@ -1797,124 +1672,4 @@ async function getRegionalAvailability(service: string, region: string) {
 
 export function classifyRawCommand(command: unknown) {
   return classifyTextCommand(command);
-}
-
-// ── OBS Static Website Hosting (AWS4 signed REST API) ──
-
-async function handleObsWebsiteConfig(args: ToolArgs) {
-  const { action, bucket, region, indexDocument, errorDocument } = args;
-  if (!bucket || !region) {
-    throw new Error('bucket and region are required');
-  }
-  const creds = asCredentialRecord(resolveCredentialsWithRuntime({}));
-  const obsAk = creds?.ak;
-  const obsSk = creds?.sk;
-  if (!obsAk || !obsSk) {
-    throw new Error('OBS website config requires AK/SK credentials. Run huaweicloud_auth_init first.');
-  }
-  const signedCreds = { ak: obsAk, sk: obsSk, securityToken: creds?.securityToken };
-
-  const host = `${bucket}.obs.${region}.myhuaweicloud.com`;
-  const endpoint = `https://${host}`;
-
-  if (action === 'get') {
-    const res = await obsSignedRequest('GET', endpoint, '/?website', '', signedCreds, region);
-    return { ok: res.status === 200, status: res.status, body: res.body };
-  }
-
-  if (action === 'delete') {
-    const res = await obsSignedRequest('DELETE', endpoint, '/?website', '', signedCreds, region);
-    return { ok: res.status === 204, status: res.status };
-  }
-
-  if (action === 'set') {
-    if (!indexDocument) {
-      throw new Error('indexDocument is required for action=set');
-    }
-    const xmlParts = ['<WebsiteConfiguration>', `  <IndexDocument><Suffix>${indexDocument}</Suffix></IndexDocument>`];
-    if (errorDocument) {
-      xmlParts.push(`  <ErrorDocument><Key>${errorDocument}</Key></ErrorDocument>`);
-    }
-    xmlParts.push('</WebsiteConfiguration>');
-    const body = xmlParts.join('\n');
-    const res = await obsSignedRequest('PUT', endpoint, '/?website', body, signedCreds, region);
-    const websiteUrl = `http://${bucket}.obs-website.${region}.myhuaweicloud.com`;
-    return {
-      ok: res.status === 200,
-      status: res.status,
-      websiteUrl,
-      message:
-        res.status === 200
-          ? `Static website hosting configured. Website URL: ${websiteUrl} (may take ~1 min to propagate)`
-          : `Failed to configure website: HTTP ${res.status}`,
-    };
-  }
-
-  throw new Error(`Unknown action: ${action}. Use set, get, or delete.`);
-}
-
-async function obsSignedRequest(
-  method: string,
-  endpoint: string,
-  pathAndQuery: string,
-  body: string,
-  // Callers throw unless ak and sk are present, so they are required here.
-  creds: CredentialLike & { ak: string; sk: string },
-  region: string,
-): Promise<{ status: number; body: string }> {
-  const now = new Date();
-  const dateStamp = now.toISOString().slice(0, 10).replace(/-/g, '');
-  const amzDate = dateStamp + 'T' + now.toISOString().slice(11, 19).replace(/:/g, '') + 'Z';
-  const payloadHash = createHash('sha256').update(body).digest('hex');
-
-  const url = new URL(endpoint + pathAndQuery);
-  const canonicalUri = '/';
-  const canonicalQueryString = 'website=';
-  const canonicalHeaders = `host:${url.host}\n` + `x-amz-content-sha256:${payloadHash}\n` + `x-amz-date:${amzDate}\n`;
-  const signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
-  const canonicalRequest = [
-    method,
-    canonicalUri,
-    canonicalQueryString,
-    canonicalHeaders,
-    signedHeaders,
-    payloadHash,
-  ].join('\n');
-
-  const credentialScope = `${dateStamp}/${region}/s3/aws4_request`;
-  const stringToSign = [
-    'AWS4-HMAC-SHA256',
-    amzDate,
-    credentialScope,
-    createHash('sha256').update(canonicalRequest).digest('hex'),
-  ].join('\n');
-
-  const kDate = createHmac('sha256', 'AWS4' + creds.sk)
-    .update(dateStamp)
-    .digest();
-  const kRegion = createHmac('sha256', kDate).update(region).digest();
-  const kService = createHmac('sha256', kRegion).update('s3').digest();
-  const kSigning = createHmac('sha256', kService).update('aws4_request').digest();
-  const signature = createHmac('sha256', kSigning).update(stringToSign).digest('hex');
-
-  const authorization =
-    `AWS4-HMAC-SHA256 Credential=${creds.ak}/${credentialScope}, ` +
-    `SignedHeaders=${signedHeaders}, Signature=${signature}`;
-
-  const headers: Record<string, string> = {
-    Host: url.host,
-    'x-amz-content-sha256': payloadHash,
-    'x-amz-date': amzDate,
-    Authorization: authorization,
-  };
-  if (body) headers['Content-Type'] = 'application/xml';
-  if (creds.securityToken) headers['x-amz-security-token'] = creds.securityToken;
-
-  const res = await fetchWithProxy(endpoint + pathAndQuery, {
-    method,
-    headers,
-    body: body || undefined,
-  });
-  const resBody = await res.text();
-  return { status: res.status, body: resBody };
 }

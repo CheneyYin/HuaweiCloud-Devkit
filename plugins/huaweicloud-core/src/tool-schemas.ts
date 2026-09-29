@@ -5,6 +5,7 @@ import type { LooseToolSchema } from './lib/pack-types.ts';
 import { looseObject, numericArg, gitConfig, workspaceId, username } from './lib/tool-schema-parts.ts';
 import { UPDATE_TOOL_SCHEMAS } from './packs/update/tools.ts';
 import { AUTH_TOOL_SCHEMAS } from './packs/auth/tools.ts';
+import { OBS_TOOL_SCHEMAS } from './packs/obs/tools.ts';
 
 // LooseToolSchema now lives in src/lib/pack-types.ts (shared pack vocabulary);
 // re-exported here so existing import sites keep working.
@@ -113,9 +114,10 @@ const TOOL_SCHEMAS = {
   huaweicloud_detect_framework: z.looseObject({
     projectPath: z.string().describe('Absolute path to the local project directory to scan.'),
   }),
-  huaweicloud_setup_obs_config: z.looseObject({
-    profile: z.string().optional().describe('Optional KooCLI profile name. Uses the active profile by default.'),
-  }),
+  // The obs pack owns its tool schemas (src/packs/obs/tools.ts); the
+  // spread keeps them in TOOL_SCHEMAS so the satisfies check below still
+  // covers all 42 ToolName keys.
+  ...OBS_TOOL_SCHEMAS,
   // The auth pack owns its tool schemas (src/packs/auth/tools.ts); the
   // spread keeps them in TOOL_SCHEMAS so the satisfies check below still
   // covers all 42 ToolName keys.
@@ -238,15 +240,8 @@ const TOOL_SCHEMAS = {
   // spread keeps them in TOOL_SCHEMAS so the satisfies check below still
   // covers all 42 ToolName keys.
   ...UPDATE_TOOL_SCHEMAS,
-  huaweicloud_obs_set_website_config: z.looseObject({
-    action: z
-      .enum(['set', 'get', 'delete'])
-      .describe('操作类型：set=配置静态网站托管，get=查询当前配置，delete=删除配置'),
-    bucket: z.string().describe('OBS 桶名称'),
-    region: z.string().describe('OBS 桶所在区域，如 cn-north-4'),
-    indexDocument: z.string().optional().describe('首页文件名（action=set 时必填），如 index.html'),
-    errorDocument: z.string().optional().describe('错误页面文件名（action=set 时可选），如 404.html 或 error.html'),
-  }),
+  // The obs website-config schema also lives in the obs pack
+  // (OBS_TOOL_SCHEMAS spread above).
   huaweicloud_list_packs: z.looseObject({}),
   huaweicloud_pack_info: z.looseObject({
     pack: z

@@ -2,6 +2,7 @@ import type { ToolName } from '../tools.ts';
 import type { Pack, PackId } from '../lib/pack-types.ts';
 import { updatePack } from './update/pack.ts';
 import { authPack } from './auth/pack.ts';
+import { obsPack } from './obs/pack.ts';
 
 // PackId and the Pack interface live in src/lib/pack-types.ts alongside
 // PackToolDefinition, so packs and the registry share one vocabulary module.
@@ -107,13 +108,7 @@ export const PACKS: readonly Pack[] = [
     tools: toolsFor('sandbox'),
   },
   authPack,
-  {
-    id: 'obs',
-    title: 'OBS',
-    description: 'OBS credential synchronization and static website hosting configuration for buckets.',
-    skills: ['huawei-obs'],
-    tools: toolsFor('obs'),
-  },
+  obsPack,
   {
     id: 'voucher',
     title: 'Voucher',
