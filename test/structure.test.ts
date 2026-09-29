@@ -5,6 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { TOOL_DEFINITIONS } from '../plugins/huaweicloud-core/src/tools.ts';
+import { PACKS } from '../plugins/huaweicloud-core/src/packs/registry.ts';
+
 const root = fileURLToPath(new URL('..', import.meta.url));
 const pluginRoot = join(root, 'plugins', 'huaweicloud-core');
 
@@ -887,4 +890,31 @@ test('plugin src tree is TypeScript only', () => {
     [],
     `src must hold only TypeScript scripts plus data assets; found JavaScript: ${scripts.join(', ')}`,
   );
+});
+
+test('pack registry partitions the tool registry and claims every skill directory', () => {
+  // Mirrors test/packs-registry.test.ts: every tool lands in exactly one pack,
+  // the pack union equals the full TOOL_DEFINITIONS registry, and every
+  // skills/ directory is claimed exactly once.
+  const allToolNames = TOOL_DEFINITIONS.map((tool) => tool.name).sort((a, b) => a.localeCompare(b));
+  const packTools = PACKS.flatMap((pack) => pack.tools);
+  const toolClaims = new Set();
+  for (const tool of packTools) {
+    assert.ok(!toolClaims.has(tool), `tool ${tool} is claimed by more than one pack`);
+    toolClaims.add(tool);
+  }
+  assert.deepEqual([...toolClaims].sort((a, b) => a.localeCompare(b)), allToolNames);
+
+  const skillsDirs = readdirSync(join(pluginRoot, 'skills'), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort((a, b) => a.localeCompare(b));
+  const skillClaims = new Set();
+  for (const pack of PACKS) {
+    for (const skill of pack.skills) {
+      assert.ok(!skillClaims.has(skill), `skill ${skill} is claimed by more than one pack (${pack.id})`);
+      skillClaims.add(skill);
+    }
+  }
+  assert.deepEqual([...skillClaims].sort((a, b) => a.localeCompare(b)), skillsDirs);
 });
