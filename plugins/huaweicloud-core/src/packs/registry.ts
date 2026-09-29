@@ -1,7 +1,14 @@
 import type { ToolName } from '../tools.ts';
+import type { Pack, PackId } from '../lib/pack-types.ts';
 import { updatePack } from './update/pack.ts';
+import { sandboxPack } from './sandbox/pack.ts';
+import { authPack } from './auth/pack.ts';
+import { obsPack } from './obs/pack.ts';
+import { voucherPack } from './voucher/pack.ts';
+import { discoveryPack } from './discovery/pack.ts';
 
-export type PackId = 'core' | 'sandbox' | 'auth' | 'obs' | 'voucher' | 'update' | 'discovery';
+// PackId and the Pack interface live in src/lib/pack-types.ts alongside
+// PackToolDefinition, so packs and the registry share one vocabulary module.
 
 // PACK_OF is the single source of truth for tool → pack ownership. The
 // satisfies check turns a missing or extra key into a compile error, so this
@@ -57,15 +64,6 @@ function toolsFor(id: PackId): ToolName[] {
   return (Object.keys(PACK_OF) as ToolName[]).filter((tool) => PACK_OF[tool] === id);
 }
 
-export interface Pack {
-  id: PackId;
-  title: string;
-  description: string;
-  /** skills/ directory names this pack ships. */
-  skills: string[];
-  tools: ToolName[];
-}
-
 // skills are hand-written claims over the plugin skills/ directories; the pack
 // tests fail when one is claimed twice, left unclaimed, or removed.
 export const PACKS: readonly Pack[] = [
@@ -104,43 +102,10 @@ export const PACKS: readonly Pack[] = [
     ],
     tools: toolsFor('core'),
   },
-  {
-    id: 'sandbox',
-    title: 'Sandbox',
-    description:
-      'Cloud sandbox workspace terminals: session and one-shot execution, file and project upload, nginx deployment and deployment checks, and hdkitservice onboarding.',
-    skills: ['huawei-sandbox'],
-    tools: toolsFor('sandbox'),
-  },
-  {
-    id: 'auth',
-    title: 'Auth',
-    description:
-      'Unified Huawei Cloud credential status, vault sync, runtime injection, and reconciliation across KooCLI, OBS, and agent MCP registrations.',
-    skills: [],
-    tools: toolsFor('auth'),
-  },
-  {
-    id: 'obs',
-    title: 'OBS',
-    description: 'OBS credential synchronization and static website hosting configuration for buckets.',
-    skills: ['huawei-obs'],
-    tools: toolsFor('obs'),
-  },
-  {
-    id: 'voucher',
-    title: 'Voucher',
-    description: 'Voucher claiming status and one-time voucher redemption.',
-    skills: ['huawei-voucher'],
-    tools: toolsFor('voucher'),
-  },
+  sandboxPack,
+  authPack,
+  obsPack,
+  voucherPack,
   updatePack,
-  {
-    id: 'discovery',
-    title: 'Discovery',
-    description:
-      'Marketplace skill search, official Huawei Cloud service icon lookup, and local web framework detection.',
-    skills: [],
-    tools: toolsFor('discovery'),
-  },
+  discoveryPack,
 ];

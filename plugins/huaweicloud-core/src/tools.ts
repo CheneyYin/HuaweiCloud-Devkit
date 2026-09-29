@@ -1,57 +1,14 @@
-import { readFileSync, readdirSync, existsSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
-import { join, dirname, basename } from 'node:path';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { homedir, tmpdir } from 'node:os';
-import { spawnSync, execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { createHmac, createHash } from 'node:crypto';
+import { homedir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { z } from 'zod';
 
 import { evaluateArtifacts, evaluateCommandRisk, evaluateDeployPlan, type RiskEvaluation } from './risk-rule-engine.ts';
 import { classifyTextCommand, redactSecrets } from './safety-policy.ts';
 import { planHcloudCommand, runHcloud, consumeApprovalToken, hashArgs, type HcloudRunResult } from './hcloud-cli.ts';
-import { searchMarketplace } from './search-market.ts';
-import { getServiceIcon } from './icon-library.ts';
-import { detectFramework } from './detect-framework.ts';
-import {
-  execWithSession,
-  execOneShot,
-  closeSession,
-  uploadFileWithSession,
-  uploadProjectWithSession,
-  deployNginx,
-  deployCheck,
-  getCurrentWorkspaceId,
-  setWorkspaceId,
-} from './sandbox/session-manager.ts';
-import {
-  hdkitCheckUser,
-  hdkitSignAgreement,
-  hdkitConnect,
-  hdkitCredentials,
-  hdkitVoucherStatus,
-  hdkitVoucherClaim,
-  hdkitGenerateUserHash,
-} from './sandbox/hdkitservice-api.ts';
-import { getCredentials } from './sandbox/hwlink-api.ts';
-import { getAuthStatus, syncAuth } from './auth/service.ts';
-import { validateIamCredentials } from './auth/credential-validator.ts';
-import {
-  readGlobalCredentials,
-  writeGlobalCredentials,
-  writeObsConfig as writeObsConfigFile,
-  setRuntimeCredentials,
-  clearRuntimeCredentials,
-  setConfiguredBySession,
-  backupGlobalCredentials,
-  writeLastSync,
-  readCodeArtsCredentials,
-  globalCredentialsPath,
-  resolveCredentialsWithRuntime,
-} from './auth/credentials.ts';
-import { trackToolInvoke, trackSkillRetrieve, clearUserHash } from './telemetry/telemetry.ts';
-import { fetchWithProxy } from './proxy/proxy-agent.ts';
-import { fingerprint, runHcloudConfigure, resolveManagedProfile } from './auth/reconcile.ts';
+import { trackToolInvoke, trackSkillRetrieve } from './telemetry/telemetry.ts';
 import { hcloudProbeNextStep, probeHcloud, type ProbeHcloudOptions } from './hcloud-probe.ts';
 import { isUsableOfficeaceRoot, readOfficeaceRootMarker } from './officeace-paths.ts';
 // The update tool handlers live in the update pack; only the DistTags type
@@ -60,6 +17,11 @@ import type { DistTags } from './update-check.ts';
 import { getToolSchema, SCHEMA_DRIFT_IGNORED_KEYS } from './tool-schemas.ts';
 import { PACKS } from './packs/registry.ts';
 import { UPDATE_TOOL_HANDLERS } from './packs/update/tools.ts';
+import { AUTH_TOOL_HANDLERS } from './packs/auth/tools.ts';
+import { OBS_TOOL_HANDLERS } from './packs/obs/tools.ts';
+import { VOUCHER_TOOL_HANDLERS } from './packs/voucher/tools.ts';
+import { DISCOVERY_TOOL_HANDLERS } from './packs/discovery/tools.ts';
+import { SANDBOX_TOOL_HANDLERS } from './packs/sandbox/tools.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILLS_ROOT_DEV = join(__dirname, '..', 'skills');
@@ -71,35 +33,6 @@ const SKILLS_ROOT_DEV = join(__dirname, '..', 'skills');
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
-// Mirrors the JS `a || b || ''` chain for string fields: the first non-empty
-// string wins, everything else falls through.
-function pickString(...values: unknown[]): string {
-  for (const value of values) {
-    if (typeof value === 'string' && value) return value;
-  }
-  return '';
-}
-
-// Boundary narrowing for credential-shaped values: only string fields survive,
-// so callers keep truthiness checks and string plumbing.
-interface CredentialLike {
-  ak?: string;
-  sk?: string;
-  securityToken?: string;
-  region?: string;
-}
-
-function asCredentialRecord(value: unknown): CredentialLike | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  const result: CredentialLike = {};
-  if (typeof record.ak === 'string') result.ak = record.ak;
-  if (typeof record.sk === 'string') result.sk = record.sk;
-  if (typeof record.securityToken === 'string') result.securityToken = record.securityToken;
-  if (typeof record.region === 'string') result.region = record.region;
-  return result;
 }
 
 function opencodeSkillsDir() {
@@ -553,175 +486,6 @@ function toolInvokeValue(name: ToolName, args: ToolArgs): string {
   return '1';
 }
 
-const execFilePromise = promisify(execFile);
-
-async function isGitAvailable() {
-  try {
-    await execFilePromise('git', ['--version'], { timeout: 5000 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function gitCloneToLocal(repoUrl: string, branch: string | undefined, targetBasename: string) {
-  const tempRoot = join(tmpdir(), `hw-sandbox-git-${Date.now()}`);
-  const cloneDir = join(tempRoot, targetBasename);
-  mkdirSync(tempRoot, { recursive: true });
-  const args = ['clone', '--depth', '1'];
-  if (branch) args.push('-b', branch);
-  args.push(repoUrl, cloneDir);
-  await execFilePromise('git', args, { timeout: 120000 });
-  return { cloneDir, tempRoot };
-}
-
-async function transferGitRepo(args: ToolArgs, devStageId: string, connectResult: Record<string, unknown>) {
-  const git = args.git;
-  if (!git?.repo_url || !git?.target_path) return;
-
-  const { repo_url, repo_branch, target_path } = git;
-
-  try {
-    const existsCheck = await execOneShot(
-      devStageId,
-      `test -d "${target_path}/.git" && echo "EXISTS" || echo "NOT_EXISTS"`,
-      'root',
-      10000,
-    );
-    if (String(existsCheck.stdout || '').includes('EXISTS')) {
-      connectResult._repoStatus = 'already_exists';
-      return;
-    }
-  } catch {
-    /* 检查失败继续 */
-  }
-
-  const hasGit = await isGitAvailable();
-  if (hasGit) {
-    let tempRoot = null;
-    try {
-      const targetName = basename(target_path);
-      const { cloneDir, tempRoot: root } = await gitCloneToLocal(repo_url, repo_branch, targetName);
-      tempRoot = root;
-      await uploadProjectWithSession(devStageId, cloneDir, dirname(target_path), 'root', 300000, {
-        extract: true,
-        exclude: ['.git', 'node_modules'],
-      });
-      connectResult._repoStatus = 'uploaded_from_local';
-      return;
-    } catch {
-      /* 本地方式失败，进入兜底 */
-    } finally {
-      if (tempRoot) {
-        try {
-          rmSync(tempRoot, { recursive: true, force: true });
-        } catch {
-          /* 清理失败忽略 */
-        }
-      }
-    }
-  }
-
-  const branchFlag = repo_branch ? `-b ${repo_branch}` : '';
-  await execOneShot(
-    devStageId,
-    `mkdir -p $(dirname "${target_path}") && git clone --depth 1 ${branchFlag} "${repo_url}" "${target_path}"`,
-    'root',
-    120000,
-  );
-  connectResult._repoStatus = 'cloned_in_sandbox';
-}
-
-interface PendingConfirm {
-  newAk: string;
-  newSk: string;
-  newSecurityToken: string;
-  newRegion: string;
-  oldFingerprint: string;
-  newFingerprint: string;
-  fromImport: boolean;
-}
-
-const pendingConfirms = new Map<string, PendingConfirm>();
-
-function readImportFile() {
-  const path = join(dirname(globalCredentialsPath()), 'creds-import.json');
-  try {
-    if (!existsSync(path)) return null;
-    const data: unknown = JSON.parse(readFileSync(path, 'utf8'));
-    const record = asRecord(data);
-    return {
-      ak: String(record.ak || ''),
-      sk: String(record.sk || ''),
-      securityToken: String(record.securityToken || ''),
-      region: String(record.region || ''),
-    };
-  } catch {
-    // Malformed/undecodable import file is un-replayable — wipe it. A VALID
-    // file is kept so a rejected persist can be replayed (see #502).
-    try {
-      rmSync(path, { force: true });
-    } catch {
-      // ignore
-    }
-    return null;
-  }
-}
-
-function clearImportFile() {
-  const path = join(dirname(globalCredentialsPath()), 'creds-import.json');
-  try {
-    rmSync(path, { force: true });
-  } catch {
-    // best-effort: an absent or locked file is not an error
-  }
-}
-
-function persistCredentials(ak: string, sk: string, securityToken: string, region: string) {
-  if (String(securityToken || '')) {
-    return {
-      status: 'error',
-      error: 'Temporary STS credentials cannot be persisted (R3). Use action=temporary.',
-      scope: 'rejected',
-    };
-  }
-  const before = backupGlobalCredentials();
-  writeGlobalCredentials({ ak, sk: String(sk), securityToken: '', region, configuredBySession: true });
-  setConfiguredBySession(true);
-  let obs: { ok: boolean; error?: string };
-  try {
-    writeObsConfigFile({ ak, sk, securityToken, region });
-    obs = { ok: true };
-  } catch (error) {
-    obs = { ok: false, error: error instanceof Error ? error.message : String(error) };
-  }
-  const profile = resolveManagedProfile();
-  let hcloud: { ok: boolean; error?: string; reason?: string };
-  if (!profile) {
-    hcloud = { ok: false, reason: 'KooCLI current profile unresolved' };
-  } else {
-    hcloud = runHcloudConfigure(profile, ak, sk, region);
-  }
-  if (hcloud.ok) {
-    writeLastSync({ kooCliProfile: profile, s1Fingerprint: fingerprint(ak, sk) });
-  }
-  return {
-    status: obs.ok && hcloud.ok ? 'ok' : 'partial',
-    scope: 'persist',
-    backedUp: Boolean(before),
-    obs: obs.ok ? { configured: true } : { configured: false, error: obs.error },
-    hcloud,
-    note: 'S1 written with configuredBySession (R9), which now takes priority over env-injected credentials; S2(current profile) and S3 synced. Note: running `auth init` later clears the configuredBySession flag and env credentials regain priority.',
-  };
-}
-
-function refreshUserHashAfterAuthChange({ regenerate = true }: { regenerate?: boolean } = {}) {
-  clearUserHash();
-  if (regenerate) {
-    hdkitGenerateUserHash().catch(() => {});
-  }
-}
-
 // Reject invalid numeric args up front instead of silently coercing them to
 // NaN (which downstream defaults would absorb as "no timeout set") — see #530.
 const NUMERIC_ARG_KEYS = ['timeoutMs', 'maxRetries', 'timeout_ms'] as const;
@@ -788,388 +552,54 @@ export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: Cal
     case 'huaweicloud_explain_error':
       return explainError(args);
     case 'huaweicloud_search_marketplace':
-      return searchMarketplace(args.query || '', args.category || '');
+      return await DISCOVERY_TOOL_HANDLERS['huaweicloud_search_marketplace'](args, opts);
     case 'huaweicloud_get_service_icon':
-      return getServiceIcon(args.service || '', args.category || '');
-    case 'huaweicloud_detect_framework': {
-      const projectPath = args.projectPath;
-      if (!projectPath) throw new Error('projectPath is required.');
-      const result = detectFramework(projectPath);
-      if (!result) {
-        return { ok: false, error: 'No recognized web framework found in: ' + projectPath };
-      }
-      return { ok: true, ...result };
-    }
+      return await DISCOVERY_TOOL_HANDLERS['huaweicloud_get_service_icon'](args, opts);
+    case 'huaweicloud_detect_framework':
+      return await DISCOVERY_TOOL_HANDLERS['huaweicloud_detect_framework'](args, opts);
     case 'huaweicloud_setup_obs_config':
-      return setupObsConfig(args.profile);
+      return await OBS_TOOL_HANDLERS['huaweicloud_setup_obs_config'](args, opts);
+    // Auth tools delegate to the auth pack's handler map
+    // (src/packs/auth/tools.ts).
     case 'huaweicloud_auth_status':
-      return getAuthStatus(args.target || 'all');
-    case 'huaweicloud_auth_sync': {
-      const result = syncAuth(args.target || 'all');
-      refreshUserHashAfterAuthChange();
-      return result;
-    }
+      return await AUTH_TOOL_HANDLERS['huaweicloud_auth_status'](args, opts);
+    case 'huaweicloud_auth_sync':
+      return await AUTH_TOOL_HANDLERS['huaweicloud_auth_sync'](args, opts);
     case 'huaweicloud_auth_init':
-      if (args.clear) {
-        clearRuntimeCredentials();
-        refreshUserHashAfterAuthChange({ regenerate: false });
-        return { status: 'cleared', message: 'Runtime credentials cleared. Fallback to env/file.' };
-      }
-      if (!args.ak || !args.sk) {
-        throw new Error('ak and sk are required. Set clear=true to clear runtime credentials.');
-      }
-      setRuntimeCredentials(args.ak, args.sk, undefined, args.region);
-      refreshUserHashAfterAuthChange();
-      return { status: 'ok', message: 'Runtime credentials set for this MCP session.' };
-    case 'huaweicloud_auth_switch': {
-      const action = args.action || 'temporary';
-      if (action === 'clear') {
-        clearRuntimeCredentials();
-        refreshUserHashAfterAuthChange({ regenerate: false });
-        return { status: 'cleared', message: 'Runtime credentials cleared. Fallback to env/file/S1.' };
-      }
-
-      let ak = args.ak || '';
-      let sk = args.sk || '';
-      let securityToken = args.securityToken || '';
-      let region = args.region || '';
-      const sourceChannel = args.mode || 'memory';
-      let importedFromFile = false;
-
-      if (sourceChannel === 'import' && (!ak || !sk)) {
-        const imported = readImportFile();
-        if (imported) {
-          ({ ak, sk, securityToken, region } = imported);
-          importedFromFile = true;
-        }
-      }
-      if (sourceChannel === 'mcp-config' && (!ak || !sk)) {
-        const cc = readCodeArtsCredentials();
-        if (cc) {
-          ak = cc.ak;
-          sk = cc.sk;
-          securityToken = cc.securityToken || '';
-          region = cc.region || region;
-        }
-      }
-
-      if (!ak || !sk) {
-        throw new Error('ak and sk are required (or provide creds-import.json for mode=import).');
-      }
-
-      if (action === 'persist' && !String(region || '').trim()) {
-        return {
-          status: 'error',
-          scope: 'invalid_region',
-          error:
-            'region is required to persist credentials. Pass --region, or include "region" in creds-import.json (mode=import).',
-        };
-      }
-
-      if (action === 'temporary') {
-        setRuntimeCredentials(ak, sk, securityToken || undefined, region);
-        refreshUserHashAfterAuthChange();
-        if (importedFromFile) clearImportFile();
-        return {
-          status: 'ok',
-          scope: 'temporary',
-          note: 'Runtime credentials active for this MCP process. hcloud commands still use the KooCLI current profile; use action=persist to align files.',
-        };
-      }
-
-      // action === 'persist'
-      const prev = readGlobalCredentials();
-      const conflict = prev?.ak && prev.ak !== ak;
-      if (conflict) {
-        backupGlobalCredentials();
-        const token = `switch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        pendingConfirms.set(token, {
-          newAk: ak,
-          newSk: sk,
-          newSecurityToken: securityToken,
-          newRegion: region,
-          oldFingerprint: fingerprint(prev.ak, prev.sk),
-          newFingerprint: fingerprint(ak, sk),
-          fromImport: importedFromFile,
-        });
-        return {
-          status: 'needs_confirmation',
-          confirmToken: token,
-          options: [
-            { key: 's1', label: '以 S1 现有账号为准（不切换，恢复 backup）' },
-            { key: 'newImported', label: `以新账号（${fingerprint(ak, sk)}）为准，覆盖 S1 并同步全部凭证文件` },
-          ],
-        };
-      }
-
-      const persisted = persistCredentials(ak, sk, securityToken, region);
-      // Clear the import file for non-replayable outcomes (success, or an
-      // unfixable rejection such as STS R3). Keep it only for a retryable
-      // 'partial' (S1 written but a mirror failed).
-      if (importedFromFile && persisted.status !== 'partial') clearImportFile();
-      refreshUserHashAfterAuthChange();
-      return persisted;
-    }
-    case 'huaweicloud_auth_confirm': {
-      const pending = pendingConfirms.get(args.token || '');
-      if (!pending) throw new Error('confirmToken not found or expired.');
-      pendingConfirms.delete(args.token || '');
-      if (args.decision === 's1') {
-        return { status: 'ok', outcome: 'aborted', message: '保持 S1 现有账号，未覆盖。' };
-      }
-      const confirmed = persistCredentials(pending.newAk, pending.newSk, pending.newSecurityToken, pending.newRegion);
-      if (pending.fromImport && confirmed.status !== 'partial') clearImportFile();
-      refreshUserHashAfterAuthChange();
-      return confirmed;
-    }
-    case 'huaweicloud_sandbox_exec_with_session': {
-      const sandboxWsId2 = args.workspace_id || getCurrentWorkspaceId();
-      if (!sandboxWsId2) {
-        throw new Error(
-          'workspace_id is required. No sandbox connected — call huaweicloud_sandbox_connect first, ' +
-            'or set HW_WORKSPACE_ID environment variable before starting the agent.',
-        );
-      }
-      const sandboxUser2 = args.username || 'root';
-      const sandboxTimeout2 = args.timeout_ms || 120000;
-      const sandboxResult2 = await execWithSession(sandboxWsId2, args.command || '', sandboxUser2, sandboxTimeout2);
-      return { stdout: sandboxResult2.stdout, exitCode: sandboxResult2.exitCode };
-    }
-    case 'huaweicloud_sandbox_exec_one_shot': {
-      const sandboxWsId3 = args.workspace_id || getCurrentWorkspaceId();
-      if (!sandboxWsId3) {
-        throw new Error(
-          'workspace_id is required. No sandbox connected — call huaweicloud_sandbox_connect first, ' +
-            'or set HW_WORKSPACE_ID environment variable before starting the agent.',
-        );
-      }
-      const sandboxUser3 = args.username || 'root';
-      const sandboxTimeout3 = args.timeout_ms || 120000;
-      const sandboxResult3 = await execOneShot(sandboxWsId3, args.command || '', sandboxUser3, sandboxTimeout3);
-      return { stdout: sandboxResult3.stdout, exitCode: sandboxResult3.exitCode };
-    }
-    case 'huaweicloud_sandbox_close_session': {
-      const sandboxWsId4 = args.workspace_id || getCurrentWorkspaceId();
-      if (!sandboxWsId4) {
-        throw new Error(
-          'workspace_id is required. No sandbox connected — call huaweicloud_sandbox_connect first, ' +
-            'or set HW_WORKSPACE_ID environment variable before starting the agent.',
-        );
-      }
-      const sandboxUser4 = args.username || 'root';
-      const closed = await closeSession(sandboxWsId4, sandboxUser4);
-      return closed ? 'ok' : 'not_connected';
-    }
-    case 'huaweicloud_sandbox_upload_file': {
-      if (!args.local_path || !args.remote_path) {
-        throw new Error('local_path and remote_path are required.');
-      }
-      const sandboxWsId5 = args.workspace_id || getCurrentWorkspaceId();
-      if (!sandboxWsId5) {
-        throw new Error(
-          'workspace_id is required. No sandbox connected — call huaweicloud_sandbox_connect first, ' +
-            'or set HW_WORKSPACE_ID environment variable before starting the agent.',
-        );
-      }
-      const sandboxUser5 = args.username || 'root';
-      const sandboxTimeout5 = args.timeout_ms || 120000;
-      return await uploadFileWithSession(
-        sandboxWsId5,
-        args.local_path,
-        args.remote_path,
-        sandboxUser5,
-        sandboxTimeout5,
-      );
-    }
-    case 'huaweicloud_sandbox_upload_project': {
-      if (!args.local_dir) {
-        throw new Error('local_dir is required.');
-      }
-      const sandboxWsId6 = args.workspace_id || getCurrentWorkspaceId();
-      if (!sandboxWsId6) {
-        throw new Error(
-          'workspace_id is required. No sandbox connected — call huaweicloud_sandbox_connect first, ' +
-            'or set HW_WORKSPACE_ID environment variable before starting the agent.',
-        );
-      }
-      const sandboxUser6 = args.username || 'root';
-      const sandboxTimeout6 = args.timeout_ms || 120000;
-      return await uploadProjectWithSession(
-        sandboxWsId6,
-        args.local_dir,
-        args.remote_dir,
-        sandboxUser6,
-        sandboxTimeout6,
-        {
-          exclude: args.exclude,
-          extract: args.extract,
-        },
-      );
-    }
-    case 'huaweicloud_sandbox_deploy_nginx': {
-      if (!args.nginx_type || !args.port || !args.project || !args.output_dir) {
-        throw new Error('nginx_type, port, project, and output_dir are required.');
-      }
-      const sandboxWsId7 = args.workspace_id || getCurrentWorkspaceId();
-      if (!sandboxWsId7) {
-        throw new Error(
-          'workspace_id is required. No sandbox connected — call huaweicloud_sandbox_connect first, ' +
-            'or set HW_WORKSPACE_ID environment variable before starting the agent.',
-        );
-      }
-      const sandboxUser7 = args.username || 'root';
-      const sandboxTimeout7 = args.timeout_ms || 60000;
-      return await deployNginx(
-        sandboxWsId7,
-        {
-          nginxType: args.nginx_type,
-          port: args.port,
-          project: args.project,
-          outputDir: args.output_dir,
-          nodePort: args.node_port,
-          publicPort: args.public_port,
-          configName: args.config_name,
-        },
-        sandboxUser7,
-        sandboxTimeout7,
-      );
-    }
-    case 'huaweicloud_sandbox_deploy_check': {
-      if (!args.port || !args.project || !args.output_dir) {
-        throw new Error('port, project, and output_dir are required.');
-      }
-      const sandboxWsId8 = args.workspace_id || getCurrentWorkspaceId();
-      if (!sandboxWsId8) {
-        throw new Error(
-          'workspace_id is required. No sandbox connected — call huaweicloud_sandbox_connect first, ' +
-            'or set HW_WORKSPACE_ID environment variable before starting the agent.',
-        );
-      }
-      const sandboxUser8 = args.username || 'root';
-      const sandboxTimeout8 = args.timeout_ms || 30000;
-      return await deployCheck(
-        sandboxWsId8,
-        {
-          port: args.port,
-          project: args.project,
-          outputDir: args.output_dir,
-          frameworkType: args.framework_type,
-        },
-        sandboxUser8,
-        sandboxTimeout8,
-      );
-    }
+      return await AUTH_TOOL_HANDLERS['huaweicloud_auth_init'](args, opts);
+    case 'huaweicloud_auth_switch':
+      return await AUTH_TOOL_HANDLERS['huaweicloud_auth_switch'](args, opts);
+    case 'huaweicloud_auth_confirm':
+      return await AUTH_TOOL_HANDLERS['huaweicloud_auth_confirm'](args, opts);
+    // Sandbox tools delegate to the sandbox pack's handler map
+    // (src/packs/sandbox/tools.ts); the git repo transfer chain moved with
+    // the connect handler.
+    case 'huaweicloud_sandbox_exec_with_session':
+      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_exec_with_session'](args, opts);
+    case 'huaweicloud_sandbox_exec_one_shot':
+      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_exec_one_shot'](args, opts);
+    case 'huaweicloud_sandbox_close_session':
+      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_close_session'](args, opts);
+    case 'huaweicloud_sandbox_upload_file':
+      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_upload_file'](args, opts);
+    case 'huaweicloud_sandbox_upload_project':
+      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_upload_project'](args, opts);
+    case 'huaweicloud_sandbox_deploy_nginx':
+      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_deploy_nginx'](args, opts);
+    case 'huaweicloud_sandbox_deploy_check':
+      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_deploy_check'](args, opts);
     case 'huaweicloud_sandbox_check_user':
-      return await hdkitCheckUser();
+      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_check_user'](args, opts);
     case 'huaweicloud_sandbox_sign_agreement':
-      return await hdkitSignAgreement();
-    case 'huaweicloud_sandbox_connect': {
-      const connectResult = await hdkitConnect(args);
-      const rawDevStageId = connectResult?.dev_stage_id || connectResult?.devStageId;
-      const devStageId = typeof rawDevStageId === 'string' ? rawDevStageId : undefined;
-      if (devStageId) {
-        setWorkspaceId(devStageId);
-        try {
-          await execOneShot(devStageId, 'devbridge delete-all 2>/dev/null || true', 'root', 15000);
-        } catch {}
-        try {
-          await execWithSession(devStageId, 'export PATH=$HOME/.huawei/bin${PATH:+:$PATH}', 'root', 10000);
-        } catch {}
-        await transferGitRepo(args, devStageId, connectResult);
-      }
-      return connectResult;
-    }
-    case 'huaweicloud_sandbox_credentials': {
-      const devStageId = args.dev_stage_id || getCurrentWorkspaceId();
-      let resolved: CredentialLike | null;
-      try {
-        resolved = asCredentialRecord(resolveCredentialsWithRuntime());
-      } catch {
-        resolved = null;
-      }
-      if (!resolved?.ak || !resolved?.sk) {
-        return {
-          ok: false,
-          error: 'Huawei Cloud credentials are not configured. Nothing was injected into the sandbox.',
-          hint: 'Run "npx huaweicloud-devkit auth init" or set HW_ACCESS_KEY/HW_SECRET_KEY, then retry.',
-        };
-      }
-      const validation = await validateIamCredentials({
-        ak: resolved.ak,
-        sk: resolved.sk,
-        securityToken: resolved.securityToken,
-        region: args.region || resolved.region,
-      });
-      if (!validation.valid && !validation.skipped) {
-        return {
-          ok: false,
-          error: 'Credential validation failed before injection: ' + validation.error,
-          hint: 'Credentials were NOT injected into the sandbox. Fix AK/SK first: run "npx huaweicloud-devkit auth init" or correct HW_ACCESS_KEY/HW_SECRET_KEY, then retry.',
-        };
-      }
-      const credResult = await hdkitCredentials(args.session_id, devStageId, args.enable_sts !== false);
-      const sandboxWsIdCred = args.dev_stage_id || getCurrentWorkspaceId();
-      // The DevBridge API Key is a LONG-LIVED account-level credential (no expiry, manual
-      // revocation only) — unlike the temporary STS AK/SK. It is stored in its own file
-      // (/tmp/hw_api_key, 0600) so an accidental dump of /tmp/hw_creds.sh never exposes it,
-      // and the local HW_API_KEY env takes precedence over the tool param so the key can be
-      // delivered without entering the conversation.
-      const apiKey = process.env.HW_API_KEY || args.api_key || '';
-      const apiKeyFile = '/tmp/hw_api_key';
-      if (sandboxWsIdCred) {
-        try {
-          const { ak, sk, securitytoken } = getCredentials();
-          const credsScript = [
-            `export HW_ACCESS_KEY='${ak}'`,
-            `export HW_SECRET_KEY='${sk}'`,
-            securitytoken ? `export HW_SECURITY_TOKEN='${securitytoken}'` : '',
-            securitytoken ? `export X_HW_SECURITY_TOKEN='${securitytoken}'` : '',
-            validation.projectId ? `export HW_PROJECT_ID='${validation.projectId}'` : '',
-          ]
-            .filter(Boolean)
-            .join('\n');
-          const credsFile = '/tmp/hw_creds.sh';
-          await execOneShot(
-            sandboxWsIdCred,
-            `cat > ${credsFile} << 'HWCREDS_EOF'\n${credsScript}\nHWCREDS_EOF\nchmod 600 ${credsFile}`,
-            'root',
-            15000,
-          );
-          await execWithSession(sandboxWsIdCred, `source ${credsFile} && echo "CREDS_SOURCED"`, 'root', 15000);
-          if (apiKey) {
-            await execOneShot(
-              sandboxWsIdCred,
-              `cat > ${apiKeyFile} << 'HWAPIKEY_EOF'\nexport HW_API_KEY='${apiKey}'\nHWAPIKEY_EOF\nchmod 600 ${apiKeyFile}`,
-              'root',
-              15000,
-            );
-          } else {
-            // Refresh with no key → drop any stale copy, same semantics as the creds file rewrite.
-            await execOneShot(sandboxWsIdCred, `rm -f ${apiKeyFile}`, 'root', 15000);
-          }
-        } catch {}
-      }
-      const result: Record<string, unknown> = {
-        ...credResult,
-        credentialValidation: validation.warning ? 'passed-with-warning' : 'passed',
-      };
-      if (sandboxWsIdCred) result.apiKeyInjected = Boolean(apiKey);
-      if (apiKey) {
-        result.apiKeyHint =
-          'DevBridge API Key written to /tmp/hw_api_key (0600, kept separate from the temporary AK/SK in /tmp/hw_creds.sh — it is a long-lived account-level credential). Release builds of devbridge 0.2.x use it via: source /tmp/hw_api_key && devbridge auth login --api-key "$HW_API_KEY". Image builds retain AK/SK login — the huawei-sandbox skill probes the capability at expose time. Never echo the key into logs.';
-      } else {
-        result.apiKeyHint =
-          'No DevBridge API Key provided — release builds of devbridge 0.2.x cannot log in with AK/SK (image builds retain AK/SK; the huawei-sandbox skill probes the build at expose time and uses the injected AK/SK directly when supported). For release builds, ask the user for an API Key (created at https://devstation.connect.huaweicloud.com/space/devbridge/apikey) and re-run with api_key, or set the local HW_API_KEY environment variable (preferred — keeps the key out of the conversation).';
-      }
-      if (validation.projectId) result.projectId = validation.projectId;
-      if (validation.warning) result.warning = validation.warning;
-      if (validation.skipped) result.warning = validation.error;
-      return result;
-    }
+      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_sign_agreement'](args, opts);
+    case 'huaweicloud_sandbox_connect':
+      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_connect'](args, opts);
+    case 'huaweicloud_sandbox_credentials':
+      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_credentials'](args, opts);
     case 'huaweicloud_voucher_status':
-      return await hdkitVoucherStatus(args.domain_id);
+      return await VOUCHER_TOOL_HANDLERS['huaweicloud_voucher_status'](args, opts);
     case 'huaweicloud_voucher_claim':
-      return await hdkitVoucherClaim(args.domain_id);
+      return await VOUCHER_TOOL_HANDLERS['huaweicloud_voucher_claim'](args, opts);
     // Update tools delegate to the update pack's handler map
     // (src/packs/update/tools.ts); the doQuery test-injection seam rides the
     // per-case opts exactly as before the migration.
@@ -1181,7 +611,7 @@ export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: Cal
     case 'huaweicloud_upgrade':
       return await UPDATE_TOOL_HANDLERS['huaweicloud_upgrade'](args, { sessionId: opts?.sessionId });
     case 'huaweicloud_obs_set_website_config':
-      return await handleObsWebsiteConfig(args);
+      return await OBS_TOOL_HANDLERS['huaweicloud_obs_set_website_config'](args, opts);
     case 'huaweicloud_list_packs':
       return listPacks();
     case 'huaweicloud_pack_info':
@@ -1255,117 +685,6 @@ async function showProfileRedacted(profile?: string) {
       ? 'Profile information was returned through the toolkit redaction pipeline.'
       : 'Failed to retrieve profile — hcloud may not be installed or configured.',
     result: redactSecrets(result),
-  };
-}
-
-async function setupObsConfig(profile?: string) {
-  const stored = asCredentialRecord(readGlobalCredentials());
-  if (stored?.ak && stored?.sk) {
-    try {
-      const obs: { path: string; endpoint: string } = writeObsConfigFile(stored);
-      return {
-        ok: true,
-        existed: false,
-        created: true,
-        path: obs.path,
-        region: stored.region,
-        endpoint: obs.endpoint,
-        source: 'global-credentials',
-        note: 'OBS credentials synced from the global credential vault. OBS commands (hcloud OBS ls, mb, cp, etc.) should now work.',
-      };
-    } catch (error) {
-      return {
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-        nextStep: 'Run "npx huaweicloud-devkit auth init" to refresh credentials and region.',
-      };
-    }
-  }
-
-  return setupObsConfigFromHcloud(profile);
-}
-
-async function setupObsConfigFromHcloud(profile?: string) {
-  const obsConfigPath = join(homedir(), '.obsutilconfig');
-  if (existsSync(obsConfigPath)) {
-    return {
-      ok: true,
-      existed: true,
-      path: obsConfigPath,
-      note: 'OBS config already exists. Delete ~/.obsutilconfig first if you need to re-sync.',
-    };
-  }
-
-  const args = ['configure', 'show'];
-  if (profile) args.push('--cli-profile', String(profile));
-  const result = await runHcloud(args, { allowWrites: false, allowCredentialRead: true });
-
-  if (!result.ok) {
-    return {
-      ok: false,
-      error: 'Failed to read hcloud profile.',
-      detail: result.error || result.stderr || 'hcloud not installed or not configured',
-      nextStep: 'Run "npx huaweicloud-devkit auth init" outside agent chat, then retry.',
-    };
-  }
-
-  let accessKeyId: string;
-  let secretAccessKey: string;
-  let region: string;
-
-  try {
-    const parsed: unknown = typeof result.stdout === 'string' ? JSON.parse(result.stdout) : result.stdout;
-    const cred = asRecord(asRecord(parsed).currentCredential);
-    accessKeyId = pickString(cred.accessKeyId, cred.ak, cred.access_key);
-    secretAccessKey = pickString(cred.secretAccessKey, cred.sk, cred.secret_key);
-    region = pickString(asRecord(parsed).currentRegion, asRecord(parsed).region);
-  } catch {
-    return {
-      ok: false,
-      error: 'Failed to parse hcloud profile output.',
-      detail: 'hcloud configure show returned unexpected format',
-    };
-  }
-
-  if (!accessKeyId || !secretAccessKey) {
-    return {
-      ok: false,
-      error: 'No credentials found in hcloud profile.',
-      nextStep: 'Run "npx huaweicloud-devkit auth init" outside agent chat to set up credentials first.',
-    };
-  }
-
-  if (!region) {
-    return {
-      ok: false,
-      error: 'No region found in hcloud profile.',
-      nextStep: 'Run "npx huaweicloud-devkit auth init" outside agent chat to configure credentials and region.',
-    };
-  }
-
-  const endpoint = `https://obs.${region}.myhuaweicloud.com`;
-  // Flat key=value format (no [default] section) as written by KooCLI 7.x `hcloud OBS config`.
-  const configContent = `endpoint=${endpoint}\nak=${accessKeyId}\nsk=${secretAccessKey}\n`;
-
-  try {
-    writeFileSync(obsConfigPath, configContent, { encoding: 'utf8', mode: 0o600 });
-  } catch (error) {
-    return {
-      ok: false,
-      error: 'Failed to write OBS config file.',
-      detail: error instanceof Error ? error.message : String(error),
-      path: obsConfigPath,
-    };
-  }
-
-  return {
-    ok: true,
-    existed: false,
-    created: true,
-    path: obsConfigPath,
-    region,
-    endpoint,
-    note: 'OBS credentials synced from hcloud profile. OBS commands (hcloud OBS ls, mb, cp, etc.) should now work.',
   };
 }
 
@@ -2021,124 +1340,4 @@ async function getRegionalAvailability(service: string, region: string) {
 
 export function classifyRawCommand(command: unknown) {
   return classifyTextCommand(command);
-}
-
-// ── OBS Static Website Hosting (AWS4 signed REST API) ──
-
-async function handleObsWebsiteConfig(args: ToolArgs) {
-  const { action, bucket, region, indexDocument, errorDocument } = args;
-  if (!bucket || !region) {
-    throw new Error('bucket and region are required');
-  }
-  const creds = asCredentialRecord(resolveCredentialsWithRuntime({}));
-  const obsAk = creds?.ak;
-  const obsSk = creds?.sk;
-  if (!obsAk || !obsSk) {
-    throw new Error('OBS website config requires AK/SK credentials. Run huaweicloud_auth_init first.');
-  }
-  const signedCreds = { ak: obsAk, sk: obsSk, securityToken: creds?.securityToken };
-
-  const host = `${bucket}.obs.${region}.myhuaweicloud.com`;
-  const endpoint = `https://${host}`;
-
-  if (action === 'get') {
-    const res = await obsSignedRequest('GET', endpoint, '/?website', '', signedCreds, region);
-    return { ok: res.status === 200, status: res.status, body: res.body };
-  }
-
-  if (action === 'delete') {
-    const res = await obsSignedRequest('DELETE', endpoint, '/?website', '', signedCreds, region);
-    return { ok: res.status === 204, status: res.status };
-  }
-
-  if (action === 'set') {
-    if (!indexDocument) {
-      throw new Error('indexDocument is required for action=set');
-    }
-    const xmlParts = ['<WebsiteConfiguration>', `  <IndexDocument><Suffix>${indexDocument}</Suffix></IndexDocument>`];
-    if (errorDocument) {
-      xmlParts.push(`  <ErrorDocument><Key>${errorDocument}</Key></ErrorDocument>`);
-    }
-    xmlParts.push('</WebsiteConfiguration>');
-    const body = xmlParts.join('\n');
-    const res = await obsSignedRequest('PUT', endpoint, '/?website', body, signedCreds, region);
-    const websiteUrl = `http://${bucket}.obs-website.${region}.myhuaweicloud.com`;
-    return {
-      ok: res.status === 200,
-      status: res.status,
-      websiteUrl,
-      message:
-        res.status === 200
-          ? `Static website hosting configured. Website URL: ${websiteUrl} (may take ~1 min to propagate)`
-          : `Failed to configure website: HTTP ${res.status}`,
-    };
-  }
-
-  throw new Error(`Unknown action: ${action}. Use set, get, or delete.`);
-}
-
-async function obsSignedRequest(
-  method: string,
-  endpoint: string,
-  pathAndQuery: string,
-  body: string,
-  // Callers throw unless ak and sk are present, so they are required here.
-  creds: CredentialLike & { ak: string; sk: string },
-  region: string,
-): Promise<{ status: number; body: string }> {
-  const now = new Date();
-  const dateStamp = now.toISOString().slice(0, 10).replace(/-/g, '');
-  const amzDate = dateStamp + 'T' + now.toISOString().slice(11, 19).replace(/:/g, '') + 'Z';
-  const payloadHash = createHash('sha256').update(body).digest('hex');
-
-  const url = new URL(endpoint + pathAndQuery);
-  const canonicalUri = '/';
-  const canonicalQueryString = 'website=';
-  const canonicalHeaders = `host:${url.host}\n` + `x-amz-content-sha256:${payloadHash}\n` + `x-amz-date:${amzDate}\n`;
-  const signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
-  const canonicalRequest = [
-    method,
-    canonicalUri,
-    canonicalQueryString,
-    canonicalHeaders,
-    signedHeaders,
-    payloadHash,
-  ].join('\n');
-
-  const credentialScope = `${dateStamp}/${region}/s3/aws4_request`;
-  const stringToSign = [
-    'AWS4-HMAC-SHA256',
-    amzDate,
-    credentialScope,
-    createHash('sha256').update(canonicalRequest).digest('hex'),
-  ].join('\n');
-
-  const kDate = createHmac('sha256', 'AWS4' + creds.sk)
-    .update(dateStamp)
-    .digest();
-  const kRegion = createHmac('sha256', kDate).update(region).digest();
-  const kService = createHmac('sha256', kRegion).update('s3').digest();
-  const kSigning = createHmac('sha256', kService).update('aws4_request').digest();
-  const signature = createHmac('sha256', kSigning).update(stringToSign).digest('hex');
-
-  const authorization =
-    `AWS4-HMAC-SHA256 Credential=${creds.ak}/${credentialScope}, ` +
-    `SignedHeaders=${signedHeaders}, Signature=${signature}`;
-
-  const headers: Record<string, string> = {
-    Host: url.host,
-    'x-amz-content-sha256': payloadHash,
-    'x-amz-date': amzDate,
-    Authorization: authorization,
-  };
-  if (body) headers['Content-Type'] = 'application/xml';
-  if (creds.securityToken) headers['x-amz-security-token'] = creds.securityToken;
-
-  const res = await fetchWithProxy(endpoint + pathAndQuery, {
-    method,
-    headers,
-    body: body || undefined,
-  });
-  const resBody = await res.text();
-  return { status: res.status, body: resBody };
 }

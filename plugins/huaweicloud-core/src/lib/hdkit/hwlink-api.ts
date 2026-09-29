@@ -1,7 +1,7 @@
 import { createHash, createHmac } from 'node:crypto';
 
-import { resolveCredentialsWithRuntime } from '../auth/credentials.ts';
-import { getProxyDispatcher } from '../proxy/proxy-agent.ts';
+import { resolveCredentialsWithRuntime } from '../../auth/credentials.ts';
+import { getProxyDispatcher } from '../../proxy/proxy-agent.ts';
 
 const BASE_URL = process.env.HWLINK_ENDPOINT || 'https://devstation.myhuaweicloud.com';
 

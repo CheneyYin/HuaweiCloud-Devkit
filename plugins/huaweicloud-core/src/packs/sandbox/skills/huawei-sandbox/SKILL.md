@@ -3,7 +3,6 @@ name: huawei-sandbox
 description: 'Use when creating, connecting, or managing Huawei Cloud Sandbox instances and workspace terminals, or when a task needs a temporary runtime to deploy, run, or preview a web application. Covers sandbox lifecycle (check-user, sign-agreement, connect, release), session-based terminal execution, and credential injection. Triggers on: sandbox, workspace, terminal, web app deployment, deploy web app, preview app, deploy github, github repo, deploy repo, website, static site, web application, hwlink, devstation, hdkitservice, remote exec. NOT for: ECS instances (use huawei-ecs), CCE clusters (use huawei-cce).'
 version: 1
 ---
-<!-- generated from src/packs/sandbox/skills/huawei-sandbox - do not edit -->
 
 # Huawei Cloud Sandbox
 

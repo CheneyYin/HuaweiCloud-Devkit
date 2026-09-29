@@ -1,4 +1,3 @@
-<!-- generated from src/packs/obs/skills/huawei-obs - do not edit -->
 # OBS Single-File Quick Share
 
 Host one file and get a shareable link in seconds. Two options:
