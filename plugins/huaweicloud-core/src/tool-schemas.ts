@@ -119,8 +119,6 @@ const TOOL_SCHEMAS = {
   // spread keeps them in TOOL_SCHEMAS so the satisfies check below still
   // covers all 42 ToolName keys.
   ...UPDATE_TOOL_SCHEMAS,
-  // The obs website-config schema also lives in the obs pack
-  // (OBS_TOOL_SCHEMAS spread above).
   huaweicloud_list_packs: z.looseObject({}),
   huaweicloud_pack_info: z.looseObject({
     pack: z

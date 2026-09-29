@@ -35,9 +35,6 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
-// Boundary narrowing helpers that migrated with the pack tools:
-// pickString (obs pack), asCredentialRecord (lib/credentials.ts).
-
 function opencodeSkillsDir() {
   const home = homedir();
   return join(home, '.config', 'opencode', 'skills');
