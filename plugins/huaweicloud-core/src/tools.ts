@@ -16,6 +16,8 @@ import { isUsableOfficeaceRoot, readOfficeaceRootMarker } from './officeace-path
 import type { DistTags } from './update-check.ts';
 import { getToolSchema, SCHEMA_DRIFT_IGNORED_KEYS } from './tool-schemas.ts';
 import { PACKS } from './packs/registry.ts';
+import { resolveEnabledPacks } from './packs/enable.ts';
+import type { PackId } from './lib/pack-types.ts';
 import { UPDATE_TOOL_HANDLERS } from './packs/update/tools.ts';
 import { AUTH_TOOL_HANDLERS } from './packs/auth/tools.ts';
 import { OBS_TOOL_HANDLERS } from './packs/obs/tools.ts';
@@ -921,12 +923,21 @@ function serviceCatalog(intent: string = '') {
 
 // ── Pack meta tools ──
 // Both tools read the pack registry (PACK_OF inversion in packs/registry.ts),
-// the tool definitions (name/description), and the zod schemas, so their
-// output can never disagree with tools/list. Pack enable/disable state lands
-// with pack-level installs in later v2 units; the flag is reported now so
-// clients can rely on the response shape.
+// the tool definitions (name/description), the zod schemas, and the live
+// enablement set (packs/enable.ts, DEVKIT_PACKS > all packs), so their output
+// can never disagree with tools/list: a disabled pack is listed with
+// enabled:false, and pack_info refuses to detail it.
+
+// Skill directory → owning pack, inverted from the PACKS claims. Skills found
+// in the resolved SKILLS_ROOT that no pack claims (foreign skills an agent
+// keeps in its own skills dir) map to undefined and stay untouched by pack
+// enablement gating.
+const SKILL_OWNER = new Map<string, PackId>(
+  PACKS.flatMap((pack) => pack.skills.map((skill) => [skill, pack.id] as const)),
+);
 
 function listPacks() {
+  const enabled = resolveEnabledPacks();
   return {
     ok: true,
     count: PACKS.length,
@@ -935,7 +946,7 @@ function listPacks() {
       title: pack.title,
       description: pack.description,
       tools: pack.tools,
-      enabled: true,
+      enabled: enabled.has(pack.id),
     })),
   };
 }
@@ -947,6 +958,20 @@ function packInfo(pack: string) {
   if (!found) {
     const available = PACKS.map((entry) => entry.id).join(', ');
     return { ok: false, error: 'Pack "' + packId + '" not found. Available: ' + available };
+  }
+  const enabled = resolveEnabledPacks();
+  if (!enabled.has(found.id)) {
+    return {
+      ok: false,
+      error:
+        'Pack "' +
+        found.id +
+        '" is not enabled. Start the server with DEVKIT_PACKS including "' +
+        found.id +
+        '" (e.g. DEVKIT_PACKS=core,' +
+        found.id +
+        ') to enable it.',
+    };
   }
   const tools = found.tools.map((name) => {
     const definition = TOOL_DEFINITIONS.find((tool) => tool.name === name);
@@ -1085,11 +1110,16 @@ function explainError({ service = 'unknown', errorCode = '', message = '', reque
 async function searchDocs(query: string, topic: string = 'all') {
   const q = String(query || '').toLowerCase();
   const tokens = q.split(/\s+/).filter((t) => t.length > 0);
+  // Skills owned by a disabled pack are filtered out of the search index;
+  // core-owned and unclaimed (foreign) skills stay searchable.
+  const enabled = resolveEnabledPacks();
   const results: Array<{ source: string; name: string; snippet: string; relevance: number }> = [];
   try {
     if (existsSync(SKILLS_ROOT)) {
       const dirs = listSkillDirs(SKILLS_ROOT);
       for (const dir of dirs) {
+        const owner = SKILL_OWNER.get(dir);
+        if (owner && !enabled.has(owner)) continue;
         const skillPath = join(SKILLS_ROOT, dir, 'SKILL.md');
         if (!existsSync(skillPath)) continue;
         const content = readFileSync(skillPath, 'utf8');
@@ -1142,6 +1172,22 @@ async function retrieveSkill(name: string) {
   if (!existsSync(skillPath)) {
     const dirs = listSkillDirs(SKILLS_ROOT);
     return { ok: false, error: 'Skill "' + skillName + '" not found. Available: ' + dirs.join(', ') };
+  }
+  const owner = SKILL_OWNER.get(skillName);
+  if (owner && !resolveEnabledPacks().has(owner)) {
+    return {
+      ok: false,
+      error:
+        'Skill "' +
+        skillName +
+        '" belongs to pack "' +
+        owner +
+        '" which is not enabled. Start the server with DEVKIT_PACKS including "' +
+        owner +
+        '" (e.g. DEVKIT_PACKS=core,' +
+        owner +
+        ') to enable it.',
+    };
   }
   const content = readFileSync(skillPath, 'utf8');
   const references: Array<{ filename: string; content: string }> = [];

@@ -3,6 +3,8 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { CallToolResult, JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 
 import { TOOL_DEFINITIONS, callTool } from './tools.ts';
+import { PACK_OF } from './packs/registry.ts';
+import { resolveEnabledPacks } from './packs/enable.ts';
 import { getToolSchema, assertConstructedSchemas } from './tool-schemas.ts';
 import { peekCachedUpdateInfo, applyUpdateHint, readInstalledVersion } from './update-check.ts';
 import { initTelemetry } from './telemetry/telemetry.ts';
@@ -101,9 +103,16 @@ export function normalizeToolCallParams(message: JSONRPCMessage): JSONRPCMessage
 
 export function createDevkitMcpServer({ sessionId }: DevkitServerOptions = {}): McpServer {
   assertConstructedSchemas();
+  // Read per construction: stdio resolves once at boot (fail-fast exit on a
+  // bogus DEVKIT_PACKS), the stateless remote re-reads env on every request,
+  // so both transports share one code path with no transport branching.
+  // Unknown pack ids throw here; core is always in the set, so its 17 tools
+  // (15 + the two pack meta tools) are never filtered.
+  const enabledPacks = resolveEnabledPacks();
   const server = new McpServer({ name: 'huaweicloud-devkit', version: pkgVersion });
 
   for (const tool of TOOL_DEFINITIONS) {
+    if (!enabledPacks.has(PACK_OF[tool.name])) continue;
     server.registerTool(
       tool.name,
       { description: tool.description, inputSchema: getToolSchema(tool.name) },
