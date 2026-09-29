@@ -720,7 +720,9 @@ test('agent-registration reports openclaw registration status', () => {
 test('official Huawei Cloud Icons library is integrated', () => {
   const tools = readSource(join('src', 'tools.ts'));
   assert.match(tools, /name: 'huaweicloud_get_service_icon'/);
-  assert.match(tools, /getServiceIcon\(args\.service/);
+
+  const discoveryPack = readSource(join('src', 'packs', 'discovery', 'tools.ts'));
+  assert.match(discoveryPack, /getServiceIcon\(args\.service/);
 
   const snapshotPath = join(pluginRoot, 'src', 'data', 'icons-manifest.v1.json');
   assert.ok(existsSync(snapshotPath), 'Missing icons-manifest.v1.json snapshot');

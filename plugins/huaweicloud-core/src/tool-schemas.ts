@@ -6,6 +6,8 @@ import { looseObject, numericArg, gitConfig, workspaceId, username } from './lib
 import { UPDATE_TOOL_SCHEMAS } from './packs/update/tools.ts';
 import { AUTH_TOOL_SCHEMAS } from './packs/auth/tools.ts';
 import { OBS_TOOL_SCHEMAS } from './packs/obs/tools.ts';
+import { VOUCHER_TOOL_SCHEMAS } from './packs/voucher/tools.ts';
+import { DISCOVERY_TOOL_SCHEMAS } from './packs/discovery/tools.ts';
 
 // LooseToolSchema now lives in src/lib/pack-types.ts (shared pack vocabulary);
 // re-exported here so existing import sites keep working.
@@ -92,32 +94,18 @@ const TOOL_SCHEMAS = {
     service: z.string().describe('Service name: ecs, obs, rds, gaussdb, cce, modelarts, functiongraph, etc.'),
     region: z.string().describe('Region ID: cn-south-1, cn-north-4, ap-southeast-3, etc.'),
   }),
-  huaweicloud_search_marketplace: z.looseObject({
-    query: z.string().optional().describe('Search query across skill name, description, triggers, and service.'),
-    category: z
-      .string()
-      .optional()
-      .describe('Optional category filter: computing, storage, network, security, devtools, monitoring, etc.'),
-  }),
-  huaweicloud_get_service_icon: z.looseObject({
-    service: z
-      .string()
-      .optional()
-      .describe(
-        'Service name, alias, or Chinese name, e.g. ecs, obs, modelarts, 对象存储, 虚拟私有云. Omit to browse by category only.',
-      ),
-    category: z
-      .string()
-      .optional()
-      .describe('Optional category filter, e.g. 计算, 存储, 网络, 人工智能, 数据库, 安全, 企业应用.'),
-  }),
-  huaweicloud_detect_framework: z.looseObject({
-    projectPath: z.string().describe('Absolute path to the local project directory to scan.'),
-  }),
+  // The discovery pack owns its tool schemas (src/packs/discovery/tools.ts);
+  // the spread keeps them in TOOL_SCHEMAS so the satisfies check below still
+  // covers all 42 ToolName keys.
+  ...DISCOVERY_TOOL_SCHEMAS,
   // The obs pack owns its tool schemas (src/packs/obs/tools.ts); the
   // spread keeps them in TOOL_SCHEMAS so the satisfies check below still
   // covers all 42 ToolName keys.
   ...OBS_TOOL_SCHEMAS,
+  // The voucher pack owns its tool schemas (src/packs/voucher/tools.ts);
+  // the spread keeps them in TOOL_SCHEMAS so the satisfies check below still
+  // covers all 42 ToolName keys.
+  ...VOUCHER_TOOL_SCHEMAS,
   // The auth pack owns its tool schemas (src/packs/auth/tools.ts); the
   // spread keeps them in TOOL_SCHEMAS so the satisfies check below still
   // covers all 42 ToolName keys.
@@ -223,18 +211,6 @@ const TOOL_SCHEMAS = {
       .describe(
         'DevBridge API Key (devbridge_...), injected into the sandbox as HW_API_KEY for devbridge 0.2.x auth. The local HW_API_KEY environment variable takes precedence over this param (preferred delivery — keeps the long-lived key out of the conversation). Users create one at https://devstation.connect.huaweicloud.com/space/devbridge/apikey (full value shown once at creation). Required for exposing web apps via devbridge 0.2.x; if missing, guide the user through creating one.',
       ),
-  }),
-  huaweicloud_voucher_status: z.looseObject({
-    domain_id: z
-      .string()
-      .optional()
-      .describe('Optional. Leave empty in production — account is resolved from IAM automatically.'),
-  }),
-  huaweicloud_voucher_claim: z.looseObject({
-    domain_id: z
-      .string()
-      .optional()
-      .describe('Optional. Leave empty in production — account is resolved from IAM automatically.'),
   }),
   // The update pack owns its tool schemas (src/packs/update/tools.ts); the
   // spread keeps them in TOOL_SCHEMAS so the satisfies check below still

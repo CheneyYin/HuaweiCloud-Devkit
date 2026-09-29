@@ -9,9 +9,6 @@ import { z } from 'zod';
 import { evaluateArtifacts, evaluateCommandRisk, evaluateDeployPlan, type RiskEvaluation } from './risk-rule-engine.ts';
 import { classifyTextCommand, redactSecrets } from './safety-policy.ts';
 import { planHcloudCommand, runHcloud, consumeApprovalToken, hashArgs, type HcloudRunResult } from './hcloud-cli.ts';
-import { searchMarketplace } from './search-market.ts';
-import { getServiceIcon } from './icon-library.ts';
-import { detectFramework } from './detect-framework.ts';
 import {
   execWithSession,
   execOneShot,
@@ -23,14 +20,7 @@ import {
   getCurrentWorkspaceId,
   setWorkspaceId,
 } from './sandbox/session-manager.ts';
-import {
-  hdkitCheckUser,
-  hdkitSignAgreement,
-  hdkitConnect,
-  hdkitCredentials,
-  hdkitVoucherStatus,
-  hdkitVoucherClaim,
-} from './lib/hdkit/hdkitservice-api.ts';
+import { hdkitCheckUser, hdkitSignAgreement, hdkitConnect, hdkitCredentials } from './lib/hdkit/hdkitservice-api.ts';
 import { getCredentials } from './lib/hdkit/hwlink-api.ts';
 import { validateIamCredentials } from './auth/credential-validator.ts';
 import { resolveCredentialsWithRuntime } from './auth/credentials.ts';
@@ -46,6 +36,8 @@ import { PACKS } from './packs/registry.ts';
 import { UPDATE_TOOL_HANDLERS } from './packs/update/tools.ts';
 import { AUTH_TOOL_HANDLERS } from './packs/auth/tools.ts';
 import { OBS_TOOL_HANDLERS } from './packs/obs/tools.ts';
+import { VOUCHER_TOOL_HANDLERS } from './packs/voucher/tools.ts';
+import { DISCOVERY_TOOL_HANDLERS } from './packs/discovery/tools.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILLS_ROOT_DEV = join(__dirname, '..', 'skills');
@@ -658,18 +650,11 @@ export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: Cal
     case 'huaweicloud_explain_error':
       return explainError(args);
     case 'huaweicloud_search_marketplace':
-      return searchMarketplace(args.query || '', args.category || '');
+      return await DISCOVERY_TOOL_HANDLERS['huaweicloud_search_marketplace'](args, opts);
     case 'huaweicloud_get_service_icon':
-      return getServiceIcon(args.service || '', args.category || '');
-    case 'huaweicloud_detect_framework': {
-      const projectPath = args.projectPath;
-      if (!projectPath) throw new Error('projectPath is required.');
-      const result = detectFramework(projectPath);
-      if (!result) {
-        return { ok: false, error: 'No recognized web framework found in: ' + projectPath };
-      }
-      return { ok: true, ...result };
-    }
+      return await DISCOVERY_TOOL_HANDLERS['huaweicloud_get_service_icon'](args, opts);
+    case 'huaweicloud_detect_framework':
+      return await DISCOVERY_TOOL_HANDLERS['huaweicloud_detect_framework'](args, opts);
     case 'huaweicloud_setup_obs_config':
       return await OBS_TOOL_HANDLERS['huaweicloud_setup_obs_config'](args, opts);
     // Auth tools delegate to the auth pack's handler map
@@ -929,9 +914,9 @@ export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: Cal
       return result;
     }
     case 'huaweicloud_voucher_status':
-      return await hdkitVoucherStatus(args.domain_id);
+      return await VOUCHER_TOOL_HANDLERS['huaweicloud_voucher_status'](args, opts);
     case 'huaweicloud_voucher_claim':
-      return await hdkitVoucherClaim(args.domain_id);
+      return await VOUCHER_TOOL_HANDLERS['huaweicloud_voucher_claim'](args, opts);
     // Update tools delegate to the update pack's handler map
     // (src/packs/update/tools.ts); the doQuery test-injection seam rides the
     // per-case opts exactly as before the migration.

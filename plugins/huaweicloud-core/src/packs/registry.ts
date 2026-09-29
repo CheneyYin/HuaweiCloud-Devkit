@@ -3,6 +3,8 @@ import type { Pack, PackId } from '../lib/pack-types.ts';
 import { updatePack } from './update/pack.ts';
 import { authPack } from './auth/pack.ts';
 import { obsPack } from './obs/pack.ts';
+import { voucherPack } from './voucher/pack.ts';
+import { discoveryPack } from './discovery/pack.ts';
 
 // PackId and the Pack interface live in src/lib/pack-types.ts alongside
 // PackToolDefinition, so packs and the registry share one vocabulary module.
@@ -109,20 +111,7 @@ export const PACKS: readonly Pack[] = [
   },
   authPack,
   obsPack,
-  {
-    id: 'voucher',
-    title: 'Voucher',
-    description: 'Voucher claiming status and one-time voucher redemption.',
-    skills: ['huawei-voucher'],
-    tools: toolsFor('voucher'),
-  },
+  voucherPack,
   updatePack,
-  {
-    id: 'discovery',
-    title: 'Discovery',
-    description:
-      'Marketplace skill search, official Huawei Cloud service icon lookup, and local web framework detection.',
-    skills: [],
-    tools: toolsFor('discovery'),
-  },
+  discoveryPack,
 ];
