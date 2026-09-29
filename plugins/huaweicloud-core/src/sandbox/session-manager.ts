@@ -211,14 +211,29 @@ const DEVBRIDGE_MIGRATION_MARKER = '服务已迁移';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// ws-exec's sources are TypeScript now, but runtime entry points read the
-// compiled dist bundle. Prefer the compiled barrel when it exists (dist/sandbox
-// -> dist/ws-exec/index.js) and fall back to the source barrel for in-repo runs
-// (src/sandbox -> src/ws-exec/index.ts, stripped by Node outside node_modules).
+// Asset and barrel paths must resolve in three layouts: source (src/sandbox,
+// Node type-stripping), compiled mirror (dist/sandbox/*.js), and the bundled
+// server entry (dist/mcp-server.js inlines this module, so __dirname is dist/
+// itself and subdirectory assets sit one level below it).
+function firstExisting(...candidates: string[]): string {
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return candidates[candidates.length - 1]!;
+}
+
+// ws-exec's sources are TypeScript, but runtime entry points read the compiled
+// dist barrel. Prefer the compiled barrel (dist/sandbox -> dist/ws-exec, or the
+// bundled entry -> dist/ws-exec) and fall back to the source barrel for
+// in-repo runs (src/sandbox -> src/ws-exec, stripped by Node outside
+// node_modules).
 export function resolveWsExecIndexUrl(): string {
-  const compiled = pathToFileURL(join(__dirname, '..', 'ws-exec', 'index.js'));
-  if (existsSync(compiled)) return compiled.href;
-  return pathToFileURL(join(__dirname, '..', 'ws-exec', 'index.ts')).href;
+  const barrel = firstExisting(
+    join(__dirname, '..', 'ws-exec', 'index.js'),
+    join(__dirname, 'ws-exec', 'index.js'),
+    join(__dirname, '..', 'ws-exec', 'index.ts'),
+  );
+  return pathToFileURL(barrel).href;
 }
 
 export const TUNNEL_URL_PATTERN = /TUNNEL_URL:(https:\/\/[A-Za-z0-9_-]+-\d+\.devbridge-s2\.hwtunnel\.com)/;
@@ -506,7 +521,10 @@ export async function uploadFileWithSession(
   };
 }
 
-const SANDBOX_FILE_SERVER_SCRIPT = readFileSync(join(__dirname, 'sandbox-file-server.py'), 'utf8');
+const SANDBOX_FILE_SERVER_SCRIPT = readFileSync(
+  firstExisting(join(__dirname, 'sandbox-file-server.py'), join(__dirname, 'sandbox', 'sandbox-file-server.py')),
+  'utf8',
+);
 
 const TUNNEL_READY_TIMEOUT_MS = 30000;
 const SERVER_HEALTH_MAX_RETRIES = 30;

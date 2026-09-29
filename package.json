@@ -41,6 +41,7 @@
     "lint:js": "eslint .",
     "lint": "npm run lint:md && npm run lint:js",
     "validate": "node ./scripts/validate-package.mjs && node ./scripts/sync-readme-badge.mjs",
+    "registry:diff": "node ./scripts/registry-snapshot-diff.mjs",
     "badge:sync": "node ./scripts/sync-readme-badge.mjs --write",
     "smoke:agents": "node ./scripts/smoke-agents.mjs",
     "pack:verify": "node ./scripts/pack-verify.mjs",
@@ -51,7 +52,9 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@types/node": "^22.20.4",
+    "esbuild": "0.28.2",
     "eslint": "^10.8.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-import-x": "^4.17.1",
@@ -61,7 +64,8 @@
     "markdownlint-cli2": "^0.23.2",
     "prettier": "^3.9.6",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.70.1"
+    "typescript-eslint": "^8.70.1",
+    "zod": "4.6.5"
   },
   "overrides": {
     "smol-toml": "1.8.0"

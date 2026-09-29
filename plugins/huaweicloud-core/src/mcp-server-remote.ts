@@ -1,9 +1,9 @@
-import { createServer, type Server, type ServerResponse } from 'node:http';
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { createServer, type Server } from 'node:http';
 import { format } from 'node:util';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 
-import { dispatch } from './mcp-protocol.ts';
+import { createDevkitMcpServer, runInitializeSideEffects, normalizeToolCallParams } from './mcp-protocol.ts';
 
 export const DEFAULT_PORT = 9528;
 export const DEFAULT_HOST = '127.0.0.1';
@@ -19,44 +19,13 @@ interface StartedRemoteServer {
   close: () => Promise<void>;
 }
 
-interface JsonRpcMessage {
-  id?: unknown;
-  method: string;
-  params: unknown;
-}
-
-interface JsonRpcResponse {
-  jsonrpc: '2.0';
-  id: unknown;
-  result?: unknown;
-  error?: { code: number; message: string };
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
-// method is coerced to string exactly as the original interpolation did: a
-// missing method becomes "undefined", which dispatch then rejects as unknown.
-// `id` is only copied when the source actually had one, so notification
-// detection via Object.hasOwn(message, 'id') stays accurate.
-function toJsonRpcMessage(value: unknown): JsonRpcMessage {
-  const record = asRecord(value);
-  const message: JsonRpcMessage = {
-    method: typeof record.method === 'string' ? record.method : String(record.method),
-    params: record.params,
-  };
-  if (Object.hasOwn(record, 'id')) message.id = record.id;
-  return message;
-}
-
 export async function startRemoteServer({
   port = DEFAULT_PORT,
   host = DEFAULT_HOST,
 }: RemoteServerOptions = {}): Promise<StartedRemoteServer> {
   const server = createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
     res.setHeader(
       'Access-Control-Allow-Headers',
       'Content-Type, MCP-Protocol-Version, Mcp-Session-Id, Accept, Authorization',
@@ -69,55 +38,88 @@ export async function startRemoteServer({
       return;
     }
 
+    // The shell keeps the method filter: GET stays 405 (legacy contract; the
+    // SDK transport would turn it into a 406/200 SSE stream) and only POST
+    // reaches the transport.
     if (req.method !== 'POST') {
       res.writeHead(405, { Allow: 'POST, OPTIONS' });
       res.end();
       return;
     }
 
-    let message: JsonRpcMessage;
+    let message: unknown;
     try {
       const chunks: Uint8Array[] = [];
       for await (const chunk of req) chunks.push(chunk);
-      message = toJsonRpcMessage(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      message = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     } catch {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }));
       return;
     }
 
-    if (!Object.hasOwn(message, 'id')) {
-      // 通知类消息（含 notifications/initialized）无需响应体，HTTP 层直接 202。
+    // Notifications (incl. notifications/initialized) get no response body;
+    // the stateless transport would 202 them, but skipping construction
+    // entirely is cheaper and preserves the 202 status contract.
+    if (
+      message !== null &&
+      typeof message === 'object' &&
+      !Array.isArray(message) &&
+      !Object.hasOwn(message as Record<string, unknown>, 'id')
+    ) {
       res.writeHead(202);
       res.end();
       return;
     }
 
-    let response: JsonRpcResponse;
-    try {
-      const headerValue = req.headers['mcp-session-id'];
-      const sessionId = (typeof headerValue === 'string' ? headerValue : '').trim() || 'default';
-      const result = await dispatch(message.method, message.params || {}, { sessionId });
-      response = { jsonrpc: '2.0', id: message.id, result };
-      if (message.method === 'initialize') {
-        const resultRecord = asRecord(result);
-        const protocolVersion =
-          typeof resultRecord.protocolVersion === 'string' ? resultRecord.protocolVersion : '2024-11-05';
-        res.setHeader('MCP-Protocol-Version', protocolVersion);
+    if (message !== null && typeof message === 'object' && !Array.isArray(message)) {
+      const record = message as Record<string, unknown>;
+      if (record.method === 'initialize') {
+        try {
+          await runInitializeSideEffects(record.params);
+        } catch {}
       }
-    } catch (error) {
-      const code = (error as { code?: unknown }).code;
-      response = {
-        jsonrpc: '2.0',
-        id: message.id,
-        error: {
-          code: Number.isSafeInteger(code) ? (code as number) : -32603,
-          message: error instanceof Error ? error.message : String(error),
-        },
-      };
     }
 
-    writeMCPResponse(res, response, req.headers.accept || '');
+    const sessionId =
+      (typeof req.headers['mcp-session-id'] === 'string' ? req.headers['mcp-session-id'] : '').trim() || 'default';
+
+    // Stateless per-request transport: no session id, no resumability. The
+    // response format stays JSON (enableJsonResponse) for dual-Accept
+    // clients; Accept headers lacking either application/json or
+    // text/event-stream are rejected 406 by the transport.
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+      enableJsonResponse: true,
+    });
+    const mcpServer = createDevkitMcpServer({ sessionId });
+    transport.onerror = (error) => {
+      const reason = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`remote transport error: ${reason}\n`);
+    };
+
+    res.on('close', () => {
+      void mcpServer.close().catch(() => {});
+      void transport.close().catch(() => {});
+    });
+
+    try {
+      await mcpServer.connect(transport);
+      await transport.handleRequest(req, res, normalizeToolCallParams(message as JSONRPCMessage));
+    } catch (error) {
+      const code = (error as { code?: unknown }).code;
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: null,
+            error: { code: Number.isSafeInteger(code) ? (code as number) : -32603, message: String(error) },
+          }),
+        );
+      }
+      await mcpServer.close().catch(() => {});
+    }
   });
 
   await new Promise<void>((resolvePromise, rejectPromise) => {
@@ -136,31 +138,4 @@ export async function startRemoteServer({
     port: address.port,
     close: () => new Promise<void>((resolvePromise) => server.close(() => resolvePromise())),
   };
-}
-
-function writeMCPResponse(res: ServerResponse, response: JsonRpcResponse, accept: string): void {
-  const json = JSON.stringify(response);
-  if (accept.includes('application/json')) {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(json);
-    return;
-  }
-  // 客户端只接受 SSE 时的兜底：单帧 event 后关闭流。
-  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
-  res.write(`event: message\ndata: ${json}\n\n`);
-  res.end();
-}
-
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  const portIdx = process.argv.indexOf('--port');
-  const port = portIdx > -1 ? Number(process.argv[portIdx + 1]) : DEFAULT_PORT;
-  const hostIdx = process.argv.indexOf('--host');
-  const host = hostIdx > -1 && process.argv[hostIdx + 1] ? process.argv[hostIdx + 1] : DEFAULT_HOST;
-  startRemoteServer({ port, host }).catch((error) => {
-    process.stderr.write(
-      `Failed to start MCP remote server: ${error instanceof Error ? error.message : String(error)}\n`,
-    );
-    // eslint-disable-next-line n/no-process-exit -- fatal startup error in standalone CLI mode
-    process.exit(1);
-  });
 }

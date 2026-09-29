@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 import test from 'node:test';
 
-const root = fileURLToPath(new URL('..', import.meta.url));
+const root = new URL('..', import.meta.url).pathname;
 const srcDir = join(root, 'plugins', 'huaweicloud-core', 'src');
 const serverPath = join(srcDir, 'mcp-server.ts');
+
+// Dual Accept is the SDK Streamable HTTP contract: POSTs whose Accept lacks
+// either application/json or text/event-stream are rejected 406.
+const DUAL_ACCEPT = 'application/json, text/event-stream';
 
 let server;
 let base;
@@ -26,12 +30,12 @@ test.after(async () => {
   }
 });
 
-async function rpc(method, params = {}, extraHeaders = {}) {
+async function rpc(method, params = {}, extraHeaders = {}, accept = DUAL_ACCEPT) {
   const res = await fetch(`${base}/`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Accept: 'application/json, text/event-stream',
+      Accept: accept,
       ...extraHeaders,
     },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
@@ -48,7 +52,8 @@ test('remote MCP server initializes, lists tools, and plans CLI commands', async
   assert.equal(initialized.status, 200);
   assert.equal(initialized.body.result.serverInfo.name, 'huaweicloud-devkit');
   assert.equal(initialized.body.result.protocolVersion, '2024-11-05');
-  assert.deepEqual(initialized.body.result.capabilities, { tools: {} });
+  // The SDK high-level server advertises tools.listChanged on registration.
+  assert.deepEqual(initialized.body.result.capabilities, { tools: { listChanged: true } });
 
   const listed = await rpc('tools/list');
   const toolNames = new Set(listed.body.result.tools.map((tool) => tool.name));
@@ -66,7 +71,7 @@ test('remote MCP server initializes, lists tools, and plans CLI commands', async
 test('remote MCP server returns 202 for notifications/initialized', async () => {
   const res = await fetch(`${base}/`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+    headers: { 'Content-Type': 'application/json', Accept: DUAL_ACCEPT },
     body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
   });
   assert.equal(res.status, 202);
@@ -75,7 +80,7 @@ test('remote MCP server returns 202 for notifications/initialized', async () => 
 test('remote MCP server returns 400 for invalid JSON body', async () => {
   const res = await fetch(`${base}/`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Accept: DUAL_ACCEPT },
     body: '{not-json]',
   });
   assert.equal(res.status, 400);
@@ -88,22 +93,58 @@ test('remote MCP server answers OPTIONS preflight with CORS headers', async () =
   assert.match(res.headers.get('access-control-allow-headers') || '', /MCP-Protocol-Version/i);
 });
 
-test('remote MCP server rejects GET with 405', async () => {
-  const res = await fetch(`${base}/`, { method: 'GET' });
+test('remote MCP server keeps GET as 405 via the shell method filter', async () => {
+  const res = await fetch(`${base}/`, { method: 'GET', headers: { Accept: 'text/event-stream' } });
   assert.equal(res.status, 405);
 });
 
-test('remote MCP server falls back to SSE when client only accepts text/event-stream', async () => {
+test('remote MCP server returns 406 when Accept lacks application/json (SDK semantics)', async () => {
   const res = await fetch(`${base}/`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'resources/list', params: {} }),
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 8,
+      method: 'tools/list',
+      params: {},
+    }),
+  });
+  assert.equal(res.status, 406);
+});
+
+test('remote MCP server returns 406 when Accept lacks text/event-stream (SDK semantics)', async () => {
+  const res = await fetch(`${base}/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 9,
+      method: 'tools/list',
+      params: {},
+    }),
+  });
+  assert.equal(res.status, 406);
+});
+
+test('remote MCP server responds JSON bodies for dual-Accept clients (enableJsonResponse)', async () => {
+  const res = await fetch(`${base}/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: DUAL_ACCEPT },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 10, method: 'tools/list', params: {} }),
   });
   assert.equal(res.status, 200);
-  assert.match(res.headers.get('content-type') || '', /text\/event-stream/);
-  const text = await res.text();
-  assert.match(text, /event: message/);
-  assert.match(text, /"resources":/);
+  assert.match(res.headers.get('content-type') || '', /application\/json/);
+  const body = await res.json();
+  assert.ok(body.result.tools.length > 0);
+});
+
+test('resources/list falls through to -32601 (capability never advertised)', async () => {
+  // tools-only registration: the SDK registers no resource handlers, so the
+  // old {resources: []} answer is gone. Declared wire change from the
+  // migration plan.
+  const res = await rpc('resources/list');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.error.code, -32601);
 });
 
 test('exports DEFAULT_PORT 9528 to avoid IACMCPServer port 9527 conflict', async () => {
@@ -160,7 +201,7 @@ test('mcp-server.ts --transport remote honors --host and --port flags', async ()
     assert.equal(addr.host, '0.0.0.0');
     const res = await fetch(`http://127.0.0.1:${addr.port}/`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      headers: { 'Content-Type': 'application/json', Accept: DUAL_ACCEPT },
       body: JSON.stringify({
         jsonrpc: '2.0',
         id: 1,

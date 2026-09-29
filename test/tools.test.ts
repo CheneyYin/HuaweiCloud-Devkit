@@ -11,6 +11,7 @@ import {
   findSkillsRoot,
   listSkillDirs,
 } from '../plugins/huaweicloud-core/src/tools.ts';
+import { getToolSchema, TOOL_SCHEMAS } from '../plugins/huaweicloud-core/src/tool-schemas.ts';
 import {
   clearRuntimeCredentials,
   resolveCredentialsWithRuntime,
@@ -112,11 +113,11 @@ test('TOOL_DEFINITIONS includes all required tools including sandbox', () => {
 });
 
 test('TOOL_DEFINITIONS expose cwd parameter on run tools', () => {
-  const readonlyTool = TOOL_DEFINITIONS.find((t) => t.name === 'huaweicloud_run_readonly_command');
-  assert.ok(Object.hasOwn(readonlyTool.inputSchema.properties, 'cwd'), 'run_readonly_command should have cwd param');
+  const readonlySchema = getToolSchema('huaweicloud_run_readonly_command').toJSONSchema();
+  assert.ok(Object.hasOwn(readonlySchema.properties, 'cwd'), 'run_readonly_command should have cwd param');
 
-  const approvedTool = TOOL_DEFINITIONS.find((t) => t.name === 'huaweicloud_run_approved_command');
-  assert.ok(Object.hasOwn(approvedTool.inputSchema.properties, 'cwd'), 'run_approved_command should have cwd param');
+  const approvedSchema = getToolSchema('huaweicloud_run_approved_command').toJSONSchema();
+  assert.ok(Object.hasOwn(approvedSchema.properties, 'cwd'), 'run_approved_command should have cwd param');
 });
 
 test('TOOL_DEFINITIONS includes proactive hook check tools', () => {
@@ -124,6 +125,16 @@ test('TOOL_DEFINITIONS includes proactive hook check tools', () => {
   assert.ok(names.has('huaweicloud_hook_check_command'));
   assert.ok(names.has('huaweicloud_hook_check_artifacts'));
   assert.ok(names.has('huaweicloud_hook_check_deploy_plan'));
+});
+
+test('TOOL_SCHEMAS keys exactly match TOOL_DEFINITIONS names (no orphans either way)', () => {
+  const registryNames = TOOL_DEFINITIONS.map((tool) => tool.name).sort((a, b) => a.localeCompare(b));
+  const schemaKeys = Object.keys(TOOL_SCHEMAS).sort((a, b) => a.localeCompare(b));
+  assert.deepEqual(
+    schemaKeys,
+    registryNames,
+    'a tool registered without a schema is unreachable over MCP; a schema without a registry entry is dead code',
+  );
 });
 
 test('huaweicloud_hook_check_command returns deny finding', async () => {

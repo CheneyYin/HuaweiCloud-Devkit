@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -549,8 +550,11 @@ test('tools.ts resolves skills from the dsh directory', () => {
   // stale or empty dirs must not short-circuit the fallback chain
   assert.match(tools, /resolveSkillsRoot[\s\S]*?findSkillsRoot\(\[/);
   assert.match(tools, /\|\|\s*SKILLS_ROOT_DEV/);
+  // The agent-target list moved to the zod schema descriptions when the
+  // JSON-Schema registry was replaced (tool-schemas.ts).
+  const schemas = readSource(join('src', 'tool-schemas.ts'));
   assert.match(
-    tools,
+    schemas,
     /opencode, codex, codex-desktop, codearts, codearts-work, workbuddy, dsh, officeace, hermes, openclaw, atomcode, or all/,
   );
 });
@@ -742,6 +746,62 @@ test('stdio server warms update cache; shared protocol decorates first tool call
   const protocol = readSource(join('src', 'mcp-protocol.ts'));
   assert.match(protocol, /applyUpdateHint\(/);
   assert.match(protocol, /peekCachedUpdateInfo\(\)/);
+});
+
+test('zod tool schemas match the legacy registry snapshot (deep structural diff)', () => {
+  // The legacy JSON-Schema literals are gone; the checked-in snapshot is the
+  // authoritative record of the pre-migration contract. scripts/registry-snapshot-diff.mjs
+  // re-renders every zod schema and compares required sets, property trees,
+  // types, enums, and item schemas against it, failing on any drift.
+  assert.ok(
+    existsSync(join(root, 'test', 'fixtures', 'legacy-registry-snapshot.json')),
+    'legacy registry snapshot fixture is missing',
+  );
+  const run = spawnSync(process.execPath, [join(root, 'scripts', 'registry-snapshot-diff.mjs')], {
+    encoding: 'utf8',
+    timeout: 60_000,
+  });
+  assert.equal(run.status, 0, `registry snapshot diff failed:\n${run.stdout}\n${run.stderr}`);
+});
+
+test('SDK migration invariants: custom stdio framing, bundle-only SDK imports, zod registry', () => {
+  const transport = readSource(join('src', 'mcp-stdio-transport.ts'));
+  // Content-Length framing must survive: the release smoke gate and the
+  // Hermes-on-Windows workaround speak LSP-style frames.
+  assert.match(transport, /Content-Length:/);
+  assert.match(transport, /-32700/);
+  assert.match(transport, /-32600/);
+  // Keepalive stays scoped to hermes+win32; every other agent exits 0.
+  assert.match(transport, /'hermes'/);
+  assert.match(transport, /'win32'/);
+
+  // Only the bundled server entry may import the SDK or zod: everything the
+  // installer copies must resolve without SDK node_modules. setup-cli must
+  // never gain a tools/mcp-protocol import (it runs before any bundling).
+  const setup = readSource(join('src', 'setup-cli.ts'));
+  assert.doesNotMatch(setup, /@modelcontextprotocol/);
+  assert.doesNotMatch(setup, /from 'zod'/);
+  assert.doesNotMatch(setup, /from '\.\/tools\.ts'/);
+  assert.doesNotMatch(setup, /from '\.\/mcp-protocol\.ts'/);
+
+  const schemas = readSource(join('src', 'tool-schemas.ts'));
+  // zod is the single source of truth for tool input schemas.
+  assert.match(schemas, /from 'zod'/);
+  assert.match(schemas, /z\.looseObject\(/);
+  // The #530 leniency must stay declared at the boundary.
+  assert.match(schemas, /numericArg/);
+
+  const protocol = readSource(join('src', 'mcp-protocol.ts'));
+  // Hint decoration rides the registerTool callback; sessionId flows into
+  // callTool so session-scoped skip state is reachable over the wire.
+  assert.match(protocol, /callTool\(tool\.name, args as Record<string, never>, \{ sessionId \}\)/);
+
+  const remote = readSource(join('src', 'mcp-server-remote.ts'));
+  // Remote keeps JSON responses for dual-Accept clients and stays stateless.
+  assert.match(remote, /enableJsonResponse: true/);
+  assert.match(remote, /sessionIdGenerator: undefined/);
+  // The shell method filter keeps GET as 405.
+  assert.match(remote, /405/);
 });
 
 test('hdkitservice-api sends X-HW-Client-Version; SKILL session-start wording', () => {

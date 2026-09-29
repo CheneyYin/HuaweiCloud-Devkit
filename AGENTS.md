@@ -46,7 +46,7 @@ Also in the repo:
 
 - `bin/setup.cjs` — interactive installer (`huaweicloud-devkit`); dispatches to each agent's plugin dir.
 - `integrations/` — per-agent adapter configs (opencode, dsh, hermes, workbuddy, atomcode), separate from the plugin.
-- `src/tools.ts` — 39 MCP tool definitions (hcloud CLI, hooks, catalog, auth, sandbox, voucher, update). `src/mcp-server-remote.ts` — remote (HTTP) transport alongside stdio. Both compile to `dist/`.
+- `src/tools.ts` — 40 MCP tools (hcloud CLI, hooks, catalog, auth, sandbox, voucher, update) with the exhaustive `callTool` dispatch. Input schemas live in `src/tool-schemas.ts` (zod, single source of truth for validation and tools/list rendering). The MCP server runs on `@modelcontextprotocol/sdk` (high-level `McpServer` + `registerTool`): `src/mcp-protocol.ts` is the server factory, `src/mcp-stdio-transport.ts` is a custom Transport carrying the dual Content-Length/newline framing (the SDK stdio transport is newline-only), `src/mcp-server-remote.ts` is the stateless Streamable HTTP remote. The SDK and zod are devDependencies bundled into `dist/mcp-server.js` at build time (esbuild; undici stays external) — agent plugin dirs have no SDK node_modules, so nothing else may import the SDK. `scripts/registry-snapshot-diff.mjs` guards the zod schemas against the legacy JSON-Schema snapshot in `test/fixtures/legacy-registry-snapshot.json`.
 - `src/setup-cli.ts` — KooCLI install/doctor logic; honors `HCLOUD_BIN`. Compiles to `dist/setup-cli.js`, the entry `bin/setup.cjs` loads.
 - `scripts/*.mjs` — validation, version sync, packaging, release helpers.
 - `.superpowers/` + `docs/superpowers/` — planning/spec workflow used for larger changes.

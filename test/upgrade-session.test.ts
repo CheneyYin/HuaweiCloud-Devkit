@@ -3,9 +3,10 @@ import { mkdtempSync, rmSync, existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { test } from 'node:test';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 
 import {
-  dispatch as dispatchOriginal,
+  createLinkedDevkitServers,
   _decorateResult,
   _isHintConsumed,
   _resetHintConsumption,
@@ -16,10 +17,39 @@ import * as updateCheck from '../plugins/huaweicloud-core/src/update-check.ts';
 // 第一部分：mcp-protocol — hintConsumed 会话隔离
 // ============================================================================
 
-test('session-isolation: dispatch 接受 opts.sessionId 且不破坏无参调用', async () => {
-  // initialize 无需 session，验证签名向后兼容
-  const r = await dispatchOriginal('initialize', { protocolVersion: '2024-11-05', clientInfo: {} });
-  assert.ok(r && r.serverInfo && typeof r.serverInfo.version === 'string');
+test('session-isolation: SDK 全链路 initialize + tools/list 正常', async () => {
+  const { server, transport } = await createLinkedDevkitServers({ sessionId: 'sess-iso' });
+  const client = new Client({ name: 'test-client', version: '0.0.0' });
+  try {
+    // connect() runs the initialize handshake in SDK 1.30.0.
+    await client.connect(transport);
+    const serverVersion = client.getServerVersion();
+    assert.equal(serverVersion?.name, 'huaweicloud-devkit');
+
+    const listed = await client.listTools();
+    assert.ok(listed.tools.length >= 25);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test('toClientInfo reads client identity from full initialize params', async () => {
+  // Both transports hand the whole params object to the initialize seam; the
+  // identity lives at params.clientInfo. A call site that passed params (or
+  // message) directly into detection silently degraded agent detection to
+  // env-only — pinned here so the shape cannot drift again.
+  const { toClientInfo } = await import('../plugins/huaweicloud-core/src/mcp-protocol.ts');
+  assert.deepEqual(toClientInfo({ clientInfo: { name: 'codex', version: '0.153.4' } }), {
+    name: 'codex',
+    version: '0.153.4',
+  });
+  assert.deepEqual(toClientInfo({ protocolVersion: '2024-11-05', clientInfo: {} }), {
+    name: null,
+    version: null,
+  });
+  assert.deepEqual(toClientInfo({}), { name: null, version: null });
+  assert.deepEqual(toClientInfo(null), { name: null, version: null });
 });
 
 test('hint-consumption: A 会话消费后 B 会话仍能拿到提示（隔离）', async () => {

@@ -47,10 +47,42 @@ for (const file of walk(srcDir)) {
   copied += 1;
 }
 
+// Single bundled entry: agent plugin dirs ship a copied dist/ whose only
+// node_modules is undici (installRuntimeDeps), so every non-node dependency
+// of the server entry (SDK, zod, all local modules) must be inlined here.
+// undici stays external for the installer-provisioned copy and the
+// node:undici built-in fallback. The remote transport ships only inside the
+// bundle; --transport remote on the main entry is the supported path.
+//
+// The bundle runs inside the staging dir and dist is swapped only after the
+// whole build succeeds. Swapping first would leave a thin tsc entry that
+// imports the SDK from node_modules: runnable in-repo, dead in agent plugin
+// dirs. throwOnError makes esbuild failures fail the build instead of
+// producing a broken bundle.
+try {
+  const esbuild = await import('esbuild');
+  await esbuild.build({
+    entryPoints: [join(stagingDir, 'mcp-server.js')],
+    outdir: stagingDir,
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    target: 'node22',
+    external: ['undici'],
+    sourcemap: 'external',
+    logLevel: 'warning',
+    allowOverwrite: true,
+  });
+} catch (error) {
+  rmSync(stagingDir, { recursive: true, force: true });
+  throw error;
+}
+rmSync(join(stagingDir, 'mcp-server-remote.js'), { force: true });
+
 rmSync(distDir, { recursive: true, force: true });
 renameSync(stagingDir, distDir);
 
-console.error(`[build-plugin] dist rebuilt; ${copied} non-script asset(s) copied.`);
+console.error(`[build-plugin] dist rebuilt; ${copied} asset(s) copied; server entry bundled.`);
 
 function walk(dir) {
   const out = [];

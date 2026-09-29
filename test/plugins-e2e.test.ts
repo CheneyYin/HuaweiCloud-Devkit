@@ -473,9 +473,15 @@ test('MCP tools/call with unknown tool name returns error', async () => {
     const responses = await invokeMcpToolCall(mcpServerPath, makeEnv(home, cwd), 'huaweicloud_nonexistent_tool', {});
 
     assert.ok(responses[0].result, 'initialize returned result');
-    // Unknown tool should return JSON-RPC error (code -32603), not crash the server
-    assert.ok(responses[1].error, 'unknown tool name should return JSON-RPC error');
-    assert.match(responses[1].error.message, /Unknown tool/i, 'error message should mention "Unknown tool"');
+    // Unknown tool returns an isError CallToolResult (SDK high-level server
+    // semantics since the migration), not a JSON-RPC error envelope.
+    assert.ok(responses[1].result, 'unknown tool name should return a tool result');
+    assert.equal(responses[1].result.isError, true, 'unknown tool must set isError');
+    assert.match(
+      responses[1].result.content.map((c) => c.text || '').join(' '),
+      /not found/i,
+      'error message should mention the tool was not found',
+    );
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
