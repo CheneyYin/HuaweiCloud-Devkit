@@ -345,6 +345,7 @@ npx --yes huaweicloud-devkit proxy clear   # 删除代理配置
 - **执行前风险检查** — 公网暴露、凭证泄露、破坏性操作在执行前即被拦截
 - **区域感知** — 自动发现可用区域，创建资源前检查服务可用性
 - **沙箱（DevStation）** — 临时云端运行环境，部署 Web 应用并即刻获得公网预览地址
+- **能力包（42 个 MCP 工具）** — 内置七个能力包（core 17 个工具；sandbox、auth、obs、voucher、update、discovery 合计其余 25 个）。用 `huaweicloud_list_packs` → `huaweicloud_pack_info` 发现能力包，再用 `huaweicloud_retrieve_skill` 加载技能。可用 `DEVKIT_PACKS` 裁剪启用面（逗号分隔的包 id，如 `DEVKIT_PACKS=core,sandbox`）；未设置即全量启用，未知 id 启动即报错，core（审批链与包元工具）始终强制包含。
 
 ## 支持的服务
 

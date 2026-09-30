@@ -1,11 +1,17 @@
 import type { ToolName } from '../tools.ts';
-import type { Pack, PackId } from '../lib/pack-types.ts';
+import type { Pack, PackId, PackToolDefinition } from '../lib/pack-types.ts';
 import { updatePack } from './update/pack.ts';
 import { sandboxPack } from './sandbox/pack.ts';
 import { authPack } from './auth/pack.ts';
 import { obsPack } from './obs/pack.ts';
 import { voucherPack } from './voucher/pack.ts';
 import { discoveryPack } from './discovery/pack.ts';
+import { UPDATE_TOOL_HANDLERS } from './update/tools.ts';
+import { SANDBOX_TOOL_HANDLERS } from './sandbox/tools.ts';
+import { AUTH_TOOL_HANDLERS } from './auth/tools.ts';
+import { OBS_TOOL_HANDLERS } from './obs/tools.ts';
+import { VOUCHER_TOOL_HANDLERS } from './voucher/tools.ts';
+import { DISCOVERY_TOOL_HANDLERS } from './discovery/tools.ts';
 
 // PackId and the Pack interface live in src/lib/pack-types.ts alongside
 // PackToolDefinition, so packs and the registry share one vocabulary module.
@@ -57,6 +63,39 @@ export const PACK_OF = {
   huaweicloud_check_update: 'update',
   huaweicloud_upgrade: 'update',
 } as const satisfies Record<ToolName, PackId>;
+
+// The 25 pack-owned tool names: every PACK_OF key whose owner is not core.
+// Derived from PACK_OF (the ownership truth) rather than hand-listed from the
+// per-pack XToolName unions, so moving a tool into a pack automatically adds
+// it here — and the PACK_TOOL_HANDLERS check below immediately demands its
+// handler.
+type NonCoreToolNames = {
+  [K in keyof typeof PACK_OF]: (typeof PACK_OF)[K] extends Exclude<PackId, 'core'> ? K : never;
+}[keyof typeof PACK_OF];
+export type PackToolName = NonCoreToolNames;
+
+// Central pack dispatch table: the six per-pack handler maps merged once.
+// The satisfies check closes the loop at compile time — a pack tool that
+// exists in PACK_OF but has no merged handler entry (missing from a pack's
+// X_TOOL_HANDLERS, or a whole pack's spread forgotten here) fails the build
+// instead of failing at call time. Same spread-merge shape as TOOL_SCHEMAS
+// in tool-schemas.ts.
+export const PACK_TOOL_HANDLERS = {
+  ...DISCOVERY_TOOL_HANDLERS,
+  ...OBS_TOOL_HANDLERS,
+  ...AUTH_TOOL_HANDLERS,
+  ...SANDBOX_TOOL_HANDLERS,
+  ...VOUCHER_TOOL_HANDLERS,
+  ...UPDATE_TOOL_HANDLERS,
+} satisfies Record<PackToolName, PackToolDefinition['handler']>;
+
+// Runtime guard over the same table: true exactly for the PackToolName
+// literals. callTool dispatches pack tools through it before the core
+// switch, and the narrowing it provides is what keeps the switch's
+// never-guard honest about covering only the core remainder.
+export function isPackToolName(name: ToolName): name is PackToolName {
+  return Object.hasOwn(PACK_TOOL_HANDLERS, name);
+}
 
 // Per-pack tool lists invert PACK_OF instead of hand-writing name lists, so a
 // pack can never claim an unassigned or non-existent tool.

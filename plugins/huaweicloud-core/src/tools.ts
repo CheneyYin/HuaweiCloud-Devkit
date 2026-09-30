@@ -11,19 +11,16 @@ import { planHcloudCommand, runHcloud, consumeApprovalToken, hashArgs, type Hclo
 import { trackToolInvoke, trackSkillRetrieve } from './telemetry/telemetry.ts';
 import { hcloudProbeNextStep, probeHcloud, type ProbeHcloudOptions } from './hcloud-probe.ts';
 import { isUsableOfficeaceRoot, readOfficeaceRootMarker } from './officeace-paths.ts';
-// The update tool handlers live in the update pack; only the DistTags type
-// for the CallToolOptions doQuery seam is still needed here.
+// The update tool handlers live in the update pack's handler map (merged
+// into PACK_TOOL_HANDLERS); only the DistTags type for the CallToolOptions
+// doQuery seam is still needed here.
 import type { DistTags } from './update-check.ts';
 import { getToolSchema, SCHEMA_DRIFT_IGNORED_KEYS } from './tool-schemas.ts';
-import { PACKS } from './packs/registry.ts';
+// PACK_TOOL_HANDLERS is the central pack dispatch table (its satisfies check
+// pins every PackToolName to a handler); PACKS feeds the pack meta tools.
+import { PACKS, PACK_TOOL_HANDLERS, isPackToolName, type PackToolName } from './packs/registry.ts';
 import { resolveEnabledPacks } from './packs/enable.ts';
 import type { PackId } from './lib/pack-types.ts';
-import { UPDATE_TOOL_HANDLERS } from './packs/update/tools.ts';
-import { AUTH_TOOL_HANDLERS } from './packs/auth/tools.ts';
-import { OBS_TOOL_HANDLERS } from './packs/obs/tools.ts';
-import { VOUCHER_TOOL_HANDLERS } from './packs/voucher/tools.ts';
-import { DISCOVERY_TOOL_HANDLERS } from './packs/discovery/tools.ts';
-import { SANDBOX_TOOL_HANDLERS } from './packs/sandbox/tools.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILLS_ROOT_DEV = join(__dirname, '..', 'skills');
@@ -161,9 +158,11 @@ const SKILLS_ROOT = resolveSkillsRoot();
 // ── Tool registry ──
 // TOOL_DEFINITIONS_LITERALS is the single source of truth for names and
 // descriptions. `as const` keeps the tool names literal so ToolName below is
-// derived from the registry itself; adding a registry entry without a
-// matching callTool case is a compile error via the never-guard on the
-// dispatch default. Input schemas live in tool-schemas.ts (zod, single
+// derived from the registry itself. callTool dispatches on two paths, both
+// closed at compile time: pack tools (PACK_OF owners ≠ core) go through the
+// central PACK_TOOL_HANDLERS map (satisfies-checked in packs/registry.ts),
+// core tools through the switch below whose never-guard pins every core
+// name to a case. Input schemas live in tool-schemas.ts (zod, single
 // source of truth for validation and tools/list rendering); its
 // `satisfies Record<ToolName, ...>` check pins the schema map to exactly
 // these names.
@@ -516,6 +515,16 @@ export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: Cal
   const toolValue = toolInvokeValue(name, args);
   trackToolInvoke(name, toolValue);
 
+  // Pack tools (the 25 non-core names) dispatch through the central handler
+  // map in packs/registry.ts before the switch; the type guard narrows
+  // `name` to the core remainder, which is what the switch below and its
+  // never-guard are exhaustive over. opts rides through verbatim: every pack
+  // handler takes (args, opts), and the update pack's doQuery/sessionId
+  // seams keep reaching their handlers exactly as before the migration.
+  if (isPackToolName(name)) {
+    return await PACK_TOOL_HANDLERS[name](args, opts);
+  }
+
   switch (name) {
     case 'huaweicloud_check_cli':
       return runVersionCheck();
@@ -553,75 +562,19 @@ export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: Cal
       return getRegionalAvailability(args.service || '', args.region || '');
     case 'huaweicloud_explain_error':
       return explainError(args);
-    case 'huaweicloud_search_marketplace':
-      return await DISCOVERY_TOOL_HANDLERS['huaweicloud_search_marketplace'](args, opts);
-    case 'huaweicloud_get_service_icon':
-      return await DISCOVERY_TOOL_HANDLERS['huaweicloud_get_service_icon'](args, opts);
-    case 'huaweicloud_detect_framework':
-      return await DISCOVERY_TOOL_HANDLERS['huaweicloud_detect_framework'](args, opts);
-    case 'huaweicloud_setup_obs_config':
-      return await OBS_TOOL_HANDLERS['huaweicloud_setup_obs_config'](args, opts);
-    // Auth tools delegate to the auth pack's handler map
-    // (src/packs/auth/tools.ts).
-    case 'huaweicloud_auth_status':
-      return await AUTH_TOOL_HANDLERS['huaweicloud_auth_status'](args, opts);
-    case 'huaweicloud_auth_sync':
-      return await AUTH_TOOL_HANDLERS['huaweicloud_auth_sync'](args, opts);
-    case 'huaweicloud_auth_init':
-      return await AUTH_TOOL_HANDLERS['huaweicloud_auth_init'](args, opts);
-    case 'huaweicloud_auth_switch':
-      return await AUTH_TOOL_HANDLERS['huaweicloud_auth_switch'](args, opts);
-    case 'huaweicloud_auth_confirm':
-      return await AUTH_TOOL_HANDLERS['huaweicloud_auth_confirm'](args, opts);
-    // Sandbox tools delegate to the sandbox pack's handler map
-    // (src/packs/sandbox/tools.ts); the git repo transfer chain moved with
-    // the connect handler.
-    case 'huaweicloud_sandbox_exec_with_session':
-      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_exec_with_session'](args, opts);
-    case 'huaweicloud_sandbox_exec_one_shot':
-      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_exec_one_shot'](args, opts);
-    case 'huaweicloud_sandbox_close_session':
-      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_close_session'](args, opts);
-    case 'huaweicloud_sandbox_upload_file':
-      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_upload_file'](args, opts);
-    case 'huaweicloud_sandbox_upload_project':
-      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_upload_project'](args, opts);
-    case 'huaweicloud_sandbox_deploy_nginx':
-      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_deploy_nginx'](args, opts);
-    case 'huaweicloud_sandbox_deploy_check':
-      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_deploy_check'](args, opts);
-    case 'huaweicloud_sandbox_check_user':
-      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_check_user'](args, opts);
-    case 'huaweicloud_sandbox_sign_agreement':
-      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_sign_agreement'](args, opts);
-    case 'huaweicloud_sandbox_connect':
-      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_connect'](args, opts);
-    case 'huaweicloud_sandbox_credentials':
-      return await SANDBOX_TOOL_HANDLERS['huaweicloud_sandbox_credentials'](args, opts);
-    case 'huaweicloud_voucher_status':
-      return await VOUCHER_TOOL_HANDLERS['huaweicloud_voucher_status'](args, opts);
-    case 'huaweicloud_voucher_claim':
-      return await VOUCHER_TOOL_HANDLERS['huaweicloud_voucher_claim'](args, opts);
-    // Update tools delegate to the update pack's handler map
-    // (src/packs/update/tools.ts); the doQuery test-injection seam rides the
-    // per-case opts exactly as before the migration.
-    case 'huaweicloud_check_update':
-      return await UPDATE_TOOL_HANDLERS['huaweicloud_check_update'](args, {
-        sessionId: opts?.sessionId,
-        doQuery: opts?.doQuery,
-      });
-    case 'huaweicloud_upgrade':
-      return await UPDATE_TOOL_HANDLERS['huaweicloud_upgrade'](args, { sessionId: opts?.sessionId });
-    case 'huaweicloud_obs_set_website_config':
-      return await OBS_TOOL_HANDLERS['huaweicloud_obs_set_website_config'](args, opts);
     case 'huaweicloud_list_packs':
       return listPacks();
     case 'huaweicloud_pack_info':
       return packInfo(args.pack || '');
     default: {
-      // Compile-time exhaustiveness guard: adding a TOOL_DEFINITIONS entry
-      // without a matching case makes `name` non-never here and fails the build.
-      const _exhaustive: never = name;
+      // Compile-time exhaustiveness over the core remainder: after the
+      // PACK_TOOL_HANDLERS lookup above, `name` can only be
+      // Exclude<ToolName, PackToolName>; with every core case present the
+      // default is unreachable. Adding a core tool without a case — or
+      // breaking the pack guard above — makes this never-check fail the
+      // build.
+      const coreOnly: Exclude<ToolName, PackToolName> = name;
+      const _exhaustive: never = coreOnly;
       throw new Error(`Unknown tool: ${String(_exhaustive)}`);
     }
   }

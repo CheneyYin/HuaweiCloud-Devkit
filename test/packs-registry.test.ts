@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { TOOL_DEFINITIONS } from '../plugins/huaweicloud-core/src/tools.ts';
-import { PACKS } from '../plugins/huaweicloud-core/src/packs/registry.ts';
+import { PACKS, PACK_TOOL_HANDLERS } from '../plugins/huaweicloud-core/src/packs/registry.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const pluginRoot = join(root, 'plugins', 'huaweicloud-core');
@@ -34,6 +34,20 @@ test('pack tool counts match the P0 grouping', () => {
     total += pack.tools.length;
   }
   assert.equal(total, 42);
+});
+
+test('the central pack handler map keys equal the pack-owned tool names', () => {
+  // PACK_TOOL_HANDLERS is the runtime dispatch table callTool consults for
+  // every non-core tool; its satisfies check only guards the missing-key
+  // direction at compile time. This pins the extra-key direction too: a key
+  // drifting in (or a PACK_OF reassignment without a matching handler move)
+  // must fail here, not surface as a silent dead entry or a live mismatch.
+  const packOwned = [...new Set(PACKS.flatMap((pack) => (pack.id === 'core' ? [] : pack.tools)))].sort((a, b) =>
+    a.localeCompare(b),
+  );
+  const mapKeys = Object.keys(PACK_TOOL_HANDLERS).sort((a, b) => a.localeCompare(b));
+  assert.deepEqual(mapKeys, packOwned);
+  assert.equal(mapKeys.length, 25);
 });
 
 test('every skills/ directory is claimed by exactly one pack', () => {

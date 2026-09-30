@@ -26,8 +26,9 @@ This is an **agent guidance + safety package**, not a service encyclopedia. Six 
 
 ```
 plugins/huaweicloud-core/
-  skills/           ← 6 meta-skills + service skills
-  src/              ← TypeScript MCP server sources (stdio/remote JSON-RPC, 42 tools in tools.ts)
+  skills/           ← 6 meta-skills + service skills (pack-owned ones generated from src/packs/<id>/skills/)
+  src/              ← TypeScript MCP server sources (stdio/remote JSON-RPC, 42 tools)
+  src/packs/        ← capability packs: per-pack handlers/schemas/skills + registry (ownership truth) + enable (DEVKIT_PACKS)
   dist/             ← tsc output; every runtime entry point loads this
   safety/           ← shared policy.json + risk rules
   hooks/            ← PreToolUse hook (Node huaweicloud-safety.mjs, wired via hooks.json; .py variant kept for compatibility)
@@ -46,7 +47,8 @@ Also in the repo:
 
 - `bin/setup.cjs` — interactive installer (`huaweicloud-devkit`); dispatches to each agent's plugin dir.
 - `integrations/` — per-agent adapter configs (opencode, dsh, hermes, workbuddy, atomcode), separate from the plugin.
-- `src/tools.ts` — 42 MCP tools (hcloud CLI, hooks, catalog, auth, sandbox, voucher, update) with the exhaustive `callTool` dispatch. Input schemas live in `src/tool-schemas.ts` (zod, single source of truth for validation and tools/list rendering). The MCP server runs on `@modelcontextprotocol/sdk` (high-level `McpServer` + `registerTool`): `src/mcp-protocol.ts` is the server factory, `src/mcp-stdio-transport.ts` is a custom Transport carrying the dual Content-Length/newline framing (the SDK stdio transport is newline-only), `src/mcp-server-remote.ts` is the stateless Streamable HTTP remote. The SDK and zod are devDependencies bundled into `dist/mcp-server.js` at build time (esbuild; undici stays external) — agent plugin dirs have no SDK node_modules, so nothing else may import the SDK. `scripts/registry-snapshot-diff.mjs` guards the zod schemas against the legacy JSON-Schema snapshot in `test/fixtures/legacy-registry-snapshot.json`.
+- `src/tools.ts` — the 17 core tools plus the `callTool` dispatch: the 25 pack tools go through the central `PACK_TOOL_HANDLERS` map in `src/packs/registry.ts` (compile-time complete via `satisfies Record<PackToolName, …>`), the core tools are direct switch cases, and the default never-guard checks `Exclude<ToolName, PackToolName>`. Cross-cutting concerns (numeric-arg normalization, telemetry, error pass-through) stay at the top of `callTool`, above both paths. Input schemas live in `src/tool-schemas.ts` (zod, single source of truth for validation and tools/list rendering; it spreads each pack's `X_TOOL_SCHEMAS` so its `satisfies Record<ToolName, …>` check still covers all 42). The MCP server runs on `@modelcontextprotocol/sdk` (high-level `McpServer` + `registerTool`): `src/mcp-protocol.ts` is the server factory, `src/mcp-stdio-transport.ts` is a custom Transport carrying the dual Content-Length/newline framing (the SDK stdio transport is newline-only), `src/mcp-server-remote.ts` is the stateless Streamable HTTP remote. The SDK and zod are devDependencies bundled into `dist/mcp-server.js` at build time (esbuild; undici stays external) — agent plugin dirs have no SDK node_modules, so nothing else may import the SDK. `scripts/registry-snapshot-diff.mjs` guards the zod schemas against the legacy JSON-Schema snapshot in `test/fixtures/legacy-registry-snapshot.json`.
+- `src/packs/` — capability-granularity units. `<id>/tools.ts` co-locates a pack's tool definitions, zod schemas, and handlers (`X_TOOLS` / `X_TOOL_SCHEMAS` / `X_TOOL_HANDLERS`); `<id>/skills/` is the authoritative source for pack-owned skills, generated into `skills/` by `scripts/sync-skills.mjs`. `registry.ts` is the composition root: `PACK_OF` (42-key tool → pack ownership truth), `PACKS`, and the central `PACK_TOOL_HANDLERS` dispatch map. `enable.ts` resolves `DEVKIT_PACKS` (unset = all packs, unknown ids fail fast at boot, core is force-included so the approval chain and pack meta tools can never be trimmed away). The guard `scripts/lib/pack-boundaries.mjs` (run by both `npm run validate` and `structure.test.ts`) keeps pack modules from importing siblings or the registry at value level.
 - `src/setup-cli.ts` — KooCLI install/doctor logic; honors `HCLOUD_BIN`. Compiles to `dist/setup-cli.js`, the entry `bin/setup.cjs` loads.
 - `scripts/*.mjs` — validation, version sync, packaging, release helpers.
 - `.superpowers/` + `docs/superpowers/` — planning/spec workflow used for larger changes.
@@ -54,7 +56,7 @@ Also in the repo:
 ## Skill Naming: Meta vs Service
 
 - **Meta-skills** (`huaweicloud-*`, 6 required): horizontal capability skills such as routing, discovery, CLI/auth, API/SDK, safety, troubleshooting. Agent always starts here.
-- **Service skills** (`huawei-*`): vertical domain knowledge for specific Huawei Cloud services (ecs, obs, vpc, iam, dew, etc.). Loaded via `huaweicloud_retrieve_skill` after routing by the core meta-skill.
+- **Service skills** (`huawei-*`): vertical domain knowledge for specific Huawei Cloud services (ecs, obs, vpc, iam, dew, etc.). Loaded via `huaweicloud_retrieve_skill` after routing by the core meta-skill. Pack-owned service skills (obs, sandbox, voucher) are authored under `src/packs/<id>/skills/` and generated into `skills/` — edit the pack source, then run `npm run skills:sync`.
 
 Required meta-skills (tethered to `test/structure.test.ts`):
 `huaweicloud-api-and-sdk`, `huaweicloud-capability-discovery`, `huaweicloud-cli-and-auth`, `huaweicloud-core`, `huaweicloud-safety`, `huaweicloud-troubleshooting`
