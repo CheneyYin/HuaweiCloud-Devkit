@@ -1,3 +1,5 @@
+<!-- generated from src/packs/services/skills/huawei-iam - do not edit -->
+
 # IAM Policy Examples
 
 ## Huawei Cloud IAM Policy Format

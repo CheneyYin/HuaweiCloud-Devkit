@@ -4,6 +4,8 @@ description: 'Use when creating or managing Cloud Backup and Recovery (CBR) vaul
 version: 1
 ---
 
+<!-- generated from src/packs/services/skills/huawei-cbr - do not edit -->
+
 # Huawei Cloud CBR
 
 **STOP - Do not answer from general knowledge.** Follow the procedure below.

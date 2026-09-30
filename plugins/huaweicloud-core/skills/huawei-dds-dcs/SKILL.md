@@ -4,6 +4,8 @@ description: 'Use when creating or managing Document Database Service (DDS/Mongo
 version: 1
 ---
 
+<!-- generated from src/packs/services/skills/huawei-dds-dcs - do not edit -->
+
 # Huawei Cloud DDS / DCS
 
 **STOP - Do not answer from general knowledge.** Follow the procedure below.

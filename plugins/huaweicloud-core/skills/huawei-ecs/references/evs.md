@@ -1,3 +1,5 @@
+<!-- generated from src/packs/services/skills/huawei-ecs - do not edit -->
+
 # EVS Cloud Disk
 
 ## Create Volume

@@ -4,6 +4,8 @@ description: 'Use when creating, configuring, or managing VPC networks, subnets,
 version: 1
 ---
 
+<!-- generated from src/packs/services/skills/huawei-vpc - do not edit -->
+
 # Huawei Cloud VPC
 
 **STOP - Do not answer from general knowledge.** Follow the procedure below.

@@ -136,9 +136,6 @@ function opencodeConfigFile(): string {
   return join(configRoot('opencode'), 'opencode.json');
 }
 
-function codexDesktopSkillsDir(): string {
-  return join(codexDesktopPluginsDir(), 'skills');
-}
 function codexDesktopPluginsDir(): string {
   return join(homedir(), 'plugins', 'huaweicloud-devkit');
 }
@@ -474,16 +471,6 @@ function toCapabilitiesConfig(value: unknown): OfficeaceCapabilitiesConfig {
     : {};
 }
 
-function readCapabilitiesJson(): OfficeaceCapabilitiesConfig {
-  const capFile = officeaceCapabilitiesFile();
-  if (!existsSync(capFile)) return { capabilities: [] };
-  try {
-    return toCapabilitiesConfig(JSON.parse(readFileSync(capFile, 'utf8')));
-  } catch {
-    return { capabilities: [] };
-  }
-}
-
 function writeCapabilitiesJson(config: OfficeaceCapabilitiesConfig): void {
   mkdirSync(officeaceCapabilitiesDirSafe(), { recursive: true });
   writeFileSync(officeaceCapabilitiesFile(), JSON.stringify(config, null, 2));
@@ -512,54 +499,6 @@ function removeOfficeaceSkillCapabilities(): void {
   if (asRecord(config).capabilities && Array.isArray(config.capabilities) && config.capabilities.length !== origLen) {
     writeCapabilitiesJson(config);
     console.log(`  Skill capabilities cleaned: ${capFile}`);
-  }
-}
-
-function registerOfficeaceSkillEntries(): void {
-  const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  if (!existsSync(skillsSrc)) return;
-  const skillNames = readdirSync(skillsSrc, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && d.name.startsWith('huawei'))
-    .map((d) => d.name);
-
-  const config = readCapabilitiesJson();
-  if (!Array.isArray(config.capabilities)) {
-    // Pre-migration this crashed on config.capabilities.findIndex, failing the
-    // install step; the zero-detect install-all test pins that outcome.
-    throw new TypeError('OfficeAce capabilities.json has no capabilities array');
-  }
-  const capabilities: unknown[] = config.capabilities;
-  let changed = false;
-
-  for (const name of skillNames) {
-    const existingIdx = capabilities.findIndex((c) => asRecord(c).id === name && asRecord(c).type === 'skill');
-    if (existingIdx >= 0) continue;
-    capabilities.push({
-      id: name,
-      type: 'skill',
-      enabled: true,
-      source: 'custom',
-      selfEvolution: 'suggest',
-      followGlobalSelfEvolution: true,
-    });
-    changed = true;
-  }
-
-  if (!capabilities.some((c) => asRecord(c).id === 'huaweicloud-core' && asRecord(c).type === 'skill')) {
-    capabilities.push({
-      id: 'huaweicloud-core',
-      type: 'skill',
-      enabled: true,
-      source: 'custom',
-      selfEvolution: 'suggest',
-      followGlobalSelfEvolution: true,
-    });
-    changed = true;
-  }
-
-  if (changed) {
-    writeCapabilitiesJson(config);
-    console.log(`  Skill entries registered: ${officeaceCapabilitiesFile()}`);
   }
 }
 
@@ -662,6 +601,115 @@ function copyDir(src: string, dest: string): void {
     } else {
       copyFileVerified(s, d);
     }
+  }
+}
+
+// The payload every per-agent plugin dir must carry: the MCP server (dist/),
+// the safety policy, and the skills tree. Skills are server data disclosed
+// only through the MCP tools (list_packs / pack_info / retrieve_skill /
+// search_docs) — they are never copied into an agent's native skill
+// directory, so every install and update path must place them next to the
+// server it deploys.
+function copyServerPayload(pluginDest: string, opts: { skipDist?: boolean } = {}): void {
+  if (!opts.skipDist) {
+    copyDir(join(PLUGIN_ROOT, 'dist'), join(pluginDest, 'dist'));
+    console.log(`  MCP Server -> ${join(pluginDest, 'dist')}`);
+  }
+  copyDir(join(PLUGIN_ROOT, 'safety'), join(pluginDest, 'safety'));
+  console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
+  copyDir(join(PLUGIN_ROOT, 'skills'), join(pluginDest, 'skills'));
+  console.log(`  Skills (server data, MCP-disclosed) -> ${join(pluginDest, 'skills')}`);
+}
+
+// Devkit-owned skill names. The shipped skills/ tree is the ownership
+// manifest: a name is deletable only when the current tree still ships it,
+// so a user-authored skill that merely shares the huawei* prefix survives
+// every cleanup.
+function devkitOwnedSkillNames(): Set<string> {
+  const skillsSrc = join(PLUGIN_ROOT, 'skills');
+  if (!existsSync(skillsSrc)) return new Set();
+  try {
+    return new Set(
+      readdirSync(skillsSrc, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+// Agent-native skill directories that older devkit versions copied skills
+// into. The codex-desktop plugin dir's skills/ is deliberately absent: that
+// is server data, not a native dir.
+function nativeSkillDirs(): string[] {
+  return [
+    opencodeSkillsDir(),
+    openclawSkillsDir(),
+    codeartsSkillsDir(),
+    codeartsProjectSkillsDir(),
+    codeartsWorkSkillsDir(),
+    workbuddySkillsDir(),
+    atomcodeSkillsDir(),
+    dshSkillsDir(),
+    officeaceSkillsDir(),
+    hermesSkillsDir(),
+  ];
+}
+
+// Stale native copies from pre-MCP installs: they shadow-disclose outdated
+// skill content through the agent's own skill loading, bypassing pack
+// enablement and the server's disclosure tools.
+function staleNativeSkillDirs(): string[] {
+  const owned = devkitOwnedSkillNames();
+  if (owned.size === 0) return [];
+  const stale: string[] = [];
+  for (const dir of nativeSkillDirs()) {
+    if (!existsSync(dir)) continue;
+    try {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isDirectory() && owned.has(entry.name)) stale.push(join(dir, entry.name));
+      }
+    } catch {}
+  }
+  return stale;
+}
+
+function purgeStaleNativeSkills(): number {
+  const stale = staleNativeSkillDirs();
+  let removed = 0;
+  for (const path of stale) {
+    if (removeIfExists(path)) removed++;
+  }
+  return removed;
+}
+
+// Remove devkit-owned skill names from one agent-native dir (uninstall path).
+// Same ownership precision as the purge: user skills sharing the huawei*
+// prefix survive.
+function removeOwnedSkillsFrom(dir: string): number {
+  const owned = devkitOwnedSkillNames();
+  if (owned.size === 0 || !existsSync(dir)) return 0;
+  let removed = 0;
+  try {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory() && owned.has(entry.name)) {
+        if (removeIfExists(join(dir, entry.name))) removed++;
+      }
+    }
+  } catch {}
+  return removed;
+}
+
+// Skills status reads the server-data tree inside the plugin dir, mirroring
+// where copyServerPayload places it.
+function serverSkillCount(pluginDir: string): number {
+  const dir = join(pluginDir, 'skills');
+  if (!existsSync(dir)) return 0;
+  try {
+    return readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).length;
+  } catch {
+    return 0;
   }
 }
 
@@ -1164,21 +1212,13 @@ function codexStatus(): boolean {
 }
 
 async function installOpenCode(): Promise<void> {
-  const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
-  const distDir = join(PLUGIN_ROOT, 'dist');
-  const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'hooks', 'skill-tracker.js');
   const pluginDest = opencodePluginsDir();
 
-  copyDir(skillsSrc, opencodeSkillsDir());
-  console.log(`  Skills -> ${opencodeSkillsDir()}`);
   copyDir(commandsSrc, opencodeCommandsDir());
   console.log(`  Commands -> ${opencodeCommandsDir()}`);
-  copyDir(distDir, join(pluginDest, 'dist'));
-  console.log(`  MCP Server -> ${join(pluginDest, 'dist')}`);
-  copyDir(safetyDir, join(pluginDest, 'safety'));
-  console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
+  copyServerPayload(pluginDest);
   const opcPlugins = join(configRoot('opencode'), 'plugins');
   mkdirSync(opcPlugins, { recursive: true });
   copyFileSync(pluginSrc, join(opcPlugins, 'skill-tracker.js'));
@@ -1188,17 +1228,8 @@ async function installOpenCode(): Promise<void> {
 }
 
 function uninstallOpenCode(): void {
-  let removed = 0;
-
-  const skills = opencodeSkillsDir();
-  if (existsSync(skills)) {
-    for (const entry of readdirSync(skills, { withFileTypes: true })) {
-      if (entry.name.startsWith('huawei')) {
-        if (removeIfExists(join(skills, entry.name))) removed++;
-      }
-    }
-    console.log(`  Removed ${removed} skills`);
-  }
+  const removed = removeOwnedSkillsFrom(opencodeSkillsDir());
+  if (removed > 0) console.log(`  Removed ${removed} skills`);
 
   const commands = opencodeCommandsDir();
   let cmdRemoved = 0;
@@ -1239,25 +1270,16 @@ function pruneStale(targetDir: string, sourceDir: string): number {
 
 // Incremental update: overwrite copied files, prune stale ones, and only touch the config when necessary.
 async function updateOpenCode(): Promise<void> {
-  const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
-  const distDir = join(PLUGIN_ROOT, 'dist');
-  const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'hooks', 'skill-tracker.js');
   const pluginDest = opencodePluginsDir();
 
-  copyDir(skillsSrc, opencodeSkillsDir());
-  const staleSkills = pruneStale(opencodeSkillsDir(), skillsSrc);
-  console.log(`  Skills updated -> ${opencodeSkillsDir()}${staleSkills > 0 ? ` (removed ${staleSkills} stale)` : ''}`);
   copyDir(commandsSrc, opencodeCommandsDir());
   const staleCommands = pruneStale(opencodeCommandsDir(), commandsSrc);
   console.log(
     `  Commands updated -> ${opencodeCommandsDir()}${staleCommands > 0 ? ` (removed ${staleCommands} stale)` : ''}`,
   );
-  copyDir(distDir, join(pluginDest, 'dist'));
-  console.log(`  MCP Server updated -> ${join(pluginDest, 'dist')}`);
-  copyDir(safetyDir, join(pluginDest, 'safety'));
-  console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
+  copyServerPayload(pluginDest);
   const opcPlugins = join(configRoot('opencode'), 'plugins');
   mkdirSync(opcPlugins, { recursive: true });
   copyFileSync(pluginSrc, join(opcPlugins, 'skill-tracker.js'));
@@ -1347,21 +1369,13 @@ function removeCodexMarketplaceEntry(): void {
 }
 
 async function installOpenClaw(): Promise<void> {
-  const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
-  const distDir = join(PLUGIN_ROOT, 'dist');
-  const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = openclawPluginsDir();
 
   mkdirSync(pluginDest, { recursive: true });
-  copyDir(skillsSrc, openclawSkillsDir());
-  console.log(`  Skills -> ${openclawSkillsDir()}`);
   copyDir(commandsSrc, join(homedir(), '.agents', 'commands'));
   console.log(`  Commands -> ${join(homedir(), '.agents', 'commands')}`);
-  copyDir(distDir, join(pluginDest, 'dist'));
-  console.log(`  MCP Server -> ${join(pluginDest, 'dist')}`);
-  copyDir(safetyDir, join(pluginDest, 'safety'));
-  console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
+  copyServerPayload(pluginDest);
 
   const mcpServerAbsPath = join(pluginDest, 'dist', 'mcp-server.js').replace(/\\/g, '/');
   writeMcpServersFile(pluginDest, mcpServerAbsPath, 'openclaw');
@@ -1377,16 +1391,8 @@ async function installOpenClaw(): Promise<void> {
 }
 
 function uninstallOpenClaw(): void {
-  const skillsDir = openclawSkillsDir();
-  let removed = 0;
-  if (existsSync(skillsDir)) {
-    for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
-      if (entry.name.startsWith('huawei')) {
-        if (removeIfExists(join(skillsDir, entry.name))) removed++;
-      }
-    }
-    console.log(`  Removed ${removed} skills`);
-  }
+  const removed = removeOwnedSkillsFrom(openclawSkillsDir());
+  if (removed > 0) console.log(`  Removed ${removed} skills`);
 
   const cmdDir = join(homedir(), '.agents', 'commands');
   let cmdRemoved = 0;
@@ -1406,22 +1412,13 @@ function uninstallOpenClaw(): void {
 }
 
 async function updateOpenClaw(): Promise<void> {
-  const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
-  const distDir = join(PLUGIN_ROOT, 'dist');
-  const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = openclawPluginsDir();
 
   mkdirSync(pluginDest, { recursive: true });
-  copyDir(skillsSrc, openclawSkillsDir());
-  const staleSkills = pruneStale(openclawSkillsDir(), skillsSrc);
-  console.log(`  Skills updated -> ${openclawSkillsDir()}${staleSkills > 0 ? ` (removed ${staleSkills} stale)` : ''}`);
   copyDir(commandsSrc, join(homedir(), '.agents', 'commands'));
   console.log(`  Commands updated -> ${join(homedir(), '.agents', 'commands')}`);
-  copyDir(distDir, join(pluginDest, 'dist'));
-  console.log(`  MCP Server updated -> ${join(pluginDest, 'dist')}`);
-  copyDir(safetyDir, join(pluginDest, 'safety'));
-  console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
+  copyServerPayload(pluginDest);
 
   const mcpServerAbsPath = join(pluginDest, 'dist', 'mcp-server.js').replace(/\\/g, '/');
   writeMcpServersFile(pluginDest, mcpServerAbsPath, 'openclaw');
@@ -1437,21 +1434,13 @@ async function updateOpenClaw(): Promise<void> {
 }
 
 async function installCodexDesktop(): Promise<void> {
-  const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
-  const distDir = join(PLUGIN_ROOT, 'dist');
-  const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = codexDesktopPluginsDir();
 
   mkdirSync(pluginDest, { recursive: true });
-  copyDir(skillsSrc, join(pluginDest, 'skills'));
-  console.log(`  Skills -> ${join(pluginDest, 'skills')}`);
   copyDir(commandsSrc, join(pluginDest, 'commands'));
   console.log(`  Commands -> ${join(pluginDest, 'commands')}`);
-  copyDir(distDir, join(pluginDest, 'dist'));
-  console.log(`  MCP Server -> ${join(pluginDest, 'dist')}`);
-  copyDir(safetyDir, join(pluginDest, 'safety'));
-  console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
+  copyServerPayload(pluginDest);
 
   // Copy assets (icons, logos) for Codex Desktop plugin UI
   const codexAssetsSrc = join(PLUGIN_ROOT, 'assets');
@@ -1475,8 +1464,10 @@ async function installCodexDesktop(): Promise<void> {
   ensureCodexMarketplaceEntry();
   console.log('  \x1b[33m请到插件 → 个人 → HuaweiCloud DevKit → 安装\x1b[0m');
 
-  // Clean up old install locations from pre-marketplace era
-  removeIfExists(join(homedir(), '.agents', 'skills'));
+  // Clean up old install locations from pre-marketplace era. ~/.agents/skills
+  // is never removed wholesale: OpenClaw installs share it, and any user
+  // skill living there must survive — devkit-owned names are purged
+  // precisely by purgeStaleNativeSkills() at the command level.
   removeIfExists(join(homedir(), '.agents', 'commands'));
   const oldPluginsDir = join(homedir(), '.agents', 'huaweicloud-plugins');
   if (existsSync(oldPluginsDir)) {
@@ -1489,27 +1480,16 @@ async function installCodexDesktop(): Promise<void> {
 
 // Incremental update: overwrite copied files, prune stale ones, and only touch the config when necessary.
 async function updateCodexDesktop(): Promise<void> {
-  const skillsSrc = join(PLUGIN_ROOT, 'skills');
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
-  const distDir = join(PLUGIN_ROOT, 'dist');
-  const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = codexDesktopPluginsDir();
 
   mkdirSync(pluginDest, { recursive: true });
-  copyDir(skillsSrc, join(pluginDest, 'skills'));
-  const staleSkills = pruneStale(join(pluginDest, 'skills'), skillsSrc);
-  console.log(
-    `  Skills updated -> ${join(pluginDest, 'skills')}${staleSkills > 0 ? ` (removed ${staleSkills} stale)` : ''}`,
-  );
   copyDir(commandsSrc, join(pluginDest, 'commands'));
   const staleCommands = pruneStale(join(pluginDest, 'commands'), commandsSrc);
   console.log(
     `  Commands updated -> ${join(pluginDest, 'commands')}${staleCommands > 0 ? ` (removed ${staleCommands} stale)` : ''}`,
   );
-  copyDir(distDir, join(pluginDest, 'dist'));
-  console.log(`  MCP Server updated -> ${join(pluginDest, 'dist')}`);
-  copyDir(safetyDir, join(pluginDest, 'safety'));
-  console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
+  copyServerPayload(pluginDest);
 
   // Copy assets (icons, logos) for Codex Desktop plugin UI
   const codexAssetsSrc = join(PLUGIN_ROOT, 'assets');
@@ -1534,17 +1514,8 @@ async function updateCodexDesktop(): Promise<void> {
 
 function uninstallCodexDesktop(): void {
   const pluginDest = codexDesktopPluginsDir();
-  let removed = 0;
-  const skillsDir = join(pluginDest, 'skills');
-  if (existsSync(skillsDir)) {
-    for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
-      if (entry.name.startsWith('huawei')) {
-        if (removeIfExists(join(skillsDir, entry.name))) removed++;
-      }
-    }
-    console.log(`  Removed ${removed} skills`);
-  }
-
+  // The whole plugin dir (server + safety + skills) is removed below; the
+  // skills inside it are server data, not native agent skills.
   const cmdDir = join(pluginDest, 'commands');
   let cmdRemoved = 0;
   if (existsSync(cmdDir)) {
@@ -1636,21 +1607,10 @@ function registerCodeartsMcp(configPath: string, agentKey = 'codearts'): void {
 }
 
 async function installCodeArts(): Promise<void> {
-  const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const distDir = join(PLUGIN_ROOT, 'dist');
-  const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'hooks', 'skill-tracker.js');
-
-  copyDir(skillsSrc, codeartsSkillsDir());
-  console.log(`  Skills -> ${codeartsSkillsDir()}`);
-  copyDir(skillsSrc, codeartsProjectSkillsDir());
-  console.log(`  Skills -> ${codeartsProjectSkillsDir()}`);
-
   const pluginDest = codeartsPluginsDir();
-  copyDir(distDir, join(pluginDest, 'dist'));
-  console.log(`  MCP Server -> ${join(pluginDest, 'dist')}`);
-  copyDir(safetyDir, join(pluginDest, 'safety'));
-  console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
+
+  copyServerPayload(pluginDest);
 
   const codeartsHookDir = join(homedir(), '.codeartsdoer', 'plugins');
   mkdirSync(codeartsHookDir, { recursive: true });
@@ -1665,21 +1625,10 @@ async function installCodeArts(): Promise<void> {
 
 // Incremental update: overwrite copied files, prune stale ones, and only touch the config when necessary.
 async function updateCodeArts(): Promise<void> {
-  const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const distDir = join(PLUGIN_ROOT, 'dist');
-  const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'hooks', 'skill-tracker.js');
   const pluginDest = codeartsPluginsDir();
 
-  for (const dir of [codeartsSkillsDir(), codeartsProjectSkillsDir()]) {
-    copyDir(skillsSrc, dir);
-    const stale = pruneStale(dir, skillsSrc);
-    console.log(`  Skills updated -> ${dir}${stale > 0 ? ` (removed ${stale} stale)` : ''}`);
-  }
-  copyDir(distDir, join(pluginDest, 'dist'));
-  console.log(`  MCP Server updated -> ${join(pluginDest, 'dist')}`);
-  copyDir(safetyDir, join(pluginDest, 'safety'));
-  console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
+  copyServerPayload(pluginDest);
 
   const codeartsHookDir = join(homedir(), '.codeartsdoer', 'plugins');
   mkdirSync(codeartsHookDir, { recursive: true });
@@ -1697,12 +1646,7 @@ async function updateCodeArts(): Promise<void> {
 function uninstallCodeArts(): void {
   let removed = 0;
   for (const skillsDir of [codeartsSkillsDir(), codeartsProjectSkillsDir()]) {
-    if (!existsSync(skillsDir)) continue;
-    for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
-      if (entry.name.startsWith('huawei')) {
-        if (removeIfExists(join(skillsDir, entry.name))) removed++;
-      }
-    }
+    removed += removeOwnedSkillsFrom(skillsDir);
   }
   if (removed > 0) console.log(`  Removed ${removed} skills`);
 
@@ -1742,12 +1686,7 @@ function codeartsStatus(): void {
   console.log(
     `  Safety Policy: ${existsSync(join(pluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
-  let skillCount = 0;
-  if (existsSync(codeartsSkillsDir())) {
-    skillCount = readdirSync(codeartsSkillsDir(), { withFileTypes: true }).filter(
-      (d) => d.isDirectory() && d.name.startsWith('huawei'),
-    ).length;
-  }
+  const skillCount = serverSkillCount(pluginDir);
   console.log(
     `  Skills: ${skillCount > 0 ? `\x1b[32m${skillCount} installed\x1b[0m` : '\x1b[31mNot installed\x1b[0m'}`,
   );
@@ -1832,35 +1771,18 @@ function isPlainLocal(value: unknown): boolean {
 }
 
 async function installCodeArtsWork(): Promise<void> {
-  const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const distDir = join(PLUGIN_ROOT, 'dist');
-  const safetyDir = join(PLUGIN_ROOT, 'safety');
-
-  copyDir(skillsSrc, codeartsWorkSkillsDir());
-  console.log(`  Skills -> ${codeartsWorkSkillsDir()}`);
-
   const pluginDest = codeartsWorkPluginsDir();
-  copyDir(distDir, join(pluginDest, 'dist'));
-  console.log(`  MCP Server -> ${join(pluginDest, 'dist')}`);
-  copyDir(safetyDir, join(pluginDest, 'safety'));
-  console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
+
+  copyServerPayload(pluginDest);
 
   registerCodeartsWorkMcp();
   installRuntimeDeps(pluginDest);
 }
 
 async function updateCodeArtsWork(): Promise<void> {
-  const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const distDir = join(PLUGIN_ROOT, 'dist');
-  const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = codeartsWorkPluginsDir();
 
-  copyDir(skillsSrc, codeartsWorkSkillsDir());
-  console.log(`  Skills updated -> ${codeartsWorkSkillsDir()}`);
-  copyDir(distDir, join(pluginDest, 'dist'));
-  console.log(`  MCP Server updated -> ${join(pluginDest, 'dist')}`);
-  copyDir(safetyDir, join(pluginDest, 'safety'));
-  console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
+  copyServerPayload(pluginDest);
   registerCodeartsWorkMcp();
   mkdirSync(pluginDest, { recursive: true });
   writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
@@ -1868,16 +1790,8 @@ async function updateCodeArtsWork(): Promise<void> {
 }
 
 function uninstallCodeArtsWork(): void {
-  const skillsDir = codeartsWorkSkillsDir();
-  if (existsSync(skillsDir)) {
-    let removed = 0;
-    for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
-      if (entry.name.startsWith('huawei')) {
-        if (removeIfExists(join(skillsDir, entry.name))) removed++;
-      }
-    }
-    if (removed > 0) console.log(`  Removed ${removed} skills`);
-  }
+  const removed = removeOwnedSkillsFrom(codeartsWorkSkillsDir());
+  if (removed > 0) console.log(`  Removed ${removed} skills`);
 
   if (removeIfExists(codeartsWorkPluginsDir())) {
     console.log('  Removed MCP server and safety policy');
@@ -1910,12 +1824,7 @@ function codeartsWorkStatus(): void {
   console.log(
     `  Safety Policy: ${existsSync(join(pluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
-  let skillCount = 0;
-  if (existsSync(codeartsWorkSkillsDir())) {
-    skillCount = readdirSync(codeartsWorkSkillsDir(), { withFileTypes: true }).filter(
-      (d) => d.isDirectory() && d.name.startsWith('huawei'),
-    ).length;
-  }
+  const skillCount = serverSkillCount(pluginDir);
   console.log(
     `  Skills: ${skillCount > 0 ? `\x1b[32m${skillCount} installed\x1b[0m` : '\x1b[31mNot installed\x1b[0m'}`,
   );
@@ -2125,18 +2034,9 @@ function removeAtomcodeHooks(): void {
 }
 
 async function installWorkBuddy(): Promise<void> {
-  const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const distDir = join(PLUGIN_ROOT, 'dist');
-  const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = workbuddyPluginsDir();
 
-  copyDir(skillsSrc, workbuddySkillsDir());
-  console.log(`  Skills -> ${workbuddySkillsDir()}`);
-
-  copyDir(distDir, join(pluginDest, 'dist'));
-  console.log(`  MCP Server -> ${join(pluginDest, 'dist')}`);
-  copyDir(safetyDir, join(pluginDest, 'safety'));
-  console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
+  copyServerPayload(pluginDest);
 
   ensureWorkbuddyMcpConfig();
   installRuntimeDeps(pluginDest);
@@ -2147,18 +2047,9 @@ async function installWorkBuddy(): Promise<void> {
 
 // Incremental update: overwrite copied files, prune stale ones, and only touch the config when necessary.
 async function updateWorkBuddy(): Promise<void> {
-  const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const distDir = join(PLUGIN_ROOT, 'dist');
-  const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = workbuddyPluginsDir();
 
-  copyDir(skillsSrc, workbuddySkillsDir());
-  const stale = pruneStale(workbuddySkillsDir(), skillsSrc);
-  console.log(`  Skills updated -> ${workbuddySkillsDir()}${stale > 0 ? ` (removed ${stale} stale)` : ''}`);
-  copyDir(distDir, join(pluginDest, 'dist'));
-  console.log(`  MCP Server updated -> ${join(pluginDest, 'dist')}`);
-  copyDir(safetyDir, join(pluginDest, 'safety'));
-  console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
+  copyServerPayload(pluginDest);
   ensureWorkbuddyMcpConfig();
   mkdirSync(pluginDest, { recursive: true });
   writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
@@ -2168,16 +2059,8 @@ async function updateWorkBuddy(): Promise<void> {
 }
 
 function uninstallWorkBuddy(): void {
-  const skillsDir = workbuddySkillsDir();
-  let removed = 0;
-  if (existsSync(skillsDir)) {
-    for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
-      if (entry.name.startsWith('huawei')) {
-        if (removeIfExists(join(skillsDir, entry.name))) removed++;
-      }
-    }
-    if (removed > 0) console.log(`  Removed ${removed} skills`);
-  }
+  const removed = removeOwnedSkillsFrom(workbuddySkillsDir());
+  if (removed > 0) console.log(`  Removed ${removed} skills`);
 
   if (removeIfExists(workbuddyPluginsDir())) {
     console.log('  Removed MCP server and safety policy');
@@ -2239,19 +2122,13 @@ function uninstallWorkBuddy(): void {
 
 function workbuddyStatus(): void {
   const pluginDir = workbuddyPluginsDir();
-  const skillsDir = workbuddySkillsDir();
   console.log(
     `  MCP Server: ${mcpServerInstalled(pluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
   console.log(
     `  Safety Policy: ${existsSync(join(pluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
-  let skillCount = 0;
-  if (existsSync(skillsDir)) {
-    skillCount = readdirSync(skillsDir, { withFileTypes: true }).filter(
-      (d) => d.isDirectory() && d.name.startsWith('huawei'),
-    ).length;
-  }
+  const skillCount = serverSkillCount(pluginDir);
   console.log(
     `  Skills: ${skillCount > 0 ? `\x1b[32m${skillCount} installed\x1b[0m` : '\x1b[31mNot installed\x1b[0m'}`,
   );
@@ -2330,18 +2207,9 @@ function ensureAtomcodeMcpConfig(): boolean {
 }
 
 async function installAtomCode(): Promise<void> {
-  const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const distDir = join(PLUGIN_ROOT, 'dist');
-  const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = atomcodePluginsDir();
 
-  copyDir(skillsSrc, atomcodeSkillsDir());
-  console.log(`  Skills -> ${atomcodeSkillsDir()}`);
-
-  copyDir(distDir, join(pluginDest, 'dist'));
-  console.log(`  MCP Server -> ${join(pluginDest, 'dist')}`);
-  copyDir(safetyDir, join(pluginDest, 'safety'));
-  console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
+  copyServerPayload(pluginDest);
 
   ensureAtomcodeMcpConfig();
   deployAtomcodeHooks();
@@ -2350,18 +2218,9 @@ async function installAtomCode(): Promise<void> {
 
 // Incremental update: overwrite copied files, prune stale ones, and only touch the config when necessary.
 async function updateAtomCode(): Promise<void> {
-  const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const distDir = join(PLUGIN_ROOT, 'dist');
-  const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = atomcodePluginsDir();
 
-  copyDir(skillsSrc, atomcodeSkillsDir());
-  const stale = pruneStale(atomcodeSkillsDir(), skillsSrc);
-  console.log(`  Skills updated -> ${atomcodeSkillsDir()}${stale > 0 ? ` (removed ${stale} stale)` : ''}`);
-  copyDir(distDir, join(pluginDest, 'dist'));
-  console.log(`  MCP Server updated -> ${join(pluginDest, 'dist')}`);
-  copyDir(safetyDir, join(pluginDest, 'safety'));
-  console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
+  copyServerPayload(pluginDest);
   ensureAtomcodeMcpConfig();
   deployAtomcodeHooks();
   mkdirSync(pluginDest, { recursive: true });
@@ -2370,16 +2229,8 @@ async function updateAtomCode(): Promise<void> {
 }
 
 function uninstallAtomCode(): void {
-  const skillsDir = atomcodeSkillsDir();
-  let removed = 0;
-  if (existsSync(skillsDir)) {
-    for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
-      if (entry.name.startsWith('huawei')) {
-        if (removeIfExists(join(skillsDir, entry.name))) removed++;
-      }
-    }
-    if (removed > 0) console.log(`  Removed ${removed} skills`);
-  }
+  const removed = removeOwnedSkillsFrom(atomcodeSkillsDir());
+  if (removed > 0) console.log(`  Removed ${removed} skills`);
 
   removeAtomcodeHooks();
 
@@ -2408,19 +2259,13 @@ function uninstallAtomCode(): void {
 
 function atomcodeStatus(): void {
   const pluginDir = atomcodePluginsDir();
-  const skillsDir = atomcodeSkillsDir();
   console.log(
     `  MCP Server: ${mcpServerInstalled(pluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
   console.log(
     `  Safety Policy: ${existsSync(join(pluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
-  let skillCount = 0;
-  if (existsSync(skillsDir)) {
-    skillCount = readdirSync(skillsDir, { withFileTypes: true }).filter(
-      (d) => d.isDirectory() && d.name.startsWith('huawei'),
-    ).length;
-  }
+  const skillCount = serverSkillCount(pluginDir);
   console.log(
     `  Skills: ${skillCount > 0 ? `\x1b[32m${skillCount} installed\x1b[0m` : '\x1b[31mNot installed\x1b[0m'}`,
   );
@@ -2661,19 +2506,11 @@ function tryInstallDshMcpClient(): boolean {
 }
 
 async function installDsh(): Promise<void> {
-  const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const distDir = join(PLUGIN_ROOT, 'dist');
-  const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = dshPluginsDir();
   const hookSrc = join(PACKAGE_ROOT, 'integrations', 'dsh', 'hook-plugin.mjs');
 
   mkdirSync(pluginDest, { recursive: true });
-  copyDir(skillsSrc, dshSkillsDir());
-  console.log(`  Skills -> ${dshSkillsDir()}`);
-  copyDir(distDir, join(pluginDest, 'dist'));
-  console.log(`  MCP Server -> ${join(pluginDest, 'dist')}`);
-  copyDir(safetyDir, join(pluginDest, 'safety'));
-  console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
+  copyServerPayload(pluginDest);
   copyFileSync(hookSrc, join(pluginDest, 'hook-plugin.mjs'));
   console.log(`  Hook Plugin -> ${join(pluginDest, 'hook-plugin.mjs')}`);
   ensureDshMcpPatch();
@@ -2683,20 +2520,11 @@ async function installDsh(): Promise<void> {
 }
 
 async function updateDsh(): Promise<void> {
-  const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const distDir = join(PLUGIN_ROOT, 'dist');
-  const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = dshPluginsDir();
   const hookSrc = join(PACKAGE_ROOT, 'integrations', 'dsh', 'hook-plugin.mjs');
 
   mkdirSync(pluginDest, { recursive: true });
-  copyDir(skillsSrc, dshSkillsDir());
-  const stale = pruneStale(dshSkillsDir(), skillsSrc);
-  console.log(`  Skills updated -> ${dshSkillsDir()}${stale > 0 ? ` (removed ${stale} stale)` : ''}`);
-  copyDir(distDir, join(pluginDest, 'dist'));
-  console.log(`  MCP Server updated -> ${join(pluginDest, 'dist')}`);
-  copyDir(safetyDir, join(pluginDest, 'safety'));
-  console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
+  copyServerPayload(pluginDest);
   copyFileSync(hookSrc, join(pluginDest, 'hook-plugin.mjs'));
   console.log(`  Hook Plugin updated -> ${join(pluginDest, 'hook-plugin.mjs')}`);
   ensureDshMcpPatch();
@@ -2708,16 +2536,11 @@ async function updateDsh(): Promise<void> {
 function uninstallDsh(): void {
   const skillsDir = dshSkillsDir();
   const oldHookFile = join(dshRoot(), 'plugins', 'skill-tracker.js');
-  let removed = 0;
-  if (existsSync(skillsDir)) {
-    for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
-      if (entry.name.startsWith('huawei')) {
-        if (removeIfExists(join(skillsDir, entry.name))) removed++;
-      }
-    }
-    if (removed > 0) console.log(`  Removed ${removed} skills`);
+  const removed = removeOwnedSkillsFrom(skillsDir);
+  if (removed > 0) console.log(`  Removed ${removed} skills`);
+  if (removed > 0) {
     try {
-      if (readdirSync(skillsDir).length === 0) {
+      if (existsSync(skillsDir) && readdirSync(skillsDir).length === 0) {
         rmSync(skillsDir, { recursive: true, force: true });
         console.log(`  Removed empty skills directory: ${skillsDir}`);
       }
@@ -2735,7 +2558,6 @@ function uninstallDsh(): void {
 
 function dshStatus(): void {
   const pluginDir = dshPluginsDir();
-  const skillsDir = dshSkillsDir();
   console.log(
     `  MCP Server: ${mcpServerInstalled(pluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
@@ -2745,12 +2567,7 @@ function dshStatus(): void {
   console.log(
     `  Hook Plugin: ${existsSync(join(pluginDir, 'hook-plugin.mjs')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
-  let skillCount = 0;
-  if (existsSync(skillsDir)) {
-    skillCount = readdirSync(skillsDir, { withFileTypes: true }).filter(
-      (d) => d.isDirectory() && d.name.startsWith('huawei'),
-    ).length;
-  }
+  const skillCount = serverSkillCount(pluginDir);
   console.log(
     `  Skills: ${skillCount > 0 ? `\x1b[32m${skillCount} installed\x1b[0m` : '\x1b[31mNot installed\x1b[0m'}`,
   );
@@ -2793,18 +2610,9 @@ async function installOfficeAce(): Promise<void> {
       return;
     }
   }
-  const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const distDir = join(PLUGIN_ROOT, 'dist');
-  const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = officeacePluginsDir();
 
-  copyDir(skillsSrc, officeaceSkillsDir());
-  console.log(`  Skills -> ${officeaceSkillsDir()}`);
-
-  copyDir(distDir, join(pluginDest, 'dist'));
-  console.log(`  MCP Server -> ${join(pluginDest, 'dist')}`);
-  copyDir(safetyDir, join(pluginDest, 'safety'));
-  console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
+  copyServerPayload(pluginDest);
 
   installRuntimeDeps(pluginDest);
   if (ensureOfficeaceMcpInSqlite() === 'owner-missing') {
@@ -2813,7 +2621,9 @@ async function installOfficeAce(): Promise<void> {
         'Open OfficeAce, add/enable any connector once, then re-run install.',
     );
   }
-  registerOfficeaceSkillEntries();
+  // Prior versions registered native skill entries here; clean them so the
+  // capabilities registry carries no pointer at the (now MCP-only) skills.
+  removeOfficeaceSkillCapabilities();
   // Persist the resolved root so a later uninstall/update (new process, no
   // OFFICE_CLAW_CONFIG_ROOT env) still targets the same directory (#559).
   const resolvedRoot = officeaceCapabilitiesDir();
@@ -2821,18 +2631,9 @@ async function installOfficeAce(): Promise<void> {
 }
 
 async function updateOfficeAce(): Promise<void> {
-  const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const distDir = join(PLUGIN_ROOT, 'dist');
-  const safetyDir = join(PLUGIN_ROOT, 'safety');
   const pluginDest = officeacePluginsDir();
 
-  copyDir(skillsSrc, officeaceSkillsDir());
-  const stale = pruneStale(officeaceSkillsDir(), skillsSrc);
-  console.log(`  Skills updated -> ${officeaceSkillsDir()}${stale > 0 ? ` (removed ${stale} stale)` : ''}`);
-  copyDir(distDir, join(pluginDest, 'dist'));
-  console.log(`  MCP Server updated -> ${join(pluginDest, 'dist')}`);
-  copyDir(safetyDir, join(pluginDest, 'safety'));
-  console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
+  copyServerPayload(pluginDest);
   installRuntimeDeps(pluginDest);
   if (ensureOfficeaceMcpInSqlite() === 'owner-missing') {
     console.log(
@@ -2840,7 +2641,7 @@ async function updateOfficeAce(): Promise<void> {
         `The connector may stay disconnected until you add/enable any connector once in OfficeAce and re-run update.`,
     );
   }
-  registerOfficeaceSkillEntries();
+  removeOfficeaceSkillCapabilities();
   const resolvedRoot = officeaceCapabilitiesDir();
   if (resolvedRoot) writeOfficeaceRootMarker(resolvedRoot);
   mkdirSync(pluginDest, { recursive: true });
@@ -2849,16 +2650,11 @@ async function updateOfficeAce(): Promise<void> {
 
 function uninstallOfficeAce(): void {
   const skillsDir = officeaceSkillsDir();
-  let removed = 0;
-  if (existsSync(skillsDir)) {
-    for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
-      if (entry.name.startsWith('huawei')) {
-        if (removeIfExists(join(skillsDir, entry.name))) removed++;
-      }
-    }
-    if (removed > 0) console.log(`  Removed ${removed} skills`);
+  const removed = removeOwnedSkillsFrom(skillsDir);
+  if (removed > 0) console.log(`  Removed ${removed} skills`);
+  if (removed > 0) {
     try {
-      if (readdirSync(skillsDir).length === 0) {
+      if (existsSync(skillsDir) && readdirSync(skillsDir).length === 0) {
         rmSync(skillsDir, { recursive: true, force: true });
         console.log(`  Removed empty skills directory: ${skillsDir}`);
       }
@@ -2874,19 +2670,13 @@ function uninstallOfficeAce(): void {
 
 function officeaceStatus(): void {
   const pluginDir = officeacePluginsDir();
-  const skillsDir = officeaceSkillsDir();
   console.log(
     `  MCP Server: ${mcpServerInstalled(pluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
   console.log(
     `  Safety Policy: ${existsSync(join(pluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
-  let skillCount = 0;
-  if (existsSync(skillsDir)) {
-    skillCount = readdirSync(skillsDir, { withFileTypes: true }).filter(
-      (d) => d.isDirectory() && d.name.startsWith('huawei'),
-    ).length;
-  }
+  const skillCount = serverSkillCount(pluginDir);
   console.log(
     `  Skills: ${skillCount > 0 ? `\x1b[32m${skillCount} installed\x1b[0m` : '\x1b[31mNot installed\x1b[0m'}`,
   );
@@ -3330,23 +3120,14 @@ function hermesMcpSdkOk(): boolean {
 }
 
 async function installHermes(): Promise<void> {
-  const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const distDir = join(PLUGIN_ROOT, 'dist');
-  const safetyDir = join(PLUGIN_ROOT, 'safety');
   const hooksDir = join(PLUGIN_ROOT, 'hooks');
   const integrationsHooksDir = resolve(PLUGIN_ROOT, '..', '..', 'integrations', 'hermes', 'hooks');
   const pluginDest = hermesPluginsDir();
   const skipMcp = process.argv.includes('--skip-mcp-server');
 
-  copyDir(skillsSrc, hermesSkillsDir());
-  console.log(`  Skills -> ${hermesSkillsDir()}`);
-
-  if (!skipMcp) {
-    copyDir(distDir, join(pluginDest, 'dist'));
-    console.log(`  MCP Server -> ${join(pluginDest, 'dist')}`);
-  }
-  copyDir(safetyDir, join(pluginDest, 'safety'));
-  console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
+  // Skills are server data and always travel with the plugin dir; only the
+  // bundled server itself is optional (--skip-mcp-server runs from a clone).
+  copyServerPayload(pluginDest, { skipDist: skipMcp });
   copyDir(hooksDir, join(pluginDest, 'hooks'));
   console.log(`  Safety Hooks -> ${join(pluginDest, 'hooks')}`);
   // Telemetry hook lives in integrations/hermes/hooks/ (platform-specific adapter)
@@ -3364,20 +3145,11 @@ async function installHermes(): Promise<void> {
 }
 
 async function updateHermes(): Promise<void> {
-  const skillsSrc = join(PLUGIN_ROOT, 'skills');
-  const distDir = join(PLUGIN_ROOT, 'dist');
-  const safetyDir = join(PLUGIN_ROOT, 'safety');
   const hooksDir = join(PLUGIN_ROOT, 'hooks');
   const integrationsHooksDir = resolve(PLUGIN_ROOT, '..', '..', 'integrations', 'hermes', 'hooks');
   const pluginDest = hermesPluginsDir();
 
-  copyDir(skillsSrc, hermesSkillsDir());
-  const stale = pruneStale(hermesSkillsDir(), skillsSrc);
-  console.log(`  Skills updated -> ${hermesSkillsDir()}${stale > 0 ? ` (removed ${stale} stale)` : ''}`);
-  copyDir(distDir, join(pluginDest, 'dist'));
-  console.log(`  MCP Server updated -> ${join(pluginDest, 'dist')}`);
-  copyDir(safetyDir, join(pluginDest, 'safety'));
-  console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
+  copyServerPayload(pluginDest);
   copyDir(hooksDir, join(pluginDest, 'hooks'));
   console.log(`  Safety Hooks updated -> ${join(pluginDest, 'hooks')}`);
   // Telemetry hook lives in integrations/hermes/hooks/ (platform-specific adapter)
@@ -3397,7 +3169,6 @@ async function updateHermes(): Promise<void> {
 
 function uninstallHermes(): void {
   const skillsDir = hermesSkillsDir();
-  let removed = 0;
 
   // 1. Remove hook config from config.yaml (before deleting script files)
   removeHermesHooksConfigBlock();
@@ -3452,15 +3223,11 @@ function uninstallHermes(): void {
   console.log('  MCP config removed');
 
   // 4. Remove skills (file deletion comes after config cleanup)
-  if (existsSync(skillsDir)) {
-    for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
-      if (entry.name.startsWith('huawei')) {
-        if (removeIfExists(join(skillsDir, entry.name))) removed++;
-      }
-    }
-    if (removed > 0) console.log(`  Removed ${removed} skills`);
+  const removed = removeOwnedSkillsFrom(skillsDir);
+  if (removed > 0) console.log(`  Removed ${removed} skills`);
+  if (removed > 0) {
     try {
-      if (readdirSync(skillsDir).length === 0) {
+      if (existsSync(skillsDir) && readdirSync(skillsDir).length === 0) {
         rmSync(skillsDir, { recursive: true, force: true });
         console.log(`  Removed empty skills directory: ${skillsDir}`);
       }
@@ -3475,7 +3242,6 @@ function uninstallHermes(): void {
 
 function hermesStatus(): void {
   const pluginDir = hermesPluginsDir();
-  const skillsDir = hermesSkillsDir();
   console.log(
     `  MCP Server: ${mcpServerInstalled(pluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
@@ -3495,12 +3261,7 @@ function hermesStatus(): void {
     `  Hook plugin: ${hermesHookPluginInstalled() ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
   console.log(`  MCP Python SDK: ${hermesMcpSdkOk() ? '\x1b[32mReady\x1b[0m' : '\x1b[31mMissing\x1b[0m'}`);
-  let skillCount = 0;
-  if (existsSync(skillsDir)) {
-    skillCount = readdirSync(skillsDir, { withFileTypes: true }).filter(
-      (d) => d.isDirectory() && d.name.startsWith('huawei'),
-    ).length;
-  }
+  const skillCount = serverSkillCount(pluginDir);
   console.log(
     `  Skills: ${skillCount > 0 ? `\x1b[32m${skillCount} installed\x1b[0m` : '\x1b[31mNot installed\x1b[0m'}`,
   );
@@ -3524,19 +3285,13 @@ function hermesStatus(): void {
 
 function opencodeStatus(): void {
   const pluginDir = opencodePluginsDir();
-  const skillsDir = opencodeSkillsDir();
   console.log(
     `  MCP Server: ${mcpServerInstalled(pluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
   console.log(
     `  Safety Policy: ${existsSync(join(pluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
-  let skillCount = 0;
-  if (existsSync(skillsDir)) {
-    skillCount = readdirSync(skillsDir, { withFileTypes: true }).filter(
-      (d) => d.isDirectory() && d.name.startsWith('huawei'),
-    ).length;
-  }
+  const skillCount = serverSkillCount(pluginDir);
   console.log(
     `  Skills: ${skillCount > 0 ? `\x1b[32m${skillCount} installed\x1b[0m` : '\x1b[31mNot installed\x1b[0m'}`,
   );
@@ -3889,6 +3644,14 @@ async function cmdInstall(): Promise<void> {
 
   checkNode();
   await checkForUpdate();
+  // Pre-MCP installs copied skills into agent-native skill dirs; those stale
+  // copies shadow-disclose outdated content, so every install run purges them
+  // (ownership-precise: only names the shipped tree still carries).
+  const purged = purgeStaleNativeSkills();
+  if (purged > 0)
+    console.log(
+      `  Cleaned ${purged} stale native skill cop${purged === 1 ? 'y' : 'ies'} (skills are now MCP-disclosed)`,
+    );
   const installFailures: string[] = [];
 
   function shouldInstall(name: string): boolean {
@@ -4220,19 +3983,13 @@ async function promptGlobalCleanup(): Promise<void> {
 
 function openclawStatus(): void {
   const cdPluginDir = openclawPluginsDir();
-  const cdSkillsDir = openclawSkillsDir();
   console.log(
     `  MCP Server: ${mcpServerInstalled(cdPluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
   console.log(
     `  Safety Policy: ${existsSync(join(cdPluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
-  let cdSkillCount = 0;
-  if (existsSync(cdSkillsDir)) {
-    cdSkillCount = readdirSync(cdSkillsDir, { withFileTypes: true }).filter(
-      (d) => d.isDirectory() && d.name.startsWith('huawei'),
-    ).length;
-  }
+  const cdSkillCount = serverSkillCount(cdPluginDir);
   console.log(
     `  Skills: ${cdSkillCount > 0 ? `\x1b[32m${cdSkillCount} installed\x1b[0m` : '\x1b[31mNot installed\x1b[0m'}`,
   );
@@ -4577,40 +4334,29 @@ async function cmdDoctor(): Promise<void> {
     check('hcloud credentials configured', hasAuth, 'Run: npx huaweicloud-devkit auth init');
   }
 
-  // Skills
-  const skillsOptions = [
-    opencodeSkillsDir(),
-    codexDesktopSkillsDir(),
-    codeartsSkillsDir(),
-    codeartsWorkSkillsDir(),
-    workbuddySkillsDir(),
-    dshSkillsDir(),
-    officeaceSkillsDir(),
-    hermesSkillsDir(),
-    atomcodeSkillsDir(),
-  ];
-  let skillCount = 0;
-  const missingSkills: string[] = [];
-  for (const dir of skillsOptions) {
-    if (!existsSync(dir)) continue;
-    const entries = readdirSync(dir, { withFileTypes: true }).filter(
-      (d) => d.isDirectory() && d.name.startsWith('huawei'),
-    );
-    const count = entries.length;
-    if (count > skillCount) {
-      skillCount = count;
-    }
-    for (const d of entries) {
-      if (!existsSync(join(dir, d.name, 'SKILL.md'))) missingSkills.push(d.name);
-    }
-  }
-  const skillsOk = skillCount >= 6;
-  check(`Skills installed (${skillCount})`, skillsOk, 'Run: npx huaweicloud-devkit install');
-  if (missingSkills.length > 0) {
-    console.log(
-      `  \x1b[33m[WARN]\x1b[0m ${missingSkills.length} skill(s) missing SKILL.md: ${missingSkills.join(', ')} — Run: npx huaweicloud-devkit install`,
-    );
+  // Skills are server data disclosed over MCP: the health signal is the
+  // tree sitting next to an installed server, never agent-native dirs.
+  const skillsTreeOk = [
+    opencodePluginDir,
+    codexPluginDir,
+    codeartsPluginDir,
+    codeartsWorkPluginDir,
+    workbuddyPluginDir,
+    dshPluginDir,
+    officeacePluginDir,
+    hermesPluginDir,
+    atomcodePluginDir,
+  ].some((dir) => mcpServerInstalled(dir) && serverSkillCount(dir) > 0);
+  check('Skills tree (server data, MCP-disclosed)', skillsTreeOk, 'Run: npx huaweicloud-devkit install');
+
+  // Stale native copies from pre-MCP installs shadow-disclose outdated skill
+  // content through the agent's own loader; they also bypass pack gating.
+  const staleNative = staleNativeSkillDirs().length;
+  if (staleNative > 0) {
     warn++;
+    console.log(
+      `  \x1b[33m[WARN]\x1b[0m ${staleNative} stale native skill cop${staleNative === 1 ? 'y' : 'ies'} from an older install — re-run: npx huaweicloud-devkit install`,
+    );
   }
 
   // Pack status — DEVKIT_PACKS is read from each installed target's MCP
@@ -4779,6 +4525,13 @@ async function cmdUpdate(): Promise<void> {
   resolvePacksFlag(); // fail fast on bogus --packs before any file is copied
   const target = parseTarget();
   await checkForUpdate();
+  // Same purge as install: upgrades are the primary path off a pre-MCP
+  // install, and stale native copies must not outlive the new server.
+  const purged = purgeStaleNativeSkills();
+  if (purged > 0)
+    console.log(
+      `  Cleaned ${purged} stale native skill cop${purged === 1 ? 'y' : 'ies'} (skills are now MCP-disclosed)`,
+    );
 
   if (target === 'opencode') {
     if (!mcpServerInstalled(opencodePluginsDir())) {

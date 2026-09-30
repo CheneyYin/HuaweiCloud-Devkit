@@ -1,3 +1,5 @@
+<!-- generated from src/packs/services/skills/huawei-functiongraph - do not edit -->
+
 # End-to-End Deployment Workflow
 
 ```

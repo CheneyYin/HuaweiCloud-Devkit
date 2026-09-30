@@ -92,7 +92,11 @@ test('handles platform-specific home directory resolution', () => {
       timeout: 60000,
     });
     assert.equal(res.status, 0, res.stderr);
-    assert.ok(existsSync(join(home, '.config', 'opencode', 'skills')), 'skills created under correct home');
+    assert.ok(
+      existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins', 'skills')),
+      'skills tree (server data) created under correct home',
+    );
+    assert.ok(!existsSync(join(home, '.config', 'opencode', 'skills')), 'native skill dir must not be created');
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });

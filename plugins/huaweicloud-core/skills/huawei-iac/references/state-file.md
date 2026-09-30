@@ -1,3 +1,5 @@
+<!-- generated from src/packs/services/skills/huawei-iac - do not edit -->
+
 # Deployment State File Specification
 
 Session-scoped tracking for the orchestration flow. This is a manual, session-scoped analog of Terraform state - lightweight by design, not a long-term deployment ledger.

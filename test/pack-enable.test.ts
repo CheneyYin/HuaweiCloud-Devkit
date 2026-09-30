@@ -89,7 +89,7 @@ test(
   withDevkitPacks('sandbox', async () => {
     const listed = await callTool('huaweicloud_list_packs', {});
     assert.equal(listed.ok, true);
-    assert.equal(listed.count, ALL_IDS.length, 'list_packs still discloses all 7 packs');
+    assert.equal(listed.count, ALL_IDS.length, 'list_packs still discloses every pack');
     const flags = new Map(listed.packs.map((pack) => [pack.id, pack.enabled]));
     assert.equal(flags.get('core'), true);
     assert.equal(flags.get('sandbox'), true);
@@ -116,19 +116,27 @@ test(
     assert.match(denied.error, /Skill "huawei-obs" belongs to pack "obs" which is not enabled/);
     assert.match(denied.error, /DEVKIT_PACKS/, 'the error must explain how to enable the pack');
 
-    // Core-owned knowledge stays fully available.
-    const coreSkill = await callTool('huaweicloud_retrieve_skill', { name: 'huawei-ecs' });
-    assert.equal(coreSkill.ok, true, 'core-pack skill must stay retrievable');
+    // Service knowledge is owned by the services pack, so a pinned env that
+    // omits it gates those skills too — "core" no longer implies service
+    // coverage.
+    const serviceSkill = await callTool('huaweicloud_retrieve_skill', { name: 'huawei-ecs' });
+    assert.equal(serviceSkill.ok, false, 'services-pack skill must be gated when services is disabled');
+    assert.match(serviceSkill.error, /belongs to pack "services" which is not enabled/);
+
+    // Core-owned knowledge (the meta-skills) stays fully available.
+    const coreSkill = await callTool('huaweicloud_retrieve_skill', { name: 'huaweicloud-core' });
+    assert.equal(coreSkill.ok, true, 'meta-skill must stay retrievable');
 
     const search = await callTool('huaweicloud_search_docs', { query: 'obs' });
     assert.equal(search.ok, true);
-    const names = search.results.map((entry) => entry.name);
-    assert.ok(!names.includes('huawei-obs'), 'disabled-pack skill must be filtered from search results');
+    const names = new Set(search.results.map((entry) => entry.name));
+    assert.ok(!names.has('huawei-obs'), 'disabled-pack skill must be filtered from search results');
+    assert.ok(!names.has('huawei-ecs'), 'services-pack skill must be filtered from search results');
 
-    const coreSearch = await callTool('huaweicloud_search_docs', { query: 'ecs' });
+    const coreSearch = await callTool('huaweicloud_search_docs', { query: 'routing' });
     assert.ok(
-      coreSearch.results.some((entry) => entry.name === 'huawei-ecs'),
-      'core-pack skill must stay searchable',
+      coreSearch.results.some((entry) => entry.name === 'huaweicloud-core'),
+      'core-owned meta-skill must stay searchable',
     );
   }),
 );

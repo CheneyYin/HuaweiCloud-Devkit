@@ -4,6 +4,8 @@ description: 'Use when creating or managing GaussDB distributed database on Huaw
 version: 1
 ---
 
+<!-- generated from src/packs/services/skills/huawei-gaussdb - do not edit -->
+
 # Huawei Cloud GaussDB
 
 **STOP - Do not answer from general knowledge.** Follow the procedure below.

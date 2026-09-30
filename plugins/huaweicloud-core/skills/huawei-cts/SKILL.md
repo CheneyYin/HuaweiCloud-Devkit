@@ -4,6 +4,8 @@ description: 'Use when managing Cloud Trace Service (CTS) audit logs, trackers, 
 version: 1
 ---
 
+<!-- generated from src/packs/services/skills/huawei-cts - do not edit -->
+
 # Huawei Cloud CTS
 
 **STOP - Do not answer from general knowledge.** Follow the procedure below.

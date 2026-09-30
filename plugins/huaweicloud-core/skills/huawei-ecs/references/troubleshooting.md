@@ -1,3 +1,5 @@
+<!-- generated from src/packs/services/skills/huawei-ecs - do not edit -->
+
 # ECS Troubleshooting
 
 基于真实测试暴露的常见错误和诊断步骤。

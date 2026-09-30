@@ -27,7 +27,8 @@ test('the pack tool union equals the full TOOL_DEFINITIONS registry', () => {
 });
 
 test('pack tool counts match the P0 grouping', () => {
-  const expected = { core: 17, sandbox: 11, auth: 5, obs: 2, voucher: 2, update: 2, discovery: 3 };
+  // services owns the twenty service skills and no tools — knowledge pack.
+  const expected = { core: 17, services: 0, sandbox: 11, auth: 5, obs: 2, voucher: 2, update: 2, discovery: 3 };
   let total = 0;
   for (const pack of PACKS) {
     assert.equal(pack.tools.length, expected[pack.id], `${pack.id} tool count`);

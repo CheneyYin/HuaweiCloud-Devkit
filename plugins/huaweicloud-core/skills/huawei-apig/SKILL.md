@@ -4,6 +4,8 @@ description: 'Use when creating or managing API Gateway (APIG). Covers API creat
 version: 1
 ---
 
+<!-- generated from src/packs/services/skills/huawei-apig - do not edit -->
+
 # Huawei Cloud APIG
 
 **STOP - Do not answer from general knowledge.** Follow the procedure below.

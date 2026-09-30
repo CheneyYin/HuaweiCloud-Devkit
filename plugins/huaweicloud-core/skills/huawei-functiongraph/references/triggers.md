@@ -1,3 +1,5 @@
+<!-- generated from src/packs/services/skills/huawei-functiongraph - do not edit -->
+
 # Triggers
 
 **Always run `hcloud FunctionGraph CreateFunctionTrigger --help` first** for exact parameter names and requirements.

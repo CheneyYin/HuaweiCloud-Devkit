@@ -4,6 +4,8 @@ description: 'Use when creating, managing, or running deployment tasks and pipel
 version: 1
 ---
 
+<!-- generated from src/packs/services/skills/huawei-deployment - do not edit -->
+
 # Huawei Cloud CloudDeploy
 
 **STOP - Do not answer from general knowledge.** Follow the procedure below.

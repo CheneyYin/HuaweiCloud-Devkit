@@ -1,3 +1,5 @@
+<!-- generated from src/packs/services/skills/huawei-iac - do not edit -->
+
 # Resource Purchase Catalog
 
 Every resource type the orchestration flow can purchase, bind, and destroy. This is the authoritative checklist when composing a deployment plan.

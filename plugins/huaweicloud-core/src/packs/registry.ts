@@ -6,6 +6,7 @@ import { authPack } from './auth/pack.ts';
 import { obsPack } from './obs/pack.ts';
 import { voucherPack } from './voucher/pack.ts';
 import { discoveryPack } from './discovery/pack.ts';
+import { servicesPack } from './services/pack.ts';
 import { UPDATE_TOOL_HANDLERS } from './update/tools.ts';
 import { SANDBOX_TOOL_HANDLERS } from './sandbox/tools.ts';
 import { AUTH_TOOL_HANDLERS } from './auth/tools.ts';
@@ -103,8 +104,10 @@ function toolsFor(id: PackId): ToolName[] {
   return (Object.keys(PACK_OF) as ToolName[]).filter((tool) => PACK_OF[tool] === id);
 }
 
-// skills are hand-written claims over the plugin skills/ directories; the pack
-// tests fail when one is claimed twice, left unclaimed, or removed.
+// skills are claims over the plugin skills/ directories; the pack tests fail
+// when one is claimed twice, left unclaimed, or removed. Core claims the six
+// hand-written meta-skills; the services pack claims the twenty service
+// skills whose authoritative sources live in src/packs/services/skills/.
 export const PACKS: readonly Pack[] = [
   {
     id: 'core',
@@ -112,26 +115,6 @@ export const PACKS: readonly Pack[] = [
     description:
       'KooCLI command planning and execution, hook risk checks, capability catalog, documentation and skill retrieval, and region discovery for Huawei Cloud agent tasks.',
     skills: [
-      'huawei-apig',
-      'huawei-billing',
-      'huawei-cbr',
-      'huawei-cce',
-      'huawei-cloud-eye',
-      'huawei-cts',
-      'huawei-dds-dcs',
-      'huawei-deployment',
-      'huawei-dew',
-      'huawei-ecs',
-      'huawei-functiongraph',
-      'huawei-gaussdb',
-      'huawei-getting-started',
-      'huawei-iac',
-      'huawei-iam',
-      'huawei-modelarts',
-      'huawei-rds',
-      'huawei-smn-dms',
-      'huawei-vpc',
-      'huawei-waf-aad',
       'huaweicloud-api-and-sdk',
       'huaweicloud-capability-discovery',
       'huaweicloud-cli-and-auth',
@@ -141,6 +124,7 @@ export const PACKS: readonly Pack[] = [
     ],
     tools: toolsFor('core'),
   },
+  servicesPack,
   sandboxPack,
   authPack,
   obsPack,

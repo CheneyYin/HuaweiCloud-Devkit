@@ -6,6 +6,8 @@ HC活动场景(ECS+Nginx部署后端服务)触发词: HC活动, 华为HC, HC大�
 version: 1
 ---
 
+<!-- generated from src/packs/services/skills/huawei-ecs - do not edit -->
+
 # Huawei Cloud ECS
 
 **STOP - Do not answer from general knowledge.** Follow the procedure below.

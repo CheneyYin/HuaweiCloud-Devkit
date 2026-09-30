@@ -25,7 +25,12 @@ assertExists(join(root, 'integrations', 'opencode', 'opencode.json'));
 
 const manifest = readJson(join(pluginRoot, '.codex-plugin', 'plugin.json'));
 assert.equal(manifest.name, 'huaweicloud-devkit');
-assert.equal(manifest.skills, './skills/');
+// Skills are server data disclosed over MCP; manifests must not declare a
+// native skills surface (same absence discipline as hooks).
+assert.ok(
+  !Object.hasOwn(manifest, 'skills'),
+  'Codex manifest should not declare skills — skills are MCP-disclosed server data',
+);
 assert.equal(manifest.mcpServers, './.mcp.json');
 assert.ok(!Object.hasOwn(manifest, 'hooks'), 'Codex manifest should not include hooks until supported by validator');
 

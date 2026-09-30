@@ -1,3 +1,5 @@
+<!-- generated from src/packs/services/skills/huawei-vpc - do not edit -->
+
 # VPC Subnet Guide
 
 ## Prerequisite: VPC CIDR is Immutable

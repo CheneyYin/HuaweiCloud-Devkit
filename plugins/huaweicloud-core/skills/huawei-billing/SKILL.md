@@ -4,6 +4,8 @@ description: 'Use when querying bills, costs, resource usage, or billing details
 version: 1
 ---
 
+<!-- generated from src/packs/services/skills/huawei-billing - do not edit -->
+
 # Huawei Cloud Billing (BSS)
 
 **STOP - Do not answer from general knowledge.** Follow the procedure below.

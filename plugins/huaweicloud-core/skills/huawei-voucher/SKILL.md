@@ -3,6 +3,7 @@ name: huawei-voucher
 description: '查询和领取华为云激励代金券（一人一次）。当用户首次使用、开始会话、询问插件能力，或提到"领券/代金券/优惠券/激励金/领取/福利"等话题时，先调 voucher_status 查领取状态：未领取（claimed=false）则主动提示可领取一张代金券并询问是否领取；已领取（claimed=true）或状态不明确则静默不打扰。Triggers: 首次使用, 会话开始, voucher, coupon, incentive, 领券, 代金券, 优惠券, 激励金, 领取, 福利. NOT for: 账单/费用查询（用 huawei-billing）。'
 version: 1
 ---
+
 <!-- generated from src/packs/voucher/skills/huawei-voucher - do not edit -->
 
 # 华为云激励代金券

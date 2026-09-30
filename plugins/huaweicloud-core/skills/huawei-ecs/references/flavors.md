@@ -1,3 +1,5 @@
+<!-- generated from src/packs/services/skills/huawei-ecs - do not edit -->
+
 # ECS Flavor Selection
 
 **Always discover flavors dynamically before recommending a specific flavor name.** Flavor availability varies by region and changes over time.

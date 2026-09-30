@@ -6,12 +6,15 @@ import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
 import { SCHEMA_DRIFT_IGNORED_KEYS } from '../plugins/huaweicloud-core/src/tool-schemas.ts';
 import { createLinkedDevkitServers } from '../plugins/huaweicloud-core/src/mcp-protocol.ts';
 
-const PACK_IDS = ['core', 'sandbox', 'auth', 'obs', 'voucher', 'update', 'discovery'];
+const PACK_IDS = ['core', 'services', 'sandbox', 'auth', 'obs', 'voucher', 'update', 'discovery'];
+// Packs that own knowledge without callable surface: their tool list is
+// legitimately empty, so the "must list tools" bar exempts them.
+const ZERO_TOOL_PACKS = new Set(['services']);
 
-test('huaweicloud_list_packs returns all 7 packs, sandbox carries exactly 11 tool names', async () => {
+test('huaweicloud_list_packs returns all 8 packs, sandbox carries exactly 11 tool names', async () => {
   const result = await callTool('huaweicloud_list_packs', {});
   assert.equal(result.ok, true);
-  assert.equal(result.count, 7);
+  assert.equal(result.count, 8);
   assert.deepEqual(
     result.packs.map((pack) => pack.id),
     PACK_IDS,
@@ -20,8 +23,15 @@ test('huaweicloud_list_packs returns all 7 packs, sandbox carries exactly 11 too
     assert.equal(typeof pack.title, 'string');
     assert.equal(typeof pack.description, 'string');
     assert.equal(pack.enabled, true);
-    assert.ok(Array.isArray(pack.tools) && pack.tools.length > 0, `${pack.id} must list tools`);
+    if (ZERO_TOOL_PACKS.has(pack.id)) {
+      assert.equal(pack.tools.length, 0, `${pack.id} owns knowledge, not tools`);
+    } else {
+      assert.ok(Array.isArray(pack.tools) && pack.tools.length > 0, `${pack.id} must list tools`);
+    }
   }
+  const services = result.packs.find((pack) => pack.id === 'services');
+  assert.equal(services.skills.length, 20);
+  assert.ok(services.skills.includes('huawei-ecs'));
   const sandbox = result.packs.find((pack) => pack.id === 'sandbox');
   assert.equal(sandbox.tools.length, 11);
   assert.ok(sandbox.tools.includes('huaweicloud_sandbox_connect'));

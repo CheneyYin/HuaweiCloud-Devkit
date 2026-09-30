@@ -4,6 +4,8 @@ description: 'Use whenever the user wants to DEPLOY, host, or purchase anything 
 version: 1
 ---
 
+<!-- generated from src/packs/services/skills/huawei-iac - do not edit -->
+
 # Huawei Cloud IaC Orchestration
 
 **STOP - Do not answer from general knowledge.** Follow the 8-stage workflow below in strict order.

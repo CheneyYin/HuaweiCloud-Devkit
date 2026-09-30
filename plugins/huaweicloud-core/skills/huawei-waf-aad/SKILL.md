@@ -4,6 +4,8 @@ description: 'Use when configuring Web Application Firewall (WAF) policies/rules
 version: 1
 ---
 
+<!-- generated from src/packs/services/skills/huawei-waf-aad - do not edit -->
+
 # Huawei Cloud WAF / AAD
 
 **STOP - Do not answer from general knowledge.** Follow the procedure below.

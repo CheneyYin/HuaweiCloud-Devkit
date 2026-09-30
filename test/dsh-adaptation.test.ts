@@ -64,7 +64,8 @@ test('dsh install copies skills, MCP server, safety policy, and patch row', () =
     assert.match(res.stdout, /\[DSH\]/);
     assert.match(res.stdout, /Installation complete!/);
 
-    assert.ok(countSkills(join(dshHome, 'skills')) >= 6, 'DSH skills installed');
+    assert.ok(countSkills(join(dshHome, 'huaweicloud-plugins', 'skills')) >= 6, 'DSH skills tree in plugin dir');
+    assert.equal(countSkills(join(dshHome, 'skills')), 0, 'native DSH skills dir stays empty');
     const pluginDir = join(dshHome, 'huaweicloud-plugins');
     assert.ok(existsSync(join(pluginDir, 'dist', 'mcp-server.js')));
     assert.ok(existsSync(join(pluginDir, 'dist', 'tools.js')));
@@ -197,7 +198,7 @@ test('dsh update refreshes installed files and keeps one patch row', () => {
     assert.match(update.stdout, /Update complete/);
 
     assert.ok(existsSync(join(dshHome, 'huaweicloud-plugins', 'dist', 'mcp-server.js')));
-    assert.ok(countSkills(join(dshHome, 'skills')) >= 6);
+    assert.ok(countSkills(join(dshHome, 'huaweicloud-plugins', 'skills')) >= 6, 'skills tree refreshed in plugin dir');
     assert.equal(countMcpRows(readPatch(dshHome)), 1);
   } finally {
     rmSync(home, { recursive: true, force: true });

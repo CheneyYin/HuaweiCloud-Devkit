@@ -64,7 +64,9 @@ function discoverPackSkills() {
 }
 
 // Inject the marker after the YAML frontmatter closing delimiter; files
-// without frontmatter get it as the first line.
+// without frontmatter get it as the first line. A blank line separates the
+// marker from what follows so the output is prettier-stable (prettier
+// enforces a blank line after a frontmatter block and around HTML comments).
 function renderGenerated(packId, skillName, relativeFile, content) {
   const marker = markerFor(packId, skillName);
   const normalized = content.replace(/\r\n/g, '\n');
@@ -77,14 +79,16 @@ function renderGenerated(packId, skillName, relativeFile, content) {
 }
 
 // Strip the injected marker line (wherever it sits — first line for files
-// without frontmatter, right after the frontmatter for SKILL.md) and
-// normalize CRLF, yielding content comparable to the authoritative source.
+// without frontmatter, right after the frontmatter for SKILL.md) plus the
+// blank line prettier may keep after it, and normalize CRLF, yielding content
+// comparable to the authoritative source.
 function stripMarkerLine(content) {
   const normalized = content.replace(/\r\n/g, '\n');
   const lines = normalized.split('\n');
   const index = lines.findIndex((line) => line.startsWith(MARKER_PREFIX) && line.endsWith(MARKER_SUFFIX));
   if (index === -1) return normalized;
   lines.splice(index, 1);
+  if (lines[index] === '') lines.splice(index, 1);
   return lines.join('\n');
 }
 

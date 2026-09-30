@@ -1,9 +1,11 @@
 manifest_version: 1
 name: huaweicloud-devkit
 description: >
-  Huawei Cloud DevKit provides Skills, MCP tools, KooCLI guidance,
-  and safety guardrails for Huawei Cloud services within Hermes Agent.
-  Includes 27 skills covering ECS, OBS, VPC, RDS, CCE, ModelArts, and more.
+  Huawei Cloud DevKit provides MCP tools, KooCLI guidance, and safety
+  guardrails for Huawei Cloud services within Hermes Agent. Service skills
+  (ECS, OBS, VPC, RDS, CCE, ModelArts, and more) ship as server data and are
+  disclosed through the MCP tools (huaweicloud_list_packs,
+  huaweicloud_retrieve_skill) instead of ~/.hermes/skills/ copies.
 
 source: https://github.com/huaweicloud/huaweicloud-devkit
 
@@ -32,10 +34,13 @@ post_install: |
   Huawei Cloud DevKit installed successfully!
 
   What was set up:
-    • 27 skills (ECS, OBS, VPC, RDS, CCE, ModelArts, ...) → ~/.hermes/skills/
-    • MCP tools (33 tools for CLI, auth, sandbox, safety) → config.yaml
+    • MCP tools (42 tools for CLI, auth, sandbox, safety, skills) → config.yaml
     • Safety hooks (pre_tool_call terminal guard) → config.yaml
-    • Safety policy → ~/.hermes/huaweicloud-plugins/safety/
+    • Safety policy + skills tree (server data) → ~/.hermes/huaweicloud-plugins/
+
+  Skills are MCP-disclosed: ask the agent to call huaweicloud_list_packs,
+  or route a task with huaweicloud_service_catalog and load the recommended
+  skill with huaweicloud_retrieve_skill.
 
   Next steps:
     1. Configure credentials: npx huaweicloud-devkit auth init

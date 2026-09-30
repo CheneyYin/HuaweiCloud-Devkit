@@ -63,6 +63,19 @@ const INTENTIONAL_DRIFTS = [
       rendered.type === 'object' &&
       Object.keys(rendered).every((k) => k === 'type' || k === 'propertyNames'),
   },
+  {
+    tool: 'huaweicloud_retrieve_skill',
+    reason:
+      'name declares the skill-name pattern the legacy literal left untyped: MCP is the sole skill-loading surface, so traversal-shaped names are rejected at the schema boundary',
+    match: (tool, key, legacy, rendered) =>
+      legacy &&
+      typeof legacy === 'object' &&
+      legacy.type === 'string' &&
+      rendered &&
+      typeof rendered === 'object' &&
+      rendered.type === 'string' &&
+      rendered.pattern === '^[a-z0-9-]+$',
+  },
 ];
 
 function normalize(node) {

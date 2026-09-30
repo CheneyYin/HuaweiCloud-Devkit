@@ -215,7 +215,7 @@ const targets = [
     name: 'opencode',
     banner: /\[OpenCode\]/,
     pluginsDir: (h) => join(h, '.config', 'opencode', 'huaweicloud-plugins'),
-    skillsDir: (h) => join(h, '.config', 'opencode', 'skills'),
+    skillsDir: (h) => join(h, '.config', 'opencode', 'huaweicloud-plugins', 'skills'),
     configPath: (h) => join(h, '.config', 'opencode', 'opencode.json'),
     hasServer: (p) => {
       if (!existsSync(p)) return false;
@@ -246,7 +246,7 @@ const targets = [
     name: 'workbuddy',
     banner: /\[WorkBuddy\]/,
     pluginsDir: (h) => join(h, '.workbuddy', 'huaweicloud-plugins'),
-    skillsDir: (h) => join(h, '.workbuddy', 'skills'),
+    skillsDir: (h) => join(h, '.workbuddy', 'huaweicloud-plugins', 'skills'),
     configPath: (h) => join(h, '.workbuddy', 'mcp.json'),
     hasServer: (p) => {
       if (!existsSync(p)) return false;

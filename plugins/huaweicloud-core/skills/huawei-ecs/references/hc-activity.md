@@ -1,3 +1,5 @@
+<!-- generated from src/packs/services/skills/huawei-ecs - do not edit -->
+
 # HC活动 ECS + Nginx/Node.js 部署后端服务
 
 ## 目标

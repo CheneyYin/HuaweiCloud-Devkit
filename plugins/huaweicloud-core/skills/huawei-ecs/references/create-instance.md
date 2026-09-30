@@ -1,3 +1,5 @@
+<!-- generated from src/packs/services/skills/huawei-ecs - do not edit -->
+
 # Create ECS Instance SOP
 
 **Before executing any command: If MCP tools are not available** (new session after install), restart your session or use hcloud CLI directly with caution. Commands using adminPass/password WILL appear in shell history — prefer key_name.

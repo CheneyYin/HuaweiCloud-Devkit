@@ -1,3 +1,5 @@
+<!-- generated from src/packs/services/skills/huawei-vpc - do not edit -->
+
 # VPC Network Management Reference
 
 ## DNS Addresses by Region

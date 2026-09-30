@@ -96,7 +96,8 @@ test('officeace install copies skills, MCP server, and safety policy', () => {
     const res = runCli(home, cwd, ['install', '--target', 'officeace'], oaHome);
     assert.equal(res.status, 0, res.stderr);
     assert.match(res.stdout, /\[OfficeAce\]/);
-    assert.ok(countSkills(join(oaHome, 'skills')) >= 6);
+    assert.ok(countSkills(join(oaHome, 'huaweicloud-plugins', 'skills')) >= 6, 'skills tree in plugin dir');
+    assert.equal(countSkills(join(oaHome, 'skills')), 0, 'native OfficeAce skills dir stays empty');
     const pd = join(oaHome, 'huaweicloud-plugins');
     assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
     assert.ok(existsSync(join(pd, 'dist', 'tools.js')));

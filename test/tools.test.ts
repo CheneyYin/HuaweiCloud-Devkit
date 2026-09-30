@@ -4,13 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import {
-  callTool,
-  runVersionCheck,
-  TOOL_DEFINITIONS,
-  findSkillsRoot,
-  listSkillDirs,
-} from '../plugins/huaweicloud-core/src/tools.ts';
+import { callTool, runVersionCheck, TOOL_DEFINITIONS, listSkillDirs } from '../plugins/huaweicloud-core/src/tools.ts';
 import { getToolSchema, TOOL_SCHEMAS } from '../plugins/huaweicloud-core/src/tool-schemas.ts';
 import {
   clearRuntimeCredentials,
@@ -248,26 +242,6 @@ test('service_catalog keeps storage routing for pure storage intent', async () =
   assert.notEqual(result.recommendedSkills[0], 'huawei-sandbox');
 });
 
-test('findSkillsRoot skips stale dirs without SKILL.md and picks the first real skills root', () => {
-  const base = mkdtempSync(join(tmpdir(), 'huaweicloud-skills-root-'));
-  try {
-    const empty = join(base, 'empty');
-    const stale = join(base, 'stale');
-    const real = join(base, 'real');
-    mkdirSync(empty);
-    mkdirSync(stale);
-    mkdirSync(join(stale, 'leftover'), { recursive: true });
-    mkdirSync(join(real, 'huawei-ecs'), { recursive: true });
-    writeFileSync(join(real, 'huawei-ecs', 'SKILL.md'), '---\nname: huawei-ecs\n---\n', 'utf8');
-
-    assert.equal(findSkillsRoot([empty, stale, real]), real);
-    assert.equal(findSkillsRoot([empty, stale]), null);
-    assert.equal(findSkillsRoot([]), null);
-  } finally {
-    rmSync(base, { recursive: true, force: true });
-  }
-});
-
 test('listSkillDirs ignores files, subdirs without SKILL.md, and counts symlinked skill dirs', () => {
   const base = mkdtempSync(join(tmpdir(), 'huaweicloud-list-skills-'));
   try {
@@ -288,6 +262,26 @@ test('listSkillDirs ignores files, subdirs without SKILL.md, and counts symlinke
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
+});
+
+// retrieve_skill is the sole skill-loading surface, so its name boundary is
+// security-relevant: traversal-shaped names must be rejected before any
+// filesystem access.
+test('retrieve_skill rejects traversal-shaped and non-skill names', async () => {
+  for (const name of ['../src/packs/obs/skills/huawei-obs', '..%2f..', 'huawei ecs', 'HUAWAI-ECS', '/etc', '']) {
+    const result = await callTool('huaweicloud_retrieve_skill', { name });
+    assert.equal(result.ok, false, `name ${JSON.stringify(name)} must be rejected`);
+    assert.match(result.error, /Invalid skill name|Skill name is required/);
+  }
+});
+
+test('retrieve_skill serves the full skill from the server-relative tree', async () => {
+  const result = await callTool('huaweicloud_retrieve_skill', { name: 'huawei-ecs' });
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.name, 'huawei-ecs');
+  assert.match(result.content, /^---\r?\nname: huawei-ecs/);
+  assert.ok(result.references.length > 0, 'huawei-ecs ships reference files');
+  assert.ok(result.references.some((ref) => ref.filename === 'create-instance.md'));
 });
 
 test('auth_switch temporary sets runtime credentials for api path', async () => {

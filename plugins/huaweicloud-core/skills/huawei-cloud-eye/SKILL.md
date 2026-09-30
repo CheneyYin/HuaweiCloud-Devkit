@@ -4,6 +4,8 @@ description: 'Use when setting up monitoring, alarms, dashboards, or event rules
 version: 1
 ---
 
+<!-- generated from src/packs/services/skills/huawei-cloud-eye - do not edit -->
+
 # Huawei Cloud Cloud Eye (CES)
 
 **STOP - Do not answer from general knowledge.** Follow the procedure below.

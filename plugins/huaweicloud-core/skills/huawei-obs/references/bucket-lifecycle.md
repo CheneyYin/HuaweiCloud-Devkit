@@ -1,4 +1,5 @@
 <!-- generated from src/packs/obs/skills/huawei-obs - do not edit -->
+
 # OBS Bucket Lifecycle
 
 > KooCLI OBS uses obsutil-style commands. `OBS CreateBucket` → `OBS mb`. `SetBucketWebsite` is NOT supported in KooCLI OBS (use API/SDK).

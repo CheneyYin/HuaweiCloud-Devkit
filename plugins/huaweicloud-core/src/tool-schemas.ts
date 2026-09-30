@@ -88,7 +88,10 @@ const TOOL_SCHEMAS = {
       .describe('Optional filter: all | ecs | obs | vpc | iam | rds | cce | modelarts | dew. Defaults to all.'),
   }),
   huaweicloud_retrieve_skill: z.looseObject({
-    name: z.string().describe('Skill name, e.g., huaweicloud-core, huawei-ecs, huawei-obs.'),
+    name: z
+      .string()
+      .regex(/^[a-z0-9-]+$/)
+      .describe('Skill name, e.g., huawei-ecs, huawei-vpc, huawei-obs. Lowercase letters, digits, dashes only.'),
   }),
   huaweicloud_list_regions: z.looseObject({}),
   huaweicloud_get_regional_availability: z.looseObject({

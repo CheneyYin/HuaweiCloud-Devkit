@@ -4,6 +4,8 @@ description: 'Use when starting fresh with Huawei Cloud or KooCLI, installing pr
 version: 1
 ---
 
+<!-- generated from src/packs/services/skills/huawei-getting-started - do not edit -->
+
 # Huawei Cloud Getting Started
 
 **STOP - Do not answer from general knowledge.** Follow the procedure below.

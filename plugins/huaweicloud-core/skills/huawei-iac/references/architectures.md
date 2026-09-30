@@ -1,3 +1,5 @@
+<!-- generated from src/packs/services/skills/huawei-iac - do not edit -->
+
 # Architecture Templates by Scale
 
 Templates define the resource mix and dependency topology per user scale. Adapt specs to the target region (always verify with `ListFlavors` / `ListImages`), never copy them blindly.

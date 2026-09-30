@@ -42,7 +42,11 @@ export interface PackToolDefinition {
 // union cannot drift apart; the registry's PACKS ids are pinned to this list
 // by test/structure.test.ts, which keeps the installer's --packs validation
 // honest against the registry truth.
-export const PACK_IDS = ['core', 'sandbox', 'auth', 'obs', 'voucher', 'update', 'discovery'] as const;
+// 'services' carries the twenty service skills with zero tools: a pack may
+// own knowledge (skills) without owning callable surface, and the meta tools
+// that disclose it (list_packs / pack_info / retrieve_skill) stay in core so
+// an enabled pack can always be discovered.
+export const PACK_IDS = ['core', 'services', 'sandbox', 'auth', 'obs', 'voucher', 'update', 'discovery'] as const;
 export type PackId = (typeof PACK_IDS)[number];
 
 // A binary a pack depends on. `scope` selects where it must exist: 'host'

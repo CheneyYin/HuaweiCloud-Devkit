@@ -4,6 +4,8 @@ description: 'Use when creating or managing CCE Kubernetes clusters. Covers clus
 version: 1
 ---
 
+<!-- generated from src/packs/services/skills/huawei-cce - do not edit -->
+
 # Huawei Cloud CCE
 
 **STOP - Do not answer from general knowledge.** Follow the procedure below.

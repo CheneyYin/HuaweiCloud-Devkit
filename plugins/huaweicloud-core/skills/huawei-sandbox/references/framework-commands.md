@@ -1,4 +1,5 @@
 <!-- generated from src/packs/sandbox/skills/huawei-sandbox - do not edit -->
+
 # Framework Command Mapping
 
 Maps web frameworks to install, build, serve commands and output directories for sandbox deployment.

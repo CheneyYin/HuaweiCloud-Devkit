@@ -1,3 +1,5 @@
+<!-- generated from src/packs/services/skills/huawei-vpc - do not edit -->
+
 # Security Group Rules
 
 ## Security Group is NOT bound to VPC

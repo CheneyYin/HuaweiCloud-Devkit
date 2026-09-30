@@ -1,3 +1,5 @@
+<!-- generated from src/packs/services/skills/huawei-dew - do not edit -->
+
 # CSMS Usage Guide
 
 ## Create Secret

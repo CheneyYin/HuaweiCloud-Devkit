@@ -1,8 +1,6 @@
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { homedir } from 'node:os';
-import { spawnSync } from 'node:child_process';
 import { z } from 'zod';
 
 import { evaluateArtifacts, evaluateCommandRisk, evaluateDeployPlan, type RiskEvaluation } from './risk-rule-engine.ts';
@@ -10,7 +8,6 @@ import { classifyTextCommand, redactSecrets } from './safety-policy.ts';
 import { planHcloudCommand, runHcloud, consumeApprovalToken, hashArgs, type HcloudRunResult } from './hcloud-cli.ts';
 import { trackToolInvoke, trackSkillRetrieve } from './telemetry/telemetry.ts';
 import { hcloudProbeNextStep, probeHcloud, type ProbeHcloudOptions } from './hcloud-probe.ts';
-import { isUsableOfficeaceRoot, readOfficeaceRootMarker } from './officeace-paths.ts';
 // The update tool handlers live in the update pack's handler map (merged
 // into PACK_TOOL_HANDLERS); only the DistTags type for the CallToolOptions
 // doQuery seam is still needed here.
@@ -27,7 +24,12 @@ import type { PackId } from './lib/pack-types.ts';
 import { SERVICE_REGIONS } from './services/regions.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SKILLS_ROOT_DEV = join(__dirname, '..', 'skills');
+
+// The skills tree is server data, not an agent-native artifact: it ships next
+// to dist/ (esbuild preserves import.meta.url, so the bundled mcp-server.js
+// resolves this relative to its own location) and is disclosed only through
+// the MCP tools (list_packs / pack_info / retrieve_skill / search_docs).
+const SKILLS_ROOT = join(__dirname, '..', 'skills');
 
 // ── Boundary narrowing helpers ──
 // Tool arguments, import-file JSON, and JS-module returns are untrusted at this
@@ -36,88 +38,6 @@ const SKILLS_ROOT_DEV = join(__dirname, '..', 'skills');
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
-function opencodeSkillsDir() {
-  const home = homedir();
-  return join(home, '.config', 'opencode', 'skills');
-}
-function codeartsSkillsDir() {
-  const home = homedir();
-  return join(home, '.codeartsdoer', 'skills');
-}
-function codeartsWorkSkillsDir() {
-  const home = homedir();
-  return join(home, '.codeartswork', 'skills');
-}
-function workbuddySkillsDir() {
-  const home = homedir();
-  return join(home, '.workbuddy', 'skills');
-}
-function dshSkillsDir() {
-  const home = process.env.DSH_HOME || join(homedir(), '.dsh');
-  return join(home, 'skills');
-}
-function readOfficeaceRegistryInstallDir() {
-  if (process.platform !== 'win32') return null;
-  try {
-    const r = spawnSync('reg', ['query', 'HKCU\\SOFTWARE\\OfficeAce\\OfficeAce', '/v', 'InstallDir'], {
-      encoding: 'utf8',
-      windowsHide: true,
-      timeout: 5000,
-    });
-    if (r.status === 0) {
-      const m = r.stdout.match(/InstallDir\s+REG_SZ\s+(.+)/);
-      if (m) return m[1].trim();
-    }
-  } catch {}
-  return null;
-}
-
-function officeaceSkillsRoot() {
-  const configRoot = process.env.OFFICE_CLAW_CONFIG_ROOT;
-  // Same lenient probe as the installer (isUsableOfficeaceRoot) so env pointing
-  // at "skills present but capabilities.json absent" resolves identically at
-  // install and at runtime (#559 review).
-  if (configRoot && isUsableOfficeaceRoot(configRoot)) return join(configRoot, 'skills');
-  // Same persisted root used by the installer keeps install-time and
-  // runtime skill discovery consistent (#559).
-  const markerRoot = readOfficeaceRootMarker();
-  if (markerRoot) return join(markerRoot, 'skills');
-  const regDir = readOfficeaceRegistryInstallDir();
-  if (regDir) {
-    const dir = join(regDir, '.office-claw', 'skills');
-    if (existsSync(dir)) return dir;
-  }
-  if (process.platform === 'win32') {
-    const bases = [process.env.ProgramFiles, 'C:\\Program Files', 'D:\\Program Files'];
-    if (process.env.LOCALAPPDATA) bases.push(join(process.env.LOCALAPPDATA, 'Programs'));
-    for (const base of bases) {
-      if (!base) continue;
-      const dir = join(base, 'OfficeAce', '.office-claw', 'skills');
-      if (existsSync(dir)) return dir;
-    }
-  }
-  return null;
-}
-
-function hermesSkillsDir() {
-  if (process.env.HERMES_HOME) return join(process.env.HERMES_HOME, 'skills');
-  // Hermes on Windows stores under LOCALAPPDATA, not ~/.hermes
-  if (process.platform === 'win32' && process.env.LOCALAPPDATA) {
-    return join(process.env.LOCALAPPDATA, 'hermes', 'skills');
-  }
-  const home = homedir();
-  return join(home, '.hermes', 'skills');
-}
-
-function atomcodeSkillsDir() {
-  const home = process.env.ATOMCODE_HOME || homedir();
-  return join(home, '.atomcode', 'skills');
-}
-
-function codexDesktopSkillsDir() {
-  return join(homedir(), '.agents', 'skills');
 }
 
 export function listSkillDirs(root: string): string[] {
@@ -130,34 +50,6 @@ export function listSkillDirs(root: string): string[] {
     return [];
   }
 }
-
-export function findSkillsRoot(candidates: Array<string | null | undefined>): string | null {
-  for (const dir of candidates) {
-    // A missing optional root (e.g. officeaceSkillsRoot() → null) behaves like a
-    // non-existent dir: no skills, keep walking the fallback chain.
-    if (!dir) continue;
-    if (listSkillDirs(dir).length > 0) return dir;
-  }
-  return null;
-}
-
-function resolveSkillsRoot() {
-  return (
-    findSkillsRoot([
-      SKILLS_ROOT_DEV,
-      dshSkillsDir(),
-      codeartsSkillsDir(),
-      codeartsWorkSkillsDir(),
-      opencodeSkillsDir(),
-      workbuddySkillsDir(),
-      officeaceSkillsRoot(),
-      hermesSkillsDir(),
-      atomcodeSkillsDir(),
-      codexDesktopSkillsDir(),
-    ]) || SKILLS_ROOT_DEV
-  );
-}
-const SKILLS_ROOT = resolveSkillsRoot();
 
 // ── Tool registry ──
 // TOOL_DEFINITIONS_LITERALS is the single source of truth for names and
@@ -213,7 +105,8 @@ const TOOL_DEFINITIONS_LITERALS = [
   },
   {
     name: 'huaweicloud_service_catalog',
-    description: 'Return the recommended capability sources for Huawei Cloud agent tasks.',
+    description:
+      'Route a Huawei Cloud task intent to capability sources. Takes intent (plain-language task such as "create an ECS instance", "static website on OBS", "bind an EIP", "troubleshoot an RDS failover") and returns recommended skill names to load with huaweicloud_retrieve_skill, the Huawei Cloud services involved, and the capability order (Skills, KooCLI, API, SDK, MCP, Terraform). Start here when the user mentions any Huawei Cloud service or scenario: ECS, VPC, OBS, RDS, CCE, IAM, security groups, EIP, serverless, Kubernetes, database, monitoring, billing, backup, and twenty more domains.',
   },
   {
     name: 'huaweicloud_explain_error',
@@ -227,7 +120,7 @@ const TOOL_DEFINITIONS_LITERALS = [
   {
     name: 'huaweicloud_retrieve_skill',
     description:
-      'Retrieve a full SKILL.md by skill name. Returns the complete skill content plus list of reference files. Use when the agent has identified which skill to load and needs the full procedure.',
+      "Retrieve one Huawei Cloud skill by exact name (e.g. huawei-ecs, huawei-vpc, huawei-obs, huawei-sandbox). Returns the full SKILL.md content plus its reference files. This is the only way to load devkit skills: they are server data, not installed in the agent's own skill directory. Find candidate names first via huaweicloud_service_catalog, huaweicloud_search_docs, or huaweicloud_list_packs.",
   },
   {
     name: 'huaweicloud_list_regions',
@@ -365,7 +258,7 @@ const TOOL_DEFINITIONS_LITERALS = [
   {
     name: 'huaweicloud_list_packs',
     description:
-      'List the devkit capability packs. Returns each pack with id, title, description, tool name list, and enabled flag. Use when the agent needs an overview of the available capability bundles before inspecting one with huaweicloud_pack_info.',
+      'List the devkit capability packs — the complete skill and tool inventory of this server. Returns each pack with id, title, description, the skill names it owns (load them with huaweicloud_retrieve_skill), its tool names, and the enabled flag. The "services" pack carries the twenty Huawei Cloud service skills (ecs, vpc, obs, iam, rds, ...). Use this to discover what the devkit knows before picking a skill or pack.',
   },
   {
     name: 'huaweicloud_pack_info',
@@ -842,20 +735,28 @@ function serviceCatalog(intent: string = '') {
     }
   }
   const recommendedSkills = [...new Set(matched.flatMap((r) => r.skills))];
+  // Never recommend a skill whose owning pack is disabled — the router must
+  // not send the agent to a loader that will refuse (same filter searchDocs
+  // applies to its index).
+  const enabled = resolveEnabledPacks();
+  const gated = recommendedSkills.filter((skill) => {
+    const owner = SKILL_OWNER.get(skill);
+    return !owner || enabled.has(owner);
+  });
   const recommendedServices = [...new Set(matched.flatMap((r) => r.services))].slice(0, 5);
 
   // Deployment intent (deploy/host/publish a web app or static website) must never
   // default to a storage/other service — recommend the sandbox first.
   const deploymentIntent = /deploy|host|hosting|publish|website|web app|preview|部署|托管|发布|网站|网页/.test(it);
-  if (deploymentIntent && recommendedSkills.includes('huawei-sandbox')) {
-    const idx = recommendedSkills.indexOf('huawei-sandbox');
-    recommendedSkills.splice(idx, 1);
-    recommendedSkills.unshift('huawei-sandbox');
+  if (deploymentIntent && gated.includes('huawei-sandbox')) {
+    const idx = gated.indexOf('huawei-sandbox');
+    gated.splice(idx, 1);
+    gated.unshift('huawei-sandbox');
   }
 
   return {
     intent,
-    recommendedSkills: recommendedSkills.length ? recommendedSkills : ['Use huaweicloud-core to route intent.'],
+    recommendedSkills: gated.length ? gated : ['Use huaweicloud-core to route intent.'],
     recommendedServices: recommendedServices.length
       ? recommendedServices
       : ['Run hcloud --help to list available services.'],
@@ -902,6 +803,7 @@ function listPacks() {
       id: pack.id,
       title: pack.title,
       description: pack.description,
+      skills: pack.skills,
       tools: pack.tools,
       enabled: enabled.has(pack.id),
     })),
@@ -1125,9 +1027,24 @@ async function searchDocs(query: string, topic: string = 'all') {
 async function retrieveSkill(name: string) {
   const skillName = String(name || '').trim();
   if (!skillName) return { ok: false, error: 'Skill name is required.' };
+  // Boundary guard: the name joins a filesystem path and MCP is the sole
+  // loading surface, so anything outside the skill-name shape (traversal
+  // segments, separators, absolute paths) is rejected before touching disk.
+  if (!/^[a-z0-9-]+$/.test(skillName)) {
+    return {
+      ok: false,
+      error: 'Invalid skill name "' + skillName + '". Skill names are lowercase letters, digits, and dashes.',
+    };
+  }
   const skillPath = join(SKILLS_ROOT, skillName, 'SKILL.md');
   if (!existsSync(skillPath)) {
-    const dirs = listSkillDirs(SKILLS_ROOT);
+    // The Available list advertises only enabled packs' skills: recommending a
+    // name the owner gate would refuse misroutes the agent.
+    const enabled = resolveEnabledPacks();
+    const dirs = listSkillDirs(SKILLS_ROOT).filter((dir) => {
+      const owner = SKILL_OWNER.get(dir);
+      return !owner || enabled.has(owner);
+    });
     return { ok: false, error: 'Skill "' + skillName + '" not found. Available: ' + dirs.join(', ') };
   }
   const owner = SKILL_OWNER.get(skillName);

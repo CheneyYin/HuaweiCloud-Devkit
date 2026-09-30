@@ -33,7 +33,9 @@ function readSource(relativePath) {
 test('Codex plugin manifest and marketplace are installable', () => {
   const manifest = readJson(join(pluginRoot, '.codex-plugin', 'plugin.json'));
   assert.equal(manifest.name, 'huaweicloud-devkit');
-  assert.equal(manifest.skills, './skills/');
+  // Skills are server data disclosed over MCP; the manifest must not declare
+  // a native skills surface (same field-absence discipline as hooks).
+  assert.ok(!Object.hasOwn(manifest, 'skills'), 'Codex manifest declares no native skills surface');
   assert.equal(manifest.mcpServers, './.mcp.json');
   assert.ok(!Object.hasOwn(manifest, 'hooks'), 'Codex manifest keeps hooks out');
 
@@ -63,10 +65,11 @@ test('OpenClaw plugin manifest matches other agent manifests', () => {
   assert.equal(names.size, 1, 'All plugin.json name fields must be identical');
 });
 
-test('OpenCode integration exposes skills, commands, and MCP config', () => {
+test('OpenCode integration exposes commands and MCP config', () => {
   assert.ok(existsSync(join(root, 'integrations', 'opencode', 'opencode.json')));
   assert.ok(existsSync(join(root, 'integrations', 'opencode', 'commands', 'huaweicloud-doctor.md')));
-  assert.ok(existsSync(join(root, 'integrations', 'opencode', 'skills', 'huaweicloud-core', 'SKILL.md')));
+  // No native OpenCode entry-point skill: MCP tools are the entry point.
+  assert.ok(!existsSync(join(root, 'integrations', 'opencode', 'skills')));
 });
 
 test('Hermes MCP Catalog manifest is present and valid', () => {
@@ -345,7 +348,10 @@ test('all plugin manifests are valid JSON', () => {
   for (const path of manifests) {
     const data = readJson(path);
     assert.ok(data.name, `Manifest ${path} missing name`);
-    assert.ok(data.skills || data.interface, `Manifest ${path} missing skills/interface`);
+    assert.ok(data.interface, `Manifest ${path} missing interface`);
+    // No manifest may declare a native skills surface: skills are server
+    // data disclosed over MCP only.
+    assert.ok(!Object.hasOwn(data, 'skills'), `Manifest ${path} must not declare skills`);
   }
 });
 
@@ -434,15 +440,16 @@ test('setup-cli.ts supports the codearts target end to end', () => {
   assert.match(setup, /function codeartsProjectSkillsDir\(\)/);
   assert.match(setup, /function codeartsProjectMcpSettingsFile\(\)/);
   assert.match(setup, /function codeartsPluginsDir\(\)/);
-  // install copies to user + project skills and registers both MCP configs
-  assert.match(setup, /copyDir\(skillsSrc, codeartsSkillsDir\(\)\)/);
-  assert.match(setup, /copyDir\(skillsSrc, codeartsProjectSkillsDir\(\)\)/);
+  // install ships the server payload (dist + safety + skills server data)
+  // into the codearts plugin dir and registers both MCP configs
+  assert.match(setup, /async function installCodeArts\(\): Promise<void> \{\s*\n\s*const pluginSrc/);
+  assert.match(setup, /copyServerPayload\(pluginDest\)/);
   assert.match(setup, /registerCodeartsMcp\(codeartsMcpSettingsFile\(\)\)/);
   assert.match(setup, /registerCodeartsMcp\(codeartsProjectMcpSettingsFile\(\)\)/);
   // MCP registration writes an enabled server with local mode env
   assert.match(setup, /config\.mcpServers\['huaweicloud-devkit'\] = \{/);
   assert.match(setup, /HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local'/);
-  assert.match(setup, /enabled: true,/);
+  assert.match(setup, /entry\.enabled = true;/);
   // command dispatch covers codearts for install / uninstall / status
   const branches = setup.match(/target === 'codearts' \|\| target === 'all'/g);
   const installDispatch = setup.match(/shouldInstall\('codearts'\)/g);
@@ -455,11 +462,10 @@ test('setup-cli.ts supports the codearts target end to end', () => {
   assert.match(setup, /if \(target === 'codex'\) return null;/);
   assert.match(setup, /if \(target === 'codearts'\) return codeartsPluginsDir\(\);/);
   assert.match(setup, /function writeInstallMarker\(target: string\)/);
-  // doctor checks the codearts skills dir alongside opencode
-  assert.match(
-    setup,
-    /const skillsOptions = \[[\s\S]*?opencodeSkillsDir\(\)[\s\S]*?codexDesktopSkillsDir\(\)[\s\S]*?codeartsSkillsDir\(\)[\s\S]*?codeartsWorkSkillsDir\(\)[\s\S]*?workbuddySkillsDir\(\)[\s\S]*?dshSkillsDir\(\)[\s\S]*?\];/,
-  );
+  // doctor checks the skills tree inside installed plugin dirs, and native
+  // skill dirs only for stale-copy detection
+  assert.match(setup, /serverSkillCount\(dir\) > 0/);
+  assert.match(setup, /staleNativeSkillDirs\(\)\.length/);
   // help text documents the target
   assert.match(
     setup,
@@ -468,18 +474,14 @@ test('setup-cli.ts supports the codearts target end to end', () => {
   assert.match(setup, /install --target codearts/);
 });
 
-test('tools.ts resolves skills from the codearts directory', () => {
+test('tools.ts resolves skills from the server-relative tree only', () => {
   const tools = readSource(join('src', 'tools.ts'));
-  assert.match(tools, /function codeartsSkillsDir\(\)/);
-  assert.match(tools, /return join\(home, '\.codeartsdoer', 'skills'\);/);
-  // candidates only count when they contain at least one skill with SKILL.md
-  assert.match(tools, /export function findSkillsRoot/);
+  // SKILLS_ROOT is server data next to dist/ — no agent-native dir probing
+  assert.match(tools, /const SKILLS_ROOT = join\(__dirname, '\.\.', 'skills'\);/);
+  assert.doesNotMatch(tools, /function opencodeSkillsDir\(\)/, 'native dir probe must be gone');
+  assert.doesNotMatch(tools, /findSkillsRoot/, 'multi-root fallback must be gone');
   assert.match(tools, /export function listSkillDirs/);
   assert.match(tools, /existsSync\(join\(root, d\.name, 'SKILL\.md'\)\)/);
-  assert.match(
-    tools,
-    /findSkillsRoot\(\[[\s\S]*?SKILLS_ROOT_DEV[\s\S]*?dshSkillsDir\(\)[\s\S]*?codeartsSkillsDir\(\)[\s\S]*?opencodeSkillsDir\(\)[\s\S]*?workbuddySkillsDir\(\)[\s\S]*?officeaceSkillsRoot\(\)[\s\S]*?\]\)/,
-  );
 });
 
 test('setup-cli.ts handles KooCLI sandbox blockers and privacy agreement', () => {
@@ -539,10 +541,9 @@ test('setup-cli.ts supports the dsh target end to end', () => {
   assert.match(setup, /async function updateDsh\(\)/);
   assert.match(setup, /function uninstallDsh\(\)/);
   assert.match(setup, /function dshStatus\(\)/);
-  // install copies skills/server/safety and registers MCP through cordis.patch.yml
-  assert.match(setup, /copyDir\(skillsSrc, dshSkillsDir\(\)\)/);
-  assert.match(setup, /copyDir\(distDir, join\(pluginDest, 'dist'\)\)/);
-  assert.match(setup, /copyDir\(safetyDir, join\(pluginDest, 'safety'\)\)/);
+  // install ships the server payload and registers MCP through cordis.patch.yml
+  assert.match(setup, /copyServerPayload\(pluginDest\)/);
+  assert.doesNotMatch(setup, /copyDir\(skillsSrc, dshSkillsDir\(\)\)/, 'DSH skills stay server data');
   assert.match(setup, /ensureDshMcpPatch\(\)/);
   assert.match(setup, /tryInstallDshMcpClient\(\)/);
   // DSH MCP patch uses dsh-mcp-client with stdio local server mode
@@ -562,10 +563,9 @@ test('setup-cli.ts supports the dsh target end to end', () => {
   );
   // .installed marker goes to the dsh plugins dir
   assert.match(setup, /if \(target === 'dsh'\) return dshPluginsDir\(\);/);
-  // doctor checks DSH plugin dir, patch, and skills dir
+  // doctor checks the DSH plugin dir and patch
   assert.match(setup, /const dshPluginDir = dshPluginsDir\(\);/);
   assert.match(setup, /dshPatchConfigured\(\)/);
-  assert.match(setup, /dshSkillsDir\(\)/);
   // help text documents the target
   assert.match(
     setup,
@@ -574,14 +574,12 @@ test('setup-cli.ts supports the dsh target end to end', () => {
   assert.match(setup, /install --target dsh/);
 });
 
-test('tools.ts resolves skills from the dsh directory', () => {
+test('tools.ts resolves skills from the server-relative tree only (dsh fallback removed)', () => {
   const tools = readSource(join('src', 'tools.ts'));
-  assert.match(tools, /function dshSkillsDir\(\)/);
-  assert.match(tools, /process\.env\.DSH_HOME \|\| join\(homedir\(\), '\.dsh'\)/);
-  assert.match(tools, /return join\(home, 'skills'\);/);
-  // stale or empty dirs must not short-circuit the fallback chain
-  assert.match(tools, /resolveSkillsRoot[\s\S]*?findSkillsRoot\(\[/);
-  assert.match(tools, /\|\|\s*SKILLS_ROOT_DEV/);
+  // No DSH (or any agent) dir probing survives in the server: skills are
+  // server data resolved next to dist/.
+  assert.doesNotMatch(tools, /function dshSkillsDir\(\)/, 'dsh dir probe must be gone');
+  assert.match(tools, /const SKILLS_ROOT = join\(__dirname, '\.\.', 'skills'\);/);
   // The agent-target list moved to the zod schema descriptions when the
   // JSON-Schema registry was replaced, and into the auth pack when the
   // schemas were materialized per pack (src/packs/auth/tools.ts).
@@ -592,12 +590,10 @@ test('tools.ts resolves skills from the dsh directory', () => {
   );
 });
 
-test('tools.ts resolves skills from the officeace directory', () => {
-  const tools = readSource(join('src', 'tools.ts'));
-  assert.match(tools, /function officeaceSkillsRoot\(\)/);
-  assert.match(tools, /function readOfficeaceRegistryInstallDir\(\)/);
-  assert.match(tools, /office-claw/);
-  assert.match(tools, /capabilities\.json/);
+test('setup-cli.ts keeps officeace capability cleanup (no native skill registration)', () => {
+  const setup = readSource(join('src', 'setup-cli.ts'));
+  assert.match(setup, /function removeOfficeaceSkillCapabilities\(\)/);
+  assert.match(setup, /function officeaceSkillsDir\(\)/);
 });
 
 test('setup-cli.ts supports the officeace target end to end', () => {
@@ -614,11 +610,11 @@ test('setup-cli.ts supports the officeace target end to end', () => {
   assert.match(setup, /function readOfficeaceRegistryInstallDir\(\)/);
   assert.match(setup, /function ensureOfficeaceMcpInSqlite\(\)/);
   assert.match(setup, /function removeOfficeaceMcpFromSqlite\(\)/);
-  assert.match(setup, /function registerOfficeaceSkillEntries\(\)/);
-  assert.match(setup, /copyDir\(skillsSrc, officeaceSkillsDir\(\)\)/);
-  assert.match(setup, /ensureOfficeaceMcpInSqlite\(\)/);
-  assert.match(setup, /registerOfficeaceSkillEntries\(\)/);
-  assert.match(setup, /type.*skill.*source.*custom/s);
+  // Native skill registration is gone; install/update actively clean the
+  // capabilities entries older versions wrote.
+  assert.doesNotMatch(setup, /registerOfficeaceSkillEntries/, 'no native skill registration');
+  assert.match(setup, /copyServerPayload\(pluginDest\)/);
+  assert.match(setup, /removeOfficeaceSkillCapabilities\(\)/);
   assert.match(setup, /mcpServer.*command.*node/s);
   assert.match(setup, /capabilities\.json/);
   const branches = setup.match(/target === 'officeace' \|\| target === 'all'/g);
@@ -651,7 +647,7 @@ test('setup-cli.ts supports the hermes target end to end', () => {
   assert.match(setup, /function hermesSafetyPluginDir\(\)/);
   assert.match(setup, /function ensureHermesHookPlugin\(\)/);
   assert.match(setup, /function removeHermesHookPlugin\(\)/);
-  assert.match(setup, /copyDir\(skillsSrc, hermesSkillsDir\(\)\)/);
+  assert.match(setup, /copyServerPayload\(pluginDest, \{ skipDist: skipMcp \}\)/);
   assert.match(setup, /copyDir\(hooksDir, join\(pluginDest, 'hooks'\)\)/);
   assert.match(setup, /ensureHermesMcpConfig\(\)/);
   assert.match(setup, /ensureHermesHooksConfig\(\)/);
@@ -716,21 +712,11 @@ test('setup-cli.ts checks for updates on install/update via shared query', () =>
   assert.ok(calls && calls.length >= 2, 'checkForUpdate should be awaited in both cmdInstall and cmdUpdate');
 });
 
-test('tools.ts resolves skills from the hermes directory', () => {
+test('tools.ts no longer probes hermes/atomcode native skill dirs', () => {
   const tools = readSource(join('src', 'tools.ts'));
-  assert.match(tools, /function hermesSkillsDir\(\)/);
-  assert.match(tools, /process\.env\.HERMES_HOME/);
-  assert.match(tools, /LOCALAPPDATA/);
-  assert.match(tools, /return join\(home, '\.hermes', 'skills'\)/);
-  assert.match(tools, /hermesSkillsDir\(\)/);
-});
-
-test('tools.ts resolves skills from the atomcode directory', () => {
-  const tools = readSource(join('src', 'tools.ts'));
-  assert.match(tools, /function atomcodeSkillsDir\(\)/);
-  assert.match(tools, /process\.env\.ATOMCODE_HOME/);
-  assert.match(tools, /return join\(home, '\.atomcode', 'skills'\)/);
-  assert.match(tools, /atomcodeSkillsDir\(\)/);
+  assert.doesNotMatch(tools, /function hermesSkillsDir\(\)/, 'hermes dir probe must be gone');
+  assert.doesNotMatch(tools, /function atomcodeSkillsDir\(\)/, 'atomcode dir probe must be gone');
+  assert.match(tools, /const SKILLS_ROOT = join\(__dirname, '\.\.', 'skills'\);/);
 });
 
 test('agent-registration reports openclaw registration status', () => {
