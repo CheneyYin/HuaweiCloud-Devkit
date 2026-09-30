@@ -4613,6 +4613,121 @@ async function cmdDoctor(): Promise<void> {
     warn++;
   }
 
+  // Pack status — DEVKIT_PACKS is read from each installed target's MCP
+  // config file, not the process env: the value reaches the server process
+  // only after the agent harness injects the config env. Unknown ids warn
+  // because the server boot fail-fasts on them (src/packs/enable.ts);
+  // host-scoped pack-declared binaries are probed with their own version
+  // flag. Sandbox-scoped binaries (e.g. devbridge) live inside the cloud
+  // sandbox, where a host-side probe would target the wrong machine, so they
+  // are not checked.
+  const packStatus: Array<{ label: string; installed: boolean; read: () => string | null }> = [
+    {
+      label: 'OpenCode',
+      installed: mcpServerInstalled(opencodePluginDir),
+      read: () => readDevkitPacksFromJson(opencodeConfigFile(), 'mcp'),
+    },
+    {
+      label: 'Codex Desktop',
+      installed: mcpServerInstalled(codexPluginDir),
+      read: () => readDevkitPacksFromJson(join(codexDesktopPluginsDir(), '.mcp.json'), 'mcpServers'),
+    },
+    {
+      label: 'CodeArts',
+      installed: mcpServerInstalled(codeartsPluginDir),
+      read: () => readDevkitPacksFromJson(codeartsMcpSettingsFile(), 'mcpServers'),
+    },
+    {
+      label: 'CodeArts Work',
+      installed: mcpServerInstalled(codeartsWorkPluginDir),
+      read: () => readDevkitPacksFromJson(codeartsWorkMcpSettingsFile(), 'mcp'),
+    },
+    {
+      label: 'WorkBuddy',
+      installed: mcpServerInstalled(workbuddyPluginDir),
+      read: () => readDevkitPacksFromJson(workbuddyMcpConfigFile(), 'mcpServers'),
+    },
+    {
+      label: 'OpenClaw',
+      installed: mcpServerInstalled(openclawPluginsDir()),
+      read: () => readDevkitPacksFromJson(join(openclawPluginsDir(), '.mcp.json'), 'mcpServers'),
+    },
+    {
+      label: 'AtomCode',
+      installed: mcpServerInstalled(atomcodePluginDir),
+      read: () => readDevkitPacksFromJson(atomcodeMcpConfigFile(), 'mcpServers'),
+    },
+    {
+      label: 'DSH',
+      installed: mcpServerInstalled(dshPluginDir),
+      read: () => readDevkitPacksFromYaml(dshPatchFile()),
+    },
+    {
+      label: 'Hermes Agent',
+      installed: mcpServerInstalled(hermesPluginDir),
+      read: () => readDevkitPacksFromYaml(hermesConfigFile()),
+    },
+    {
+      label: 'OfficeAce',
+      installed: mcpServerInstalled(officeacePluginDir),
+      read: () => readOfficeaceDevkitPacks(),
+    },
+  ];
+  const enabledPacksUnion = new Set<string>();
+  let anyPackTarget = false;
+  for (const target of packStatus) {
+    if (!target.installed) continue;
+    anyPackTarget = true;
+    const raw = target.read();
+    if (raw === null || raw.trim() === '') {
+      console.log(`  \x1b[36m[INFO]\x1b[0m Packs (${target.label}): all — DEVKIT_PACKS not set`);
+      for (const id of PACK_IDS) enabledPacksUnion.add(id);
+      continue;
+    }
+    const ids = raw
+      .split(',')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0);
+    const unknown = ids.filter((id) => !PACK_ID_SET.has(id));
+    if (unknown.length > 0) {
+      warn++;
+      console.log(
+        `  \x1b[33m[WARN]\x1b[0m Packs (${target.label}): unknown id(s) in DEVKIT_PACKS="${raw}": ${unknown.join(', ')}`,
+      );
+      console.log(
+        `        The MCP server will refuse to start until the value is fixed. Clear it: npx huaweicloud-devkit install --target <agent> --packs all`,
+      );
+      continue;
+    }
+    const enabled = ids.includes('core') ? ids : ['core', ...ids];
+    for (const id of enabled) enabledPacksUnion.add(id);
+    console.log(`  \x1b[36m[INFO]\x1b[0m Packs (${target.label}): ${enabled.join(', ')}`);
+  }
+  if (anyPackTarget) {
+    const hostBinaries: Array<{ pack: string; name: string; versionFlag: string }> = [];
+    for (const [packId, declared] of Object.entries(PACK_BINARIES) as Array<[string, readonly PackBinary[]]>) {
+      if (!enabledPacksUnion.has(packId)) continue;
+      for (const bin of declared) {
+        if (bin.scope === 'host') hostBinaries.push({ pack: packId, name: bin.name, versionFlag: bin.versionFlag });
+      }
+    }
+    if (hostBinaries.length === 0) {
+      console.log(`  \x1b[36m[INFO]\x1b[0m Pack host binaries: none declared`);
+    } else {
+      for (const bin of hostBinaries) {
+        if (commandAvailable(bin.name, [bin.versionFlag])) {
+          console.log(`  \x1b[32m[PASS]\x1b[0m ${bin.name} (pack ${bin.pack}) available`);
+          pass++;
+        } else {
+          warn++;
+          console.log(
+            `  \x1b[33m[WARN]\x1b[0m ${bin.name} (pack ${bin.pack}) not found — install it on this machine or the pack's tools will fail at runtime`,
+          );
+        }
+      }
+    }
+  }
+
   const proxyConfig = readProxyConfig();
   const proxyEnv: string | undefined =
     process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy;
