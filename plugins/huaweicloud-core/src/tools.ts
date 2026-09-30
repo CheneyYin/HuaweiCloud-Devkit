@@ -21,6 +21,10 @@ import { getToolSchema, SCHEMA_DRIFT_IGNORED_KEYS } from './tool-schemas.ts';
 import { PACKS, PACK_TOOL_HANDLERS, isPackToolName, type PackToolName } from './packs/registry.ts';
 import { resolveEnabledPacks } from './packs/enable.ts';
 import type { PackId } from './lib/pack-types.ts';
+// Service region descriptor (the old inline `known` table in
+// getRegionalAvailability, migrated verbatim — see services/regions.ts for
+// its guarantee scope).
+import { SERVICE_REGIONS } from './services/regions.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILLS_ROOT_DEV = join(__dirname, '..', 'skills');
@@ -1219,94 +1223,11 @@ async function getRegionalAvailability(service: string, region: string) {
     .toLowerCase()
     .trim();
   if (!svc || !reg) return { ok: false, error: 'Both service and region are required.' };
-  const known: Record<string, string[]> = {
-    ecs: [
-      'cn-south-1',
-      'cn-north-4',
-      'cn-north-1',
-      'cn-east-3',
-      'cn-east-2',
-      'ap-southeast-3',
-      'ap-southeast-2',
-      'ap-southeast-1',
-      'ap-southeast-4',
-      'af-south-1',
-      'tr-west-1',
-      'sa-brazil-1',
-      'la-north-2',
-      'na-mexico-1',
-      'me-east-1',
-    ],
-    obs: [
-      'cn-south-1',
-      'cn-north-4',
-      'cn-north-1',
-      'cn-east-3',
-      'cn-east-2',
-      'ap-southeast-3',
-      'ap-southeast-2',
-      'ap-southeast-1',
-      'af-south-1',
-    ],
-    vpc: [
-      'cn-south-1',
-      'cn-north-4',
-      'cn-north-1',
-      'cn-east-3',
-      'cn-east-2',
-      'ap-southeast-3',
-      'ap-southeast-2',
-      'ap-southeast-1',
-      'ap-southeast-4',
-      'af-south-1',
-      'tr-west-1',
-      'sa-brazil-1',
-      'la-north-2',
-      'me-east-1',
-    ],
-    iam: ['global'],
-    rds: [
-      'cn-south-1',
-      'cn-north-4',
-      'cn-north-1',
-      'cn-east-3',
-      'cn-east-2',
-      'ap-southeast-3',
-      'ap-southeast-2',
-      'ap-southeast-1',
-    ],
-    gaussdb: ['cn-south-1', 'cn-north-4', 'cn-east-3'],
-    cce: [
-      'cn-south-1',
-      'cn-north-4',
-      'cn-north-1',
-      'cn-east-3',
-      'cn-east-2',
-      'ap-southeast-3',
-      'ap-southeast-2',
-      'ap-southeast-1',
-    ],
-    modelarts: ['cn-south-1', 'cn-north-4', 'cn-east-3'],
-    functiongraph: [
-      'cn-south-1',
-      'cn-north-4',
-      'cn-north-1',
-      'cn-east-3',
-      'cn-east-2',
-      'ap-southeast-3',
-      'ap-southeast-2',
-      'ap-southeast-1',
-    ],
-    dew: ['cn-south-1', 'cn-north-4', 'cn-east-3', 'ap-southeast-3'],
-    smn: ['cn-south-1', 'cn-north-4', 'cn-east-3', 'ap-southeast-3'],
-    ces: ['cn-south-1', 'cn-north-4', 'cn-east-3', 'ap-southeast-3'],
-    cts: ['cn-south-1', 'cn-north-4', 'cn-east-3', 'ap-southeast-3'],
-    apig: ['cn-south-1', 'cn-north-4', 'cn-east-3', 'ap-southeast-3'],
-    cbr: ['cn-south-1', 'cn-north-4', 'cn-east-3', 'ap-southeast-3'],
-    dds: ['cn-south-1', 'cn-north-4', 'cn-east-3', 'ap-southeast-3'],
-    dcs: ['cn-south-1', 'cn-north-4', 'cn-east-3', 'ap-southeast-3'],
-  };
-  if (!known[svc])
+  // svc is an arbitrary string at this boundary; the explicit Record view is
+  // what keeps the string index legal under strict mode (SERVICE_REGIONS is a
+  // closed object literal with no index signature).
+  const table: Record<string, readonly string[]> = SERVICE_REGIONS;
+  if (!table[svc])
     return {
       ok: false,
       service: svc,
@@ -1319,7 +1240,7 @@ async function getRegionalAvailability(service: string, region: string) {
         svc.toUpperCase() +
         ' --help to verify, or check https://developer.huaweicloud.com/endpoint.',
     };
-  const available = known[svc].includes(reg) || known[svc].includes('global');
+  const available = table[svc].includes(reg) || table[svc].includes('global');
   return {
     ok: true,
     service: svc,
