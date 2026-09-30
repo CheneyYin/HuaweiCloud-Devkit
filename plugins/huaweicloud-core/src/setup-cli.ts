@@ -50,6 +50,7 @@ import { isUsableOfficeaceRoot, readOfficeaceRootMarker, writeOfficeaceRootMarke
 import { queryDistTagsFetch, determineTarget, semverCompare } from './update-check.ts';
 import { getKooCliVersion, compareVersion, kooCliDownloadBase, KOO_CLI_BASE } from './koocli-version.ts';
 import { findHcloudBin, hcloudProbeNextStep, probeHcloud } from './hcloud-probe.ts';
+import { PACK_BINARIES, PACK_IDS, type PackBinary } from './lib/pack-types.ts';
 
 // node:sqlite is a runtime-only builtin loaded through createRequire; only the
 // DatabaseSync surface this module calls is modeled (see auth/agent-registration.ts).
@@ -322,6 +323,12 @@ function ensureOfficeaceMcpInSqlite(): 'db-missing' | 'ok' | 'owner-missing' | '
   ];
   const hcloudBin = findHcloudBin();
   if (hcloudBin) env.push({ key: 'HCLOUD_BIN', value: hcloudBin.replace(/\\/g, '/'), sensitive: false });
+  // DEVKIT_PACKS rides the same env rows; packsCarryValue applies the --packs
+  // policy (user-set values win, --packs all removes, no flag keeps current).
+  const officeacePacks = packsCarryValue('OfficeAce', readOfficeaceDevkitPacks());
+  if (officeacePacks !== null) {
+    env.push({ key: 'DEVKIT_PACKS', value: officeacePacks, sensitive: false });
+  }
 
   const now = Date.now();
   let db: SqliteDatabase | null = null;
@@ -349,6 +356,12 @@ function ensureOfficeaceMcpInSqlite(): 'db-missing' | 'ok' | 'owner-missing' | '
       const envMerged: unknown[] = [...(Array.isArray(existingEnv) ? existingEnv : [])];
       for (const e of env) {
         if (e && e.key && !envMerged.some((x) => asRecord(x).key === e.key)) envMerged.push(e);
+      }
+      // --packs all restores full enablement: drop any existing DEVKIT_PACKS row.
+      if (resolvePacksFlag().kind === 'all') {
+        for (let i = envMerged.length - 1; i >= 0; i--) {
+          if (asRecord(envMerged[i]).key === 'DEVKIT_PACKS') envMerged.splice(i, 1);
+        }
       }
       const nextArgsJson = JSON.stringify([mcpPath, ...userArgs]);
       const nextEnvJson = JSON.stringify(envMerged);
@@ -718,6 +731,193 @@ function removeIfExists(p: string): boolean {
   return false;
 }
 
+// --- Install-time pack selection (--packs) ---------------------------------
+//
+// DEVKIT_PACKS selects the pack surface at server boot (src/packs/enable.ts).
+// The installer writes it into each target's MCP config env layer — the same
+// layer HUAWEICLOUD_AGENT_TOOLKIT_MODE already occupies — and the agent
+// harness injects it into the server process. The registry itself is not
+// importable here (its chain is zod-bundled into dist/mcp-server.js only),
+// so the id list comes from the zod-free PACK_IDS vocabulary in
+// lib/pack-types.ts, pinned to the registry by test/structure.test.ts.
+//
+// Flag semantics:
+//   --packs <ids>  write DEVKIT_PACKS=<ids> unless the config already carries
+//                  a value; a differing user-set value wins with a warning
+//                  (the mergeEnv contract, issue #615)
+//   --packs all    remove the DEVKIT_PACKS key (restore full enablement)
+//   (no flag)      never write or remove the key
+
+type PacksFlag = { kind: 'unset' } | { kind: 'all' } | { kind: 'ids'; value: string };
+
+const PACK_ID_SET = new Set<string>(PACK_IDS);
+
+let packsFlagCache: PacksFlag | undefined;
+
+// Parse and validate --packs once per process; bogus input exits non-zero on
+// stderr with the unknown id(s) and the valid id list, mirroring --target.
+// Call before any file is copied so a typo cannot half-install.
+function resolvePacksFlag(): PacksFlag {
+  if (packsFlagCache) return packsFlagCache;
+  const idx = process.argv.indexOf('--packs');
+  let result: PacksFlag = { kind: 'unset' };
+  if (idx >= 0) {
+    const raw = process.argv[idx + 1];
+    if (raw === undefined || raw === '' || raw.startsWith('--')) {
+      console.error('Missing value for --packs (expected a comma-separated pack id list or "all")');
+      console.error(`Valid pack ids: ${PACK_IDS.join(', ')} (or "all")`);
+      process.exit(1);
+    }
+    if (raw.trim().toLowerCase() === 'all') {
+      result = { kind: 'all' };
+    } else {
+      const ids = raw
+        .split(',')
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0);
+      const bogus = ids.filter((id) => !PACK_ID_SET.has(id));
+      if (bogus.length > 0) {
+        console.error(`Unknown pack id(s): ${bogus.join(', ')}`);
+        console.error(`Valid pack ids: ${PACK_IDS.join(', ')} (or "all")`);
+        process.exit(1);
+      }
+      result = { kind: 'ids', value: ids.join(',') };
+    }
+  }
+  packsFlagCache = result;
+  return result;
+}
+
+// The DEVKIT_PACKS value a config should carry after this run, given its
+// current value. keptUserValue marks the case where a user-set value won.
+function packsWriteValue(current: string | null): {
+  next: string | null;
+  keptUserValue: boolean;
+  requested: string;
+} {
+  const flag = resolvePacksFlag();
+  if (flag.kind === 'unset') return { next: current, keptUserValue: false, requested: '' };
+  if (flag.kind === 'all') return { next: null, keptUserValue: false, requested: 'all' };
+  if (current !== null && current !== flag.value) {
+    return { next: current, keptUserValue: true, requested: flag.value };
+  }
+  return { next: flag.value, keptUserValue: false, requested: flag.value };
+}
+
+function warnPacksUserValueKept(label: string, current: string, requested: string): void {
+  console.log(
+    `  \x1b[33m[WARN]\x1b[0m ${label}: config already sets DEVKIT_PACKS="${current}"; keeping it (--packs would set "${requested}"). Run with --packs all to clear it.`,
+  );
+}
+
+// Apply the packs policy to one merged MCP entry. `envKey` is the env field
+// the target's harness reads ('env' for .mcp.json-style entries,
+// 'environment' for OpenCode and CodeArts Work). Returns true when the entry
+// changed, so callers can fold it into their "unchanged" short-circuit.
+function applyPacksToEntry(entry: Record<string, unknown>, envKey: 'env' | 'environment', label: string): boolean {
+  const flag = resolvePacksFlag();
+  if (flag.kind === 'unset') return false;
+  const rawEnv: unknown = entry[envKey];
+  const existingEnv: Record<string, unknown> | null =
+    rawEnv !== null && typeof rawEnv === 'object' && !Array.isArray(rawEnv)
+      ? (rawEnv as Record<string, unknown>)
+      : null;
+  const current =
+    existingEnv !== null && typeof existingEnv.DEVKIT_PACKS === 'string' ? existingEnv.DEVKIT_PACKS : null;
+  const { next, keptUserValue, requested } = packsWriteValue(current);
+  if (keptUserValue) {
+    warnPacksUserValueKept(label, current ?? '', requested);
+    return false;
+  }
+  if (next === current) return false;
+  if (next === null) {
+    if (existingEnv === null || !Object.hasOwn(existingEnv, 'DEVKIT_PACKS')) return false;
+    delete existingEnv.DEVKIT_PACKS;
+    if (Object.keys(existingEnv).length === 0) delete entry[envKey];
+    return true;
+  }
+  entry[envKey] = { ...(existingEnv ?? {}), DEVKIT_PACKS: next };
+  return true;
+}
+
+// Whether the packs policy would rewrite DEVKIT_PACKS in an entry shaped
+// like `existing`, warning when a user-set value wins. For writers whose
+// merge path rebuilds the env object from the raw existing entry (CodeArts
+// Work): the "unchanged" short-circuit must account for the packs write
+// before that rebuild discards it.
+function packsEntryPending(entry: unknown, envKey: 'env' | 'environment', label: string): boolean {
+  if (resolvePacksFlag().kind === 'unset') return false;
+  const rawEnv: unknown = asRecord(entry)[envKey];
+  const existingEnv: Record<string, unknown> | null =
+    rawEnv !== null && typeof rawEnv === 'object' && !Array.isArray(rawEnv)
+      ? (rawEnv as Record<string, unknown>)
+      : null;
+  const current =
+    existingEnv !== null && typeof existingEnv.DEVKIT_PACKS === 'string' ? existingEnv.DEVKIT_PACKS : null;
+  const { next, keptUserValue, requested } = packsWriteValue(current);
+  if (keptUserValue) {
+    warnPacksUserValueKept(label, current ?? '', requested);
+    return false;
+  }
+  return next !== current;
+}
+
+// For writers that regenerate their config wholesale (YAML blocks, the
+// OfficeAce sqlite row): resolve the DEVKIT_PACKS value to carry forward.
+function packsCarryValue(label: string, current: string | null): string | null {
+  const { next, keptUserValue, requested } = packsWriteValue(current);
+  if (keptUserValue) warnPacksUserValueKept(label, current ?? '', requested);
+  return next;
+}
+
+// Read the DEVKIT_PACKS value one MCP config entry carries, trying both env
+// field spellings agents accept. Null when the file/entry/key is absent.
+function readDevkitPacksFromJson(configPath: string, mapKey: 'mcp' | 'mcpServers'): string | null {
+  if (!existsSync(configPath)) return null;
+  try {
+    const entry = asRecord(
+      asRecord(asRecord(JSON.parse(readFileSync(configPath, 'utf8')))[mapKey])['huaweicloud-devkit'],
+    );
+    for (const envKey of ['environment', 'env']) {
+      const value = asRecord(entry[envKey]).DEVKIT_PACKS;
+      if (typeof value === 'string') return value;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function readDevkitPacksFromYaml(configPath: string): string | null {
+  if (!existsSync(configPath)) return null;
+  try {
+    const match = readFileSync(configPath, 'utf8').match(/^\s*DEVKIT_PACKS:\s*['"]?([^'"\n]+?)['"]?\s*$/m);
+    return match ? match[1].trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function readOfficeaceDevkitPacks(): string | null {
+  if (!existsSync(officeaceSqlitePath())) return null;
+  let db: SqliteDatabase | null = null;
+  try {
+    db = openOfficeaceDb();
+    const row: unknown = db.prepare("SELECT env_json FROM mcp_connectors WHERE name = 'huaweicloud-devkit'").get();
+    const parsed: unknown = JSON.parse(String(asRecord(row).env_json || '[]'));
+    if (!Array.isArray(parsed)) return null;
+    const hit = parsed.find((e) => asRecord(e).key === 'DEVKIT_PACKS');
+    const value = hit ? asRecord(hit).value : null;
+    return typeof value === 'string' ? value : null;
+  } catch {
+    return null;
+  } finally {
+    try {
+      db?.close();
+    } catch {}
+  }
+}
+
 function updateOpenCodeConfig(pluginDir: string): void {
   const configPath = opencodeConfigFile();
   const mcpPath = join(pluginDir, 'dist', 'mcp-server.js').replace(/\\/g, '/');
@@ -732,12 +932,13 @@ function updateOpenCodeConfig(pluginDir: string): void {
       return;
     }
     const existing: unknown = asRecord(config.mcp)['huaweicloud-devkit'];
-    const { entry, changed } = mergeCommandStyle(existing, { mcpPath });
-    if (existing && !changed) {
-      console.log(`  OpenCode MCP config unchanged: ${configPath}`);
-      return;
-    }
-    if (existing && changed) {
+    if (existing) {
+      const { entry, changed } = mergeCommandStyle(existing, { mcpPath });
+      const packsChanged = applyPacksToEntry(entry, 'environment', 'OpenCode');
+      if (!changed && !packsChanged) {
+        console.log(`  OpenCode MCP config unchanged: ${configPath}`);
+        return;
+      }
       const mcpMap = asRecord(config.mcp);
       mcpMap['huaweicloud-devkit'] = entry;
       config.mcp = mcpMap;
@@ -747,11 +948,14 @@ function updateOpenCodeConfig(pluginDir: string): void {
     }
   }
   const mcpMap: Record<string, unknown> = asRecord(config.mcp);
-  mcpMap['huaweicloud-devkit'] = mergeCommandStyle(undefined, { mcpPath }).entry;
-  config.mcp = mcpMap;
-  // Restore user fields saved by a previous uninstall (issue #615).
+  let entry = mergeCommandStyle(undefined, { mcpPath }).entry;
+  // Restore user fields saved by a previous uninstall (issue #615) before the
+  // packs write so a delta-carried DEVKIT_PACKS counts as the current value.
   const delta = takeAgentDelta('opencode');
-  if (delta) mcpMap['huaweicloud-devkit'] = applyUserDelta(mcpMap['huaweicloud-devkit'], delta, 'command');
+  if (delta) entry = asRecord(applyUserDelta(entry, delta, 'command'));
+  applyPacksToEntry(entry, 'environment', 'OpenCode');
+  mcpMap['huaweicloud-devkit'] = entry;
+  config.mcp = mcpMap;
   writeMcpSettingsFile(configPath, config);
   console.log(`  OpenCode config updated: ${configPath}`);
 }
@@ -776,20 +980,24 @@ function writeMcpServersFile(pluginDest: string, mcpPath: string, agentKey: stri
     env: { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local' },
     defaultTimeout: null,
   });
-  if (existing && !changed) {
+  let finalEntry: Record<string, unknown> = entry;
+  if (!existing) {
+    // Restore user fields saved by a previous uninstall (issue #615) before
+    // the packs write so a delta-carried DEVKIT_PACKS counts as the current value.
+    const delta = takeAgentDelta(agentKey);
+    if (delta) finalEntry = asRecord(applyUserDelta(entry, delta, 'args'));
+  }
+  const packsChanged = applyPacksToEntry(finalEntry, 'env', agentKey === 'openclaw' ? 'OpenClaw' : 'Codex Desktop');
+  if (existing && !changed && !packsChanged) {
     console.log(`  MCP Config unchanged: ${configPath}`);
     return;
   }
   const next: Record<string, unknown> = configRecord ? { ...configRecord } : {};
   const nextServers: Record<string, unknown> = {
     ...asRecord(configRecord ? configRecord.mcpServers : undefined),
-    'huaweicloud-devkit': entry,
+    'huaweicloud-devkit': finalEntry,
   };
   next.mcpServers = nextServers;
-  if (!existing) {
-    const delta = takeAgentDelta(agentKey);
-    if (delta) nextServers['huaweicloud-devkit'] = applyUserDelta(nextServers['huaweicloud-devkit'], delta, 'args');
-  }
   writeMcpSettingsFile(configPath, next);
   console.log(`  MCP Config -> ${configPath}`);
 }
@@ -863,6 +1071,11 @@ function getCodexPluginName(): string {
 }
 
 function installCodex(): boolean {
+  // --packs has no write path here: the codex CLI owns this target's MCP
+  // config. Say so once and continue; the install itself is unaffected.
+  if (resolvePacksFlag().kind !== 'unset') {
+    console.log('  \x1b[33mcodex target is managed by codex CLI; set DEVKIT_PACKS in its MCP config manually\x1b[0m');
+  }
   const marketplaceRoot = PACKAGE_ROOT;
   const pluginName = getCodexPluginName();
   const marketplaceName = getMarketplaceName();
@@ -1393,7 +1606,8 @@ function registerCodeartsMcp(configPath: string, agentKey = 'codearts'): void {
     existing = asRecord(config.mcpServers)['huaweicloud-devkit'];
     if (existing) {
       const { entry, changed } = mergeArgsStyle(existing, { mcpPath, env });
-      if (!changed) {
+      const packsChanged = applyPacksToEntry(entry, 'env', 'CodeArts');
+      if (!changed && !packsChanged) {
         console.log(`  MCP config unchanged: ${configPath}`);
         return;
       }
@@ -1410,9 +1624,11 @@ function registerCodeartsMcp(configPath: string, agentKey = 'codearts'): void {
   config.mcpServers = servers;
   let entry = mergeArgsStyle(undefined, { mcpPath, env }).entry;
   entry.enabled = true;
-  // Restore user fields saved by a previous uninstall (issue #615).
+  // Restore user fields saved by a previous uninstall (issue #615) before the
+  // packs write so a delta-carried DEVKIT_PACKS counts as the current value.
   const delta = takeAgentDelta(agentKey);
   if (delta) entry = asRecord(applyUserDelta(entry, delta, 'args'));
+  applyPacksToEntry(entry, 'env', 'CodeArts');
   servers['huaweicloud-devkit'] = entry;
   mkdirSync(dirname(configPath), { recursive: true });
   writeMcpSettingsFile(configPath, config);
@@ -1569,7 +1785,7 @@ function registerCodeartsWorkMcp(): void {
     if (existing) {
       // codearts-work uses `command` array + `environment` naming; adapt via mergeCommandStyle.
       const { entry, changed } = mergeCommandStyle(existing, { mcpPath });
-      if (!changed) {
+      if (!changed && !packsEntryPending(existing, 'environment', 'CodeArts Work')) {
         console.log(`  MCP config unchanged: ${configPath}`);
         return;
       }
@@ -1583,6 +1799,7 @@ function registerCodeartsWorkMcp(): void {
       if (hcloudBin && mergedEnv.HCLOUD_BIN === undefined) {
         mergedEnv.HCLOUD_BIN = hcloudBin.replace(/\\/g, '/');
       }
+      applyPacksToEntry(merged, 'environment', 'CodeArts Work');
       const mcpMap = asRecord(config.mcp);
       mcpMap['huaweicloud-devkit'] = merged;
       config.mcp = mcpMap;
@@ -1603,6 +1820,7 @@ function registerCodeartsWorkMcp(): void {
   // Restore user fields saved by a previous uninstall (issue #615).
   const delta = takeAgentDelta('codearts-work');
   if (delta) entry = asRecord(applyUserDelta(entry, delta, 'command'));
+  applyPacksToEntry(entry, 'environment', 'CodeArts Work');
   mcpMap['huaweicloud-devkit'] = entry;
   mkdirSync(dirname(configPath), { recursive: true });
   writeMcpSettingsFile(configPath, config);
@@ -1733,7 +1951,8 @@ function ensureWorkbuddyMcpConfig(): boolean {
     const existing: unknown = asRecord(config.mcpServers)['huaweicloud-devkit'];
     if (existing) {
       const { entry, changed } = mergeArgsStyle(existing, { mcpPath, env });
-      if (!changed) {
+      const packsChanged = applyPacksToEntry(entry, 'env', 'WorkBuddy');
+      if (!changed && !packsChanged) {
         console.log(`  MCP config unchanged: ${configPath}`);
         return false;
       }
@@ -1749,9 +1968,11 @@ function ensureWorkbuddyMcpConfig(): boolean {
   const servers: Record<string, unknown> = asRecord(config.mcpServers);
   config.mcpServers = servers;
   let entry = mergeArgsStyle(undefined, { mcpPath, env }).entry;
-  // Restore user fields saved by a previous uninstall (issue #615).
+  // Restore user fields saved by a previous uninstall (issue #615) before the
+  // packs write so a delta-carried DEVKIT_PACKS counts as the current value.
   const delta = takeAgentDelta('workbuddy');
   if (delta) entry = asRecord(applyUserDelta(entry, delta, 'args'));
+  applyPacksToEntry(entry, 'env', 'WorkBuddy');
   servers['huaweicloud-devkit'] = entry;
   mkdirSync(dirname(configPath), { recursive: true });
   writeMcpSettingsFile(configPath, config);
@@ -2079,7 +2300,8 @@ function ensureAtomcodeMcpConfig(): boolean {
     const existing: unknown = asRecord(config.mcpServers)['huaweicloud-devkit'];
     if (existing) {
       const { entry, changed } = mergeArgsStyle(existing, { mcpPath, env });
-      if (!changed) {
+      const packsChanged = applyPacksToEntry(entry, 'env', 'AtomCode');
+      if (!changed && !packsChanged) {
         console.log(`  MCP config unchanged: ${configPath}`);
         return false;
       }
@@ -2095,9 +2317,11 @@ function ensureAtomcodeMcpConfig(): boolean {
   const servers: Record<string, unknown> = asRecord(config.mcpServers);
   config.mcpServers = servers;
   let entry = mergeArgsStyle(undefined, { mcpPath, env }).entry;
-  // Restore user fields saved by a previous uninstall (issue #615).
+  // Restore user fields saved by a previous uninstall (issue #615) before the
+  // packs write so a delta-carried DEVKIT_PACKS counts as the current value.
   const delta = takeAgentDelta('atomcode');
   if (delta) entry = asRecord(applyUserDelta(entry, delta, 'args'));
+  applyPacksToEntry(entry, 'env', 'AtomCode');
   servers['huaweicloud-devkit'] = entry;
   mkdirSync(dirname(configPath), { recursive: true });
   writeMcpSettingsFile(configPath, config);
@@ -2217,11 +2441,14 @@ function dshMcpServerPath(): string {
   return join(dshPluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
 }
 
-function dshPatchBlock(): string {
+function dshPatchBlock(devkitPacks: string | null): string {
   const hcloudBin = findHcloudBin();
   const envLines: string[] = ['          HUAWEICLOUD_AGENT_TOOLKIT_MODE: local'];
   if (hcloudBin) {
     envLines.push(`          HCLOUD_BIN: '${hcloudBin.replace(/\\/g, '/').replace(/'/g, "''")}'`);
+  }
+  if (devkitPacks !== null) {
+    envLines.push(`          DEVKIT_PACKS: '${devkitPacks.replace(/'/g, "''")}'`);
   }
   return [
     DSH_MCP_PATCH_START,
@@ -2269,6 +2496,10 @@ function dshPatchHasOnlyCommentsOrEmptyList(content: unknown): boolean {
 function ensureDshMcpPatch(): boolean {
   const patchFile = dshPatchFile();
   let existing = existsSync(patchFile) ? readFileSync(patchFile, 'utf8') : '';
+  // Resolve the packs policy before any cleanup rewrites the patch: the
+  // current DEVKIT_PACKS value lives inside the managed block that
+  // removeManagedDshPatchBlock strips below.
+  const dshPacks = packsCarryValue('DSH', readDevkitPacksFromYaml(patchFile));
 
   // Clean up any legacy managed block from pre-bundle versions.
   const cleaned = removeManagedDshPatchBlock(existing);
@@ -2299,7 +2530,7 @@ function ensureDshMcpPatch(): boolean {
   }
 
   // Fallback for standalone usage: write a managed block when no bundle.
-  const block = dshPatchBlock();
+  const block = dshPatchBlock(dshPacks);
   let next: string;
   if (dshPatchHasOnlyCommentsOrEmptyList(cleaned)) {
     const prefix = cleaned
@@ -2733,6 +2964,12 @@ function ensureHermesMcpConfig(): boolean {
   if (hcloudBin) {
     blockLines.push(`      HCLOUD_BIN: "${hcloudBin.replace(/\\/g, '/')}"`);
   }
+  // Resolve the packs policy before any block rewrite: the current
+  // DEVKIT_PACKS value lives inside the block removeHermesMcpConfigBlock
+  // strips below, and the "unchanged" check must account for it.
+  const hermesPacks = packsCarryValue('Hermes Agent', readDevkitPacksFromYaml(configPath));
+  const hermesPacksLine = hermesPacks !== null ? `      DEVKIT_PACKS: "${hermesPacks.replace(/"/g, '\\"')}"` : null;
+  if (hermesPacksLine !== null) blockLines.push(hermesPacksLine);
 
   let existing = '';
   if (existsSync(configPath)) {
@@ -2744,7 +2981,9 @@ function ensureHermesMcpConfig(): boolean {
       const argsMatch = existing.match(/^\s*huaweicloud-devkit\s*:[\s\S]*?^\s*args:\s*\[[^\]]*\]\s*$/m);
       const extrasMatch = argsMatch ? argsMatch[0].match(/args:\s*\[".*?"(.*)\]/) : null;
       const extras = extrasMatch && extrasMatch[1].trim() ? extrasMatch[1].replace(/,\s*$/, '') : '';
-      if (existing.includes(`args: ["${mcpPath}"${extras}]`)) {
+      const packsLineOk =
+        hermesPacksLine === null ? !/^\s*DEVKIT_PACKS:/m.test(existing) : existing.includes(hermesPacksLine);
+      if (existing.includes(`args: ["${mcpPath}"${extras}]`) && packsLineOk) {
         console.log(`  MCP config unchanged: ${configPath}`);
         return false;
       }
@@ -3627,6 +3866,7 @@ function writeInstallMarker(target: string): void {
 
 async function cmdInstall(): Promise<void> {
   console.log(BANNER);
+  resolvePacksFlag(); // fail fast on bogus --packs before any file is copied
   const plan = await resolveInstallTarget();
   if (plan.abort) {
     process.exitCode = 1;
@@ -4421,6 +4661,7 @@ async function cmdDoctor(): Promise<void> {
 
 async function cmdUpdate(): Promise<void> {
   console.log(BANNER);
+  resolvePacksFlag(); // fail fast on bogus --packs before any file is copied
   const target = parseTarget();
   await checkForUpdate();
 
@@ -5377,6 +5618,9 @@ async function main(): Promise<void> {
       console.log(
         '  --target     Target agent: opencode (default), codex, codearts, codearts-work, workbuddy, dsh, officeace, hermes, openclaw, atomcode, all',
       );
+      console.log(
+        '  --packs      Install-time pack selection: <id,id,...> or "all" (full surface). Writes DEVKIT_PACKS into the agent MCP config env; existing user values are kept',
+      );
       console.log('  --version    Print CLI version and installed plugin version per agent');
       console.log('  --clean-kocli   (with: uninstall --target all) also remove KooCLI');
       console.log('  --clean-obs     (with: uninstall --target all) also remove OBS config');
@@ -5392,6 +5636,7 @@ async function main(): Promise<void> {
       console.log('  npx huaweicloud-devkit install --target hermes');
       console.log('  npx huaweicloud-devkit install --target atomcode');
       console.log('  npx huaweicloud-devkit install --target all');
+      console.log('  npx huaweicloud-devkit install --target opencode --packs sandbox');
       console.log('  npx huaweicloud-devkit auth init');
       console.log('  npx huaweicloud-devkit auth sync --target all');
       console.log('  npx huaweicloud-devkit auth status --target all');
