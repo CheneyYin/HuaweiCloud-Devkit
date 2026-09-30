@@ -66,13 +66,24 @@ export async function probe({
   framing = 'content-length',
   settleMs = 1200,
   splitWrite = false,
+  serverEntry: serverEntryOverride,
+  cwd,
 }) {
   const DEBUG = process.env.PROBE_DEBUG === '1';
   const log = (...a) => DEBUG && console.error('[probe]', ...a);
-  log('start', { out, calls: calls.length, framing });
+  log('start', {
+    out,
+    calls: calls.length,
+    framing,
+    serverEntry: serverEntryOverride ?? 'default',
+    cwd: cwd ?? 'default',
+  });
   mkdirSync(dirname(out), { recursive: true });
-  const child = spawn(process.execPath, [serverEntry], {
-    cwd: root,
+  // serverEntry/cwd overrides let a lane drive an installed server (temp HOME
+  // install dir) instead of the repo build; omitted values keep the default.
+  const entry = serverEntryOverride ? resolve(serverEntryOverride) : serverEntry;
+  const child = spawn(process.execPath, [entry], {
+    cwd: cwd ? resolve(cwd) : root,
     env: { ...process.env, ...env },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -85,7 +96,10 @@ export async function probe({
 
   const decoder = makeDecoder((message) => {
     log('decoded', message.method ?? 'response', 'id', message.id);
-    transcript.received.push(message);
+    // `t` timestamps every transcript message (performance.now() origin) so
+    // perf lanes can measure round-trips; a new field, existing assertions
+    // on method/id/params keep working unchanged.
+    transcript.received.push({ ...message, t: performance.now() });
     if (message.id !== undefined && pending.has(message.id)) {
       pending.get(message.id)(message);
       pending.delete(message.id);
@@ -101,7 +115,7 @@ export async function probe({
 
   const send = (message) => {
     const wire = frame(message, framing);
-    transcript.sent.push(message);
+    transcript.sent.push({ ...message, t: performance.now() });
     if (splitWrite && wire.length > 8) {
       // Half-open write: the first chunk lands without the frame terminator,
       // so the server must buffer and reassemble before responding.
@@ -165,6 +179,8 @@ if (invokedDirectly) {
   const framing =
     args.includes('--framing') && args[args.indexOf('--framing') + 1] === 'nl' ? 'newline' : 'content-length';
   const splitWrite = args.includes('--split');
+  const serverOverride = args.includes('--server') ? args[args.indexOf('--server') + 1] : undefined;
+  const cwdArg = args.includes('--cwd') ? args[args.indexOf('--cwd') + 1] : undefined;
   const calls = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] !== '--call') continue;
@@ -172,7 +188,14 @@ if (invokedDirectly) {
     calls.push({ name, args: rawArgs ? JSON.parse(rawArgs) : {} });
     i++;
   }
-  const { results, transcript } = await probe({ out, calls, framing, splitWrite });
+  const { results, transcript } = await probe({
+    out,
+    calls,
+    framing,
+    splitWrite,
+    serverEntry: serverOverride,
+    cwd: cwdArg,
+  });
   const toolCount = results.toolsList?.result?.tools?.length;
   const callOk = calls.every((c) => results[c.name] !== undefined);
   const pass = Number.isSafeInteger(toolCount) && toolCount > 0 && callOk;
