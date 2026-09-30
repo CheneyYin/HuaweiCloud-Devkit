@@ -774,11 +774,13 @@ test('per-pack modules stay inside the pack boundary allowlist', () => {
   assert.deepEqual(result.lines, [], `pack boundary violations:\n${result.lines.join('\n')}`);
 });
 
-test('update pack registers version-update tools; tools.ts delegates dispatch', () => {
+test('update pack registers version-update tools; registry carries the central dispatch', () => {
   // The update pack (src/packs/update/tools.ts) owns the tool wiring
-  // (name/description/schema/handler); tools.ts keeps the delegation case
-  // labels in callTool. Semantics unchanged: both update tools are registered
-  // and wired end to end.
+  // (name/description/schema/handler); since P4 callTool has no per-pack case
+  // labels — the PACK_TOOL_HANDLERS merge in packs/registry.ts dispatches
+  // every pack tool, satisfies-checked for completeness at compile time.
+  // Semantics unchanged: both update tools are registered and wired end to
+  // end.
   const packTools = readSource(join('src', 'packs', 'update', 'tools.ts'));
   for (const name of ['huaweicloud_check_update', 'huaweicloud_upgrade']) {
     assert.match(packTools, new RegExp(`name: '${name}'`));
@@ -787,8 +789,10 @@ test('update pack registers version-update tools; tools.ts delegates dispatch', 
 
   const tools = readSource(join('src', 'tools.ts'));
   for (const name of ['huaweicloud_check_update', 'huaweicloud_upgrade']) {
-    assert.match(tools, new RegExp(`case '${name}':`));
+    assert.doesNotMatch(tools, new RegExp(`case '${name}':`));
   }
+  assert.match(tools, /isPackToolName\(name\)/);
+  assert.match(tools, /PACK_TOOL_HANDLERS\[name\]\(args, opts\)/);
 
   // Behavioral lockstep: the pack tool list equals the PACK_OF ownership for
   // 'update', and the pack descriptions match the tools/list definitions.
@@ -804,10 +808,11 @@ test('update pack registers version-update tools; tools.ts delegates dispatch', 
   }
 });
 
-test('five P2 packs register their tools; tools.ts delegates dispatch', () => {
+test('five P2 packs register their tools; the central map dispatches them', () => {
   // Same contract as the update pack, asserted for the five packs
   // materialized in P2: sandbox (11), auth (5), obs (2), voucher (2),
-  // discovery (3) — 23 tools total.
+  // discovery (3) — 23 tools total. P4: their handlers reach callTool only
+  // through the PACK_TOOL_HANDLERS merge in packs/registry.ts.
   const packs = [
     { id: 'sandbox', tools: SANDBOX_TOOLS, count: 11 },
     { id: 'auth', tools: AUTH_TOOLS, count: 5 },
@@ -816,16 +821,19 @@ test('five P2 packs register their tools; tools.ts delegates dispatch', () => {
     { id: 'discovery', tools: DISCOVERY_TOOLS, count: 3 },
   ];
   const tools = readSource(join('src', 'tools.ts'));
+  const registry = readSource(join('src', 'packs', 'registry.ts'));
   for (const { id, tools: packTools, count } of packs) {
     assert.equal(packTools.length, count, `${id} pack tool count`);
     const packSource = readSource(join('src', 'packs', id, 'tools.ts'));
     for (const tool of packTools) {
       assert.match(packSource, new RegExp(`name: '${tool.name}'`));
-      assert.match(tools, new RegExp(`case '${tool.name}':`));
+      assert.doesNotMatch(tools, new RegExp(`case '${tool.name}':`));
       const definition = TOOL_DEFINITIONS.find((entry) => entry.name === tool.name);
       assert.ok(definition, `${tool.name} missing from TOOL_DEFINITIONS`);
       assert.equal(tool.description, definition.description);
     }
+    // The pack's handler map is merged into the central dispatch table.
+    assert.match(registry, new RegExp(`\\.\\.\\.${id.toUpperCase()}_TOOL_HANDLERS`));
     // Behavioral lockstep: the pack tool list equals the PACK_OF ownership.
     const owned = Object.keys(PACK_OF).filter((tool) => PACK_OF[tool] === id);
     assert.deepEqual(
@@ -834,6 +842,7 @@ test('five P2 packs register their tools; tools.ts delegates dispatch', () => {
       `${id} pack tools must match PACK_OF ownership`,
     );
   }
+  assert.match(registry, /satisfies Record<PackToolName, PackToolDefinition\['handler'\]>/);
 });
 
 test('stdio server warms update cache; shared protocol decorates first tool call', () => {
