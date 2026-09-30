@@ -351,6 +351,7 @@ Environment variables `HTTPS_PROXY`, `HTTP_PROXY`, and `NO_PROXY` take precedenc
 - **Pre-execution risk checks** — public exposure, credential leaks, and destructive operations are caught before they run
 - **Regional awareness** — auto-discovers available regions and checks service availability before creating resources
 - **Sandbox (DevStation)** — temporary cloud runtime for web app deployment with instant public URL preview
+- **Capability packs (42 MCP tools)** — the devkit ships seven packs (core 17 tools; sandbox, auth, obs, voucher, update, discovery for the rest). Discover them with `huaweicloud_list_packs` → `huaweicloud_pack_info`, then load the skill with `huaweicloud_retrieve_skill`. Trim the surface with `DEVKIT_PACKS` (comma-separated pack ids, e.g. `DEVKIT_PACKS=core,sandbox`); unset means all packs, unknown ids fail fast at startup, and core (the approval path plus the pack meta tools) is always included.
 
 ## Supported Services
 
