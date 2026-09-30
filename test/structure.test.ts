@@ -7,6 +7,7 @@ import test from 'node:test';
 
 import { TOOL_DEFINITIONS } from '../plugins/huaweicloud-core/src/tools.ts';
 import { PACK_OF, PACKS } from '../plugins/huaweicloud-core/src/packs/registry.ts';
+import { PACK_BINARIES, PACK_IDS } from '../plugins/huaweicloud-core/src/lib/pack-types.ts';
 import { UPDATE_TOOLS } from '../plugins/huaweicloud-core/src/packs/update/tools.ts';
 import { AUTH_TOOLS } from '../plugins/huaweicloud-core/src/packs/auth/tools.ts';
 import { OBS_TOOLS } from '../plugins/huaweicloud-core/src/packs/obs/tools.ts';
@@ -1021,4 +1022,36 @@ test('pack registry partitions the tool registry and claims every skill director
     [...skillClaims].sort((a, b) => a.localeCompare(b)),
     skillsDirs,
   );
+});
+
+test('pack binaries declarations are well-shaped and the id list matches the registry', () => {
+  // PACK_IDS is the installer's zod-free --packs validation list
+  // (setup-cli.ts cannot import the zod-dependent registry); it must equal
+  // the registry's PACKS ids or --packs would reject valid packs or accept
+  // ghosts.
+  const registryIds = PACKS.map((pack) => pack.id).sort((a, b) => a.localeCompare(b));
+  assert.deepEqual(
+    [...PACK_IDS].sort((a, b) => a.localeCompare(b)),
+    registryIds,
+  );
+
+  // Every declared binary carries all three fields with a legal scope; the
+  // sandbox pack declares devbridge as a sandbox-scoped binary whose version
+  // command is the `version` subcommand (doctor must not probe it host-side).
+  for (const pack of PACKS) {
+    if (!pack.binaries) continue;
+    for (const bin of pack.binaries) {
+      assert.equal(typeof bin.name, 'string', `${pack.id} binary name must be a string`);
+      assert.ok(bin.scope === 'host' || bin.scope === 'sandbox', `${pack.id} binary scope must be host|sandbox`);
+      assert.equal(typeof bin.versionFlag, 'string', `${pack.id} binary versionFlag must be a string`);
+    }
+  }
+  const sandbox = PACKS.find((pack) => pack.id === 'sandbox');
+  assert.deepEqual(sandbox?.binaries, [{ name: 'devbridge', scope: 'sandbox', versionFlag: 'version' }]);
+
+  // PACK_BINARIES is the doctor-side table; every entry it declares must be
+  // attributed to a real pack id.
+  for (const packId of Object.keys(PACK_BINARIES)) {
+    assert.ok(registryIds.includes(packId), `PACK_BINARIES key ${packId} must be a registry pack id`);
+  }
 });
