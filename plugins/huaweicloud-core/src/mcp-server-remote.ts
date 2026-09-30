@@ -2,6 +2,7 @@ import { createServer, type Server } from 'node:http';
 import { format } from 'node:util';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import { createDevkitMcpServer, runInitializeSideEffects, normalizeToolCallParams } from './mcp-protocol.ts';
 
@@ -113,12 +114,17 @@ export async function startRemoteServer({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
     });
-    const mcpServer = createDevkitMcpServer({ sessionId });
     transport.onerror = (error) => {
       process.stderr.write(`remote transport error: ${error.message}\n`);
     };
 
+    // Server construction happens inside the try because it can throw
+    // (resolveEnabledPacks fail-fasts on unknown DEVKIT_PACKS ids): each
+    // request must answer 500 instead of leaving the rejection unhandled and
+    // crashing the listener.
+    let mcpServer: McpServer | undefined;
     try {
+      mcpServer = createDevkitMcpServer({ sessionId });
       await mcpServer.connect(transport);
       const response = await transport.handleRequest(webRequest, {
         parsedBody: normalizeToolCallParams(message as JSONRPCMessage),
@@ -141,7 +147,7 @@ export async function startRemoteServer({
         );
       }
     } finally {
-      await mcpServer.close().catch(() => {});
+      await mcpServer?.close().catch(() => {});
       await transport.close().catch(() => {});
     }
   });
