@@ -529,6 +529,29 @@ test('atomcode install is idempotent', () => {
   }
 });
 
+// The plugin-dir skills tree is pruned on update: a retired skill name must
+// not keep serving stale, ungated content through retrieve_skill.
+test('update prunes retired skills from the plugin-dir tree', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
+  try {
+    assert.equal(run('opencode', home, cwd, 'install').status, 0);
+    const pluginSkillsDir = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'skills');
+    mkdirSync(join(pluginSkillsDir, 'huawei-retired'), { recursive: true });
+    writeFileSync(join(pluginSkillsDir, 'huawei-retired', 'SKILL.md'), '---\nname: huawei-retired\n---\nstale\n');
+    mkdirSync(join(pluginSkillsDir, 'user-foreign'), { recursive: true });
+    writeFileSync(join(pluginSkillsDir, 'user-foreign', 'SKILL.md'), '---\nname: user-foreign\n---\nuser\n');
+    const res = run('opencode', home, cwd, 'update');
+    assert.equal(res.status, 0, res.stderr);
+    assert.ok(!existsSync(join(pluginSkillsDir, 'huawei-retired')), 'retired devkit skill must be pruned');
+    assert.ok(existsSync(join(pluginSkillsDir, 'user-foreign')), 'foreign dir without huawei prefix survives');
+    assert.ok(countSkills(pluginSkillsDir) >= 6, 'shipped tree intact');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test('codex target does not crash without Codex CLI', () => {
   const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
   const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));

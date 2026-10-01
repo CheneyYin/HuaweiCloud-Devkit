@@ -113,6 +113,40 @@ test('officeace install copies skills, MCP server, and safety policy', () => {
   }
 });
 
+// The capability cleanup is ownership-precise: only skill-type entries whose
+// id the shipped tree carries are removed. A user's own custom entry sharing
+// the huawei* prefix — and any non-skill capability — must survive.
+test('officeace capability cleanup preserves user entries and non-skill capabilities', () => {
+  const home = mkdtempSync(join(tmpdir(), 'oa-home-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'oa-proj-'));
+  const oaHome = join(home, '.office-claw');
+  mkdirSync(oaHome, { recursive: true });
+  writeFileSync(
+    join(oaHome, 'capabilities.json'),
+    JSON.stringify({
+      capabilities: [
+        { id: 'huawei-ecs', type: 'skill', source: 'custom', enabled: true },
+        { id: 'huawei-my-runbook', type: 'skill', source: 'custom', enabled: true },
+        { id: 'huawei-my-notes', type: 'skill', source: 'official', enabled: true },
+        { id: 'huawei-custom-mcp', type: 'mcp', source: 'custom', enabled: true },
+      ],
+    }),
+  );
+  try {
+    const res = runCli(home, cwd, ['install', '--target', 'officeace'], oaHome);
+    assert.equal(res.status, 0, res.stderr);
+    const config = JSON.parse(readFileSync(join(oaHome, 'capabilities.json'), 'utf8'));
+    const ids = new Set(config.capabilities.map((c) => c.id));
+    assert.ok(!ids.has('huawei-ecs'), 'devkit-owned skill entry must be cleaned');
+    assert.ok(ids.has('huawei-my-runbook'), 'user custom skill entry must survive');
+    assert.ok(ids.has('huawei-my-notes'), 'official-source skill entry must survive');
+    assert.ok(ids.has('huawei-custom-mcp'), 'non-skill capability must survive');
+  } finally {
+    removeTempDir(home);
+    removeTempDir(cwd);
+  }
+});
+
 test('officeace uninstall removes installed files', () => {
   const home = mkdtempSync(join(tmpdir(), 'oa-home-'));
   const cwd = mkdtempSync(join(tmpdir(), 'oa-proj-'));

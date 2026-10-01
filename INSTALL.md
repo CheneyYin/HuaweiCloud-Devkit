@@ -39,8 +39,7 @@ npx --yes huaweicloud-devkit install --target dsh
 
 安装器会写入：
 
-- `$DSH_HOME/skills`：华为云 Skills。
-- `$DSH_HOME/huaweicloud-plugins`：MCP Server 和安全策略。
+- `$DSH_HOME/huaweicloud-plugins`：MCP Server、安全策略和 Skills（服务器数据，经 MCP 的 `huaweicloud_list_packs` / `huaweicloud_retrieve_skill` 披露）。
 - `$DSH_HOME/profiles/web/cordis.patch.yml`：DSH MCP 注册补丁。
 
 如果没有设置 `DSH_HOME`，默认使用 `~/.dsh`。安装后重启 DSH 会话。

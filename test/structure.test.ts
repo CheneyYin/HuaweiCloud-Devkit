@@ -464,7 +464,7 @@ test('setup-cli.ts supports the codearts target end to end', () => {
   assert.match(setup, /function writeInstallMarker\(target: string\)/);
   // doctor checks the skills tree inside installed plugin dirs, and native
   // skill dirs only for stale-copy detection
-  assert.match(setup, /serverSkillCount\(dir\) > 0/);
+  assert.match(setup, /serverSkillCount\(dir\) >= 6/);
   assert.match(setup, /staleNativeSkillDirs\(\)\.length/);
   // help text documents the target
   assert.match(

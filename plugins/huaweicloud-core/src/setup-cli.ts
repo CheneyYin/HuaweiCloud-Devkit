@@ -486,17 +486,21 @@ function removeOfficeaceSkillCapabilities(): void {
     return;
   }
   if (!Array.isArray(config.capabilities)) return;
+  // Ownership-precise: only skill-type entries whose id the shipped skills
+  // tree still carries (huaweicloud-core is a tree dir, so it is covered).
+  // A user's own custom entry sharing the huawei* prefix — or a non-skill
+  // capability — must survive; same manifest discipline as the native-dir
+  // purge, never a prefix glob.
+  const owned = devkitOwnedSkillNames();
   const capabilities: unknown[] = config.capabilities;
   const origLen = capabilities.length;
-  config.capabilities = capabilities.filter((c) => {
+  const filtered = capabilities.filter((c) => {
     const cap = asRecord(c);
     const capId: unknown = cap.id;
-    return !(
-      (cap.id === 'huaweicloud-core' && cap.type === 'skill') ||
-      (cap.source === 'custom' && capId && typeof capId === 'string' && capId.startsWith('huawei'))
-    );
+    return !(cap.type === 'skill' && typeof capId === 'string' && owned.has(capId));
   });
-  if (asRecord(config).capabilities && Array.isArray(config.capabilities) && config.capabilities.length !== origLen) {
+  if (filtered.length !== origLen) {
+    config.capabilities = filtered;
     writeCapabilitiesJson(config);
     console.log(`  Skill capabilities cleaned: ${capFile}`);
   }
@@ -617,8 +621,15 @@ function copyServerPayload(pluginDest: string, opts: { skipDist?: boolean } = {}
   }
   copyDir(join(PLUGIN_ROOT, 'safety'), join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
-  copyDir(join(PLUGIN_ROOT, 'skills'), join(pluginDest, 'skills'));
-  console.log(`  Skills (server data, MCP-disclosed) -> ${join(pluginDest, 'skills')}`);
+  const skillsSrc = join(PLUGIN_ROOT, 'skills');
+  copyDir(skillsSrc, join(pluginDest, 'skills'));
+  // The plugin dir is wholly devkit-owned: prune retired skill names so a
+  // departed directory can never keep serving stale, ungated content through
+  // retrieve_skill/search_docs (unclaimed dirs bypass pack enablement).
+  const stale = pruneStale(join(pluginDest, 'skills'), skillsSrc);
+  console.log(
+    `  Skills (server data, MCP-disclosed) -> ${join(pluginDest, 'skills')}${stale > 0 ? ` (removed ${stale} stale)` : ''}`,
+  );
 }
 
 // Devkit-owned skill names. The shipped skills/ tree is the ownership
@@ -1464,11 +1475,11 @@ async function installCodexDesktop(): Promise<void> {
   ensureCodexMarketplaceEntry();
   console.log('  \x1b[33m请到插件 → 个人 → HuaweiCloud DevKit → 安装\x1b[0m');
 
-  // Clean up old install locations from pre-marketplace era. ~/.agents/skills
-  // is never removed wholesale: OpenClaw installs share it, and any user
-  // skill living there must survive — devkit-owned names are purged
-  // precisely by purgeStaleNativeSkills() at the command level.
-  removeIfExists(join(homedir(), '.agents', 'commands'));
+  // Clean up old install locations from pre-marketplace era. Neither
+  // ~/.agents/skills nor ~/.agents/commands is removed wholesale: OpenClaw
+  // installs share both, and user-authored content must survive —
+  // devkit-owned skill names are purged precisely by
+  // purgeStaleNativeSkills() at the command level.
   const oldPluginsDir = join(homedir(), '.agents', 'huaweicloud-plugins');
   if (existsSync(oldPluginsDir)) {
     removeIfExists(oldPluginsDir);
@@ -4335,8 +4346,12 @@ async function cmdDoctor(): Promise<void> {
   }
 
   // Skills are server data disclosed over MCP: the health signal is the
-  // tree sitting next to an installed server, never agent-native dirs.
-  const skillsTreeOk = [
+  // tree sitting in an installed plugin dir, never agent-native dirs. The
+  // tree check is decoupled from the bundled server (the Hermes clone flow
+  // --skip-mcp-server ships skills without dist), includes OpenClaw, and
+  // accepts the running package root when the DSH npm-in-profile patch is
+  // configured (that layout resolves skills from the package root).
+  const skillsTreeDirs = [
     opencodePluginDir,
     codexPluginDir,
     codeartsPluginDir,
@@ -4346,7 +4361,10 @@ async function cmdDoctor(): Promise<void> {
     officeacePluginDir,
     hermesPluginDir,
     atomcodePluginDir,
-  ].some((dir) => mcpServerInstalled(dir) && serverSkillCount(dir) > 0);
+    openclawPluginsDir(),
+  ];
+  if (dshPatchConfigured()) skillsTreeDirs.push(join(PLUGIN_ROOT, 'skills'));
+  const skillsTreeOk = skillsTreeDirs.some((dir) => serverSkillCount(dir) >= 6);
   check('Skills tree (server data, MCP-disclosed)', skillsTreeOk, 'Run: npx huaweicloud-devkit install');
 
   // Stale native copies from pre-MCP installs shadow-disclose outdated skill
@@ -4525,13 +4543,34 @@ async function cmdUpdate(): Promise<void> {
   resolvePacksFlag(); // fail fast on bogus --packs before any file is copied
   const target = parseTarget();
   await checkForUpdate();
-  // Same purge as install: upgrades are the primary path off a pre-MCP
-  // install, and stale native copies must not outlive the new server.
-  const purged = purgeStaleNativeSkills();
-  if (purged > 0)
-    console.log(
-      `  Cleaned ${purged} stale native skill cop${purged === 1 ? 'y' : 'ies'} (skills are now MCP-disclosed)`,
-    );
+  // Purge stale native copies only when this run will actually place the new
+  // payload somewhere. A target whose server is absent gets "Not installed"
+  // below; purging its (only) skill copies first would destroy them with no
+  // replacement. codex has no native skill dir, so its null marker skips the
+  // purge harmlessly.
+  const markerDir = installMarkerDirForTarget(target);
+  const willPlacePayload =
+    target === 'all'
+      ? [
+          opencodePluginsDir(),
+          codexDesktopPluginsDir(),
+          codeartsPluginsDir(),
+          codeartsWorkPluginsDir(),
+          workbuddyPluginsDir(),
+          dshPluginsDir(),
+          officeacePluginsDir(),
+          hermesPluginsDir(),
+          openclawPluginsDir(),
+          atomcodePluginsDir(),
+        ].some((dir) => mcpServerInstalled(dir))
+      : markerDir !== null && mcpServerInstalled(markerDir);
+  if (willPlacePayload) {
+    const purged = purgeStaleNativeSkills();
+    if (purged > 0)
+      console.log(
+        `  Cleaned ${purged} stale native skill cop${purged === 1 ? 'y' : 'ies'} (skills are now MCP-disclosed)`,
+      );
+  }
 
   if (target === 'opencode') {
     if (!mcpServerInstalled(opencodePluginsDir())) {
@@ -4647,7 +4686,7 @@ async function cmdUpdate(): Promise<void> {
   }
 
   if (target === 'openclaw') {
-    if (!mcpServerInstalled(codexDesktopPluginsDir())) {
+    if (!mcpServerInstalled(openclawPluginsDir())) {
       console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
       return;
     }

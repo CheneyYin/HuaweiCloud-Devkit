@@ -63,10 +63,11 @@ function discoverPackSkills() {
   return out;
 }
 
-// Inject the marker after the YAML frontmatter closing delimiter; files
-// without frontmatter get it as the first line. A blank line separates the
-// marker from what follows so the output is prettier-stable (prettier
-// enforces a blank line after a frontmatter block and around HTML comments).
+// Inject the marker as a pure insertion: right after the YAML frontmatter
+// closing delimiter for SKILL.md, first line otherwise. Prettier later
+// settles a blank line between the frontmatter block and the marker;
+// stripMarkerLine tolerates both shapes, so --write output passes --check
+// with or without a format pass (strip∘render is the identity).
 function renderGenerated(packId, skillName, relativeFile, content) {
   const marker = markerFor(packId, skillName);
   const normalized = content.replace(/\r\n/g, '\n');
@@ -79,16 +80,23 @@ function renderGenerated(packId, skillName, relativeFile, content) {
 }
 
 // Strip the injected marker line (wherever it sits — first line for files
-// without frontmatter, right after the frontmatter for SKILL.md) plus the
-// blank line prettier may keep after it, and normalize CRLF, yielding content
-// comparable to the authoritative source.
+// without frontmatter, right after the frontmatter for SKILL.md) and
+// normalize CRLF, yielding content comparable to the authoritative source.
+// Prettier settles one blank line around the marker: between the frontmatter
+// block and the marker for SKILL.md (detected by both neighbors blank — the
+// other blank is the source's own), or after a first-line marker for
+// reference files (detected by the missing left neighbor). Exactly that one
+// blank is undone; every other case is a pure removal, the inverse of the
+// insertion renderGenerated performs.
 function stripMarkerLine(content) {
   const normalized = content.replace(/\r\n/g, '\n');
   const lines = normalized.split('\n');
   const index = lines.findIndex((line) => line.startsWith(MARKER_PREFIX) && line.endsWith(MARKER_SUFFIX));
   if (index === -1) return normalized;
   lines.splice(index, 1);
-  if (lines[index] === '') lines.splice(index, 1);
+  const after = lines[index];
+  const beforeBlank = index > 0 && lines[index - 1] === '';
+  if (after === '' && (beforeBlank || index === 0)) lines.splice(index, 1);
   return lines.join('\n');
 }
 
@@ -155,20 +163,27 @@ function run({ write }) {
   return { failures, packSkills: packSkills.length };
 }
 
-const args = new Set(process.argv.slice(2));
-const write = args.has('--write');
-if (!write && !args.has('--check')) {
-  console.error('usage: node scripts/sync-skills.mjs --write | --check');
-  process.exit(2);
+const invokedDirectly = process.argv[1] && import.meta.url === new URL('file://' + process.argv[1]).href;
+if (invokedDirectly) {
+  const args = new Set(process.argv.slice(2));
+  const write = args.has('--write');
+  if (!write && !args.has('--check')) {
+    console.error('usage: node scripts/sync-skills.mjs --write | --check');
+    process.exit(2);
+  }
+
+  const { failures, packSkills } = run({ write });
+  if (failures.length > 0) {
+    console.error(`skills sync ${write ? 'reported' : 'check'} FAILED (${failures.length}):`);
+    for (const failure of failures) console.error(`  - ${failure}`);
+    if (!write) console.error('Fix with: npm run skills:sync');
+    process.exit(1);
+  }
+  // stdout stays empty: npm pack --json parses stdout as JSON and this script
+  // runs as the prepack tail (same stderr-only rule as build-plugin.mjs).
+  console.error(`skills sync ${write ? 'wrote' : 'check OK'}: ${packSkills} pack skill source(s) in sync.`);
 }
 
-const { failures, packSkills } = run({ write });
-if (failures.length > 0) {
-  console.error(`skills sync ${write ? 'reported' : 'check'} FAILED (${failures.length}):`);
-  for (const failure of failures) console.error(`  - ${failure}`);
-  if (!write) console.error('Fix with: npm run skills:sync');
-  process.exit(1);
-}
-// stdout stays empty: npm pack --json parses stdout as JSON and this script
-// runs as the prepack tail (same stderr-only rule as build-plugin.mjs).
-console.error(`skills sync ${write ? 'wrote' : 'check OK'}: ${packSkills} pack skill source(s) in sync.`);
+// The round-trip pair is exported for the packs-sync test: --write output
+// must pass --check without a prettier pass in between.
+export { renderGenerated, stripMarkerLine };

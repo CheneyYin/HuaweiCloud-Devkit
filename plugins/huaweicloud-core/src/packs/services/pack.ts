@@ -7,8 +7,9 @@ import type { Pack } from '../../lib/pack-types.ts';
 // this pack owns knowledge, not callable surface — the meta tools that
 // disclose skills (huaweicloud_list_packs / huaweicloud_pack_info /
 // huaweicloud_retrieve_skill) live in core so every enabled pack stays
-// discoverable. A future tool moves here by claiming it in PACK_OF
-// (registry.ts); toolsFor() inversion then flows it automatically.
+// discoverable. A future tool claimed for this pack in PACK_OF must also be
+// listed here by hand (packs cannot import the registry, so the list cannot
+// self-derive); the packs-registry union test fails loudly if the two drift.
 export const servicesPack: Pack = {
   id: 'services',
   title: 'Service Skills',

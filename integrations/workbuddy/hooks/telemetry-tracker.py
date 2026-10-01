@@ -12,7 +12,10 @@ Data flow:
   stdin JSON (PostToolUse event) → classify → hook-events.jsonl
   → MCP Server telemetry.mjs :: ingestHookEvents() → eventQueue → HTTP POST
 
-Classification logic mirrors the OpenCode skill-tracker.js exactly.
+Classification mirrors the trimmed OpenCode skill-tracker.js: only the hcloud
+CLI classifier and MCP tool invocations. Devkit skills are server data
+disclosed over MCP (never installed natively), so skill-retrieval telemetry
+rides trackSkillRetrieve inside huaweicloud_retrieve_skill.
 """
 
 import json
@@ -31,10 +34,9 @@ def _get_plugin_dir():
       1. HUAWEICLOUD_PLUGIN_DIR env var         (explicit override)
       2. Dev repo: scripts/ → ../plugins/...     (local dev)
       3. ~/.workbuddy/huaweicloud-plugins/       (WorkBuddy installed)
-      4. ~/.workbuddy/skills/huawei-*/plugins/... (WorkBuddy skills)
-      5. ~/.hermes/huaweicloud-plugins/          (Hermes)
-      6. ~/.dsh/huaweicloud-plugins/             (DSH)
-      7. ~/.config/opencode/huaweicloud-plugins/ (OpenCode)
+      4. ~/.hermes/huaweicloud-plugins/          (Hermes)
+      5. ~/.dsh/huaweicloud-plugins/             (DSH)
+      6. ~/.config/opencode/huaweicloud-plugins/ (OpenCode)
       8. ~/.codex/huaweicloud-plugins/           (Codex)
     """
     env_dir = os.environ.get("HUAWEICLOUD_PLUGIN_DIR")
@@ -58,15 +60,6 @@ def _get_plugin_dir():
     ]:
         if platform_dir.is_dir():
             return platform_dir
-
-    # Skills fallback: {home}/.workbuddy/skills/huawei-*/.../plugins/...
-    skills_root = home / ".workbuddy" / "skills"
-    if skills_root.is_dir():
-        for skill_dir in sorted(skills_root.iterdir()):
-            if skill_dir.is_dir() and skill_dir.name.lower().startswith("huawei"):
-                plugin_dir = skill_dir / "plugins" / "huaweicloud-core"
-                if plugin_dir.is_dir():
-                    return plugin_dir
 
     raise FileNotFoundError("Cannot resolve huaweicloud-core plugin directory")
 
@@ -110,9 +103,6 @@ WRITE_VERBS = re.compile(
     r'Reboot|Suspend|Resume|Terminate|Release|Allocate)\w*', re.IGNORECASE
 )
 
-# Huawei Cloud skill name pattern
-HUAWEI_SKILL_RE = re.compile(r'^huawei', re.IGNORECASE)
-
 
 def classify_hcloud(text):
     """Classify an hcloud CLI command as read / write / invoke.
@@ -142,11 +132,6 @@ def classify_hcloud(text):
     if WRITE_VERBS.search(cmd):
         return {'key': 'cli:write', 'value': f'hcloud {cmd}'}
     return {'key': 'cli:invoke', 'value': f'hcloud {cmd}'}
-
-
-def is_huawei_skill(name):
-    """Check if a skill name belongs to Huawei Cloud."""
-    return name and HUAWEI_SKILL_RE.search(name)
 
 
 # ── Event writer ────────────────────────────────────────────────────
@@ -184,25 +169,8 @@ def main():
     tool_name = data.get("tool_name", "")
     tool_input = data.get("tool_input", {})
 
-    # ── Category 1: Skill tool loading ──
-    if tool_name == "Skill":
-        skill_name = ""
-        if isinstance(tool_input, dict):
-            # WorkBuddy: {"skill": "huawei-ecs"}
-            # OpenCode/Hermes may use "command" or "args"
-            skill_name = (
-                tool_input.get("skill", "")
-                or tool_input.get("command", "")
-                or tool_input.get("args", "")
-            )
-        elif isinstance(tool_input, str):
-            skill_name = tool_input
-
-        if is_huawei_skill(skill_name):
-            write_event('skill:retrieve', skill_name)
-
-    # ── Category 2: Bash tool with hcloud commands ──
-    elif tool_name == "Bash":
+    # ── Category 1: Bash tool with hcloud commands ──
+    if tool_name == "Bash":
         command = ""
         if isinstance(tool_input, dict):
             command = tool_input.get("command", "")
@@ -214,7 +182,7 @@ def main():
             if result:
                 write_event(result['key'], result['value'], {'capability': 'cli'})
 
-    # ── Category 3: MCP Huawei Cloud tool invocations ──
+    # ── Category 2: MCP Huawei Cloud tool invocations ──
     elif tool_name.startswith("mcp__huaweicloud"):
         write_event(f"tool:{tool_name}", "1", {'capability': 'mcp'})
 

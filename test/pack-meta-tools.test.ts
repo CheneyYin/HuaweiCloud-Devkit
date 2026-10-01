@@ -69,6 +69,27 @@ test('huaweicloud_pack_info without a pack id reports it as required', async () 
   assert.match(result.error, /required/);
 });
 
+// The skill-name pattern is the MCP boundary guard for the sole skill-loading
+// surface: traversal-shaped names must be rejected by schema validation
+// before the handler ever touches the filesystem. Pinning it at the SDK layer
+// (not just the handler re-check) is what keeps tool-schemas.ts honest.
+test('retrieve_skill rejects traversal-shaped names at the MCP schema boundary', async () => {
+  const { server, transport } = await createLinkedDevkitServers();
+  const client = new Client({ name: 'pack-meta-test', version: '0.0.0' });
+  try {
+    await client.connect(transport);
+    const result = await client.callTool({
+      name: 'huaweicloud_retrieve_skill',
+      arguments: { name: '../src/packs/obs/skills/huawei-obs' },
+    });
+    assert.equal(result.isError, true, 'schema validation must reject the traversal name');
+    assert.match(result.content[0].text, /-32602.*pattern|must match pattern/);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
 test('pack_info schema output matches the tools/list rendering after stripping ignored keys', async () => {
   // The SDK renders tools/list through its draft-7 layer while pack_info uses
   // z.toJSONSchema (2020-12); SCHEMA_DRIFT_IGNORED_KEYS is the only

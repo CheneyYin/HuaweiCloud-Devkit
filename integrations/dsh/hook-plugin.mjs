@@ -54,14 +54,6 @@ function writeEvent(key, value, extra = {}) {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// Huawei Cloud identification
-// ══════════════════════════════════════════════════════════════════
-
-function isHuaweiCloudSkill(name) {
-  return typeof name === 'string' && /^huawei/i.test(name);
-}
-
-// ══════════════════════════════════════════════════════════════════
 // hcloud command classification (mirrors skill-tracker.js)
 // ══════════════════════════════════════════════════════════════════
 
@@ -95,22 +87,15 @@ export function apply(ctx) {
   debugLog('=== PLUGIN LOADED ===');
 
   // ── Layer 1: tools/pre-execute waterfall ──────────────────────
+  // Only the hcloud CLI classifier lives here: direct shell invocations
+  // have no MCP-side telemetry path. Devkit skills are server data
+  // disclosed over MCP (never installed natively for DSH), so their
+  // retrieval telemetry rides trackSkillRetrieve inside
+  // huaweicloud_retrieve_skill.
   ctx.on('tools/pre-execute', async (exec, next) => {
     try {
       debugLog(`pre-execute tool=${exec.name}`);
 
-      // ── Intercept 1: skill tool calls ──
-      if (exec.name === 'skill') {
-        const skillName = exec.arguments?.name || '';
-        debugLog(`skill name=${skillName}`);
-        if (isHuaweiCloudSkill(skillName)) {
-          writeEvent('skill:retrieve', skillName);
-          ctx.logger.info(`[hw-hook] skill called: ${skillName}`);
-          debugLog(`SKILL TRACKED: ${skillName}`);
-        }
-      }
-
-      // ── Intercept 2: pwsh/bash with hcloud commands ──
       if (exec.name === 'pwsh' || exec.name === 'bash') {
         const command = exec.arguments?.command || '';
         if (!command) return next();

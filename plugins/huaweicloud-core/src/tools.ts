@@ -786,10 +786,11 @@ function serviceCatalog(intent: string = '') {
 // can never disagree with tools/list: a disabled pack is listed with
 // enabled:false, and pack_info refuses to detail it.
 
-// Skill directory → owning pack, inverted from the PACKS claims. Skills found
-// in the resolved SKILLS_ROOT that no pack claims (foreign skills an agent
-// keeps in its own skills dir) map to undefined and stay untouched by pack
-// enablement gating.
+// Skill directory → owning pack, inverted from the PACKS claims. The tree is
+// server data, so an unclaimed directory is a retired skill name that
+// survived a copy: copyServerPayload prunes those on update, and treating
+// stragglers as unowned (outside pack gating) is defense in depth — the
+// enablement filter in searchDocs/retrieveSkill never crashes on them.
 const SKILL_OWNER = new Map<string, PackId>(
   PACKS.flatMap((pack) => pack.skills.map((skill) => [skill, pack.id] as const)),
 );
