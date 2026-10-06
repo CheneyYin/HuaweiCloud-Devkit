@@ -37,13 +37,14 @@ test('pack tool counts match the P0 grouping', () => {
     voucher: 2,
     update: 2,
     discovery: 3,
+    openapi: 6,
   };
   let total = 0;
   for (const pack of PACKS) {
     assert.equal(pack.tools.length, expected[pack.id], `${pack.id} tool count`);
     total += pack.tools.length;
   }
-  assert.equal(total, 42);
+  assert.equal(total, 48);
 });
 
 test('the central pack handler map keys equal the pack-owned tool names', () => {
@@ -57,7 +58,7 @@ test('the central pack handler map keys equal the pack-owned tool names', () => 
   );
   const mapKeys = Object.keys(PACK_TOOL_HANDLERS).sort((a, b) => a.localeCompare(b));
   assert.deepEqual(mapKeys, packOwned);
-  assert.equal(mapKeys.length, 25);
+  assert.equal(mapKeys.length, 31);
 });
 
 test('every skills/ directory is claimed by exactly one pack', () => {

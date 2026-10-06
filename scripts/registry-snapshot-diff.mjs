@@ -22,7 +22,16 @@ const IGNORED_KEYS = new Set(['$schema', 'additionalProperties', 'description'])
 // Tools registered after the legacy snapshot was extracted. They have no git
 // history to regenerate the fixture from, so the snapshot cannot cover them;
 // listed here instead of weakening the check for the remaining legacy tools.
-const EXEMPT_TOOLS = new Set(['huaweicloud_list_packs', 'huaweicloud_pack_info']);
+const EXEMPT_TOOLS = new Set([
+  'huaweicloud_list_packs',
+  'huaweicloud_pack_info',
+  'huaweicloud_search_apis',
+  'huaweicloud_list_products',
+  'huaweicloud_get_product',
+  'huaweicloud_list_apis',
+  'huaweicloud_get_api',
+  'huaweicloud_get_api_examples',
+]);
 
 // Declared, intentional drifts from the legacy literals. Each entry names the
 // semantic reason the zod render is allowed to differ.

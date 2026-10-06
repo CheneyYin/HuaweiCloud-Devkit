@@ -182,7 +182,7 @@ const REQUIRED_TOOLS = [
 ];
 
 // Optional-pack tools, grouped by pack id (same grouping as
-// packs/registry.ts). Together with REQUIRED_TOOLS these cover all 42 tools.
+// packs/registry.ts). Together with REQUIRED_TOOLS these cover all 48 tools.
 const PER_PACK_TOOLS = {
   sandbox: [
     'huaweicloud_sandbox_exec_with_session',
@@ -208,6 +208,14 @@ const PER_PACK_TOOLS = {
   voucher: ['huaweicloud_voucher_status', 'huaweicloud_voucher_claim'],
   update: ['huaweicloud_check_update', 'huaweicloud_upgrade'],
   discovery: ['huaweicloud_search_marketplace', 'huaweicloud_get_service_icon', 'huaweicloud_detect_framework'],
+  openapi: [
+    'huaweicloud_search_apis',
+    'huaweicloud_list_products',
+    'huaweicloud_get_product',
+    'huaweicloud_list_apis',
+    'huaweicloud_get_api',
+    'huaweicloud_get_api_examples',
+  ],
 };
 
 const targets = [
@@ -353,7 +361,7 @@ test('MCP tools/list includes all required core tools with valid schemas', async
     }
     assert.equal(
       REQUIRED_TOOLS.length + perPackNames.length,
-      42,
+      48,
       'always-on + per-pack lists must cover the full registry',
     );
     assert.ok(toolNames.length >= 25, `Expected >= 25 tools, got ${toolNames.length}`);
@@ -412,6 +420,39 @@ test('DEVKIT_PACKS=sandbox trims tools/list to core 17 + sandbox 11', async () =
     // ...and every other pack's tools are absent.
     for (const [packId, names] of Object.entries(PER_PACK_TOOLS)) {
       if (packId === 'sandbox') continue;
+      for (const name of names) {
+        assert.ok(!toolNames.includes(name), `${name} from disabled pack ${packId} must not be registered`);
+      }
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('DEVKIT_PACKS=openapi trims tools/list to core 17 + openapi 6', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'mcp-trim-openapi-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'mcp-trim-openapi-proj-'));
+  try {
+    const install = runCli(home, cwd, ['install', '--target', 'opencode']);
+    assert.equal(install.status, 0, install.stderr);
+
+    const mcpServerPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js');
+    const responses = await invokeMcpTools(mcpServerPath, { ...makeEnv(home, cwd), DEVKIT_PACKS: 'openapi' });
+
+    assert.ok(responses[0].result, 'initialize returned result');
+    assert.ok(responses[1].result, 'tools/list returned result');
+    const toolNames = responses[1].result.tools.map((t) => t.name);
+    assert.equal(toolNames.length, 23, `expected core 17 + openapi 6, got ${toolNames.length}`);
+
+    for (const required of REQUIRED_TOOLS) {
+      assert.ok(toolNames.includes(required), `Missing core tool: ${required}`);
+    }
+    for (const name of PER_PACK_TOOLS.openapi) {
+      assert.ok(toolNames.includes(name), `Missing openapi tool: ${name}`);
+    }
+    for (const [packId, names] of Object.entries(PER_PACK_TOOLS)) {
+      if (packId === 'openapi') continue;
       for (const name of names) {
         assert.ok(!toolNames.includes(name), `${name} from disabled pack ${packId} must not be registered`);
       }

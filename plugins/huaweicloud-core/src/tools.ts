@@ -265,6 +265,36 @@ const TOOL_DEFINITIONS_LITERALS = [
     description:
       'Inspect one capability pack. Takes pack (a pack id from huaweicloud_list_packs) and returns the pack title, description, claimed skills, enabled flag, and every tool in the pack with name, description, and JSON Schema. Use to decide which pack covers a task before loading a skill with huaweicloud_retrieve_skill.',
   },
+  {
+    name: 'huaweicloud_search_apis',
+    description:
+      'Search the full Huawei Cloud API catalog (300+ products, 17,000+ APIs) by entity keywords when the intent does not name a product. Returns candidate products with representative APIs and match evidence. Step 0 of openapi discovery: search_apis → list_apis → get_api. Read-only; needs no credentials.',
+  },
+  {
+    name: 'huaweicloud_list_products',
+    description:
+      'List Huawei Cloud products with categories and API counts, optionally filtered by category or keyword. Use when the task domain is known but the product is not, then narrow with huaweicloud_list_apis. Read-only; needs no credentials.',
+  },
+  {
+    name: 'huaweicloud_get_product',
+    description:
+      "Get one product's catalog entry (category, display name, whether it is a global-level service). Global-level services use a different auth model. Read-only; needs no credentials.",
+  },
+  {
+    name: 'huaweicloud_list_apis',
+    description:
+      'List the API catalog of one product with tag_groups for narrowing; paginate with search/limit/offset. Read the chosen API with huaweicloud_get_api before doing anything with it. Read-only; needs no credentials.',
+  },
+  {
+    name: 'huaweicloud_get_api',
+    description:
+      "Get one API's full documentation: method, path, parameter names/requiredness/types/enums, x-constraint preconditions, response schema, and the region-specific endpoint. Must-read before executing or hand-writing a call to that API. Read-only; needs no credentials.",
+  },
+  {
+    name: 'huaweicloud_get_api_examples',
+    description:
+      'Get the official request examples (x-request-examples) for one API to guide parameter construction. Read-only; needs no credentials.',
+  },
 ] as const;
 
 export type ToolName = (typeof TOOL_DEFINITIONS_LITERALS)[number]['name'];

@@ -6,15 +6,15 @@ import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
 import { SCHEMA_DRIFT_IGNORED_KEYS } from '../plugins/huaweicloud-core/src/tool-schemas.ts';
 import { createLinkedDevkitServers } from '../plugins/huaweicloud-core/src/mcp-protocol.ts';
 
-const PACK_IDS = ['core', 'huaweicloud-cli', 'sandbox', 'auth', 'obs', 'voucher', 'update', 'discovery'];
+const PACK_IDS = ['core', 'huaweicloud-cli', 'sandbox', 'auth', 'obs', 'voucher', 'update', 'discovery', 'openapi'];
 // Packs that own knowledge without callable surface: their tool list is
 // legitimately empty, so the "must list tools" bar exempts them.
 const ZERO_TOOL_PACKS = new Set(['huaweicloud-cli']);
 
-test('huaweicloud_list_packs returns all 8 packs, sandbox carries exactly 11 tool names', async () => {
+test('huaweicloud_list_packs returns all 9 packs, sandbox carries exactly 11 tool names', async () => {
   const result = await callTool('huaweicloud_list_packs', {});
   assert.equal(result.ok, true);
-  assert.equal(result.count, 8);
+  assert.equal(result.count, 9);
   assert.deepEqual(
     result.packs.map((pack) => pack.id),
     PACK_IDS,
@@ -112,7 +112,7 @@ test('pack_info schema output matches the tools/list rendering after stripping i
         compared++;
       }
     }
-    assert.equal(compared, 42, 'every registered tool must be compared');
+    assert.equal(compared, 48, 'every registered tool must be compared');
   } finally {
     await client.close();
     await server.close();

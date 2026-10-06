@@ -4,6 +4,7 @@ import type { ToolName } from './tools.ts';
 import type { LooseToolSchema } from './lib/pack-types.ts';
 import { looseObject, numericArg } from './lib/tool-schema-parts.ts';
 import { UPDATE_TOOL_SCHEMAS } from './packs/update/tools.ts';
+import { OPENAPI_TOOL_SCHEMAS } from './packs/openapi/tools.ts';
 import { AUTH_TOOL_SCHEMAS } from './packs/auth/tools.ts';
 import { OBS_TOOL_SCHEMAS } from './packs/obs/tools.ts';
 import { VOUCHER_TOOL_SCHEMAS } from './packs/voucher/tools.ts';
@@ -100,28 +101,32 @@ const TOOL_SCHEMAS = {
   }),
   // The discovery pack owns its tool schemas (src/packs/discovery/tools.ts);
   // the spread keeps them in TOOL_SCHEMAS so the satisfies check below still
-  // covers all 42 ToolName keys.
+  // covers all 48 ToolName keys.
   ...DISCOVERY_TOOL_SCHEMAS,
   // The obs pack owns its tool schemas (src/packs/obs/tools.ts); the
   // spread keeps them in TOOL_SCHEMAS so the satisfies check below still
-  // covers all 42 ToolName keys.
+  // covers all 48 ToolName keys.
   ...OBS_TOOL_SCHEMAS,
   // The voucher pack owns its tool schemas (src/packs/voucher/tools.ts);
   // the spread keeps them in TOOL_SCHEMAS so the satisfies check below still
-  // covers all 42 ToolName keys.
+  // covers all 48 ToolName keys.
   ...VOUCHER_TOOL_SCHEMAS,
   // The auth pack owns its tool schemas (src/packs/auth/tools.ts); the
   // spread keeps them in TOOL_SCHEMAS so the satisfies check below still
-  // covers all 42 ToolName keys.
+  // covers all 48 ToolName keys.
   ...AUTH_TOOL_SCHEMAS,
   // The sandbox pack owns its tool schemas (src/packs/sandbox/tools.ts);
   // the spread keeps them in TOOL_SCHEMAS so the satisfies check below still
-  // covers all 42 ToolName keys.
+  // covers all 48 ToolName keys.
   ...SANDBOX_TOOL_SCHEMAS,
   // The update pack owns its tool schemas (src/packs/update/tools.ts); the
   // spread keeps them in TOOL_SCHEMAS so the satisfies check below still
-  // covers all 42 ToolName keys.
+  // covers all 48 ToolName keys.
   ...UPDATE_TOOL_SCHEMAS,
+  // The openapi pack owns its tool schemas (src/packs/openapi/tools.ts);
+  // the spread keeps them in TOOL_SCHEMAS so the satisfies check below still
+  // covers all 48 ToolName keys.
+  ...OPENAPI_TOOL_SCHEMAS,
   huaweicloud_list_packs: z.looseObject({}),
   huaweicloud_pack_info: z.looseObject({
     pack: z

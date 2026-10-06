@@ -48,6 +48,7 @@
 
 ## Unreleased
 
+- feat(packs): 新增 `openapi` 能力包——经本地 huaweicloud-open-mcp 网关代理华为云全量 OpenAPI 目录发现（`huaweicloud_search_apis` / `list_products` / `get_product` / `list_apis` / `get_api` / `get_api_examples`，共 6 个只读工具）。Python sidecar 为进程级单例（`src/packs/openapi/sidecar.ts`，手写换行 JSON-RPC，不依赖 MCP SDK），首次调用懒启动，生命周期绑定父进程 stdin 管道；remote 传输每请求构造/关闭 server 不影响单例；`DEVKIT_PACKS` 裁剪该包时零注册零 spawn；`OPENMCP_BIN` 可覆盖二进制解析，doctor 经 `PACK_BINARIES` 探测网关存在性。工具总数 42→48。API 执行（execute_api + 审批桥）为后续阶段
 - docs(sandbox): huawei-sandbox 标注跨 pack 工具依赖的降级路径——`huaweicloud_detect_framework`（discovery pack）与 `huaweicloud_setup_obs_config`（obs pack）在 `DEVKIT_PACKS` 裁剪对应 pack 时给出可操作指引（询问开发者/改用手工配置），而非裸调未注册工具
 - refactor(packs): pack id `services` 更名为 `huaweicloud-cli`(按执行面命名)。破坏性变更:`DEVKIT_PACKS` 持旧值的配置启动即失败并列出合法 id,改用新 id 或重跑安装器 `--packs all` 恢复(codex 目标由 codex CLI 托管需手改;DSH 吞启动错误,以 doctor 为发现途径);`sync-skills --check` 新增生成头路径校验,目录改名后漏跑 `skills:sync` 将直接失败
 - feat(sandbox): devbridge 认证改为运行时能力探测——`0.2.2-release` 存在两个构建（镜像版保留 AK/SK 登录 + env 自动读取；发布版仅支持 API Key），暴露流程按 `auth login --help` 探测结果自动分支：镜像版直接使用注入的 AK/SK（零介入），发布版走 API Key 引导；`.codeartsdoer` sidecopy 同步，守护测试覆盖双分支
