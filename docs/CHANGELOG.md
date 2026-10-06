@@ -48,6 +48,7 @@
 
 ## Unreleased
 
+- docs(sandbox): huawei-sandbox 标注跨 pack 工具依赖的降级路径——`huaweicloud_detect_framework`（discovery pack）与 `huaweicloud_setup_obs_config`（obs pack）在 `DEVKIT_PACKS` 裁剪对应 pack 时给出可操作指引（询问开发者/改用手工配置），而非裸调未注册工具
 - refactor(packs): pack id `services` 更名为 `huaweicloud-cli`(按执行面命名)。破坏性变更:`DEVKIT_PACKS` 持旧值的配置启动即失败并列出合法 id,改用新 id 或重跑安装器 `--packs all` 恢复(codex 目标由 codex CLI 托管需手改;DSH 吞启动错误,以 doctor 为发现途径);`sync-skills --check` 新增生成头路径校验,目录改名后漏跑 `skills:sync` 将直接失败
 - feat(sandbox): devbridge 认证改为运行时能力探测——`0.2.2-release` 存在两个构建（镜像版保留 AK/SK 登录 + env 自动读取；发布版仅支持 API Key），暴露流程按 `auth login --help` 探测结果自动分支：镜像版直接使用注入的 AK/SK（零介入），发布版走 API Key 引导；`.codeartsdoer` sidecopy 同步，守护测试覆盖双分支
 

@@ -216,7 +216,7 @@ hcloud OBS cp <local-file> obs://<bucket>/<key> -f -acl=public-read
 curl -s -o /workspace/<repo>/<file> https://<bucket>.obs.<region>.myhuaweicloud.com/<key>
 ```
 
-> Requires OBS credentials (`huaweicloud_setup_obs_config`). Bucket ACL does not cascade to objects — set object-level `-acl=public-read` for anonymous reads.
+> Requires OBS credentials (`huaweicloud_setup_obs_config`, owned by the `obs` pack). If the tool is not registered, `DEVKIT_PACKS` excluded `obs`: have the user configure `~/.obsutilconfig` instead of retrying. Bucket ACL does not cascade to objects — set object-level `-acl=public-read` for anonymous reads.
 
 ## Expose the deployed app (public URL)
 
@@ -385,6 +385,8 @@ When deploying a web application to the sandbox, build the app inside the sandbo
 - For Monorepo: `subApps` list with individual framework detection
 
 If detection returns `null`, the project is not a recognized web app. Stop and tell the developer.
+
+> `huaweicloud_detect_framework` is owned by the `discovery` pack. If the tool is not registered, the server was started with `DEVKIT_PACKS` excluding `discovery`: ask the developer for the framework, build command, and output directory, then proceed. Retrying the call cannot help.
 
 If detection returns `type: "monorepo"`, show the `subApps` list to the developer and ask which sub-app to deploy. Then re-detect that sub-app's framework.
 
