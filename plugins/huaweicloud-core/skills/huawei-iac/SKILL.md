@@ -4,7 +4,7 @@ description: 'Use whenever the user wants to DEPLOY, host, or purchase anything 
 version: 1
 ---
 
-<!-- generated from src/packs/services/skills/huawei-iac - do not edit -->
+<!-- generated from src/packs/huaweicloud-cli/skills/huawei-iac - do not edit -->
 
 # Huawei Cloud IaC Orchestration
 

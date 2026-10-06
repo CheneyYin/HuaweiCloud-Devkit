@@ -100,6 +100,16 @@ function stripMarkerLine(content) {
   return lines.join('\n');
 }
 
+// The marker line a generated file must carry, or null when absent. --check
+// compares it against markerFor(packId, skillName): the content comparison
+// below strips the marker before comparing, so without this check a stale
+// marker path (a pack directory renamed with --write skipped) survives every
+// gate, including prepack.
+function markerLineOf(content) {
+  const normalized = content.replace(/\r\n/g, '\n');
+  return normalized.split('\n').find((line) => line.startsWith(MARKER_PREFIX) && line.endsWith(MARKER_SUFFIX)) ?? null;
+}
+
 // A skills/ directory is generated iff its SKILL.md carries the marker.
 function isGeneratedSkillDir(skillDir) {
   const skillMd = join(skillDir, 'SKILL.md');
@@ -131,7 +141,15 @@ function run({ write }) {
           `missing generated file: ${relative(repoRoot, targetPath)} (source: ${relative(repoRoot, sourcePath)})`,
         );
       } else {
-        const actualStripped = stripMarkerLine(readFileSync(targetPath, 'utf8'));
+        const rawTarget = readFileSync(targetPath, 'utf8');
+        const expectedMarker = markerFor(packId, skillName);
+        const actualMarker = markerLineOf(rawTarget);
+        if (actualMarker !== expectedMarker) {
+          failures.push(
+            `stale generated marker in ${relative(repoRoot, targetPath)}: expected "${expectedMarker}", found ${actualMarker ?? 'none'} — run: npm run skills:sync`,
+          );
+        }
+        const actualStripped = stripMarkerLine(rawTarget);
         if (actualStripped !== sourceContent) {
           failures.push(
             `drift in ${relative(repoRoot, targetPath)} (authoritative source: ${relative(repoRoot, sourcePath)}) — run: npm run skills:sync`,

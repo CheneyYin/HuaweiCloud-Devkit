@@ -1,4 +1,4 @@
-<!-- generated from src/packs/services/skills/huawei-functiongraph - do not edit -->
+<!-- generated from src/packs/huaweicloud-cli/skills/huawei-functiongraph - do not edit -->
 
 # FunctionGraph Function Creation Reference
 

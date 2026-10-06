@@ -1,4 +1,4 @@
-<!-- generated from src/packs/services/skills/huawei-iac - do not edit -->
+<!-- generated from src/packs/huaweicloud-cli/skills/huawei-iac - do not edit -->
 
 # Architecture Templates by Scale
 

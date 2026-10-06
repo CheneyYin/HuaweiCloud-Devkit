@@ -4,7 +4,7 @@ description: 'Use when creating or managing SMN topics/subscriptions/messages or
 version: 1
 ---
 
-<!-- generated from src/packs/services/skills/huawei-smn-dms - do not edit -->
+<!-- generated from src/packs/huaweicloud-cli/skills/huawei-smn-dms - do not edit -->
 
 # Huawei Cloud SMN / DMS
 

@@ -4,7 +4,7 @@ description: 'Use when managing secrets, credentials, encryption keys, certifica
 version: 1
 ---
 
-<!-- generated from src/packs/services/skills/huawei-dew - do not edit -->
+<!-- generated from src/packs/huaweicloud-cli/skills/huawei-dew - do not edit -->
 
 # Huawei Cloud DEW (Data Encryption Workshop)
 

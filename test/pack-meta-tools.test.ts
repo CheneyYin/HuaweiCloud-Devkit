@@ -6,10 +6,10 @@ import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
 import { SCHEMA_DRIFT_IGNORED_KEYS } from '../plugins/huaweicloud-core/src/tool-schemas.ts';
 import { createLinkedDevkitServers } from '../plugins/huaweicloud-core/src/mcp-protocol.ts';
 
-const PACK_IDS = ['core', 'services', 'sandbox', 'auth', 'obs', 'voucher', 'update', 'discovery'];
+const PACK_IDS = ['core', 'huaweicloud-cli', 'sandbox', 'auth', 'obs', 'voucher', 'update', 'discovery'];
 // Packs that own knowledge without callable surface: their tool list is
 // legitimately empty, so the "must list tools" bar exempts them.
-const ZERO_TOOL_PACKS = new Set(['services']);
+const ZERO_TOOL_PACKS = new Set(['huaweicloud-cli']);
 
 test('huaweicloud_list_packs returns all 8 packs, sandbox carries exactly 11 tool names', async () => {
   const result = await callTool('huaweicloud_list_packs', {});
@@ -29,9 +29,9 @@ test('huaweicloud_list_packs returns all 8 packs, sandbox carries exactly 11 too
       assert.ok(Array.isArray(pack.tools) && pack.tools.length > 0, `${pack.id} must list tools`);
     }
   }
-  const services = result.packs.find((pack) => pack.id === 'services');
-  assert.equal(services.skills.length, 20);
-  assert.ok(services.skills.includes('huawei-ecs'));
+  const cliPack = result.packs.find((pack) => pack.id === 'huaweicloud-cli');
+  assert.equal(cliPack.skills.length, 20);
+  assert.ok(cliPack.skills.includes('huawei-ecs'));
   const sandbox = result.packs.find((pack) => pack.id === 'sandbox');
   assert.equal(sandbox.tools.length, 11);
   assert.ok(sandbox.tools.includes('huaweicloud_sandbox_connect'));

@@ -1,4 +1,4 @@
-<!-- generated from src/packs/services/skills/huawei-vpc - do not edit -->
+<!-- generated from src/packs/huaweicloud-cli/skills/huawei-vpc - do not edit -->
 
 # VPC Subnet Guide
 

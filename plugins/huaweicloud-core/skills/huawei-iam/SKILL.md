@@ -4,7 +4,7 @@ description: 'Use when managing IAM users, groups, roles, policies, agencies, pr
 version: 1
 ---
 
-<!-- generated from src/packs/services/skills/huawei-iam - do not edit -->
+<!-- generated from src/packs/huaweicloud-cli/skills/huawei-iam - do not edit -->
 
 # Huawei Cloud IAM
 

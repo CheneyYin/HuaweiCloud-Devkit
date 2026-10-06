@@ -6,7 +6,7 @@ import { authPack } from './auth/pack.ts';
 import { obsPack } from './obs/pack.ts';
 import { voucherPack } from './voucher/pack.ts';
 import { discoveryPack } from './discovery/pack.ts';
-import { servicesPack } from './services/pack.ts';
+import { huaweicloudCliPack } from './huaweicloud-cli/pack.ts';
 import { UPDATE_TOOL_HANDLERS } from './update/tools.ts';
 import { SANDBOX_TOOL_HANDLERS } from './sandbox/tools.ts';
 import { AUTH_TOOL_HANDLERS } from './auth/tools.ts';
@@ -106,8 +106,8 @@ function toolsFor(id: PackId): ToolName[] {
 
 // skills are claims over the plugin skills/ directories; the pack tests fail
 // when one is claimed twice, left unclaimed, or removed. Core claims the six
-// hand-written meta-skills; the services pack claims the twenty service
-// skills whose authoritative sources live in src/packs/services/skills/.
+// hand-written meta-skills; the huaweicloud-cli pack claims the twenty service
+// skills whose authoritative sources live in src/packs/huaweicloud-cli/skills/.
 export const PACKS: readonly Pack[] = [
   {
     id: 'core',
@@ -124,7 +124,7 @@ export const PACKS: readonly Pack[] = [
     ],
     tools: toolsFor('core'),
   },
-  servicesPack,
+  huaweicloudCliPack,
   sandboxPack,
   authPack,
   obsPack,

@@ -1,4 +1,4 @@
-<!-- generated from src/packs/services/skills/huawei-ecs - do not edit -->
+<!-- generated from src/packs/huaweicloud-cli/skills/huawei-ecs - do not edit -->
 
 # Create ECS Instance SOP
 

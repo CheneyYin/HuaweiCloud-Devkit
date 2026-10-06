@@ -1,4 +1,4 @@
-<!-- generated from src/packs/services/skills/huawei-iam - do not edit -->
+<!-- generated from src/packs/huaweicloud-cli/skills/huawei-iam - do not edit -->
 
 # IAM Policy Examples
 

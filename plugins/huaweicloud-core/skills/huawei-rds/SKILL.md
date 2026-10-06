@@ -4,7 +4,7 @@ description: 'Use when creating, configuring, managing, or troubleshooting RDS i
 version: 1
 ---
 
-<!-- generated from src/packs/services/skills/huawei-rds - do not edit -->
+<!-- generated from src/packs/huaweicloud-cli/skills/huawei-rds - do not edit -->
 
 # Huawei Cloud RDS
 

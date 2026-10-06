@@ -4,7 +4,7 @@ description: 'Use when training, deploying, or managing AI/ML models on Huawei C
 version: 1
 ---
 
-<!-- generated from src/packs/services/skills/huawei-modelarts - do not edit -->
+<!-- generated from src/packs/huaweicloud-cli/skills/huawei-modelarts - do not edit -->
 
 # Huawei Cloud ModelArts
 

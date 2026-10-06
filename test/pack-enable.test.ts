@@ -116,12 +116,12 @@ test(
     assert.match(denied.error, /Skill "huawei-obs" belongs to pack "obs" which is not enabled/);
     assert.match(denied.error, /DEVKIT_PACKS/, 'the error must explain how to enable the pack');
 
-    // Service knowledge is owned by the services pack, so a pinned env that
-    // omits it gates those skills too — "core" no longer implies service
+    // Service knowledge is owned by the huaweicloud-cli pack, so a pinned env
+    // that omits it gates those skills too; core no longer implies service
     // coverage.
     const serviceSkill = await callTool('huaweicloud_retrieve_skill', { name: 'huawei-ecs' });
-    assert.equal(serviceSkill.ok, false, 'services-pack skill must be gated when services is disabled');
-    assert.match(serviceSkill.error, /belongs to pack "services" which is not enabled/);
+    assert.equal(serviceSkill.ok, false, 'service skill must be gated when huaweicloud-cli is disabled');
+    assert.match(serviceSkill.error, /belongs to pack "huaweicloud-cli" which is not enabled/);
 
     // Core-owned knowledge (the meta-skills) stays fully available.
     const coreSkill = await callTool('huaweicloud_retrieve_skill', { name: 'huaweicloud-core' });
@@ -131,13 +131,37 @@ test(
     assert.equal(search.ok, true);
     const names = new Set(search.results.map((entry) => entry.name));
     assert.ok(!names.has('huawei-obs'), 'disabled-pack skill must be filtered from search results');
-    assert.ok(!names.has('huawei-ecs'), 'services-pack skill must be filtered from search results');
+    assert.ok(!names.has('huawei-ecs'), 'service skill must be filtered from search results');
 
     const coreSearch = await callTool('huaweicloud_search_docs', { query: 'routing' });
     assert.ok(
       coreSearch.results.some((entry) => entry.name === 'huaweicloud-core'),
       'core-owned meta-skill must stay searchable',
     );
+  }),
+);
+
+test(
+  'enabling huaweicloud-cli loads service skills and gates other packs',
+  withDevkitPacks('huaweicloud-cli', async () => {
+    // The pack owns zero tools, so tools/list cannot tell it apart from every
+    // optional pack being disabled; skill gating is its whole surface, and the
+    // positive path is what migrating DEVKIT_PACKS holders will run.
+    const listed = await callTool('huaweicloud_list_packs', {});
+    assert.equal(listed.ok, true);
+    const flags = new Map(listed.packs.map((pack) => [pack.id, pack.enabled]));
+    assert.equal(flags.get('huaweicloud-cli'), true);
+    assert.equal(flags.get('core'), true);
+    for (const id of OPTIONAL_IDS) {
+      if (id !== 'huaweicloud-cli') assert.equal(flags.get(id), false, `${id} must report enabled:false`);
+    }
+
+    const serviceSkill = await callTool('huaweicloud_retrieve_skill', { name: 'huawei-ecs' });
+    assert.equal(serviceSkill.ok, true, 'service skill must load when huaweicloud-cli is enabled');
+
+    const denied = await callTool('huaweicloud_retrieve_skill', { name: 'huawei-sandbox' });
+    assert.equal(denied.ok, false);
+    assert.match(denied.error, /belongs to pack "sandbox" which is not enabled/);
   }),
 );
 

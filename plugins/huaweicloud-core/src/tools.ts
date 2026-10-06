@@ -258,7 +258,7 @@ const TOOL_DEFINITIONS_LITERALS = [
   {
     name: 'huaweicloud_list_packs',
     description:
-      'List the devkit capability packs — the complete skill and tool inventory of this server. Returns each pack with id, title, description, the skill names it owns (load them with huaweicloud_retrieve_skill), its tool names, and the enabled flag. The "services" pack carries the twenty Huawei Cloud service skills (ecs, vpc, obs, iam, rds, ...). Use this to discover what the devkit knows before picking a skill or pack.',
+      'List the devkit capability packs — the complete skill and tool inventory of this server. Returns each pack with id, title, description, the skill names it owns (load them with huaweicloud_retrieve_skill), its tool names, and the enabled flag. The "huaweicloud-cli" pack carries the twenty Huawei Cloud service skills (ecs, vpc, obs, iam, rds, ...) with per-service CLI workflows; the huaweicloud-cli-and-auth skill covers KooCLI installation and credentials. Use this to discover what the devkit knows before picking a skill or pack.',
   },
   {
     name: 'huaweicloud_pack_info',

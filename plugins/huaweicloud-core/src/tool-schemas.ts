@@ -126,7 +126,9 @@ const TOOL_SCHEMAS = {
   huaweicloud_pack_info: z.looseObject({
     pack: z
       .string()
-      .describe('Pack id from huaweicloud_list_packs, such as core, sandbox, auth, obs, voucher, update, discovery.'),
+      .describe(
+        'Pack id from huaweicloud_list_packs, such as core, huaweicloud-cli, sandbox, auth, obs, voucher, update, discovery.',
+      ),
   }),
 } satisfies Record<ToolName, LooseToolSchema>;
 
