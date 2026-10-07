@@ -1,6 +1,5 @@
 import { z } from 'zod';
 
-import { numericArg } from '../../lib/tool-schema-parts.ts';
 import type { PackToolDefinition, LooseToolSchema } from '../../lib/pack-types.ts';
 import { callOpenMcpTool } from './sidecar.ts';
 
@@ -13,9 +12,14 @@ import { callOpenMcpTool } from './sidecar.ts';
 // once-scope grant inside the handler), which keeps the devkit's single
 // consent authority intact.
 
+// The gateway's pydantic ints reject null (verified: limit=null fails with
+// "Input should be a valid integer"), so unlike numericArg these stay
+// non-nullable; numeric strings pass through and coerce gateway-side.
+const gatewayInt = z.union([z.number(), z.string()]).optional();
+
 const searchApisSchema = z.looseObject({
   query: z.string().describe('Entity keywords for the cross-product search, e.g. "弹性云服务器" or "database".'),
-  limit: numericArg.optional().describe('Max candidates per product (default 8, max 20; -1 = all).'),
+  limit: gatewayInt.describe('Max candidates per product (default 8, max 20; -1 = all).'),
   category: z.string().optional().describe('Optional product category filter.'),
 });
 
@@ -33,9 +37,9 @@ const listApisSchema = z.looseObject({
   product: z.string().describe('Product short name whose API catalog to list.'),
   tag: z.string().optional().describe('Filter by tag (see tag_groups in the result).'),
   search: z.string().optional().describe('Search within the product APIs by name.'),
-  limit: numericArg.optional().describe('Page size (default 20).'),
-  offset: numericArg.optional().describe('Page offset (default 0).'),
-  include_sops: z.boolean().optional(),
+  limit: gatewayInt.describe('Page size (default 20).'),
+  offset: gatewayInt.describe('Page offset (default 0).'),
+  include_sops: z.boolean().optional().describe('Include full SOP texts per page (default false: index only).'),
 });
 
 const getApiSchema = z.looseObject({

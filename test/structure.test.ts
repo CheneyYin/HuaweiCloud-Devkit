@@ -14,6 +14,7 @@ import { OBS_TOOLS } from '../plugins/huaweicloud-core/src/packs/obs/tools.ts';
 import { VOUCHER_TOOLS } from '../plugins/huaweicloud-core/src/packs/voucher/tools.ts';
 import { DISCOVERY_TOOLS } from '../plugins/huaweicloud-core/src/packs/discovery/tools.ts';
 import { SANDBOX_TOOLS } from '../plugins/huaweicloud-core/src/packs/sandbox/tools.ts';
+import { HUAWEICLOUD_OPEN_MCP_TOOLS } from '../plugins/huaweicloud-core/src/packs/huaweicloud-open-mcp/tools.ts';
 import { checkPackBoundaries } from '../scripts/lib/pack-boundaries.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -795,17 +796,18 @@ test('update pack registers version-update tools; registry carries the central d
   }
 });
 
-test('five P2 packs register their tools; the central map dispatches them', () => {
-  // Same contract as the update pack, asserted for the five packs
-  // materialized in P2: sandbox (11), auth (5), obs (2), voucher (2),
-  // discovery (3) — 23 tools total. P4: their handlers reach callTool only
-  // through the PACK_TOOL_HANDLERS merge in packs/registry.ts.
+test('six packs register their tools; the central map dispatches them', () => {
+  // Same contract as the update pack, asserted for the packs materialized
+  // after P4: sandbox (11), auth (5), obs (2), voucher (2), discovery (3),
+  // huaweicloud-open-mcp (6) — 29 tools total. Their handlers reach callTool
+  // only through the PACK_TOOL_HANDLERS merge in packs/registry.ts.
   const packs = [
     { id: 'sandbox', tools: SANDBOX_TOOLS, count: 11 },
     { id: 'auth', tools: AUTH_TOOLS, count: 5 },
     { id: 'obs', tools: OBS_TOOLS, count: 2 },
     { id: 'voucher', tools: VOUCHER_TOOLS, count: 2 },
     { id: 'discovery', tools: DISCOVERY_TOOLS, count: 3 },
+    { id: 'huaweicloud-open-mcp', tools: HUAWEICLOUD_OPEN_MCP_TOOLS, count: 6 },
   ];
   const tools = readSource(join('src', 'tools.ts'));
   const registry = readSource(join('src', 'packs', 'registry.ts'));
@@ -819,8 +821,12 @@ test('five P2 packs register their tools; the central map dispatches them', () =
       assert.ok(definition, `${tool.name} missing from TOOL_DEFINITIONS`);
       assert.equal(tool.description, definition.description);
     }
-    // The pack's handler map is merged into the central dispatch table.
-    assert.match(registry, new RegExp(`\\.\\.\\.${id.toUpperCase()}_TOOL_HANDLERS`));
+    // The pack's handler map is merged into the central dispatch table. The
+    // export-name convention maps the pack id to UPPER_SNAKE: hyphens in the
+    // id become underscores (huaweicloud-open-mcp →
+    // HUAWEICLOUD_OPEN_MCP_TOOL_HANDLERS).
+    const exportName = id.toUpperCase().replaceAll('-', '_');
+    assert.match(registry, new RegExp(`\\.\\.\\.${exportName}_TOOL_HANDLERS`));
     // Behavioral lockstep: the pack tool list equals the PACK_OF ownership.
     const owned = Object.keys(PACK_OF).filter((tool) => PACK_OF[tool] === id);
     assert.deepEqual(

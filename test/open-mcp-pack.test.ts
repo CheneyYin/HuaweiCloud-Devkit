@@ -8,6 +8,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
 import { createDevkitMcpServer, createLinkedDevkitServers } from '../plugins/huaweicloud-core/src/mcp-protocol.ts';
 import {
+  callOpenMcpTool,
   _openMcpSidecarStats,
   _resetOpenMcpSidecar,
 } from '../plugins/huaweicloud-core/src/packs/huaweicloud-open-mcp/sidecar.ts';
@@ -121,6 +122,91 @@ test('a dead sidecar is respawned by the next call, not awaited forever', async 
   assert.equal(_openMcpSidecarStats().spawns, spawnsBefore + 1);
 });
 
+// All four normalization branches: the real gateway answers successful
+// calls as structuredContent and refusals two different ways (isError for
+// protocol-level rejections, {ok:false, reason} envelopes for policy ones).
+test('normalization covers structuredContent, isError, envelope failures, and raw text', async () => {
+  const echoed = await callOpenMcpTool('search_apis', { query: 'ecs' });
+  assert.equal(echoed.ok, true, JSON.stringify(echoed));
+  assert.equal(echoed.arguments.query, 'ecs');
+  assert.equal(typeof echoed.pid, 'number');
+
+  const failing = await callOpenMcpTool('failing_tool', {});
+  assert.equal(failing.ok, false);
+  assert.equal(failing.error, 'fake gateway tool failure');
+
+  const envelope = await callOpenMcpTool('envelope_fail_tool', {});
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.error, 'fake envelope failure', 'reason must map into the repo-standard error key');
+  assert.equal(envelope.reason, 'fake envelope failure', 'reason is kept for gateway fidelity');
+
+  const rawText = await callOpenMcpTool('raw_text_tool', {});
+  assert.equal(rawText.ok, true);
+  assert.equal(rawText.raw, 'not json at all');
+});
+
+// Regression for the EPIPE crash: a call whose write lands between the
+// child's OS-level death and Node's 'exit' delivery used to raise an
+// unhandled 'error' on the stdin socket and take down the whole server
+// (reproduced by probe). The stdin error handler must turn it into a fast
+// {ok:false} instead.
+test('a call racing child death fails fast instead of crashing the server', async () => {
+  const first = await callTool('huaweicloud_get_product', { product: 'ECS' });
+  assert.equal(first.ok, true, JSON.stringify(first));
+  process.kill(first.pid, 'SIGKILL');
+  // Block the event loop so 'exit' cannot be delivered yet: the write below
+  // hits the kernel-broken pipe inside the exact EPIPE window.
+  const blockedUntil = Date.now() + 50;
+  while (Date.now() < blockedUntil) {
+    /* spin */
+  }
+  const raced = await callOpenMcpTool('get_product', { product: 'VPC' }, 2000);
+  assert.equal(raced.ok, false, 'the racing call must fail, not hang or crash');
+  let cleared = false;
+  for (let attempt = 0; attempt < 50; attempt++) {
+    if (!_openMcpSidecarStats().alive) {
+      cleared = true;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.ok(cleared, 'the singleton must clear once the child death is delivered');
+  const revived = await callTool('huaweicloud_get_product', { product: 'RDS' });
+  assert.equal(revived.ok, true, JSON.stringify(revived));
+});
+
+// A failed handshake must kill the spawned child: the parent holds the
+// child's stdin pipe open, so an un-killed orphan survives (and pins the
+// event loop) for the process lifetime — one leak per retry.
+test('a failed handshake kills the spawned child (no orphan)', async () => {
+  await _resetOpenMcpSidecar();
+  const previous = process.env.FAKE_FAIL_HANDSHAKE;
+  process.env.FAKE_FAIL_HANDSHAKE = '1';
+  try {
+    const result = await callOpenMcpTool('search_apis', { query: 'boom' });
+    assert.equal(result.ok, false);
+    assert.match(String(result.error), /fake handshake failure/);
+    assert.equal(_openMcpSidecarStats().alive, false, 'a failed spawn must clear the singleton');
+    const pid = _openMcpSidecarStats().lastPid;
+    assert.ok(Number.isSafeInteger(pid), 'stats must expose the spawned child pid');
+    let gone = false;
+    for (let attempt = 0; attempt < 50; attempt++) {
+      try {
+        process.kill(pid, 0);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      } catch {
+        gone = true;
+        break;
+      }
+    }
+    assert.ok(gone, 'the handshake-failed child must be killed, not orphaned');
+  } finally {
+    if (previous === undefined) delete process.env.FAKE_FAIL_HANDSHAKE;
+    else process.env.FAKE_FAIL_HANDSHAKE = previous;
+    await _resetOpenMcpSidecar();
+  }
+});
+
 // Invariant 3: the child's lifetime is the parent's stdin pipe. The driver
 // uses the real sidecar module, prints the child pid, then exits; the child
 // must follow.
@@ -155,7 +241,6 @@ test('sidecar errors surface as ok:false results, never as throws', async () => 
   // assertion fails cleanly instead of leaving the sidecar child's pipes
   // holding the event loop open.
   try {
-    const { callOpenMcpTool } = await import('../plugins/huaweicloud-core/src/packs/huaweicloud-open-mcp/sidecar.ts');
     const result = await callOpenMcpTool('no_such_tool', {});
     assert.equal(result.ok, false);
     assert.equal(result.tool, 'no_such_tool');
