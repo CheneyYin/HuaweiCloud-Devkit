@@ -48,6 +48,7 @@
 
 ## Unreleased
 
+- feat(packs): open-mcp 网关安装路径对齐上游——解析链 `~/.local/bin` → PATH（pip / pipx / uv tool install）→ `uvx huaweicloud-open-mcp` 兜底（零持久安装；uvx 首次冷启动拉取包可能超过握手超时，下次调用对热缓存自动重试）；找不到网关的错误指引改为 pip / uvx 优先；spawn 补 `windowsHide` 与 Windows `.exe` 候选后缀；解析函数按 `resolveEnabledPacks(env)` 先例接受 env 参数并可测
 - fix(packs): open-mcp sidecar 对抗审查加固——子进程死亡窗口内的调用不再以未处理 EPIPE 击穿整个 server（stdin error 监听接入 onExit + request/notify alive 守卫，附竞态回归测试）；握手失败即杀子进程（SIGTERM→SIGKILL），孤儿 exit 不再误清健康单例（currentSidecar 身份比对）；spawn 显式 `--log-file` 指向 tmpdir（网关默认相对路径会在继承的 cwd——用户项目目录——创建 `logs/`，只读 cwd 下启动即死）；`limit`/`offset` schema 改非 nullable（网关 pydantic int 拒绝 null，实测）；网关信封失败 `reason` 映射为仓库标准 `error` 键（保留 reason）；归一化四分支补全覆盖（fake 网关新增 structuredContent/isError/信封失败/纯文本模式与握手失败开关）；六条工具描述纳入 structure.test lockstep 守卫（spread 断言泛化连字符 id→下划线导出名）。真实网关探针复验：日志落 tmpdir、cwd 零污染、失败归一在真实线协议上成立
 - feat(packs): 新增 `huaweicloud-open-mcp` 能力包——经本地 huaweicloud-open-mcp 网关代理华为云全量 OpenAPI 目录发现（`huaweicloud_search_apis` / `list_products` / `get_product` / `list_apis` / `get_api` / `get_api_examples`，共 6 个只读工具）。Python sidecar 为进程级单例（`src/packs/huaweicloud-open-mcp/sidecar.ts`，手写换行 JSON-RPC，不依赖 MCP SDK），首次调用懒启动，生命周期绑定父进程 stdin 管道；remote 传输每请求构造/关闭 server 不影响单例；`DEVKIT_PACKS` 裁剪该包时零注册零 spawn；`OPENMCP_BIN` 可覆盖二进制解析，doctor 经 `PACK_BINARIES` 探测网关存在性。工具总数 42→48。API 执行（execute_api + 审批桥）为后续阶段
 - docs(sandbox): huawei-sandbox 标注跨 pack 工具依赖的降级路径——`huaweicloud_detect_framework`（discovery pack）与 `huaweicloud_setup_obs_config`（obs pack）在 `DEVKIT_PACKS` 裁剪对应 pack 时给出可操作指引（询问开发者/改用手工配置），而非裸调未注册工具

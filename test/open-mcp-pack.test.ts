@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -9,6 +11,7 @@ import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
 import { createDevkitMcpServer, createLinkedDevkitServers } from '../plugins/huaweicloud-core/src/mcp-protocol.ts';
 import {
   callOpenMcpTool,
+  resolveGatewayCommand,
   _openMcpSidecarStats,
   _resetOpenMcpSidecar,
 } from '../plugins/huaweicloud-core/src/packs/huaweicloud-open-mcp/sidecar.ts';
@@ -173,6 +176,64 @@ test('a call racing child death fails fast instead of crashing the server', asyn
   assert.ok(cleared, 'the singleton must clear once the child death is delivered');
   const revived = await callTool('huaweicloud_get_product', { product: 'RDS' });
   assert.equal(revived.ok, true, JSON.stringify(revived));
+});
+
+// Gateway resolution order, pinned deterministically: OPENMCP_BIN → a
+// persistent install (~/.local/bin or PATH) → the uvx fallback, which runs
+// the gateway with no persistent install at all.
+test('gateway resolution prefers OPENMCP_BIN, then disk, then uvx', () => {
+  const direct = resolveGatewayCommand({ OPENMCP_BIN: fakeSidecar, HOME: '/nonexistent', PATH: '/usr/bin' });
+  assert.equal(direct.command, fakeSidecar);
+  assert.deepEqual(direct.argsPrefix, []);
+
+  const home = mkdtempSync(join(tmpdir(), 'openmcp-res-home-'));
+  const binDir = mkdtempSync(join(tmpdir(), 'openmcp-res-bin-'));
+  const fakeUvx = join(binDir, 'uvx');
+  writeFileSync(fakeUvx, `#!/bin/sh\nshift\nexec "${process.execPath}" "${fakeSidecar}" "$@"\n`, { mode: 0o755 });
+  const envUvxOnly = { HOME: home, PATH: `/usr/bin:${binDir}` };
+  const viaUvx = resolveGatewayCommand(envUvxOnly);
+  assert.equal(viaUvx.command, fakeUvx, 'with nothing on disk, uvx is the fallback');
+  assert.deepEqual(viaUvx.argsPrefix, ['huaweicloud-open-mcp']);
+
+  // A persistent install in ~/.local/bin outranks the uvx fallback.
+  const localBin = join(home, '.local', 'bin');
+  mkdirSync(localBin, { recursive: true });
+  const installed = join(localBin, 'huaweicloud-open-mcp');
+  writeFileSync(installed, `#!/bin/sh\nexec "${process.execPath}" "${fakeSidecar}" "$@"\n`, { mode: 0o755 });
+  const viaDisk = resolveGatewayCommand(envUvxOnly);
+  assert.equal(viaDisk.command, installed);
+  assert.deepEqual(viaDisk.argsPrefix, []);
+});
+
+// The uvx path end to end: with no gateway binary anywhere and only a fake
+// uvx on PATH, a tool call must spawn through it (uvx <package> <args>)
+// and complete the round trip.
+test('a tool call runs end to end through the uvx fallback', { skip: process.platform === 'win32' }, async () => {
+  const home = mkdtempSync(join(tmpdir(), 'openmcp-uvx-home-'));
+  const binDir = mkdtempSync(join(tmpdir(), 'openmcp-uvx-bin-'));
+  const fakeUvx = join(binDir, 'uvx');
+  writeFileSync(fakeUvx, `#!/bin/sh\nshift\nexec "${process.execPath}" "${fakeSidecar}" "$@"\n`, { mode: 0o755 });
+
+  const savedBin = process.env.OPENMCP_BIN;
+  const savedHome = process.env.HOME;
+  const savedPath = process.env.PATH;
+  delete process.env.OPENMCP_BIN;
+  process.env.HOME = home;
+  process.env.PATH = `/usr/bin:${binDir}`;
+  try {
+    await _resetOpenMcpSidecar();
+    const result = await callTool('huaweicloud_search_apis', { query: 'via-uvx' });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.arguments.query, 'via-uvx');
+    assert.equal(typeof result.pid, 'number');
+  } finally {
+    if (savedBin === undefined) delete process.env.OPENMCP_BIN;
+    else process.env.OPENMCP_BIN = savedBin;
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    process.env.PATH = savedPath;
+    await _resetOpenMcpSidecar();
+  }
 });
 
 // A failed handshake must kill the spawned child: the parent holds the

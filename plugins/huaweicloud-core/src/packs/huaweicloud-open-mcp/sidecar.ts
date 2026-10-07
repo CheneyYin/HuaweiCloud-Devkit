@@ -166,28 +166,56 @@ let sidecarPromise: Promise<OpenMcpSidecar> | null = null;
 // a stale child's late exit cannot clear a healthy replacement.
 let currentSidecar: OpenMcpSidecar | null = null;
 
-// uv tool installs land in ~/.local/bin; OPENMCP_BIN overrides everything
-// (tests point it at the fake fixture). Modeled on findHcloudBin: the
-// agent harness PATH can differ from the installer shell's, so resolution
-// happens at spawn time, not install time.
-function resolveOpenMcpBin(): string | null {
-  const envBin = process.env.OPENMCP_BIN;
-  if (envBin && existsSync(envBin)) return envBin;
-  const candidate = join(homedir(), '.local', 'bin', 'huaweicloud-open-mcp');
-  if (existsSync(candidate)) return candidate;
+// Supported install paths, in resolution order: OPENMCP_BIN (absolute path
+// to the gateway binary; tests point it at the fake fixture) → a persistent
+// install on disk (~/.local/bin covers pip --user, pipx, and uv tool
+// install; the PATH lookup covers venvs) → the uvx fallback, which runs the
+// gateway with no persistent install at all. uvx fetches and caches the
+// package on first run, so a cold first call can exceed the handshake
+// timeout; the next call retries against the warm cache. Modeled on
+// findHcloudBin/resolveHcloudCommand: the agent harness PATH can differ
+// from the installer shell's, so resolution happens at spawn time, not
+// install time. The env parameter follows the resolveEnabledPacks(env)
+// precedent so tests can pin HOME/PATH deterministically.
+export interface GatewayCommand {
+  command: string;
+  argsPrefix: string[];
+}
+
+export function resolveGatewayCommand(env: NodeJS.ProcessEnv = process.env): GatewayCommand | null {
+  const envBin = env.OPENMCP_BIN;
+  if (envBin && existsSync(envBin)) return { command: envBin, argsPrefix: [] };
+  const home = process.platform === 'win32' ? homedir() : env.HOME || homedir();
+  const exeSuffix = process.platform === 'win32' ? '.exe' : '';
+  const candidate = join(home, '.local', 'bin', `huaweicloud-open-mcp${exeSuffix}`);
+  if (existsSync(candidate)) return { command: candidate, argsPrefix: [] };
+  const onPath = lookupOnPath('huaweicloud-open-mcp', env);
+  if (onPath) return { command: onPath, argsPrefix: [] };
+  // uvx last: it works with nothing installed, but a persistent binary is
+  // preferred (no first-run download, no cache staleness). uvx itself
+  // typically lives in ~/.local/bin — the exact directory the agent
+  // harness PATH often misses — so it is probed there before PATH.
+  const uvxCandidate = join(home, '.local', 'bin', `uvx${exeSuffix}`);
+  if (existsSync(uvxCandidate)) return { command: uvxCandidate, argsPrefix: ['huaweicloud-open-mcp'] };
+  const uvx = lookupOnPath('uvx', env);
+  if (uvx) return { command: uvx, argsPrefix: ['huaweicloud-open-mcp'] };
+  return null;
+}
+
+function lookupOnPath(name: string, env: NodeJS.ProcessEnv): string | null {
   const lookup =
     process.platform === 'win32'
-      ? spawnSync('where.exe', ['huaweicloud-open-mcp'], { encoding: 'utf8', timeout: 5000 })
-      : spawnSync('which', ['huaweicloud-open-mcp'], { encoding: 'utf8', timeout: 5000 });
+      ? spawnSync('where.exe', [name], { encoding: 'utf8', timeout: 5000, env })
+      : spawnSync('which', [name], { encoding: 'utf8', timeout: 5000, env });
   const hit = lookup.status === 0 ? (lookup.stdout || '').trim().split('\n')[0] : '';
   return hit || null;
 }
 
 async function spawnSidecar(): Promise<OpenMcpSidecar> {
-  const bin = resolveOpenMcpBin();
-  if (!bin) {
+  const gateway = resolveGatewayCommand();
+  if (!gateway) {
     throw new Error(
-      "huaweicloud-open-mcp not found. Install it with `uv tool install huaweicloud-open-mcp`, or set OPENMCP_BIN to the gateway's absolute path.",
+      'huaweicloud-open-mcp gateway not found. Install it with pip (`pip install huaweicloud-open-mcp`) or keep `uvx` on PATH to run it without a persistent install (`uv tool install huaweicloud-open-mcp` also works). OPENMCP_BIN can point at the gateway binary directly.',
     );
   }
   const gatewayArgs = ['--mode', 'openapi', '--elicitation', 'off'];
@@ -199,7 +227,10 @@ async function spawnSidecar(): Promise<OpenMcpSidecar> {
   if (!process.env.HUAWEICLOUD_MCP_LOG_FILE) {
     gatewayArgs.push('--log-file', join(tmpdir(), 'huaweicloud-open-mcp.log'));
   }
-  const child = spawn(bin, gatewayArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(gateway.command, [...gateway.argsPrefix, ...gatewayArgs], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
   stats.spawns += 1;
   stats.lastPid = child.pid ?? null;
   const sidecar = new OpenMcpSidecar(child);
