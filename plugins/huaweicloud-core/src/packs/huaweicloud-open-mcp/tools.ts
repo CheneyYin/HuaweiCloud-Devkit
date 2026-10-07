@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { numericArg } from '../../lib/tool-schema-parts.ts';
 import type { PackToolDefinition, LooseToolSchema } from '../../lib/pack-types.ts';
-import { callOpenapiTool } from './sidecar.ts';
+import { callOpenMcpTool } from './sidecar.ts';
 
 // Thin proxies over the huaweicloud-open-mcp gateway's six metadata tools
 // (src/mcp_openapi/server.py). The gateway is the authoritative validator;
@@ -51,25 +51,25 @@ const getApiExamplesSchema = z.looseObject({
 });
 
 async function handleSearchApis(args: Record<string, unknown>) {
-  return callOpenapiTool('search_apis', args);
+  return callOpenMcpTool('search_apis', args);
 }
 async function handleListProducts(args: Record<string, unknown>) {
-  return callOpenapiTool('list_products', args);
+  return callOpenMcpTool('list_products', args);
 }
 async function handleGetProduct(args: Record<string, unknown>) {
-  return callOpenapiTool('get_product', args);
+  return callOpenMcpTool('get_product', args);
 }
 async function handleListApis(args: Record<string, unknown>) {
-  return callOpenapiTool('list_apis', args);
+  return callOpenMcpTool('list_apis', args);
 }
 async function handleGetApi(args: Record<string, unknown>) {
-  return callOpenapiTool('get_api', args);
+  return callOpenMcpTool('get_api', args);
 }
 async function handleGetApiExamples(args: Record<string, unknown>) {
-  return callOpenapiTool('get_api_examples', args);
+  return callOpenMcpTool('get_api_examples', args);
 }
 
-export const OPENAPI_TOOLS = [
+export const HUAWEICLOUD_OPEN_MCP_TOOLS = [
   {
     name: 'huaweicloud_search_apis',
     description:
@@ -114,9 +114,9 @@ export const OPENAPI_TOOLS = [
   },
 ] as const satisfies readonly PackToolDefinition[];
 
-export type OpenapiToolName = (typeof OPENAPI_TOOLS)[number]['name'];
+export type HuaweicloudOpenMcpToolName = (typeof HUAWEICLOUD_OPEN_MCP_TOOLS)[number]['name'];
 
-export const OPENAPI_TOOL_SCHEMAS: Readonly<Record<OpenapiToolName, LooseToolSchema>> = {
+export const HUAWEICLOUD_OPEN_MCP_TOOL_SCHEMAS: Readonly<Record<HuaweicloudOpenMcpToolName, LooseToolSchema>> = {
   huaweicloud_search_apis: searchApisSchema,
   huaweicloud_list_products: listProductsSchema,
   huaweicloud_get_product: getProductSchema,
@@ -125,7 +125,9 @@ export const OPENAPI_TOOL_SCHEMAS: Readonly<Record<OpenapiToolName, LooseToolSch
   huaweicloud_get_api_examples: getApiExamplesSchema,
 };
 
-export const OPENAPI_TOOL_HANDLERS: Readonly<Record<OpenapiToolName, PackToolDefinition['handler']>> = {
+export const HUAWEICLOUD_OPEN_MCP_TOOL_HANDLERS: Readonly<
+  Record<HuaweicloudOpenMcpToolName, PackToolDefinition['handler']>
+> = {
   huaweicloud_search_apis: handleSearchApis,
   huaweicloud_list_products: handleListProducts,
   huaweicloud_get_product: handleGetProduct,

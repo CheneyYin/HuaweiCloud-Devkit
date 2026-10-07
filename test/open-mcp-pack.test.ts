@@ -7,18 +7,21 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 
 import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
 import { createDevkitMcpServer, createLinkedDevkitServers } from '../plugins/huaweicloud-core/src/mcp-protocol.ts';
-import { _openapiSidecarStats, _resetOpenapiSidecar } from '../plugins/huaweicloud-core/src/packs/openapi/sidecar.ts';
+import {
+  _openMcpSidecarStats,
+  _resetOpenMcpSidecar,
+} from '../plugins/huaweicloud-core/src/packs/huaweicloud-open-mcp/sidecar.ts';
 
-// The five openapi-pack lifecycle invariants from the pack-system decision
+// The five huaweicloud-open-mcp pack lifecycle invariants from the pack-system decision
 // record, driven through the real dispatch surfaces with a fake gateway
-// (test/fixtures/fake-openapi-sidecar.mjs). The Node suite never depends on
+// (test/fixtures/fake-open-mcp-sidecar.mjs). The Node suite never depends on
 // Python or uv: OPENMCP_BIN points every spawn at the fixture.
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const fakeSidecar = join(root, 'test', 'fixtures', 'fake-openapi-sidecar.mjs');
+const fakeSidecar = join(root, 'test', 'fixtures', 'fake-open-mcp-sidecar.mjs');
 process.env.OPENMCP_BIN = fakeSidecar;
 
-const OPENAPI_TOOLS = new Set([
+const OPEN_MCP_TOOLS = new Set([
   'huaweicloud_search_apis',
   'huaweicloud_list_products',
   'huaweicloud_get_product',
@@ -46,19 +49,19 @@ function withDevkitPacks(value, fn) {
 // The registry imports every pack's handler modules unconditionally, so the
 // zero-spawn half is exactly what lazy spawning has to guarantee.
 test(
-  'DEVKIT_PACKS excluding openapi registers no openapi tools and spawns nothing',
+  'DEVKIT_PACKS excluding huaweicloud-open-mcp registers no gateway tools and spawns nothing',
   withDevkitPacks('core', async () => {
     const { server, transport } = await createLinkedDevkitServers();
-    const client = new Client({ name: 'openapi-trim-test', version: '0.0.0' });
+    const client = new Client({ name: 'open-mcp-trim-test', version: '0.0.0' });
     try {
       await client.connect(transport);
       const listed = await client.listTools();
       const names = listed.tools.map((tool) => tool.name);
       assert.equal(names.length, 17, 'core-only tools/list');
-      for (const name of OPENAPI_TOOLS) {
-        assert.ok(!names.includes(name), `${name} must not be registered when openapi is trimmed`);
+      for (const name of OPEN_MCP_TOOLS) {
+        assert.ok(!names.includes(name), `${name} must not be registered when huaweicloud-open-mcp is trimmed`);
       }
-      assert.equal(_openapiSidecarStats().spawns, 0, 'a trimmed pack must never spawn the sidecar');
+      assert.equal(_openMcpSidecarStats().spawns, 0, 'a trimmed pack must never spawn the sidecar');
     } finally {
       await client.close();
       await server.close();
@@ -66,16 +69,16 @@ test(
   }),
 );
 
-test('pack meta discloses the openapi pack with its six proxy tools', async () => {
-  const info = await callTool('huaweicloud_pack_info', { pack: 'openapi' });
+test('pack meta discloses the huaweicloud-open-mcp pack with its six proxy tools', async () => {
+  const info = await callTool('huaweicloud_pack_info', { pack: 'huaweicloud-open-mcp' });
   assert.equal(info.ok, true);
   assert.equal(info.enabled, true);
   assert.equal(info.tools.length, 6);
   for (const entry of info.tools) {
-    assert.ok(OPENAPI_TOOLS.has(entry.name), `${entry.name} must be one of the six proxy tools`);
+    assert.ok(OPEN_MCP_TOOLS.has(entry.name), `${entry.name} must be one of the six proxy tools`);
     assert.equal(typeof entry.description, 'string');
   }
-  assert.equal(_openapiSidecarStats().spawns, 0, 'pack meta must not spawn the sidecar');
+  assert.equal(_openMcpSidecarStats().spawns, 0, 'pack meta must not spawn the sidecar');
 });
 
 test('metadata proxy round-trips through the sidecar', async () => {
@@ -85,44 +88,44 @@ test('metadata proxy round-trips through the sidecar', async () => {
   assert.equal(result.arguments.query, 'ecs');
   assert.equal(result.arguments.limit, 5);
   assert.equal(typeof result.pid, 'number');
-  assert.equal(_openapiSidecarStats().spawns, 1, 'first call lazily spawns exactly once');
-  assert.equal(_openapiSidecarStats().alive, true);
+  assert.equal(_openMcpSidecarStats().spawns, 1, 'first call lazily spawns exactly once');
+  assert.equal(_openMcpSidecarStats().alive, true);
 });
 
 // Invariant 2: the remote transport constructs and closes an McpServer per
 // HTTP request; the sidecar is a process-scope singleton that must not
 // notice.
 test('remote-style per-request server construction does not touch the sidecar', async () => {
-  const before = _openapiSidecarStats();
+  const before = _openMcpSidecarStats();
   const first = createDevkitMcpServer({ sessionId: 'remote-1' });
   await first.close();
   const second = createDevkitMcpServer({ sessionId: 'remote-2' });
   await second.close();
-  assert.equal(_openapiSidecarStats().spawns, before.spawns, 'server construct/close must not spawn or kill');
+  assert.equal(_openMcpSidecarStats().spawns, before.spawns, 'server construct/close must not spawn or kill');
   const result = await callTool('huaweicloud_list_products', { keyword: 'ecs' });
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.tool, 'list_products');
-  assert.equal(_openapiSidecarStats().spawns, before.spawns, 'the existing singleton serves later calls');
+  assert.equal(_openMcpSidecarStats().spawns, before.spawns, 'the existing singleton serves later calls');
 });
 
 test('a dead sidecar is respawned by the next call, not awaited forever', async () => {
   const first = await callTool('huaweicloud_get_product', { product: 'ECS' });
   assert.equal(first.ok, true, JSON.stringify(first));
-  const spawnsBefore = _openapiSidecarStats().spawns;
+  const spawnsBefore = _openMcpSidecarStats().spawns;
   process.kill(first.pid, 'SIGKILL');
   await new Promise((resolve) => setTimeout(resolve, 300));
-  assert.equal(_openapiSidecarStats().alive, false, 'the singleton must register the child death');
+  assert.equal(_openMcpSidecarStats().alive, false, 'the singleton must register the child death');
   const second = await callTool('huaweicloud_get_product', { product: 'VPC' });
   assert.equal(second.ok, true, JSON.stringify(second));
   assert.notEqual(second.pid, first.pid, 'the next call must be served by a fresh child');
-  assert.equal(_openapiSidecarStats().spawns, spawnsBefore + 1);
+  assert.equal(_openMcpSidecarStats().spawns, spawnsBefore + 1);
 });
 
 // Invariant 3: the child's lifetime is the parent's stdin pipe. The driver
 // uses the real sidecar module, prints the child pid, then exits; the child
 // must follow.
 test('the sidecar dies with its parent process (stdin pipe EOF)', async () => {
-  const driver = join(root, 'test', 'fixtures', 'openapi-sidecar-driver.mjs');
+  const driver = join(root, 'test', 'fixtures', 'open-mcp-sidecar-driver.mjs');
   const child = spawn(process.execPath, [driver], { stdio: ['pipe', 'pipe', 'pipe'] });
   let out = '';
   child.stdout.setEncoding('utf8');
@@ -152,14 +155,14 @@ test('sidecar errors surface as ok:false results, never as throws', async () => 
   // assertion fails cleanly instead of leaving the sidecar child's pipes
   // holding the event loop open.
   try {
-    const { callOpenapiTool } = await import('../plugins/huaweicloud-core/src/packs/openapi/sidecar.ts');
-    const result = await callOpenapiTool('no_such_tool', {});
+    const { callOpenMcpTool } = await import('../plugins/huaweicloud-core/src/packs/huaweicloud-open-mcp/sidecar.ts');
+    const result = await callOpenMcpTool('no_such_tool', {});
     assert.equal(result.ok, false);
     assert.equal(result.tool, 'no_such_tool');
     assert.ok(typeof result.error === 'string' && result.error.length > 0);
-    assert.equal(_openapiSidecarStats().spawns > 0, true, 'the cumulative spawn counter stays honest');
+    assert.equal(_openMcpSidecarStats().spawns > 0, true, 'the cumulative spawn counter stays honest');
   } finally {
-    await _resetOpenapiSidecar();
-    assert.equal(_openapiSidecarStats().alive, false, 'reset clears the singleton');
+    await _resetOpenMcpSidecar();
+    assert.equal(_openMcpSidecarStats().alive, false, 'reset clears the singleton');
   }
 });

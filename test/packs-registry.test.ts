@@ -37,7 +37,7 @@ test('pack tool counts match the P0 grouping', () => {
     voucher: 2,
     update: 2,
     discovery: 3,
-    openapi: 6,
+    'huaweicloud-open-mcp': 6,
   };
   let total = 0;
   for (const pack of PACKS) {

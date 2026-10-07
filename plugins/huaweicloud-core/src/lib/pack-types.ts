@@ -55,7 +55,7 @@ export const PACK_IDS = [
   'voucher',
   'update',
   'discovery',
-  'openapi',
+  'huaweicloud-open-mcp',
 ] as const;
 export type PackId = (typeof PACK_IDS)[number];
 
@@ -81,11 +81,12 @@ export const PACK_BINARIES = {
   // `version` subcommand, so it is declared sandbox-scoped: doctor's
   // host-side probe must not check it.
   sandbox: [{ name: 'devbridge', scope: 'sandbox', versionFlag: 'version' }],
-  // The openapi gateway runs on the host as a child of the MCP server
-  // process (src/packs/openapi/sidecar.ts). The gateway CLI has no
+  // The openapi gateway (the huaweicloud-open-mcp pack's sidecar) runs on
+  // the host as a child of the MCP server process
+  // (src/packs/huaweicloud-open-mcp/sidecar.ts). The gateway CLI has no
   // --version flag yet (upstream Phase 0 item), so the presence probe uses
   // --help, which argparse exits 0 on.
-  openapi: [{ name: 'huaweicloud-open-mcp', scope: 'host', versionFlag: '--help' }],
+  'huaweicloud-open-mcp': [{ name: 'huaweicloud-open-mcp', scope: 'host', versionFlag: '--help' }],
 } as const satisfies Readonly<Partial<Record<PackId, readonly PackBinary[]>>>;
 
 export interface Pack {

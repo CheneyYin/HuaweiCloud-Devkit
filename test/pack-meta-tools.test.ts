@@ -6,7 +6,17 @@ import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
 import { SCHEMA_DRIFT_IGNORED_KEYS } from '../plugins/huaweicloud-core/src/tool-schemas.ts';
 import { createLinkedDevkitServers } from '../plugins/huaweicloud-core/src/mcp-protocol.ts';
 
-const PACK_IDS = ['core', 'huaweicloud-cli', 'sandbox', 'auth', 'obs', 'voucher', 'update', 'discovery', 'openapi'];
+const PACK_IDS = [
+  'core',
+  'huaweicloud-cli',
+  'sandbox',
+  'auth',
+  'obs',
+  'voucher',
+  'update',
+  'discovery',
+  'huaweicloud-open-mcp',
+];
 // Packs that own knowledge without callable surface: their tool list is
 // legitimately empty, so the "must list tools" bar exempts them.
 const ZERO_TOOL_PACKS = new Set(['huaweicloud-cli']);

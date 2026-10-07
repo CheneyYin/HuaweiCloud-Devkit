@@ -7,14 +7,14 @@ import { obsPack } from './obs/pack.ts';
 import { voucherPack } from './voucher/pack.ts';
 import { discoveryPack } from './discovery/pack.ts';
 import { huaweicloudCliPack } from './huaweicloud-cli/pack.ts';
-import { openapiPack } from './openapi/pack.ts';
+import { huaweicloudOpenMcpPack } from './huaweicloud-open-mcp/pack.ts';
 import { UPDATE_TOOL_HANDLERS } from './update/tools.ts';
 import { SANDBOX_TOOL_HANDLERS } from './sandbox/tools.ts';
 import { AUTH_TOOL_HANDLERS } from './auth/tools.ts';
 import { OBS_TOOL_HANDLERS } from './obs/tools.ts';
 import { VOUCHER_TOOL_HANDLERS } from './voucher/tools.ts';
 import { DISCOVERY_TOOL_HANDLERS } from './discovery/tools.ts';
-import { OPENAPI_TOOL_HANDLERS } from './openapi/tools.ts';
+import { HUAWEICLOUD_OPEN_MCP_TOOL_HANDLERS } from './huaweicloud-open-mcp/tools.ts';
 
 // PackId and the Pack interface live in src/lib/pack-types.ts alongside
 // PackToolDefinition, so packs and the registry share one vocabulary module.
@@ -65,12 +65,12 @@ export const PACK_OF = {
   huaweicloud_voucher_claim: 'voucher',
   huaweicloud_check_update: 'update',
   huaweicloud_upgrade: 'update',
-  huaweicloud_search_apis: 'openapi',
-  huaweicloud_list_products: 'openapi',
-  huaweicloud_get_product: 'openapi',
-  huaweicloud_list_apis: 'openapi',
-  huaweicloud_get_api: 'openapi',
-  huaweicloud_get_api_examples: 'openapi',
+  huaweicloud_search_apis: 'huaweicloud-open-mcp',
+  huaweicloud_list_products: 'huaweicloud-open-mcp',
+  huaweicloud_get_product: 'huaweicloud-open-mcp',
+  huaweicloud_list_apis: 'huaweicloud-open-mcp',
+  huaweicloud_get_api: 'huaweicloud-open-mcp',
+  huaweicloud_get_api_examples: 'huaweicloud-open-mcp',
 } as const satisfies Record<ToolName, PackId>;
 
 // The 25 pack-owned tool names: every PACK_OF key whose owner is not core.
@@ -96,7 +96,7 @@ export const PACK_TOOL_HANDLERS = {
   ...SANDBOX_TOOL_HANDLERS,
   ...VOUCHER_TOOL_HANDLERS,
   ...UPDATE_TOOL_HANDLERS,
-  ...OPENAPI_TOOL_HANDLERS,
+  ...HUAWEICLOUD_OPEN_MCP_TOOL_HANDLERS,
 } satisfies Record<PackToolName, PackToolDefinition['handler']>;
 
 // Runtime guard over the same table: true exactly for the PackToolName
@@ -140,5 +140,5 @@ export const PACKS: readonly Pack[] = [
   voucherPack,
   updatePack,
   discoveryPack,
-  openapiPack,
+  huaweicloudOpenMcpPack,
 ];

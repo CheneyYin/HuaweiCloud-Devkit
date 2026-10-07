@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Minimal newline-JSON-RPC MCP server standing in for the real
-// huaweicloud-open-mcp gateway in the openapi-pack tests. Echoes every
+// huaweicloud-open-mcp gateway in the open-mcp-pack tests. Echoes every
 // tools/call as {ok, tool, arguments, pid}; answers nothing else. Exits on
 // stdin EOF, which is exactly the parent-death semantics the real gateway's
 // stdio transport has and the sidecar lifetime contract depends on.
@@ -45,7 +45,7 @@ function handleLine(line) {
       result: {
         protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
         capabilities: {},
-        serverInfo: { name: 'fake-openapi-sidecar', version: '0.0.0' },
+        serverInfo: { name: 'fake-open-mcp-sidecar', version: '0.0.0' },
       },
     });
   } else if (request.method === 'tools/call') {

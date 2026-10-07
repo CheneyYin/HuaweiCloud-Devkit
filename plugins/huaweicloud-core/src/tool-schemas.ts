@@ -4,7 +4,7 @@ import type { ToolName } from './tools.ts';
 import type { LooseToolSchema } from './lib/pack-types.ts';
 import { looseObject, numericArg } from './lib/tool-schema-parts.ts';
 import { UPDATE_TOOL_SCHEMAS } from './packs/update/tools.ts';
-import { OPENAPI_TOOL_SCHEMAS } from './packs/openapi/tools.ts';
+import { HUAWEICLOUD_OPEN_MCP_TOOL_SCHEMAS } from './packs/huaweicloud-open-mcp/tools.ts';
 import { AUTH_TOOL_SCHEMAS } from './packs/auth/tools.ts';
 import { OBS_TOOL_SCHEMAS } from './packs/obs/tools.ts';
 import { VOUCHER_TOOL_SCHEMAS } from './packs/voucher/tools.ts';
@@ -123,16 +123,17 @@ const TOOL_SCHEMAS = {
   // spread keeps them in TOOL_SCHEMAS so the satisfies check below still
   // covers all 48 ToolName keys.
   ...UPDATE_TOOL_SCHEMAS,
-  // The openapi pack owns its tool schemas (src/packs/openapi/tools.ts);
+  // The huaweicloud-open-mcp pack owns its tool schemas
+  // (src/packs/huaweicloud-open-mcp/tools.ts);
   // the spread keeps them in TOOL_SCHEMAS so the satisfies check below still
   // covers all 48 ToolName keys.
-  ...OPENAPI_TOOL_SCHEMAS,
+  ...HUAWEICLOUD_OPEN_MCP_TOOL_SCHEMAS,
   huaweicloud_list_packs: z.looseObject({}),
   huaweicloud_pack_info: z.looseObject({
     pack: z
       .string()
       .describe(
-        'Pack id from huaweicloud_list_packs, such as core, huaweicloud-cli, sandbox, auth, obs, voucher, update, discovery.',
+        'Pack id from huaweicloud_list_packs, such as core, huaweicloud-cli, sandbox, auth, obs, voucher, update, discovery, huaweicloud-open-mcp.',
       ),
   }),
 } satisfies Record<ToolName, LooseToolSchema>;

@@ -39,7 +39,7 @@ interface PendingEntry {
   timer: ReturnType<typeof setTimeout>;
 }
 
-class OpenapiSidecar {
+class OpenMcpSidecar {
   readonly child: ChildProcess;
   private nextId = 1;
   private readonly pending = new Map<number, PendingEntry>();
@@ -85,7 +85,7 @@ class OpenapiSidecar {
     if (!entry) return;
     clearTimeout(entry.timer);
     this.pending.delete(message.id);
-    if (message.error) entry.reject(new Error(message.error.message || 'openapi gateway error'));
+    if (message.error) entry.reject(new Error(message.error.message || 'open-mcp gateway error'));
     else entry.resolve(message.result);
   }
 
@@ -111,7 +111,7 @@ class OpenapiSidecar {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`openapi gateway ${method} timed out after ${timeoutMs}ms`));
+        reject(new Error(`open-mcp gateway ${method} timed out after ${timeoutMs}ms`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       this.child.stdin!.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
@@ -140,7 +140,7 @@ class OpenapiSidecar {
   }
 }
 
-let sidecarPromise: Promise<OpenapiSidecar> | null = null;
+let sidecarPromise: Promise<OpenMcpSidecar> | null = null;
 
 // uv tool installs land in ~/.local/bin; OPENMCP_BIN overrides everything
 // (tests point it at the fake fixture). Modeled on findHcloudBin: the
@@ -159,21 +159,21 @@ function resolveOpenMcpBin(): string | null {
   return hit || null;
 }
 
-async function spawnSidecar(): Promise<OpenapiSidecar> {
+async function spawnSidecar(): Promise<OpenMcpSidecar> {
   const bin = resolveOpenMcpBin();
   if (!bin) {
     throw new Error(
-      'huaweicloud-open-mcp not found. Install it with `uv tool install huaweicloud-open-mcp` (or set OPENMCP_BIN to its absolute path), then run doctor to verify. The openapi pack needs the gateway for API catalog access.',
+      'huaweicloud-open-mcp not found. Install it with `uv tool install huaweicloud-open-mcp` (or set OPENMCP_BIN to its absolute path), then run doctor to verify. The huaweicloud-open-mcp pack needs the gateway for API catalog access.',
     );
   }
   const child = spawn(bin, ['--mode', 'openapi', '--elicitation', 'off'], { stdio: ['pipe', 'pipe', 'pipe'] });
   stats.spawns += 1;
-  const sidecar = new OpenapiSidecar(child);
+  const sidecar = new OpenMcpSidecar(child);
   await sidecar.handshake();
   return sidecar;
 }
 
-export function openapiSidecar(): Promise<OpenapiSidecar> {
+export function openMcpSidecar(): Promise<OpenMcpSidecar> {
   if (!sidecarPromise) {
     sidecarPromise = spawnSidecar().catch((error) => {
       sidecarPromise = null; // spawn or handshake failed: the next call retries
@@ -183,7 +183,7 @@ export function openapiSidecar(): Promise<OpenapiSidecar> {
   return sidecarPromise;
 }
 
-export interface OpenapiToolResult {
+export interface OpenMcpToolResult {
   ok: boolean;
   tool: string;
   [key: string]: unknown;
@@ -193,13 +193,13 @@ export interface OpenapiToolResult {
 // gateway is the authoritative validator of its own tool inputs; the zod
 // schemas in tools.ts are a thin boundary guard, so unexpected extras pass
 // through and errors surface as {ok:false} rather than throws.
-export async function callOpenapiTool(
+export async function callOpenMcpTool(
   name: string,
   args: Record<string, unknown>,
   timeoutMs?: number,
-): Promise<OpenapiToolResult> {
+): Promise<OpenMcpToolResult> {
   try {
-    const sidecar = await openapiSidecar();
+    const sidecar = await openMcpSidecar();
     const raw = (await sidecar.call(name, args, timeoutMs)) as {
       content?: Array<{ text?: string }>;
       structuredContent?: Record<string, unknown>;
@@ -210,7 +210,7 @@ export async function callOpenapiTool(
         .map((part) => part.text || '')
         .join('\n')
         .trim();
-      return { ok: false, tool: name, error: text || 'openapi gateway tool error' };
+      return { ok: false, tool: name, error: text || 'open-mcp gateway tool error' };
     }
     if (raw.structuredContent && typeof raw.structuredContent === 'object') {
       return { ok: true, tool: name, ...raw.structuredContent };
@@ -230,11 +230,11 @@ export async function callOpenapiTool(
 }
 
 // Test hooks, same convention as _resetHintConsumption in mcp-protocol.ts.
-export function _openapiSidecarStats(): { spawns: number; alive: boolean } {
+export function _openMcpSidecarStats(): { spawns: number; alive: boolean } {
   return { spawns: stats.spawns, alive: sidecarPromise !== null };
 }
 
-export async function _resetOpenapiSidecar(): Promise<void> {
+export async function _resetOpenMcpSidecar(): Promise<void> {
   const promise = sidecarPromise;
   sidecarPromise = null;
   if (!promise) return;

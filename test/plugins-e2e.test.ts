@@ -208,7 +208,7 @@ const PER_PACK_TOOLS = {
   voucher: ['huaweicloud_voucher_status', 'huaweicloud_voucher_claim'],
   update: ['huaweicloud_check_update', 'huaweicloud_upgrade'],
   discovery: ['huaweicloud_search_marketplace', 'huaweicloud_get_service_icon', 'huaweicloud_detect_framework'],
-  openapi: [
+  'huaweicloud-open-mcp': [
     'huaweicloud_search_apis',
     'huaweicloud_list_products',
     'huaweicloud_get_product',
@@ -430,29 +430,32 @@ test('DEVKIT_PACKS=sandbox trims tools/list to core 17 + sandbox 11', async () =
   }
 });
 
-test('DEVKIT_PACKS=openapi trims tools/list to core 17 + openapi 6', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'mcp-trim-openapi-'));
-  const cwd = mkdtempSync(join(tmpdir(), 'mcp-trim-openapi-proj-'));
+test('DEVKIT_PACKS=huaweicloud-open-mcp trims tools/list to core 17 + gateway 6', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'mcp-trim-open-mcp-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'mcp-trim-open-mcp-proj-'));
   try {
     const install = runCli(home, cwd, ['install', '--target', 'opencode']);
     assert.equal(install.status, 0, install.stderr);
 
     const mcpServerPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js');
-    const responses = await invokeMcpTools(mcpServerPath, { ...makeEnv(home, cwd), DEVKIT_PACKS: 'openapi' });
+    const responses = await invokeMcpTools(mcpServerPath, {
+      ...makeEnv(home, cwd),
+      DEVKIT_PACKS: 'huaweicloud-open-mcp',
+    });
 
     assert.ok(responses[0].result, 'initialize returned result');
     assert.ok(responses[1].result, 'tools/list returned result');
     const toolNames = responses[1].result.tools.map((t) => t.name);
-    assert.equal(toolNames.length, 23, `expected core 17 + openapi 6, got ${toolNames.length}`);
+    assert.equal(toolNames.length, 23, `expected core 17 + gateway 6, got ${toolNames.length}`);
 
     for (const required of REQUIRED_TOOLS) {
       assert.ok(toolNames.includes(required), `Missing core tool: ${required}`);
     }
-    for (const name of PER_PACK_TOOLS.openapi) {
-      assert.ok(toolNames.includes(name), `Missing openapi tool: ${name}`);
+    for (const name of PER_PACK_TOOLS['huaweicloud-open-mcp']) {
+      assert.ok(toolNames.includes(name), `Missing gateway tool: ${name}`);
     }
     for (const [packId, names] of Object.entries(PER_PACK_TOOLS)) {
-      if (packId === 'openapi') continue;
+      if (packId === 'huaweicloud-open-mcp') continue;
       for (const name of names) {
         assert.ok(!toolNames.includes(name), `${name} from disabled pack ${packId} must not be registered`);
       }
