@@ -7,7 +7,7 @@ import test from 'node:test';
 
 import { TOOL_DEFINITIONS } from '../plugins/huaweicloud-core/src/tools.ts';
 import { PACK_OF, PACKS } from '../plugins/huaweicloud-core/src/packs/registry.ts';
-import { PACK_BINARIES, PACK_IDS } from '../plugins/huaweicloud-core/src/lib/pack-types.ts';
+import { PACK_IDS } from '../plugins/huaweicloud-core/src/lib/pack-types.ts';
 import {
   closeEnablement,
   DEPENDENCIES,
@@ -1088,7 +1088,7 @@ test('pack registry partitions the tool registry and claims every skill director
   );
 });
 
-test('pack binaries declarations are well-shaped and the id list matches the registry', () => {
+test('pack ids match the registry and the legacy binaries table is gone', () => {
   // PACK_IDS is the installer's zod-free --packs validation list
   // (setup-cli.ts cannot import the zod-dependent registry); it must equal
   // the registry's PACKS ids or --packs would reject valid packs or accept
@@ -1099,25 +1099,30 @@ test('pack binaries declarations are well-shaped and the id list matches the reg
     registryIds,
   );
 
-  // Every declared binary carries all three fields with a legal scope; the
-  // sandbox pack declares devbridge as a sandbox-scoped binary whose version
-  // command is the `version` subcommand (doctor must not probe it host-side).
+  // The dependency model absorbed the old PACK_BINARIES / Pack.binaries
+  // declaration wave: the binary vocabulary lives only in
+  // lib/dependency-model.ts, and no pack manifest re-grows a binaries field.
+  const packTypes = readSource(join('src', 'lib', 'pack-types.ts'));
+  assert.doesNotMatch(packTypes, /PACK_BINARIES|PackBinary/, 'pack-types must not re-grow the binaries table');
   for (const pack of PACKS) {
-    if (!pack.binaries) continue;
-    for (const bin of pack.binaries) {
-      assert.equal(typeof bin.name, 'string', `${pack.id} binary name must be a string`);
-      assert.ok(bin.scope === 'host' || bin.scope === 'sandbox', `${pack.id} binary scope must be host|sandbox`);
-      assert.equal(typeof bin.versionFlag, 'string', `${pack.id} binary versionFlag must be a string`);
-    }
+    assert.ok(!('binaries' in pack), `${pack.id} declares no binaries field`);
   }
-  const sandbox = PACKS.find((pack) => pack.id === 'sandbox');
-  assert.deepEqual(sandbox?.binaries, [{ name: 'devbridge', scope: 'sandbox', versionFlag: 'version' }]);
+});
 
-  // PACK_BINARIES is the doctor-side table; every entry it declares must be
-  // attributed to a real pack id.
-  for (const packId of Object.keys(PACK_BINARIES)) {
-    assert.ok(registryIds.includes(packId), `PACK_BINARIES key ${packId} must be a registry pack id`);
-  }
+test('doctor renders the pack-binary section from the dependency model', () => {
+  const setupCli = readSource(join('src', 'setup-cli.ts'));
+  assert.doesNotMatch(setupCli, /PACK_BINARIES|PackBinary/, 'doctor must not read the deleted binaries table');
+  assert.match(
+    setupCli,
+    /requiredDependencies\(enabledPacksUnion\)/,
+    'the section iterates requiredDependencies over the enabled union',
+  );
+  assert.match(setupCli, /sandbox-resident, not probed host-side/);
+  assert.match(setupCli, /dep install \$\{id\}/, 'the gateway WARNs point at dep install for the missing dependency');
+  assert.match(setupCli, /Object\.entries\(PACK_USES\)/, 'PACK_USES soft edges warn in the same section');
+  // The dedicated hcloud block stays the explicit plugin-level rule, never
+  // derived from the dependency graph (see the section's comment).
+  assert.match(setupCli, /check\('hcloud CLI installed'/, 'the dedicated hcloud check is untouched');
 });
 
 test('dependency model: catalog keyed by id, kinds pin the process model', () => {

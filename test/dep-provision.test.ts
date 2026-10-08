@@ -8,13 +8,20 @@ import test from 'node:test';
 
 import { DEPENDENCIES } from '../plugins/huaweicloud-core/src/lib/dependency-model.ts';
 import { resolveDependencyCommand } from '../plugins/huaweicloud-core/src/lib/dep-resolve.ts';
-import { provisionDependencies } from '../plugins/huaweicloud-core/src/dep-provision.ts';
+import {
+  installGatewayTool,
+  provisionDependencies,
+  uninstallDependency,
+} from '../plugins/huaweicloud-core/src/dep-provision.ts';
+import { readReceipt, writeReceipt, type DepReceipt } from '../plugins/huaweicloud-core/src/dep-receipts.ts';
 import { findHcloudBin } from '../plugins/huaweicloud-core/src/hcloud-probe.ts';
 
-// Unit 2 (provision half) contracts, driven through the public functions and
-// the real CLI: the resolution chain's tier order, the provisioning policy
-// loop (with the installer/probe/resolution seams faked — no network, no
-// real installs), the dep CLI surface, and findHcloudBin's delegation.
+// Unit 2 (provision half) and Unit 3 (uninstall half + receipts) contracts,
+// driven through the public functions and the real CLI: the resolution
+// chain's tier order, the provisioning policy loop (with the
+// installer/probe/resolution seams faked — no network, no real installs),
+// the receipt-gated uninstall decision, the dep CLI surface, and
+// findHcloudBin's delegation.
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const setupCli = join(root, 'bin', 'setup.cjs');
@@ -299,6 +306,293 @@ test('provisioning: a failing dependency is isolated and reported, the loop cont
   assert.match(out.text(), /devbridge: sandbox-resident/);
 });
 
+// ---- uninstallDependency: the receipt-gated decision, seams faked ----
+
+function emptyPathEnv(home: string): Record<string, string> {
+  const emptyPath = mkdtempSync(join(tmpdir(), 'dep-provision-empty-'));
+  return { HOME: home, PATH: emptyPath };
+}
+
+function hcloudReceiptAt(path: string): DepReceipt {
+  return { binary: 'hcloud', provisioner: 'devkit', path, installedAt: '2026-10-08T00:00:00.000Z' };
+}
+
+function gatewayReceiptWithTier(tier: 'uv' | 'pipx' | 'pip3'): DepReceipt {
+  return { binary: 'open-mcp-gateway', provisioner: 'devkit', tier, installedAt: '2026-10-08T00:00:00.000Z' };
+}
+
+const noTargets = { enabledPacks: new Set(), carriers: [] };
+
+test('uninstall: devbridge is refused, the host never manages it', () => {
+  const result = uninstallDependency('devbridge', noTargets, { receiptsDir: mkdtempSync(join(tmpdir(), 'dep-')) });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /devbridge ships inside the cloud sandbox; the host never installs or removes it\./);
+});
+
+test('uninstall hcloud without a receipt refuses and points at --clean-kocli', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dep-uninstall-'));
+  const result = uninstallDependency('hcloud', noTargets, { receiptsDir: dir, env: emptyPathEnv(dir) });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /Refusing to uninstall hcloud: no devkit install receipt/);
+  assert.match(result.message, /uninstall --target <agent> --clean-kocli/);
+});
+
+test('uninstall open-mcp-gateway without a receipt refuses and points at the manual uninstalls', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dep-uninstall-'));
+  const result = uninstallDependency('open-mcp-gateway', noTargets, { receiptsDir: dir, env: emptyPathEnv(dir) });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /Refusing to uninstall open-mcp-gateway: no devkit install receipt/);
+  assert.match(result.message, /uv tool uninstall huaweicloud-open-mcp/);
+  assert.match(result.message, /pipx uninstall huaweicloud-open-mcp/);
+});
+
+test('uninstall refuses while the effective pack union still requires the id', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dep-uninstall-'));
+  writeReceipt(hcloudReceiptAt('/gone-anyway'), dir);
+  const targets = {
+    enabledPacks: new Set(['core', 'huaweicloud-cli', 'auth']),
+    carriers: [
+      { label: 'OpenCode', packs: new Set(['core', 'huaweicloud-cli', 'auth']) },
+      { label: 'Codex CLI', packs: new Set(['core', 'voucher']) },
+    ],
+  };
+  const result = uninstallDependency('hcloud', targets, { receiptsDir: dir });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /Refusing to uninstall hcloud: required by enabled pack\(s\) auth, huaweicloud-cli/);
+  assert.match(result.message, /installed targets: OpenCode/);
+  assert.doesNotMatch(result.message, /Codex CLI/, 'a target not carrying the requiring packs is not named');
+  // The requirement refusal fires before the receipt gate: even a receipt
+  // does not unlock removing a binary the enabled surface still needs.
+  assert.ok(readReceipt('hcloud', dir), 'the receipt is kept untouched');
+});
+
+test('uninstall hcloud with a receipt deletes exactly the receipt path', () => {
+  const home = tempHome();
+  const dir = join(home, 'deps');
+  const placed = join(home, '.local', 'bin', 'hcloud');
+  const userOwned = join(home, 'usr-local', 'hcloud');
+  writeExecutable(placed);
+  writeExecutable(userOwned);
+  writeReceipt(hcloudReceiptAt(placed), dir);
+  const result = uninstallDependency(
+    'hcloud',
+    noTargets,
+    // A second hcloud resolves elsewhere; the receipt's path is the only
+    // file devkit may touch.
+    { receiptsDir: dir, env: { ...emptyPathEnv(home), HCLOUD_BIN: userOwned } },
+  );
+  assert.equal(result.ok, true, result.message);
+  assert.equal(existsSync(placed), false, 'the devkit-placed binary is removed');
+  assert.equal(existsSync(userOwned), true, 'a binary outside the receipt path is untouched');
+  assert.equal(readReceipt('hcloud', dir), null, 'the receipt is removed with the binary');
+  assert.ok(result.message.includes(`Removed the devkit-installed hcloud binary: ${placed}`), result.message);
+  assert.match(result.detail?.[0] ?? '', /~\/\.hcloud credentials and config were not touched/);
+});
+
+test('uninstall hcloud when the receipt path is already gone clears the stale receipt', () => {
+  const home = tempHome();
+  const dir = join(home, 'deps');
+  writeReceipt(hcloudReceiptAt(join(home, '.local', 'bin', 'hcloud')), dir);
+  const result = uninstallDependency('hcloud', noTargets, { receiptsDir: dir, env: emptyPathEnv(home) });
+  assert.equal(result.ok, true);
+  assert.match(result.message, /hcloud was already gone/);
+  assert.match(result.message, /removed the stale receipt/);
+  assert.equal(readReceipt('hcloud', dir), null);
+});
+
+test('uninstall hcloud with a pathless receipt never deletes the user\u2019s HCLOUD_BIN override', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dep-uninstall-'));
+  const userOwned = join(dir, 'my-hcloud');
+  writeExecutable(userOwned);
+  writeReceipt({ binary: 'hcloud', provisioner: 'devkit', installedAt: '2026-10-08T00:00:00.000Z' }, dir);
+  const result = uninstallDependency('hcloud', noTargets, {
+    receiptsDir: dir,
+    env: { ...emptyPathEnv(dir), HCLOUD_BIN: userOwned },
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /user's HCLOUD_BIN override/);
+  assert.equal(existsSync(userOwned), true);
+  assert.ok(readReceipt('hcloud', dir), 'the receipt stays until the user resolves the standoff');
+});
+
+for (const tier of ['uv', 'pipx', 'pip3'] as const) {
+  test(`uninstall gateway with a ${tier} receipt dispatches ${tier}'s uninstall command`, () => {
+    const home = tempHome();
+    const dir = join(home, 'deps');
+    writeReceipt(gatewayReceiptWithTier(tier), dir);
+    const tool = join(home, '.local', 'bin', tier);
+    writeExecutable(tool);
+    const calls: Array<{ command: string; args: readonly string[] }> = [];
+    const result = uninstallDependency('open-mcp-gateway', noTargets, {
+      receiptsDir: dir,
+      env: emptyPathEnv(home),
+      runCommand: (command, args) => {
+        calls.push({ command, args });
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+    assert.equal(result.ok, true, result.message);
+    assert.equal(calls.length, 1);
+    const expectedArgs =
+      tier === 'uv'
+        ? ['tool', 'uninstall', 'huaweicloud-open-mcp']
+        : tier === 'pipx'
+          ? ['uninstall', 'huaweicloud-open-mcp']
+          : ['uninstall', '--user', '-y', 'huaweicloud-open-mcp'];
+    assert.deepEqual(calls[0], { command: tool, args: expectedArgs });
+    assert.equal(readReceipt('open-mcp-gateway', dir), null);
+  });
+}
+
+test('uninstall gateway falls back to the resolved binary when the tier tool is gone', () => {
+  const home = tempHome();
+  const dir = join(home, 'deps');
+  const gatewayBin = join(home, '.local', 'bin', `huaweicloud-open-mcp${exeSuffix}`);
+  writeExecutable(gatewayBin);
+  writeReceipt(gatewayReceiptWithTier('uv'), dir);
+  let runnerCalls = 0;
+  const result = uninstallDependency('open-mcp-gateway', noTargets, {
+    receiptsDir: dir,
+    env: emptyPathEnv(home),
+    runCommand: () => {
+      runnerCalls += 1;
+      return { status: 0, stdout: '', stderr: '' };
+    },
+  });
+  assert.equal(result.ok, true, result.message);
+  assert.equal(runnerCalls, 0, 'no tier command runs when the tier tool is gone');
+  assert.equal(existsSync(gatewayBin), false, 'the resolved candidate binary is removed directly');
+  assert.match(result.message, /uv is no longer installed.*removed the gateway binary directly/);
+  assert.equal(readReceipt('open-mcp-gateway', dir), null);
+});
+
+test('uninstall gateway treats a failed tier uninstall with no remaining binary as already gone', () => {
+  const home = tempHome();
+  const dir = join(home, 'deps');
+  writeReceipt(gatewayReceiptWithTier('pipx'), dir);
+  writeExecutable(join(home, '.local', 'bin', 'pipx'));
+  const result = uninstallDependency('open-mcp-gateway', noTargets, {
+    receiptsDir: dir,
+    env: emptyPathEnv(home),
+    runCommand: () => ({ status: 1, stdout: '', stderr: 'Nothing to uninstall' }),
+  });
+  assert.equal(result.ok, true);
+  assert.match(result.message, /open-mcp-gateway was already gone/);
+  assert.match(result.message, /pipx reported: Nothing to uninstall/);
+  assert.equal(readReceipt('open-mcp-gateway', dir), null);
+});
+
+test('uninstall gateway keeps the receipt when the tier uninstall fails and a binary still resolves', () => {
+  const home = tempHome();
+  const dir = join(home, 'deps');
+  const gatewayBin = join(home, '.local', 'bin', `huaweicloud-open-mcp${exeSuffix}`);
+  writeExecutable(gatewayBin);
+  writeReceipt(gatewayReceiptWithTier('pip3'), dir);
+  writeExecutable(join(home, '.local', 'bin', 'pip3'));
+  const result = uninstallDependency('open-mcp-gateway', noTargets, {
+    receiptsDir: dir,
+    env: emptyPathEnv(home),
+    runCommand: () => ({ status: 2, stdout: '', stderr: 'pip error' }),
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /pip3 uninstall failed \(exit 2\): pip error/);
+  assert.ok(readReceipt('open-mcp-gateway', dir), 'the receipt is kept for the retry');
+  assert.equal(existsSync(gatewayBin), true, 'the still-resolving binary is not deleted on a failed tier uninstall');
+});
+
+test('uninstall gateway with no tier tool and no resolvable binary clears the stale receipt', () => {
+  const home = tempHome();
+  const dir = join(home, 'deps');
+  writeReceipt(
+    { binary: 'open-mcp-gateway', provisioner: 'devkit', tier: 'uv', installedAt: '2026-10-08T00:00:00.000Z' },
+    dir,
+  );
+  const result = uninstallDependency('open-mcp-gateway', noTargets, { receiptsDir: dir, env: emptyPathEnv(home) });
+  assert.equal(result.ok, true);
+  assert.match(result.message, /open-mcp-gateway was already gone \(no persistent install resolves\)/);
+  assert.equal(readReceipt('open-mcp-gateway', dir), null);
+});
+
+test('installers: a successful gateway install records its tier in a receipt', async () => {
+  const home = tempHome();
+  const savedHome = process.env.HOME;
+  const savedReceiptHome = process.env.HUAWEICLOUD_HOME;
+  const savedPath = process.env.PATH;
+  try {
+    process.env.HOME = home;
+    process.env.HUAWEICLOUD_HOME = home;
+    writeExecutable(join(home, '.local', 'bin', 'uv'));
+    process.env.PATH = `/usr/bin${delimiter}${join(home, '.local', 'bin')}`;
+    const result = await installGatewayTool();
+    assert.deepEqual(result, { ok: true, tier: 'uv' });
+    const receipt = readReceipt('open-mcp-gateway');
+    assert.equal(receipt?.binary, 'open-mcp-gateway');
+    assert.equal(receipt?.provisioner, 'devkit');
+    assert.equal(receipt?.tier, 'uv');
+    assert.ok(!Number.isNaN(Date.parse(receipt?.installedAt ?? '')), 'installedAt is a real ISO timestamp');
+  } finally {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    if (savedReceiptHome === undefined) delete process.env.HUAWEICLOUD_HOME;
+    else process.env.HUAWEICLOUD_HOME = savedReceiptHome;
+    process.env.PATH = savedPath;
+  }
+});
+
+test('installers: installKooCli writes an hcloud receipt after a verified install', { skip: isWin }, () => {
+  const home = tempHome();
+  const fakeBin = mkdtempSync(join(tmpdir(), 'dep-provision-fakebin-'));
+  // Fake curl writes the "tarball"; fake tar "extracts" an hcloud binary
+  // into the scratch dir installKooCli passes via -C; the real mv then
+  // places it under the fake HOME.
+  writeFileSync(join(fakeBin, 'curl'), '#!/bin/sh\necho fake-tarball > "$4"\n');
+  chmodSync(join(fakeBin, 'curl'), 0o755);
+  writeFileSync(
+    join(fakeBin, 'tar'),
+    '#!/bin/sh\ndir="$4"\nmkdir -p "$dir"\nprintf \'#!/bin/sh\\n\' > "$dir/hcloud"\nchmod +x "$dir/hcloud"\n',
+  );
+  chmodSync(join(fakeBin, 'tar'), 0o755);
+  const res = spawnSync(process.execPath, [setupCli, 'dep', 'install', 'hcloud'], {
+    cwd: root,
+    env: {
+      ...process.env,
+      HOME: home,
+      HUAWEICLOUD_HOME: home,
+      PATH: `${fakeBin}${delimiter}/usr/bin${delimiter}/bin`,
+    },
+    encoding: 'utf8',
+    timeout: 120000,
+  });
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /Install complete/);
+  const placed = join(home, '.local', 'bin', 'hcloud');
+  assert.ok(existsSync(placed), 'the fake install placed the binary');
+  const receipt = readReceipt('hcloud', join(home, '.config', 'huaweicloud', 'deps'));
+  assert.ok(receipt, 'the verified install wrote a receipt');
+  assert.equal(receipt?.path, placed);
+  assert.equal(receipt?.provisioner, 'devkit');
+});
+
+test('installers: an already-present binary writes no receipt', async () => {
+  const home = tempHome();
+  const savedReceiptHome = process.env.HUAWEICLOUD_HOME;
+  const out = collector();
+  try {
+    process.env.HUAWEICLOUD_HOME = home;
+    await provisionDependencies(['hcloud'], {
+      log: out.log,
+      probeHcloud: () => ({ status: 'ok', installed: true, installedVersion: '7.2.12' }),
+      installKooCli: async () => true,
+    });
+    assert.match(out.text(), /hcloud: present \(7\.2\.12\), skipping install/);
+    // The skip path never reaches an installer, so no receipt can appear.
+    assert.equal(readReceipt('hcloud'), null);
+  } finally {
+    if (savedReceiptHome === undefined) delete process.env.HUAWEICLOUD_HOME;
+    else process.env.HUAWEICLOUD_HOME = savedReceiptHome;
+  }
+});
+
 // ---- dep CLI: status/install parsing through the real bin ----
 
 function runDep(args: string[], env: Record<string, string | undefined> = {}) {
@@ -332,7 +626,7 @@ test('dep install devbridge refuses with the in-sandbox pointer', () => {
 test('dep without a subcommand prints usage', () => {
   const res = runDep([]);
   assert.notEqual(res.status, 0);
-  assert.match(res.stderr, /Usage: npx huaweicloud-devkit dep <status \| install <id>>/);
+  assert.match(res.stderr, /Usage: npx huaweicloud-devkit dep <status \| install <id> \| uninstall <id>>/);
 });
 
 test('dep status with nothing installed requires no binaries', () => {
@@ -352,21 +646,33 @@ test('dep status with nothing installed requires no binaries', () => {
 
 // ---- install/update wiring through the real installer ----
 
-function runInstall(args: string[]): ReturnType<typeof spawnSync> {
-  const home = tempHome();
+function cliEnv(home: string, extra: Record<string, string | undefined> = {}): Record<string, string | undefined> {
+  return {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    HOMEDRIVE: home.slice(0, 2),
+    HOMEPATH: home.slice(2),
+    HUAWEICLOUD_DEVKIT_SKIP_OFFICEACE_DETECT: '1',
+    ...extra,
+  };
+}
+
+function runSetupCli(
+  args: string[],
+  home: string,
+  extra: Record<string, string | undefined> = {},
+): ReturnType<typeof spawnSync> {
   return spawnSync(process.execPath, [setupCli, ...args], {
     cwd: mkdtempSync(join(tmpdir(), 'dep-provision-cwd-')),
-    env: {
-      ...process.env,
-      HOME: home,
-      USERPROFILE: home,
-      HOMEDRIVE: home.slice(0, 2),
-      HOMEPATH: home.slice(2),
-      HUAWEICLOUD_DEVKIT_SKIP_OFFICEACE_DETECT: '1',
-    },
+    env: cliEnv(home, extra),
     encoding: 'utf8',
     timeout: 120000,
   });
+}
+
+function runInstall(args: string[]): ReturnType<typeof spawnSync> {
+  return runSetupCli(args, tempHome());
 }
 
 test('install provisions pack binaries after the per-target loop', () => {
@@ -380,6 +686,90 @@ test('install --skip-binaries suppresses the provisioning pass', () => {
   const res = runInstall(['install', '--target', 'opencode', '--skip-binaries']);
   assert.equal(res.status, 0, res.stderr);
   assert.doesNotMatch(res.stdout, /Provisioning pack binaries/);
+});
+
+// ---- dep uninstall through the real CLI ----
+
+test('dep uninstall with a bogus id errors and names the valid ids', () => {
+  const res = runDep(['uninstall', 'bogus']);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /Unknown dependency id: bogus/);
+  assert.match(res.stderr, /Valid dependency ids: hcloud, open-mcp-gateway, devbridge/);
+});
+
+test('dep uninstall devbridge refuses with the in-sandbox pointer', () => {
+  const res = runDep(['uninstall', 'devbridge']);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /devbridge ships inside the cloud sandbox; the host never installs or removes it\./);
+});
+
+test('dep uninstall hcloud without a receipt refuses and points at --clean-kocli', () => {
+  const home = tempHome();
+  const emptyPath = mkdtempSync(join(tmpdir(), 'dep-provision-path-'));
+  const res = runSetupCli(['dep', 'uninstall', 'hcloud'], home, { PATH: emptyPath, HUAWEICLOUD_HOME: home });
+  assert.equal(res.status, 1, res.stderr);
+  assert.match(res.stderr, /Refusing to uninstall hcloud: no devkit install receipt/);
+  assert.match(res.stderr, /uninstall --target <agent> --clean-kocli/);
+  const depsDir = join(home, '.config', 'huaweicloud', 'deps');
+  assert.equal(existsSync(join(depsDir, 'hcloud.json')), false, 'a refusal writes no receipt');
+  assert.equal(existsSync(join(depsDir, 'lock')), false, 'the decision lock is released on refusal');
+});
+
+test('dep uninstall hcloud with a receipt removes exactly the placed binary', () => {
+  const home = tempHome();
+  const emptyPath = mkdtempSync(join(tmpdir(), 'dep-provision-path-'));
+  const placed = join(home, '.local', 'bin', 'hcloud');
+  writeExecutable(placed);
+  writeReceipt(hcloudReceiptAt(placed), join(home, '.config', 'huaweicloud', 'deps'));
+  const res = runSetupCli(['dep', 'uninstall', 'hcloud'], home, { PATH: emptyPath, HUAWEICLOUD_HOME: home });
+  assert.equal(res.status, 0, res.stderr);
+  assert.ok(res.stdout.includes(`Removed the devkit-installed hcloud binary: ${placed}`), res.stdout);
+  assert.match(res.stdout, /~\/\.hcloud credentials and config were not touched/);
+  assert.equal(existsSync(placed), false);
+  assert.equal(readReceipt('hcloud', join(home, '.config', 'huaweicloud', 'deps')), null);
+});
+
+test('dep uninstall hcloud refuses while an installed target still requires it', () => {
+  const home = tempHome();
+  // Install with the real PATH (the installer needs npm); the uninstall run
+  // then uses an empty PATH so codex detection cannot widen the union.
+  const installRes = runSetupCli(['install', '--target', 'opencode', '--packs', 'huaweicloud-cli'], home);
+  assert.equal(installRes.status, 0, installRes.stderr);
+  const emptyPath = mkdtempSync(join(tmpdir(), 'dep-provision-path-'));
+  // A receipt exists — the refusal must still fire because the installed
+  // target's pack surface requires hcloud.
+  writeReceipt(hcloudReceiptAt(join(home, '.local', 'bin', 'hcloud')), join(home, '.config', 'huaweicloud', 'deps'));
+  const res = runSetupCli(['dep', 'uninstall', 'hcloud'], home, { PATH: emptyPath, HUAWEICLOUD_HOME: home });
+  assert.equal(res.status, 1, res.stderr);
+  assert.match(res.stderr, /Refusing to uninstall hcloud: required by enabled pack\(s\) huaweicloud-cli/);
+  assert.match(res.stderr, /installed targets: OpenCode/);
+  assert.match(res.stderr, /Remove or trim those targets first/);
+});
+
+// ---- doctor's pack-binary section renders from the dependency model ----
+
+test('doctor renders devbridge and PACK_USES warnings for a sandbox-only trim', () => {
+  const home = tempHome();
+  const installRes = runSetupCli(['install', '--target', 'opencode', '--packs', 'sandbox'], home);
+  assert.equal(installRes.status, 0, installRes.stderr);
+  const res = runSetupCli(['doctor'], home);
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /devbridge: sandbox-resident, not probed host-side/);
+  assert.match(res.stdout, /Pack sandbox uses discovery \(soft dependency\) but it is disabled/);
+  assert.match(res.stdout, /Pack sandbox uses obs \(soft dependency\) but it is disabled/);
+  assert.doesNotMatch(res.stdout, /open-mcp-gateway /, 'the gateway is outside this trim');
+  assert.match(res.stdout, /hcloud CLI installed/, 'the dedicated hcloud block still renders');
+});
+
+test('doctor reports no pack dependencies for a core-only trim', () => {
+  const home = tempHome();
+  const installRes = runSetupCli(['install', '--target', 'opencode', '--packs', 'core'], home);
+  assert.equal(installRes.status, 0, installRes.stderr);
+  const res = runSetupCli(['doctor'], home);
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /Pack dependencies: none required/);
+  assert.doesNotMatch(res.stdout, /devbridge: sandbox-resident/);
+  assert.doesNotMatch(res.stdout, /Pack .* uses .* soft dependency/);
 });
 
 // ---- findHcloudBin: delegation equivalence, env-injected ----

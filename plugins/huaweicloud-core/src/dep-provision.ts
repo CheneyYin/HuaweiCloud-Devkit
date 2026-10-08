@@ -7,23 +7,49 @@ import { createInterface } from 'node:readline';
 import { probeHcloud } from './hcloud-probe.ts';
 import { getKooCliVersion, kooCliDownloadBase, KOO_CLI_BASE } from './koocli-version.ts';
 import { detectCodeartsSandbox, printSandboxWarning } from './codearts-sandbox.ts';
-import { DEPENDENCIES, type DependencyId, type DependencySpec } from './lib/dependency-model.ts';
+import { readReceipt, receiptDir, removeReceipt, withDepLock, writeReceipt, type DepReceipt } from './dep-receipts.ts';
+import {
+  DEPENDENCIES,
+  PACK_DEPENDENCIES,
+  requiredDependencies,
+  type DependencyId,
+  type DependencySpec,
+} from './lib/dependency-model.ts';
+import type { PackId } from './lib/pack-types.ts';
 import { lookupOnPath, resolveDependencyCommand, type ResolvedDependency } from './lib/dep-resolve.ts';
 
-// Dependency provisioning: the install-time half of the dependency model in
-// lib/dependency-model.ts. After the payload lands, the enabled packs' host
-// binaries are provisioned per their installPolicy. Node builtins only —
+// Dependency provisioning: the install-time and uninstall-time halves over
+// the dependency model in lib/dependency-model.ts. After the payload lands,
+// the enabled packs' host binaries are provisioned per their installPolicy
+// and each verified install writes a receipt (dep-receipts.ts) that later
+// gates `dep uninstall`. Node builtins plus the zod-free lib/ modules only —
 // this module compiles into the unbundled dist/setup-cli.js graph, where
 // only undici exists at runtime.
 //
-// The three seams, kept injectable for hermetic tests (test/dep-provision.test.ts):
-// the hcloud presence probe, the two installers, and the gateway resolution.
-// Everything else (policy, output, ordering) is the contract under test.
+// The seams, kept injectable for hermetic tests (test/dep-provision.test.ts):
+// the hcloud presence probe, the two installers, the gateway resolution, and
+// (uninstall) the receipt dir plus the tier-uninstall runner. Everything else
+// (policy, output, ordering, refusal wording) is the contract under test.
 
 const INFO = '  \x1b[36m[INFO]\x1b[0m';
 const WARN = '  \x1b[33m[WARN]\x1b[0m';
 
 type Log = (_line: string) => void;
+
+// Receipt writes are best-effort bookkeeping after a verifiably successful
+// install: a failed write must not fail the install (the binary is real, the
+// escape hatch still exists), and an already-present binary never reaches
+// this function — the provisioning loop skips before the installer runs, so
+// devkit only ever claims a binary this run placed.
+function recordInstallReceipt(receipt: DepReceipt): void {
+  try {
+    writeReceipt(receipt);
+  } catch (error) {
+    console.log(
+      `${WARN} could not write the install receipt for ${receipt.binary}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
 
 // ---------------------------------------------------------------------------
 // KooCLI (hcloud) installer — absorbed from cmdInstallHcloud's body. The CLI
@@ -181,6 +207,15 @@ export async function installKooCli(opts: { tty: boolean }): Promise<boolean> {
 
       await offerPrivacyAcceptance(join(installDir, 'hcloud.exe'), opts.tty);
 
+      if (existsSync(join(installDir, 'hcloud.exe'))) {
+        recordInstallReceipt({
+          binary: 'hcloud',
+          provisioner: 'devkit',
+          path: join(installDir, 'hcloud.exe'),
+          installedAt: new Date().toISOString(),
+        });
+      }
+
       console.log('  Or restart terminal and: hcloud version');
       return true;
     } catch (error) {
@@ -259,6 +294,15 @@ export async function installKooCli(opts: { tty: boolean }): Promise<boolean> {
       console.log(`  Verify: ${binPath} version`);
 
       await offerPrivacyAcceptance(binPath, opts.tty);
+
+      if (existsSync(binPath)) {
+        recordInstallReceipt({
+          binary: 'hcloud',
+          provisioner: 'devkit',
+          path: binPath,
+          installedAt: new Date().toISOString(),
+        });
+      }
       return true;
     } catch (error) {
       console.log(`\n\x1b[33mAuto-install failed: ${error instanceof Error ? error.message : String(error)}\x1b[0m`);
@@ -291,11 +335,11 @@ export interface GatewayInstallResult {
   tier: GatewayInstallTier | null;
 }
 
-function findHostTool(name: string): string | null {
+function findHostTool(name: string, env: NodeJS.ProcessEnv = process.env): string | null {
   const exeSuffix = process.platform === 'win32' ? '.exe' : '';
-  const home = process.platform === 'win32' ? homedir() : process.env.HOME || homedir();
+  const home = process.platform === 'win32' ? homedir() : env.HOME || homedir();
   const local = join(home, '.local', 'bin', `${name}${exeSuffix}`);
-  return existsSync(local) ? local : lookupOnPath(name, process.env);
+  return existsSync(local) ? local : lookupOnPath(name, env);
 }
 
 function outputTail(text: string, maxLines = 4): string {
@@ -321,7 +365,15 @@ export async function installGatewayTool(): Promise<GatewayInstallResult> {
       timeout: GATEWAY_INSTALL_TIMEOUT_MS,
       windowsHide: true,
     });
-    if (r.status === 0) return { ok: true, tier: 'uv' };
+    if (r.status === 0) {
+      recordInstallReceipt({
+        binary: 'open-mcp-gateway',
+        provisioner: 'devkit',
+        tier: 'uv',
+        installedAt: new Date().toISOString(),
+      });
+      return { ok: true, tier: 'uv' };
+    }
     reportInstallFailure('uv tool install', r.status, String(r.stdout || ''), String(r.stderr || ''));
   }
 
@@ -333,7 +385,15 @@ export async function installGatewayTool(): Promise<GatewayInstallResult> {
       timeout: GATEWAY_INSTALL_TIMEOUT_MS,
       windowsHide: true,
     });
-    if (r.status === 0) return { ok: true, tier: 'pipx' };
+    if (r.status === 0) {
+      recordInstallReceipt({
+        binary: 'open-mcp-gateway',
+        provisioner: 'devkit',
+        tier: 'pipx',
+        installedAt: new Date().toISOString(),
+      });
+      return { ok: true, tier: 'pipx' };
+    }
     reportInstallFailure('pipx install', r.status, String(r.stdout || ''), String(r.stderr || ''));
   }
 
@@ -350,6 +410,12 @@ export async function installGatewayTool(): Promise<GatewayInstallResult> {
         console.log(`${WARN} pip --user puts the gateway in the Python Scripts dir, which may not be on PATH.`);
         console.log(`        Prefer uv/uvx (https://docs.astral.sh/uv/) so the gateway resolves everywhere.`);
       }
+      recordInstallReceipt({
+        binary: 'open-mcp-gateway',
+        provisioner: 'devkit',
+        tier: 'pip3',
+        installedAt: new Date().toISOString(),
+      });
       return { ok: true, tier: 'pip3' };
     }
     const out = `${r.stdout || ''}\n${r.stderr || ''}`;
@@ -400,18 +466,20 @@ async function defaultConfirm(prompt: string): Promise<boolean> {
   });
 }
 
+// The shared default for the resolve seam: the single resolution chain over
+// the catalog's data. Provisioning and uninstall inject the same thing.
+function defaultResolveDependency(id: DependencyId, env: NodeJS.ProcessEnv): ResolvedDependency | null {
+  const entry = DEPENDENCIES[id];
+  return entry && 'resolution' in entry ? resolveDependencyCommand(entry.resolution, env) : null;
+}
+
 export async function provisionDependencies(ids: Iterable<DependencyId>, opts: ProvisionOptions = {}): Promise<void> {
   const tty = opts.tty === true;
   const env = opts.env ?? process.env;
   const log = opts.log ?? console.log;
   const probe = opts.probeHcloud ?? (() => probeHcloud());
   const installCli = opts.installKooCli ?? ((o) => installKooCli(o));
-  const resolve =
-    opts.resolveDependency ??
-    ((id, e) => {
-      const entry = DEPENDENCIES[id];
-      return entry && 'resolution' in entry ? resolveDependencyCommand(entry.resolution, e) : null;
-    });
+  const resolve = opts.resolveDependency ?? defaultResolveDependency;
   const installGateway = opts.installGateway ?? (() => installGatewayTool());
   const confirm = opts.confirm ?? defaultConfirm;
 
@@ -491,4 +559,223 @@ export async function provisionDependencies(ids: Iterable<DependencyId>, opts: P
       log(`${WARN} ${id}: provisioning failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Receipt-gated uninstall (`dep uninstall <id>`). The decision derives from
+// the same model the installer used: the caller passes the effective pack
+// union (setup-cli's effectivePackUnion — no second derivation exists), and
+// uninstall refuses while any enabled pack requires the id. With no requiring
+// pack, the receipt gates deletion: devkit removes only what it placed and
+// can prove it placed. Deletion scope is binary-only — ~/.hcloud credentials
+// and config stay untouched (that broader cleanup belongs to the documented
+// ungated escape hatch `uninstall --clean-kocli`).
+// ---------------------------------------------------------------------------
+
+export interface DepUninstallTargets {
+  /** Effective pack union across installed targets (setup-cli's effectivePackUnion). */
+  enabledPacks: ReadonlySet<PackId>;
+  /** Per-target enabled packs, for refusal attribution (labels from packStatusReaders). */
+  carriers: ReadonlyArray<{ label: string; packs: ReadonlySet<PackId> }>;
+}
+
+export interface DepUninstallOptions {
+  env?: NodeJS.ProcessEnv;
+  /** Receipt directory; defaults to the shared ~/.config/huaweicloud/deps convention. */
+  receiptsDir?: string;
+  resolveDependency?: (_id: DependencyId, _env: NodeJS.ProcessEnv) => ResolvedDependency | null;
+  runCommand?: (
+    _command: string,
+    _args: readonly string[],
+  ) => { status: number | null; stdout: string; stderr: string };
+}
+
+export interface DepUninstallResult {
+  /** False renders via console.error with exit code 1 in the dep CLI. */
+  ok: boolean;
+  message: string;
+  detail?: string[];
+}
+
+const GATEWAY_UNINSTALL_ARGS: Record<GatewayInstallTier, readonly string[]> = {
+  uv: ['tool', 'uninstall', GATEWAY_PACKAGE],
+  pipx: ['uninstall', GATEWAY_PACKAGE],
+  // -y because dep uninstall runs where pip's confirmation prompt would hang
+  // a non-TTY session (same discipline as obsutil's -f).
+  pip3: ['uninstall', '--user', '-y', GATEWAY_PACKAGE],
+};
+
+const HCLOUD_ESCAPE_HATCH = 'Escape hatch: npx huaweicloud-devkit uninstall --target <agent> --clean-kocli';
+const GATEWAY_ESCAPE_HATCH =
+  'Escape hatch: uv tool uninstall huaweicloud-open-mcp (or pipx uninstall huaweicloud-open-mcp / pip3 uninstall --user huaweicloud-open-mcp)';
+
+function requiringPacks(id: DependencyId, enabledPacks: ReadonlySet<PackId>): PackId[] {
+  // The naming half of the refusal: the decision itself went through
+  // requiredDependencies over the same edge table; this inverse lookup only
+  // produces the pack names the refusal lists. Sorted so the line is
+  // deterministic regardless of set order.
+  return [...enabledPacks]
+    .filter((pack) => (PACK_DEPENDENCIES[pack] as readonly DependencyId[]).includes(id))
+    .sort((a, b) => a.localeCompare(b));
+}
+
+export function uninstallDependency(
+  id: DependencyId,
+  targets: DepUninstallTargets,
+  opts: DepUninstallOptions = {},
+): DepUninstallResult {
+  const spec = DEPENDENCIES[id];
+  if (!spec) return { ok: false, message: `Unknown dependency id: ${id}` };
+  if (spec.kind === 'sandbox-resident') {
+    return { ok: false, message: 'devbridge ships inside the cloud sandbox; the host never installs or removes it.' };
+  }
+  const dir = opts.receiptsDir ?? receiptDir();
+  // The whole decision — requirement check, receipt read, deletion, receipt
+  // removal — serializes against concurrent installs under the receipt lock.
+  return withDepLock(() => {
+    // The same derivation the installer used, never a second one: the
+    // effective union's required-dependency set decides; requiringPacks only
+    // names the packs for the refusal line.
+    if (requiredDependencies(targets.enabledPacks).has(id)) {
+      const requiring = requiringPacks(id, targets.enabledPacks);
+      const carrierLabels = targets.carriers
+        .filter((target) => [...target.packs].some((pack) => requiring.includes(pack)))
+        .map((target) => target.label);
+      const carriers = carrierLabels.length > 0 ? ` (installed targets: ${carrierLabels.join(', ')})` : '';
+      return {
+        ok: false,
+        message: `Refusing to uninstall ${id}: required by enabled pack(s) ${requiring.join(', ')}${carriers}. Remove or trim those targets first: npx huaweicloud-devkit uninstall --target <agent>, or reinstall with --packs`,
+      };
+    }
+    const receipt = readReceipt(id, dir);
+    if (!receipt) {
+      const escapeHatch = id === 'hcloud' ? HCLOUD_ESCAPE_HATCH : GATEWAY_ESCAPE_HATCH;
+      return {
+        ok: false,
+        message: `Refusing to uninstall ${id}: no devkit install receipt, so this devkit did not place it and will not remove it. ${escapeHatch}`,
+      };
+    }
+    return id === 'hcloud' ? uninstallHcloud(receipt, dir, opts) : uninstallGateway(receipt, dir, opts);
+  }, dir);
+}
+
+function uninstallHcloud(receipt: DepReceipt, dir: string, opts: DepUninstallOptions): DepUninstallResult {
+  const env = opts.env ?? process.env;
+  const resolve = opts.resolveDependency ?? defaultResolveDependency;
+  // The receipt's path is the attribution: devkit deletes exactly that file.
+  // When the receipt lacks one (a hand-edited receipt) the currently resolved
+  // binary stands in — except an env-tier resolution: HCLOUD_BIN is the
+  // user's explicit override, not devkit's placement, and a user-placed
+  // binary is never touched.
+  let target: string | null;
+  if (receipt.path) {
+    target = receipt.path;
+  } else {
+    const resolved = resolve('hcloud', env);
+    if (resolved && resolved.tier === 'env') {
+      return {
+        ok: false,
+        message: `Refusing to uninstall hcloud: the receipt records no path and the resolved binary is the user's HCLOUD_BIN override (${resolved.command}). ${HCLOUD_ESCAPE_HATCH}`,
+      };
+    }
+    target = resolved ? resolved.command : null;
+  }
+  if (!target || !existsSync(target)) {
+    removeReceipt('hcloud', dir);
+    return {
+      ok: true,
+      message: `hcloud was already gone (nothing at ${target ?? 'the resolved location'}); removed the stale receipt.`,
+    };
+  }
+  try {
+    rmSync(target);
+  } catch (error) {
+    return {
+      ok: false,
+      message: `Failed to remove ${target}: ${error instanceof Error ? error.message : String(error)}. Remove it manually, then re-run dep uninstall hcloud to clear the receipt.`,
+    };
+  }
+  removeReceipt('hcloud', dir);
+  return {
+    ok: true,
+    message: `Removed the devkit-installed hcloud binary: ${target}`,
+    detail: [
+      '~/.hcloud credentials and config were not touched; those are removed only by: npx huaweicloud-devkit uninstall --target <agent> --clean-kocli',
+    ],
+  };
+}
+
+function uninstallGateway(receipt: DepReceipt, dir: string, opts: DepUninstallOptions): DepUninstallResult {
+  const env = opts.env ?? process.env;
+  const resolve = opts.resolveDependency ?? defaultResolveDependency;
+  const tier = receipt.tier;
+  if (tier) {
+    // Tier-aware: a bare rm would orphan uv/pipx tool metadata. The tier tool
+    // that placed the gateway is the tool that knows how to withdraw it.
+    const args = GATEWAY_UNINSTALL_ARGS[tier];
+    const tool = findHostTool(tier, env);
+    if (tool) {
+      const run = opts.runCommand ?? defaultRunCommand;
+      const r = run(tool, args);
+      if (r.status === 0) {
+        removeReceipt('open-mcp-gateway', dir);
+        return {
+          ok: true,
+          message: `Uninstalled the devkit-installed open-mcp-gateway via ${tier}: ${tool} ${args.join(' ')}`,
+        };
+      }
+      const tail = outputTail(`${r.stdout}\n${r.stderr}`);
+      const resolved = resolve('open-mcp-gateway', env);
+      if (!resolved || resolved.tier === 'fallback') {
+        // The tier tool refused because nothing is installed under it, and no
+        // persistent binary resolves either: converged, receipt cleared.
+        removeReceipt('open-mcp-gateway', dir);
+        return {
+          ok: true,
+          message: `open-mcp-gateway was already gone (${tier} reported: ${tail || `exit ${r.status}`}); removed the receipt.`,
+        };
+      }
+      return {
+        ok: false,
+        message: `${tier} uninstall failed (exit ${r.status ?? 'killed'}): ${tail || 'no output'}`,
+        detail: [
+          `A gateway binary still resolves at ${resolved.command}. Remove it manually (${GATEWAY_ESCAPE_HATCH}), then re-run dep uninstall open-mcp-gateway to clear the receipt.`,
+        ],
+      };
+    }
+  }
+  // No usable tier, or the tier tool is gone: fall back to removing the
+  // resolved binary directly, and say so. Candidate tier only — the env
+  // override is the user's file, and a PATH hit is not provably devkit's.
+  const resolved = resolve('open-mcp-gateway', env);
+  if (resolved && resolved.tier === 'candidate') {
+    try {
+      rmSync(resolved.command);
+    } catch (error) {
+      return {
+        ok: false,
+        message: `Failed to remove ${resolved.command}: ${error instanceof Error ? error.message : String(error)}. Remove it manually, then re-run dep uninstall open-mcp-gateway to clear the receipt.`,
+      };
+    }
+    removeReceipt('open-mcp-gateway', dir);
+    return {
+      ok: true,
+      message: tier
+        ? `${tier} is no longer installed, so its uninstall command cannot run; removed the gateway binary directly: ${resolved.command}`
+        : `The receipt records no install tier; removed the gateway binary directly: ${resolved.command}`,
+    };
+  }
+  removeReceipt('open-mcp-gateway', dir);
+  return {
+    ok: true,
+    message: `open-mcp-gateway was already gone (no persistent install resolves); removed the stale receipt.`,
+  };
+}
+
+function defaultRunCommand(
+  command: string,
+  args: readonly string[],
+): { status: number | null; stdout: string; stderr: string } {
+  const r = spawnSync(command, [...args], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
+  return { status: r.status ?? null, stdout: String(r.stdout || ''), stderr: String(r.stderr || '') };
 }

@@ -39,7 +39,7 @@ import {
 } from './proxy/proxy-config.ts';
 import { removeKooCli, removeObsConfig } from './sandbox/uninstall-cleanup.ts';
 import { detectCodeartsSandbox } from './codearts-sandbox.ts';
-import { installGatewayTool, installKooCli, provisionDependencies } from './dep-provision.ts';
+import { installGatewayTool, installKooCli, provisionDependencies, uninstallDependency } from './dep-provision.ts';
 import {
   mergeCommandStyle,
   mergeArgsStyle,
@@ -52,8 +52,15 @@ import { isUsableOfficeaceRoot, readOfficeaceRootMarker, writeOfficeaceRootMarke
 import { queryDistTagsFetch, determineTarget, semverCompare } from './update-check.ts';
 import { getKooCliVersion, compareVersion, kooCliDownloadBase } from './koocli-version.ts';
 import { findHcloudBin, hcloudProbeNextStep, probeHcloud } from './hcloud-probe.ts';
-import { PACK_BINARIES, PACK_IDS, type PackBinary, type PackId } from './lib/pack-types.ts';
-import { DEPENDENCIES, DEPENDENCY_IDS, parseDevkitPacks, requiredDependencies } from './lib/dependency-model.ts';
+import { PACK_IDS, type PackId } from './lib/pack-types.ts';
+import {
+  DEPENDENCIES,
+  DEPENDENCY_IDS,
+  PACK_USES,
+  parseDevkitPacks,
+  requiredDependencies,
+  type DependencyId,
+} from './lib/dependency-model.ts';
 import { resolveDependencyCommand } from './lib/dep-resolve.ts';
 
 // node:sqlite is a runtime-only builtin loaded through createRequire; only the
@@ -4129,17 +4136,24 @@ function packStatusReaders(): Array<{ label: string; installed: boolean; read: (
   ];
 }
 
-// The effective pack union for provisioning and `dep status`: every
-// reader-backed installed target contributes its parsed closure
-// (blank/unset config means the full surface), and codex contributes the
-// full surface whenever its CLI is present — the codex server boots with
-// no DEVKIT_PACKS because the --packs flag has no write path there, so it
-// always needs whatever the full surface needs. Unknown ids in a target's
-// DEVKIT_PACKS warn and count as the full surface (fail-safe): unlike
-// doctor's warn+continue, skipping the target would under-provision its
-// binaries.
-function effectivePackUnion(): ReadonlySet<PackId> {
+// The effective pack union for provisioning, `dep status`, and the uninstall
+// requirement check: every reader-backed installed target contributes its
+// parsed closure (blank/unset config means the full surface), and codex
+// contributes the full surface whenever its CLI is present — the codex server
+// boots with no DEVKIT_PACKS because the --packs flag has no write path
+// there, so it always needs whatever the full surface needs. Unknown ids in
+// a target's DEVKIT_PACKS warn and count as the full surface (fail-safe):
+// unlike doctor's warn+continue, skipping the target would under-provision
+// its binaries. packUnionReport is the one derivation; it also returns the
+// per-target attribution `dep uninstall` names when it refuses.
+interface PackUnionReport {
+  union: ReadonlySet<PackId>;
+  carriers: ReadonlyArray<{ label: string; packs: ReadonlySet<PackId> }>;
+}
+
+function packUnionReport(): PackUnionReport {
   const union = new Set<PackId>();
+  const carriers: Array<{ label: string; packs: ReadonlySet<PackId> }> = [];
   for (const target of packStatusReaders()) {
     if (!target.installed) continue;
     const parsed = parseDevkitPacks(target.read());
@@ -4147,15 +4161,24 @@ function effectivePackUnion(): ReadonlySet<PackId> {
       console.log(
         `  \x1b[33m[WARN]\x1b[0m Packs (${target.label}): unknown id(s) in DEVKIT_PACKS="${parsed.raw}": ${parsed.unknown.join(', ')} — provisioning the full surface (fail-safe)`,
       );
-      for (const id of PACK_IDS) union.add(id);
+      const full = new Set(PACK_IDS);
+      for (const id of full) union.add(id);
+      carriers.push({ label: target.label, packs: full });
       continue;
     }
     for (const id of parsed.enabled) union.add(id);
+    carriers.push({ label: target.label, packs: parsed.enabled });
   }
   if (hasCodexCLI()) {
-    for (const id of PACK_IDS) union.add(id);
+    const full = new Set(PACK_IDS);
+    for (const id of full) union.add(id);
+    carriers.push({ label: 'Codex CLI', packs: full });
   }
-  return union;
+  return { union, carriers };
+}
+
+function effectivePackUnion(): ReadonlySet<PackId> {
+  return packUnionReport().union;
 }
 
 // Provision the enabled packs' host binaries right after payload placement.
@@ -4478,13 +4501,18 @@ async function cmdDoctor(): Promise<void> {
   // Pack status — DEVKIT_PACKS is read from each installed target's MCP
   // config file, not the process env: the value reaches the server process
   // only after the agent harness injects the config env. Unknown ids warn
-  // because the server boot fail-fasts on them (src/packs/enable.ts);
-  // host-scoped pack-declared binaries are probed with their own version
-  // flag. Sandbox-scoped binaries (e.g. devbridge) live inside the cloud
-  // sandbox, where a host-side probe would target the wrong machine, so they
-  // are not checked.
+  // because the server boot fail-fasts on them (src/packs/enable.ts).
+  // The binary section below renders from the dependency model:
+  // requiredDependencies over the enabled union, dispatched by id. hcloud is
+  // deliberately absent here — the dedicated hcloud block above owns it as
+  // the explicit plugin-level rule (deriving it was rejected: a core⇒hcloud
+  // edge would auto-provision CLI-less trims, and the union is empty on
+  // zero-target machines, exactly where the check matters most). devbridge
+  // is sandbox-resident and never probed host-side; the gateway renders
+  // through the shared resolution chain. PACK_USES soft edges warn once per
+  // pair when a used pack sits disabled in the union.
   const packStatus = packStatusReaders();
-  const enabledPacksUnion = new Set<string>();
+  const enabledPacksUnion = new Set<PackId>();
   let anyPackTarget = false;
   for (const target of packStatus) {
     if (!target.installed) continue;
@@ -4510,26 +4538,39 @@ async function cmdDoctor(): Promise<void> {
     console.log(`  \x1b[36m[INFO]\x1b[0m Packs (${target.label}): ${[...enabled].join(', ')}`);
   }
   if (anyPackTarget) {
-    const hostBinaries: Array<{ pack: string; name: string; versionFlag: string }> = [];
-    for (const [packId, declared] of Object.entries(PACK_BINARIES) as Array<[string, readonly PackBinary[]]>) {
-      if (!enabledPacksUnion.has(packId)) continue;
-      for (const bin of declared) {
-        if (bin.scope === 'host') hostBinaries.push({ pack: packId, name: bin.name, versionFlag: bin.versionFlag });
-      }
-    }
-    if (hostBinaries.length === 0) {
-      console.log(`  \x1b[36m[INFO]\x1b[0m Pack host binaries: none declared`);
+    const requiredDeps = requiredDependencies(enabledPacksUnion);
+    if (requiredDeps.size === 0) {
+      console.log(`  \x1b[36m[INFO]\x1b[0m Pack dependencies: none required`);
     } else {
-      for (const bin of hostBinaries) {
-        if (commandAvailable(bin.name, [bin.versionFlag])) {
-          console.log(`  \x1b[32m[PASS]\x1b[0m ${bin.name} (pack ${bin.pack}) available`);
+      for (const id of DEPENDENCY_IDS.filter((entry) => requiredDeps.has(entry))) {
+        if (id === 'hcloud') continue; // the dedicated hcloud block above owns this check
+        if (id === 'devbridge') {
+          console.log(`  \x1b[36m[INFO]\x1b[0m devbridge: sandbox-resident, not probed host-side`);
+          continue;
+        }
+        const resolved = resolveDependencyCommand(DEPENDENCIES[id].resolution);
+        if (resolved && resolved.tier !== 'fallback') {
+          console.log(`  \x1b[32m[PASS]\x1b[0m ${id} available (${resolved.tier}: ${resolved.command})`);
           pass++;
-        } else {
+        } else if (resolved) {
           warn++;
           console.log(
-            `  \x1b[33m[WARN]\x1b[0m ${bin.name} (pack ${bin.pack}) not found — install it on this machine or the pack's tools will fail at runtime`,
+            `  \x1b[33m[WARN]\x1b[0m ${id} resolves only via ${resolved.command} (no persistent install) — npx huaweicloud-devkit dep install ${id}`,
           );
+        } else {
+          warn++;
+          console.log(`  \x1b[33m[WARN]\x1b[0m ${id} not found — npx huaweicloud-devkit dep install ${id}`);
         }
+      }
+    }
+    for (const [user, used] of Object.entries(PACK_USES)) {
+      if (!enabledPacksUnion.has(user as PackId)) continue;
+      for (const dep of used) {
+        if (enabledPacksUnion.has(dep)) continue;
+        warn++;
+        console.log(
+          `  \x1b[33m[WARN]\x1b[0m Pack ${user} uses ${dep} (soft dependency) but it is disabled — its tools fall back to manual paths (npx huaweicloud-devkit install --packs <ids> to enable)`,
+        );
       }
     }
   }
@@ -5322,7 +5363,9 @@ function cmdVersion(): void {
 
 // Dependency tooling: `dep status` renders the catalog rows for the current
 // effective pack union; `dep install <id>` runs one specific installer,
-// bypassing policy. Unit 3 extends this with uninstall.
+// bypassing policy; `dep uninstall <id>` is receipt-gated (see
+// dep-provision.ts) and refuses while the effective pack union still
+// requires the id.
 function cmdDepStatus(): void {
   const union = effectivePackUnion();
   const deps = requiredDependencies(union);
@@ -5371,6 +5414,29 @@ async function cmdDepInstall(): Promise<void> {
   process.exitCode = 1;
 }
 
+function cmdDepUninstall(): void {
+  const id = process.argv[4];
+  if (!id || !(DEPENDENCY_IDS as readonly string[]).includes(id)) {
+    console.error(`Unknown dependency id: ${id ?? '(missing)'}`);
+    console.error(`Valid dependency ids: ${DEPENDENCY_IDS.join(', ')}`);
+    process.exitCode = 1;
+    return;
+  }
+  const report = packUnionReport();
+  const result = uninstallDependency(id as DependencyId, {
+    enabledPacks: report.union,
+    carriers: report.carriers,
+  });
+  if (result.ok) {
+    console.log(result.message);
+    for (const line of result.detail ?? []) console.log(line);
+    return;
+  }
+  console.error(result.message);
+  for (const line of result.detail ?? []) console.error(line);
+  process.exitCode = 1;
+}
+
 async function cmdDep(): Promise<void> {
   const sub = process.argv[3];
   if (sub === 'status') {
@@ -5381,7 +5447,11 @@ async function cmdDep(): Promise<void> {
     await cmdDepInstall();
     return;
   }
-  console.error('Usage: npx huaweicloud-devkit dep <status | install <id>>');
+  if (sub === 'uninstall') {
+    cmdDepUninstall();
+    return;
+  }
+  console.error('Usage: npx huaweicloud-devkit dep <status | install <id> | uninstall <id>>');
   console.error(`Valid dependency ids: ${DEPENDENCY_IDS.join(', ')}`);
   process.exitCode = 1;
 }
@@ -5447,7 +5517,7 @@ async function main(): Promise<void> {
       console.log('  status       Show installation status');
       console.log('  doctor       Self-check: hcloud, MCP, skills, auth');
       console.log('  install-hcloud  Show KooCLI install commands for your OS');
-      console.log('  dep          Dependency tooling: status | install <hcloud|open-mcp-gateway|devbridge>');
+      console.log('  dep          Dependency tooling: status | install <id> | uninstall <id>');
       console.log('  auth         Manage unified auth: init | sync | status | reconcile');
       console.log('  proxy        Manage proxy config: init | show | clear');
       console.log('  version      Print CLI version and installed plugin version per agent');
@@ -5478,6 +5548,7 @@ async function main(): Promise<void> {
       console.log('  npx huaweicloud-devkit install --target opencode --packs sandbox');
       console.log('  npx huaweicloud-devkit dep status');
       console.log('  npx huaweicloud-devkit dep install hcloud');
+      console.log('  npx huaweicloud-devkit dep uninstall hcloud');
       console.log('  npx huaweicloud-devkit auth init');
       console.log('  npx huaweicloud-devkit auth sync --target all');
       console.log('  npx huaweicloud-devkit auth status --target all');

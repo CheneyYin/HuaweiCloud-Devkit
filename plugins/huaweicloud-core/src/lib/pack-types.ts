@@ -8,19 +8,21 @@ import type { ToolArgs, ToolName, CallToolOptions } from '../tools.ts';
 // used in a typeof query, and importing ToolName/ToolArgs/CallToolOptions from
 // tools.ts is a type-only edge, which verbatimModuleSyntax erases — so the
 // existing tools.ts → registry → pack value chain gains no runtime cycle).
-// PACK_IDS and PACK_BINARIES below are value exports, but they keep the
-// module's runtime graph at zero imports on purpose: the installer
-// (dist/setup-cli.js, plain tsc output — only dist/mcp-server.js is
-// esbuild-bundled with zod inlined) imports this module to validate --packs
-// and to read pack-declared binaries in doctor, and must not pull the
-// zod-dependent registry chain.
+// PACK_IDS below is the module's only value export, and it keeps the runtime
+// graph at zero imports on purpose: the installer (dist/setup-cli.js, plain
+// tsc output — only dist/mcp-server.js is esbuild-bundled with zod inlined)
+// imports this module to validate --packs and must not pull the
+// zod-dependent registry chain. The pack→binary dependency vocabulary that
+// once lived here was absorbed by lib/dependency-model.ts: the DEPENDENCIES
+// catalog plus PACK_DEPENDENCIES edges are the single declaration surface
+// now.
 //
 // Consumers:
 //   - src/packs/registry.ts        (Pack, PackId)
-//   - src/packs/<id>/pack.ts       (Pack, PACK_BINARIES)
+//   - src/packs/<id>/pack.ts       (Pack)
 //   - src/packs/<id>/tools.ts      (PackToolDefinition, LooseToolSchema)
 //   - src/tool-schemas.ts          (LooseToolSchema, re-exported for callers)
-//   - src/setup-cli.ts             (PACK_IDS, PACK_BINARIES — installer side)
+//   - src/setup-cli.ts             (PACK_IDS — installer side)
 //   - src/lib/dependency-model.ts   (PACK_IDS — shared dependency vocabulary)
 
 // The runtime class behind z.looseObject (constructor name ZodObject): a
@@ -61,36 +63,6 @@ export const PACK_IDS = [
 ] as const;
 export type PackId = (typeof PACK_IDS)[number];
 
-// A binary a pack depends on. `scope` selects where it must exist: 'host'
-// binaries run on the user's machine and are checked by doctor; 'sandbox'
-// binaries live inside the cloud sandbox, where a host-side probe would
-// target the wrong machine, so doctor leaves them alone. `versionFlag` is
-// the argument that makes the binary print a version ('--version', or
-// 'version' when the binary uses a subcommand).
-export interface PackBinary {
-  name: string;
-  scope: 'host' | 'sandbox';
-  versionFlag: string;
-}
-
-// Pack-declared binaries, keyed by pack id. The table lives here rather than
-// inside the pack manifests (next to their zod-heavy tool tables) so the
-// installer's doctor can read it without importing the registry chain; each
-// pack manifest references its own entry, so the declaration stays attributed
-// to the pack and a future entry takes effect in doctor immediately.
-export const PACK_BINARIES = {
-  // devbridge ships inside the cloud sandbox and reports its version via the
-  // `version` subcommand, so it is declared sandbox-scoped: doctor's
-  // host-side probe must not check it.
-  sandbox: [{ name: 'devbridge', scope: 'sandbox', versionFlag: 'version' }],
-  // The openapi gateway (the huaweicloud-open-mcp pack's sidecar) runs on
-  // the host as a child of the MCP server process
-  // (src/packs/huaweicloud-open-mcp/sidecar.ts). The gateway CLI has no
-  // --version flag yet (upstream Phase 0 item), so the presence probe uses
-  // --help, which argparse exits 0 on.
-  'huaweicloud-open-mcp': [{ name: 'huaweicloud-open-mcp', scope: 'host', versionFlag: '--help' }],
-} as const satisfies Readonly<Partial<Record<PackId, readonly PackBinary[]>>>;
-
 export interface Pack {
   id: PackId;
   title: string;
@@ -98,6 +70,4 @@ export interface Pack {
   /** skills/ directory names this pack ships. */
   skills: string[];
   tools: ToolName[];
-  /** Binaries this pack depends on; absent = none declared. */
-  readonly binaries?: readonly PackBinary[];
 }
