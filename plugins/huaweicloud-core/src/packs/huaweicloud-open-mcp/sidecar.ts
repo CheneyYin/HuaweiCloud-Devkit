@@ -145,6 +145,22 @@ class OpenMcpSidecar {
     this.child.once('exit', () => clearTimeout(force));
   }
 
+  // kill() plus the bounded wait for the actual exit, so a replacement spawn
+  // never overlaps a live old child. The bound sits past kill's 3s SIGKILL
+  // escalation; a child still alive after that resolves anyway — the next
+  // spawn's handshake failure path would kill its own child, never this one.
+  async stop(): Promise<void> {
+    if (!this.alive) return;
+    this.kill();
+    await new Promise<void>((resolve) => {
+      const bound = setTimeout(resolve, 4500);
+      this.child.once('exit', () => {
+        clearTimeout(bound);
+        resolve();
+      });
+    });
+  }
+
   async handshake(): Promise<void> {
     await this.request(
       'initialize',
@@ -320,4 +336,41 @@ export async function _resetOpenMcpSidecar(): Promise<void> {
     // spawn or handshake already failed; spawnSidecar's catch killed the child
   }
   await new Promise((resolve) => setTimeout(resolve, 200));
+}
+
+// First-class in-session restart: recycle the gateway child, e.g. after the
+// host upgraded the binary (npx huaweicloud-devkit dep install
+// open-mcp-gateway) while the agent was live. The old child is stopped and
+// its real exit awaited (bounded by the kill escalation window) before the
+// replacement spawns, so the upgraded binary is the one that runs.
+//
+// Serialization: the restart continuation itself becomes the sidecar
+// promise, so tool calls racing the restart await the same replacement
+// spawn instead of interleaving their own. currentSidecar is cleared BEFORE
+// the old child stops, so the old child's onExit (which only clears state
+// when currentSidecar === this) cannot wipe the continuation. In-flight
+// proxied calls are rejected by the pending-entry machinery when the old
+// child dies — the restart tool's description sets that expectation.
+// Idempotent: no live singleton means the call is just a spawn.
+export function restartOpenMcpSidecar(): Promise<{ pid: number | null; spawns: number }> {
+  const previous = sidecarPromise;
+  currentSidecar = null;
+  const next = (async () => {
+    if (previous) {
+      try {
+        const old = await previous;
+        await old.stop();
+      } catch {
+        // A failed spawn or handshake already killed its child.
+      }
+    }
+    const sidecar = await spawnSidecar();
+    currentSidecar = sidecar;
+    return sidecar;
+  })();
+  sidecarPromise = next.catch((error) => {
+    sidecarPromise = null; // the restart's spawn failed: the next call retries
+    throw error;
+  });
+  return sidecarPromise.then(() => ({ pid: stats.lastPid, spawns: stats.spawns }));
 }

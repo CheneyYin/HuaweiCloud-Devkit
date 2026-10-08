@@ -32,6 +32,7 @@ const OPEN_MCP_TOOLS = new Set([
   'huaweicloud_list_apis',
   'huaweicloud_get_api',
   'huaweicloud_get_api_examples',
+  'huaweicloud_gateway_restart',
 ]);
 
 // node --test runs each file in its own process; the try/finally keeps later
@@ -73,13 +74,13 @@ test(
   }),
 );
 
-test('pack meta discloses the huaweicloud-open-mcp pack with its six proxy tools', async () => {
+test('pack meta discloses the huaweicloud-open-mcp pack with its six proxy tools and the restart tool', async () => {
   const info = await callTool('huaweicloud_pack_info', { pack: 'huaweicloud-open-mcp' });
   assert.equal(info.ok, true);
   assert.equal(info.enabled, true);
-  assert.equal(info.tools.length, 6);
+  assert.equal(info.tools.length, 7);
   for (const entry of info.tools) {
-    assert.ok(OPEN_MCP_TOOLS.has(entry.name), `${entry.name} must be one of the six proxy tools`);
+    assert.ok(OPEN_MCP_TOOLS.has(entry.name), `${entry.name} must be one of the pack's tools`);
     assert.equal(typeof entry.description, 'string');
   }
   assert.equal(_openMcpSidecarStats().spawns, 0, 'pack meta must not spawn the sidecar');
@@ -307,6 +308,37 @@ test('sidecar errors surface as ok:false results, never as throws', async () => 
     assert.equal(result.tool, 'no_such_tool');
     assert.ok(typeof result.error === 'string' && result.error.length > 0);
     assert.equal(_openMcpSidecarStats().spawns > 0, true, 'the cumulative spawn counter stays honest');
+  } finally {
+    await _resetOpenMcpSidecar();
+    assert.equal(_openMcpSidecarStats().alive, false, 'reset clears the singleton');
+  }
+});
+
+// The restart tool's contract, driven through the pack's real dispatch with
+// the fake gateway: a live child recycles to a NEW pid, and with no prior
+// spawn the restart is just one spawn (idempotent). stats.spawns is the
+// module-level cumulative counter, so the assertions are deltas.
+test('huaweicloud_gateway_restart recycles a live child and spawns fresh when none exists', async () => {
+  await _resetOpenMcpSidecar();
+  try {
+    // No prior spawn: the restart is a single spawn.
+    let before = _openMcpSidecarStats().spawns;
+    let result = await callTool('huaweicloud_gateway_restart', {});
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.spawns - before, 1, 'first restart with no live child is one spawn');
+    const firstPid = result.pid;
+    assert.ok(firstPid !== null, 'the new child must report a pid');
+
+    // Live child: the restart stops it and spawns a replacement.
+    before = _openMcpSidecarStats().spawns;
+    result = await callTool('huaweicloud_gateway_restart', {});
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.spawns - before, 1, 'a live child adds exactly one more spawn');
+    assert.notEqual(result.pid, firstPid, 'the recycled child must be a new process');
+
+    // The replacement actually serves proxy calls.
+    const probe = await callTool('huaweicloud_list_products', {});
+    assert.equal(probe.ok, true, JSON.stringify(probe));
   } finally {
     await _resetOpenMcpSidecar();
     assert.equal(_openMcpSidecarStats().alive, false, 'reset clears the singleton');

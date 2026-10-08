@@ -284,6 +284,11 @@ const TOOL_DEFINITIONS_LITERALS = [
     description:
       'Get the official request examples (x-request-examples) for one API to guide parameter construction. Read-only; needs no credentials.',
   },
+  {
+    name: 'huaweicloud_gateway_restart',
+    description:
+      'Recycle the open-mcp gateway child of this MCP server process, e.g. after upgrading the gateway on the host (npx huaweicloud-devkit dep install open-mcp-gateway) while the session was live. In-flight gateway calls are interrupted when the old child stops. No arguments. In-process lifecycle only; needs no credentials.',
+  },
 ] as const;
 
 export type ToolName = (typeof TOOL_DEFINITIONS_LITERALS)[number]['name'];

@@ -72,6 +72,7 @@ export const PACK_OF = {
   huaweicloud_list_apis: 'huaweicloud-open-mcp',
   huaweicloud_get_api: 'huaweicloud-open-mcp',
   huaweicloud_get_api_examples: 'huaweicloud-open-mcp',
+  huaweicloud_gateway_restart: 'huaweicloud-open-mcp',
 } as const satisfies Record<ToolName, PackId>;
 
 // The 38 pack-owned tool names: every PACK_OF key whose owner is not core.

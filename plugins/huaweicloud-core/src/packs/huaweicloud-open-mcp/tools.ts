@@ -1,10 +1,11 @@
 import { z } from 'zod';
 
 import type { PackToolDefinition, LooseToolSchema } from '../../lib/pack-types.ts';
-import { callOpenMcpTool } from './sidecar.ts';
+import { callOpenMcpTool, restartOpenMcpSidecar } from './sidecar.ts';
 
 // Thin proxies over the huaweicloud-open-mcp gateway's six metadata tools
-// (src/mcp_openapi/server.py). The gateway is the authoritative validator;
+// (src/mcp_openapi/server.py), plus one lifecycle tool that recycles the
+// gateway child in-session. The gateway is the authoritative validator;
 // these zod schemas only guard the boundary (required identity fields plus
 // passthrough), and the sidecar normalizes results to {ok, tool, ...}.
 // Phase 1 is discovery-only: execute_api and manage_policy are NOT proxied.
@@ -54,6 +55,8 @@ const getApiExamplesSchema = z.looseObject({
   region: z.string().optional().describe('Region; same semantics as get_api.'),
 });
 
+const gatewayRestartSchema = z.looseObject({});
+
 async function handleSearchApis(args: Record<string, unknown>) {
   return callOpenMcpTool('search_apis', args);
 }
@@ -71,6 +74,17 @@ async function handleGetApi(args: Record<string, unknown>) {
 }
 async function handleGetApiExamples(args: Record<string, unknown>) {
   return callOpenMcpTool('get_api_examples', args);
+}
+
+// In-process lifecycle only — no hcloud I/O, so no approval token (the
+// auth_init class of state mutation, not the run_approved_command class).
+async function handleGatewayRestart() {
+  try {
+    const { pid, spawns } = await restartOpenMcpSidecar();
+    return { ok: true, pid, spawns, note: 'gateway recycled; an upgraded binary is now active' };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 export const HUAWEICLOUD_OPEN_MCP_TOOLS = [
@@ -116,6 +130,13 @@ export const HUAWEICLOUD_OPEN_MCP_TOOLS = [
     schema: getApiExamplesSchema,
     handler: handleGetApiExamples,
   },
+  {
+    name: 'huaweicloud_gateway_restart',
+    description:
+      'Recycle the open-mcp gateway child of this MCP server process, e.g. after upgrading the gateway on the host (npx huaweicloud-devkit dep install open-mcp-gateway) while the session was live. In-flight gateway calls are interrupted when the old child stops. No arguments. In-process lifecycle only; needs no credentials.',
+    schema: gatewayRestartSchema,
+    handler: handleGatewayRestart,
+  },
 ] as const satisfies readonly PackToolDefinition[];
 
 export type HuaweicloudOpenMcpToolName = (typeof HUAWEICLOUD_OPEN_MCP_TOOLS)[number]['name'];
@@ -127,6 +148,7 @@ export const HUAWEICLOUD_OPEN_MCP_TOOL_SCHEMAS: Readonly<Record<HuaweicloudOpenM
   huaweicloud_list_apis: listApisSchema,
   huaweicloud_get_api: getApiSchema,
   huaweicloud_get_api_examples: getApiExamplesSchema,
+  huaweicloud_gateway_restart: gatewayRestartSchema,
 };
 
 export const HUAWEICLOUD_OPEN_MCP_TOOL_HANDLERS: Readonly<
@@ -138,4 +160,5 @@ export const HUAWEICLOUD_OPEN_MCP_TOOL_HANDLERS: Readonly<
   huaweicloud_list_apis: handleListApis,
   huaweicloud_get_api: handleGetApi,
   huaweicloud_get_api_examples: handleGetApiExamples,
+  huaweicloud_gateway_restart: handleGatewayRestart,
 };

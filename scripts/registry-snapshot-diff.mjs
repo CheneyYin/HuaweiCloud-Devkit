@@ -31,6 +31,7 @@ const EXEMPT_TOOLS = new Set([
   'huaweicloud_list_apis',
   'huaweicloud_get_api',
   'huaweicloud_get_api_examples',
+  'huaweicloud_gateway_restart',
 ]);
 
 // Declared, intentional drifts from the legacy literals. Each entry names the

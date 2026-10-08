@@ -869,7 +869,7 @@ test('update pack registers version-update tools; registry carries the central d
 test('seven packs register their tools; the central map dispatches them', () => {
   // Same contract as the update pack, asserted for the packs materialized
   // after P4: sandbox (11), auth (5), obs (2), voucher (2), discovery (3),
-  // huaweicloud-open-mcp (6), huaweicloud-cli (7) — 36 tools total. Their
+  // huaweicloud-open-mcp (7), huaweicloud-cli (7) — 37 tools total. Their
   // handlers reach callTool only through the PACK_TOOL_HANDLERS merge in
   // packs/registry.ts.
   const packs = [
@@ -878,7 +878,7 @@ test('seven packs register their tools; the central map dispatches them', () => 
     { id: 'obs', tools: OBS_TOOLS, count: 2 },
     { id: 'voucher', tools: VOUCHER_TOOLS, count: 2 },
     { id: 'discovery', tools: DISCOVERY_TOOLS, count: 3 },
-    { id: 'huaweicloud-open-mcp', tools: HUAWEICLOUD_OPEN_MCP_TOOLS, count: 6 },
+    { id: 'huaweicloud-open-mcp', tools: HUAWEICLOUD_OPEN_MCP_TOOLS, count: 7 },
     { id: 'huaweicloud-cli', tools: HUAWEICLOUD_CLI_TOOLS, count: 7 },
   ];
   const tools = readSource(join('src', 'tools.ts'));
