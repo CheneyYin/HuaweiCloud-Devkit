@@ -345,7 +345,7 @@ npx --yes huaweicloud-devkit proxy clear   # 删除代理配置
 - **执行前风险检查** — 公网暴露、凭证泄露、破坏性操作在执行前即被拦截
 - **区域感知** — 自动发现可用区域，创建资源前检查服务可用性
 - **沙箱（DevStation）** — 临时云端运行环境，部署 Web 应用并即刻获得公网预览地址
-- **能力包（48 个 MCP 工具）** — 内置九个能力包（core 17 个工具；huaweicloud-cli 承载 20 个服务技能；sandbox、auth、obs、voucher、update、discovery、huaweicloud-open-mcp 合计其余 31 个）。huaweicloud-open-mcp 包经本地 huaweicloud-open-mcp 网关提供全量 API 目录发现（search_apis → get_api；网关可用 pip 或 uv 安装，PATH 上有 `uvx` 即无需持久安装）。用 `huaweicloud_list_packs` → `huaweicloud_pack_info` 发现能力包，再用 `huaweicloud_retrieve_skill` 加载技能。可用 `DEVKIT_PACKS` 裁剪启用面（逗号分隔的包 id，如 `DEVKIT_PACKS=core,sandbox`）；未设置即全量启用，未知 id 启动即报错，core（审批链与包元工具）始终强制包含。
+- **能力包（48 个 MCP 工具）** — 内置九个能力包（core 10 个工具；huaweicloud-cli 承载 20 个服务技能外加 7 个 KooCLI 执行工具；sandbox、auth、obs、voucher、update、discovery、huaweicloud-open-mcp 合计其余 31 个）。huaweicloud-open-mcp 包经本地 huaweicloud-open-mcp 网关提供全量 API 目录发现（search_apis → get_api；网关可用 pip 或 uv 安装，PATH 上有 `uvx` 即无需持久安装）。用 `huaweicloud_list_packs` → `huaweicloud_pack_info` 发现能力包，再用 `huaweicloud_retrieve_skill` 加载技能。可用 `DEVKIT_PACKS` 裁剪启用面（逗号分隔的包 id，如 `DEVKIT_PACKS=core,sandbox`）；未设置即全量启用，未知 id 启动即报错，core（包元数据、安全与发现面）始终强制包含——裁剪 huaweicloud-cli 会同时移除 CLI 执行面及其审批工具。
 
 ## 支持的服务
 

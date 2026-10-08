@@ -42,10 +42,11 @@ export interface PackToolDefinition {
 // union cannot drift apart; the registry's PACKS ids are pinned to this list
 // by test/structure.test.ts, which keeps the installer's --packs validation
 // honest against the registry truth.
-// 'huaweicloud-cli' carries the twenty service skills with zero tools: a pack may
-// own knowledge (skills) without owning callable surface, and the meta tools
-// that disclose it (list_packs / pack_info / retrieve_skill) stay in core so
-// an enabled pack can always be discovered.
+// 'huaweicloud-cli' is a mixed knowledge+tools pack: the twenty service
+// skills plus the seven KooCLI execution tools (the CLI face and its
+// approval chain, sunk from core), while the meta tools that disclose packs
+// (list_packs / pack_info / retrieve_skill) stay in core so an enabled pack
+// can always be discovered.
 export const PACK_IDS = [
   'core',
   'huaweicloud-cli',

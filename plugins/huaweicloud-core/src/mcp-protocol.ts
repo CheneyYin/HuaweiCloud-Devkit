@@ -106,8 +106,8 @@ export function createDevkitMcpServer({ sessionId }: DevkitServerOptions = {}): 
   // Read per construction: stdio resolves once at boot (fail-fast exit on a
   // bogus DEVKIT_PACKS), the stateless remote re-reads env on every request,
   // so both transports share one code path with no transport branching.
-  // Unknown pack ids throw here; core is always in the set, so its 17 tools
-  // (15 + the two pack meta tools) are never filtered.
+  // Unknown pack ids throw here; core is always in the set, so its 10 tools
+  // (8 + the two pack meta tools) are never filtered.
   const enabledPacks = resolveEnabledPacks();
   const server = new McpServer({ name: 'huaweicloud-devkit', version: pkgVersion });
 

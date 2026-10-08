@@ -1,15 +1,16 @@
 import type { Pack } from '../../lib/pack-types.ts';
+import { HUAWEICLOUD_CLI_TOOLS } from './tools.ts';
 
-// The huaweicloud-cli pack manifest. registry.ts references this from PACKS;
-// the skill list is the authoritative claim over the twenty service skills
-// whose sources live in this pack's skills/ tree (generated into the runtime
-// skills/ tree by scripts/sync-skills.mjs). The tool list is empty by design:
-// this pack owns knowledge, not callable surface — the meta tools that
-// disclose skills (huaweicloud_list_packs / huaweicloud_pack_info /
-// huaweicloud_retrieve_skill) live in core so every enabled pack stays
-// discoverable. A future tool claimed for this pack in PACK_OF must also be
-// listed here by hand (packs cannot import the registry, so the list cannot
-// self-derive); the packs-registry union test fails loudly if the two drift.
+// The huaweicloud-cli pack manifest: a mixed knowledge+tools pack. The skill
+// list is the authoritative claim over the twenty service skills whose
+// sources live in this pack's skills/ tree (generated into the runtime
+// skills/ tree by scripts/sync-skills.mjs); the seven KooCLI execution tools
+// (src/packs/huaweicloud-cli/tools.ts) include the approval chain
+// (huaweicloud_run_approved_command), so trimming this pack removes the CLI
+// execution face and its approval tools together — fail-closed. The tool
+// list derives from the pack's own definitions (the obs self-derivation
+// pattern), and PACK_OF stays the tool-ownership source of truth
+// (structure.test.ts asserts the lockstep).
 export const huaweicloudCliPack: Pack = {
   id: 'huaweicloud-cli',
   title: 'CLI Service Skills',
@@ -37,5 +38,5 @@ export const huaweicloudCliPack: Pack = {
     'huawei-vpc',
     'huawei-waf-aad',
   ],
-  tools: [],
+  tools: HUAWEICLOUD_CLI_TOOLS.map((tool) => tool.name),
 };

@@ -162,12 +162,6 @@ function invokeMcpToolCall(mcpServerPath, env, toolName, toolArgs, timeout = 150
 // TOOL_DEFINITIONS and packs/registry.ts. When a new tool is added to tools.ts,
 // add it here or under its pack below.
 const REQUIRED_TOOLS = [
-  'huaweicloud_check_cli',
-  'huaweicloud_plan_cli_command',
-  'huaweicloud_run_readonly_command',
-  'huaweicloud_list_operations',
-  'huaweicloud_run_approved_command',
-  'huaweicloud_show_profile_redacted',
   'huaweicloud_hook_check_command',
   'huaweicloud_hook_check_artifacts',
   'huaweicloud_hook_check_deploy_plan',
@@ -175,7 +169,6 @@ const REQUIRED_TOOLS = [
   'huaweicloud_explain_error',
   'huaweicloud_search_docs',
   'huaweicloud_retrieve_skill',
-  'huaweicloud_list_regions',
   'huaweicloud_get_regional_availability',
   'huaweicloud_list_packs',
   'huaweicloud_pack_info',
@@ -184,6 +177,15 @@ const REQUIRED_TOOLS = [
 // Optional-pack tools, grouped by pack id (same grouping as
 // packs/registry.ts). Together with REQUIRED_TOOLS these cover all 48 tools.
 const PER_PACK_TOOLS = {
+  'huaweicloud-cli': [
+    'huaweicloud_check_cli',
+    'huaweicloud_plan_cli_command',
+    'huaweicloud_run_readonly_command',
+    'huaweicloud_list_operations',
+    'huaweicloud_run_approved_command',
+    'huaweicloud_show_profile_redacted',
+    'huaweicloud_list_regions',
+  ],
   sandbox: [
     'huaweicloud_sandbox_exec_with_session',
     'huaweicloud_sandbox_exec_one_shot',
@@ -354,7 +356,7 @@ test('MCP tools/list includes all required core tools with valid schemas', async
     for (const required of REQUIRED_TOOLS) {
       assert.ok(toolNames.includes(required), `Missing tool: ${required}`);
     }
-    // Plus every optional-pack tool: tools/list must carry the full 42.
+    // Plus every optional-pack tool: tools/list must carry the full 48.
     const perPackNames = Object.values(PER_PACK_TOOLS).flat();
     for (const name of perPackNames) {
       assert.ok(toolNames.includes(name), `Missing tool: ${name}`);
@@ -392,7 +394,7 @@ test('MCP tools/list includes all required core tools with valid schemas', async
   }
 });
 
-test('DEVKIT_PACKS=sandbox trims tools/list to core 17 + sandbox 11', async () => {
+test('DEVKIT_PACKS=sandbox trims tools/list to core 10 + sandbox 11', async () => {
   const home = mkdtempSync(join(tmpdir(), 'mcp-trim-'));
   const cwd = mkdtempSync(join(tmpdir(), 'mcp-trim-proj-'));
   try {
@@ -401,13 +403,13 @@ test('DEVKIT_PACKS=sandbox trims tools/list to core 17 + sandbox 11', async () =
 
     const mcpServerPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js');
     // DEVKIT_PACKS rides the spawn env into the stdio server; without it the
-    // suite's other tests above still see the full 42.
+    // suite's other tests above still see the full 48.
     const responses = await invokeMcpTools(mcpServerPath, { ...makeEnv(home, cwd), DEVKIT_PACKS: 'sandbox' });
 
     assert.ok(responses[0].result, 'initialize returned result');
     assert.ok(responses[1].result, 'tools/list returned result');
     const toolNames = responses[1].result.tools.map((t) => t.name);
-    assert.equal(toolNames.length, 28, `expected core 17 + sandbox 11, got ${toolNames.length}`);
+    assert.equal(toolNames.length, 21, `expected core 10 + sandbox 11, got ${toolNames.length}`);
 
     // The always-on core surface survives any trimming...
     for (const required of REQUIRED_TOOLS) {
@@ -430,7 +432,7 @@ test('DEVKIT_PACKS=sandbox trims tools/list to core 17 + sandbox 11', async () =
   }
 });
 
-test('DEVKIT_PACKS=huaweicloud-open-mcp trims tools/list to core 17 + gateway 6', async () => {
+test('DEVKIT_PACKS=huaweicloud-open-mcp trims tools/list to core 10 + gateway 6', async () => {
   const home = mkdtempSync(join(tmpdir(), 'mcp-trim-open-mcp-'));
   const cwd = mkdtempSync(join(tmpdir(), 'mcp-trim-open-mcp-proj-'));
   try {
@@ -446,7 +448,7 @@ test('DEVKIT_PACKS=huaweicloud-open-mcp trims tools/list to core 17 + gateway 6'
     assert.ok(responses[0].result, 'initialize returned result');
     assert.ok(responses[1].result, 'tools/list returned result');
     const toolNames = responses[1].result.tools.map((t) => t.name);
-    assert.equal(toolNames.length, 23, `expected core 17 + gateway 6, got ${toolNames.length}`);
+    assert.equal(toolNames.length, 16, `expected core 10 + gateway 6, got ${toolNames.length}`);
 
     for (const required of REQUIRED_TOOLS) {
       assert.ok(toolNames.includes(required), `Missing core tool: ${required}`);

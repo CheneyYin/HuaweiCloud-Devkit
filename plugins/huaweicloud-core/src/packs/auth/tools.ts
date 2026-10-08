@@ -230,7 +230,7 @@ export type AuthToolName = (typeof AUTH_TOOLS)[number]['name'];
 
 // Schema map keyed by tool name for src/tool-schemas.ts: TOOL_SCHEMAS spreads
 // it in place, keeping the satisfies Record<ToolName, LooseToolSchema>
-// completeness check over all 42 tools.
+// completeness check over all 48 tools.
 export const AUTH_TOOL_SCHEMAS: Readonly<Record<AuthToolName, LooseToolSchema>> = {
   huaweicloud_auth_status: authStatusSchema,
   huaweicloud_auth_sync: authSyncSchema,

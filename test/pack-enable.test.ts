@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 
 import { resolveEnabledPacks } from '../plugins/huaweicloud-core/src/packs/enable.ts';
 import { PACKS } from '../plugins/huaweicloud-core/src/packs/registry.ts';
 import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
+import { createLinkedDevkitServers } from '../plugins/huaweicloud-core/src/mcp-protocol.ts';
 
 const ALL_IDS = PACKS.map((pack) => pack.id);
 const OPTIONAL_IDS = ALL_IDS.filter((id) => id !== 'core');
@@ -144,9 +146,8 @@ test(
 test(
   'enabling huaweicloud-cli loads service skills and gates other packs',
   withDevkitPacks('huaweicloud-cli', async () => {
-    // The pack owns zero tools, so tools/list cannot tell it apart from every
-    // optional pack being disabled; skill gating is its whole surface, and the
-    // positive path is what migrating DEVKIT_PACKS holders will run.
+    // Skill gating is half the pack's surface; the tools/list half (core 10 +
+    // the seven CLI execution tools) is pinned by the trimming test below.
     const listed = await callTool('huaweicloud_list_packs', {});
     assert.equal(listed.ok, true);
     const flags = new Map(listed.packs.map((pack) => [pack.id, pack.enabled]));
@@ -162,6 +163,38 @@ test(
     const denied = await callTool('huaweicloud_retrieve_skill', { name: 'huawei-sandbox' });
     assert.equal(denied.ok, false);
     assert.match(denied.error, /belongs to pack "sandbox" which is not enabled/);
+  }),
+);
+
+test(
+  'enabling only huaweicloud-cli registers the seven CLI execution tools alongside core',
+  withDevkitPacks('huaweicloud-cli', async () => {
+    // Fail-closed trimming, positive direction: the pack carries the CLI
+    // execution face and its approval tools together, so a trimmed-to-cli
+    // server exposes exactly core 10 + cli 7 and nothing else.
+    const { server, transport } = await createLinkedDevkitServers();
+    const client = new Client({ name: 'pack-enable-test', version: '0.0.0' });
+    try {
+      await client.connect(transport);
+      const listed = await client.listTools();
+      const names = listed.tools.map((tool) => tool.name);
+      assert.equal(names.length, 17, 'core 10 + huaweicloud-cli 7');
+      for (const name of [
+        'huaweicloud_check_cli',
+        'huaweicloud_plan_cli_command',
+        'huaweicloud_run_readonly_command',
+        'huaweicloud_list_operations',
+        'huaweicloud_run_approved_command',
+        'huaweicloud_show_profile_redacted',
+        'huaweicloud_list_regions',
+      ]) {
+        assert.ok(names.includes(name), `${name} must be registered when huaweicloud-cli is enabled`);
+      }
+      assert.ok(!names.includes('huaweicloud_sandbox_connect'), 'a non-cli pack tool must not be registered');
+    } finally {
+      await client.close();
+      await server.close();
+    }
   }),
 );
 

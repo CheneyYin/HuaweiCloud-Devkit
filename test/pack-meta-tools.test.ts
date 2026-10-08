@@ -17,9 +17,6 @@ const PACK_IDS = [
   'discovery',
   'huaweicloud-open-mcp',
 ];
-// Packs that own knowledge without callable surface: their tool list is
-// legitimately empty, so the "must list tools" bar exempts them.
-const ZERO_TOOL_PACKS = new Set(['huaweicloud-cli']);
 
 test('huaweicloud_list_packs returns all 9 packs, sandbox carries exactly 11 tool names', async () => {
   const result = await callTool('huaweicloud_list_packs', {});
@@ -33,11 +30,7 @@ test('huaweicloud_list_packs returns all 9 packs, sandbox carries exactly 11 too
     assert.equal(typeof pack.title, 'string');
     assert.equal(typeof pack.description, 'string');
     assert.equal(pack.enabled, true);
-    if (ZERO_TOOL_PACKS.has(pack.id)) {
-      assert.equal(pack.tools.length, 0, `${pack.id} owns knowledge, not tools`);
-    } else {
-      assert.ok(Array.isArray(pack.tools) && pack.tools.length > 0, `${pack.id} must list tools`);
-    }
+    assert.ok(Array.isArray(pack.tools) && pack.tools.length > 0, `${pack.id} must list tools`);
   }
   const cliPack = result.packs.find((pack) => pack.id === 'huaweicloud-cli');
   assert.equal(cliPack.skills.length, 20);

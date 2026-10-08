@@ -27,10 +27,11 @@ test('the pack tool union equals the full TOOL_DEFINITIONS registry', () => {
 });
 
 test('pack tool counts match the P0 grouping', () => {
-  // huaweicloud-cli owns the twenty service skills and no tools: knowledge pack.
+  // huaweicloud-cli is a mixed pack: the twenty service skills plus the seven
+  // KooCLI execution tools sunk from core.
   const expected = {
-    core: 17,
-    'huaweicloud-cli': 0,
+    core: 10,
+    'huaweicloud-cli': 7,
     sandbox: 11,
     auth: 5,
     obs: 2,
@@ -58,7 +59,7 @@ test('the central pack handler map keys equal the pack-owned tool names', () => 
   );
   const mapKeys = Object.keys(PACK_TOOL_HANDLERS).sort((a, b) => a.localeCompare(b));
   assert.deepEqual(mapKeys, packOwned);
-  assert.equal(mapKeys.length, 31);
+  assert.equal(mapKeys.length, 38);
 });
 
 test('every skills/ directory is claimed by exactly one pack', () => {

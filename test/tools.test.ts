@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { callTool, runVersionCheck, TOOL_DEFINITIONS, listSkillDirs } from '../plugins/huaweicloud-core/src/tools.ts';
+import { callTool, TOOL_DEFINITIONS, listSkillDirs } from '../plugins/huaweicloud-core/src/tools.ts';
+import { runVersionCheck } from '../plugins/huaweicloud-core/src/packs/huaweicloud-cli/tools.ts';
 import { getToolSchema, TOOL_SCHEMAS } from '../plugins/huaweicloud-core/src/tool-schemas.ts';
 import {
   clearRuntimeCredentials,

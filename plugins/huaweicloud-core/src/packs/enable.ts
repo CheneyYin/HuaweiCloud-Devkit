@@ -9,13 +9,16 @@ import { PACKS } from './registry.ts';
 // Unknown ids throw immediately (boot fail-fast): a typo'd id must not
 // silently shrink the tool surface.
 //
-// core is force-included either way. The approval chain
-// (huaweicloud_run_approved_command) and the pack meta disclosure tools
-// (huaweicloud_list_packs / huaweicloud_pack_info) live in core; trimming
-// them would leave an agent that can execute writes without a reviewable
-// approval path or disclose neither what it runs nor what was disabled.
-// Listing core explicitly is redundant but harmless; an env that omits core
-// gets it silently — the safety boundary is not configurable away.
+// core is force-included either way, and the rationale is disclosure: the
+// pack meta tools (huaweicloud_list_packs / huaweicloud_pack_info) stay in
+// core, so no trimming can hide what was disabled. The approval chain moved
+// to the huaweicloud-cli pack with the CLI execution face: trimming that pack
+// removes both together — the only allowWrites:true call site goes with them,
+// so a trimmed configuration has no legal write path (fail-closed). The
+// PreToolUse hook keeps denying raw Bash writes regardless; it never reads
+// pack state. Listing core explicitly is redundant but harmless; an env that
+// omits core gets it silently — the disclosure surface is not configurable
+// away.
 //
 // This file sits at the src/packs/ root next to registry.ts: both are
 // composition files that only core modules (tools.ts, mcp-protocol.ts)

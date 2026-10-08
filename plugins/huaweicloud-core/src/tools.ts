@@ -4,10 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
 import { evaluateArtifacts, evaluateCommandRisk, evaluateDeployPlan, type RiskEvaluation } from './risk-rule-engine.ts';
-import { classifyTextCommand, redactSecrets } from './safety-policy.ts';
-import { planHcloudCommand, runHcloud, consumeApprovalToken, hashArgs, type HcloudRunResult } from './hcloud-cli.ts';
+import { classifyTextCommand } from './safety-policy.ts';
 import { trackToolInvoke, trackSkillRetrieve } from './telemetry/telemetry.ts';
-import { hcloudProbeNextStep, probeHcloud, type ProbeHcloudOptions } from './hcloud-probe.ts';
 // The update tool handlers live in the update pack's handler map (merged
 // into PACK_TOOL_HANDLERS); only the DistTags type for the CallToolOptions
 // doQuery seam is still needed here.
@@ -30,15 +28,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // resolves this relative to its own location) and is disclosed only through
 // the MCP tools (list_packs / pack_info / retrieve_skill / search_docs).
 const SKILLS_ROOT = join(__dirname, '..', 'skills');
-
-// ── Boundary narrowing helpers ──
-// Tool arguments, import-file JSON, and JS-module returns are untrusted at this
-// boundary: values land as unknown and are narrowed with typeof/Array.isArray
-// checks (same guarded-asRecord style as mcp-protocol.ts / hcloud-cli.ts).
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
 
 export function listSkillDirs(root: string): string[] {
   if (!existsSync(root)) return [];
@@ -258,7 +247,7 @@ const TOOL_DEFINITIONS_LITERALS = [
   {
     name: 'huaweicloud_list_packs',
     description:
-      'List the devkit capability packs — the complete skill and tool inventory of this server. Returns each pack with id, title, description, the skill names it owns (load them with huaweicloud_retrieve_skill), its tool names, and the enabled flag. The "huaweicloud-cli" pack carries the twenty Huawei Cloud service skills (ecs, vpc, obs, iam, rds, ...) with per-service CLI workflows; the huaweicloud-cli-and-auth skill covers KooCLI installation and credentials. Use this to discover what the devkit knows before picking a skill or pack.',
+      'List the devkit capability packs — the complete skill and tool inventory of this server. Returns each pack with id, title, description, the skill names it owns (load them with huaweicloud_retrieve_skill), its tool names, and the enabled flag. The "huaweicloud-cli" pack carries the twenty Huawei Cloud service skills (ecs, vpc, obs, iam, rds, ...) with per-service CLI workflows plus the seven KooCLI execution tools (check_cli, plan_cli_command, run_readonly_command, list_operations, run_approved_command, show_profile_redacted, list_regions); the huaweicloud-cli-and-auth skill covers KooCLI installation and credentials. Use this to discover what the devkit knows before picking a skill or pack.',
   },
   {
     name: 'huaweicloud_pack_info',
@@ -442,7 +431,7 @@ export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: Cal
   const toolValue = toolInvokeValue(name, args);
   trackToolInvoke(name, toolValue);
 
-  // Pack tools (the 25 non-core names) dispatch through the central handler
+  // Pack tools (the 38 non-core names) dispatch through the central handler
   // map in packs/registry.ts before the switch; the type guard narrows
   // `name` to the core remainder, which is what the switch below and its
   // never-guard are exhaustive over. opts rides through verbatim: every pack
@@ -453,23 +442,6 @@ export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: Cal
   }
 
   switch (name) {
-    case 'huaweicloud_check_cli':
-      return runVersionCheck();
-    case 'huaweicloud_plan_cli_command':
-      return planHcloudCommand(args.args || [], { allowWrites: args.allowWrites === true });
-    case 'huaweicloud_run_readonly_command':
-      return runHcloud(args.args || [], {
-        timeoutMs: args.timeoutMs,
-        maxRetries: args.maxRetries,
-        cwd: args.cwd,
-        stdin: args.stdin,
-      });
-    case 'huaweicloud_list_operations':
-      return listOperations(args.service, { timeoutMs: args.timeoutMs });
-    case 'huaweicloud_run_approved_command':
-      return runApprovedCommand(args);
-    case 'huaweicloud_show_profile_redacted':
-      return showProfileRedacted(args.profile);
     case 'huaweicloud_hook_check_command':
       return hookResult(evaluateCommandRisk(args.command || ''));
     case 'huaweicloud_hook_check_artifacts':
@@ -483,8 +455,6 @@ export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: Cal
     case 'huaweicloud_retrieve_skill':
       trackSkillRetrieve(args.name || '');
       return retrieveSkill(args.name || '');
-    case 'huaweicloud_list_regions':
-      return listRegions();
     case 'huaweicloud_get_regional_availability':
       return getRegionalAvailability(args.service || '', args.region || '');
     case 'huaweicloud_explain_error':
@@ -519,134 +489,6 @@ function hookResult(result: RiskEvaluation) {
           ? 'Review the warnings with the user before proceeding.'
           : 'No Huawei Cloud hook risk rule matched.',
   };
-}
-
-export async function runVersionCheck(options: ProbeHcloudOptions = {}) {
-  const result = probeHcloud(options);
-  return {
-    installed: result.installed,
-    authenticated: result.ok && !/配置文件中不存在配置项|USE_ERROR.*配置/i.test(result.output || ''),
-    errorCode: result.errorCode,
-    status: result.status,
-    output: result.output,
-    kooCliVersion: result.requiredVersion || undefined,
-    installedVersion: result.installedVersion || undefined,
-    versionMismatch: Boolean(result.versionMismatch),
-    nextStep: hcloudProbeNextStep(result),
-    authHint:
-      'If hcloud is installed but commands fail with "配置文件中不存在配置项", run `npx huaweicloud-devkit auth init` outside agent chat to configure credentials.',
-  };
-}
-
-async function showProfileRedacted(profile?: string) {
-  const args = ['configure', 'show'];
-  if (profile) {
-    args.push('--cli-profile', String(profile));
-  }
-  // The catch fallback adds the blocked/reason markers on top of a run result.
-  type ProfileRunResult = HcloudRunResult & { blocked?: boolean; reason?: string };
-  const result: ProfileRunResult = await runHcloud(args, { allowWrites: false, allowCredentialRead: true }).catch(
-    (error): ProfileRunResult => ({
-      ok: false,
-      blocked: true,
-      reason: error instanceof Error ? error.message : String(error),
-    }),
-  );
-  if (result.blocked) {
-    return {
-      ok: false,
-      blockedByPolicy: true,
-      reason: result.reason,
-      safeAlternative:
-        'Use huaweicloud_show_profile_redacted so profile output is returned through the redaction pipeline.',
-    };
-  }
-  return {
-    ok: result.ok,
-    note: result.ok
-      ? 'Profile information was returned through the toolkit redaction pipeline.'
-      : 'Failed to retrieve profile — hcloud may not be installed or configured.',
-    result: redactSecrets(result),
-  };
-}
-
-const SERVICE_EXAMPLES: Record<string, { list: string; create: string; show: string }> = {
-  ECS: { list: 'ECS ListServersDetails', create: 'ECS CreateServers', show: 'IMS GlanceShowImage' },
-  VPC: { list: 'VPC ListVpcs', create: 'VPC CreateVpc', show: 'VPC ShowVpc' },
-  FUNCTIONGRAPH: {
-    list: 'FunctionGraph ListFunctions',
-    create: 'FunctionGraph CreateFunction',
-    show: 'FunctionGraph ShowFunctionConfig',
-  },
-  APIG: { list: 'APIG ListInstancesV2', create: 'APIG CreateInstanceV2', show: 'APIG ShowDetailsOfInstanceV2' },
-  OBS: { list: 'OBS ls', create: 'OBS mb obs://<bucket>', show: 'OBS stat obs://<bucket>/<key>' },
-  RDS: { list: 'RDS ListInstances', create: 'RDS CreateInstance', show: 'RDS ShowInstance' },
-  CES: { list: 'CES ListAlarms', create: 'CES CreateAlarm', show: 'CES ListMetrics' },
-  GAUSSDB: { list: 'GaussDB ListInstances', create: 'GaussDB CreateInstance', show: 'GaussDB ShowInstance' },
-  DDS: { list: 'DDS ListInstances', create: 'DDS CreateInstance', show: 'DDS ShowInstance' },
-  DCS: { list: 'DCS ListInstances', create: 'DCS CreateInstance', show: 'DCS ShowInstance' },
-};
-
-async function listOperations(service: string | undefined, options: { timeoutMs?: number } = {}) {
-  const serviceName = String(service || '').trim();
-  if (!/^[A-Za-z][A-Za-z0-9-]{1,63}$/.test(serviceName)) {
-    throw new Error('service must be a KooCLI service name such as ECS, VPC, IMS, OBS, RDS, or CDN.');
-  }
-  const isObs = /^obs$/i.test(serviceName);
-  const svc = isObs ? 'obs' : serviceName;
-  const args = isObs ? ['obs', 'help'] : [svc, '--help'];
-  let result = await runHcloud(args, {
-    timeoutMs: options.timeoutMs,
-    maxRetries: 0,
-  });
-  if (!result.ok && !isObs) {
-    result = await runHcloud([svc, 'help'], {
-      timeoutMs: options.timeoutMs,
-      maxRetries: 0,
-    });
-  }
-  return {
-    service: serviceName,
-    command: isObs ? 'hcloud obs help' : `hcloud ${svc} --help`,
-    selectionRule: 'Use this help text to select the exact KooCLI operation name before planning any service command.',
-    examples: SERVICE_EXAMPLES[serviceName.toUpperCase()] || {
-      note: `No cached examples for ${serviceName}. Use the help text above to discover available operations.`,
-    },
-    result,
-  };
-}
-
-async function runApprovedCommand(args: ToolArgs = {}) {
-  if (args.approvedByUser !== true) {
-    throw new Error('approvedByUser must be true after explicit user approval for this exact command.');
-  }
-  const token = String(args.approvalToken || '');
-  const stored = consumeApprovalToken(token);
-  if (!stored) {
-    throw new Error('Invalid or expired approval token. Please re-plan the command.');
-  }
-  const providedArgs = Array.isArray(args.args) ? args.args.map(String) : [];
-  if (hashArgs(providedArgs) !== stored.argsHash) {
-    const redactedStored = JSON.stringify(stored.argsRedacted);
-    const redactedProvided = JSON.stringify(redactSecrets(providedArgs));
-    if (redactedStored !== redactedProvided) {
-      throw new Error(
-        'Provided args do not match the approved plan. Use the exact args from the plan. ' +
-          'If the plan shows <redacted> for passwords or secrets, replace <redacted> with the actual values in approvedCommand.',
-      );
-    }
-  }
-  const strictPlan = planHcloudCommand(providedArgs, { allowWrites: false });
-  const result = await runHcloud(providedArgs, {
-    allowWrites: true,
-    timeoutMs: args.timeoutMs,
-    maxRetries: args.maxRetries,
-    cwd: args.cwd,
-    stdin: args.stdin,
-  });
-  // Spread instead of in-place mutation: identical serialized content, minus a
-  // write to the HcloudRunResult shape owned by hcloud-cli.ts.
-  return { ...result, approved: true, plan: strictPlan };
 }
 
 function serviceCatalog(intent: string = '') {
@@ -1114,53 +956,6 @@ async function retrieveSkill(name: string) {
     if (dm) description = dm[1].trim();
   }
   return { ok: true, name: skillName, version, description, content, references };
-}
-
-async function listRegions() {
-  const result = await runHcloud(['IAM', 'KeystoneListRegions'], { timeoutMs: 30000, maxRetries: 0 }).catch(
-    (error): HcloudRunResult => ({
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    }),
-  );
-  if (!result.ok) {
-    return {
-      ok: false,
-      error: result.error || 'Failed to list regions.',
-      fallback: 'Check https://developer.huaweicloud.com/endpoint for available regions.',
-      staticRegions: [
-        { id: 'cn-north-1', description: '华北-北京一' },
-        { id: 'cn-north-4', description: '华北-北京四' },
-        { id: 'cn-east-3', description: '华东-上海一' },
-        { id: 'cn-east-2', description: '华东-上海二' },
-        { id: 'cn-south-1', description: '华南-广州' },
-        { id: 'ap-southeast-1', description: '香港' },
-        { id: 'ap-southeast-3', description: '新加坡' },
-        { id: 'ap-southeast-2', description: '曼谷' },
-        { id: 'af-south-1', description: '约翰内斯堡' },
-      ],
-      note: 'hcloud unavailable. Showing static region list. For the complete list, visit the fallback URL.',
-    };
-  }
-  let regions: Array<Record<string, unknown>>;
-  try {
-    const parsed: unknown = typeof result.stdout === 'string' ? JSON.parse(result.stdout) : result.stdout;
-    const rawRegionsValue = asRecord(parsed).regions;
-    const rawRegions = Array.isArray(rawRegionsValue) ? rawRegionsValue : [];
-    regions = rawRegions.map((r) => {
-      const record = asRecord(r);
-      return {
-        id: record.id,
-        description: record.description || record.names,
-        type: record.type,
-        locales: record.locales,
-      };
-    });
-  } catch {
-    regions = [{ raw: String(result.stdout).substring(0, 1000) }];
-  }
-  regions.sort((a, b) => String(a.id || '').localeCompare(String(b.id || '')));
-  return { ok: true, count: regions.length, regions };
 }
 
 async function getRegionalAvailability(service: string, region: string) {

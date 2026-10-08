@@ -15,6 +15,7 @@ import { OBS_TOOL_HANDLERS } from './obs/tools.ts';
 import { VOUCHER_TOOL_HANDLERS } from './voucher/tools.ts';
 import { DISCOVERY_TOOL_HANDLERS } from './discovery/tools.ts';
 import { HUAWEICLOUD_OPEN_MCP_TOOL_HANDLERS } from './huaweicloud-open-mcp/tools.ts';
+import { HUAWEICLOUD_CLI_TOOL_HANDLERS } from './huaweicloud-cli/tools.ts';
 
 // PackId and the Pack interface live in src/lib/pack-types.ts alongside
 // PackToolDefinition, so packs and the registry share one vocabulary module.
@@ -23,12 +24,12 @@ import { HUAWEICLOUD_OPEN_MCP_TOOL_HANDLERS } from './huaweicloud-open-mcp/tools
 // satisfies check turns a missing or extra key into a compile error, so this
 // map always covers exactly the TOOL_DEFINITIONS registry.
 export const PACK_OF = {
-  huaweicloud_check_cli: 'core',
-  huaweicloud_plan_cli_command: 'core',
-  huaweicloud_run_readonly_command: 'core',
-  huaweicloud_list_operations: 'core',
-  huaweicloud_run_approved_command: 'core',
-  huaweicloud_show_profile_redacted: 'core',
+  huaweicloud_check_cli: 'huaweicloud-cli',
+  huaweicloud_plan_cli_command: 'huaweicloud-cli',
+  huaweicloud_run_readonly_command: 'huaweicloud-cli',
+  huaweicloud_list_operations: 'huaweicloud-cli',
+  huaweicloud_run_approved_command: 'huaweicloud-cli',
+  huaweicloud_show_profile_redacted: 'huaweicloud-cli',
   huaweicloud_hook_check_command: 'core',
   huaweicloud_hook_check_artifacts: 'core',
   huaweicloud_hook_check_deploy_plan: 'core',
@@ -36,7 +37,7 @@ export const PACK_OF = {
   huaweicloud_explain_error: 'core',
   huaweicloud_search_docs: 'core',
   huaweicloud_retrieve_skill: 'core',
-  huaweicloud_list_regions: 'core',
+  huaweicloud_list_regions: 'huaweicloud-cli',
   huaweicloud_get_regional_availability: 'core',
   huaweicloud_list_packs: 'core',
   huaweicloud_pack_info: 'core',
@@ -73,7 +74,7 @@ export const PACK_OF = {
   huaweicloud_get_api_examples: 'huaweicloud-open-mcp',
 } as const satisfies Record<ToolName, PackId>;
 
-// The 25 pack-owned tool names: every PACK_OF key whose owner is not core.
+// The 38 pack-owned tool names: every PACK_OF key whose owner is not core.
 // Derived from PACK_OF (the ownership truth) rather than hand-listed from the
 // per-pack XToolName unions, so moving a tool into a pack automatically adds
 // it here — and the PACK_TOOL_HANDLERS check below immediately demands its
@@ -83,7 +84,8 @@ type NonCoreToolNames = {
 }[keyof typeof PACK_OF];
 export type PackToolName = NonCoreToolNames;
 
-// Central pack dispatch table: the six per-pack handler maps merged once.
+// Central pack dispatch table: the eight per-pack handler maps merged once
+// (DISCOVERY, OBS, AUTH, SANDBOX, VOUCHER, UPDATE, OPENAPI, HUAWEICLOUD_CLI).
 // The satisfies check closes the loop at compile time — a pack tool that
 // exists in PACK_OF but has no merged handler entry (missing from a pack's
 // X_TOOL_HANDLERS, or a whole pack's spread forgotten here) fails the build
@@ -97,6 +99,7 @@ export const PACK_TOOL_HANDLERS = {
   ...VOUCHER_TOOL_HANDLERS,
   ...UPDATE_TOOL_HANDLERS,
   ...HUAWEICLOUD_OPEN_MCP_TOOL_HANDLERS,
+  ...HUAWEICLOUD_CLI_TOOL_HANDLERS,
 } satisfies Record<PackToolName, PackToolDefinition['handler']>;
 
 // Runtime guard over the same table: true exactly for the PackToolName

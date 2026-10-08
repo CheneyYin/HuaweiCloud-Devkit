@@ -2,9 +2,10 @@ import { z } from 'zod';
 
 import type { ToolName } from './tools.ts';
 import type { LooseToolSchema } from './lib/pack-types.ts';
-import { looseObject, numericArg } from './lib/tool-schema-parts.ts';
+import { looseObject } from './lib/tool-schema-parts.ts';
 import { UPDATE_TOOL_SCHEMAS } from './packs/update/tools.ts';
 import { HUAWEICLOUD_OPEN_MCP_TOOL_SCHEMAS } from './packs/huaweicloud-open-mcp/tools.ts';
+import { HUAWEICLOUD_CLI_TOOL_SCHEMAS } from './packs/huaweicloud-cli/tools.ts';
 import { AUTH_TOOL_SCHEMAS } from './packs/auth/tools.ts';
 import { OBS_TOOL_SCHEMAS } from './packs/obs/tools.ts';
 import { VOUCHER_TOOL_SCHEMAS } from './packs/voucher/tools.ts';
@@ -32,32 +33,6 @@ const artifactsItem = z.looseObject({
 });
 
 const TOOL_SCHEMAS = {
-  huaweicloud_check_cli: z.looseObject({}),
-  huaweicloud_plan_cli_command: z.looseObject({
-    args: z.array(z.string()).describe('hcloud arguments, excluding the hcloud executable.'),
-    allowWrites: z.boolean().optional().describe('Only true after explicit user approval for this exact operation.'),
-  }),
-  huaweicloud_run_readonly_command: z.looseObject({
-    args: z.array(z.string()),
-    timeoutMs: numericArg.optional().describe('Optional timeout in milliseconds. Defaults to 60000.'),
-    maxRetries: numericArg.optional().describe('Optional retry count for transient network errors. Defaults to 1.'),
-    cwd: z.string().optional().describe('Optional working directory for the hcloud process.'),
-  }),
-  huaweicloud_list_operations: z.looseObject({
-    service: z.string().describe('KooCLI service name, such as ECS, VPC, IMS, OBS, RDS, or CDN.'),
-    timeoutMs: numericArg.optional().describe('Optional timeout in milliseconds. Defaults to 60000.'),
-  }),
-  huaweicloud_run_approved_command: z.looseObject({
-    args: z.array(z.string()).describe('hcloud arguments, excluding the hcloud executable.'),
-    approvalToken: z.string().describe('The approvalToken returned by huaweicloud_plan_cli_command.'),
-    approvedByUser: z.boolean().describe('Must be true only after the user explicitly approves this exact command.'),
-    timeoutMs: numericArg.optional().describe('Optional timeout in milliseconds. Defaults to 60000.'),
-    maxRetries: numericArg.optional().describe('Optional retry count for transient network errors. Defaults to 1.'),
-    cwd: z.string().optional().describe('Optional working directory for the hcloud process.'),
-  }),
-  huaweicloud_show_profile_redacted: z.looseObject({
-    profile: z.string().optional().describe('Optional KooCLI profile name.'),
-  }),
   huaweicloud_hook_check_command: z.looseObject({
     command: z.string().describe('The exact command text to inspect.'),
   }),
@@ -94,7 +69,6 @@ const TOOL_SCHEMAS = {
       .regex(/^[a-z0-9-]+$/)
       .describe('Skill name, e.g., huawei-ecs, huawei-vpc, huawei-obs. Lowercase letters, digits, dashes only.'),
   }),
-  huaweicloud_list_regions: z.looseObject({}),
   huaweicloud_get_regional_availability: z.looseObject({
     service: z.string().describe('Service name: ecs, obs, rds, gaussdb, cce, modelarts, functiongraph, etc.'),
     region: z.string().describe('Region ID: cn-south-1, cn-north-4, ap-southeast-3, etc.'),
@@ -128,6 +102,11 @@ const TOOL_SCHEMAS = {
   // the spread keeps them in TOOL_SCHEMAS so the satisfies check below still
   // covers all 48 ToolName keys.
   ...HUAWEICLOUD_OPEN_MCP_TOOL_SCHEMAS,
+  // The huaweicloud-cli pack owns its tool schemas (the seven KooCLI
+  // execution tools sunk from core; src/packs/huaweicloud-cli/tools.ts);
+  // the spread keeps them in TOOL_SCHEMAS so the satisfies check below still
+  // covers all 48 ToolName keys.
+  ...HUAWEICLOUD_CLI_TOOL_SCHEMAS,
   huaweicloud_list_packs: z.looseObject({}),
   huaweicloud_pack_info: z.looseObject({
     pack: z
