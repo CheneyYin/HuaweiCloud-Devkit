@@ -137,6 +137,16 @@ for (const target of SUPPORTED_AGENT_TARGETS) {
     record(target, 'install exits 0', install.status === 0, firstErrorLine(install));
     if (install.status !== 0) continue;
 
+    // Non-TTY smoke stays network-free by contract, so the provisioning seam
+    // must run end-to-end: the header is the stable marker that it did.
+    const provisionHeader = (install.stdout.match(/Provisioning pack binaries \(enabled packs: \d+\)/) || [])[0];
+    record(
+      target,
+      'install provisions pack binaries',
+      Boolean(provisionHeader),
+      provisionHeader || 'provisioning section missing from install output',
+    );
+
     // codex-desktop has no status section (pre-existing gap: install target
     // exists, cmdStatus does not cover it). Its proof is the copied
     // marketplace server below.

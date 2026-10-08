@@ -496,26 +496,38 @@ test('tools.ts resolves skills from the server-relative tree only', () => {
   assert.match(tools, /existsSync\(join\(root, d\.name, 'SKILL\.md'\)\)/);
 });
 
-test('setup-cli.ts handles KooCLI sandbox blockers and privacy agreement', () => {
+test('KooCLI sandbox blockers and privacy agreement live in their extracted modules', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
   const hcloudProbe = readSource(join('src', 'hcloud-probe.ts'));
-  // sandbox detection reads the CodeArts permission config
-  assert.match(setup, /function detectCodeartsSandbox\(\)/);
-  assert.match(setup, /codearts-data', 'storage', 'permission', 'config\.json'/);
-  assert.match(setup, /config\.bash_mode/);
-  // hcloud lookup covers HCLOUD_BIN and ~/hcloud on Windows
+  const codeartsSandbox = readSource(join('src', 'codearts-sandbox.ts'));
+  const depProvision = readSource(join('src', 'dep-provision.ts'));
+  // sandbox detection reads the CodeArts permission config (codearts-sandbox.ts,
+  // shared by doctor and the KooCLI installer; no leftover local copy in setup-cli)
+  assert.match(codeartsSandbox, /function detectCodeartsSandbox\(\)/);
+  assert.match(codeartsSandbox, /codearts-data', 'storage', 'permission', 'config\.json'/);
+  assert.match(codeartsSandbox, /config\.bash_mode/);
+  // sandbox warning prompts user to install externally or disable sandbox
+  assert.match(codeartsSandbox, /function printSandboxWarning\(/);
+  assert.match(codeartsSandbox, /检测到码道沙箱模式/);
+  assert.match(codeartsSandbox, /在码道外的终端安装并使用 KooCLI/);
+  assert.match(codeartsSandbox, /关闭沙箱模式后重试/);
+  assert.match(setup, /from '\.\/codearts-sandbox\.(?:mjs|ts)'/);
+  assert.doesNotMatch(setup, /function detectCodeartsSandbox\(\)/, 'detection must not be duplicated in setup-cli');
+  // hcloud lookup covers HCLOUD_BIN and delegates to the shared resolution chain
   assert.match(setup, /from '\.\/hcloud-probe\.(?:mjs|ts)'/);
   assert.match(hcloudProbe, /function findHcloudBin\(\)/);
   assert.match(hcloudProbe, /process\.env\.HCLOUD_BIN/);
-  assert.match(hcloudProbe, /homedir\(\), 'hcloud', 'hcloud\.exe'/);
+  assert.match(hcloudProbe, /resolveDependencyCommand\(DEPENDENCIES\.hcloud\.resolution\)/);
   assert.match(hcloudProbe, /sandbox_home_failure/);
-  // sandbox warning prompts user to install externally or disable sandbox
-  assert.match(setup, /function printSandboxWarning\(/);
-  assert.match(setup, /检测到码道沙箱模式/);
-  assert.match(setup, /在码道外的终端安装并使用 KooCLI/);
-  assert.match(setup, /关闭沙箱模式后重试/);
-  // install-hcloud surfaces sandbox guidance on failure and after install
-  assert.match(setup, /沙箱模式拦截了 KooCLI 自动安装/);
+  // install-hcloud surfaces sandbox guidance on failure (caller moved with the installer)
+  assert.match(depProvision, /沙箱模式拦截了 KooCLI 自动安装/);
+  // privacy agreement is gated on the tty flag on BOTH platforms (the Windows
+  // branch used to lack the gate and hang non-interactive sessions)
+  assert.match(depProvision, /await offerPrivacyAcceptance\(join\(installDir, 'hcloud\.exe'\), opts\.tty\)/);
+  assert.match(depProvision, /await offerPrivacyAcceptance\(binPath, opts\.tty\)/);
+  assert.match(depProvision, /非交互会话：请稍后在终端运行 hcloud version/);
+  // the caller computes the gate; the installer stays testable
+  assert.match(setup, /process\.stdin\.isTTY === true && process\.stdout\.isTTY === true/);
   // MCP env injects HCLOUD_BIN when an hcloud binary is found
   assert.match(setup, /if \(hcloudBin\) env\.HCLOUD_BIN = hcloudBin\.replace/);
   // doctor warns about sandbox mode with the accurate settings path (#261)
@@ -523,17 +535,64 @@ test('setup-cli.ts handles KooCLI sandbox blockers and privacy agreement', () =>
   assert.match(setup, /设置 → 对话流 → 智能体 终端命令运行模式 → 自动运行/);
 });
 
-test('setup-cli.ts covers hermes restart hints, unix auto-install, and grouped status (#280)', () => {
+test('hermes restart hints, unix auto-install in dep-provision, grouped status (#280)', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
+  const depProvision = readSource(join('src', 'dep-provision.ts'));
   // Hermes .installed marker is read for restart hints (#280-4)
   assert.match(setup, /hermesPluginsDir\(\), '\.installed'/);
-  // Unix install-hcloud executes for real: download → extract → install → verify (#280-3)
-  assert.match(setup, /Auto-installing to \$\{binDir\}/);
-  assert.match(setup, /spawnSync\('curl', \['-fL', url, '-o', tmpTar\]/);
-  assert.match(setup, /spawnSync\('tar', \['-xzf', tmpTar, '-C', tmpdir\(\)\]/);
+  // Unix install-hcloud executes for real: download → extract → install → verify
+  // (#280-3); the body moved to dep-provision.ts when provisioning absorbed it.
+  assert.match(depProvision, /Auto-installing to \$\{binDir\}/);
+  assert.match(depProvision, /spawnSync\('curl', \['-fL', url, '-o', tmpTar\]/);
+  assert.match(depProvision, /spawnSync\('tar', \['-xzf', tmpTar, '-C', scratch\]/);
+  // download/extract scratch is per-run (mkdtemp) and cleaned up in finally:
+  // the fixed tmpdir()/huaweicloud-cli-<pkg>.tar.gz path collided across
+  // concurrent installs, and auto-provisioning made concurrent installs normal.
+  assert.match(depProvision, /mkdtempSync\(join\(tmpdir\(\), 'huaweicloud-devkit-'\)\)/);
+  assert.match(depProvision, /rmSync\(scratch, \{ recursive: true, force: true \}\)/);
   // status groups sections by install state, installed first (#280-9)
   assert.match(setup, /stateOrder = \{ installed: 0, partial: 1, unknown: 2, not: 3 \}/);
   assert.match(setup, /已安装: /);
+});
+
+test('dependency provisioning: new modules stay unbundled; setup-cli delegates', () => {
+  const setup = readSource(join('src', 'setup-cli.ts'));
+  const depProvision = readSource(join('src', 'dep-provision.ts'));
+  const codeartsSandbox = readSource(join('src', 'codearts-sandbox.ts'));
+  const depResolve = readSource(join('src', 'lib', 'dep-resolve.ts'));
+  // These compile into the unbundled dist/setup-cli.js graph, where only
+  // undici exists at runtime: no zod, no SDK, ever.
+  for (const [name, source] of [
+    ['dep-provision.ts', depProvision],
+    ['codearts-sandbox.ts', codeartsSandbox],
+    ['lib/dep-resolve.ts', depResolve],
+  ]) {
+    assert.doesNotMatch(source, /from 'zod'/, `${name} must not import zod`);
+    assert.doesNotMatch(source, /@modelcontextprotocol/, `${name} must not import the SDK`);
+  }
+  // lib/dep-resolve keeps the src/lib contract: runtime imports are node:*
+  // builtins only; the dependency-model edge is type-only.
+  const importLines = depResolve.split('\n').filter((line) => line.startsWith('import '));
+  assert.ok(importLines.length >= 5, 'dep-resolve should import node builtins');
+  for (const line of importLines) {
+    assert.ok(
+      line.includes("from 'node:") || line.startsWith('import type '),
+      `lib/dep-resolve.ts runtime import must be node:* or type-only: ${line}`,
+    );
+  }
+  // The installer body is absorbed, not duplicated: setup-cli owns the CLI
+  // wrapper only.
+  assert.doesNotMatch(setup, /spawnSync\('curl'/, 'the KooCLI installer body lives in dep-provision.ts');
+  assert.match(
+    setup,
+    /await installKooCli\(\{ tty: process\.stdin\.isTTY === true && process\.stdout\.isTTY === true \}\)/,
+    'cmdInstallHcloud is the thin wrapper',
+  );
+  // Install and update both provision after payload placement, gated on the flag.
+  assert.match(setup, /Provisioning pack binaries \(enabled packs: \$\{union\.size\}\)/);
+  assert.match(setup, /hasCliFlag\('--skip-binaries'\)/);
+  assert.match(setup, /const updated = await dispatchUpdateTarget\(target\);/);
+  assert.match(setup, /--skip-binaries {3}\(with: install\/update\) skip provisioning host binaries/);
 });
 
 test('setup-cli.ts supports the dsh target end to end', () => {

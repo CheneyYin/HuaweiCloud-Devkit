@@ -11,7 +11,7 @@ import {
 } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { homedir, platform, tmpdir } from 'node:os';
+import { homedir, platform } from 'node:os';
 import { createInterface } from 'node:readline';
 import { spawnSync, type SpawnSyncOptions, type SpawnSyncReturns } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -38,6 +38,8 @@ import {
   type ProxyConfigFile,
 } from './proxy/proxy-config.ts';
 import { removeKooCli, removeObsConfig } from './sandbox/uninstall-cleanup.ts';
+import { detectCodeartsSandbox } from './codearts-sandbox.ts';
+import { installGatewayTool, installKooCli, provisionDependencies } from './dep-provision.ts';
 import {
   mergeCommandStyle,
   mergeArgsStyle,
@@ -48,10 +50,11 @@ import {
 import { readAgentDelta, saveAgentDelta, takeAgentDelta, purgeBackup } from './mcp-config-backup.ts';
 import { isUsableOfficeaceRoot, readOfficeaceRootMarker, writeOfficeaceRootMarker } from './officeace-paths.ts';
 import { queryDistTagsFetch, determineTarget, semverCompare } from './update-check.ts';
-import { getKooCliVersion, compareVersion, kooCliDownloadBase, KOO_CLI_BASE } from './koocli-version.ts';
+import { getKooCliVersion, compareVersion, kooCliDownloadBase } from './koocli-version.ts';
 import { findHcloudBin, hcloudProbeNextStep, probeHcloud } from './hcloud-probe.ts';
-import { PACK_BINARIES, PACK_IDS, type PackBinary } from './lib/pack-types.ts';
-import { parseDevkitPacks } from './lib/dependency-model.ts';
+import { PACK_BINARIES, PACK_IDS, type PackBinary, type PackId } from './lib/pack-types.ts';
+import { DEPENDENCIES, DEPENDENCY_IDS, parseDevkitPacks, requiredDependencies } from './lib/dependency-model.ts';
+import { resolveDependencyCommand } from './lib/dep-resolve.ts';
 
 // node:sqlite is a runtime-only builtin loaded through createRequire; only the
 // DatabaseSync surface this module calls is modeled (see auth/agent-registration.ts).
@@ -511,25 +514,11 @@ const DSH_MCP_PATCH_START = '# HuaweiCloud DevKit DSH integration start';
 const DSH_MCP_PATCH_END = '# HuaweiCloud DevKit DSH integration end';
 
 // Detect CodeArts sandbox mode (bash_mode in permission config).
-function detectCodeartsSandbox(): string | null {
-  try {
-    const configPath = join(homedir(), '.codeartsdoer', 'codearts-data', 'storage', 'permission', 'config.json');
-    if (!existsSync(configPath)) return null;
-    const config: { bash_mode?: unknown } = JSON.parse(readFileSync(configPath, 'utf8'));
-    return typeof config.bash_mode === 'string' ? config.bash_mode : null;
-  } catch {
-    return null;
-  }
-}
+// The implementation lives in ./codearts-sandbox.ts, shared with the KooCLI
+// installer in ./dep-provision.ts.
 
-function printSandboxWarning(reason: string): void {
-  console.log(`\n\x1b[1m\x1b[31m⚠ 检测到码道沙箱模式 (bash_mode: sandbox)\x1b[0m`);
-  console.log(`\x1b[31m  ${reason}\x1b[0m`);
-  console.log(`\x1b[31m  请任选其一继续:\x1b[0m`);
-  console.log(`\x1b[31m  A. 在码道外的终端安装并使用 KooCLI (推荐):`);
-  console.log(`\x1b[31m     https://support.huaweicloud.com/qs-hcli/hcli_02_003.html`);
-  console.log(`\x1b[31m  B. 在码道设置中关闭沙箱模式后重试 (设置 → 对话流 → 智能体 终端命令运行模式 → 自动运行)`);
-  console.log(`\x1b[31m  关闭沙箱后重新运行: npx huaweicloud-devkit install-hcloud\x1b[0m`);
+function hasCliFlag(name: string): boolean {
+  return process.argv.includes(name);
 }
 
 function checkNode(): void {
@@ -3748,6 +3737,14 @@ async function cmdInstall(): Promise<void> {
     });
   }
 
+  // Successful targets get their binaries even when a sibling target failed,
+  // so provisioning runs after the per-target loop but before the failure
+  // exit. Non-interactive sessions stay network-free (the policy loop prints
+  // the pinned manual command instead of downloading).
+  if (!hasCliFlag('--skip-binaries')) {
+    await provisionPackBinaries();
+  }
+
   if (installFailures.length > 0) {
     console.log(`\n\x1b[31mInstallation failed for: ${installFailures.join(', ')}\x1b[0m`);
     if (target === 'all') {
@@ -4074,6 +4071,106 @@ async function cmdStatus(): Promise<void> {
   console.log(`  Platform: ${platform()}`);
 }
 
+// Reader-backed pack status: one entry per installable agent target that
+// has an MCP config to read DEVKIT_PACKS from. Shared by doctor (per-target
+// pack status) and install-time provisioning (the effective pack union).
+function packStatusReaders(): Array<{ label: string; installed: boolean; read: () => string | null }> {
+  return [
+    {
+      label: 'OpenCode',
+      installed: mcpServerInstalled(opencodePluginsDir()),
+      read: () => readDevkitPacksFromJson(opencodeConfigFile(), 'mcp'),
+    },
+    {
+      label: 'Codex Desktop',
+      installed: mcpServerInstalled(codexDesktopPluginsDir()),
+      read: () => readDevkitPacksFromJson(join(codexDesktopPluginsDir(), '.mcp.json'), 'mcpServers'),
+    },
+    {
+      label: 'CodeArts',
+      installed: mcpServerInstalled(codeartsPluginsDir()),
+      read: () => readDevkitPacksFromJson(codeartsMcpSettingsFile(), 'mcpServers'),
+    },
+    {
+      label: 'CodeArts Work',
+      installed: mcpServerInstalled(codeartsWorkPluginsDir()),
+      read: () => readDevkitPacksFromJson(codeartsWorkMcpSettingsFile(), 'mcp'),
+    },
+    {
+      label: 'WorkBuddy',
+      installed: mcpServerInstalled(workbuddyPluginsDir()),
+      read: () => readDevkitPacksFromJson(workbuddyMcpConfigFile(), 'mcpServers'),
+    },
+    {
+      label: 'OpenClaw',
+      installed: mcpServerInstalled(openclawPluginsDir()),
+      read: () => readDevkitPacksFromJson(join(openclawPluginsDir(), '.mcp.json'), 'mcpServers'),
+    },
+    {
+      label: 'AtomCode',
+      installed: mcpServerInstalled(atomcodePluginsDir()),
+      read: () => readDevkitPacksFromJson(atomcodeMcpConfigFile(), 'mcpServers'),
+    },
+    {
+      label: 'DSH',
+      installed: mcpServerInstalled(dshPluginsDir()),
+      read: () => readDevkitPacksFromYaml(dshPatchFile()),
+    },
+    {
+      label: 'Hermes Agent',
+      installed: mcpServerInstalled(hermesPluginsDir()),
+      read: () => readDevkitPacksFromYaml(hermesConfigFile()),
+    },
+    {
+      label: 'OfficeAce',
+      installed: mcpServerInstalled(officeacePluginsDir()),
+      read: () => readOfficeaceDevkitPacks(),
+    },
+  ];
+}
+
+// The effective pack union for provisioning and `dep status`: every
+// reader-backed installed target contributes its parsed closure
+// (blank/unset config means the full surface), and codex contributes the
+// full surface whenever its CLI is present — the codex server boots with
+// no DEVKIT_PACKS because the --packs flag has no write path there, so it
+// always needs whatever the full surface needs. Unknown ids in a target's
+// DEVKIT_PACKS warn and count as the full surface (fail-safe): unlike
+// doctor's warn+continue, skipping the target would under-provision its
+// binaries.
+function effectivePackUnion(): ReadonlySet<PackId> {
+  const union = new Set<PackId>();
+  for (const target of packStatusReaders()) {
+    if (!target.installed) continue;
+    const parsed = parseDevkitPacks(target.read());
+    if (parsed.unknown.length > 0) {
+      console.log(
+        `  \x1b[33m[WARN]\x1b[0m Packs (${target.label}): unknown id(s) in DEVKIT_PACKS="${parsed.raw}": ${parsed.unknown.join(', ')} — provisioning the full surface (fail-safe)`,
+      );
+      for (const id of PACK_IDS) union.add(id);
+      continue;
+    }
+    for (const id of parsed.enabled) union.add(id);
+  }
+  if (hasCodexCLI()) {
+    for (const id of PACK_IDS) union.add(id);
+  }
+  return union;
+}
+
+// Provision the enabled packs' host binaries right after payload placement.
+// No output at all when nothing is required (empty union, e.g. a
+// DEVKIT_PACKS=core-only install with no codex CLI).
+async function provisionPackBinaries(): Promise<void> {
+  const union = effectivePackUnion();
+  const deps = requiredDependencies(union);
+  if (deps.size === 0) return;
+  console.log(`\nProvisioning pack binaries (enabled packs: ${union.size})`);
+  await provisionDependencies(deps, {
+    tty: process.stdin.isTTY === true && process.stdout.isTTY === true,
+  });
+}
+
 async function cmdDoctor(): Promise<void> {
   console.log(BANNER);
   console.log('HuaweiCloud DevKit Doctor\n');
@@ -4386,58 +4483,7 @@ async function cmdDoctor(): Promise<void> {
   // flag. Sandbox-scoped binaries (e.g. devbridge) live inside the cloud
   // sandbox, where a host-side probe would target the wrong machine, so they
   // are not checked.
-  const packStatus: Array<{ label: string; installed: boolean; read: () => string | null }> = [
-    {
-      label: 'OpenCode',
-      installed: mcpServerInstalled(opencodePluginDir),
-      read: () => readDevkitPacksFromJson(opencodeConfigFile(), 'mcp'),
-    },
-    {
-      label: 'Codex Desktop',
-      installed: mcpServerInstalled(codexPluginDir),
-      read: () => readDevkitPacksFromJson(join(codexDesktopPluginsDir(), '.mcp.json'), 'mcpServers'),
-    },
-    {
-      label: 'CodeArts',
-      installed: mcpServerInstalled(codeartsPluginDir),
-      read: () => readDevkitPacksFromJson(codeartsMcpSettingsFile(), 'mcpServers'),
-    },
-    {
-      label: 'CodeArts Work',
-      installed: mcpServerInstalled(codeartsWorkPluginDir),
-      read: () => readDevkitPacksFromJson(codeartsWorkMcpSettingsFile(), 'mcp'),
-    },
-    {
-      label: 'WorkBuddy',
-      installed: mcpServerInstalled(workbuddyPluginDir),
-      read: () => readDevkitPacksFromJson(workbuddyMcpConfigFile(), 'mcpServers'),
-    },
-    {
-      label: 'OpenClaw',
-      installed: mcpServerInstalled(openclawPluginsDir()),
-      read: () => readDevkitPacksFromJson(join(openclawPluginsDir(), '.mcp.json'), 'mcpServers'),
-    },
-    {
-      label: 'AtomCode',
-      installed: mcpServerInstalled(atomcodePluginDir),
-      read: () => readDevkitPacksFromJson(atomcodeMcpConfigFile(), 'mcpServers'),
-    },
-    {
-      label: 'DSH',
-      installed: mcpServerInstalled(dshPluginDir),
-      read: () => readDevkitPacksFromYaml(dshPatchFile()),
-    },
-    {
-      label: 'Hermes Agent',
-      installed: mcpServerInstalled(hermesPluginDir),
-      read: () => readDevkitPacksFromYaml(hermesConfigFile()),
-    },
-    {
-      label: 'OfficeAce',
-      installed: mcpServerInstalled(officeacePluginDir),
-      read: () => readOfficeaceDevkitPacks(),
-    },
-  ];
+  const packStatus = packStatusReaders();
   const enabledPacksUnion = new Set<string>();
   let anyPackTarget = false;
   for (const target of packStatus) {
@@ -4568,28 +4614,41 @@ async function cmdUpdate(): Promise<void> {
       );
   }
 
+  // Provision only when at least one target actually updated: the per-target
+  // "Not installed" early-returns below must not trigger a provisioning pass
+  // for a machine where nothing changed.
+  const updated = await dispatchUpdateTarget(target);
+  if (updated && !hasCliFlag('--skip-binaries')) {
+    await provisionPackBinaries();
+  }
+}
+
+// The per-target update dispatch. Returns true when the target actually
+// updated (drives the post-update provisioning pass); false on the
+// per-target "Not installed" early-returns.
+async function dispatchUpdateTarget(target: string): Promise<boolean> {
   if (target === 'opencode') {
     if (!mcpServerInstalled(opencodePluginsDir())) {
       console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return;
+      return false;
     }
     console.log('[OpenCode]');
     await updateOpenCode();
     console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
     console.log(`\x1b[33mMCP 工具在重启 OpenCode 会话后才生效。\x1b[0m`);
-    return;
+    return true;
   }
 
   if (target === 'codex-desktop') {
     if (!mcpServerInstalled(codexDesktopPluginsDir())) {
       console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return;
+      return false;
     }
     console.log('[Codex Desktop]');
     await updateCodexDesktop();
     console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
     console.log(`\x1b[33mMCP 工具在重启 Codex Desktop 会话后才生效。\x1b[0m`);
-    return;
+    return true;
   }
 
   if (target === 'codex') {
@@ -4600,109 +4659,109 @@ async function cmdUpdate(): Promise<void> {
       }
       console.log(`  \x1b[31mInstall Codex CLI: https://github.com/openai/codex-cli\x1b[0m`);
       process.exitCode = 1;
-      return;
+      return false;
     }
     console.log('[Codex]');
     installCodex();
     console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
     console.log(`\x1b[33mRestart the Codex session for changes to take effect.\x1b[0m`);
-    return;
+    return true;
   }
 
   if (target === 'codearts') {
     if (!mcpServerInstalled(codeartsPluginsDir())) {
       console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return;
+      return false;
     }
     console.log('[CodeArts]');
     await updateCodeArts();
     console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
     console.log(`\x1b[33mMCP 工具在重启 CodeArts 会话后才生效。\x1b[0m`);
-    return;
+    return true;
   }
 
   if (target === 'codearts-work') {
     if (!mcpServerInstalled(codeartsWorkPluginsDir())) {
       console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return;
+      return false;
     }
     console.log('[CodeArts Work]');
     await updateCodeArtsWork();
     console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
     console.log(`\x1b[33mMCP 工具在重启 CodeArts Work 会话后才生效。\x1b[0m`);
-    return;
+    return true;
   }
 
   if (target === 'workbuddy') {
     if (!mcpServerInstalled(workbuddyPluginsDir())) {
       console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return;
+      return false;
     }
     console.log('[WorkBuddy]');
     await updateWorkBuddy();
     console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
     console.log(`\x1b[33mMCP 工具在重启 WorkBuddy 会话后才生效。\x1b[0m`);
-    return;
+    return true;
   }
 
   if (target === 'dsh') {
     if (!mcpServerInstalled(dshPluginsDir())) {
       console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return;
+      return false;
     }
     console.log('[DSH]');
     await updateDsh();
     console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
     console.log(`\x1b[33mRestart the DSH session for changes to take effect.\x1b[0m`);
-    return;
+    return true;
   }
 
   if (target === 'officeace') {
     if (!mcpServerInstalled(officeacePluginsDir())) {
       console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return;
+      return false;
     }
     console.log('[OfficeAce]');
     await updateOfficeAce();
     console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
     console.log(`\x1b[33m打开连接器 → 我的连接器 → huaweicloud-devkit → 连接 → 回到对话 → 输入框开启连接器\x1b[0m`);
-    return;
+    return true;
   }
 
   if (target === 'hermes') {
     if (!mcpServerInstalled(hermesPluginsDir())) {
       console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return;
+      return false;
     }
     console.log('[Hermes Agent]');
     await updateHermes();
     console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
     console.log(`\x1b[33mRestart Hermes Agent for changes to take effect.\x1b[0m`);
-    return;
+    return true;
   }
 
   if (target === 'openclaw') {
     if (!mcpServerInstalled(openclawPluginsDir())) {
       console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return;
+      return false;
     }
     console.log('[OpenClaw]');
     await updateOpenClaw();
     console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
     console.log(`\x1b[33mRestart OpenClaw for changes to take effect.\x1b[0m`);
-    return;
+    return true;
   }
 
   if (target === 'atomcode') {
     if (!mcpServerInstalled(atomcodePluginsDir())) {
       console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return;
+      return false;
     }
     console.log('[AtomCode]');
     await updateAtomCode();
     console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
     console.log(`\x1b[33mRestart the AtomCode session for changes to take effect.\x1b[0m`);
-    return;
+    return true;
   }
 
   if (target === 'all') {
@@ -4764,12 +4823,13 @@ async function cmdUpdate(): Promise<void> {
     }
     if (!updatedAny) {
       console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return;
+      return false;
     }
     console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
     console.log(`\x1b[33mMCP 工具在重启各 agent 会话后才生效。\x1b[0m`);
-    return;
+    return true;
   }
+  return false;
 }
 
 async function cmdReinstall(): Promise<void> {
@@ -4802,206 +4862,11 @@ async function confirm(msg: string): Promise<boolean> {
 
 async function cmdInstallHcloud(): Promise<void> {
   console.log(BANNER);
-  console.log('Installing KooCLI (hcloud)...\n');
-
-  const os = platform();
-  const arch = process.arch;
-  const baseUrl = kooCliDownloadBase();
-  const kooCliVersion = getKooCliVersion();
-  const latestUrl = `${KOO_CLI_BASE}/latest`;
-  const installDir = os === 'win32' ? join(homedir(), 'hcloud') : join(homedir(), '.local', 'bin');
-
-  if (os === 'win32') {
-    const url = `${baseUrl}/huaweicloud-cli-windows-amd64.zip`;
-    const zipPath = join(installDir, 'hcloud.zip');
-
-    console.log(`[Windows] Auto-installing to ${installDir}...`);
-
-    try {
-      mkdirSync(installDir, { recursive: true });
-
-      // Download
-      console.log(`  Downloading ${url}...`);
-      const psCmd = `[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '${url}' -OutFile '${zipPath}' -UseBasicParsing`;
-      const dl = spawnSync('powershell', ['-NoProfile', '-Command', psCmd], {
-        stdio: 'inherit',
-        windowsHide: true,
-        timeout: 180000,
-      });
-      if (dl.status !== 0) throw new Error(`下载失败 (PowerShell exit ${dl.status})`);
-
-      // Extract
-      console.log('  Extracting...');
-      const ex = spawnSync(
-        'powershell',
-        ['-NoProfile', '-Command', `Expand-Archive -Path '${zipPath}' -DestinationPath '${installDir}' -Force`],
-        { stdio: 'inherit', windowsHide: true, timeout: 60000 },
-      );
-      if (ex.status !== 0) throw new Error(`解压失败 (PowerShell exit ${ex.status})`);
-      if (!existsSync(join(installDir, 'hcloud.exe'))) throw new Error('hcloud.exe 未生成，可能已被安全软件拦截');
-
-      // Clean up zip
-      rmSync(zipPath, { force: true });
-
-      // Add to user PATH (append + dedupe within the User scope only; never copy
-      // session/system entries into the user PATH, and never use setx PATH which
-      // overwrites the whole variable and truncates at 1024 chars).
-      console.log('  Adding to user PATH...');
-      const pathPs = [
-        '$ErrorActionPreference = "Stop"',
-        `$target = '${installDir.replace(/'/g, "''")}'`,
-        '$cur = [Environment]::GetEnvironmentVariable("Path", "User")',
-        'if (-not $cur) { $cur = "" }',
-        '$parts = @($cur -split ";" | Where-Object { $_ -ne "" })',
-        'if ($parts -notcontains $target) {',
-        '  [Environment]::SetEnvironmentVariable("Path", (@($parts) + $target) -join ";", "User")',
-        '  Write-Output "  Added to user PATH (deduped): $target"',
-        '} else {',
-        '  Write-Output "  Already in user PATH: $target"',
-        '}',
-      ].join('; ');
-      spawnSync('powershell', ['-NoProfile', '-Command', pathPs], {
-        stdio: 'inherit',
-        windowsHide: true,
-        timeout: 30000,
-      });
-
-      console.log(`\n\x1b[32mInstall complete.\x1b[0m`);
-      console.log(`  Verify: ${join(installDir, 'hcloud.exe')} version`);
-
-      const hcloudBin = join(installDir, 'hcloud.exe');
-
-      // Ask user before accepting the privacy agreement — never auto-accept.
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
-      const agree = await new Promise<boolean>((resolve) => {
-        rl.question('\n  KooCLI requires accepting its privacy agreement. Do you accept? (y/N) ', (answer) => {
-          rl.close();
-          resolve(/^\s*y\s*$/i.test(answer));
-        });
-      });
-      if (agree) {
-        const r = spawnSync(hcloudBin, ['version'], {
-          input: 'y\n',
-          encoding: 'utf8',
-          timeout: 10000,
-          windowsHide: true,
-        });
-        if (r.status === 0) {
-          console.log('  \x1b[32mPrivacy agreement accepted. KooCLI ready.\x1b[0m');
-        } else {
-          console.log('  \x1b[33m无法写入配置目录。请在普通终端运行: echo "y" | hcloud version\x1b[0m');
-        }
-      } else {
-        console.log('  \x1b[33m请手动接受隐私协议：在终端运行 hcloud version 并按提示操作\x1b[0m');
-      }
-
-      console.log('  Or restart terminal and: hcloud version');
-    } catch (error) {
-      console.log(`\n\x1b[33mAuto-install failed: ${errorMessage(error)}\x1b[0m`);
-      console.log(`  Manual: download ${url}, unzip to ${installDir}, add to PATH`);
-      console.log(`  Guide: https://support.huaweicloud.com/qs-hcli/hcli_02_003_01.html`);
-      if (detectCodeartsSandbox() === 'sandbox') {
-        printSandboxWarning('沙箱模式拦截了 KooCLI 自动安装（无法创建/写入安装目录）。');
-      }
-    }
-  } else if (os === 'linux' || os === 'darwin') {
-    const label = os === 'linux' ? 'Linux' : 'macOS';
-    const pkg =
-      os === 'linux'
-        ? arch === 'arm64'
-          ? 'linux-arm64'
-          : 'linux-amd64'
-        : arch === 'arm64'
-          ? 'mac-arm64'
-          : 'mac-amd64';
-    const url = `${baseUrl}/huaweicloud-cli-${pkg}.tar.gz`;
-    const binDir = os === 'linux' ? join(homedir(), '.local', 'bin') : '/usr/local/bin';
-    const binPath = join(binDir, 'hcloud');
-
-    const printManual = (): void => {
-      console.log(`\n[${label}] Manual install (pinned to KooCLI ${kooCliVersion || ''}):`);
-      console.log(`  curl -LO "${url}"`);
-      console.log(`  tar -zxvf huaweicloud-cli-${pkg}.tar.gz`);
-      console.log(`  mv hcloud ${binDir}/`);
-      console.log(`  hcloud version`);
-      console.log(`\n  Or one-liner (installs LATEST, may differ from pinned ${kooCliVersion || ''}):`);
-      console.log(`  curl -sSL ${latestUrl}/hcloud_install.sh -o ./hcloud_install.sh && bash ./hcloud_install.sh -y`);
-      console.log(
-        `  \x1b[33m⚠️  The one-liner installs the latest KooCLI. If \`hcloud version\` != ${kooCliVersion}, doctor/check_cli will warn — use the pinned download above instead.\x1b[0m`,
-      );
-      console.log(
-        `\nFull guide: https://support.huaweicloud.com/qs-hcli/hcli_02_003_0${os === 'linux' ? '2' : '3'}.html`,
-      );
-    };
-
-    if (detectCodeartsSandbox() === 'sandbox') {
-      printSandboxWarning('沙箱模式拦截了 KooCLI 自动安装（无法创建/写入安装目录）。');
-      printManual();
-    } else {
-      console.log(`[${label}] Auto-installing to ${binDir}...`);
-      try {
-        const tmpTar = join(tmpdir(), `huaweicloud-cli-${pkg}.tar.gz`);
-        console.log(`  Downloading ${url}...`);
-        const dl = spawnSync('curl', ['-fL', url, '-o', tmpTar], { stdio: 'inherit', timeout: 180000 });
-        if (dl.status !== 0) throw new Error(`下载失败 (curl exit ${dl.status})`);
-
-        console.log('  Extracting...');
-        const ex = spawnSync('tar', ['-xzf', tmpTar, '-C', tmpdir()], { stdio: 'inherit', timeout: 60000 });
-        if (ex.status !== 0) throw new Error(`解压失败 (tar exit ${ex.status})`);
-        rmSync(tmpTar, { force: true });
-        const extracted = join(tmpdir(), 'hcloud');
-        if (!existsSync(extracted)) throw new Error('hcloud 二进制未生成，可能已被安全软件拦截');
-
-        try {
-          mkdirSync(binDir, { recursive: true });
-        } catch {}
-        console.log('  Installing...');
-        let mv = spawnSync('mv', [extracted, binPath], { stdio: 'inherit', timeout: 30000 });
-        if (mv.status !== 0) {
-          console.log('  目标目录需要权限，尝试 sudo mv...');
-          mv = spawnSync('sudo', ['mv', extracted, binPath], { stdio: 'inherit', timeout: 30000 });
-          if (mv.status !== 0) throw new Error(`安装失败 (mv exit ${mv.status})`);
-        }
-
-        console.log(`\n\x1b[32mInstall complete.\x1b[0m`);
-        console.log(`  Verify: ${binPath} version`);
-
-        // Ask user before accepting the privacy agreement — never auto-accept.
-        if (process.stdin.isTTY && process.stdout.isTTY) {
-          const rl = createInterface({ input: process.stdin, output: process.stdout });
-          const agree = await new Promise<boolean>((resolve) => {
-            rl.question('\n  KooCLI requires accepting its privacy agreement. Do you accept? (y/N) ', (answer) => {
-              rl.close();
-              resolve(/^\s*y\s*$/i.test(answer));
-            });
-          });
-          if (agree) {
-            const r = spawnSync(binPath, ['version'], {
-              input: 'y\n',
-              encoding: 'utf8',
-              timeout: 15000,
-            });
-            console.log(
-              r.status === 0
-                ? '  \x1b[32mPrivacy agreement accepted. KooCLI ready.\x1b[0m'
-                : '  \x1b[33m无法写入配置目录。请在终端运行: hcloud version 并按提示操作\x1b[0m',
-            );
-          } else {
-            console.log('  \x1b[33m请手动接受隐私协议：在终端运行 hcloud version 并按提示操作\x1b[0m');
-          }
-        } else {
-          console.log('  \x1b[33m非交互会话：请稍后在终端运行 hcloud version 并按提示接受隐私协议\x1b[0m');
-        }
-      } catch (error) {
-        console.log(`\n\x1b[33mAuto-install failed: ${errorMessage(error)}\x1b[0m`);
-        printManual();
-        if (detectCodeartsSandbox() === 'sandbox') {
-          printSandboxWarning('沙箱模式拦截了 KooCLI 自动安装（无法创建/写入安装目录）。');
-        }
-      }
-    }
-  }
-
+  // Thin wrapper: the platform installer lives in src/dep-provision.ts
+  // (installKooCli), shared with install-time provisioning; this command
+  // owns the banner and the trailing credentials note. For a TTY user the
+  // output is indistinguishable from the pre-extraction command.
+  await installKooCli({ tty: process.stdin.isTTY === true && process.stdout.isTTY === true });
   console.log('\nAfter install, set HCLOUD_BIN if hcloud is not on PATH.');
   console.log('\n\x1b[1m\x1b[33m=== Configure credentials SAFELY ===\x1b[0m');
   console.log('  Unified credentials (recommended): npx huaweicloud-devkit auth init');
@@ -5455,6 +5320,72 @@ function cmdVersion(): void {
   console.log('\nRun `npx huaweicloud-devkit update --target <agent>` to refresh installed agent plugins.');
 }
 
+// Dependency tooling: `dep status` renders the catalog rows for the current
+// effective pack union; `dep install <id>` runs one specific installer,
+// bypassing policy. Unit 3 extends this with uninstall.
+function cmdDepStatus(): void {
+  const union = effectivePackUnion();
+  const deps = requiredDependencies(union);
+  console.log(`Dependency status (effective packs: ${union.size})`);
+  if (deps.size === 0) {
+    console.log('  No pack binaries required.');
+    return;
+  }
+  for (const id of DEPENDENCY_IDS.filter((entry) => deps.has(entry))) {
+    const spec = DEPENDENCIES[id];
+    if (spec.kind === 'sandbox-resident') {
+      console.log(
+        `  ${id.padEnd(18)} kind=sandbox-resident  (lives inside the cloud sandbox; the host never manages it)`,
+      );
+      continue;
+    }
+    const resolved = resolveDependencyCommand(spec.resolution);
+    const tierText = resolved ? `tier=${resolved.tier} (${resolved.command})` : 'unresolved';
+    console.log(`  ${id.padEnd(18)} kind=${spec.kind}  policy=${spec.installPolicy}  ${tierText}`);
+    if (!resolved) {
+      console.log(`    ${spec.installHint}`);
+    }
+  }
+}
+
+async function cmdDepInstall(): Promise<void> {
+  const id = process.argv[4];
+  if (!id || !(DEPENDENCY_IDS as readonly string[]).includes(id)) {
+    console.error(`Unknown dependency id: ${id ?? '(missing)'}`);
+    console.error(`Valid dependency ids: ${DEPENDENCY_IDS.join(', ')}`);
+    process.exitCode = 1;
+    return;
+  }
+  const tty = process.stdin.isTTY === true && process.stdout.isTTY === true;
+  if (id === 'hcloud') {
+    const ok = await installKooCli({ tty });
+    if (!ok) process.exitCode = 1;
+    return;
+  }
+  if (id === 'open-mcp-gateway') {
+    const result = await installGatewayTool();
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+  console.error('devbridge ships inside the cloud sandbox; the host never installs or removes it.');
+  process.exitCode = 1;
+}
+
+async function cmdDep(): Promise<void> {
+  const sub = process.argv[3];
+  if (sub === 'status') {
+    cmdDepStatus();
+    return;
+  }
+  if (sub === 'install') {
+    await cmdDepInstall();
+    return;
+  }
+  console.error('Usage: npx huaweicloud-devkit dep <status | install <id>>');
+  console.error(`Valid dependency ids: ${DEPENDENCY_IDS.join(', ')}`);
+  process.exitCode = 1;
+}
+
 async function main(): Promise<void> {
   const cmd = process.argv[2] || 'help';
 
@@ -5485,6 +5416,9 @@ async function main(): Promise<void> {
     case 'install-hcloud':
       await cmdInstallHcloud();
       break;
+    case 'dep':
+      await cmdDep();
+      break;
     case 'auth':
       await cmdAuth();
       break;
@@ -5513,6 +5447,7 @@ async function main(): Promise<void> {
       console.log('  status       Show installation status');
       console.log('  doctor       Self-check: hcloud, MCP, skills, auth');
       console.log('  install-hcloud  Show KooCLI install commands for your OS');
+      console.log('  dep          Dependency tooling: status | install <hcloud|open-mcp-gateway|devbridge>');
       console.log('  auth         Manage unified auth: init | sync | status | reconcile');
       console.log('  proxy        Manage proxy config: init | show | clear');
       console.log('  version      Print CLI version and installed plugin version per agent');
@@ -5524,6 +5459,7 @@ async function main(): Promise<void> {
       console.log(
         '  --packs      Install-time pack selection: <id,id,...> or "all" (full surface). Writes DEVKIT_PACKS into the agent MCP config env; existing user values are kept',
       );
+      console.log('  --skip-binaries   (with: install/update) skip provisioning host binaries for enabled packs');
       console.log('  --version    Print CLI version and installed plugin version per agent');
       console.log('  --clean-kocli   (with: uninstall --target all) also remove KooCLI');
       console.log('  --clean-obs     (with: uninstall --target all) also remove OBS config');
@@ -5540,6 +5476,8 @@ async function main(): Promise<void> {
       console.log('  npx huaweicloud-devkit install --target atomcode');
       console.log('  npx huaweicloud-devkit install --target all');
       console.log('  npx huaweicloud-devkit install --target opencode --packs sandbox');
+      console.log('  npx huaweicloud-devkit dep status');
+      console.log('  npx huaweicloud-devkit dep install hcloud');
       console.log('  npx huaweicloud-devkit auth init');
       console.log('  npx huaweicloud-devkit auth sync --target all');
       console.log('  npx huaweicloud-devkit auth status --target all');

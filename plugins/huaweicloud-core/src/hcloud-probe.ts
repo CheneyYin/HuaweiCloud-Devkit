@@ -1,10 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 
 import { compareVersion, getKooCliVersion, parseHcloudVersion } from './koocli-version.ts';
 import { redactSecrets } from './safety-policy.ts';
+import { DEPENDENCIES } from './lib/dependency-model.ts';
+import { resolveDependencyCommand } from './lib/dep-resolve.ts';
 
 const VERSION_RE = /KooCLI|Current.*version|当前KooCLI/i;
 
@@ -42,32 +41,16 @@ export interface ProbeHcloudOptions {
   requiredVersion?: string | null;
 }
 
+// Delegates to the shared resolution chain (lib/dep-resolve.ts) over the
+// DEPENDENCIES.hcloud data, so install-time provisioning and spawn-time
+// resolution agree on which binary runs. Two deliberate changes versus the
+// previous local implementation, both reviewed fixes: unix candidates now
+// include /usr/local/bin/hcloud (the macOS install target, previously
+// reachable only via PATH), and '~' expands against env.HOME || homedir()
+// on unix (the sidecar's hermetic-test convention, now the one rule).
 export function findHcloudBin(): string | null {
-  if (process.env.HCLOUD_BIN && existsSync(process.env.HCLOUD_BIN)) return process.env.HCLOUD_BIN;
-  const candidates =
-    process.platform === 'win32'
-      ? [join(homedir(), 'hcloud', 'hcloud.exe')]
-      : [join(homedir(), '.local', 'bin', 'hcloud'), join(homedir(), 'hcloud', 'hcloud')];
-  const found = candidates.find((candidate) => existsSync(candidate));
-  if (found) return found;
-
-  const locator =
-    process.platform === 'win32'
-      ? spawnSync('where.exe', ['hcloud'], { windowsHide: true, stdio: 'pipe', encoding: 'utf8', timeout: 3000 })
-      : spawnSync('sh', ['-c', 'command -v hcloud'], {
-          windowsHide: true,
-          stdio: 'pipe',
-          encoding: 'utf8',
-          timeout: 3000,
-        });
-  if (locator.status === 0) {
-    const first = String(locator.stdout || '')
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find(Boolean);
-    if (first) return first;
-  }
-  return null;
+  const resolved = resolveDependencyCommand(DEPENDENCIES.hcloud.resolution);
+  return resolved ? resolved.command : null;
 }
 
 function envHcloudArgs(): string[] {

@@ -686,6 +686,7 @@ test('install auto-detect with multiple agents requires explicit target in non-i
 });
 
 function runAutoPty(home, cwd, cmd, input, extraEnv = {}) {
+  seedProvisionedBinaries(home);
   return spawnSync('script', ['-qec', `${process.execPath} ${setupCli} ${cmd}`, '/dev/null'], {
     cwd,
     env: makeEnv(home, extraEnv),
@@ -696,6 +697,7 @@ function runAutoPty(home, cwd, cmd, input, extraEnv = {}) {
 }
 
 function runAutoPtyStaged(home, cwd, cmd, stages, extraEnv = {}) {
+  seedProvisionedBinaries(home);
   const env = makeEnv(home, extraEnv);
   const innerCmd = `${process.execPath} ${setupCli} ${cmd}`;
   const feed = stages.map((s) => (typeof s === 'number' ? `sleep ${s}` : `printf '%s\\n' "${s}"`)).join('; ');
@@ -705,6 +707,23 @@ function runAutoPtyStaged(home, cwd, cmd, stages, extraEnv = {}) {
     encoding: 'utf8',
     timeout: 150000,
   });
+}
+
+// Hermetic host binaries for PTY-driven installs. Under `script` the child
+// sees a real TTY, so install-time provisioning takes its interactive path:
+// without a present hcloud it downloads KooCLI for real and then blocks on
+// the privacy-agreement prompt with the test's input already exhausted. The
+// fakes make the provisioning loop resolve everything as present and skip —
+// the seam still runs end to end, just without network or prompts.
+function seedProvisionedBinaries(home) {
+  const binDir = join(home, '.local', 'bin');
+  mkdirSync(binDir, { recursive: true });
+  const fakeHcloud = join(binDir, 'hcloud');
+  writeFileSync(fakeHcloud, `#!/bin/sh\necho "Current KooCLI version: ${pkg.kooCliVersion}"\n`, 'utf8');
+  chmodSync(fakeHcloud, 0o755);
+  const fakeGateway = join(binDir, 'huaweicloud-open-mcp');
+  writeFileSync(fakeGateway, '#!/bin/sh\n', 'utf8');
+  chmodSync(fakeGateway, 0o755);
 }
 
 test(

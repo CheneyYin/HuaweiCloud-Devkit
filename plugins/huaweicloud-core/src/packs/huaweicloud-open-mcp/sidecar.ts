@@ -1,7 +1,9 @@
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+import { DEPENDENCIES } from '../../lib/dependency-model.ts';
+import { resolveDependencyCommand } from '../../lib/dep-resolve.ts';
 
 // Process-scope singleton for the huaweicloud-open-mcp sidecar (openapi mode).
 //
@@ -176,39 +178,20 @@ let currentSidecar: OpenMcpSidecar | null = null;
 // findHcloudBin/resolveHcloudCommand: the agent harness PATH can differ
 // from the installer shell's, so resolution happens at spawn time, not
 // install time. The env parameter follows the resolveEnabledPacks(env)
-// precedent so tests can pin HOME/PATH deterministically.
+// precedent so tests can pin HOME/PATH deterministically. The chain itself
+// lives in src/lib/dep-resolve.ts and the data in DEPENDENCIES
+// ('open-mcp-gateway'.resolution), shared with install-time provisioning
+// and findHcloudBin, so the binary that was installed is the binary that
+// runs; this mapping only adapts the result to the spawn shape.
 export interface GatewayCommand {
   command: string;
   argsPrefix: string[];
 }
 
 export function resolveGatewayCommand(env: NodeJS.ProcessEnv = process.env): GatewayCommand | null {
-  const envBin = env.OPENMCP_BIN;
-  if (envBin && existsSync(envBin)) return { command: envBin, argsPrefix: [] };
-  const home = process.platform === 'win32' ? homedir() : env.HOME || homedir();
-  const exeSuffix = process.platform === 'win32' ? '.exe' : '';
-  const candidate = join(home, '.local', 'bin', `huaweicloud-open-mcp${exeSuffix}`);
-  if (existsSync(candidate)) return { command: candidate, argsPrefix: [] };
-  const onPath = lookupOnPath('huaweicloud-open-mcp', env);
-  if (onPath) return { command: onPath, argsPrefix: [] };
-  // uvx last: it works with nothing installed, but a persistent binary is
-  // preferred (no first-run download, no cache staleness). uvx itself
-  // typically lives in ~/.local/bin — the exact directory the agent
-  // harness PATH often misses — so it is probed there before PATH.
-  const uvxCandidate = join(home, '.local', 'bin', `uvx${exeSuffix}`);
-  if (existsSync(uvxCandidate)) return { command: uvxCandidate, argsPrefix: ['huaweicloud-open-mcp'] };
-  const uvx = lookupOnPath('uvx', env);
-  if (uvx) return { command: uvx, argsPrefix: ['huaweicloud-open-mcp'] };
-  return null;
-}
-
-function lookupOnPath(name: string, env: NodeJS.ProcessEnv): string | null {
-  const lookup =
-    process.platform === 'win32'
-      ? spawnSync('where.exe', [name], { encoding: 'utf8', timeout: 5000, env })
-      : spawnSync('which', [name], { encoding: 'utf8', timeout: 5000, env });
-  const hit = lookup.status === 0 ? (lookup.stdout || '').trim().split('\n')[0] : '';
-  return hit || null;
+  const resolved = resolveDependencyCommand(DEPENDENCIES['open-mcp-gateway'].resolution, env);
+  if (!resolved) return null;
+  return { command: resolved.command, argsPrefix: [...resolved.argsPrefix] };
 }
 
 async function spawnSidecar(): Promise<OpenMcpSidecar> {
