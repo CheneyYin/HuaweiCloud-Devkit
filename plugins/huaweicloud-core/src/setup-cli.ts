@@ -51,6 +51,7 @@ import { queryDistTagsFetch, determineTarget, semverCompare } from './update-che
 import { getKooCliVersion, compareVersion, kooCliDownloadBase, KOO_CLI_BASE } from './koocli-version.ts';
 import { findHcloudBin, hcloudProbeNextStep, probeHcloud } from './hcloud-probe.ts';
 import { PACK_BINARIES, PACK_IDS, type PackBinary } from './lib/pack-types.ts';
+import { parseDevkitPacks } from './lib/dependency-model.ts';
 
 // node:sqlite is a runtime-only builtin loaded through createRequire; only the
 // DatabaseSync surface this module calls is modeled (see auth/agent-registration.ts).
@@ -4448,11 +4449,7 @@ async function cmdDoctor(): Promise<void> {
       for (const id of PACK_IDS) enabledPacksUnion.add(id);
       continue;
     }
-    const ids = raw
-      .split(',')
-      .map((id) => id.trim())
-      .filter((id) => id.length > 0);
-    const unknown = ids.filter((id) => !PACK_ID_SET.has(id));
+    const { enabled, unknown } = parseDevkitPacks(raw);
     if (unknown.length > 0) {
       warn++;
       console.log(
@@ -4463,9 +4460,8 @@ async function cmdDoctor(): Promise<void> {
       );
       continue;
     }
-    const enabled = ids.includes('core') ? ids : ['core', ...ids];
     for (const id of enabled) enabledPacksUnion.add(id);
-    console.log(`  \x1b[36m[INFO]\x1b[0m Packs (${target.label}): ${enabled.join(', ')}`);
+    console.log(`  \x1b[36m[INFO]\x1b[0m Packs (${target.label}): ${[...enabled].join(', ')}`);
   }
   if (anyPackTarget) {
     const hostBinaries: Array<{ pack: string; name: string; versionFlag: string }> = [];

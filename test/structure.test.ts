@@ -8,6 +8,16 @@ import test from 'node:test';
 import { TOOL_DEFINITIONS } from '../plugins/huaweicloud-core/src/tools.ts';
 import { PACK_OF, PACKS } from '../plugins/huaweicloud-core/src/packs/registry.ts';
 import { PACK_BINARIES, PACK_IDS } from '../plugins/huaweicloud-core/src/lib/pack-types.ts';
+import {
+  closeEnablement,
+  DEPENDENCIES,
+  DEPENDENCY_IDS,
+  parseDevkitPacks,
+  PACK_DEPENDENCIES,
+  PACK_REQUIRES,
+  PACK_USES,
+  requiredDependencies,
+} from '../plugins/huaweicloud-core/src/lib/dependency-model.ts';
 import { UPDATE_TOOLS } from '../plugins/huaweicloud-core/src/packs/update/tools.ts';
 import { AUTH_TOOLS } from '../plugins/huaweicloud-core/src/packs/auth/tools.ts';
 import { OBS_TOOLS } from '../plugins/huaweicloud-core/src/packs/obs/tools.ts';
@@ -1049,4 +1059,125 @@ test('pack binaries declarations are well-shaped and the id list matches the reg
   for (const packId of Object.keys(PACK_BINARIES)) {
     assert.ok(registryIds.includes(packId), `PACK_BINARIES key ${packId} must be a registry pack id`);
   }
+});
+
+test('dependency model: catalog keyed by id, kinds pin the process model', () => {
+  assert.deepEqual(
+    Object.keys(DEPENDENCIES).sort((a, b) => a.localeCompare(b)),
+    [...DEPENDENCY_IDS].sort((a, b) => a.localeCompare(b)),
+  );
+  assert.equal(DEPENDENCIES.devbridge.kind, 'sandbox-resident');
+  assert.ok(!('resolution' in DEPENDENCIES.devbridge), 'sandbox-resident carries no host resolution');
+  assert.ok(!('installPolicy' in DEPENDENCIES.devbridge), 'sandbox-resident carries no install policy');
+  assert.equal(DEPENDENCIES.hcloud.kind, 'cli');
+  assert.equal(DEPENDENCIES.hcloud.installPolicy, 'auto');
+  assert.equal(DEPENDENCIES['open-mcp-gateway'].kind, 'managed-child');
+  assert.equal(DEPENDENCIES['open-mcp-gateway'].installPolicy, 'prompt');
+  assert.deepEqual(DEPENDENCIES['open-mcp-gateway'].supervision, {
+    owner: 'mcp-server',
+    spawn: 'lazy-on-first-call',
+    lifetime: 'parent-stdin-pipe',
+    escalation: 'sigterm-sigkill-3s',
+    respawn: 'on-next-call',
+  });
+});
+
+test('dependency model: pack edges are legal, core owns none, hcloud attributed to its consumers', () => {
+  assert.deepEqual(
+    Object.keys(PACK_DEPENDENCIES).sort((a, b) => a.localeCompare(b)),
+    [...PACK_IDS].sort((a, b) => a.localeCompare(b)),
+  );
+  const used = new Set();
+  for (const [packId, deps] of Object.entries(PACK_DEPENDENCIES)) {
+    for (const dep of deps) {
+      assert.ok(
+        (DEPENDENCY_IDS as readonly string[]).includes(dep),
+        `${packId} -> ${dep} must be a declared dependency id`,
+      );
+      used.add(dep);
+    }
+  }
+  assert.deepEqual(
+    [...used].sort((a, b) => a.localeCompare(b)),
+    [...DEPENDENCY_IDS].sort((a, b) => a.localeCompare(b)),
+    'every dependency is required by at least one pack',
+  );
+  assert.deepEqual(
+    PACK_DEPENDENCIES.core,
+    [],
+    'core owns no binary dependency: a core edge would auto-provision hcloud for CLI-less trims and block receipt-gated uninstall',
+  );
+  const hcloudConsumers = Object.entries(PACK_DEPENDENCIES)
+    .filter(([, deps]) => (deps as readonly string[]).includes('hcloud'))
+    .map(([packId]) => packId)
+    .sort((a, b) => a.localeCompare(b));
+  assert.deepEqual(hcloudConsumers, ['auth', 'huaweicloud-cli', 'obs']);
+});
+
+test('dependency model: requires/uses edges are legal and requires is acyclic', () => {
+  for (const table of [PACK_REQUIRES, PACK_USES]) {
+    for (const [packId, deps] of Object.entries(table)) {
+      for (const dep of deps as readonly string[]) {
+        assert.ok((PACK_IDS as readonly string[]).includes(dep), `${packId} -> ${dep} must be a pack id`);
+        assert.notEqual(dep, packId, 'no self edges');
+      }
+    }
+  }
+  const seen = new Set<string>();
+  const stack = new Set<string>();
+  const hasCycle = (id: string): boolean => {
+    if (stack.has(id)) return true;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    stack.add(id);
+    const edges = (PACK_REQUIRES as Record<string, readonly string[]>)[id] ?? [];
+    const cyclic = edges.some((edge) => hasCycle(edge));
+    stack.delete(id);
+    return cyclic;
+  };
+  assert.ok(!(PACK_IDS as readonly string[]).some((id) => hasCycle(id)), 'PACK_REQUIRES must be acyclic');
+  assert.deepEqual(PACK_USES.sandbox, ['discovery', 'obs']);
+});
+
+test('closeEnablement closes transitively and reports pulledBy', () => {
+  const closure = closeEnablement(['obs'], (id) =>
+    id === 'obs' ? ['auth', 'voucher'] : id === 'auth' ? ['discovery'] : [],
+  );
+  assert.deepEqual(
+    [...closure.enabled].sort((a, b) => a.localeCompare(b)),
+    ['auth', 'discovery', 'obs', 'voucher'],
+  );
+  assert.deepEqual(closure.pulledBy.get('auth'), ['obs']);
+  assert.deepEqual(closure.pulledBy.get('voucher'), ['obs']);
+  assert.deepEqual(closure.pulledBy.get('discovery'), ['auth']);
+  assert.equal(closure.pulledBy.has('obs'), false);
+  const cyclic = closeEnablement(['auth'], (id) => (id === 'auth' ? ['voucher'] : id === 'voucher' ? ['auth'] : []));
+  assert.deepEqual(
+    [...cyclic.enabled].sort((a, b) => a.localeCompare(b)),
+    ['auth', 'voucher'],
+  );
+});
+
+test('parseDevkitPacks is tolerant and defaults blank to the full surface', () => {
+  for (const blank of [null, undefined, '', '   ']) {
+    const parsed = parseDevkitPacks(blank);
+    assert.equal(parsed.enabled.size, PACK_IDS.length);
+    assert.deepEqual(parsed.unknown, []);
+  }
+  const parsed = parseDevkitPacks(' sandbox , bogus ');
+  assert.deepEqual(parsed.unknown, ['bogus']);
+  assert.deepEqual(
+    [...parsed.enabled].sort((a, b) => a.localeCompare(b)),
+    ['core', 'sandbox'],
+  );
+});
+
+test('requiredDependencies unions pack edges; core alone requires nothing', () => {
+  assert.deepEqual([...requiredDependencies(new Set(['core']))], []);
+  assert.deepEqual(
+    [...requiredDependencies(new Set(['huaweicloud-cli', 'auth', 'obs']))].sort((a, b) => a.localeCompare(b)),
+    ['hcloud'],
+  );
+  assert.deepEqual([...requiredDependencies(new Set(['sandbox']))], ['devbridge']);
+  assert.deepEqual([...requiredDependencies(new Set(['huaweicloud-open-mcp']))], ['open-mcp-gateway']);
 });

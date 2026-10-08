@@ -1,5 +1,5 @@
-import type { PackId } from '../lib/pack-types.ts';
-import { PACKS } from './registry.ts';
+import { PACK_IDS, type PackId } from '../lib/pack-types.ts';
+import { parseDevkitPacks } from '../lib/dependency-model.ts';
 
 // Pack enablement, resolved from the DEVKIT_PACKS environment variable.
 //
@@ -7,7 +7,10 @@ import { PACKS } from './registry.ts';
 // comma-separated pack id list ("sandbox,auth"); items are trimmed and empty
 // items are dropped. An unset or blank value keeps the full default surface.
 // Unknown ids throw immediately (boot fail-fast): a typo'd id must not
-// silently shrink the tool surface.
+// silently shrink the tool surface. The parse and closure now delegate to
+// src/lib/dependency-model.ts, the zod-free shared vocabulary, so doctor and
+// the boot path share one parse + closure instead of doctor hand-rolling its
+// own core force-include.
 //
 // core is force-included either way, and the rationale is disclosure: the
 // pack meta tools (huaweicloud_list_packs / huaweicloud_pack_info) stay in
@@ -27,23 +30,20 @@ import { PACKS } from './registry.ts';
 // (scripts/lib/pack-boundaries.mjs treats any src/packs/<other> target as
 // off limits).
 
-const VALID_IDS: readonly string[] = PACKS.map((pack) => pack.id);
-const VALID_ID_SET = new Set<string>(VALID_IDS);
+const VALID_IDS: readonly string[] = PACK_IDS;
 
 // The simplest shape wins: callers consume the set directly, so no wrapper
 // interface is exported. Pure function — env in, set out, no process state.
+// The parse and closure live in lib/dependency-model.ts; this file keeps only
+// the boot-boundary policy: unknown ids throw fail-fast with the valid list.
 export function resolveEnabledPacks(env: NodeJS.ProcessEnv = process.env): ReadonlySet<PackId> {
   const raw = (env.DEVKIT_PACKS ?? '').trim();
-  if (!raw) return new Set(PACKS.map((pack) => pack.id));
-  const requested = raw
-    .split(',')
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
-  const unknown = requested.filter((id) => !VALID_ID_SET.has(id));
+  if (!raw) return new Set(PACK_IDS);
+  const { unknown, enabled } = parseDevkitPacks(raw);
   if (unknown.length > 0) {
     throw new Error(
       `DEVKIT_PACKS contains unknown pack id(s): ${unknown.join(', ')}. Valid pack ids: ${VALID_IDS.join(', ')}.`,
     );
   }
-  return new Set(PACKS.filter((pack) => pack.id === 'core' || requested.includes(pack.id)).map((pack) => pack.id));
+  return enabled;
 }

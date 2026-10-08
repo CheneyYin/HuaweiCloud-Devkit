@@ -21,6 +21,7 @@ import type { ToolArgs, ToolName, CallToolOptions } from '../tools.ts';
 //   - src/packs/<id>/tools.ts      (PackToolDefinition, LooseToolSchema)
 //   - src/tool-schemas.ts          (LooseToolSchema, re-exported for callers)
 //   - src/setup-cli.ts             (PACK_IDS, PACK_BINARIES — installer side)
+//   - src/lib/dependency-model.ts   (PACK_IDS — shared dependency vocabulary)
 
 // The runtime class behind z.looseObject (constructor name ZodObject): a
 // constructed passthrough object schema. Named once so registry entries,
