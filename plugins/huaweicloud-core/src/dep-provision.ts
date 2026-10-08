@@ -601,13 +601,15 @@ const GATEWAY_UNINSTALL_ARGS: Record<GatewayInstallTier, readonly string[]> = {
   uv: ['tool', 'uninstall', GATEWAY_PACKAGE],
   pipx: ['uninstall', GATEWAY_PACKAGE],
   // -y because dep uninstall runs where pip's confirmation prompt would hang
-  // a non-TTY session (same discipline as obsutil's -f).
-  pip3: ['uninstall', '--user', '-y', GATEWAY_PACKAGE],
+  // a non-TTY session (same discipline as obsutil's -f). No --user: pip
+  // rejects it on uninstall (exit 2, verified on pip 24.0), and pip removes
+  // from the user site when run as that user anyway.
+  pip3: ['uninstall', '-y', GATEWAY_PACKAGE],
 };
 
 const HCLOUD_ESCAPE_HATCH = 'Escape hatch: npx huaweicloud-devkit uninstall --target <agent> --clean-kocli';
 const GATEWAY_ESCAPE_HATCH =
-  'Escape hatch: uv tool uninstall huaweicloud-open-mcp (or pipx uninstall huaweicloud-open-mcp / pip3 uninstall --user huaweicloud-open-mcp)';
+  'Escape hatch: uv tool uninstall huaweicloud-open-mcp (or pipx uninstall huaweicloud-open-mcp / pip3 uninstall -y huaweicloud-open-mcp)';
 
 function requiringPacks(id: DependencyId, enabledPacks: ReadonlySet<PackId>): PackId[] {
   // The naming half of the refusal: the decision itself went through
@@ -690,9 +692,26 @@ function uninstallHcloud(receipt: DepReceipt, dir: string, opts: DepUninstallOpt
   try {
     rmSync(target);
   } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    // /usr/local/bin on default macOS: the installer placed the binary via
+    // `sudo mv`, so a bare rmSync fails EACCES. Mirror that discipline
+    // without ever blocking on a password prompt — sudo -n only, through
+    // the same runCommand seam the tier uninstall uses.
+    const run = opts.runCommand ?? defaultRunCommand;
+    const escalated = run('sudo', ['-n', 'rm', target]);
+    if (escalated.status === 0) {
+      removeReceipt('hcloud', dir);
+      return {
+        ok: true,
+        message: `Removed the devkit-installed hcloud binary: ${target} (via sudo -n rm)`,
+        detail: [
+          '~/.hcloud credentials and config were not touched; those are removed only by: npx huaweicloud-devkit uninstall --target <agent> --clean-kocli',
+        ],
+      };
+    }
     return {
       ok: false,
-      message: `Failed to remove ${target}: ${error instanceof Error ? error.message : String(error)}. Remove it manually, then re-run dep uninstall hcloud to clear the receipt.`,
+      message: `Failed to remove ${target}: ${reason}. Remove it manually (sudo rm ${target}), then re-run dep uninstall hcloud to clear the receipt.`,
     };
   }
   removeReceipt('hcloud', dir);

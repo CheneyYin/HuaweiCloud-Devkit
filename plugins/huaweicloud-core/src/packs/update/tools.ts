@@ -92,7 +92,7 @@ export type UpdateToolName = (typeof UPDATE_TOOLS)[number]['name'];
 
 // Schema map keyed by tool name for src/tool-schemas.ts: TOOL_SCHEMAS spreads
 // it in place, keeping the satisfies Record<ToolName, LooseToolSchema>
-// completeness check over all 48 tools.
+// completeness check over all 49 tools.
 export const UPDATE_TOOL_SCHEMAS: Readonly<Record<UpdateToolName, LooseToolSchema>> = {
   huaweicloud_check_update: checkUpdateSchema,
   huaweicloud_upgrade: upgradeSchema,

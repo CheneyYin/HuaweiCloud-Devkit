@@ -344,6 +344,8 @@ test('uninstall open-mcp-gateway without a receipt refuses and points at the man
   assert.match(result.message, /Refusing to uninstall open-mcp-gateway: no devkit install receipt/);
   assert.match(result.message, /uv tool uninstall huaweicloud-open-mcp/);
   assert.match(result.message, /pipx uninstall huaweicloud-open-mcp/);
+  assert.match(result.message, /pip3 uninstall -y huaweicloud-open-mcp/);
+  assert.doesNotMatch(result.message, /pip3 uninstall --user/, 'pip rejects --user on uninstall');
 });
 
 test('uninstall refuses while the effective pack union still requires the id', () => {
@@ -400,6 +402,76 @@ test('uninstall hcloud when the receipt path is already gone clears the stale re
   assert.equal(readReceipt('hcloud', dir), null);
 });
 
+// Root bypasses directory permissions, so EACCES cannot be staged as root.
+const cannotStageEacces = isWin || (typeof process.getuid === 'function' && process.getuid() === 0);
+
+test(
+  'uninstall hcloud escalates to sudo -n rm through the runCommand seam when rmSync fails',
+  { skip: cannotStageEacces },
+  () => {
+    const home = tempHome();
+    const dir = join(home, 'deps');
+    // macOS /usr/local/bin shape: the receipt path sits in a directory the
+    // current user cannot write, exactly how the installer's sudo mv left it.
+    const placed = join(home, 'usr-local', 'hcloud');
+    writeExecutable(placed);
+    writeReceipt(hcloudReceiptAt(placed), dir);
+    chmodSync(join(home, 'usr-local'), 0o555);
+    try {
+      const calls: Array<{ command: string; args: readonly string[] }> = [];
+      const result = uninstallDependency('hcloud', noTargets, {
+        receiptsDir: dir,
+        env: emptyPathEnv(home),
+        runCommand: (command, args) => {
+          calls.push({ command, args });
+          return { status: 0, stdout: '', stderr: '' };
+        },
+      });
+      assert.equal(result.ok, true, result.message);
+      assert.deepEqual(calls, [{ command: 'sudo', args: ['-n', 'rm', placed] }]);
+      assert.ok(
+        result.message.includes(`Removed the devkit-installed hcloud binary: ${placed} (via sudo -n rm)`),
+        result.message,
+      );
+      assert.equal(readReceipt('hcloud', dir), null, 'the receipt is cleared once sudo withdraws the binary');
+    } finally {
+      chmodSync(join(home, 'usr-local'), 0o755);
+    }
+  },
+);
+
+test(
+  'uninstall hcloud reports the manual sudo rm line when sudo -n cannot withdraw the binary',
+  { skip: cannotStageEacces },
+  () => {
+    const home = tempHome();
+    const dir = join(home, 'deps');
+    const placed = join(home, 'usr-local', 'hcloud');
+    writeExecutable(placed);
+    writeReceipt(hcloudReceiptAt(placed), dir);
+    chmodSync(join(home, 'usr-local'), 0o555);
+    try {
+      const result = uninstallDependency('hcloud', noTargets, {
+        receiptsDir: dir,
+        env: emptyPathEnv(home),
+        runCommand: () => ({ status: 1, stdout: '', stderr: 'sudo: a password is required' }),
+      });
+      assert.equal(result.ok, false);
+      assert.ok(result.message.includes(`Failed to remove ${placed}:`), result.message);
+      assert.ok(
+        result.message.includes(
+          `Remove it manually (sudo rm ${placed}), then re-run dep uninstall hcloud to clear the receipt.`,
+        ),
+        result.message,
+      );
+      assert.equal(existsSync(placed), true, 'the binary is left in place');
+      assert.ok(readReceipt('hcloud', dir), 'the receipt stays until the user resolves the standoff');
+    } finally {
+      chmodSync(join(home, 'usr-local'), 0o755);
+    }
+  },
+);
+
 test('uninstall hcloud with a pathless receipt never deletes the user\u2019s HCLOUD_BIN override', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dep-uninstall-'));
   const userOwned = join(dir, 'my-hcloud');
@@ -428,6 +500,11 @@ for (const tier of ['uv', 'pipx', 'pip3'] as const) {
       env: emptyPathEnv(home),
       runCommand: (command, args) => {
         calls.push({ command, args });
+        // The contract, not the literal: pip has no --user option on
+        // uninstall (exit 2), so a regression back to --user must fail here.
+        if (args.includes('uninstall') && args.includes('--user')) {
+          return { status: 2, stdout: '', stderr: 'no such option: --user' };
+        }
         return { status: 0, stdout: '', stderr: '' };
       },
     });
@@ -438,8 +515,12 @@ for (const tier of ['uv', 'pipx', 'pip3'] as const) {
         ? ['tool', 'uninstall', 'huaweicloud-open-mcp']
         : tier === 'pipx'
           ? ['uninstall', 'huaweicloud-open-mcp']
-          : ['uninstall', '--user', '-y', 'huaweicloud-open-mcp'];
+          : ['uninstall', '-y', 'huaweicloud-open-mcp'];
     assert.deepEqual(calls[0], { command: tool, args: expectedArgs });
+    assert.ok(
+      result.message.includes(`Uninstalled the devkit-installed open-mcp-gateway via ${tier}:`),
+      result.message,
+    );
     assert.equal(readReceipt('open-mcp-gateway', dir), null);
   });
 }
@@ -744,6 +825,26 @@ test('dep uninstall hcloud refuses while an installed target still requires it',
   assert.match(res.stderr, /Refusing to uninstall hcloud: required by enabled pack\(s\) huaweicloud-cli/);
   assert.match(res.stderr, /installed targets: OpenCode/);
   assert.match(res.stderr, /Remove or trim those targets first/);
+});
+
+// ---- --clean-kocli through the real CLI ----
+
+test('uninstall --clean-kocli clears the devkit hcloud receipt with the binary', () => {
+  const home = tempHome();
+  const emptyPath = mkdtempSync(join(tmpdir(), 'dep-provision-path-'));
+  const placed = join(home, '.local', 'bin', 'hcloud');
+  writeExecutable(placed);
+  const depsDir = join(home, '.config', 'huaweicloud', 'deps');
+  writeReceipt(hcloudReceiptAt(placed), depsDir);
+  const res = runSetupCli(['uninstall', '--target', 'all', '--clean-kocli'], home, {
+    PATH: emptyPath,
+    HUAWEICLOUD_HOME: home,
+  });
+  assert.equal(res.status, 0, res.stderr);
+  assert.ok(res.stdout.includes(`KooCLI removed: ${placed}`), res.stdout);
+  assert.ok(res.stdout.includes('Cleared the devkit hcloud install receipt.'), res.stdout);
+  assert.equal(existsSync(placed), false, 'the binary is removed');
+  assert.equal(readReceipt('hcloud', depsDir), null, 'the receipt does not outlive the binary');
 });
 
 // ---- doctor's pack-binary section renders from the dependency model ----

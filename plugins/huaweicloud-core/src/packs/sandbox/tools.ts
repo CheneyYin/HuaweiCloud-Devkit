@@ -553,7 +553,7 @@ export type SandboxToolName = (typeof SANDBOX_TOOLS)[number]['name'];
 
 // Schema map keyed by tool name for src/tool-schemas.ts: TOOL_SCHEMAS spreads
 // it in place, keeping the satisfies Record<ToolName, LooseToolSchema>
-// completeness check over all 48 tools.
+// completeness check over all 49 tools.
 export const SANDBOX_TOOL_SCHEMAS: Readonly<Record<SandboxToolName, LooseToolSchema>> = {
   huaweicloud_sandbox_exec_with_session: execWithSessionSchema,
   huaweicloud_sandbox_exec_one_shot: execOneShotSchema,

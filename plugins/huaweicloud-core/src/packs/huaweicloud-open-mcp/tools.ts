@@ -3,11 +3,13 @@ import { z } from 'zod';
 import type { PackToolDefinition, LooseToolSchema } from '../../lib/pack-types.ts';
 import { callOpenMcpTool, restartOpenMcpSidecar } from './sidecar.ts';
 
-// Thin proxies over the huaweicloud-open-mcp gateway's six metadata tools
-// (src/mcp_openapi/server.py), plus one lifecycle tool that recycles the
-// gateway child in-session. The gateway is the authoritative validator;
-// these zod schemas only guard the boundary (required identity fields plus
-// passthrough), and the sidecar normalizes results to {ok, tool, ...}.
+// Seven tools over the huaweicloud-open-mcp gateway: six metadata proxies
+// (search_apis, list_products, get_product, list_apis, get_api,
+// get_api_examples — src/mcp_openapi/server.py) plus one lifecycle tool
+// that recycles the gateway child in-session. The gateway is the
+// authoritative validator; these zod schemas only guard the boundary
+// (required identity fields plus passthrough), and the sidecar normalizes
+// results to {ok, tool, ...}.
 // Phase 1 is discovery-only: execute_api and manage_policy are NOT proxied.
 // API execution arrives with the approval bridge (plan/run pair minting a
 // once-scope grant inside the handler), which keeps the devkit's single

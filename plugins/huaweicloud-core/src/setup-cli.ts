@@ -38,6 +38,7 @@ import {
   type ProxyConfigFile,
 } from './proxy/proxy-config.ts';
 import { removeKooCli, removeObsConfig } from './sandbox/uninstall-cleanup.ts';
+import { removeReceipt } from './dep-receipts.ts';
 import { detectCodeartsSandbox } from './codearts-sandbox.ts';
 import { installGatewayTool, installKooCli, provisionDependencies, uninstallDependency } from './dep-provision.ts';
 import {
@@ -1090,7 +1091,7 @@ function removeOpenCodeConfig(): void {
 }
 
 function hasCodexCLI(): boolean {
-  const r = spawnSync('codex --version', [], { shell: true, windowsHide: true, stdio: 'pipe' });
+  const r = spawnSync('codex --version', [], { shell: true, windowsHide: true, stdio: 'pipe', timeout: 5000 });
   if (r.status === 0 && r.stdout && r.stdout.toString().includes('codex')) return true;
   // WindowsApps codex.exe may fail with "Access is denied"
   // Fallback: check if codex exists on PATH via where.exe
@@ -1204,7 +1205,12 @@ function codexStatus(): boolean {
   // plugin's SOURCE path (…/plugins/huaweicloud-devkit) also contains the name,
   // so a naive includes() reports "installed" even when the status column says
   // "not installed".
-  const r = spawnSync('codex plugin list --json', [], { shell: true, windowsHide: true, stdio: 'pipe' });
+  const r = spawnSync('codex plugin list --json', [], {
+    shell: true,
+    windowsHide: true,
+    stdio: 'pipe',
+    timeout: 5000,
+  });
   const out = r.stdout ? r.stdout.toString() : '';
   const name = getCodexPluginName();
   try {
@@ -3957,6 +3963,12 @@ function removeKooCliWithMessage(): void {
   } else {
     console.log('  KooCLI not found (nothing to remove).');
   }
+  // The devkit receipt must not outlive the binary it attributes: a stale
+  // receipt would make a later `dep uninstall hcloud` delete a binary the
+  // user reinstalled themselves at the same path (the manual instructions
+  // teach exactly that path).
+  removeReceipt('hcloud');
+  console.log('  Cleared the devkit hcloud install receipt.');
 }
 
 function removeObsConfigWithMessage(): void {
@@ -4136,16 +4148,21 @@ function packStatusReaders(): Array<{ label: string; installed: boolean; read: (
   ];
 }
 
-// The effective pack union for provisioning, `dep status`, and the uninstall
-// requirement check: every reader-backed installed target contributes its
-// parsed closure (blank/unset config means the full surface), and codex
-// contributes the full surface whenever its CLI is present — the codex server
+// The effective pack union for provisioning, `dep status`, doctor's
+// pack-dependency section, and the uninstall requirement check: every
+// reader-backed installed target contributes its parsed closure
+// (blank/unset config means the full surface), and codex contributes the
+// full surface only when the devkit plugin is actually installed for codex
+// (codexStatus's `codex plugin list --json` signal) — the codex server
 // boots with no DEVKIT_PACKS because the --packs flag has no write path
-// there, so it always needs whatever the full surface needs. Unknown ids in
-// a target's DEVKIT_PACKS warn and count as the full surface (fail-safe):
-// unlike doctor's warn+continue, skipping the target would under-provision
-// its binaries. packUnionReport is the one derivation; it also returns the
-// per-target attribution `dep uninstall` names when it refuses.
+// there, so it always needs whatever the full surface needs, but a codex
+// CLI that merely exists on PATH proves nothing about this devkit's
+// footprint and must not widen the union (over-provisioned `--packs core`
+// trims, phantom uninstall refusals). Unknown ids in a target's
+// DEVKIT_PACKS warn and count as the full surface (fail-safe): skipping the
+// target would under-provision its binaries. packUnionReport is the one
+// derivation; it also returns the per-target attribution `dep uninstall`
+// names when it refuses.
 interface PackUnionReport {
   union: ReadonlySet<PackId>;
   carriers: ReadonlyArray<{ label: string; packs: ReadonlySet<PackId> }>;
@@ -4169,7 +4186,7 @@ function packUnionReport(): PackUnionReport {
     for (const id of parsed.enabled) union.add(id);
     carriers.push({ label: target.label, packs: parsed.enabled });
   }
-  if (hasCodexCLI()) {
+  if (codexStatus()) {
     const full = new Set(PACK_IDS);
     for (const id of full) union.add(id);
     carriers.push({ label: 'Codex CLI', packs: full });
@@ -4502,25 +4519,22 @@ async function cmdDoctor(): Promise<void> {
   // config file, not the process env: the value reaches the server process
   // only after the agent harness injects the config env. Unknown ids warn
   // because the server boot fail-fasts on them (src/packs/enable.ts).
-  // The binary section below renders from the dependency model:
-  // requiredDependencies over the enabled union, dispatched by id. hcloud is
-  // deliberately absent here — the dedicated hcloud block above owns it as
-  // the explicit plugin-level rule (deriving it was rejected: a core⇒hcloud
-  // edge would auto-provision CLI-less trims, and the union is empty on
-  // zero-target machines, exactly where the check matters most). devbridge
-  // is sandbox-resident and never probed host-side; the gateway renders
-  // through the shared resolution chain. PACK_USES soft edges warn once per
-  // pair when a used pack sits disabled in the union.
-  const packStatus = packStatusReaders();
-  const enabledPacksUnion = new Set<PackId>();
-  let anyPackTarget = false;
-  for (const target of packStatus) {
+  // The per-target lines below are display only; the derivation is
+  // packUnionReport() — the same one derivation provisioning, `dep status`,
+  // and `dep uninstall` use — so doctor's dependency verdict can never
+  // disagree with theirs. hcloud is deliberately absent here — the
+  // dedicated hcloud block above owns it as the explicit plugin-level rule
+  // (deriving it was rejected: a core⇒hcloud edge would auto-provision
+  // CLI-less trims, and the union is empty on zero-target machines, exactly
+  // where the check matters most). devbridge is sandbox-resident and never
+  // probed host-side; the gateway renders through the shared resolution
+  // chain. PACK_USES soft edges warn once per pair when a used pack sits
+  // disabled in the union.
+  for (const target of packStatusReaders()) {
     if (!target.installed) continue;
-    anyPackTarget = true;
     const raw = target.read();
     if (raw === null || raw.trim() === '') {
       console.log(`  \x1b[36m[INFO]\x1b[0m Packs (${target.label}): all — DEVKIT_PACKS not set`);
-      for (const id of PACK_IDS) enabledPacksUnion.add(id);
       continue;
     }
     const { enabled, unknown } = parseDevkitPacks(raw);
@@ -4534,10 +4548,10 @@ async function cmdDoctor(): Promise<void> {
       );
       continue;
     }
-    for (const id of enabled) enabledPacksUnion.add(id);
     console.log(`  \x1b[36m[INFO]\x1b[0m Packs (${target.label}): ${[...enabled].join(', ')}`);
   }
-  if (anyPackTarget) {
+  const { union: enabledPacksUnion, carriers } = packUnionReport();
+  if (carriers.length > 0) {
     const requiredDeps = requiredDependencies(enabledPacksUnion);
     if (requiredDeps.size === 0) {
       console.log(`  \x1b[36m[INFO]\x1b[0m Pack dependencies: none required`);

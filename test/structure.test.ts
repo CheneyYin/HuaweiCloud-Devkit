@@ -513,10 +513,13 @@ test('KooCLI sandbox blockers and privacy agreement live in their extracted modu
   assert.match(codeartsSandbox, /关闭沙箱模式后重试/);
   assert.match(setup, /from '\.\/codearts-sandbox\.(?:mjs|ts)'/);
   assert.doesNotMatch(setup, /function detectCodeartsSandbox\(\)/, 'detection must not be duplicated in setup-cli');
-  // hcloud lookup covers HCLOUD_BIN and delegates to the shared resolution chain
+  // hcloud lookup delegates to the shared resolution chain; the HCLOUD_BIN
+  // override is a property of the dependency catalog (envBin), not a literal
+  // in this module — the old process.env.HCLOUD_BIN regex here passed only
+  // because HCLOUD_BIN_ARGS_JSON prefixes it.
   assert.match(setup, /from '\.\/hcloud-probe\.(?:mjs|ts)'/);
   assert.match(hcloudProbe, /function findHcloudBin\(\)/);
-  assert.match(hcloudProbe, /process\.env\.HCLOUD_BIN/);
+  assert.equal(DEPENDENCIES.hcloud.resolution.envBin, 'HCLOUD_BIN');
   assert.match(hcloudProbe, /resolveDependencyCommand\(DEPENDENCIES\.hcloud\.resolution\)/);
   assert.match(hcloudProbe, /sandbox_home_failure/);
   // install-hcloud surfaces sandbox guidance on failure (caller moved with the installer)

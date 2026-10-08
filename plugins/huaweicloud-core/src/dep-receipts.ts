@@ -102,8 +102,11 @@ export function removeReceipt(id: DependencyId, dir: string = receiptDir()): voi
 const LOCK_FILE = 'lock';
 const LOCK_POLL_MS = 50;
 // A live holder doing real work is waited out; a holder wedged past this
-// window is taken over anyway — the guard must never block forever.
-const LOCK_TAKEOVER_MS = 5000;
+// window is taken over anyway — the guard must never block forever. The
+// window must exceed the longest critical section (the tier uninstall's
+// 60s spawnSync) plus resolution margin, or a legitimate holder still
+// inside its section gets its lock taken over mid-flight.
+const LOCK_TAKEOVER_MS = 90_000;
 
 const lockDepth = new Map<string, number>();
 const heldDirs = new Set<string>();
@@ -136,10 +139,10 @@ function readHolderPid(file: string): number | null {
   }
 }
 
-function acquireLock(dir: string): void {
+function acquireLock(dir: string, takeoverMs: number = LOCK_TAKEOVER_MS): void {
   mkdirSync(dir, { recursive: true });
   const file = lockPath(dir);
-  const deadline = Date.now() + LOCK_TAKEOVER_MS;
+  const deadline = Date.now() + takeoverMs;
   for (;;) {
     try {
       writeFileSync(file, `${process.pid}\n`, { flag: 'wx' });
@@ -152,9 +155,20 @@ function acquireLock(dir: string): void {
       sleepSync(LOCK_POLL_MS);
       continue;
     }
-    // Stale (dead or unparsable holder) or wedged past the takeover window:
-    // remove it and race for the lock again.
-    rmSync(file, { force: true });
+    // Stale (dead or unparsable holder) or wedged past the takeover window.
+    // The takeover is an atomic rename, never an rmSync: an unconditional
+    // delete let two expired waiters remove each other's LIVE lock and both
+    // hold. rename(2) claims the contender's file; ENOENT means another
+    // taker won the same race — loop straight back to the wx attempt. The
+    // renamed file is left as a <lock>.stale.<pid>.<ts> orphan on purpose:
+    // nothing ever reads it as a lock (only the exact `lock` path is), and
+    // it records that a takeover happened.
+    const stale = `${file}.stale.${process.pid}.${Date.now()}`;
+    try {
+      renameSync(file, stale);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
   }
 }
 
@@ -174,7 +188,7 @@ function installExitCleanup(): void {
   });
 }
 
-export function withDepLock<T>(fn: () => T, dir: string = receiptDir()): T {
+export function withDepLock<T>(fn: () => T, dir: string = receiptDir(), takeoverMs: number = LOCK_TAKEOVER_MS): T {
   const depth = lockDepth.get(dir) ?? 0;
   if (depth > 0) {
     lockDepth.set(dir, depth + 1);
@@ -184,7 +198,7 @@ export function withDepLock<T>(fn: () => T, dir: string = receiptDir()): T {
       lockDepth.set(dir, depth - 1);
     }
   }
-  acquireLock(dir);
+  acquireLock(dir, takeoverMs);
   installExitCleanup();
   heldDirs.add(dir);
   lockDepth.set(dir, 1);

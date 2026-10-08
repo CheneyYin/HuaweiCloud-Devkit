@@ -176,24 +176,86 @@ test('lock: a stale holder (dead pid) is taken over, never waited out', async ()
   }
 });
 
+test('lock: a stale takeover renames the contender aside instead of deleting it', async () => {
+  const dir = tempDir();
+  try {
+    const child = spawn(process.execPath, ['-e', 'process.exit(0)']);
+    const { pid } = child;
+    assert.ok(pid, 'spawned child has a pid');
+    await new Promise<void>((resolve) => child.on('exit', resolve));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'lock'), `${pid}\n`, 'utf8');
+    let ran = false;
+    withDepLock(() => {
+      ran = true;
+    }, dir);
+    assert.equal(ran, true, 'the stale lock is taken over');
+    assert.equal(existsSync(join(dir, 'lock')), false, 'no lock file remains');
+    const artifacts = readdirSync(dir).filter((name) => name.startsWith('lock.stale.'));
+    assert.ok(artifacts.length >= 1, 'the takeover renamed the stale lock aside (rename path, not rmSync)');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('lock: a live holder is not stolen within the takeover window', () => {
+  const dir = tempDir();
+  try {
+    mkdirSync(dir, { recursive: true });
+    // The lock names THIS process: a live holder mid-critical-section.
+    writeFileSync(join(dir, 'lock'), `${process.pid}\n`, 'utf8');
+    const windowMs = 600;
+    const started = Date.now();
+    let ran = false;
+    withDepLock(
+      () => {
+        ran = true;
+      },
+      dir,
+      windowMs,
+    );
+    const elapsed = Date.now() - started;
+    assert.equal(ran, true, 'the lock is acquired only after the window');
+    assert.ok(elapsed >= 500, `a live holder must be waited out, not stolen (${elapsed}ms)`);
+    assert.equal(existsSync(join(dir, 'lock')), false, 'the lock is released after the takeover');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('lock: a live foreign holder is waited out, then taken over after it dies', async () => {
   const dir = tempDir();
   try {
     mkdirSync(dir, { recursive: true });
-    // The child writes the lock itself and stays alive for 800ms, then dies
-    // without removing it: the parent must block on the live pid, take over
-    // once it is stale, and release afterwards.
-    const child = spawn(process.execPath, [
-      '-e',
-      `require('fs').writeFileSync(${JSON.stringify(join(dir, 'lock'))}, process.pid + '\\n'); setTimeout(() => {}, 800)`,
-    ]);
-    assert.ok(child.pid, 'spawned child has a pid');
-    const holderPid = String(child.pid);
-    const deadline = Date.now() + 5000;
-    while (!existsSync(join(dir, 'lock')) || readFileSync(join(dir, 'lock'), 'utf8').trim() !== holderPid) {
-      assert.ok(Date.now() < deadline, 'child never wrote its lock');
+    const lockFile = join(dir, 'lock');
+    // The real holder is a grandchild that writes the lock with its own pid
+    // and lives 1500ms. The helper spawned here reaps it synchronously the
+    // moment it exits (spawnSync), so the pid flips verifiably dead while
+    // this test's event loop is blocked inside withDepLock — a direct child
+    // would stay a zombie instead (the blocked loop never reaps), and the
+    // takeover would only ever fire via the deadline path.
+    const inner = `require('fs').writeFileSync(${JSON.stringify(lockFile)}, process.pid + '\\n'); setTimeout(() => {}, 1500)`;
+    const helperScript = `require('child_process').spawnSync(process.execPath, ['-e', ${JSON.stringify(inner)}]); setTimeout(() => {}, 500)`;
+    const child = spawn(process.execPath, ['-e', helperScript]);
+    assert.ok(child.pid, 'spawned helper has a pid');
+    // Wait until the lock names a holder that is verifiably alive RIGHT NOW,
+    // so the acquire below starts inside the live window.
+    let holder = 0;
+    const waitDeadline = Date.now() + 10_000;
+    while (Date.now() < waitDeadline) {
+      if (existsSync(lockFile)) {
+        const pid = Number.parseInt(readFileSync(lockFile, 'utf8').trim(), 10);
+        if (Number.isSafeInteger(pid) && pid > 0 && pid !== child.pid) {
+          try {
+            process.kill(pid, 0);
+            holder = pid;
+            break;
+          } catch {}
+        }
+      }
       await new Promise((r) => setTimeout(r, 10));
     }
+    assert.ok(holder > 0, 'the holder never wrote a live lock');
     const started = Date.now();
     let ran = false;
     withDepLock(() => {
@@ -202,7 +264,11 @@ test('lock: a live foreign holder is waited out, then taken over after it dies',
     const elapsed = Date.now() - started;
     assert.equal(ran, true);
     assert.ok(elapsed >= 400, `expected to wait for the live holder, took ${elapsed}ms`);
-    assert.equal(existsSync(join(dir, 'lock')), false, 'the lock is released after the critical section');
+    assert.ok(
+      elapsed < 10_000,
+      `the takeover must come from the dead-pid check, not the 90s deadline (took ${elapsed}ms)`,
+    );
+    assert.equal(existsSync(lockFile), false, 'the lock is released after the critical section');
     child.kill();
   } finally {
     rmSync(dir, { recursive: true, force: true });

@@ -20,8 +20,8 @@ import type { DependencyResolution } from './dependency-model.ts';
 //   candidate platform candidates, '~'-prefixed ones expanded against the
 //             platform home (win32 homedir(); unix env.HOME || homedir() —
 //             the hermetic-test convention, now the one rule)
-//   path      PATH lookup via where.exe (win32) / which (otherwise), ~5s
-//             timeout, the caller's env passed through
+//   path      PATH lookup via where.exe (win32) / sh -c 'command -v'
+//             (otherwise), ~5s timeout, the caller's env passed through
 //   fallback  run <command> <argsPrefix...> with no persistent install: the
 //             fallback COMMAND is resolved itself first (its ~/.local/bin
 //             candidate before PATH — uvx typically lives there while the
@@ -54,10 +54,15 @@ function pathLookupName(resolution: DependencyResolution): string | null {
 }
 
 export function lookupOnPath(name: string, env: NodeJS.ProcessEnv): string | null {
+  // POSIX `command -v` is a shell builtin, always present — an external
+  // `which` binary is not (slim containers ship without it, silently
+  // nulling the path tier). Names arrive from the DEPENDENCIES catalog
+  // basenames and internal literals only, never user input, so the shell
+  // interpolation is safe.
   const lookup =
     process.platform === 'win32'
       ? spawnSync('where.exe', [name], { encoding: 'utf8', timeout: 5000, env })
-      : spawnSync('which', [name], { encoding: 'utf8', timeout: 5000, env });
+      : spawnSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8', timeout: 5000, env });
   const hit = lookup.status === 0 ? (lookup.stdout || '').trim().split('\n')[0] : '';
   return hit || null;
 }
