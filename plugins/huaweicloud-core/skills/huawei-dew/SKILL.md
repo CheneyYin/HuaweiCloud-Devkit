@@ -3,7 +3,6 @@ name: huawei-dew
 description: 'Use when managing secrets, credentials, encryption keys, certificates, or any sensitive data on Huawei Cloud. Covers CSMS (Cloud Secret Management Service) for secrets, KMS for encryption keys, and credential rotation. Triggers on: secret, credential, API key, token, password, encrypt, decrypt, KMS, CSMS, DEW, certificate, CSR, rotation. Activates for ANY task involving secrets or credentials — load this skill first before touching secrets.'
 version: 1
 ---
-
 <!-- generated from src/packs/huaweicloud-cli/skills/huawei-dew - do not edit -->
 
 # Huawei Cloud DEW (Data Encryption Workshop)

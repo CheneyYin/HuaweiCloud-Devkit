@@ -3,7 +3,6 @@ name: huawei-iac
 description: 'Use whenever the user wants to DEPLOY, host, or purchase anything on Huawei Cloud that creates billable resources: application deployments (部署应用到华为云, deploy my app, 上线, 搭建), architecture proposals, cost estimation, multi-resource provisioning (VPC, subnet, security group, ECS, EIP, RDS, OBS, CDN, DNS, FunctionGraph, CCE, GaussDB and more), session-scoped state tracking, and reverse-order destroy. Trigger words: 部署, 部署到华为云, 上线, 购买, 搭建, 开通, 成本估算, 多少钱, 销毁, deploy, deploy to Huawei Cloud, provision, purchase, architecture, hosting. Reusing an existing VPC does NOT make it single-resource - any purchase (ECS, EIP, disk, keypair, rules) must pass the cost+balance gate here. NOT for: sandbox preview (huawei-sandbox - free, no purchase), read-only or lifecycle operations on EXISTING resources (query/reboot/resize/delete - use the service skill directly).'
 version: 1
 ---
-
 <!-- generated from src/packs/huaweicloud-cli/skills/huawei-iac - do not edit -->
 
 # Huawei Cloud IaC Orchestration

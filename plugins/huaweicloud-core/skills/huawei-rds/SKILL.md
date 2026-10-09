@@ -3,7 +3,6 @@ name: huawei-rds
 description: 'Use when creating, configuring, managing, or troubleshooting RDS instances on Huawei Cloud. Covers MySQL, PostgreSQL, SQL Server. Triggers: RDS, MySQL, PostgreSQL, database instance, backup, read replica. NOT for: GaussDB (use huawei-gaussdb), DDS (use huawei-dds-dcs).'
 version: 1
 ---
-
 <!-- generated from src/packs/huaweicloud-cli/skills/huawei-rds - do not edit -->
 
 # Huawei Cloud RDS

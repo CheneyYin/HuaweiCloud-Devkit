@@ -1,5 +1,4 @@
 <!-- generated from src/packs/huaweicloud-cli/skills/huawei-iam - do not edit -->
-
 # IAM Quick Reference
 
 ## Common Operations

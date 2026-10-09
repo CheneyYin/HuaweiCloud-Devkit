@@ -3,7 +3,6 @@ name: huawei-cts
 description: 'Use when managing Cloud Trace Service (CTS) audit logs, trackers, and traces on Huawei Cloud. Triggers: CTS, Cloud Trace, audit log, tracker, trace, operation record. NOT for: CES monitoring alarms (use huawei-cloud-eye), log analysis (use LTS).'
 version: 1
 ---
-
 <!-- generated from src/packs/huaweicloud-cli/skills/huawei-cts - do not edit -->
 
 # Huawei Cloud CTS

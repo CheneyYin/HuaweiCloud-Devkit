@@ -3,7 +3,6 @@ name: huawei-gaussdb
 description: 'Use when creating or managing GaussDB distributed database on Huawei Cloud. Covers GaussDB(for MySQL), GaussDB(for openGauss), sharding, HTAP. Triggers: GaussDB, distributed database, sharding, openGauss, HTAP. NOT for: single RDS (use huawei-rds).'
 version: 1
 ---
-
 <!-- generated from src/packs/huaweicloud-cli/skills/huawei-gaussdb - do not edit -->
 
 # Huawei Cloud GaussDB

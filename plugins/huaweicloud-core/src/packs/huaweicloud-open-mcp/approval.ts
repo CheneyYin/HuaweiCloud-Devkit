@@ -39,14 +39,18 @@ export function resolveApprovalMode(env: NodeJS.ProcessEnv = process.env): Appro
   );
 }
 
-const READONLY_TOOLS = new Set([
-  'search_apis',
-  'list_products',
-  'get_product',
-  'list_apis',
-  'get_api',
-  'get_api_examples',
-]);
+// The one vocabulary table for the gateway tool surface. Every list that
+// enumerates gateway tool names derives from here: classify's read-only
+// set, the drift gate's exemption set, and gateway_list_tools' projection
+// (KNOWN_GATEWAY_TOOLS in tools.ts). Adding a gateway tool is a one-row
+// edit plus a classify row — no hand-maintained duplicates (round-7/8
+// review's consolidation note).
+export const GATEWAY_TOOL_VOCABULARY = {
+  readonly: ['search_apis', 'list_products', 'get_product', 'list_apis', 'get_api', 'get_api_examples'],
+  routed: ['manage_policy', 'execute_api', 'query_data', 'transform_data'],
+} as const;
+
+const READONLY_TOOLS = new Set<string>(GATEWAY_TOOL_VOCABULARY.readonly);
 
 // The only scopes an agent may buy with a token: every one of them dies
 // with the process or the clock. An allow-list, not a deny-list of known

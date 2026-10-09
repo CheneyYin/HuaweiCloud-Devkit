@@ -1,5 +1,4 @@
 <!-- generated from src/packs/obs/skills/huawei-obs - do not edit -->
-
 # OBS Static Website Deployment
 
 ## Workflow

@@ -3,7 +3,6 @@ name: huawei-deployment
 description: 'Use when creating, managing, or running deployment tasks and pipelines on Huawei Cloud CloudDeploy. Triggers: CloudDeploy, deployment, CI/CD, pipeline, release, artifact deployment, deploy task. NOT for: CodeArts Build (build pipeline), SWR container registry.'
 version: 1
 ---
-
 <!-- generated from src/packs/huaweicloud-cli/skills/huawei-deployment - do not edit -->
 
 # Huawei Cloud CloudDeploy

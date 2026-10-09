@@ -3,7 +3,6 @@ name: huawei-apig
 description: 'Use when creating or managing API Gateway (APIG). Covers API creation, throttling, auth (IAM/APP/basic), CORS, publishing, instance management. Triggers: APIG, API gateway, throttling, publish API. NOT for: FunctionGraph triggers (use huawei-functiongraph).'
 version: 1
 ---
-
 <!-- generated from src/packs/huaweicloud-cli/skills/huawei-apig - do not edit -->
 
 # Huawei Cloud APIG

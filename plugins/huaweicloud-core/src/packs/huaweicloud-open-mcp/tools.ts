@@ -3,7 +3,14 @@ import { z } from 'zod';
 import type { PackToolDefinition, LooseToolSchema } from '../../lib/pack-types.ts';
 import { consumeApprovalToken, createApprovalToken, hashArgs } from '../../lib/approval-tokens.ts';
 import { redactSecrets } from '../../safety-policy.ts';
-import { classify, matchingDenyRule, resolveApprovalMode, ruleSemanticKey, type ApprovalMode } from './approval.ts';
+import {
+  classify,
+  GATEWAY_TOOL_VOCABULARY,
+  matchingDenyRule,
+  resolveApprovalMode,
+  ruleSemanticKey,
+  type ApprovalMode,
+} from './approval.ts';
 import {
   callOpenMcpTool,
   listGatewayTools,
@@ -115,22 +122,12 @@ async function handleGatewayRestart() {
   }
 }
 
-// The devkit's projection of the gateway surface: the six read-only
+// The devkit's projection of the gateway surface, DERIVED from the one
+// vocabulary table in approval.ts (readonly + routed): the six read-only
 // discovery tools plus the four stateful names classify() routes.
 // gateway_list_tools reports drift between this list and the child's live
 // tools/list so an agent can see what a generic call can reach.
-const KNOWN_GATEWAY_TOOLS = [
-  'search_apis',
-  'list_products',
-  'get_product',
-  'list_apis',
-  'get_api',
-  'get_api_examples',
-  'execute_api',
-  'manage_policy',
-  'query_data',
-  'transform_data',
-] as const;
+const KNOWN_GATEWAY_TOOLS: readonly string[] = [...GATEWAY_TOOL_VOCABULARY.readonly, ...GATEWAY_TOOL_VOCABULARY.routed];
 
 async function handleGatewayListTools() {
   try {

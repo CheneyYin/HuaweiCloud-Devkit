@@ -3,7 +3,6 @@ name: huawei-dds-dcs
 description: 'Use when creating or managing Document Database Service (DDS/MongoDB-compatible) or Distributed Cache Service (DCS/Redis/Memcached) on Huawei Cloud. Triggers: DDS, DCS, MongoDB, Redis, Memcached, document DB, cache, replica set, sharding. NOT for: RDS (use huawei-rds), GaussDB (use huawei-gaussdb).'
 version: 1
 ---
-
 <!-- generated from src/packs/huaweicloud-cli/skills/huawei-dds-dcs - do not edit -->
 
 # Huawei Cloud DDS / DCS

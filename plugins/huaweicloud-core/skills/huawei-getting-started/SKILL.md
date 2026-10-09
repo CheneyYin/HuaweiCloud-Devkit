@@ -3,7 +3,6 @@ name: huawei-getting-started
 description: 'Use when starting fresh with Huawei Cloud or KooCLI, installing prerequisites, setting up authentication, or exploring what is possible. Triggers: getting started, first time, setup, install, explore, quickstart, beginner, tutorial. NOT for: specific service operations (use huawei-ecs, huawei-obs, etc.).'
 version: 1
 ---
-
 <!-- generated from src/packs/huaweicloud-cli/skills/huawei-getting-started - do not edit -->
 
 # Huawei Cloud Getting Started

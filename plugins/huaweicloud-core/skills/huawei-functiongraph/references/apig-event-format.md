@@ -1,5 +1,4 @@
 <!-- generated from src/packs/huaweicloud-cli/skills/huawei-functiongraph - do not edit -->
-
 # APIG DEDICATEDGATEWAY Event Format
 
 When APIG calls FunctionGraph via DEDICATEDGATEWAY trigger, the event structure is NOT the standard HTTP event. Key differences:
