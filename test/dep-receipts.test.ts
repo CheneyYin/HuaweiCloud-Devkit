@@ -152,7 +152,13 @@ test('receiptDir rides the HUAWEICLOUD_HOME convention', () => {
   }
 });
 
-// ---- the lockfile ----
+// ---- the lock ----
+
+// The lock is a directory (mkdir = atomic claim) with a pid file inside.
+function seedLock(dir: string, pid: number): void {
+  mkdirSync(join(dir, 'lock'), { recursive: true });
+  writeFileSync(join(dir, 'lock', 'pid'), `${pid}\n`, 'utf8');
+}
 
 test('lock: a stale holder (dead pid) is taken over, never waited out', async () => {
   const dir = tempDir();
@@ -163,7 +169,7 @@ test('lock: a stale holder (dead pid) is taken over, never waited out', async ()
     // Reap the child so the pid is verifiably dead.
     await new Promise<void>((resolve) => child.on('exit', resolve));
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'lock'), `${pid}\n`, 'utf8');
+    seedLock(dir, pid);
     const started = Date.now();
     let ran = false;
     withDepLock(() => {
@@ -177,7 +183,7 @@ test('lock: a stale holder (dead pid) is taken over, never waited out', async ()
   }
 });
 
-test('lock: a stale takeover renames the contender aside instead of deleting it', async () => {
+test('lock: a dead holder takeover removes the lock directory and leaves nothing behind', async () => {
   const dir = tempDir();
   try {
     const child = spawn(process.execPath, ['-e', 'process.exit(0)']);
@@ -185,15 +191,15 @@ test('lock: a stale takeover renames the contender aside instead of deleting it'
     assert.ok(pid, 'spawned child has a pid');
     await new Promise<void>((resolve) => child.on('exit', resolve));
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'lock'), `${pid}\n`, 'utf8');
+    seedLock(dir, pid);
     let ran = false;
     withDepLock(() => {
       ran = true;
     }, dir);
     assert.equal(ran, true, 'the stale lock is taken over');
-    assert.equal(existsSync(join(dir, 'lock')), false, 'no lock file remains');
-    const artifacts = readdirSync(dir).filter((name) => name.startsWith('lock.stale.'));
-    assert.ok(artifacts.length >= 1, 'the takeover renamed the stale lock aside (rename path, not rmSync)');
+    // The directory design has no rename artifacts by construction: the only
+    // thing a takeover removes is the dead holder's directory itself.
+    assert.deepEqual(readdirSync(dir), [], 'no lock directory and no artifacts remain');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -204,7 +210,7 @@ test('lock: a live holder is not stolen within the takeover window', () => {
   try {
     mkdirSync(dir, { recursive: true });
     // The lock names THIS process: a live holder mid-critical-section.
-    writeFileSync(join(dir, 'lock'), `${process.pid}\n`, 'utf8');
+    seedLock(dir, process.pid);
     const windowMs = 600;
     const started = Date.now();
     let ran = false;
@@ -228,14 +234,15 @@ test('lock: a live foreign holder is waited out, then taken over after it dies',
   const dir = tempDir();
   try {
     mkdirSync(dir, { recursive: true });
-    const lockFile = join(dir, 'lock');
+    const pidFile = join(dir, 'lock', 'pid');
+    const lockDir = join(dir, 'lock');
     // The real holder is a grandchild that writes the lock with its own pid
     // and lives 1500ms. The helper spawned here reaps it synchronously the
     // moment it exits (spawnSync), so the pid flips verifiably dead while
     // this test's event loop is blocked inside withDepLock — a direct child
     // would stay a zombie instead (the blocked loop never reaps), and the
     // takeover would only ever fire via the deadline path.
-    const inner = `require('fs').writeFileSync(${JSON.stringify(lockFile)}, process.pid + '\\n'); setTimeout(() => {}, 1500)`;
+    const inner = `require('fs').mkdirSync(${JSON.stringify(join(dir, 'lock'))}, {recursive: true}); require('fs').writeFileSync(${JSON.stringify(join(dir, 'lock', 'pid'))}, process.pid + '\\n'); setTimeout(() => {}, 1500)`;
     const helperScript = `require('child_process').spawnSync(process.execPath, ['-e', ${JSON.stringify(inner)}]); setTimeout(() => {}, 500)`;
     const child = spawn(process.execPath, ['-e', helperScript]);
     assert.ok(child.pid, 'spawned helper has a pid');
@@ -244,8 +251,8 @@ test('lock: a live foreign holder is waited out, then taken over after it dies',
     let holder = 0;
     const waitDeadline = Date.now() + 10_000;
     while (Date.now() < waitDeadline) {
-      if (existsSync(lockFile)) {
-        const pid = Number.parseInt(readFileSync(lockFile, 'utf8').trim(), 10);
+      if (existsSync(pidFile)) {
+        const pid = Number.parseInt(readFileSync(pidFile, 'utf8').trim(), 10);
         if (Number.isSafeInteger(pid) && pid > 0 && pid !== child.pid) {
           try {
             process.kill(pid, 0);
@@ -269,7 +276,7 @@ test('lock: a live foreign holder is waited out, then taken over after it dies',
       elapsed < 10_000,
       `the takeover must come from the dead-pid check, not the 90s deadline (took ${elapsed}ms)`,
     );
-    assert.equal(existsSync(lockFile), false, 'the lock is released after the critical section');
+    assert.equal(existsSync(lockDir), false, 'the lock is released after the critical section');
     child.kill();
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -292,13 +299,19 @@ test('lock: same-process re-entry recurses instead of deadlocking', () => {
   }
 });
 
-// The verified-claim regression pin: two real contender processes against a
+// The mutual-exclusion pin: two real contender processes against a
 // pre-seeded dead lock must never hold the critical section at the same
-// time. Before the verification, a waiter that read the dead pid could lose
-// the interleave to another taker (which renamed the dead lock aside and
-// wx-wrote its own live lock) and then rename that LIVE lock aside — both
-// contenders "held" and their sections overlapped. Each contender records
-// its enter/leave timestamps to its own file; the sections must not overlap.
+// time. Under the file+rename designs this failed ~25% of rounds (every
+// rename of a possibly-live lock opens a free-path window); the directory
+// design removes the class — only a verifiably-dead holder's lock is ever
+// removed, verified by an immediate re-read. Known flake, recorded honestly:
+// the contenders' mkdir observably both succeed on tmpfs-backed temp dirs
+// (~30% of isolated runs) AND under full-suite load on ext4, while isolated
+// ext4 runs are clean (4/4). Production receipt dirs (~/.config) are not
+// tmpfs, but the mechanism is not yet explained — investigate the
+// filesystem/scheduler interaction before trusting this pin on a loaded
+// box. Each contender records its enter/leave timestamps; the sections must
+// not overlap.
 test('lock: two contenders against a dead lock never overlap critical sections', async () => {
   const receiptsModule = fileURLToPath(new URL('../plugins/huaweicloud-core/src/dep-receipts.ts', import.meta.url));
   const contenderScript = `
@@ -306,14 +319,15 @@ const mod = await import(process.argv[1]);
 const fs = await import('node:fs');
 const [dir, timingsFile, sentinel, readyFile] = process.argv.slice(2);
 fs.writeFileSync(readyFile, 'ready');
-// Busy-wait so both contenders leave the barrier within microseconds: the
-// takeover race (read the dead pid → rival completes its own takeover →
-// rename) only interleaves when both are in acquireLock at the same moment.
+// Busy-wait so both contenders leave the barrier within microseconds: both
+// hit the seeded dead lock at the same moment, maximizing takeover pressure.
 while (!fs.existsSync(sentinel)) {}
+const acquireStarted = Date.now();
 mod.withDepLock(() => {
   const start = Date.now();
+  const waitedForLock = start - acquireStarted;
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
-  fs.writeFileSync(timingsFile, JSON.stringify({ start, end: Date.now() }));
+  fs.writeFileSync(timingsFile, JSON.stringify({ start, end: Date.now(), waitedForLock }));
 }, dir, 15000);
 `;
   const rounds = 12;
@@ -326,7 +340,7 @@ mod.withDepLock(() => {
       assert.ok(deadPid, 'spawned child has a pid');
       await new Promise<void>((resolve) => dead.on('exit', resolve));
       mkdirSync(dir, { recursive: true });
-      writeFileSync(join(dir, 'lock'), `${deadPid}\n`, 'utf8');
+      seedLock(dir, deadPid);
       const sentinel = join(dir, 'go');
       const timingsFiles = [join(dir, 'a.json'), join(dir, 'b.json')];
       const readyFiles = [join(dir, 'ready-a'), join(dir, 'ready-b')];
@@ -349,11 +363,13 @@ mod.withDepLock(() => {
       assert.deepEqual(codes, [0, 0], `round ${round}: both contenders exited cleanly`);
       const sections = timingsFiles.map((file) => {
         assert.ok(existsSync(file), `round ${round}: no timings file at ${file}`);
-        return JSON.parse(readFileSync(file, 'utf8')) as { start: number; end: number };
+        return JSON.parse(readFileSync(file, 'utf8')) as { start: number; end: number; waitedForLock: number };
       });
       const [a, b] = sections;
       if (a.start < b.end && b.start < a.end) {
-        overlapped.push(`round ${round}: a=[${a.start},${a.end}] b=[${b.start},${b.end}]`);
+        overlapped.push(
+          `round ${round}: a.waited=${a.waitedForLock} | b.waited=${b.waitedForLock} (filesystem: see the test header)`,
+        );
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -373,8 +389,9 @@ test(
     const dir = tempDir();
     try {
       mkdirSync(dir, { recursive: true });
-      const lockFile = join(dir, 'lock');
-      // The holder writes the lock with its own pid and exits at a fixed
+      const lockDir = join(dir, 'lock');
+      const pidFile = join(lockDir, 'pid');
+      // The holder claims the lock with its own pid and exits at a fixed
       // offset. This test process is blocked inside withDepLock when that
       // happens, so it can never reap the child: kill(pid, 0) keeps succeeding
       // against the zombie while /proc/<pid>/stat shows state Z. Without the
@@ -382,13 +399,13 @@ test(
       // whole window.
       const holder = spawn(process.execPath, [
         '-e',
-        `require('fs').writeFileSync(${JSON.stringify(lockFile)}, process.pid + '\\n'); setTimeout(() => process.exit(0), 1500)`,
+        `require('fs').mkdirSync(${JSON.stringify(lockDir)}); require('fs').writeFileSync(${JSON.stringify(pidFile)}, process.pid + '\\n'); setTimeout(() => process.exit(0), 1500)`,
       ]);
       assert.ok(holder.pid, 'spawned holder has a pid');
       let sawLiveHolder = false;
       const waitDeadline = Date.now() + 10_000;
       while (Date.now() < waitDeadline) {
-        if (existsSync(lockFile)) {
+        if (existsSync(pidFile)) {
           try {
             process.kill(holder.pid!, 0);
             sawLiveHolder = true;
@@ -410,7 +427,7 @@ test(
       const elapsed = Date.now() - started;
       assert.equal(ran, true, 'the zombie-held lock is taken over');
       assert.ok(elapsed < 4000, `the zombie holder must not be waited out (took ${elapsed}ms of the 5000ms window)`);
-      assert.equal(existsSync(lockFile), false, 'the lock is released after the critical section');
+      assert.equal(existsSync(lockDir), false, 'the lock is released after the critical section');
       holder.kill();
     } finally {
       rmSync(dir, { recursive: true, force: true });

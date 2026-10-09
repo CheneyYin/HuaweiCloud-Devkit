@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import { DEPENDENCIES } from '../plugins/huaweicloud-core/src/lib/dependency-model.ts';
-import { resolveDependencyCommand } from '../plugins/huaweicloud-core/src/lib/dep-resolve.ts';
+import { lookupOnPath, resolveDependencyCommand } from '../plugins/huaweicloud-core/src/lib/dep-resolve.ts';
 import {
   installGatewayTool,
   provisionDependencies,
@@ -947,7 +947,10 @@ test('doctor reports no pack dependencies for a core-only trim', () => {
 // output ('broken' — the exit-1/timeout/garbage shape).
 function writeCodexStub(behavior: 'clean' | 'broken'): string {
   const stubDir = mkdtempSync(join(tmpdir(), 'dep-provision-codex-'));
-  const list = behavior === 'clean' ? 'echo \'{"installed":[],"available":[]}\'' : "echo 'not-json'; exit 1";
+  const list =
+    behavior === 'clean'
+      ? "echo '{\"installed\":[],\"available\":[]}'; exit 0"
+      : "echo 'not-json'; exit 1";
   writeFileSync(
     join(stubDir, 'codex'),
     `#!/bin/sh\ncase "$1" in --version) echo "codex-cli stub 0.0.0"; exit 0;; esac\nif [ "$1" = "plugin" ] && [ "$2" = "list" ]; then ${list}; fi\nexit 1\n`,
@@ -1057,3 +1060,21 @@ test(
     }
   },
 );
+
+test('lookupOnPath passes the name as an argument, never interpolated into the shell script', { skip: isWin }, () => {
+  // If the name reached sh -c by string interpolation, the touch would
+  // EXECUTE and leave the sentinel behind. The positional $1 pass makes
+  // that impossible: the metacharacters are data, not script.
+  const emptyPath = mkdtempSync(join(tmpdir(), 'dep-provision-nopath-'));
+  const sentinel = join(tmpdir(), `dep-probe-sentinel-${process.pid}`);
+  rmSync(sentinel, { force: true });
+  try {
+    const evil = `no-such-bin; touch ${sentinel}`;
+    const resolved = lookupOnPath(evil, { PATH: emptyPath });
+    assert.equal(resolved, null, 'the metacharacter name resolves to nothing');
+    assert.equal(existsSync(sentinel), false, 'the name must never execute as shell script');
+  } finally {
+    rmSync(sentinel, { force: true });
+    rmSync(emptyPath, { recursive: true, force: true });
+  }
+});

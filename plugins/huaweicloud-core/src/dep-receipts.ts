@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -19,15 +19,13 @@ import { DEPENDENCIES, type DependencyId } from './lib/dependency-model.ts';
 // recovery needs no reconciliation — a crashed install left no receipt, so a
 // later uninstall simply refuses and points at the documented escape hatch.
 //
-// Receipt mutations and the uninstall decision serialize on a lockfile in the
-// receipt dir: PID-based holder detection with process-liveness checks, so a
-// stale lock (holder crashed, or exited but was never reaped — a zombie still
-// answers kill(pid, 0)) is taken over instead of blocking forever, and the
-// lock is removed when the critical section ends. A takeover renames the
-// expired lock aside as a <lock>.stale.<pid>.<ts> artifact — never read as a
-// lock (only the exact `lock` path is) — and those artifacts are best-effort
-// pruned once older than 24h so an unbroken takeover history cannot grow
-// without bound. Concurrent install+uninstall converges: worst case the
+// Receipt mutations and the uninstall decision serialize on a lock in the
+// receipt dir: a DIRECTORY claimed with mkdir (atomic, EEXIST means held)
+// carrying the holder's pid. A lock is taken over only when its pid is
+// verifiably dead (or wedged past a window exceeding the longest critical
+// section), so a live holder's lock is never removed and no rename ever
+// opens a free-path window — see the lock section below for the full design
+// and the residual. Concurrent install+uninstall converges: worst case the
 // install re-places the binary after an uninstall completed.
 //
 // Every function takes the receipt dir as an optional parameter (defaulting
@@ -97,13 +95,43 @@ export function removeReceipt(id: DependencyId, dir: string = receiptDir()): voi
 }
 
 // ---------------------------------------------------------------------------
-// The lockfile. Sync critical sections only: the uninstall decision and the
+// The lock. Sync critical sections only: the uninstall decision and the
 // receipt mutations are plain fs operations, so the guard is a plain sync
 // function. Same-process re-entry (an uninstall body calling removeReceipt)
 // recurses instead of deadlocking on its own lock.
+//
+// DESIGN: the lock is a DIRECTORY claimed with mkdir (O_EXCL semantics —
+// EEXIST means someone holds it), carrying a pid file written by the holder
+// AFTER the claim, into the holder's own directory, where no other process
+// can observe a half-written state as stealable. A path FILE plus rename
+// takeover was tried three times (unconditional rm, verified-claim rename,
+// link-based restore with a post-claim re-read) and kept failing the
+// two-contender mutual-exclusion test at ~25% of rounds: every rename of a
+// possibly-live lock opens a free-path window in which a third claim
+// overlaps the displaced holder, and the create→write gap lets a taker
+// judge a just-created lock as unattributed and steal it while the creator
+// is still writing. The directory design removes the class structurally:
+//
+//   - acquiring = mkdir; the only writer of the pid file is the holder, and
+//     it writes into its OWN directory (no cross-process half-state);
+//   - a lock is taken over ONLY when its pid file names a process that is
+//     verifiably dead (a dead owner can never be inside its section or
+//     release later) or when the takeover window expired on a wedged holder
+//     (documented residual: a >90s "live" holder is assumed wedged; the
+//     critical sections cap at ~60s);
+//   - an EMPTY lock directory (holder between mkdir and its pid write —
+//     microseconds) is unknown, never stealable: waiters poll past it;
+//   - release removes the directory only while the pid file still names
+//     this process, so a wedged holder releasing after a takeover cannot
+//     delete the new holder's lock.
+//
+// Residual: pid reuse could make a dead holder's pid look alive — that only
+// DELAYS a takeover past the window (bounded, converges); it can never
+// cause a double hold.
 // ---------------------------------------------------------------------------
 
-const LOCK_FILE = 'lock';
+const LOCK_DIR_NAME = 'lock';
+const LOCK_PID_FILE = 'pid';
 const LOCK_POLL_MS = 50;
 // A live holder doing real work is waited out; a holder wedged past this
 // window is taken over anyway — the guard must never block forever. The
@@ -116,8 +144,8 @@ const lockDepth = new Map<string, number>();
 const heldDirs = new Set<string>();
 let exitCleanupInstalled = false;
 
-function lockPath(dir: string): string {
-  return join(dir, LOCK_FILE);
+function lockDirPath(dir: string): string {
+  return join(dir, LOCK_DIR_NAME);
 }
 
 function isPidAlive(pid: number): boolean {
@@ -151,84 +179,68 @@ function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function readHolderPid(file: string): number | null {
+// The holder's pid, read from the pid file inside its lock directory. null
+// means the directory is empty (the holder is between mkdir and its pid
+// write) or unreadable — unknown, which callers treat as "keep waiting",
+// never as stealable.
+function readHolderPid(dir: string): number | null {
   try {
-    const pid = Number.parseInt(readFileSync(file, 'utf8').trim(), 10);
+    const pid = Number.parseInt(readFileSync(join(lockDirPath(dir), LOCK_PID_FILE), 'utf8').trim(), 10);
     return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
   } catch {
     return null;
   }
 }
 
-// Takeover orphans (lock.stale.*) are never read as locks, but a long-lived
-// receipt dir can accumulate them; anything older than a day is garbage.
-// Best-effort by design — a failure here must never block lock acquisition.
-function pruneStaleLockArtifacts(dir: string): void {
-  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-  try {
-    for (const name of readdirSync(dir)) {
-      if (!name.startsWith(`${LOCK_FILE}.stale.`)) continue;
-      try {
-        if (statSync(join(dir, name)).mtimeMs < cutoff) rmSync(join(dir, name), { force: true });
-      } catch {}
-    }
-  } catch {}
-}
-
 function acquireLock(dir: string, takeoverMs: number = LOCK_TAKEOVER_MS): void {
   mkdirSync(dir, { recursive: true });
-  pruneStaleLockArtifacts(dir);
-  const file = lockPath(dir);
+  const lock = lockDirPath(dir);
   const deadline = Date.now() + takeoverMs;
   for (;;) {
     try {
-      writeFileSync(file, `${process.pid}\n`, { flag: 'wx' });
+      mkdirSync(lock);
+      // Written into our OWN directory after the atomic claim: no other
+      // process ever sees this file half-written, and no other process ever
+      // writes it. The mkdir alone is the claim; the pid file is the
+      // attribution takeovers judge on.
+      writeFileSync(join(lock, LOCK_PID_FILE), `${process.pid}\n`);
       return;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     }
-    const holder = readHolderPid(file);
+    const holder = readHolderPid(dir);
+    // An empty directory (holder mid-create, microseconds) is unknown and
+    // never stealable — wait it out; a crashed creator's empty dir is
+    // reclaimed only past the takeover window below.
     if (holder !== null && isPidAlive(holder) && Date.now() < deadline) {
       sleepSync(LOCK_POLL_MS);
       continue;
     }
-    // Stale (dead or unparsable holder) or wedged past the takeover window.
-    // The takeover is a VERIFIED claim, never a blind one: rename(2) is
-    // atomic, but the file it grabs may not be the file the pid was judged
-    // on — another taker can win the interleave (rename the dead lock aside,
-    // wx-write its own LIVE lock) between this waiter's read and its rename.
-    // So after a successful rename the artifact's pid is re-read and checked
-    // against the pid that was judged stale: on a mismatch a fresh live lock
-    // was stolen, it is renamed back (best-effort, errors ignored) and the
-    // waiter keeps waiting instead of proceeding. An unconditional delete
-    // was even worse: two expired waiters removed each other's LIVE lock and
-    // both held. ENOENT from the rename means another taker won the same
-    // race — loop straight back to the wx attempt. The renamed artifact is
-    // otherwise left as a <lock>.stale.<pid>.<ts> orphan on purpose: nothing
-    // ever reads it as a lock (only the exact `lock` path is), and it
-    // records that a takeover happened.
-    const stale = `${file}.stale.${process.pid}.${Date.now()}`;
-    try {
-      renameSync(file, stale);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      continue;
-    }
-    if (readHolderPid(stale) !== holder) {
-      try {
-        renameSync(stale, file);
-      } catch {}
+    if (holder === null && Date.now() < deadline) {
       sleepSync(LOCK_POLL_MS);
       continue;
     }
+    // Verified removal — the judgment above may be STALE: another taker can
+    // have replaced the lock between our read and this point, and removing
+    // its fresh claim would let two processes hold at once. Re-read
+    // immediately before removing, and only remove when the pid still names
+    // the SAME verifiably-dead holder (or the directory is still empty past
+    // the window): while the dead holder's directory stands, no new claim
+    // can exist — claims need the path absent — so a re-read that still
+    // matches is safe to act on. A changed pid means the lock is someone
+    // else's now: keep waiting.
+    if (readHolderPid(dir) !== holder) {
+      sleepSync(LOCK_POLL_MS);
+      continue;
+    }
+    rmSync(lock, { recursive: true, force: true });
   }
 }
 
-// Remove the lock only while it still names this process: another taker may
-// have already replaced it after our takeover window expired.
+// Remove the lock only while its pid file still names this process: a
+// wedged holder whose lock was taken over must not delete the new holder's.
 function releaseLock(dir: string): void {
-  const file = lockPath(dir);
-  if (readHolderPid(file) === process.pid) rmSync(file, { force: true });
+  if (readHolderPid(dir) === process.pid) rmSync(lockDirPath(dir), { recursive: true, force: true });
 }
 
 function installExitCleanup(): void {

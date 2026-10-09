@@ -62,7 +62,7 @@ import {
   requiredDependencies,
   type DependencyId,
 } from './lib/dependency-model.ts';
-import { resolveDependencyCommand } from './lib/dep-resolve.ts';
+import { lookupOnPath, resolveDependencyCommand } from './lib/dep-resolve.ts';
 
 // node:sqlite is a runtime-only builtin loaded through createRequire; only the
 // DatabaseSync surface this module calls is modeled (see auth/agent-registration.ts).
@@ -1201,18 +1201,21 @@ function uninstallCodex(): void {
 }
 
 // The codex plugin probe as a discriminated result. A successfully parsed
-// `codex plugin list --json` (any installed list, empty or not) is the only
-// authoritative signal; a spawn failure, timeout, or unparseable output is
-// UNKNOWN, not "not installed" — the uninstall safety gate must treat
-// unknown the same way unknown DEVKIT_PACKS ids are treated (contribute the
-// full surface, fail-safe), because a probe failure must never let
+// `codex plugin list --json` (exit 0, valid JSON, an installed array — empty
+// or not) is the only authoritative negative signal; a spawn failure,
+// timeout, non-zero exit, or unparseable/shape-mismatched output is UNKNOWN,
+// not "not installed" — the uninstall safety gate must treat unknown the
+// same way unknown DEVKIT_PACKS ids are treated (contribute the full
+// surface, fail-safe), because a probe failure must never let
 // `dep uninstall` delete a binary a live codex installation still needs.
-// A machine with no codex CLI at all is the one definitive not-installed:
-// without the CLI there is no codex installation to need anything.
+// A PATH miss is the one definitive absence: hasCodexCLI() cannot front this
+// probe because its false covers BOTH "absent" and "present but failed to
+// answer" (a --version timeout or odd version string), and the latter must
+// read as unknown, not as a trusted negative.
 type CodexPluginProbe = { ok: true; installed: boolean } | { ok: false };
 
 function codexPluginProbe(): CodexPluginProbe {
-  if (!hasCodexCLI()) return { ok: true, installed: false };
+  if (lookupOnPath('codex', process.env) === null) return { ok: true, installed: false };
   // Parse the structured output instead of substring-matching the table: the
   // plugin's SOURCE path (…/plugins/huaweicloud-devkit) also contains the name,
   // so a naive includes() reports "installed" even when the status column says
@@ -1223,14 +1226,15 @@ function codexPluginProbe(): CodexPluginProbe {
     stdio: 'pipe',
     timeout: 5000,
   });
+  if (r.status !== 0) return { ok: false };
   const out = r.stdout ? r.stdout.toString() : '';
   const name = getCodexPluginName();
   try {
     const data = asRecord(JSON.parse(out));
-    const installed: unknown[] = Array.isArray(data.installed) ? data.installed : [];
+    if (!Array.isArray(data.installed)) return { ok: false };
     return {
       ok: true,
-      installed: installed.some((p) => {
+      installed: data.installed.some((p) => {
         const record = asRecord(p);
         return record.name === name || (typeof record.pluginId === 'string' && record.pluginId.startsWith(`${name}@`));
       }),
@@ -4200,7 +4204,8 @@ function packStatusReaders(): Array<{ label: string; installed: boolean; read: (
 // target would under-provision its binaries. packUnionReport is the one
 // derivation and is side-effect free — it returns per-target parse results
 // and the per-target attribution `dep uninstall` names when it refuses, and
-// each caller (provisioning, doctor) renders its own flavor of warning.
+// each caller (provisioning, doctor, dep status, dep uninstall) renders its
+// own flavor of warning.
 interface PackUnionTargetResult {
   label: string;
   /** The raw DEVKIT_PACKS value the target's config carried (null = absent). */
@@ -4255,8 +4260,17 @@ function packUnionReport(): PackUnionReport {
   };
 }
 
-function effectivePackUnion(): ReadonlySet<PackId> {
-  return packUnionReport().union;
+// The neutral unknown-id WARN the union consumers without their own flavor
+// render (dep status, dep uninstall): a fail-safe widening must never be
+// silent — a user whose DEVKIT_PACKS="bogus,core" shows 9 effective packs
+// needs the line that explains why.
+function renderUnknownPackIds(report: PackUnionReport): void {
+  for (const target of report.targets) {
+    if (target.unknown.length === 0) continue;
+    console.log(
+      `  \x1b[33m[WARN]\x1b[0m Packs (${target.label}): unknown id(s) in DEVKIT_PACKS="${target.raw}": ${target.unknown.join(', ')} — treating the target as the full surface (fail-safe)`,
+    );
+  }
 }
 
 // Provision the enabled packs' host binaries right after payload placement.
@@ -5457,7 +5471,9 @@ function cmdVersion(): void {
 // dep-provision.ts) and refuses while the effective pack union still
 // requires the id.
 function cmdDepStatus(): void {
-  const union = effectivePackUnion();
+  const report = packUnionReport();
+  renderUnknownPackIds(report);
+  const union = report.union;
   const deps = requiredDependencies(union);
   console.log(`Dependency status (effective packs: ${union.size})`);
   if (deps.size === 0) {
@@ -5513,6 +5529,7 @@ function cmdDepUninstall(): void {
     return;
   }
   const report = packUnionReport();
+  renderUnknownPackIds(report);
   const result = uninstallDependency(id as DependencyId, {
     enabledPacks: report.union,
     carriers: report.carriers,
