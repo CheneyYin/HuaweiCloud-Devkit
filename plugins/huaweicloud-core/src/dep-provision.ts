@@ -661,6 +661,31 @@ export function uninstallDependency(
   }, dir);
 }
 
+// The only paths the uninstall side may ever hand to sudo: the catalog's
+// platform candidates for hcloud (expanded with the same HOME rule the
+// resolution chain uses) plus the installer's computed binPath. The receipt
+// is user-writable JSON, so its recorded path is untrusted input at this
+// boundary — a forged receipt must never aim sudo at an arbitrary file.
+function hcloudInstallLandingSites(env: NodeJS.ProcessEnv): ReadonlySet<string> {
+  const home = process.platform === 'win32' ? homedir() : env.HOME || homedir();
+  const sites = new Set<string>();
+  const candidates =
+    process.platform === 'win32'
+      ? DEPENDENCIES.hcloud.resolution.candidates.win32
+      : DEPENDENCIES.hcloud.resolution.candidates.unix;
+  for (const candidate of candidates) {
+    sites.add(candidate.startsWith('~') ? join(home, candidate.slice(1)) : candidate);
+  }
+  sites.add(
+    process.platform === 'win32'
+      ? join(homedir(), 'hcloud', 'hcloud.exe')
+      : process.platform === 'linux'
+        ? join(homedir(), '.local', 'bin', 'hcloud')
+        : '/usr/local/bin/hcloud',
+  );
+  return sites;
+}
+
 function uninstallHcloud(receipt: DepReceipt, dir: string, opts: DepUninstallOptions): DepUninstallResult {
   const env = opts.env ?? process.env;
   const resolve = opts.resolveDependency ?? defaultResolveDependency;
@@ -693,25 +718,50 @@ function uninstallHcloud(receipt: DepReceipt, dir: string, opts: DepUninstallOpt
     rmSync(target);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    // /usr/local/bin on default macOS: the installer placed the binary via
-    // `sudo mv`, so a bare rmSync fails EACCES. Mirror that discipline
-    // without ever blocking on a password prompt — sudo -n only, through
-    // the same runCommand seam the tier uninstall uses.
-    const run = opts.runCommand ?? defaultRunCommand;
-    const escalated = run('sudo', ['-n', 'rm', target]);
-    if (escalated.status === 0) {
+    const errno = (error as NodeJS.ErrnoException).code;
+    if (errno === 'ENOENT') {
+      // A concurrent removal won the race between existsSync and rmSync:
+      // converge to the already-gone outcome instead of reporting failure.
       removeReceipt('hcloud', dir);
       return {
         ok: true,
-        message: `Removed the devkit-installed hcloud binary: ${target} (via sudo -n rm)`,
-        detail: [
-          '~/.hcloud credentials and config were not touched; those are removed only by: npx huaweicloud-devkit uninstall --target <agent> --clean-kocli',
-        ],
+        message: `hcloud was already gone (nothing at ${target}); removed the stale receipt.`,
+      };
+    }
+    // Only permission errors escalate, and never on win32 (sudo does not
+    // exist there); every other errno reports failure without escalation.
+    const escalates = (errno === 'EACCES' || errno === 'EPERM') && process.platform !== 'win32';
+    if (escalates && !hcloudInstallLandingSites(env).has(target)) {
+      return {
+        ok: false,
+        message: `Refusing to remove ${target}: the receipt path is not a known devkit install location, so sudo was not attempted. Remove it manually only if you are certain devkit placed it, then re-run dep uninstall hcloud to clear the receipt.`,
+      };
+    }
+    if (escalates) {
+      // /usr/local/bin on default macOS: the installer placed the binary via
+      // `sudo mv`, so a bare rmSync fails EACCES. Mirror that discipline
+      // without ever blocking on a password prompt — sudo -n only, through
+      // the same runCommand seam the tier uninstall uses.
+      const run = opts.runCommand ?? defaultRunCommand;
+      const escalated = run('sudo', ['-n', 'rm', target]);
+      if (escalated.status === 0) {
+        removeReceipt('hcloud', dir);
+        return {
+          ok: true,
+          message: `Removed the devkit-installed hcloud binary: ${target} (via sudo -n rm)`,
+          detail: [
+            '~/.hcloud credentials and config were not touched; those are removed only by: npx huaweicloud-devkit uninstall --target <agent> --clean-kocli',
+          ],
+        };
+      }
+      return {
+        ok: false,
+        message: `Failed to remove ${target}: ${reason}. Remove it manually (sudo rm ${target}), then re-run dep uninstall hcloud to clear the receipt.`,
       };
     }
     return {
       ok: false,
-      message: `Failed to remove ${target}: ${reason}. Remove it manually (sudo rm ${target}), then re-run dep uninstall hcloud to clear the receipt.`,
+      message: `Failed to remove ${target}: ${reason}. Remove it manually, then re-run dep uninstall hcloud to clear the receipt.`,
     };
   }
   removeReceipt('hcloud', dir);

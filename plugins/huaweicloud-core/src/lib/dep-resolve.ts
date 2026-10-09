@@ -57,12 +57,14 @@ export function lookupOnPath(name: string, env: NodeJS.ProcessEnv): string | nul
   // POSIX `command -v` is a shell builtin, always present — an external
   // `which` binary is not (slim containers ship without it, silently
   // nulling the path tier). Names arrive from the DEPENDENCIES catalog
-  // basenames and internal literals only, never user input, so the shell
-  // interpolation is safe.
+  // basenames and internal literals only, never user input; passing the
+  // name positionally as $1 instead of interpolating it into the script
+  // makes that safety a property of the call itself, not of every
+  // caller's discipline.
   const lookup =
     process.platform === 'win32'
       ? spawnSync('where.exe', [name], { encoding: 'utf8', timeout: 5000, env })
-      : spawnSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8', timeout: 5000, env });
+      : spawnSync('sh', ['-c', 'command -v "$1"', 'sh', name], { encoding: 'utf8', timeout: 5000, env });
   const hit = lookup.status === 0 ? (lookup.stdout || '').trim().split('\n')[0] : '';
   return hit || null;
 }

@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import {
@@ -290,3 +291,129 @@ test('lock: same-process re-entry recurses instead of deadlocking', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// The verified-claim regression pin: two real contender processes against a
+// pre-seeded dead lock must never hold the critical section at the same
+// time. Before the verification, a waiter that read the dead pid could lose
+// the interleave to another taker (which renamed the dead lock aside and
+// wx-wrote its own live lock) and then rename that LIVE lock aside — both
+// contenders "held" and their sections overlapped. Each contender records
+// its enter/leave timestamps to its own file; the sections must not overlap.
+test('lock: two contenders against a dead lock never overlap critical sections', async () => {
+  const receiptsModule = fileURLToPath(new URL('../plugins/huaweicloud-core/src/dep-receipts.ts', import.meta.url));
+  const contenderScript = `
+const mod = await import(process.argv[1]);
+const fs = await import('node:fs');
+const [dir, timingsFile, sentinel, readyFile] = process.argv.slice(2);
+fs.writeFileSync(readyFile, 'ready');
+// Busy-wait so both contenders leave the barrier within microseconds: the
+// takeover race (read the dead pid → rival completes its own takeover →
+// rename) only interleaves when both are in acquireLock at the same moment.
+while (!fs.existsSync(sentinel)) {}
+mod.withDepLock(() => {
+  const start = Date.now();
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
+  fs.writeFileSync(timingsFile, JSON.stringify({ start, end: Date.now() }));
+}, dir, 15000);
+`;
+  const rounds = 12;
+  const overlapped: string[] = [];
+  for (let round = 0; round < rounds; round++) {
+    const dir = tempDir();
+    try {
+      const dead = spawn(process.execPath, ['-e', 'process.exit(0)']);
+      const deadPid = dead.pid;
+      assert.ok(deadPid, 'spawned child has a pid');
+      await new Promise<void>((resolve) => dead.on('exit', resolve));
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'lock'), `${deadPid}\n`, 'utf8');
+      const sentinel = join(dir, 'go');
+      const timingsFiles = [join(dir, 'a.json'), join(dir, 'b.json')];
+      const readyFiles = [join(dir, 'ready-a'), join(dir, 'ready-b')];
+      const contenders = timingsFiles.map((timingsFile, i) =>
+        spawn(
+          process.execPath,
+          ['--input-type=module', '-e', contenderScript, receiptsModule, dir, timingsFile, sentinel, readyFiles[i]],
+          { stdio: 'pipe' },
+        ),
+      );
+      const readyDeadline = Date.now() + 10_000;
+      while (Date.now() < readyDeadline && !(existsSync(readyFiles[0]) && existsSync(readyFiles[1]))) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      assert.ok(existsSync(readyFiles[0]) && existsSync(readyFiles[1]), 'a contender never reached the barrier');
+      writeFileSync(sentinel, 'go', 'utf8');
+      const codes = await Promise.all(
+        contenders.map((child) => new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)))),
+      );
+      assert.deepEqual(codes, [0, 0], `round ${round}: both contenders exited cleanly`);
+      const sections = timingsFiles.map((file) => {
+        assert.ok(existsSync(file), `round ${round}: no timings file at ${file}`);
+        return JSON.parse(readFileSync(file, 'utf8')) as { start: number; end: number };
+      });
+      const [a, b] = sections;
+      if (a.start < b.end && b.start < a.end) {
+        overlapped.push(`round ${round}: a=[${a.start},${a.end}] b=[${b.start},${b.end}]`);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  assert.deepEqual(
+    overlapped,
+    [],
+    `critical sections overlapped (the live lock was stolen):\n${overlapped.join('\n')}`,
+  );
+});
+
+test(
+  'lock: an unreaped zombie holder is taken over, not waited out',
+  { skip: process.platform !== 'linux' },
+  async () => {
+    const dir = tempDir();
+    try {
+      mkdirSync(dir, { recursive: true });
+      const lockFile = join(dir, 'lock');
+      // The holder writes the lock with its own pid and exits at a fixed
+      // offset. This test process is blocked inside withDepLock when that
+      // happens, so it can never reap the child: kill(pid, 0) keeps succeeding
+      // against the zombie while /proc/<pid>/stat shows state Z. Without the
+      // /proc check the lock reads as live and the takeover waits out the
+      // whole window.
+      const holder = spawn(process.execPath, [
+        '-e',
+        `require('fs').writeFileSync(${JSON.stringify(lockFile)}, process.pid + '\\n'); setTimeout(() => process.exit(0), 1500)`,
+      ]);
+      assert.ok(holder.pid, 'spawned holder has a pid');
+      let sawLiveHolder = false;
+      const waitDeadline = Date.now() + 10_000;
+      while (Date.now() < waitDeadline) {
+        if (existsSync(lockFile)) {
+          try {
+            process.kill(holder.pid!, 0);
+            sawLiveHolder = true;
+            break;
+          } catch {}
+        }
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      assert.ok(sawLiveHolder, 'the holder never wrote a live lock');
+      const started = Date.now();
+      let ran = false;
+      withDepLock(
+        () => {
+          ran = true;
+        },
+        dir,
+        5000,
+      );
+      const elapsed = Date.now() - started;
+      assert.equal(ran, true, 'the zombie-held lock is taken over');
+      assert.ok(elapsed < 4000, `the zombie holder must not be waited out (took ${elapsed}ms of the 5000ms window)`);
+      assert.equal(existsSync(lockFile), false, 'the lock is released after the critical section');
+      holder.kill();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);

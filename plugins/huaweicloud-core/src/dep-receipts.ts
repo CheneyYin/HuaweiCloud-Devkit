@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -21,10 +21,14 @@ import { DEPENDENCIES, type DependencyId } from './lib/dependency-model.ts';
 //
 // Receipt mutations and the uninstall decision serialize on a lockfile in the
 // receipt dir: PID-based holder detection with process-liveness checks, so a
-// stale lock (holder crashed) is taken over instead of blocking forever, and
-// the lock is removed when the critical section ends. Concurrent
-// install+uninstall converges: worst case the install re-places the binary
-// after an uninstall completed.
+// stale lock (holder crashed, or exited but was never reaped — a zombie still
+// answers kill(pid, 0)) is taken over instead of blocking forever, and the
+// lock is removed when the critical section ends. A takeover renames the
+// expired lock aside as a <lock>.stale.<pid>.<ts> artifact — never read as a
+// lock (only the exact `lock` path is) — and those artifacts are best-effort
+// pruned once older than 24h so an unbroken takeover history cannot grow
+// without bound. Concurrent install+uninstall converges: worst case the
+// install re-places the binary after an uninstall completed.
 //
 // Every function takes the receipt dir as an optional parameter (defaulting
 // to the real convention) so tests run against a temp directory — the same
@@ -117,6 +121,23 @@ function lockPath(dir: string): string {
 }
 
 function isPidAlive(pid: number): boolean {
+  // kill(pid, 0) succeeds against an unreaped zombie: the holder exited but
+  // its parent never waited, so the pid stays allocated and the kernel still
+  // answers the signal probe. A crashed holder's lock must not be treated as
+  // live for the whole takeover window, so on Linux /proc/<pid>/stat is the
+  // truth (state Z means the process can never run again) and kill(pid, 0) is
+  // only the fallback for other platforms and read failures.
+  if (process.platform === 'linux') {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      // comm is parenthesized and may itself contain ')' or spaces, so the
+      // state is the first field after the LAST closing paren.
+      const state = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0];
+      return state !== 'Z';
+    } catch {
+      // Unreadable /proc (reaped pid, or an exotic mount): fall through.
+    }
+  }
   try {
     process.kill(pid, 0);
     return true;
@@ -139,8 +160,24 @@ function readHolderPid(file: string): number | null {
   }
 }
 
+// Takeover orphans (lock.stale.*) are never read as locks, but a long-lived
+// receipt dir can accumulate them; anything older than a day is garbage.
+// Best-effort by design — a failure here must never block lock acquisition.
+function pruneStaleLockArtifacts(dir: string): void {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  try {
+    for (const name of readdirSync(dir)) {
+      if (!name.startsWith(`${LOCK_FILE}.stale.`)) continue;
+      try {
+        if (statSync(join(dir, name)).mtimeMs < cutoff) rmSync(join(dir, name), { force: true });
+      } catch {}
+    }
+  } catch {}
+}
+
 function acquireLock(dir: string, takeoverMs: number = LOCK_TAKEOVER_MS): void {
   mkdirSync(dir, { recursive: true });
+  pruneStaleLockArtifacts(dir);
   const file = lockPath(dir);
   const deadline = Date.now() + takeoverMs;
   for (;;) {
@@ -156,18 +193,33 @@ function acquireLock(dir: string, takeoverMs: number = LOCK_TAKEOVER_MS): void {
       continue;
     }
     // Stale (dead or unparsable holder) or wedged past the takeover window.
-    // The takeover is an atomic rename, never an rmSync: an unconditional
-    // delete let two expired waiters remove each other's LIVE lock and both
-    // hold. rename(2) claims the contender's file; ENOENT means another
-    // taker won the same race — loop straight back to the wx attempt. The
-    // renamed file is left as a <lock>.stale.<pid>.<ts> orphan on purpose:
-    // nothing ever reads it as a lock (only the exact `lock` path is), and
-    // it records that a takeover happened.
+    // The takeover is a VERIFIED claim, never a blind one: rename(2) is
+    // atomic, but the file it grabs may not be the file the pid was judged
+    // on — another taker can win the interleave (rename the dead lock aside,
+    // wx-write its own LIVE lock) between this waiter's read and its rename.
+    // So after a successful rename the artifact's pid is re-read and checked
+    // against the pid that was judged stale: on a mismatch a fresh live lock
+    // was stolen, it is renamed back (best-effort, errors ignored) and the
+    // waiter keeps waiting instead of proceeding. An unconditional delete
+    // was even worse: two expired waiters removed each other's LIVE lock and
+    // both held. ENOENT from the rename means another taker won the same
+    // race — loop straight back to the wx attempt. The renamed artifact is
+    // otherwise left as a <lock>.stale.<pid>.<ts> orphan on purpose: nothing
+    // ever reads it as a lock (only the exact `lock` path is), and it
+    // records that a takeover happened.
     const stale = `${file}.stale.${process.pid}.${Date.now()}`;
     try {
       renameSync(file, stale);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      continue;
+    }
+    if (readHolderPid(stale) !== holder) {
+      try {
+        renameSync(stale, file);
+      } catch {}
+      sleepSync(LOCK_POLL_MS);
+      continue;
     }
   }
 }

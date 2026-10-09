@@ -38,7 +38,7 @@ import {
   type ProxyConfigFile,
 } from './proxy/proxy-config.ts';
 import { removeKooCli, removeObsConfig } from './sandbox/uninstall-cleanup.ts';
-import { removeReceipt } from './dep-receipts.ts';
+import { readReceipt, removeReceipt } from './dep-receipts.ts';
 import { detectCodeartsSandbox } from './codearts-sandbox.ts';
 import { installGatewayTool, installKooCli, provisionDependencies, uninstallDependency } from './dep-provision.ts';
 import {
@@ -1096,7 +1096,7 @@ function hasCodexCLI(): boolean {
   // WindowsApps codex.exe may fail with "Access is denied"
   // Fallback: check if codex exists on PATH via where.exe
   if (process.platform === 'win32') {
-    const w = spawnSync('where.exe', ['codex'], { windowsHide: true, stdio: 'pipe' });
+    const w = spawnSync('where.exe', ['codex'], { windowsHide: true, stdio: 'pipe', timeout: 5000 });
     if (w.status === 0 && w.stdout.toString().trim()) return true;
   }
   return false;
@@ -1200,7 +1200,19 @@ function uninstallCodex(): void {
   }
 }
 
-function codexStatus(): boolean {
+// The codex plugin probe as a discriminated result. A successfully parsed
+// `codex plugin list --json` (any installed list, empty or not) is the only
+// authoritative signal; a spawn failure, timeout, or unparseable output is
+// UNKNOWN, not "not installed" — the uninstall safety gate must treat
+// unknown the same way unknown DEVKIT_PACKS ids are treated (contribute the
+// full surface, fail-safe), because a probe failure must never let
+// `dep uninstall` delete a binary a live codex installation still needs.
+// A machine with no codex CLI at all is the one definitive not-installed:
+// without the CLI there is no codex installation to need anything.
+type CodexPluginProbe = { ok: true; installed: boolean } | { ok: false };
+
+function codexPluginProbe(): CodexPluginProbe {
+  if (!hasCodexCLI()) return { ok: true, installed: false };
   // Parse the structured output instead of substring-matching the table: the
   // plugin's SOURCE path (…/plugins/huaweicloud-devkit) also contains the name,
   // so a naive includes() reports "installed" even when the status column says
@@ -1216,13 +1228,21 @@ function codexStatus(): boolean {
   try {
     const data = asRecord(JSON.parse(out));
     const installed: unknown[] = Array.isArray(data.installed) ? data.installed : [];
-    return installed.some((p) => {
-      const record = asRecord(p);
-      return record.name === name || (typeof record.pluginId === 'string' && record.pluginId.startsWith(`${name}@`));
-    });
+    return {
+      ok: true,
+      installed: installed.some((p) => {
+        const record = asRecord(p);
+        return record.name === name || (typeof record.pluginId === 'string' && record.pluginId.startsWith(`${name}@`));
+      }),
+    };
   } catch {
-    return false;
+    return { ok: false };
   }
+}
+
+function codexStatus(): boolean {
+  const probe = codexPluginProbe();
+  return probe.ok && probe.installed;
 }
 
 async function installOpenCode(): Promise<void> {
@@ -3966,9 +3986,24 @@ function removeKooCliWithMessage(): void {
   // The devkit receipt must not outlive the binary it attributes: a stale
   // receipt would make a later `dep uninstall hcloud` delete a binary the
   // user reinstalled themselves at the same path (the manual instructions
-  // teach exactly that path).
-  removeReceipt('hcloud');
-  console.log('  Cleared the devkit hcloud install receipt.');
+  // teach exactly that path). The clear is gated on the attributed binary
+  // actually being gone: removeKooCli only touches ~/.local/bin/hcloud,
+  // ~/hcloud/hcloud[.exe], and ~/.hcloud — never /usr/local/bin/hcloud, the
+  // darwin install location — so on macOS the binary survives this pass and
+  // burning the receipt here would permanently defeat the escape hatch the
+  // uninstall refusal points at. Best-effort like every other cleanup step:
+  // receipt hygiene must never abort the uninstall.
+  try {
+    const receipt = readReceipt('hcloud');
+    if (receipt?.path && existsSync(receipt.path)) {
+      console.log(
+        `  \x1b[33m[WARN]\x1b[0m Kept the devkit hcloud install receipt: the recorded binary (${receipt.path}) still exists and was not removed by this pass; \`dep uninstall hcloud\` can still remove it.`,
+      );
+    } else {
+      removeReceipt('hcloud');
+      console.log('  Cleared the devkit hcloud install receipt.');
+    }
+  } catch {}
 }
 
 function removeObsConfigWithMessage(): void {
@@ -4152,32 +4187,49 @@ function packStatusReaders(): Array<{ label: string; installed: boolean; read: (
 // pack-dependency section, and the uninstall requirement check: every
 // reader-backed installed target contributes its parsed closure
 // (blank/unset config means the full surface), and codex contributes the
-// full surface only when the devkit plugin is actually installed for codex
-// (codexStatus's `codex plugin list --json` signal) — the codex server
+// full surface only when the devkit plugin is verifiably installed for codex
+// (codexPluginProbe's `codex plugin list --json` signal) — the codex server
 // boots with no DEVKIT_PACKS because the --packs flag has no write path
 // there, so it always needs whatever the full surface needs, but a codex
 // CLI that merely exists on PATH proves nothing about this devkit's
 // footprint and must not widen the union (over-provisioned `--packs core`
-// trims, phantom uninstall refusals). Unknown ids in a target's
-// DEVKIT_PACKS warn and count as the full surface (fail-safe): skipping the
+// trims, phantom uninstall refusals). An UNREADABLE plugin list also widens
+// the union (fail-safe, the same direction unknown DEVKIT_PACKS ids widen):
+// a probe failure must never read as "not installed". Unknown ids in a
+// target's DEVKIT_PACKS count as the full surface (fail-safe): skipping the
 // target would under-provision its binaries. packUnionReport is the one
-// derivation; it also returns the per-target attribution `dep uninstall`
-// names when it refuses.
+// derivation and is side-effect free — it returns per-target parse results
+// and the per-target attribution `dep uninstall` names when it refuses, and
+// each caller (provisioning, doctor) renders its own flavor of warning.
+interface PackUnionTargetResult {
+  label: string;
+  /** The raw DEVKIT_PACKS value the target's config carried (null = absent). */
+  raw: string | null;
+  /** Closed under requires with core force-included; blank config means full surface. */
+  enabled: ReadonlySet<PackId>;
+  /** Ids not in PACK_IDS; non-empty means the target contributed the full surface. */
+  unknown: readonly string[];
+}
+
 interface PackUnionReport {
   union: ReadonlySet<PackId>;
   carriers: ReadonlyArray<{ label: string; packs: ReadonlySet<PackId> }>;
+  /** Per-target parse results for callers that render (doctor, provisioning). */
+  targets: ReadonlyArray<PackUnionTargetResult>;
+  /** Why codex contributed to the union, when it did; null when it did not. */
+  codex: { reason: 'plugin-installed' | 'probe-failed' } | null;
 }
 
 function packUnionReport(): PackUnionReport {
   const union = new Set<PackId>();
   const carriers: Array<{ label: string; packs: ReadonlySet<PackId> }> = [];
+  const targets: PackUnionTargetResult[] = [];
   for (const target of packStatusReaders()) {
     if (!target.installed) continue;
-    const parsed = parseDevkitPacks(target.read());
+    const raw = target.read();
+    const parsed = parseDevkitPacks(raw);
+    targets.push({ label: target.label, raw, enabled: parsed.enabled, unknown: parsed.unknown });
     if (parsed.unknown.length > 0) {
-      console.log(
-        `  \x1b[33m[WARN]\x1b[0m Packs (${target.label}): unknown id(s) in DEVKIT_PACKS="${parsed.raw}": ${parsed.unknown.join(', ')} — provisioning the full surface (fail-safe)`,
-      );
       const full = new Set(PACK_IDS);
       for (const id of full) union.add(id);
       carriers.push({ label: target.label, packs: full });
@@ -4186,12 +4238,21 @@ function packUnionReport(): PackUnionReport {
     for (const id of parsed.enabled) union.add(id);
     carriers.push({ label: target.label, packs: parsed.enabled });
   }
-  if (codexStatus()) {
+  const codex = codexPluginProbe();
+  // Polarity rule: a failed probe fails safe — it widens the union exactly
+  // like an unknown DEVKIT_PACKS id and must never read as "not installed".
+  const codexContributes = codex.ok ? codex.installed : true;
+  if (codexContributes) {
     const full = new Set(PACK_IDS);
     for (const id of full) union.add(id);
     carriers.push({ label: 'Codex CLI', packs: full });
   }
-  return { union, carriers };
+  return {
+    union,
+    carriers,
+    targets,
+    codex: codexContributes ? { reason: codex.ok ? 'plugin-installed' : 'probe-failed' } : null,
+  };
 }
 
 function effectivePackUnion(): ReadonlySet<PackId> {
@@ -4202,7 +4263,14 @@ function effectivePackUnion(): ReadonlySet<PackId> {
 // No output at all when nothing is required (empty union, e.g. a
 // DEVKIT_PACKS=core-only install with no codex CLI).
 async function provisionPackBinaries(): Promise<void> {
-  const union = effectivePackUnion();
+  const report = packUnionReport();
+  for (const target of report.targets) {
+    if (target.unknown.length === 0) continue;
+    console.log(
+      `  \x1b[33m[WARN]\x1b[0m Packs (${target.label}): unknown id(s) in DEVKIT_PACKS="${target.raw}": ${target.unknown.join(', ')} — provisioning the full surface (fail-safe)`,
+    );
+  }
+  const union = report.union;
   const deps = requiredDependencies(union);
   if (deps.size === 0) return;
   console.log(`\nProvisioning pack binaries (enabled packs: ${union.size})`);
@@ -4519,38 +4587,46 @@ async function cmdDoctor(): Promise<void> {
   // config file, not the process env: the value reaches the server process
   // only after the agent harness injects the config env. Unknown ids warn
   // because the server boot fail-fasts on them (src/packs/enable.ts).
-  // The per-target lines below are display only; the derivation is
-  // packUnionReport() — the same one derivation provisioning, `dep status`,
-  // and `dep uninstall` use — so doctor's dependency verdict can never
-  // disagree with theirs. hcloud is deliberately absent here — the
-  // dedicated hcloud block above owns it as the explicit plugin-level rule
-  // (deriving it was rejected: a core⇒hcloud edge would auto-provision
+  // The per-target lines below render from the SAME packUnionReport()
+  // derivation provisioning, `dep status`, and `dep uninstall` use — the
+  // display loop consumes the report's per-target parse results, so no
+  // config file is read twice in one doctor run and each unknown id warns
+  // exactly once, counted in `warn`. hcloud is deliberately absent here —
+  // the dedicated hcloud block above owns it as the explicit plugin-level
+  // rule (deriving it was rejected: a core⇒hcloud edge would auto-provision
   // CLI-less trims, and the union is empty on zero-target machines, exactly
   // where the check matters most). devbridge is sandbox-resident and never
   // probed host-side; the gateway renders through the shared resolution
   // chain. PACK_USES soft edges warn once per pair when a used pack sits
   // disabled in the union.
-  for (const target of packStatusReaders()) {
-    if (!target.installed) continue;
-    const raw = target.read();
-    if (raw === null || raw.trim() === '') {
+  const packReport = packUnionReport();
+  for (const target of packReport.targets) {
+    if (target.raw === null || target.raw.trim() === '') {
       console.log(`  \x1b[36m[INFO]\x1b[0m Packs (${target.label}): all — DEVKIT_PACKS not set`);
       continue;
     }
-    const { enabled, unknown } = parseDevkitPacks(raw);
-    if (unknown.length > 0) {
+    if (target.unknown.length > 0) {
       warn++;
       console.log(
-        `  \x1b[33m[WARN]\x1b[0m Packs (${target.label}): unknown id(s) in DEVKIT_PACKS="${raw}": ${unknown.join(', ')}`,
+        `  \x1b[33m[WARN]\x1b[0m Packs (${target.label}): unknown id(s) in DEVKIT_PACKS="${target.raw}": ${target.unknown.join(', ')}`,
       );
       console.log(
         `        The MCP server will refuse to start until the value is fixed. Clear it: npx huaweicloud-devkit install --target <agent> --packs all`,
       );
       continue;
     }
-    console.log(`  \x1b[36m[INFO]\x1b[0m Packs (${target.label}): ${[...enabled].join(', ')}`);
+    console.log(`  \x1b[36m[INFO]\x1b[0m Packs (${target.label}): ${[...target.enabled].join(', ')}`);
   }
-  const { union: enabledPacksUnion, carriers } = packUnionReport();
+  // Attribution for the codex contribution to the union above: a widened
+  // union with no explaining line reads as a phantom.
+  if (packReport.codex) {
+    const why =
+      packReport.codex.reason === 'plugin-installed'
+        ? 'the devkit plugin is installed for codex'
+        : 'codex plugin list could not be read, assuming the full surface (fail-safe)';
+    console.log(`  \x1b[36m[INFO]\x1b[0m Packs (Codex CLI): all — ${why}`);
+  }
+  const { union: enabledPacksUnion, carriers } = packReport;
   if (carriers.length > 0) {
     const requiredDeps = requiredDependencies(enabledPacksUnion);
     if (requiredDeps.size === 0) {

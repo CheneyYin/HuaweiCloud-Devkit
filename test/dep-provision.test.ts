@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -411,12 +411,14 @@ test(
   () => {
     const home = tempHome();
     const dir = join(home, 'deps');
-    // macOS /usr/local/bin shape: the receipt path sits in a directory the
-    // current user cannot write, exactly how the installer's sudo mv left it.
-    const placed = join(home, 'usr-local', 'hcloud');
+    // The receipt path must be a known installer landing site before sudo is
+    // allowed near it: ~/.local/bin/hcloud is the catalog's first unix
+    // candidate. The directory is made non-writable so rmSync fails EACCES,
+    // exactly how a permissions-restricted install location behaves.
+    const placed = join(home, '.local', 'bin', 'hcloud');
     writeExecutable(placed);
     writeReceipt(hcloudReceiptAt(placed), dir);
-    chmodSync(join(home, 'usr-local'), 0o555);
+    chmodSync(join(home, '.local', 'bin'), 0o555);
     try {
       const calls: Array<{ command: string; args: readonly string[] }> = [];
       const result = uninstallDependency('hcloud', noTargets, {
@@ -435,7 +437,7 @@ test(
       );
       assert.equal(readReceipt('hcloud', dir), null, 'the receipt is cleared once sudo withdraws the binary');
     } finally {
-      chmodSync(join(home, 'usr-local'), 0o755);
+      chmodSync(join(home, '.local', 'bin'), 0o755);
     }
   },
 );
@@ -446,10 +448,10 @@ test(
   () => {
     const home = tempHome();
     const dir = join(home, 'deps');
-    const placed = join(home, 'usr-local', 'hcloud');
+    const placed = join(home, '.local', 'bin', 'hcloud');
     writeExecutable(placed);
     writeReceipt(hcloudReceiptAt(placed), dir);
-    chmodSync(join(home, 'usr-local'), 0o555);
+    chmodSync(join(home, '.local', 'bin'), 0o555);
     try {
       const result = uninstallDependency('hcloud', noTargets, {
         receiptsDir: dir,
@@ -466,6 +468,40 @@ test(
       );
       assert.equal(existsSync(placed), true, 'the binary is left in place');
       assert.ok(readReceipt('hcloud', dir), 'the receipt stays until the user resolves the standoff');
+    } finally {
+      chmodSync(join(home, '.local', 'bin'), 0o755);
+    }
+  },
+);
+
+test(
+  'uninstall hcloud refuses sudo for a receipt path outside the known install locations',
+  { skip: cannotStageEacces },
+  () => {
+    const home = tempHome();
+    const dir = join(home, 'deps');
+    // A forged receipt aiming sudo at an arbitrary file: present on disk,
+    // EACCES-protected, but neither a platform candidate nor the installer's
+    // computed binPath.
+    const placed = join(home, 'usr-local', 'hcloud');
+    writeExecutable(placed);
+    writeReceipt(hcloudReceiptAt(placed), dir);
+    chmodSync(join(home, 'usr-local'), 0o555);
+    try {
+      const calls: Array<{ command: string; args: readonly string[] }> = [];
+      const result = uninstallDependency('hcloud', noTargets, {
+        receiptsDir: dir,
+        env: emptyPathEnv(home),
+        runCommand: (command, args) => {
+          calls.push({ command, args });
+          return { status: 0, stdout: '', stderr: '' };
+        },
+      });
+      assert.equal(result.ok, false, result.message);
+      assert.deepEqual(calls, [], 'sudo is never spawned for an untrusted receipt path');
+      assert.match(result.message, /receipt path is not a known devkit install location/);
+      assert.equal(existsSync(placed), true, 'the binary is left in place');
+      assert.ok(readReceipt('hcloud', dir), 'the receipt is kept');
     } finally {
       chmodSync(join(home, 'usr-local'), 0o755);
     }
@@ -847,13 +883,42 @@ test('uninstall --clean-kocli clears the devkit hcloud receipt with the binary',
   assert.equal(readReceipt('hcloud', depsDir), null, 'the receipt does not outlive the binary');
 });
 
+test('uninstall --clean-kocli keeps the receipt when the attributed binary survives the pass', () => {
+  const home = tempHome();
+  const emptyPath = mkdtempSync(join(tmpdir(), 'dep-provision-path-'));
+  // The macOS shape: the receipt names /usr/local/bin/hcloud, which
+  // removeKooCli never touches (it only removes ~/.local/bin/hcloud,
+  // ~/hcloud/hcloud[.exe], and ~/.hcloud). Burning the receipt here would
+  // defeat `dep uninstall hcloud` forever while the binary lives.
+  const placed = join(home, 'usr-local', 'hcloud');
+  writeExecutable(placed);
+  const depsDir = join(home, '.config', 'huaweicloud', 'deps');
+  writeReceipt(hcloudReceiptAt(placed), depsDir);
+  const res = runSetupCli(['uninstall', '--target', 'all', '--clean-kocli'], home, {
+    PATH: emptyPath,
+    HUAWEICLOUD_HOME: home,
+  });
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(existsSync(placed), true, 'the binary outside removeKooCli\u2019s scope survives');
+  assert.ok(readReceipt('hcloud', depsDir), 'the receipt survives with the binary');
+  assert.ok(
+    res.stdout.includes(`Kept the devkit hcloud install receipt: the recorded binary (${placed}) still exists`),
+    res.stdout,
+  );
+  assert.ok(res.stdout.includes('`dep uninstall hcloud` can still remove it'), res.stdout);
+  assert.ok(!res.stdout.includes('Cleared the devkit hcloud install receipt.'), res.stdout);
+});
+
 // ---- doctor's pack-binary section renders from the dependency model ----
 
 test('doctor renders devbridge and PACK_USES warnings for a sandbox-only trim', () => {
   const home = tempHome();
   const installRes = runSetupCli(['install', '--target', 'opencode', '--packs', 'sandbox'], home);
   assert.equal(installRes.status, 0, installRes.stderr);
-  const res = runSetupCli(['doctor'], home);
+  // Empty PATH neutralizes codex detection (the neighboring dep-uninstall
+  // test's precedent), so the union is exactly the installed target's trim.
+  const emptyPath = mkdtempSync(join(tmpdir(), 'dep-provision-path-'));
+  const res = runSetupCli(['doctor'], home, { PATH: emptyPath, HUAWEICLOUD_HOME: home });
   assert.equal(res.status, 0, res.stderr);
   assert.match(res.stdout, /devbridge: sandbox-resident, not probed host-side/);
   assert.match(res.stdout, /Pack sandbox uses discovery \(soft dependency\) but it is disabled/);
@@ -866,11 +931,88 @@ test('doctor reports no pack dependencies for a core-only trim', () => {
   const home = tempHome();
   const installRes = runSetupCli(['install', '--target', 'opencode', '--packs', 'core'], home);
   assert.equal(installRes.status, 0, installRes.stderr);
-  const res = runSetupCli(['doctor'], home);
+  const emptyPath = mkdtempSync(join(tmpdir(), 'dep-provision-path-'));
+  const res = runSetupCli(['doctor'], home, { PATH: emptyPath, HUAWEICLOUD_HOME: home });
   assert.equal(res.status, 0, res.stderr);
   assert.match(res.stdout, /Pack dependencies: none required/);
   assert.doesNotMatch(res.stdout, /devbridge: sandbox-resident/);
   assert.doesNotMatch(res.stdout, /Pack .* uses .* soft dependency/);
+});
+
+// ---- the codex probe's fail-safe polarity at the uninstall safety gate ----
+
+// A codex stub on PATH: --version answers like a real codex CLI (so the
+// existence gate passes), and `plugin list --json` either emits a valid
+// list without the devkit plugin ('clean') or fails with unparseable
+// output ('broken' — the exit-1/timeout/garbage shape).
+function writeCodexStub(behavior: 'clean' | 'broken'): string {
+  const stubDir = mkdtempSync(join(tmpdir(), 'dep-provision-codex-'));
+  const list = behavior === 'clean' ? 'echo \'{"installed":[],"available":[]}\'' : "echo 'not-json'; exit 1";
+  writeFileSync(
+    join(stubDir, 'codex'),
+    `#!/bin/sh\ncase "$1" in --version) echo "codex-cli stub 0.0.0"; exit 0;; esac\nif [ "$1" = "plugin" ] && [ "$2" = "list" ]; then ${list}; fi\nexit 1\n`,
+    'utf8',
+  );
+  chmodSync(join(stubDir, 'codex'), 0o755);
+  return stubDir;
+}
+
+test(
+  'dep status: a parsed codex plugin list without the devkit plugin does not widen the union',
+  { skip: isWin },
+  () => {
+    const home = tempHome();
+    const installRes = runSetupCli(['install', '--target', 'opencode', '--packs', 'core'], home);
+    assert.equal(installRes.status, 0, installRes.stderr);
+    const stubDir = writeCodexStub('clean');
+    const res = runSetupCli(['dep', 'status'], home, { PATH: `${stubDir}${delimiter}/usr/bin${delimiter}/bin` });
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.stdout, /Dependency status \(effective packs: 1\)/);
+  },
+);
+
+test('dep status: a failed codex plugin probe widens the union (fail-safe)', { skip: isWin }, () => {
+  const home = tempHome();
+  const installRes = runSetupCli(['install', '--target', 'opencode', '--packs', 'core'], home);
+  assert.equal(installRes.status, 0, installRes.stderr);
+  const stubDir = writeCodexStub('broken');
+  const stubPath = `${stubDir}${delimiter}/usr/bin${delimiter}/bin`;
+  const res = runSetupCli(['dep', 'status'], home, { PATH: stubPath });
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /Dependency status \(effective packs: 9\)/);
+  // Doctor names the codex contribution: a widened union with no explaining
+  // line reads as a phantom.
+  const doc = runSetupCli(['doctor'], home, { PATH: stubPath, HUAWEICLOUD_HOME: home });
+  assert.equal(doc.status, 0, doc.stderr);
+  assert.match(doc.stdout, /Packs \(Codex CLI\): all — codex plugin list could not be read/);
+});
+
+test('doctor warns exactly once for an unknown DEVKIT_PACKS id', () => {
+  const home = tempHome();
+  const installRes = runSetupCli(['install', '--target', 'opencode', '--packs', 'core'], home);
+  assert.equal(installRes.status, 0, installRes.stderr);
+  // Corrupt the installed target's DEVKIT_PACKS with an unknown id.
+  const cfgPath = join(home, '.config', 'opencode', 'opencode.json');
+  assert.ok(existsSync(cfgPath), 'the install wrote the OpenCode MCP config');
+  const cfg: Record<string, unknown> = JSON.parse(readFileSync(cfgPath, 'utf8'));
+  const entry = (cfg.mcp as Record<string, Record<string, Record<string, unknown>>>)['huaweicloud-devkit'];
+  const envMap = entry.environment ?? entry.env;
+  envMap.DEVKIT_PACKS = 'bogus,core';
+  writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+  const emptyPath = mkdtempSync(join(tmpdir(), 'dep-provision-path-'));
+  const res = runSetupCli(['doctor'], home, { PATH: emptyPath, HUAWEICLOUD_HOME: home });
+  assert.equal(res.status, 0, res.stderr);
+  const unknownLines = res.stdout.match(/unknown id\(s\) in DEVKIT_PACKS/g) ?? [];
+  assert.equal(unknownLines.length, 1, `exactly one unknown-id WARN line:\n${res.stdout}`);
+  assert.doesNotMatch(
+    res.stdout,
+    /provisioning the full surface/,
+    'the provisioning-flavored line stays in provisioning',
+  );
+  const tally = /Results: (\d+) pass, (\d+) warn, (\d+) fail/.exec(res.stdout);
+  assert.ok(tally, `the Results tally rendered:\n${res.stdout}`);
+  const warnTags = res.stdout.match(/\[WARN\]/g) ?? [];
+  assert.equal(Number(tally[2]), warnTags.length, `shown WARN lines must equal the counted warn tally:\n${res.stdout}`);
 });
 
 // ---- findHcloudBin: delegation equivalence, env-injected ----
