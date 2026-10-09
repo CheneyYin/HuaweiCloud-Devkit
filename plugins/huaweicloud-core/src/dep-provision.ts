@@ -562,13 +562,16 @@ export async function provisionDependencies(ids: Iterable<DependencyId>, opts: P
 }
 
 // ---------------------------------------------------------------------------
-// Receipt-gated uninstall (`dep uninstall <id>`). The decision derives from
-// the same model the installer used: the caller passes the effective pack
-// union (setup-cli's effectivePackUnion — no second derivation exists), and
-// uninstall refuses while any enabled pack requires the id. With no requiring
-// pack, the receipt gates deletion: devkit removes only what it placed and
-// can prove it placed. Deletion scope is binary-only — ~/.hcloud credentials
-// and config stay untouched (that broader cleanup belongs to the documented
+// Receipt-gated uninstall, two call shapes over one decision core. The gated
+// shape (`dep uninstall <id>`) derives the decision from the same model the
+// installer used: the caller passes the effective pack union (setup-cli's
+// packUnionReport — no second derivation exists), and uninstall refuses
+// while any enabled pack requires the id. The forced shape
+// (`uninstall --clean-*` flags) has no union to consult: the flag is the
+// user's explicit answer, so the receipt gate alone decides. Either way the
+// receipt gates deletion: devkit removes only what it placed and can prove
+// it placed. Deletion scope is binary-only — ~/.hcloud credentials and
+// config stay untouched (that broader cleanup belongs to the documented
 // ungated escape hatch `uninstall --clean-kocli`).
 // ---------------------------------------------------------------------------
 
@@ -607,7 +610,7 @@ const GATEWAY_UNINSTALL_ARGS: Record<GatewayInstallTier, readonly string[]> = {
   pip3: ['uninstall', '-y', GATEWAY_PACKAGE],
 };
 
-const HCLOUD_ESCAPE_HATCH = 'Escape hatch: npx huaweicloud-devkit uninstall --target <agent> --clean-kocli';
+const HCLOUD_ESCAPE_HATCH = 'Escape hatch: npx huaweicloud-devkit uninstall --target all --clean-kocli';
 const GATEWAY_ESCAPE_HATCH =
   'Escape hatch: uv tool uninstall huaweicloud-open-mcp (or pipx uninstall huaweicloud-open-mcp / pip3 uninstall -y huaweicloud-open-mcp)';
 
@@ -621,16 +624,36 @@ function requiringPacks(id: DependencyId, enabledPacks: ReadonlySet<PackId>): Pa
     .sort((a, b) => a.localeCompare(b));
 }
 
-export function uninstallDependency(
-  id: DependencyId,
-  targets: DepUninstallTargets,
-  opts: DepUninstallOptions = {},
-): DepUninstallResult {
+function specRefusal(id: DependencyId): DepUninstallResult | null {
   const spec = DEPENDENCIES[id];
   if (!spec) return { ok: false, message: `Unknown dependency id: ${id}` };
   if (spec.kind === 'sandbox-resident') {
     return { ok: false, message: 'devbridge ships inside the cloud sandbox; the host never installs or removes it.' };
   }
+  return null;
+}
+
+// The decision core both call shapes share: the receipt gate, the tier-aware
+// removal, and the receipt cleanup. No pack-requirement check lives here.
+function placedUninstall(id: DependencyId, dir: string, opts: DepUninstallOptions): DepUninstallResult {
+  const receipt = readReceipt(id, dir);
+  if (!receipt) {
+    const escapeHatch = id === 'hcloud' ? HCLOUD_ESCAPE_HATCH : GATEWAY_ESCAPE_HATCH;
+    return {
+      ok: false,
+      message: `Refusing to uninstall ${id}: no devkit install receipt, so this devkit did not place it and will not remove it. ${escapeHatch}`,
+    };
+  }
+  return id === 'hcloud' ? uninstallHcloud(receipt, dir, opts) : uninstallGateway(receipt, dir, opts);
+}
+
+export function uninstallDependency(
+  id: DependencyId,
+  targets: DepUninstallTargets,
+  opts: DepUninstallOptions = {},
+): DepUninstallResult {
+  const refusal = specRefusal(id);
+  if (refusal) return refusal;
   const dir = opts.receiptsDir ?? receiptDir();
   // The whole decision — requirement check, receipt read, deletion, receipt
   // removal — serializes against concurrent installs under the receipt lock.
@@ -649,16 +672,18 @@ export function uninstallDependency(
         message: `Refusing to uninstall ${id}: required by enabled pack(s) ${requiring.join(', ')}${carriers}. Remove or trim those targets first: npx huaweicloud-devkit uninstall --target <agent>, or reinstall with --packs`,
       };
     }
-    const receipt = readReceipt(id, dir);
-    if (!receipt) {
-      const escapeHatch = id === 'hcloud' ? HCLOUD_ESCAPE_HATCH : GATEWAY_ESCAPE_HATCH;
-      return {
-        ok: false,
-        message: `Refusing to uninstall ${id}: no devkit install receipt, so this devkit did not place it and will not remove it. ${escapeHatch}`,
-      };
-    }
-    return id === 'hcloud' ? uninstallHcloud(receipt, dir, opts) : uninstallGateway(receipt, dir, opts);
+    return placedUninstall(id, dir, opts);
   }, dir);
+}
+
+// The forced shape for the uninstall --clean-* flags: the user already
+// answered "remove account-level tools", so no pack-requirement refusal
+// applies. There is no union to consult — the receipt gate alone decides.
+export function uninstallPlacedDependency(id: DependencyId, opts: DepUninstallOptions = {}): DepUninstallResult {
+  const refusal = specRefusal(id);
+  if (refusal) return refusal;
+  const dir = opts.receiptsDir ?? receiptDir();
+  return withDepLock(() => placedUninstall(id, dir, opts), dir);
 }
 
 // The only paths the uninstall side may ever hand to sudo: the catalog's
@@ -750,7 +775,7 @@ function uninstallHcloud(receipt: DepReceipt, dir: string, opts: DepUninstallOpt
           ok: true,
           message: `Removed the devkit-installed hcloud binary: ${target} (via sudo -n rm)`,
           detail: [
-            '~/.hcloud credentials and config were not touched; those are removed only by: npx huaweicloud-devkit uninstall --target <agent> --clean-kocli',
+            '~/.hcloud credentials and config were not touched; those are removed only by: npx huaweicloud-devkit uninstall --target all --clean-kocli',
           ],
         };
       }
@@ -769,7 +794,7 @@ function uninstallHcloud(receipt: DepReceipt, dir: string, opts: DepUninstallOpt
     ok: true,
     message: `Removed the devkit-installed hcloud binary: ${target}`,
     detail: [
-      '~/.hcloud credentials and config were not touched; those are removed only by: npx huaweicloud-devkit uninstall --target <agent> --clean-kocli',
+      '~/.hcloud credentials and config were not touched; those are removed only by: npx huaweicloud-devkit uninstall --target all --clean-kocli',
     ],
   };
 }

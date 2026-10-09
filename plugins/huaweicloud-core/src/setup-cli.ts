@@ -40,7 +40,13 @@ import {
 import { removeKooCli, removeObsConfig } from './sandbox/uninstall-cleanup.ts';
 import { readReceipt, removeReceipt } from './dep-receipts.ts';
 import { detectCodeartsSandbox } from './codearts-sandbox.ts';
-import { installGatewayTool, installKooCli, provisionDependencies, uninstallDependency } from './dep-provision.ts';
+import {
+  installGatewayTool,
+  installKooCli,
+  provisionDependencies,
+  uninstallDependency,
+  uninstallPlacedDependency,
+} from './dep-provision.ts';
 import {
   mergeCommandStyle,
   mergeArgsStyle,
@@ -3900,7 +3906,7 @@ async function cmdInstall(): Promise<void> {
   }
 }
 
-async function cmdUninstall(): Promise<void> {
+async function cmdUninstall(opts: { fromReinstall?: boolean } = {}): Promise<void> {
   const target = parseTarget();
   console.log(BANNER);
   console.log(`Uninstalling HuaweiCloud DevKit${target !== 'opencode' ? ` from ${target}` : ''}...\n`);
@@ -3952,7 +3958,9 @@ async function cmdUninstall(): Promise<void> {
       }
     }
   }
-  if (target === 'all') {
+  // A reinstall uninstalls only to reinstall: account-level state (vault,
+  // MCP config backups, account-level tools) must survive it.
+  if (target === 'all' && opts.fromReinstall !== true) {
     const vaultPath = globalCredentialsPath();
     if (removeIfExists(vaultPath)) {
       console.log('  Removed credential vault');
@@ -3975,7 +3983,7 @@ async function cmdUninstall(): Promise<void> {
 
   if (target !== 'all') {
     console.log(
-      `\n\x1b[33m💡 本次仅卸载了 ${target} 的插件。如需清理全局配置（凭据库/OBS/KooCLI），请运行 \`npx huaweicloud-devkit uninstall --target all\`。\x1b[0m`,
+      `\n\x1b[33m💡 本次仅卸载了 ${target} 的插件。如需清理全局配置（凭据库/OBS/KooCLI/open-mcp-gateway），请运行 \`npx huaweicloud-devkit uninstall --target all\`。\x1b[0m`,
     );
   }
 }
@@ -4019,31 +4027,91 @@ function removeObsConfigWithMessage(): void {
   }
 }
 
-async function promptGlobalCleanup(): Promise<void> {
-  const hasFlag = (name: string): boolean => process.argv.includes(name);
-  const cleanKocli = hasFlag('--clean-kocli') || hasFlag('--clean-global');
-  const cleanObs = hasFlag('--clean-obs') || hasFlag('--clean-global');
+// The gateway's account-level cleanup. The --clean-gateway flag (or an
+// interactive yes) is the user's explicit request, so no pack-requirement
+// refusal applies — but the receipt gate alone still decides, so devkit
+// removes only what it placed and never a user-managed gateway.
+function removeGatewayWithMessage(): void {
+  const resolved = resolveDependencyCommand(DEPENDENCIES['open-mcp-gateway'].resolution);
+  const persistent = resolved !== null && resolved.tier !== 'fallback';
+  if (!readReceipt('open-mcp-gateway') && !persistent) {
+    console.log('  No devkit-managed Open MCP Gateway found (nothing to remove).');
+    return;
+  }
+  const result = uninstallPlacedDependency('open-mcp-gateway');
+  const prefix = result.ok ? '  ' : '  \x1b[33m[WARN]\x1b[0m ';
+  console.log(`${prefix}${result.message}`);
+  for (const line of result.detail ?? []) console.log(`  ${line}`);
+}
 
-  // Interactive terminal: ask the user for each account-level tool.
-  if (!cleanKocli && !cleanObs && process.stdin.isTTY && process.stdout.isTTY) {
+// Account-level cleanup targets, table-driven so the fourth artifact is one
+// entry, not another hand-maintained copy of the selection guards. KooCLI
+// and OBS remove files directly; the gateway runs the forced uninstall
+// (receipt gate only) because the flag is the user's explicit answer.
+interface AccountLevelArtifact {
+  /** CLI flag selecting this artifact alone; --clean-global selects every entry. */
+  flag: string;
+  /** Interactive question, asked only when nothing was pre-selected on argv. */
+  question: string;
+  /** Line printed when the interactive answer is no. */
+  keptLine: string;
+  /** zh phrase slotted into the composed non-interactive keep message. */
+  keepPhrase: string;
+  /** Best-effort removal: prints its own outcome, never fails the uninstall. */
+  run: () => void;
+}
+
+async function promptGlobalCleanup(): Promise<void> {
+  const artifacts: AccountLevelArtifact[] = [
+    {
+      flag: '--clean-kocli',
+      question: '  是否一并删除 KooCLI (hcloud)？(y/N) ',
+      keptLine: '  KooCLI kept.',
+      keepPhrase: 'KooCLI',
+      run: removeKooCliWithMessage,
+    },
+    {
+      flag: '--clean-obs',
+      question: '  是否一并删除 OBS 配置 (~/.obsutilconfig)？(y/N) ',
+      keptLine: '  OBS config kept.',
+      keepPhrase: 'OBS 配置',
+      run: removeObsConfigWithMessage,
+    },
+    {
+      flag: '--clean-gateway',
+      question: '  是否一并删除 open-mcp-gateway (huaweicloud-open-mcp)？(y/N) ',
+      keptLine: '  Open MCP Gateway kept.',
+      keepPhrase: 'open-mcp-gateway',
+      run: removeGatewayWithMessage,
+    },
+  ];
+  const selected = process.argv.includes('--clean-global')
+    ? artifacts
+    : artifacts.filter((artifact) => process.argv.includes(artifact.flag));
+
+  // Interactive terminal: ask for every artifact, then act on the answers.
+  if (selected.length === 0 && process.stdin.isTTY && process.stdout.isTTY) {
     console.log('\n  —— 全局凭据库已清除，是否一并删除账号级工具？——');
-    const kocliAnswer = await readLineQuestion('  是否一并删除 KooCLI (hcloud)？(y/N) ');
-    const obsAnswer = await readLineQuestion('  是否一并删除 OBS 配置 (~/.obsutilconfig)？(y/N) ');
-    if (/^\s*y\s*$/i.test(kocliAnswer)) removeKooCliWithMessage();
-    else console.log('  KooCLI kept.');
-    if (/^\s*y\s*$/i.test(obsAnswer)) removeObsConfigWithMessage();
-    else console.log('  OBS config kept.');
+    const answers: boolean[] = [];
+    for (const artifact of artifacts) {
+      answers.push(/^\s*y\s*$/i.test(await readLineQuestion(artifact.question)));
+    }
+    for (const [index, artifact] of artifacts.entries()) {
+      if (answers[index]) artifact.run();
+      else console.log(artifact.keptLine);
+    }
     return;
   }
 
-  // Explicit flags: delete deterministically, without prompting.
-  if (cleanKocli) removeKooCliWithMessage();
-  if (cleanObs) removeObsConfigWithMessage();
+  for (const artifact of selected) artifact.run();
 
   // No flag and non-interactive: keep them and surface the option.
-  if (!cleanKocli && !cleanObs) {
+  if (selected.length === 0) {
+    const phrases = artifacts.map((artifact) => artifact.keepPhrase);
+    const kept = `${phrases.slice(0, -1).join('、')}与 ${phrases[phrases.length - 1]}`;
+    const flags = [...artifacts.map((artifact) => artifact.flag), '--clean-global'].join(' / ');
     console.log(
-      `\n\x1b[33m已保留 KooCLI 与 OBS 配置（全局凭据库已删除）。如需一并清理，请使用 --clean-kocli / --clean-obs / --clean-global flag，或在交互终端重新执行全局卸载。\x1b[0m`,
+      `\n\x1b[33m已保留 ${kept}（全局凭据库已删除）。如需一并清理，请使用 ${flags} flag，或在交互终端重新执行全局卸载。\x1b[0m`,
     );
   }
 }
@@ -4984,7 +5052,7 @@ async function cmdReinstall(): Promise<void> {
     return;
   }
   confirmed = true;
-  await cmdUninstall();
+  await cmdUninstall({ fromReinstall: true });
   console.log('');
   await cmdInstall();
 }
@@ -5638,9 +5706,14 @@ async function main(): Promise<void> {
       );
       console.log('  --skip-binaries   (with: install/update) skip provisioning host binaries for enabled packs');
       console.log('  --version    Print CLI version and installed plugin version per agent');
-      console.log('  --clean-kocli   (with: uninstall --target all) also remove KooCLI');
-      console.log('  --clean-obs     (with: uninstall --target all) also remove OBS config');
-      console.log('  --clean-global  (with: uninstall --target all) also remove KooCLI + OBS config');
+      console.log('  --clean-kocli    (with: uninstall --target all) also remove KooCLI');
+      console.log('  --clean-obs      (with: uninstall --target all) also remove OBS config');
+      console.log(
+        '  --clean-gateway  (with: uninstall --target all) also remove the devkit-installed open-mcp-gateway',
+      );
+      console.log(
+        '  --clean-global   (with: uninstall --target all) also remove KooCLI + OBS config + open-mcp-gateway',
+      );
       console.log('\nExamples:');
       console.log('  npx huaweicloud-devkit install');
       console.log('  npx huaweicloud-devkit install --target codex');

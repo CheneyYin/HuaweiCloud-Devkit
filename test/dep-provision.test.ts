@@ -12,6 +12,7 @@ import {
   installGatewayTool,
   provisionDependencies,
   uninstallDependency,
+  uninstallPlacedDependency,
 } from '../plugins/huaweicloud-core/src/dep-provision.ts';
 import { readReceipt, writeReceipt, type DepReceipt } from '../plugins/huaweicloud-core/src/dep-receipts.ts';
 import { findHcloudBin } from '../plugins/huaweicloud-core/src/hcloud-probe.ts';
@@ -334,7 +335,7 @@ test('uninstall hcloud without a receipt refuses and points at --clean-kocli', (
   const result = uninstallDependency('hcloud', noTargets, { receiptsDir: dir, env: emptyPathEnv(dir) });
   assert.equal(result.ok, false);
   assert.match(result.message, /Refusing to uninstall hcloud: no devkit install receipt/);
-  assert.match(result.message, /uninstall --target <agent> --clean-kocli/);
+  assert.match(result.message, /uninstall --target all --clean-kocli/);
 });
 
 test('uninstall open-mcp-gateway without a receipt refuses and points at the manual uninstalls', () => {
@@ -560,6 +561,40 @@ for (const tier of ['uv', 'pipx', 'pip3'] as const) {
     assert.equal(readReceipt('open-mcp-gateway', dir), null);
   });
 }
+
+test('the forced uninstall shape skips the pack-requirement gate the gated shape enforces', () => {
+  const home = tempHome();
+  const dir = join(home, 'deps');
+  writeReceipt(gatewayReceiptWithTier('uv'), dir);
+  writeExecutable(join(home, '.local', 'bin', 'uv'));
+  const requiring = {
+    enabledPacks: new Set(['huaweicloud-open-mcp']),
+    carriers: [{ label: 'OpenCode', packs: new Set(['huaweicloud-open-mcp']) }],
+  };
+  const gated = uninstallDependency('open-mcp-gateway', requiring, {
+    receiptsDir: dir,
+    env: emptyPathEnv(home),
+    runCommand: () => ({ status: 0, stdout: '', stderr: '' }),
+  });
+  assert.equal(gated.ok, false);
+  assert.match(gated.message, /required by enabled pack\(s\) huaweicloud-open-mcp/);
+  assert.ok(readReceipt('open-mcp-gateway', dir), 'the gated refusal keeps the receipt');
+  const forced = uninstallPlacedDependency('open-mcp-gateway', {
+    receiptsDir: dir,
+    env: emptyPathEnv(home),
+    runCommand: () => ({ status: 0, stdout: '', stderr: '' }),
+  });
+  assert.equal(forced.ok, true, forced.message);
+  assert.equal(readReceipt('open-mcp-gateway', dir), null, 'the forced shape clears the receipt');
+});
+
+test('uninstallPlacedDependency without a receipt refuses like the gated shape', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dep-uninstall-'));
+  const result = uninstallPlacedDependency('open-mcp-gateway', { receiptsDir: dir, env: emptyPathEnv(dir) });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /no devkit install receipt/);
+  assert.match(result.message, /uv tool uninstall huaweicloud-open-mcp/);
+});
 
 test('uninstall gateway falls back to the resolved binary when the tier tool is gone', () => {
   const home = tempHome();
@@ -826,7 +861,7 @@ test('dep uninstall hcloud without a receipt refuses and points at --clean-kocli
   const res = runSetupCli(['dep', 'uninstall', 'hcloud'], home, { PATH: emptyPath, HUAWEICLOUD_HOME: home });
   assert.equal(res.status, 1, res.stderr);
   assert.match(res.stderr, /Refusing to uninstall hcloud: no devkit install receipt/);
-  assert.match(res.stderr, /uninstall --target <agent> --clean-kocli/);
+  assert.match(res.stderr, /uninstall --target all --clean-kocli/);
   const depsDir = join(home, '.config', 'huaweicloud', 'deps');
   assert.equal(existsSync(join(depsDir, 'hcloud.json')), false, 'a refusal writes no receipt');
   assert.equal(existsSync(join(depsDir, 'lock')), false, 'the decision lock is released on refusal');
@@ -909,6 +944,145 @@ test('uninstall --clean-kocli keeps the receipt when the attributed binary survi
   assert.ok(!res.stdout.includes('Cleared the devkit hcloud install receipt.'), res.stdout);
 });
 
+// ---- --clean-gateway through the real CLI ----
+
+// A fake uv standing in for `uv tool uninstall`: it records its arguments
+// and removes the gateway binary, which is what the real tool does to the
+// symlink it placed.
+function writeFakeUv(home: string): string {
+  const log = join(home, 'uv-args.log');
+  const uv = join(home, '.local', 'bin', 'uv');
+  mkdirSync(join(uv, '..'), { recursive: true });
+  writeFileSync(
+    uv,
+    `#!/bin/sh\necho "$@" >> "${log}"\nrm -f "${join(home, '.local', 'bin', `huaweicloud-open-mcp${exeSuffix}`)}"\n`,
+    'utf8',
+  );
+  chmodSync(uv, 0o755);
+  return log;
+}
+
+test(
+  'uninstall --target all --clean-gateway removes the devkit-installed gateway via its tier',
+  { skip: isWin },
+  () => {
+    const home = tempHome();
+    const log = writeFakeUv(home);
+    const gatewayBin = join(home, '.local', 'bin', `huaweicloud-open-mcp${exeSuffix}`);
+    writeExecutable(gatewayBin);
+    const depsDir = join(home, '.config', 'huaweicloud', 'deps');
+    writeReceipt(gatewayReceiptWithTier('uv'), depsDir);
+    const res = runSetupCli(['uninstall', '--target', 'all', '--clean-gateway'], home);
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(readFileSync(log, 'utf8').trim(), 'tool uninstall huaweicloud-open-mcp');
+    assert.equal(existsSync(gatewayBin), false, 'the gateway binary is removed');
+    assert.equal(readReceipt('open-mcp-gateway', depsDir), null, 'the receipt is cleared');
+  },
+);
+
+test('uninstall --target all --clean-gateway selects only the gateway', { skip: isWin }, () => {
+  const home = tempHome();
+  writeFakeUv(home);
+  const gatewayBin = join(home, '.local', 'bin', `huaweicloud-open-mcp${exeSuffix}`);
+  writeExecutable(gatewayBin);
+  writeExecutable(join(home, '.local', 'bin', 'hcloud'));
+  writeFileSync(join(home, '.obsutilconfig'), 'ak=x\nsk=y\n', 'utf8');
+  const depsDir = join(home, '.config', 'huaweicloud', 'deps');
+  writeReceipt(gatewayReceiptWithTier('uv'), depsDir);
+  const res = runSetupCli(['uninstall', '--target', 'all', '--clean-gateway'], home);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(existsSync(gatewayBin), false, 'the gateway binary is removed');
+  assert.ok(existsSync(join(home, '.local', 'bin', 'hcloud')), 'KooCLI is kept without its flag');
+  assert.ok(existsSync(join(home, '.obsutilconfig')), 'OBS config is kept without its flag');
+  assert.doesNotMatch(res.stdout, /已保留/, 'a partial selection prints no keep-all message');
+});
+
+test('uninstall --target all --clean-gateway with nothing devkit-placed is a calm no-op', () => {
+  const home = tempHome();
+  const emptyPath = mkdtempSync(join(tmpdir(), 'dep-provision-path-'));
+  const res = runSetupCli(['uninstall', '--target', 'all', '--clean-gateway'], home, { PATH: emptyPath });
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /No devkit-managed Open MCP Gateway found \(nothing to remove\)\./);
+  assert.doesNotMatch(res.stdout, /Refusing to uninstall open-mcp-gateway/);
+});
+
+test('uninstall --target all --clean-gateway with a user-managed binary warns and keeps it', () => {
+  const home = tempHome();
+  const gatewayBin = join(home, '.local', 'bin', `huaweicloud-open-mcp${exeSuffix}`);
+  writeExecutable(gatewayBin);
+  const res = runSetupCli(['uninstall', '--target', 'all', '--clean-gateway'], home);
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /Refusing to uninstall open-mcp-gateway: no devkit install receipt/);
+  assert.match(res.stdout, /uv tool uninstall huaweicloud-open-mcp/);
+  assert.ok(existsSync(gatewayBin), 'a user-managed gateway is never removed');
+});
+
+test(
+  'the --clean-gateway flag path bypasses the pack-requirement gate that blocks dep uninstall',
+  { skip: isWin },
+  () => {
+    const home = tempHome();
+    writeFakeUv(home);
+    const gatewayBin = join(home, '.local', 'bin', `huaweicloud-open-mcp${exeSuffix}`);
+    writeExecutable(gatewayBin);
+    const depsDir = join(home, '.config', 'huaweicloud', 'deps');
+    writeReceipt(gatewayReceiptWithTier('uv'), depsDir);
+    const stubDir = writeCodexStub('broken');
+    const stubPath = `${stubDir}${delimiter}/usr/bin${delimiter}/bin`;
+    const gated = runSetupCli(['dep', 'uninstall', 'open-mcp-gateway'], home, { PATH: stubPath });
+    assert.equal(gated.status, 1, gated.stderr);
+    assert.match(gated.stderr, /Refusing to uninstall open-mcp-gateway: required by enabled pack\(s\)/);
+    assert.match(gated.stderr, /installed targets: Codex CLI/);
+    assert.ok(readReceipt('open-mcp-gateway', depsDir), 'the gated refusal keeps the receipt');
+    const res = runSetupCli(['uninstall', '--target', 'all', '--clean-gateway'], home, { PATH: stubPath });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(existsSync(gatewayBin), false, 'the flag path removes the gateway anyway');
+    assert.equal(readReceipt('open-mcp-gateway', depsDir), null, 'the receipt is cleared');
+  },
+);
+
+test('dep uninstall open-mcp-gateway refuses while an installed target still requires it', () => {
+  const home = tempHome();
+  const installRes = runSetupCli(['install', '--target', 'opencode', '--packs', 'huaweicloud-open-mcp'], home);
+  assert.equal(installRes.status, 0, installRes.stderr);
+  const gatewayBin = join(home, '.local', 'bin', `huaweicloud-open-mcp${exeSuffix}`);
+  writeExecutable(gatewayBin);
+  const depsDir = join(home, '.config', 'huaweicloud', 'deps');
+  writeReceipt(gatewayReceiptWithTier('uv'), depsDir);
+  const emptyPath = mkdtempSync(join(tmpdir(), 'dep-provision-path-'));
+  const res = runSetupCli(['dep', 'uninstall', 'open-mcp-gateway'], home, { PATH: emptyPath, HUAWEICLOUD_HOME: home });
+  assert.equal(res.status, 1, res.stderr);
+  assert.match(
+    res.stderr,
+    /Refusing to uninstall open-mcp-gateway: required by enabled pack\(s\) huaweicloud-open-mcp/,
+  );
+  assert.match(res.stderr, /installed targets: OpenCode/);
+  assert.ok(readReceipt('open-mcp-gateway', depsDir), 'the refusal keeps the receipt');
+  assert.ok(existsSync(gatewayBin), 'the required gateway binary is kept');
+});
+
+test('uninstall --target all --clean-global is idempotent for the gateway', { skip: isWin }, () => {
+  const home = tempHome();
+  writeFakeUv(home);
+  const gatewayBin = join(home, '.local', 'bin', `huaweicloud-open-mcp${exeSuffix}`);
+  writeExecutable(gatewayBin);
+  const depsDir = join(home, '.config', 'huaweicloud', 'deps');
+  writeReceipt(gatewayReceiptWithTier('uv'), depsDir);
+  // A near-empty PATH: the runner's PATH could carry an ambient
+  // huaweicloud-open-mcp, which would make run 2 resolve persistent and
+  // refuse instead of staying a no-op, while a fully empty PATH would leave
+  // the fake uv without rm in run 1. /usr/bin and /bin split the difference.
+  const stubPath = mkdtempSync(join(tmpdir(), 'dep-provision-path-'));
+  const envPath = `${stubPath}${delimiter}/usr/bin${delimiter}/bin`;
+  const first = runSetupCli(['uninstall', '--target', 'all', '--clean-global'], home, { PATH: envPath });
+  assert.equal(first.status, 0, first.stderr);
+  assert.equal(existsSync(gatewayBin), false, 'the first run removes the gateway');
+  const second = runSetupCli(['uninstall', '--target', 'all', '--clean-global'], home, { PATH: envPath });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /No devkit-managed Open MCP Gateway found \(nothing to remove\)\./);
+  assert.doesNotMatch(second.stdout, /Refusing to uninstall open-mcp-gateway/);
+});
+
 // ---- doctor's pack-binary section renders from the dependency model ----
 
 test('doctor renders devbridge and PACK_USES warnings for a sandbox-only trim', () => {
@@ -947,10 +1121,7 @@ test('doctor reports no pack dependencies for a core-only trim', () => {
 // output ('broken' — the exit-1/timeout/garbage shape).
 function writeCodexStub(behavior: 'clean' | 'broken'): string {
   const stubDir = mkdtempSync(join(tmpdir(), 'dep-provision-codex-'));
-  const list =
-    behavior === 'clean'
-      ? "echo '{\"installed\":[],\"available\":[]}'; exit 0"
-      : "echo 'not-json'; exit 1";
+  const list = behavior === 'clean' ? 'echo \'{"installed":[],"available":[]}\'; exit 0' : "echo 'not-json'; exit 1";
   writeFileSync(
     join(stubDir, 'codex'),
     `#!/bin/sh\ncase "$1" in --version) echo "codex-cli stub 0.0.0"; exit 0;; esac\nif [ "$1" = "plugin" ] && [ "$2" = "list" ]; then ${list}; fi\nexit 1\n`,

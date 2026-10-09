@@ -979,14 +979,14 @@ test('cmdUpdate has no trailing unreachable reinstall; cmdReinstall keeps it', (
     setup.indexOf('async function cmdUpdate()'),
     setup.indexOf('async function cmdReinstall()'),
   );
-  assert.doesNotMatch(cmdUpdateBody, /await cmdUninstall\(\)/);
-  assert.doesNotMatch(cmdUpdateBody, /await cmdInstall\(\)/);
+  assert.doesNotMatch(cmdUpdateBody, /await cmdUninstall\(/);
+  assert.doesNotMatch(cmdUpdateBody, /await cmdInstall\(/);
   // cmdReinstall 是专职重装：卸载+重装逻辑必须保留。
   const cmdReinstallBody = setup.slice(
     setup.indexOf('async function cmdReinstall()'),
     setup.indexOf('async function cmdInstallHcloud()'),
   );
-  assert.match(cmdReinstallBody, /await cmdUninstall\(\)/);
+  assert.match(cmdReinstallBody, /await cmdUninstall\(\{ fromReinstall: true \}\)/);
   assert.match(cmdReinstallBody, /await cmdInstall\(\)/);
 });
 

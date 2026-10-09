@@ -47,7 +47,7 @@ The commands below are global (they act on every agent):
 
 ```bash
 npx --yes huaweicloud-devkit version  # print CLI version and installed plugin versions per agent
-npx --yes huaweicloud-devkit uninstall --target all --clean-global  # also remove KooCLI + OBS config
+npx --yes huaweicloud-devkit uninstall --target all --clean-global  # also remove KooCLI + OBS config + open-mcp-gateway
 ```
 
 ### OpenCode
