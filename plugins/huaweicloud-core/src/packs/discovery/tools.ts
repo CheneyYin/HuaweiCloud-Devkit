@@ -79,7 +79,7 @@ export type DiscoveryToolName = (typeof DISCOVERY_TOOLS)[number]['name'];
 
 // Schema map keyed by tool name for src/tool-schemas.ts: TOOL_SCHEMAS spreads
 // it in place, keeping the satisfies Record<ToolName, LooseToolSchema>
-// completeness check over all 49 tools.
+// completeness check over all 51 tools.
 export const DISCOVERY_TOOL_SCHEMAS: Readonly<Record<DiscoveryToolName, LooseToolSchema>> = {
   huaweicloud_search_marketplace: searchMarketplaceSchema,
   huaweicloud_get_service_icon: getServiceIconSchema,

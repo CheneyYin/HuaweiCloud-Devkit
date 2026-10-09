@@ -48,7 +48,7 @@ export type VoucherToolName = (typeof VOUCHER_TOOLS)[number]['name'];
 
 // Schema map keyed by tool name for src/tool-schemas.ts: TOOL_SCHEMAS spreads
 // it in place, keeping the satisfies Record<ToolName, LooseToolSchema>
-// completeness check over all 49 tools.
+// completeness check over all 51 tools.
 export const VOUCHER_TOOL_SCHEMAS: Readonly<Record<VoucherToolName, LooseToolSchema>> = {
   huaweicloud_voucher_status: voucherStatusSchema,
   huaweicloud_voucher_claim: voucherClaimSchema,

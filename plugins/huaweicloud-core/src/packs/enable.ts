@@ -14,12 +14,18 @@ import { parseDevkitPacks } from '../lib/dependency-model.ts';
 //
 // core is force-included either way, and the rationale is disclosure: the
 // pack meta tools (huaweicloud_list_packs / huaweicloud_pack_info) stay in
-// core, so no trimming can hide what was disabled. The approval chain moved
-// to the huaweicloud-cli pack with the CLI execution face: trimming that pack
-// removes both together — the only allowWrites:true call site goes with them,
-// so a trimmed configuration has no legal write path (fail-closed). The
-// PreToolUse hook keeps denying raw Bash writes regardless; it never reads
-// pack state. Listing core explicitly is redundant but harmless; an env that
+// core, so no trimming can hide what was disabled. Trimming the
+// huaweicloud-cli pack removes the CLI execution face and its approval
+// tools together, but the open-mcp pack independently carries gated
+// writes (the execute_api bridge, manage_policy grants, transform_data and
+// query_data): a DEVKIT_PACKS=core,huaweicloud-open-mcp configuration has
+// write paths. In the default devkit approval mode every one of them sits
+// behind a plan-run approval token; under
+// HUAWEICLOUD_OPENMCP_APPROVAL=native the execute_api gate is delegated
+// to the gateway's own policy engine instead — a trimmed configuration
+// then carries a non-token write path the operator chose. The PreToolUse
+// hook keeps denying raw Bash writes regardless; it never reads pack
+// state. Listing core explicitly is redundant but harmless; an env that
 // omits core gets it silently — the disclosure surface is not configurable
 // away.
 //

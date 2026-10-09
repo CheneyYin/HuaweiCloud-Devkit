@@ -285,6 +285,16 @@ const TOOL_DEFINITIONS_LITERALS = [
       'Get the official request examples (x-request-examples) for one API to guide parameter construction. Read-only; needs no credentials.',
   },
   {
+    name: 'huaweicloud_gateway_list_tools',
+    description:
+      "List the open-mcp gateway child's live tool surface (names, descriptions, input schemas) as its tools/list reports. Use it to check gateway capabilities and drift from the devkit projection before generic calls. Read-only; needs no credentials.",
+  },
+  {
+    name: 'huaweicloud_gateway_call',
+    description:
+      'Call one open-mcp gateway tool generically with tool and toolArgs. Read-only discovery tools pass through. State-changing tools (execute_api, manage_policy grants, transform_data, query_data, unknown tools) require user approval: the first call returns an approvalToken bound to the exact tool and arguments; re-send with approvalToken and approvedByUser:true after the user approves. Secret reads, permanent grants, and writes into devkit state are denied outright. With HUAWEICLOUD_OPENMCP_APPROVAL=native, execute_api delegates to the gateway policy engine instead of per-call tokens.',
+  },
+  {
     name: 'huaweicloud_gateway_restart',
     description:
       'Recycle the open-mcp gateway child of this MCP server process, e.g. after upgrading the gateway on the host (npx huaweicloud-devkit dep install open-mcp-gateway) while the session was live. In-flight gateway calls are interrupted when the old child stops. No arguments. In-process lifecycle only; needs no credentials.',
@@ -336,6 +346,8 @@ export type ToolArgs = {
   clear?: boolean;
   mode?: string;
   action?: string;
+  tool?: string;
+  toolArgs?: Record<string, unknown>;
   approvalToken?: string;
   approvedByUser?: boolean;
   bucket?: string;
@@ -436,7 +448,7 @@ export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: Cal
   const toolValue = toolInvokeValue(name, args);
   trackToolInvoke(name, toolValue);
 
-  // Pack tools (the 38 non-core names) dispatch through the central handler
+  // Pack tools (the 40 non-core names) dispatch through the central handler
   // map in packs/registry.ts before the switch; the type guard narrows
   // `name` to the core remainder, which is what the switch below and its
   // never-guard are exhaustive over. opts rides through verbatim: every pack

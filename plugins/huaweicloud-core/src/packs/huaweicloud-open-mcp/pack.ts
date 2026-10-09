@@ -7,13 +7,13 @@ import { HUAWEICLOUD_OPEN_MCP_TOOLS } from './tools.ts';
 // asserts the lockstep). The pack's binary dependency (the
 // huaweicloud-open-mcp gateway) is declared in lib/dependency-model.ts
 // PACK_DEPENDENCIES, not here. No skills yet: the routing rows and the
-// huawei-openapi skill land with the approval bridge, when there is an
-// execution story to teach.
+// huawei-openapi skill land with a dedicated teaching pass over these
+// approval faces.
 export const huaweicloudOpenMcpPack: Pack = {
   id: 'huaweicloud-open-mcp',
   title: 'Open MCP Gateway',
   description:
-    'Direct Huawei Cloud OpenAPI discovery proxied through the local huaweicloud-open-mcp gateway: search the full catalog (300+ products, 17,000+ APIs), narrow to one API, read its schema and examples. Discovery-only surface; API execution arrives with the approval bridge in a later phase.',
+    'Direct Huawei Cloud OpenAPI discovery proxied through the local huaweicloud-open-mcp gateway: search the full catalog (300+ products, 17,000+ APIs), narrow to one API, read its schema and examples, inspect the live gateway tool surface, and call gateway tools generically through the approval-token gate (devkit mode) or the gateway policy engine (HUAWEICLOUD_OPENMCP_APPROVAL=native).',
   skills: [],
   tools: HUAWEICLOUD_OPEN_MCP_TOOLS.map((tool) => tool.name),
 };

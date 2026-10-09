@@ -38,14 +38,14 @@ test('pack tool counts match the P0 grouping', () => {
     voucher: 2,
     update: 2,
     discovery: 3,
-    'huaweicloud-open-mcp': 7,
+    'huaweicloud-open-mcp': 9,
   };
   let total = 0;
   for (const pack of PACKS) {
     assert.equal(pack.tools.length, expected[pack.id], `${pack.id} tool count`);
     total += pack.tools.length;
   }
-  assert.equal(total, 49);
+  assert.equal(total, 51);
 });
 
 test('the central pack handler map keys equal the pack-owned tool names', () => {
@@ -59,7 +59,7 @@ test('the central pack handler map keys equal the pack-owned tool names', () => 
   );
   const mapKeys = Object.keys(PACK_TOOL_HANDLERS).sort((a, b) => a.localeCompare(b));
   assert.deepEqual(mapKeys, packOwned);
-  assert.equal(mapKeys.length, 39);
+  assert.equal(mapKeys.length, 41);
 });
 
 test('every skills/ directory is claimed by exactly one pack', () => {

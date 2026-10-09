@@ -66,7 +66,7 @@ function isSecretKeyName(key: unknown, policy: Policy = DEFAULT_POLICY): boolean
     .toLowerCase()
     .replace(/[^a-z0-9]/g, '');
   if (
-    /access.*key|secret.*key|security.*token|xauth.*token|authorization|password|passwd|adminpass|credential|private.*key|userdata|metadata/.test(
+    /access.*key|secret.*key|security.*token|xauth.*token|authorization|password|passwd|adminpass|credential|private.*key|userdata|metadata|inputvalue/.test(
       normalized,
     )
   ) {
@@ -81,12 +81,22 @@ function redactString(text: unknown): string {
       // Opaque blob keys (cloud-init user_data, metadata, private_key) carry
       // base64/scripts that may embed SSH keys, DB passwords, bootstrap tokens.
       // Redact the ENTIRE value of this arg — not just the first whitespace token.
-      .replace(/((?:user[_-]?data|metadata|private[_-]?key)\s*[:=]\s*).*/gi, '$1<redacted>')
+      // Quoted-key variants: gateway validation errors echo arguments as JSON
+      // ("adminPass":"...") and pydantic echoes them as input_value=... — the
+      // unquoted key=value form alone left both shapes crossing unredacted.
+      // Auth-style headers carry multi-word values ("Authorization: Bearer
+      // <jwt>"): the first-token capture redacted 'Bearer' and crossed the
+      // credential itself, so this family consumes to end-of-line like the
+      // blob-key branch above.
       .replace(
-        /((?:access[_-]?key|secret[_-]?key|security[_-]?token|x[_-]?auth[_-]?token|token|authorization|password|passwd|admin[_-]?pass|credential)\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)/gi,
+        /(["']?(?:user[_-]?data|metadata|private[_-]?key|authorization|x[_-]?auth[_-]?token)["']?\s*[:=]\s*).*/gi,
         '$1<redacted>',
       )
-      .replace(/(AK|SK)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;]+)/g, '$1=<redacted>')
+      .replace(
+        /(["']?(?:access[_-]?key|secret[_-]?key|security[_-]?token|token|password|passwd|admin[_-]?pass|credential|input[_-]?value)["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)/gi,
+        '$1<redacted>',
+      )
+      .replace(/\b(["']?(?:AK|SK)["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1<redacted>')
   );
 }
 

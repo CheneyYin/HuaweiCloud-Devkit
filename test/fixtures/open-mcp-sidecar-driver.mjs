@@ -3,7 +3,13 @@
 // sidecar through the REAL module (so the stdin-pipe wiring under test is
 // the production one), makes one call, prints the child pid, then exits.
 // The test asserts the sidecar dies after this driver exits.
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 process.env.OPENMCP_BIN = new URL('./fake-open-mcp-sidecar.mjs', import.meta.url).pathname;
+// Pin the state home so the policy provisioning this spawn triggers lands
+// in scratch, not the real user config tree.
+process.env.HUAWEICLOUD_HOME = join(tmpdir(), `openmcp-driver-home-${process.pid}`);
 
 const { callOpenMcpTool } = await import('../../plugins/huaweicloud-core/src/packs/huaweicloud-open-mcp/sidecar.ts');
 const result = await callOpenMcpTool('search_apis', { query: 'driver' });

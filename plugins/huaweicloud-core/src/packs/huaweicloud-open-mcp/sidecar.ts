@@ -1,11 +1,14 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 import { DEPENDENCIES } from '../../lib/dependency-model.ts';
 import { resolveDependencyCommand } from '../../lib/dep-resolve.ts';
+import { ensurePackState, packStateDir } from '../../lib/pack-state.ts';
+import { redactSecrets } from '../../safety-policy.ts';
 
-// Process-scope singleton for the huaweicloud-open-mcp sidecar (openapi mode).
+// Process-scope singleton for the huaweicloud-open-mcp sidecar.
 //
 // Ownership: the sidecar belongs to THIS PROCESS, never to an McpServer
 // object. The remote transport constructs and closes a server per HTTP
@@ -110,6 +113,7 @@ class OpenMcpSidecar {
     if (currentSidecar === this) {
       currentSidecar = null;
       sidecarPromise = null;
+      gatewaySurface = null;
     }
   }
 
@@ -183,6 +187,26 @@ let sidecarPromise: Promise<OpenMcpSidecar> | null = null;
 // The resolved instance behind sidecarPromise; onExit compares against it so
 // a stale child's late exit cannot clear a healthy replacement.
 let currentSidecar: OpenMcpSidecar | null = null;
+// Advisory cache of the live child's tools/list names, populated after every
+// successful handshake and refreshed when a call reports Unknown tool. The
+// gateway_call classifier turns a surface lacking execute_api into a deny
+// instead of spending user consent on a call the child cannot serve; null
+// means unknown, which skips the drift check entirely.
+let gatewaySurface: Set<string> | null = null;
+
+// One tools/list against a live child, normalized into the surface cache.
+// Failures propagate to the caller: spawn treats them as "leave the cache
+// alone and continue" (advisory), and the Unknown-tool refresh swallows
+// them so the caller still sees its original error.
+async function fetchGatewaySurface(sidecar: OpenMcpSidecar): Promise<void> {
+  const raw = (await sidecar.request('tools/list', {}, CALL_TIMEOUT_MS)) as {
+    tools?: Array<{ name?: unknown }>;
+  };
+  const names = (Array.isArray(raw?.tools) ? raw.tools : [])
+    .map((entry) => (typeof entry?.name === 'string' ? entry.name : ''))
+    .filter((name) => name !== '');
+  gatewaySurface = new Set(names);
+}
 
 // Supported install paths, in resolution order: OPENMCP_BIN (absolute path
 // to the gateway binary; tests point it at the fake fixture) → a persistent
@@ -210,6 +234,101 @@ export function resolveGatewayCommand(env: NodeJS.ProcessEnv = process.env): Gat
   return { command: resolved.command, argsPrefix: [...resolved.argsPrefix] };
 }
 
+// The devkit's spawn-arg policy for the gateway child, as one pure function
+// so tests pin every branch without spawning anything. Four flags, one rule
+// each (pin-unless-env, the --log-file precedent):
+//
+//   --elicitation off  always: the sidecar is a non-interactive child by
+//                      construction, and elicitation is not probe-able at
+//                      handshake (not declared in capabilities even with
+//                      --elicitation auto), so consent flows through the
+//                      devkit approval face instead.
+//   --mode openapi     only when HUAWEICLOUD_MCP_MODE is unset; when the
+//                      operator set the gateway's own env, no arg is passed
+//                      so the env wins (args outrank env in the gateway).
+//                      discover is rejected here: it proxies arbitrary
+//                      external MCP servers, a capability face the devkit's
+//                      approval boundary does not model.
+//   --policy <state>   only when HUAWEICLOUD_MCP_POLICY_FILE is unset; the
+//                      devkit-provisioned file lives in the pack state
+//                      space (lib/pack-state.ts) and the caller creates it
+//                      BEFORE spawn — the gateway fail-fasts
+//                      (FileNotFoundError) on a missing policy file, and a
+//                      devkit-authored provisioning error beats a
+//                      gateway-authored one.
+//   --audit-file       never. The gateway's NDJSON audit records full
+//                      unredacted tool arguments with no rotation, so the
+//                      devkit never provisions that sink. An operator who
+//                      sets HUAWEICLOUD_MCP_AUDIT_FILE opts in and owns the
+//                      file (pack-state adds it to the protected tree).
+export interface GatewaySpawnPlan {
+  args: string[];
+  /** Provisioning the caller must complete before spawn; null when the operator owns the policy path. */
+  provision: { dir: string; policyPath: string } | null;
+}
+
+const SUPPORTED_MODE_TOKENS = new Set(['openapi', 'data']);
+
+// Single definition of the provisioned policy file name: the spawn arg,
+// the provisioning call, and the approval module's operator-policy reader
+// all derive from it, so they cannot drift apart (the gateway fail-fasts on
+// a missing --policy target, which is exactly the failure pre-spawn
+// provisioning exists to prevent).
+export const POLICY_FILE = 'policy';
+
+export function resolveGatewaySpawnArgs(env: NodeJS.ProcessEnv = process.env): GatewaySpawnPlan {
+  // Relative operator paths are rejected before anything consumes them:
+  // the gateway child resolves them against its scratch cwd, this server
+  // against its own, and the protected-tree guard against tmpdir — three
+  // anchors, three different files. Refusing the ambiguous form is the
+  // same philosophy as the guard refusing '..' segments.
+  for (const key of ['HUAWEICLOUD_MCP_POLICY_FILE', 'HUAWEICLOUD_MCP_AUDIT_FILE'] as const) {
+    const value = (env[key] ?? '').trim();
+    if (value !== '' && !isAbsolute(value)) {
+      throw new Error(
+        `${key} must be an absolute path (got "${value}"): the gateway child, this server, and the protected-tree guard each resolve relative paths against different working directories.`,
+      );
+    }
+  }
+
+  const args: string[] = ['--elicitation', 'off'];
+
+  const mode = (env.HUAWEICLOUD_MCP_MODE ?? '').trim();
+  if (mode === '') {
+    args.push('--mode', 'openapi');
+  } else {
+    const tokens = mode
+      .split(',')
+      .map((token) => token.trim())
+      .filter((token) => token.length > 0);
+    const unsupported = tokens.filter((token) => !SUPPORTED_MODE_TOKENS.has(token));
+    if (tokens.length === 0 || unsupported.length > 0) {
+      throw new Error(
+        `HUAWEICLOUD_MCP_MODE "${mode}" is not supported by the devkit proxy. Supported: openapi, data (comma-combinable). ` +
+          'The gateway discover mode proxies arbitrary external MCP servers and is not modeled by the devkit approval boundary yet.',
+      );
+    }
+    // Operator pinned a mode through the gateway's own env: pass no --mode.
+  }
+
+  const policyEnv = (env.HUAWEICLOUD_MCP_POLICY_FILE ?? '').trim();
+  let provision: GatewaySpawnPlan['provision'] = null;
+  if (policyEnv === '') {
+    const dir = packStateDir('huaweicloud-open-mcp', env);
+    provision = { dir, policyPath: join(dir, POLICY_FILE) };
+    args.push('--policy', provision.policyPath);
+  }
+
+  // The gateway's logging defaults to a RELATIVE logs/ path that it mkdirs
+  // at boot: bare, it would drop a logs/ directory into whatever cwd the
+  // child inherited and die outright on a read-only cwd. Pin it to tmpdir
+  // unless the operator already configured the gateway's own env var.
+  if (!(env.HUAWEICLOUD_MCP_LOG_FILE ?? '').trim()) {
+    args.push('--log-file', join(tmpdir(), 'huaweicloud-open-mcp.log'));
+  }
+  return { args, provision };
+}
+
 async function spawnSidecar(): Promise<OpenMcpSidecar> {
   const gateway = resolveGatewayCommand();
   if (!gateway) {
@@ -217,18 +336,25 @@ async function spawnSidecar(): Promise<OpenMcpSidecar> {
       'huaweicloud-open-mcp gateway not found. Install it with pip (`pip install huaweicloud-open-mcp`) or keep `uvx` on PATH to run it without a persistent install (`uv tool install huaweicloud-open-mcp` also works). OPENMCP_BIN can point at the gateway binary directly.',
     );
   }
-  const gatewayArgs = ['--mode', 'openapi', '--elicitation', 'off'];
-  // The gateway's logging defaults to a RELATIVE logs/ path that it mkdirs
-  // at boot: bare, it would drop a logs/ directory into whatever cwd the
-  // MCP server inherited (the user's project) and die outright on a
-  // read-only cwd. Pin it to tmpdir unless the operator already configured
-  // the gateway's own env var (args outrank env there).
-  if (!process.env.HUAWEICLOUD_MCP_LOG_FILE) {
-    gatewayArgs.push('--log-file', join(tmpdir(), 'huaweicloud-open-mcp.log'));
+  const plan = resolveGatewaySpawnArgs();
+  if (plan.provision) {
+    // Precedes spawn: the gateway fail-fasts on a missing policy file, and
+    // the policy store is the approval base for both consent modes.
+    ensurePackState('huaweicloud-open-mcp', [POLICY_FILE]);
   }
-  const child = spawn(gateway.command, [...gateway.argsPrefix, ...gatewayArgs], {
+  // Per-child scratch cwd, not the shared tmpdir root: two MCP server
+  // processes (stdio + remote) each spawn a gateway child, and relative
+  // out.path/tables.path values resolve against this cwd — a shared root
+  // would make their relative writes collide. The protected-tree guard
+  // anchors relative targets at tmpdir(), the PARENT of every scratch cwd:
+  // a relative name can only ever be over-denied there (basename collision
+  // with a protected root), never under-denied, because any climb out
+  // needs '..' — which the guard refuses outright.
+  const scratchCwd = mkdtempSync(join(tmpdir(), 'openmcp-gw-'));
+  const child = spawn(gateway.command, [...gateway.argsPrefix, ...plan.args], {
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
+    cwd: scratchCwd,
   });
   stats.spawns += 1;
   stats.lastPid = child.pid ?? null;
@@ -241,6 +367,12 @@ async function spawnSidecar(): Promise<OpenMcpSidecar> {
     // event loop — for the process lifetime, once per retry.
     sidecar.kill();
     throw error;
+  }
+  try {
+    await fetchGatewaySurface(sidecar);
+  } catch {
+    // The cache is advisory: a child that completes the handshake but
+    // cannot answer tools/list still serves calls; drift checks stay off.
   }
   return sidecar;
 }
@@ -277,17 +409,33 @@ function withErrorKey(result: OpenMcpToolResult): OpenMcpToolResult {
   return result;
 }
 
+// Error text crosses the boundary with both redactors applied: if the
+// text parses as JSON (validation failures echo the offending input as an
+// object), the key-name walk is stronger than any string pattern; the
+// quoted-key string patterns cover the rest.
+function redactErrorText(text: string): string {
+  try {
+    return JSON.stringify(redactSecrets(JSON.parse(text)));
+  } catch {
+    return String(redactSecrets(text));
+  }
+}
+
 // One proxied tools/call, normalized to the devkit result shape. The
 // gateway is the authoritative validator of its own tool inputs; the zod
 // schemas in tools.ts are a thin boundary guard, so unexpected extras pass
-// through and errors surface as {ok:false} rather than throws.
+// through and errors surface as {ok:false} rather than throws. Success
+// payloads cross this boundary redacted (gateway output can echo secret
+// arguments); error paths redact too — refusal prose survives verbatim,
+// only credential-shaped values are rewritten.
 export async function callOpenMcpTool(
   name: string,
   args: Record<string, unknown>,
   timeoutMs?: number,
 ): Promise<OpenMcpToolResult> {
+  let sidecar: OpenMcpSidecar | undefined;
   try {
-    const sidecar = await openMcpSidecar();
+    sidecar = await openMcpSidecar();
     const raw = (await sidecar.call(name, args, timeoutMs)) as {
       content?: Array<{ text?: string }>;
       structuredContent?: Record<string, unknown>;
@@ -298,23 +446,80 @@ export async function callOpenMcpTool(
         .map((part) => part.text || '')
         .join('\n')
         .trim();
-      return { ok: false, tool: name, error: text || 'open-mcp gateway tool error' };
+      await refreshSurfaceOnUnknownTool(sidecar, text);
+      return { ok: false, tool: name, error: redactErrorText(text) || 'open-mcp gateway tool error' };
     }
     if (raw.structuredContent && typeof raw.structuredContent === 'object') {
-      return withErrorKey({ ok: true, tool: name, ...raw.structuredContent });
+      // Redact the payload object itself, not the ok/tool envelope keys the
+      // devkit layers on top of the spread.
+      return withErrorKey({
+        ok: true,
+        tool: name,
+        ...(redactSecrets(raw.structuredContent) as Record<string, unknown>),
+      });
     }
     const text = (raw.content || [])
       .map((part) => part.text || '')
       .join('\n')
       .trim();
     try {
-      return withErrorKey({ ok: true, tool: name, ...(JSON.parse(text) as Record<string, unknown>) });
+      return withErrorKey({
+        ok: true,
+        tool: name,
+        ...(redactSecrets(JSON.parse(text)) as Record<string, unknown>),
+      });
     } catch {
-      return { ok: true, tool: name, raw: text };
+      return { ok: true, tool: name, raw: redactSecrets(text) };
     }
   } catch (error) {
-    return { ok: false, tool: name, error: error instanceof Error ? error.message : String(error) };
+    const message = redactSecrets(error instanceof Error ? error.message : String(error));
+    if (sidecar) await refreshSurfaceOnUnknownTool(sidecar, String(message));
+    return { ok: false, tool: name, error: message };
   }
+}
+
+// "Unknown tool" from the child means the surface drifted since the cache
+// was populated: refresh before the error returns so the next classify sees
+// the live surface. Speaks to the sidecar request directly (no recursion
+// into callOpenMcpTool) and swallows its own failure — a dead child leaves
+// the error the caller already has, and the next spawn repopulates.
+async function refreshSurfaceOnUnknownTool(sidecar: OpenMcpSidecar, message: string): Promise<void> {
+  if (!/Unknown tool/i.test(message)) return;
+  try {
+    await fetchGatewaySurface(sidecar);
+  } catch {
+    // dead child or failed list: the pending respawn path owns recovery
+  }
+}
+
+export interface GatewayToolListing {
+  name: string;
+  description?: string;
+  inputSchema?: unknown;
+}
+
+// The child's tools/list, normalized for the gateway_list_tools face.
+// Kept distinct from the surface cache on purpose: this returns full
+// entries (descriptions, input schemas) while the cache keeps only the
+// names the classifier needs — but it writes the cache too, so the drift
+// report a call just read also arms the classifier for the very next
+// call instead of waiting for the next spawn or an Unknown-tool error.
+export async function listGatewayTools(): Promise<GatewayToolListing[]> {
+  const sidecar = await openMcpSidecar();
+  const raw = (await sidecar.request('tools/list', {}, CALL_TIMEOUT_MS)) as {
+    tools?: Array<{ name?: unknown; description?: unknown; inputSchema?: unknown }>;
+  };
+  const tools: GatewayToolListing[] = [];
+  for (const entry of Array.isArray(raw?.tools) ? raw.tools : []) {
+    if (entry === null || typeof entry !== 'object' || typeof entry.name !== 'string') continue;
+    tools.push({
+      name: entry.name,
+      description: typeof entry.description === 'string' ? entry.description : undefined,
+      inputSchema: entry.inputSchema,
+    });
+  }
+  gatewaySurface = new Set(tools.map((entry) => entry.name));
+  return tools;
 }
 
 // Test hooks, same convention as _resetHintConsumption in mcp-protocol.ts.
@@ -324,10 +529,15 @@ export function _openMcpSidecarStats(): { spawns: number; alive: boolean; lastPi
   return { spawns: stats.spawns, alive: sidecarPromise !== null, lastPid: stats.lastPid };
 }
 
+export function _gatewaySurface(): ReadonlySet<string> | null {
+  return gatewaySurface;
+}
+
 export async function _resetOpenMcpSidecar(): Promise<void> {
   const promise = sidecarPromise;
   currentSidecar = null;
   sidecarPromise = null;
+  gatewaySurface = null;
   if (!promise) return;
   try {
     const sidecar = await promise;
@@ -355,6 +565,7 @@ export async function _resetOpenMcpSidecar(): Promise<void> {
 export function restartOpenMcpSidecar(): Promise<{ pid: number | null; spawns: number }> {
   const previous = sidecarPromise;
   currentSidecar = null;
+  gatewaySurface = null;
   const next = (async () => {
     if (previous) {
       try {

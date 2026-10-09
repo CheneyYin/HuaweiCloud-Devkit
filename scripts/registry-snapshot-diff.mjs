@@ -31,6 +31,8 @@ const EXEMPT_TOOLS = new Set([
   'huaweicloud_list_apis',
   'huaweicloud_get_api',
   'huaweicloud_get_api_examples',
+  'huaweicloud_gateway_list_tools',
+  'huaweicloud_gateway_call',
   'huaweicloud_gateway_restart',
 ]);
 

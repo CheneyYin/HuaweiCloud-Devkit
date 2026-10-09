@@ -29,7 +29,7 @@ This is an **agent guidance + safety package**, not a service encyclopedia. Six 
 ```
 plugins/huaweicloud-core/
   skills/           ← GENERATED runtime tree (all 29 skills); sources live in src/packs/<id>/skills/
-  src/              ← TypeScript MCP server sources (stdio/remote JSON-RPC, 49 tools)
+  src/              ← TypeScript MCP server sources (stdio/remote JSON-RPC, 51 tools)
   src/packs/        ← capability packs: per-pack handlers/schemas/skills + registry (ownership truth) + enable (DEVKIT_PACKS)
   dist/             ← tsc output; every runtime entry point loads this
   safety/           ← shared policy.json + risk rules
