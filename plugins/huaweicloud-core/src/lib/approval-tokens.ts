@@ -82,7 +82,19 @@ function sha256Hex(data: string): string {
 // identically for direct callTool callers (round-7 probe). True cycles
 // still terminate: the cycle edge revisits an ancestor and reads null.
 function canonicalize(value: unknown, seen = new Set<unknown>()): unknown {
-  if (Array.isArray(value)) return value.map((item) => canonicalize(item, seen));
+  if (Array.isArray(value)) {
+    // Arrays join the recursion path too: a self-referential array
+    // recursed unboundedly through the map before the object guard ever
+    // saw it (round-8 probe: RangeError), violating the module's own
+    // "hash never rejects" contract.
+    if (seen.has(value)) return null;
+    seen.add(value);
+    try {
+      return value.map((item) => canonicalize(item, seen));
+    } finally {
+      seen.delete(value);
+    }
+  }
   if (value !== null && typeof value === 'object') {
     if (seen.has(value)) return null;
     seen.add(value);

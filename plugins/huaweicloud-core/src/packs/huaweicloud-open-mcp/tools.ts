@@ -243,15 +243,21 @@ async function handleGatewayCall(args: Record<string, unknown>) {
     product = typeof toolArgs.product === 'string' ? toolArgs.product : '';
     api = typeof toolArgs.api === 'string' ? toolArgs.api : '';
     const validIdentity =
-      product.trim() !== '' && api.trim() !== '' && !/[*:=\n\r\t]/.test(product) && !/[*:=\n\r\t]/.test(api);
+      product.trim() !== '' && api.trim() !== '' && !/[*#:=\n\r\t]/.test(product) && !/[*#:=\n\r\t]/.test(api);
     if (!validIdentity) {
       return { ok: false, error: 'execute_api requires non-empty product and api without wildcards' };
     }
-    const denyLine = matchingDenyRule(product, api);
-    if (denyLine) {
+    const denial = matchingDenyRule(product, api);
+    if (denial) {
+      if (denial.unparseable) {
+        return {
+          ok: false,
+          error: `the policy file contains a line the gateway itself cannot load (${denial.line}); the gateway keeps its last valid rules and ignores that line, but this face denies until it is fixed or removed.`,
+        };
+      }
       return {
         ok: false,
-        error: `operator policy denies this call (${denyLine}); remove or adjust the deny rule in the policy file before approving`,
+        error: `operator policy denies this call (${denial.line}); remove or adjust the deny rule in the policy file before approving`,
       };
     }
     // A pre-existing rule the gateway would treat as the bridge's own
@@ -317,11 +323,14 @@ async function sameLineRuleExists(line: string): Promise<ConflictCheck> {
   if (!listing.ok) {
     return `listing-failed:${String(listing.error ?? 'unknown error')}`;
   }
-  // The listing exposes rules in two layers: the overlay (structured
-  // {line, scope, expires_in} objects) AND the policy file's raw text in
-  // the 'policy' string field (the real gateway reports file rules only
-  // there — a probe reading only the array missed file-layer conflicts
-  // entirely). Both layers reduce through the semantic key.
+  // The listing exposes rules in two layers: the structured rules array
+  // (overlay rules with their scope, plus the file's semantic lines with
+  // scope 'permanent' — list_rules appends both) AND the policy file's
+  // raw text in the 'policy' string field (including comments and the
+  // verbatim spacing). Reading BOTH is the superset that survives either
+  // layer being reduced; the raw text is also the only place verbatim
+  // spacing survives redaction of the structured echo. Both layers reduce
+  // through the semantic key.
   const candidates: string[] = [];
   if (Array.isArray(listing.rules)) {
     for (const rule of listing.rules) {

@@ -78,9 +78,52 @@ function callableToolNames() {
   return gatewayToolNames().filter((name) => !hidden.has(name));
 }
 
+// fnmatch translation, a verbatim copy of fnmatchRegex in
+// packs/huaweicloud-open-mcp/approval.ts (the .ts source; the fixture is
+// .mjs and cannot import it without tsc allowJs — keep the two in lockstep
+// when editing). Class translation per fnmatch.translate: '!' after '['
+// negates, ']' right after '[' or '[!' is literal, '\' escaped,
+// unterminated '[' literal, guarded construction with literal fallback.
+function fnmatchRegex(pattern) {
+  let out = '';
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === '*') out += '.*';
+    else if (char === '?') out += '.';
+    else if (char === '[') {
+      let cursor = index + 1;
+      let negated = false;
+      if (pattern[cursor] === '!') {
+        negated = true;
+        cursor += 1;
+      }
+      const close = pattern.indexOf(']', cursor);
+      if (close < 0) {
+        out += '\\[';
+      } else {
+        let body = pattern.slice(cursor, close).replace(/\\/g, '\\\\');
+        if (body.startsWith(']')) body = `\\]${body.slice(1)}`;
+        if (body.startsWith('^')) body = `\\^${body.slice(1)}`;
+        out += `[${negated ? '^' : ''}${body}]`;
+        index = close;
+      }
+    } else out += char.replace(/[.+^${}()|\\]/g, '\\$&');
+  }
+  try {
+    return new RegExp(`^${out}$`, 'i');
+  } catch {
+    return new RegExp(`^${pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+  }
+}
+
+// The gateway's evaluate is exact-or-'*' on the PRODUCT side; only the api
+// pattern goes through fnmatch (mirror of productMatches in approval.ts).
+function productMatches(side, product) {
+  return side === '*' || side.toLowerCase() === product.toLowerCase();
+}
+
 function sideMatches(side, value) {
-  const pattern = side.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
-  return new RegExp('^' + pattern + '$', 'i').test(value);
+  return fnmatchRegex(side).test(value);
 }
 
 // File-layer mirror (FAKE_POLICY_FILE): the real gateway resolves its
@@ -121,7 +164,7 @@ function matchingRule(product, api) {
     const sides = rule.line.slice(0, eq).split(':');
     const productSide = sides[0] ?? '';
     const apiSide = sides.length > 1 ? sides.slice(1).join(':') : (sides[0] ?? '');
-    return sideMatches(productSide, product) && sideMatches(apiSide, api);
+    return productMatches(productSide, product) && sideMatches(apiSide, api);
   });
 }
 
@@ -135,7 +178,7 @@ function matchingFileRule(product, api) {
     const sides = fileLine.slice(0, eq).split(':');
     const productSide = sides[0] ?? '';
     const apiSide = sides.length > 1 ? sides.slice(1).join(':') : (sides[0] ?? '');
-    return sideMatches(productSide, product) && sideMatches(apiSide, api);
+    return productMatches(productSide, product) && sideMatches(apiSide, api);
   });
   return file === undefined ? null : { line: file, scope: 'permanent' };
 }
@@ -279,31 +322,55 @@ function handleLine(line) {
       // the canonical branch.
       const action = typeof args.action === 'string' ? args.action.trim().toLowerCase() : String(args.action ?? '');
       if (action === 'list') {
-        // Structured rules, the real gateway's list shape: the overlay as
-        // {line, scope, expires_in} objects AND the policy file's raw text
-        // in the 'policy' string field (the real gateway reports file
-        // rules only there — round-7 probe caught the array-only read
-        // missing file-layer conflicts). FAKE_POLICY_FILE mirrors the file
-        // layer: its lines list with scope 'permanent', and remove falls
-        // through to it after the overlay misses.
+        // The real gateway's list shape (source-verified): the rules array
+        // carries the overlay AND the file's semantic lines (scope
+        // 'permanent'), the 'policy' text field carries the raw file
+        // including comments. FAKE_POLICY_TEXT_ONLY=1 deliberately omits
+        // the file lines from the array so tests prove the consumer reads
+        // the text layer too — the real gateway reports both, this knob
+        // is branch-coverage instrumentation only.
         const fileText = readFileText();
+        const fileRows = fileLines().map((fileLine) => ({ line: fileLine, scope: 'permanent', expires_in: null }));
         respond(request.id, {
           ok: true,
           tool: name,
           action: 'list',
           policy: fileText,
           rules: [
-            ...fileLines().map((fileLine) => ({ line: fileLine, scope: 'permanent', expires_in: null })),
+            ...(process.env.FAKE_POLICY_TEXT_ONLY === '1' ? [] : fileRows),
             ...rules.map((rule) => ({ line: rule.line, scope: rule.scope, expires_in: null })),
           ],
         });
       } else if (action === 'add') {
-        // The scope is normalized on entry: the devkit face now binds and
-        // forwards the canonical spelling, and the burn check below
+        // The real gateway's add validates the line through parse_policy
+        // and rejects unparseable ones outright (round-8 mirror); the
+        // inline parser matches semanticKey below / parseRuleLine in
+        // approval.ts. The scope is normalized on entry: the devkit face
+        // binds and forwards the canonical spelling, and the burn check
         // compares normalized values only. The response echoes BOTH the
         // normalized form and the raw received value — tests assert the
         // devkit's forwarding against 'received', not against this
         // fixture's own normalization (which would be circular).
+        const parseKey = (text) => {
+          const stripped = String(text).trim();
+          if (stripped === '' || stripped.startsWith('#')) return null;
+          const eq = stripped.lastIndexOf('=');
+          if (eq < 0) return null;
+          const effect = stripped
+            .slice(eq + 1)
+            .trim()
+            .toLowerCase();
+          if (effect !== 'allow' && effect !== 'deny') return null;
+          const target = stripped.slice(0, eq).trim();
+          if (target.startsWith('server:')) return null;
+          const colon = target.indexOf(':');
+          if (colon < 0 && target !== '*') return null;
+          return 'ok';
+        };
+        if (parseKey(line) === null) {
+          respond(request.id, { ok: false, reason: `规则格式非法：${line}` });
+          return;
+        }
         const scope = typeof args.scope === 'string' ? args.scope.trim().toLowerCase() : null;
         rules.push({ line, scope });
         respond(request.id, {
@@ -315,14 +382,25 @@ function handleLine(line) {
           received: { action: args.action, scope: args.scope ?? null },
         });
       } else if (action === 'remove') {
-        // Semantic first-match remove, the real gateway's policy_store
-        // behavior (source-verified round 7): the rule key is
-        // kind/connect_only/product.lower()/api_pattern.lower()/allow, so
-        // spacing, case, and trailing comments in the stored line do not
-        // protect it from a semantically equal remove line. The bare
-        // exact-match fake masked the bridge-conflict class entirely.
+        // The real gateway's remove envelope (source-verified rounds 7-8):
+        // a scoped remove is rejected outright ("remove 不接受
+        // scope/ttl_seconds 参数"); an unparseable line is rejected
+        // ("规则格式非法"); a valid line that matches nothing is rejected
+        // ("未找到匹配的规则"); a hit removes by SEMANTIC key, overlay
+        // first then file, so spacing/case variants do not protect a rule.
+        // The inline key mirrors parseRuleLine in approval.ts (whole-line
+        // comments only — inline '#' is part of the action; colon-less
+        // non-'*' targets are parse failures).
+        if (args.scope !== undefined && args.scope !== null) {
+          respond(request.id, {
+            ok: false,
+            reason: 'remove 不接受 scope/ttl_seconds 参数（跨层匹配：先会话/临时后文件，首个语义命中移除）',
+          });
+          return;
+        }
         const semanticKey = (text) => {
-          const stripped = String(text).split('#')[0].trim();
+          const stripped = String(text).trim();
+          if (stripped === '' || stripped.startsWith('#')) return null;
           const eq = stripped.lastIndexOf('=');
           if (eq < 0) return null;
           const effect = stripped
@@ -333,30 +411,37 @@ function handleLine(line) {
           const target = stripped.slice(0, eq).trim();
           if (target.startsWith('server:')) return null;
           const colon = target.indexOf(':');
-          const product = (colon < 0 ? (target === '*' ? '*' : target) : target.slice(0, colon)).trim() || '*';
+          if (colon < 0 && target !== '*') return null;
+          const product = (colon < 0 ? '*' : target.slice(0, colon)).trim() || '*';
           const apiPattern = (colon < 0 ? '*' : target.slice(colon + 1)).trim() || '*';
           return `${product.toLowerCase()}::${apiPattern.toLowerCase()}::${effect}`;
         };
         const wanted = semanticKey(line);
+        if (wanted === null) {
+          respond(request.id, { ok: false, reason: `规则格式非法：${line}` });
+          return;
+        }
         let removed = false;
-        if (wanted !== null) {
-          // Overlay first, then the file layer — the real gateway's
-          // cross-layer remove order.
-          const index = rules.findIndex((rule) => semanticKey(rule.line) === wanted);
-          if (index >= 0) {
-            rules.splice(index, 1);
+        // Overlay first, then the file layer — the real gateway's
+        // cross-layer remove order.
+        const index = rules.findIndex((rule) => semanticKey(rule.line) === wanted);
+        if (index >= 0) {
+          rules.splice(index, 1);
+          removed = true;
+        } else {
+          const file = fileLines();
+          const fileIndex = file.findIndex((fileLine) => semanticKey(fileLine) === wanted);
+          if (fileIndex >= 0) {
+            file.splice(fileIndex, 1);
+            writeFileLines(file);
             removed = true;
-          } else {
-            const file = fileLines();
-            const fileIndex = file.findIndex((fileLine) => semanticKey(fileLine) === wanted);
-            if (fileIndex >= 0) {
-              file.splice(fileIndex, 1);
-              writeFileLines(file);
-              removed = true;
-            }
           }
         }
-        respond(request.id, { ok: true, tool: name, action: 'remove', line, removed });
+        if (!removed) {
+          respond(request.id, { ok: false, reason: `未找到匹配的规则：${line}` });
+          return;
+        }
+        respond(request.id, { ok: true, tool: name, action: 'remove', line, removed: true });
       } else {
         respond(request.id, { ok: false, reason: `unsupported manage_policy action: ${args.action}` });
       }

@@ -111,8 +111,18 @@ export function classify(
         reason: `manage_policy add accepts only the ephemeral scopes (${[...EPHEMERAL_SCOPES].join(', ')}) through this face; pass one explicitly. ${permanentGrantReason()}`,
       };
     }
-    // remove: the gateway ignores scope for remove (overlay-first, by
-    // line), and the token binds the exact rule text the user sees.
+    // remove: the gateway REJECTS remove with a scope (manage_policy_ops:
+    // "remove 不接受 scope/ttl_seconds 参数") — a token-gated remove+scope
+    // would burn the approval on a guaranteed gateway rejection (round-8,
+    // the same class as the 'ADD' forwarding gap). The token binds the
+    // exact rule text the user sees.
+    if (toolArgs.scope !== undefined && toolArgs.scope !== null) {
+      return {
+        verdict: 'deny',
+        reason:
+          'manage_policy remove takes no scope: removal is cross-layer by line, and the gateway rejects a scoped remove outright.',
+      };
+    }
     return { verdict: 'token' };
   }
 
@@ -214,49 +224,54 @@ function operatorPolicyPath(env: NodeJS.ProcessEnv): string {
 }
 
 // The gateway's rule-line semantics, mirrored from safety/policy.py
-// parse_policy + policy_store._rule_key (source-verified round 7): strip,
-// drop '#' comments and blanks, rpartition on '=', action must be
-// allow/deny (anything else is a parse FAILURE gateway-side — here it
-// reads as an unparseable deny, fail-closed), target partitioned on ':',
-// each side stripped-or-'*', server: prefix out of scope for this face.
-// One parser serves both consumers: matchingDenyRule and the bridge's
-// same-line conflict check, so the devkit can never compare against a
-// weaker model of the line than the gateway enforces (round-6's lesson:
-// redaction was normalized, semantics were not — a spaced operator line
-// bypassed the conflict check while the gateway's semantic remove deleted
-// the operator's rule).
-interface SemanticRule {
-  product: string;
-  apiPattern: string;
-  allow: boolean;
-}
+// parse_policy + policy_store._rule_key (source-verified rounds 7-8):
+// strip, drop only WHOLE-LINE '#' comments and blanks (inline '#' is part
+// of the action gateway-side — parse_policy raises on it, verified by
+// running the installed module), rpartition on '=', action must be
+// allow/deny, target partitioned on the FIRST ':', each side
+// stripped-or-'*', a colon-less non-'*' product target is a parse
+// failure (the gateway raises), server: prefix is out of scope for this
+// face. Parse failures are their own kind here: matchingDenyRule treats
+// them as fail-closed denials, ruleSemanticKey maps them per-line so
+// mangled lines never collide with each other (round-8: the shared
+// wildcard sentinel made every redaction-mangled rule one key, so
+// unrelated token-suffixed rules cross-conflicted).
+type ParsedLine =
+  | { kind: 'rule'; product: string; apiPattern: string; allow: boolean }
+  | { kind: 'server' }
+  | { kind: 'unparseable' }
+  | null;
 
-function parseRuleLine(rawLine: string): SemanticRule | null {
-  const text = rawLine.split('#')[0].trim();
-  if (text === '') return null;
+function parseRuleLine(rawLine: string): ParsedLine {
+  const text = rawLine.trim();
+  if (text === '' || text.startsWith('#')) return null;
   const effectIndex = text.lastIndexOf('=');
-  if (effectIndex < 0) return null;
+  if (effectIndex < 0) return { kind: 'unparseable' };
   const effect = text
     .slice(effectIndex + 1)
     .trim()
     .toLowerCase();
-  if (effect !== 'allow' && effect !== 'deny') {
-    // Gateway parse failure — fail-closed on the consent boundary.
-    return { product: '*', apiPattern: '*', allow: false };
-  }
+  if (effect !== 'allow' && effect !== 'deny') return { kind: 'unparseable' };
   const target = text.slice(0, effectIndex).trim();
-  if (target.startsWith('server:')) return null; // out of scope for this face
+  if (target.startsWith('server:')) return { kind: 'server' };
   const separator = target.indexOf(':');
-  const product = (separator < 0 ? (target === '*' ? '*' : target) : target.slice(0, separator)).trim() || '*';
+  if (separator < 0 && target !== '*') return { kind: 'unparseable' };
+  const product = (separator < 0 ? '*' : target.slice(0, separator)).trim() || '*';
   const apiPattern = (separator < 0 ? '*' : target.slice(separator + 1)).trim() || '*';
-  return { product, apiPattern, allow: effect === 'allow' };
+  return { kind: 'rule', product, apiPattern, allow: effect === 'allow' };
 }
 
 // fnmatch translation, the gateway's matcher (safety/policy.py uses
-// fnmatch.fnmatch case-insensitively): '*' → '.*', '?' → '.', '[...]'
-// passes through as a class, everything else literal. Round-7: the old
-// matcher escaped '?' and '[' — operator denies like 'ECS:Create?ervers'
-// were invisible to the pre-check while the gateway matched them.
+// fnmatch.fnmatch case-insensitively): '*' → '.*', '?' → '.', classes
+// are TRANSLATED per fnmatch.translate — '!' right after '[' negates,
+// ']' right after '[' or '[!' is literal, '^' at class start is literal
+// (only '!' negates), '\' is escaped, an unterminated '[' is literal.
+// Round-8: the passthrough version made '[!A]' a positive JS class of
+// '!'|'A' — operator denies with negation were invisible to the pre-check
+// while the gateway enforced them (probe: both directions wrong), and a
+// backslash inside a class produced an unterminated JS class that threw
+// out of the pre-check entirely. The whole construction is guarded: an
+// untranslatable pattern falls back to literal matching.
 function fnmatchRegex(pattern: string): RegExp {
   let out = '';
   for (let index = 0; index < pattern.length; index += 1) {
@@ -264,24 +279,55 @@ function fnmatchRegex(pattern: string): RegExp {
     if (char === '*') out += '.*';
     else if (char === '?') out += '.';
     else if (char === '[') {
-      // Pass the class through, closing an unterminated one literally.
-      const close = pattern.indexOf(']', index + 1);
+      let cursor = index + 1;
+      let negated = false;
+      if (pattern[cursor] === '!') {
+        negated = true;
+        cursor += 1;
+      }
+      const close = pattern.indexOf(']', cursor);
       if (close < 0) {
         out += '\\[';
       } else {
-        out += pattern.slice(index, close + 1);
+        let body = pattern.slice(cursor, close).replace(/\\/g, '\\\\');
+        if (body.startsWith(']')) body = `\\]${body.slice(1)}`;
+        if (body.startsWith('^')) body = `\\^${body.slice(1)}`;
+        out += `[${negated ? '^' : ''}${body}]`;
         index = close;
       }
     } else out += char.replace(/[.+^${}()|\\]/g, '\\$&');
   }
-  return new RegExp(`^${out}$`, 'i');
+  try {
+    return new RegExp(`^${out}$`, 'i');
+  } catch {
+    return new RegExp(`^${pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+  }
+}
+
+// The gateway's evaluate is exact-or-'*' on the PRODUCT side (only the
+// api pattern goes through fnmatch — safety/policy.py: rule.product !=
+// '*' and rule.product.lower() != product.lower()). Mirroring that
+// exactly: a product pattern like 'EC?' never matches ECS here, same as
+// gateway-side.
+function productMatches(side: string, product: string): boolean {
+  return side === '*' || side.toLowerCase() === product.toLowerCase();
 }
 
 function sideMatches(side: string, value: string): boolean {
   return fnmatchRegex(side).test(value);
 }
 
-export function matchingDenyRule(product: string, api: string, env: NodeJS.ProcessEnv = process.env): string | null {
+export interface DenialMatch {
+  line: string;
+  /** The line is one the gateway itself cannot load (parse failure) — the message must say so, not blame an operator deny. */
+  unparseable: boolean;
+}
+
+export function matchingDenyRule(
+  product: string,
+  api: string,
+  env: NodeJS.ProcessEnv = process.env,
+): DenialMatch | null {
   let lines: string[];
   try {
     const text = readFileSync(operatorPolicyPath(env), 'utf8');
@@ -312,11 +358,20 @@ export function matchingDenyRule(product: string, api: string, env: NodeJS.Proce
   // Deliberately stricter than the gateway's first-match resolution: an
   // allow line earlier in the file wins gateway-side, but a matching deny
   // wins here regardless of position. Operator intent to deny must not be
-  // neutralized by line ordering.
+  // neutralized by line ordering. Unparseable lines deny everything
+  // (fail-closed): gateway-side the store keeps its last valid version
+  // when a line fails to parse, so the operator's file is inert until
+  // fixed — refusing here surfaces the broken file instead of silently
+  // trusting the stale rules.
   for (const rawLine of lines) {
     const rule = parseRuleLine(rawLine);
-    if (!rule || rule.allow) continue;
-    if (sideMatches(rule.product, product) && sideMatches(rule.apiPattern, api)) return rawLine.split('#')[0].trim();
+    if (rule?.kind === 'server') continue; // out of scope for this face
+    if (rule === null) continue; // blank or whole-line comment
+    if (rule.kind === 'unparseable') return { line: rawLine.trim(), unparseable: true };
+    if (rule.allow) continue;
+    if (productMatches(rule.product, product) && sideMatches(rule.apiPattern, api)) {
+      return { line: rawLine.trim(), unparseable: false };
+    }
   }
   return null;
 }
@@ -325,9 +380,15 @@ export function matchingDenyRule(product: string, api: string, env: NodeJS.Proce
 // under this key are interchangeable to the gateway's add/remove/evaluate,
 // regardless of spacing or case in the source line. Exported for the
 // bridge's conflict check, which must see conflicts the gateway's remove
-// would act on.
+// would act on. Unparseable and server lines map to per-line unique keys:
+// they can never equal a product grant key, and two DIFFERENT mangled
+// lines never collide with each other (round-8: the shared sentinel key
+// made every redaction-mangled rule equivalent, so an unrelated
+// token-suffixed rule falsely conflicted with the bridge).
 export function ruleSemanticKey(rawLine: string): string {
   const rule = parseRuleLine(rawLine);
-  if (!rule) return `unparseable:${rawLine.trim().toLowerCase()}`;
+  if (rule === null) return `empty:${rawLine.trim().toLowerCase()}`;
+  if (rule.kind === 'server') return `server:${rawLine.trim().toLowerCase()}`;
+  if (rule.kind === 'unparseable') return `unparseable:${rawLine.trim().toLowerCase()}`;
   return `${rule.product.toLowerCase()}::${rule.apiPattern.toLowerCase()}::${rule.allow ? 'allow' : 'deny'}`;
 }

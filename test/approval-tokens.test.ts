@@ -94,10 +94,15 @@ test('hashArgs serializes DAG-aliased references structurally, not as null', () 
   const withNull = { a: { k: 1 }, b: null };
   assert.equal(hashArgs(aliased), hashArgs(expanded), 'aliasing does not change the hash');
   assert.notEqual(hashArgs(aliased), hashArgs(withNull), 'a null sibling is a different value');
-  // True cycles still terminate.
+  // True cycles still terminate — objects AND arrays (round-8: the array
+  // branch bypassed the recursion-path set and a self-referential array
+  // threw RangeError).
   const cyclic: Record<string, unknown> = { k: 1 };
   cyclic.self = cyclic;
   assert.doesNotThrow(() => hashArgs(cyclic));
+  const cyclicArray: unknown[] = [];
+  cyclicArray.push(cyclicArray);
+  assert.doesNotThrow(() => hashArgs({ tool: 't', toolArgs: { x: cyclicArray } }));
 });
 
 test(

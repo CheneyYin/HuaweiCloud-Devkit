@@ -542,15 +542,17 @@ test('classify: manage_policy add demands an explicit ephemeral scope', () => {
     assert.equal(ruling.verdict, 'deny', `scope ${JSON.stringify(scope)} must deny`);
     assert.match(String(ruling.reason), /ephemeral scopes|policy file/);
   }
-  // remove: the gateway ignores scope for remove; the token binds the rule
-  // text, so the scope spelling is irrelevant on that action.
+  // remove: the token binds the rule text; scope is REJECTED on remove
+  // (round-8: the gateway refuses a scoped remove outright — a token-gated
+  // remove+scope burned the approval on a guaranteed rejection).
   assert.deepEqual(classify('manage_policy', { action: 'remove', line: 'ECS:X=allow' }, 'devkit', null), {
     verdict: 'token',
   });
-  assert.deepEqual(
-    classify('manage_policy', { action: 'remove', line: 'ECS:X=allow', scope: 'permanent' }, 'native', null),
-    { verdict: 'token' },
-  );
+  for (const scope of ['once', 'permanent']) {
+    const scoped = classify('manage_policy', { action: 'remove', line: 'ECS:X=allow', scope }, 'native', null);
+    assert.equal(scoped.verdict, 'deny', `remove with scope ${scope} denies before consent is spent`);
+    assert.match(String(scoped.reason), /takes no scope/);
+  }
   // Action normalization (round-6): case/whitespace variants route into
   // the add/remove branches like their canonical spellings — 'ADD' with a
   // valid ephemeral scope spends a token, not a deny. Genuinely unknown
@@ -743,7 +745,7 @@ test('matchingDenyRule: JSON and plain-line files, wildcards, missing files', ()
   writeFileSync(linesPolicy, 'ECS:CreateServers=deny\n*=deny\n');
 
   assert.equal(
-    matchingDenyRule('ECS', 'CreateServers', { HUAWEICLOUD_MCP_POLICY_FILE: jsonPolicy }),
+    matchingDenyRule('ECS', 'CreateServers', { HUAWEICLOUD_MCP_POLICY_FILE: jsonPolicy })?.line,
     'ECS:CreateServers=deny',
     'a deny beats an earlier wildcard allow (stricter than the gateway first-match)',
   );
@@ -753,7 +755,7 @@ test('matchingDenyRule: JSON and plain-line files, wildcards, missing files', ()
     'an allow-only match reads as no denial',
   );
   assert.equal(
-    matchingDenyRule('vpc', 'listvpcs', { HUAWEICLOUD_MCP_POLICY_FILE: linesPolicy }),
+    matchingDenyRule('vpc', 'listvpcs', { HUAWEICLOUD_MCP_POLICY_FILE: linesPolicy })?.line,
     '*=deny',
     'sides match anchored and case-insensitively',
   );
@@ -764,57 +766,57 @@ test('matchingDenyRule: JSON and plain-line files, wildcards, missing files', ()
   );
 });
 
-test('matchingDenyRule: comments, spaced separators, product-wide single tokens, ambiguous effects', () => {
+test('matchingDenyRule: whole-line comments, spaced separators, unparseable forms', () => {
+  // Round-8 (source-verified against the installed module): parse_policy
+  // raises on inline '#' comments, on colon-less non-'*' targets, and on
+  // any effect other than allow/deny — the gateway keeps its last valid
+  // rules and the line is inert gateway-side. The devkit reads those
+  // lines as UNPARSEABLE denials (fail-closed, distinct message) so a
+  // broken operator file surfaces instead of silently trusting stale
+  // rules. Only WHOLE-LINE comments are dropped.
   const dir = mkdtempSync(join(tmpdir(), 'openmcp-deny-hard-'));
   const policy = join(dir, 'policy');
   writeFileSync(
     policy,
-    [
-      'ECS:CreateServers=deny # locked down by ops',
-      'ECS : ListServers = deny',
-      'RDS=deny',
-      'VPC:DisassociateRouteTable=maybe',
-      '',
-      '# a comment-only line',
-    ].join('\n'),
+    ['ECS : ListServers = deny', '# a whole-line comment', '', 'ECS:CreateServers=deny # inline note'].join('\n'),
   );
   const env = { HUAWEICLOUD_MCP_POLICY_FILE: policy };
-  assert.equal(
-    matchingDenyRule('ECS', 'CreateServers', env).startsWith('ECS:CreateServers=deny'),
-    true,
-    'trailing comments are stripped',
-  );
-  assert.equal(
-    matchingDenyRule('ECS', 'ListServers', env).startsWith('ECS : ListServers'),
-    true,
-    'spaced separators parse',
-  );
-  assert.equal(
-    matchingDenyRule('RDS', 'AnythingAtAll', env).startsWith('RDS=deny'),
-    true,
-    'a single-token deny is product-wide',
-  );
-  assert.equal(matchingDenyRule('RDS', 'ListFlavors', env).startsWith('RDS=deny'), true);
-  assert.equal(
-    matchingDenyRule('VPC', 'DisassociateRouteTable', env).startsWith('VPC:DisassociateRouteTable=maybe'),
-    true,
-    'an ambiguous effect token denies (fail-closed)',
-  );
-  // The ambiguous-effect line ('=maybe') reads as an unparseable deny —
-  // fail-closed — so it denies EVERY query, not only its own product.
-  // The DEW query must therefore also be denied BY THAT LINE; only a
-  // product with no deny-shaped line at all passes.
-  assert.equal(matchingDenyRule('DEW', 'ListSecrets', env), 'VPC:DisassociateRouteTable=maybe');
+  const spaced = matchingDenyRule('ECS', 'ListServers', env);
+  assert.ok(spaced && !spaced.unparseable && spaced.line.startsWith('ECS : ListServers'), 'spaced separators parse');
+
+  // The inline-comment line is unparseable: it denies every query with
+  // the distinct broken-file flag, not the operator-deny framing.
+  const inline = matchingDenyRule('ECS', 'CreateServers', env);
+  assert.ok(inline && inline.unparseable, 'inline comments are parse failures');
+  assert.match(inline.line, /# inline note/);
+  const bystander = matchingDenyRule('DEW', 'ListSecrets', env);
+  assert.ok(bystander && bystander.unparseable, 'an unparseable line denies unrelated products too');
+  assert.equal(bystander.line, inline.line, 'the same broken line is reported');
+
+  // Colon-less non-'*' targets and bad effects are unparseable as well
+  // (the gateway raises on both).
+  for (const bad of ['RDS=deny', 'VPC:DisassociateRouteTable=maybe', 'no equals sign']) {
+    const dir2 = mkdtempSync(join(tmpdir(), 'openmcp-deny-bad-'));
+    const policy2 = join(dir2, 'policy');
+    writeFileSync(policy2, `${bad}\n`);
+    const hit = matchingDenyRule('RDS', 'ListFlavors', { HUAWEICLOUD_MCP_POLICY_FILE: policy2 });
+    assert.ok(hit && hit.unparseable, `${bad} is an unparseable deny (fail-closed)`);
+    assert.equal(hit.line, bad);
+  }
 });
 
-test('matchingDenyRule: fnmatch wildcards (?, character classes) match the gateway', () => {
-  // Round-7: the gateway's matcher is fnmatch — 'Create?ervers' and
-  // 'Create[A-Z]ervers' are PATTERNS gateway-side; the old escaper treated
-  // '?' and '[' literally and the deny was invisible to the pre-check
-  // while the gateway enforced it.
+test('matchingDenyRule: fnmatch wildcards (?, classes, negation) match the gateway', () => {
+  // Round-7: the gateway's matcher is fnmatch — '?', '[...]' and negated
+  // '[!...]' classes are PATTERNS gateway-side; the old escaper treated
+  // '?' and '[' literally. Round-8: negation was still mistranslated
+  // ('[!A]' became a positive JS class of '!'|'A', both directions
+  // wrong) and a backslash inside a class threw out of the pre-check.
   const dir = mkdtempSync(join(tmpdir(), 'openmcp-deny-fn-'));
   const policy = join(dir, 'policy');
-  writeFileSync(policy, ['ECS:Create?ervers=deny', 'VPC:List[A-Z]pcs=deny', 'OBS:*Object=deny'].join('\n'));
+  writeFileSync(
+    policy,
+    ['ECS:Create?ervers=deny', 'VPC:List[A-Z]pcs=deny', 'OBS:*Object=deny', 'RDS:List[!P]alavors=deny'].join('\n'),
+  );
   const env = { HUAWEICLOUD_MCP_POLICY_FILE: policy };
   assert.ok(matchingDenyRule('ECS', 'CreateServers', env), '? matches one character');
   assert.ok(matchingDenyRule('ECS', 'CreateXervers', env), 'any single character');
@@ -822,6 +824,15 @@ test('matchingDenyRule: fnmatch wildcards (?, character classes) match the gatew
   assert.ok(matchingDenyRule('VPC', 'ListIpcs', env), 'character class matches inside');
   assert.equal(matchingDenyRule('VPC', 'List1pcs', env), null, 'class excludes outside');
   assert.ok(matchingDenyRule('OBS', 'GetObject', env), 'star still works');
+  // Negation: '[!P]' matches any single character EXCEPT P.
+  assert.ok(matchingDenyRule('RDS', 'ListMalavors', env), 'negated class admits a non-P character');
+  assert.equal(matchingDenyRule('RDS', 'ListPalavors', env), null, 'negated class excludes P');
+
+  // A backslash inside a class no longer throws out of the pre-check.
+  const dir3 = mkdtempSync(join(tmpdir(), 'openmcp-deny-bs-'));
+  const policy3 = join(dir3, 'policy');
+  writeFileSync(policy3, 'ECS:List[\\w]pcs=deny\n');
+  assert.doesNotThrow(() => matchingDenyRule('ECS', 'Listwpcs', { HUAWEICLOUD_MCP_POLICY_FILE: policy3 }));
 });
 
 // ── gateway_list_tools / gateway_call through the real dispatch ──
@@ -997,14 +1008,16 @@ test(
 );
 
 test(
-  'the conflict pre-check matches the gateway semantic key: spacing, case, comments',
+  'the conflict pre-check matches the gateway semantic key: spacing and case',
   withGatewayEnv({ FAKE_POLICY: '1' }, async () => {
     // Round-7: the gateway's remove matches on its semantic rule key
-    // (source-verified), so 'ECS : CreateServers = allow # ops pinned'
-    // is the SAME rule to the gateway as 'ECS:CreateServers=allow'. The
-    // literal comparison previously missed it while the bridge's cleanup
-    // still deleted the operator's rule.
-    const spaced = 'ECS : CreateServers = allow # ops pinned';
+    // (source-verified), so 'ECS : CreateServers = allow' is the SAME
+    // rule to the gateway as 'ECS:CreateServers=allow'. The literal
+    // comparison previously missed it while the bridge's cleanup still
+    // deleted the operator's rule. (Inline '#' comments are NOT valid
+    // add lines — the gateway and the fake both reject them now — so
+    // this test exercises spacing and case only.)
+    const spaced = 'ECS : CreateServers = allow';
     const grantArgs = { action: 'add', line: spaced, scope: 'session' };
     const plan = await callTool('huaweicloud_gateway_call', { tool: 'manage_policy', toolArgs: grantArgs });
     const added = await callTool('huaweicloud_gateway_call', {
@@ -1023,7 +1036,7 @@ test(
       approvalToken: execPlan.approvalToken,
       approvedByUser: true,
     });
-    assert.equal(refused.ok, false, 'a semantically equal spaced/commented rule is a conflict');
+    assert.equal(refused.ok, false, 'a semantically equal spaced rule is a conflict');
     assert.match(String(refused.error), /already exists/);
 
     // And the lowercase variant too: 'ecs:createservers=allow'.
@@ -1047,13 +1060,54 @@ test(
 );
 
 test(
-  'a file-layer policy line is a conflict (both listing layers are read)',
+  'distinct token-suffixed rules do not cross-conflict through the redaction boundary',
   withGatewayEnv({ FAKE_POLICY: '1' }, async () => {
-    // Round-7 probe: the real gateway's manage_policy list exposes the
-    // overlay in 'rules' and the FILE in the 'policy' text field; reading
-    // only the array missed file-layer conflicts entirely. The devkit
-    // state home's policy file backs the fake's file layer.
-    const policyPath = join(stateHome, '.config', 'huaweicloud', 'packs', 'huaweicloud-open-mcp', 'policy');
+    // Round-8: the shared wildcard sentinel made every redaction-mangled
+    // rule one semantic key, so an unrelated IAM:CreateAccessKey grant
+    // falsely conflicted with an IAM:DeleteAccessKey execute (probe: the
+    // remediation dead-looped on remove). Unparseable keys are per-line
+    // now: the equal-pair match still works, the cross-pair does not.
+    const grantArgs = { action: 'add', line: 'IAM:CreateAccessKey=allow', scope: 'session' };
+    const plan = await callTool('huaweicloud_gateway_call', { tool: 'manage_policy', toolArgs: grantArgs });
+    const added = await callTool('huaweicloud_gateway_call', {
+      tool: 'manage_policy',
+      toolArgs: grantArgs,
+      approvalToken: plan.approvalToken,
+      approvedByUser: true,
+    });
+    assert.equal(added.ok, true, JSON.stringify(added));
+
+    // A DIFFERENT token-suffixed API: both lines mangle to
+    // '...<redacted>' in the listing, but their keys stay distinct.
+    const execArgs = { product: 'IAM', api: 'DeleteAccessKey' };
+    const execPlan = await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs });
+    const notConflicted = await callTool('huaweicloud_gateway_call', {
+      tool: 'execute_api',
+      toolArgs: execArgs,
+      approvalToken: execPlan.approvalToken,
+      approvedByUser: true,
+    });
+    assert.ok(!/already exists/.test(String(notConflicted.error)), 'a different rule is not a conflict');
+    assert.ok(
+      notConflicted.ok === true || /safety policy/.test(String(notConflicted.error)),
+      'the bridge proceeds (the fake denies the ungranted API, which is the point)',
+    );
+  }),
+);
+
+test(
+  'a file-layer policy line is a conflict (the text layer is load-bearing)',
+  withGatewayEnv({ FAKE_POLICY: '1', FAKE_POLICY_TEXT_ONLY: '1' }, async () => {
+    // Round-7 probe: the gateway's list exposes rules in BOTH layers
+    // (array = overlay + file-with-scope-permanent, text = raw file).
+    // FAKE_POLICY_TEXT_ONLY deliberately reduces the array to overlay-only
+    // so this test proves the consumer reads the policy TEXT branch —
+    // without the knob, an array-only reader passes too and the test
+    // proves nothing. The devkit state home's policy file backs the
+    // fake's file layer.
+    const policyDir = join(stateHome, '.config', 'huaweicloud', 'packs', 'huaweicloud-open-mcp');
+    mkdirSync(policyDir, { recursive: true });
+    const policyPath = join(policyDir, 'policy');
     writeFileSync(policyPath, 'ECS : CreateServers = allow\n');
     try {
       const execArgs = { product: 'ECS', api: 'CreateServers' };
@@ -1064,18 +1118,19 @@ test(
         approvalToken: execPlan.approvalToken,
         approvedByUser: true,
       });
-      assert.equal(refused.ok, false, 'the file layer counts as a conflict');
+      assert.equal(refused.ok, false, 'the text-only file layer still reads as a conflict');
       assert.match(String(refused.error), /already exists/);
     } finally {
       writeFileSync(policyPath, '');
     }
-    // With the file cleared, the same unspent token bridges.
+    // With the file cleared, a fresh approval bridges (the overlay grant
+    // authorizes; the file layer contributes nothing).
     const execArgs = { product: 'ECS', api: 'CreateServers' };
+    const fresh = await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs });
     const bridging = await callTool('huaweicloud_gateway_call', {
       tool: 'execute_api',
       toolArgs: execArgs,
-      approvalToken: (await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs }))
-        .approvalToken,
+      approvalToken: fresh.approvalToken,
       approvedByUser: true,
     });
     assert.equal(bridging.ok, true, JSON.stringify(bridging));
