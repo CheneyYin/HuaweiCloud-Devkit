@@ -24,6 +24,25 @@ The toolkit assumes coding agents can accidentally expose secrets or perform exp
 
 The default write path is planning: `huaweicloud_plan_cli_command` returns a command for review. The optional execution path is `huaweicloud_run_approved_command`, which requires an exact command string already shown to the user plus explicit approval. This is an agent workflow guardrail, not a substitute for IAM least privilege or human review.
 
+## Gateway Face: Delegated Authorization
+
+The open-mcp gateway face (`huaweicloud_gateway_call`) delegates authorization to the gateway's own policy engine. The devkit mints no consent on this face: every routed call forwards, and the engine's refusal reason is the consent instruction (it names the exact `manage_policy` grant shapes the agent may buy after confirming with the user). The CLI face keeps the plan-run token contract above.
+
+Probed 2026-10-10 against huaweicloud-open-mcp v0.2.0a4 (report: `/tmp/opencode/openmcp-probe-report.json`, scratch copy; the probe script mirrors `sidecar.ts` spawn shape):
+
+- An empty policy file makes the engine deny every `execute_api` with a consent-teaching reason. The delegated face is fail-closed out of the box.
+- The engine itself accepts `scope=permanent` adds (writing the operator's policy file) and `ttl_seconds` with `scope=temporary`, and it has no secret guard and no policy gate on `query_data`/`transform_data`.
+
+The devkit-side floors (`src/packs/huaweicloud-open-mcp/approval.ts`) are the barriers for what the engine does not enforce: secret operations deny outright; file targets inside the devkit protected tree and credential-shaped paths deny; `manage_policy` accepts only canonical `list`/`add`/`remove` with ephemeral scopes and no `ttl_seconds`.
+
+Accepted risks of the delegation (decision record in `docs/open-mcp-approval-delegation-design.md`):
+
+- An agent can add session-scoped allows and remove operator rules through `manage_policy` (the engine resolves its in-memory overlay before the file layer and its remove is cross-layer).
+- Local file reads and writes through `query_data`/`transform_data` outside the protected tree and credential patterns are un-gated.
+- A malformed operator policy file is silently inert gateway-side (the engine keeps its last valid version).
+
+`HUAWEICLOUD_OPENMCP_APPROVAL` is retired; setting it surfaces a tool error pointing at the operator policy file, which hot-reloads.
+
 ## Non-Goals
 
 This is not a hard security boundary. Users still need IAM least privilege, audit logs, secure local credential storage, and review of generated commands or code.

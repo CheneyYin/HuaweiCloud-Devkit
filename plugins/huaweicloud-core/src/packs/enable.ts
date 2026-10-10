@@ -16,18 +16,17 @@ import { parseDevkitPacks } from '../lib/dependency-model.ts';
 // pack meta tools (huaweicloud_list_packs / huaweicloud_pack_info) stay in
 // core, so no trimming can hide what was disabled. Trimming the
 // huaweicloud-cli pack removes the CLI execution face and its approval
-// tools together, but the open-mcp pack independently carries gated
-// writes (the execute_api bridge, manage_policy grants, transform_data and
-// query_data): a DEVKIT_PACKS=core,huaweicloud-open-mcp configuration has
-// write paths. In the default devkit approval mode every one of them sits
-// behind a plan-run approval token; under
-// HUAWEICLOUD_OPENMCP_APPROVAL=native the execute_api gate is delegated
-// to the gateway's own policy engine instead — a trimmed configuration
-// then carries a non-token write path the operator chose. The PreToolUse
-// hook keeps denying raw Bash writes regardless; it never reads pack
-// state. Listing core explicitly is redundant but harmless; an env that
-// omits core gets it silently — the disclosure surface is not configurable
-// away.
+// tools together. The open-mcp gateway face no longer carries devkit-side
+// approval: authorization is delegated to the gateway's own policy engine
+// (an empty policy file denies every execute_api, probed 2026-10-10), so a
+// DEVKIT_PACKS=core,huaweicloud-open-mcp configuration keeps gateway writes
+// whose control plane is the operator's policy file, and the devkit-side
+// floors (secret operations, protected tree, manage_policy shape) load with
+// the pack. Trimming is disclosure-level either way: a trimmed pack's
+// handlers stay dispatchable through callTool. The PreToolUse hook keeps
+// denying raw Bash writes regardless; it never reads pack state. Listing
+// core explicitly is redundant but harmless; an env that omits core gets
+// it silently — the disclosure surface is not configurable away.
 //
 // This file sits at the src/packs/ root next to registry.ts: both are
 // composition files that only core modules (tools.ts, mcp-protocol.ts)
