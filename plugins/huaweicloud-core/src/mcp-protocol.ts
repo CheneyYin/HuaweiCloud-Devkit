@@ -1,8 +1,8 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, type RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { CallToolResult, JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 
-import { TOOL_DEFINITIONS, callTool } from './tools.ts';
+import { TOOL_DEFINITIONS, callTool, type CallToolOptions, type ToolDefinition, type ToolName } from './tools.ts';
 import { PACK_OF } from './packs/registry.ts';
 import { resolveEnabledPacks } from './packs/enable.ts';
 import { getToolSchema, assertConstructedSchemas } from './tool-schemas.ts';
@@ -18,6 +18,11 @@ const consumedBySession = new Map<string, boolean>();
 
 export interface DevkitServerOptions {
   sessionId?: string | null;
+  // stdio sessions own runtime pack toggling (huaweicloud_packs_configure
+  // gets registered and its opts carry the disclosure re-sync seam). The
+  // stateless remote leaves this off: it builds a fresh server per request
+  // and must never hold cross-request mutable pack state.
+  runtimePacks?: boolean;
 }
 
 export function _decorateResult(sessionId: string | undefined | null, name: string, result: unknown): unknown {
@@ -101,35 +106,71 @@ export function normalizeToolCallParams(message: JSONRPCMessage): JSONRPCMessage
   return message;
 }
 
-export function createDevkitMcpServer({ sessionId }: DevkitServerOptions = {}): McpServer {
+export function createDevkitMcpServer({ sessionId, runtimePacks = false }: DevkitServerOptions = {}): McpServer {
   assertConstructedSchemas();
   // Read per construction: stdio resolves once at boot (fail-fast exit on a
   // bogus DEVKIT_PACKS), the stateless remote re-reads env on every request,
   // so both transports share one code path with no transport branching.
-  // Unknown pack ids throw here; core is always in the set, so its 10 tools
-  // (8 + the two pack meta tools) are never filtered.
+  // Unknown pack ids throw here; core is always in the set, so its 11 tools
+  // (8 + the two pack meta tools + packs_configure) are never filtered.
   const enabledPacks = resolveEnabledPacks();
   const server = new McpServer({ name: 'huaweicloud-devkit', version: pkgVersion });
+  const registered = new Map<ToolName, RegisteredTool>();
+
+  // One wanted-set derivation for boot and re-sync: enablement decides pack
+  // ownership, runtimePacks decides the session-toggle tool itself, so a
+  // server that never exposed the toggle can never grow it mid-flight.
+  const isWanted = (tool: ToolDefinition, enabled: ReadonlySet<string>): boolean =>
+    enabled.has(PACK_OF[tool.name]) && (runtimePacks || tool.name !== 'huaweicloud_packs_configure');
+
+  const registerOne = (tool: ToolDefinition): void => {
+    registered.set(
+      tool.name,
+      server.registerTool(
+        tool.name,
+        { description: tool.description, inputSchema: getToolSchema(tool.name) },
+        async (args): Promise<CallToolResult> => {
+          const callOpts: CallToolOptions = runtimePacks
+            ? { sessionId, onPacksChanged: () => syncDisclosure() }
+            : { sessionId };
+          const result = await callTool(tool.name, args as Record<string, never>, callOpts);
+          const decorated = _decorateResult(sessionId, tool.name, result);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(decorated, null, 2),
+              },
+            ],
+            isError: false,
+          };
+        },
+      ),
+    );
+  };
+
+  // Re-disclosure after huaweicloud_packs_configure mutates the override:
+  // diff the wanted set against the registered set, add what appeared,
+  // remove what vanished (RegisteredTool.remove), then notify the client to
+  // re-list. A client that ignores tools/list_changed still converges on its
+  // next reconnect.
+  const syncDisclosure = (): void => {
+    const enabled = resolveEnabledPacks();
+    for (const tool of TOOL_DEFINITIONS) {
+      const wanted = isWanted(tool, enabled);
+      const held = registered.has(tool.name);
+      if (wanted && !held) registerOne(tool);
+      else if (!wanted && held) {
+        registered.get(tool.name)?.remove();
+        registered.delete(tool.name);
+      }
+    }
+    server.sendToolListChanged();
+  };
 
   for (const tool of TOOL_DEFINITIONS) {
-    if (!enabledPacks.has(PACK_OF[tool.name])) continue;
-    server.registerTool(
-      tool.name,
-      { description: tool.description, inputSchema: getToolSchema(tool.name) },
-      async (args): Promise<CallToolResult> => {
-        const result = await callTool(tool.name, args as Record<string, never>, { sessionId });
-        const decorated = _decorateResult(sessionId, tool.name, result);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(decorated, null, 2),
-            },
-          ],
-          isError: false,
-        };
-      },
-    );
+    if (!isWanted(tool, enabledPacks)) continue;
+    registerOne(tool);
   }
 
   return server;

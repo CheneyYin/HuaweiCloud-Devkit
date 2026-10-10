@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import type { ToolName } from './tools.ts';
 import type { LooseToolSchema } from './lib/pack-types.ts';
+import { PACK_IDS } from './lib/pack-types.ts';
 import { looseObject } from './lib/tool-schema-parts.ts';
 import { UPDATE_TOOL_SCHEMAS } from './packs/update/tools.ts';
 import { HUAWEICLOUD_OPEN_MCP_TOOL_SCHEMAS } from './packs/huaweicloud-open-mcp/tools.ts';
@@ -75,37 +76,37 @@ const TOOL_SCHEMAS = {
   }),
   // The discovery pack owns its tool schemas (src/packs/discovery/tools.ts);
   // the spread keeps them in TOOL_SCHEMAS so the satisfies check below still
-  // covers all 51 ToolName keys.
+  // covers all 52 ToolName keys.
   ...DISCOVERY_TOOL_SCHEMAS,
   // The obs pack owns its tool schemas (src/packs/obs/tools.ts); the
   // spread keeps them in TOOL_SCHEMAS so the satisfies check below still
-  // covers all 51 ToolName keys.
+  // covers all 52 ToolName keys.
   ...OBS_TOOL_SCHEMAS,
   // The voucher pack owns its tool schemas (src/packs/voucher/tools.ts);
   // the spread keeps them in TOOL_SCHEMAS so the satisfies check below still
-  // covers all 51 ToolName keys.
+  // covers all 52 ToolName keys.
   ...VOUCHER_TOOL_SCHEMAS,
   // The auth pack owns its tool schemas (src/packs/auth/tools.ts); the
   // spread keeps them in TOOL_SCHEMAS so the satisfies check below still
-  // covers all 51 ToolName keys.
+  // covers all 52 ToolName keys.
   ...AUTH_TOOL_SCHEMAS,
   // The sandbox pack owns its tool schemas (src/packs/sandbox/tools.ts);
   // the spread keeps them in TOOL_SCHEMAS so the satisfies check below still
-  // covers all 51 ToolName keys.
+  // covers all 52 ToolName keys.
   ...SANDBOX_TOOL_SCHEMAS,
   // The update pack owns its tool schemas (src/packs/update/tools.ts); the
   // spread keeps them in TOOL_SCHEMAS so the satisfies check below still
-  // covers all 51 ToolName keys.
+  // covers all 52 ToolName keys.
   ...UPDATE_TOOL_SCHEMAS,
   // The huaweicloud-open-mcp pack owns its tool schemas
   // (src/packs/huaweicloud-open-mcp/tools.ts);
   // the spread keeps them in TOOL_SCHEMAS so the satisfies check below still
-  // covers all 51 ToolName keys.
+  // covers all 52 ToolName keys.
   ...HUAWEICLOUD_OPEN_MCP_TOOL_SCHEMAS,
   // The huaweicloud-cli pack owns its tool schemas (the seven KooCLI
   // execution tools sunk from core; src/packs/huaweicloud-cli/tools.ts);
   // the spread keeps them in TOOL_SCHEMAS so the satisfies check below still
-  // covers all 51 ToolName keys.
+  // covers all 52 ToolName keys.
   ...HUAWEICLOUD_CLI_TOOL_SCHEMAS,
   huaweicloud_list_packs: z.looseObject({}),
   huaweicloud_pack_info: z.looseObject({
@@ -114,6 +115,22 @@ const TOOL_SCHEMAS = {
       .describe(
         'Pack id from huaweicloud_list_packs, such as core, huaweicloud-cli, sandbox, auth, obs, voucher, update, discovery, huaweicloud-open-mcp.',
       ),
+  }),
+  huaweicloud_packs_configure: z.looseObject({
+    enable: z
+      .array(z.enum(PACK_IDS))
+      .optional()
+      .describe(
+        'Pack ids to enable for this session, e.g. ["obs", "sandbox"]. Ignored when the surface is already full.',
+      ),
+    disable: z
+      .array(z.enum(PACK_IDS))
+      .optional()
+      .describe('Pack ids to disable for this session. core cannot be disabled.'),
+    reset: z
+      .boolean()
+      .optional()
+      .describe('Drop the session override and return to the operator DEVKIT_PACKS posture.'),
   }),
 } satisfies Record<ToolName, LooseToolSchema>;
 

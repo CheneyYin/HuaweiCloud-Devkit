@@ -1,5 +1,5 @@
 import { PACK_IDS, type PackId } from '../lib/pack-types.ts';
-import { parseDevkitPacks } from '../lib/dependency-model.ts';
+import { parseDevkitPacks, type ParsedPacksEnv } from '../lib/dependency-model.ts';
 
 // Pack enablement, resolved from the DEVKIT_PACKS environment variable.
 //
@@ -37,11 +37,46 @@ import { parseDevkitPacks } from '../lib/dependency-model.ts';
 
 const VALID_IDS: readonly string[] = PACK_IDS;
 
+// Session-scoped runtime override: one more DEVKIT_PACKS-shaped value, held
+// in this process's memory instead of the environment. Null means no
+// override and the operator's env posture rules. It is set only through
+// huaweicloud_packs_configure, whose registration the stateless remote never
+// requests, so a remote process keeps the override null forever — a
+// per-request surface must not carry cross-request mutable state. The
+// override never persists: the next boot re-reads DEVKIT_PACKS.
+let runtimeOverride: ParsedPacksEnv | null = null;
+
+export function setRuntimePacksOverride(raw: string): ParsedPacksEnv {
+  const parsed = parseDevkitPacks(raw);
+  if (!parsed.raw) {
+    throw new Error('Runtime pack override cannot be blank. Clear it with reset instead.');
+  }
+  if (parsed.unknown.length > 0) {
+    throw new Error(
+      `Runtime pack override contains unknown pack id(s): ${parsed.unknown.join(', ')}. Valid pack ids: ${VALID_IDS.join(', ')}.`,
+    );
+  }
+  runtimeOverride = parsed;
+  return parsed;
+}
+
+export function clearRuntimePacksOverride(): void {
+  runtimeOverride = null;
+}
+
+export function runtimePacksOverride(): ParsedPacksEnv | null {
+  return runtimeOverride;
+}
+
 // The simplest shape wins: callers consume the set directly, so no wrapper
 // interface is exported. Pure function — env in, set out, no process state.
 // The parse and closure live in lib/dependency-model.ts; this file keeps only
 // the boot-boundary policy: unknown ids throw fail-fast with the valid list.
+// The runtime override, when present, wins over env — every reader (disclosure
+// at boot, per-call gates, list_packs status) flips together through this one
+// function, so no reader can disagree with another.
 export function resolveEnabledPacks(env: NodeJS.ProcessEnv = process.env): ReadonlySet<PackId> {
+  if (runtimeOverride) return runtimeOverride.enabled;
   const raw = (env.DEVKIT_PACKS ?? '').trim();
   if (!raw) return new Set(PACK_IDS);
   const { unknown, enabled } = parseDevkitPacks(raw);

@@ -65,7 +65,7 @@ async function runStdioServer() {
   // 版本升级检测预热：异步、非阻塞；失败静默（离线/超时不影响会话）。
   getCachedUpdateInfo(readInstalledVersion() || '0.0.0').catch(() => {});
 
-  const server = createDevkitMcpServer({ sessionId: 'stdin' });
+  const server = createDevkitMcpServer({ sessionId: 'stdin', runtimePacks: true });
   const transport = new DevkitStdioTransport();
   await server.connect(transport);
 }

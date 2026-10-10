@@ -14,8 +14,14 @@ import { getToolSchema, SCHEMA_DRIFT_IGNORED_KEYS } from './tool-schemas.ts';
 // PACK_TOOL_HANDLERS is the central pack dispatch table (its satisfies check
 // pins every PackToolName to a handler); PACKS feeds the pack meta tools.
 import { PACKS, PACK_TOOL_HANDLERS, isPackToolName, type PackToolName } from './packs/registry.ts';
-import { resolveEnabledPacks } from './packs/enable.ts';
-import type { PackId } from './lib/pack-types.ts';
+import {
+  resolveEnabledPacks,
+  setRuntimePacksOverride,
+  clearRuntimePacksOverride,
+  runtimePacksOverride,
+} from './packs/enable.ts';
+import { PACK_IDS, type PackId } from './lib/pack-types.ts';
+import { parseDevkitPacks } from './lib/dependency-model.ts';
 // Service region descriptor (the old inline `known` table in
 // getRegionalAvailability, migrated verbatim — see services/regions.ts for
 // its guarantee scope).
@@ -255,6 +261,11 @@ const TOOL_DEFINITIONS_LITERALS = [
       'Inspect one capability pack. Takes pack (a pack id from huaweicloud_list_packs) and returns the pack title, description, claimed skills, enabled flag, and every tool in the pack with name, description, and JSON Schema. Use to decide which pack covers a task before loading a skill with huaweicloud_retrieve_skill.',
   },
   {
+    name: 'huaweicloud_packs_configure',
+    description:
+      'Enable or disable capability packs for THIS session, or reset to the operator posture. Session-scoped: the change lives in this server process only and the next session restart restores the DEVKIT_PACKS posture the operator configured. Takes enable (pack ids to add), disable (pack ids to remove; core cannot be disabled), and reset (drop the session override). The refreshed tool list is pushed to the agent immediately. The persistent equivalent is the operator CLI: npx huaweicloud-devkit packs enable <ids> --target <agent>.',
+  },
+  {
     name: 'huaweicloud_search_apis',
     description:
       'Search the full Huawei Cloud API catalog (300+ products, 17,000+ APIs) by entity keywords when the intent does not name a product. Returns candidate products with representative APIs and match evidence. Step 0 of openapi discovery: search_apis → list_apis → get_api. Read-only; needs no credentials.',
@@ -338,6 +349,9 @@ export type ToolArgs = {
   region?: string;
   category?: string;
   pack?: string;
+  enable?: string[];
+  disable?: string[];
+  reset?: boolean;
   projectPath?: string;
   target?: string;
   ak?: string;
@@ -398,6 +412,10 @@ interface SandboxGitConfig {
 export interface CallToolOptions {
   sessionId?: string | null;
   doQuery?: () => Promise<DistTags | null>;
+  // Disclosure re-sync seam, wired only by stdio-session constructions in
+  // mcp-protocol.ts. Its absence is the guard that keeps the stateless remote
+  // from mutating process-shared pack state through a direct unlisted call.
+  onPacksChanged?: () => void;
 }
 
 function toolInvokeValue(name: ToolName, args: ToolArgs): string {
@@ -480,6 +498,8 @@ export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: Cal
       return listPacks();
     case 'huaweicloud_pack_info':
       return packInfo(args.pack || '');
+    case 'huaweicloud_packs_configure':
+      return configurePacks(args, opts);
     default: {
       // Compile-time exhaustiveness over the core remainder: after the
       // PACK_TOOL_HANDLERS lookup above, `name` can only be
@@ -720,11 +740,9 @@ function packInfo(pack: string) {
       error:
         'Pack "' +
         found.id +
-        '" is not enabled. Start the server with DEVKIT_PACKS including "' +
+        '" is not enabled. Enable it for this session with huaweicloud_packs_configure, or persistently by running npx huaweicloud-devkit packs enable ' +
         found.id +
-        '" (e.g. DEVKIT_PACKS=core,' +
-        found.id +
-        ') to enable it.',
+        ' --target <agent> and restarting the agent (that command rewrites DEVKIT_PACKS in the agent MCP config).',
     };
   }
   const tools = found.tools.map((name) => {
@@ -741,6 +759,81 @@ function packInfo(pack: string) {
     skills: found.skills,
     tools,
     enabled: true,
+  };
+}
+
+// Session pack configuration. One mutation with three shapes (enable,
+// disable, reset) over the override state in packs/enable.ts. The value math
+// mirrors the operator CLI family (setup-cli "packs enable/disable/all") so
+// both surfaces stay one semantic: the seed is joined in PACK_IDS order,
+// core is the disable floor, and a set covering every pack is stored as the
+// full seed, never as a blank (blank means the full surface in env terms).
+function configurePacks(args: ToolArgs, opts: CallToolOptions): unknown {
+  const enable = (args.enable ?? []).map((id) => String(id));
+  const disable = (args.disable ?? []).map((id) => String(id));
+  const reset = args.reset === true;
+  if (!reset && enable.length === 0 && disable.length === 0) {
+    return { ok: false, error: 'Provide at least one of enable, disable, or reset.' };
+  }
+  const bogus = [...enable, ...disable].filter((id) => !(PACK_IDS as readonly string[]).includes(id));
+  if (bogus.length > 0) {
+    return {
+      ok: false,
+      error: 'Unknown pack id(s): ' + bogus.join(', ') + '. Valid pack ids: ' + PACK_IDS.join(', ') + '.',
+    };
+  }
+  if (disable.includes('core')) {
+    return {
+      ok: false,
+      error:
+        'core is always enabled (the pack meta, safety, and discovery surface is force-included) and cannot be disabled.',
+    };
+  }
+  if (!opts.onPacksChanged) {
+    return {
+      ok: false,
+      error:
+        'Runtime pack configuration is available in stdio agent sessions only; this surface carries no session state.',
+    };
+  }
+
+  const current = runtimePacksOverride();
+  if (reset && (enable.length > 0 || disable.length > 0)) {
+    return {
+      ok: false,
+      error: 'reset drops the whole session override and cannot be combined with enable or disable.',
+    };
+  }
+  const envParsed = parseDevkitPacks(process.env.DEVKIT_PACKS);
+  const base: string[] = current ? [...current.requested] : envParsed.raw ? [...envParsed.requested] : [...PACK_IDS];
+  const next = new Set(base.filter((id) => !disable.includes(id)));
+  for (const id of enable) next.add(id);
+  const same = next.size === base.length && base.every((id) => next.has(id));
+
+  let changed = false;
+  if (reset) {
+    if (current) {
+      clearRuntimePacksOverride();
+      changed = true;
+    }
+  } else if (!same) {
+    const seed = PACK_IDS.filter((id) => next.has(id));
+    setRuntimePacksOverride((seed.length > 0 ? seed : (['core'] as const)).join(','));
+    changed = true;
+  }
+  if (changed) opts.onPacksChanged();
+
+  const effective = resolveEnabledPacks();
+  return {
+    ok: true,
+    changed,
+    override: runtimePacksOverride()?.raw ?? null,
+    effectivePacks: PACK_IDS.filter((id) => effective.has(id)),
+    note: changed
+      ? 'Session override active. Restarting the session restores the operator DEVKIT_PACKS posture.'
+      : reset
+        ? 'No session override was active.'
+        : 'The requested surface already applies.',
   };
 }
 
@@ -951,11 +1044,9 @@ async function retrieveSkill(name: string) {
         skillName +
         '" belongs to pack "' +
         owner +
-        '" which is not enabled. Start the server with DEVKIT_PACKS including "' +
+        '" which is not enabled. Enable it for this session with huaweicloud_packs_configure, or persistently by running npx huaweicloud-devkit packs enable ' +
         owner +
-        '" (e.g. DEVKIT_PACKS=core,' +
-        owner +
-        ') to enable it.',
+        ' --target <agent> and restarting the agent (that command rewrites DEVKIT_PACKS in the agent MCP config).',
     };
   }
   const content = readFileSync(skillPath, 'utf8');
