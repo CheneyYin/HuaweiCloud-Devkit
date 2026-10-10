@@ -14,8 +14,10 @@ import type { CallToolOptions, ToolArgs } from '../../tools.ts';
 // directly from src/lib/approval-tokens.ts (the CLI face's consent module),
 // not the hcloud-cli.ts re-export shim. The only allowWrites:true call site
 // in the codebase (runApprovedCommand) lives here, so trimming this pack
-// removes the CLI execution face and its approval tools together: a trimmed
-// configuration has no legal write path.
+// removes the CLI execution face and its approval tools together: a
+// configuration trimmed of this pack has no devkit-side hcloud CLI write
+// path, and the gateway face, when enabled, is a separate delegated write
+// path.
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};

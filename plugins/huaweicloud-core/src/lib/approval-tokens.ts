@@ -19,7 +19,7 @@ import { huaweiConfigBase } from './pack-state.ts';
 // Nothing here knows hcloud — the payload is an opaque serializable
 // value, hashed, redacted, and persisted with a TTL.
 //
-// hcloud-cli.ts re-exports these for its own call sites (the
+// hcloud-cli.ts re-exports these for existing test import sites (the
 // tool-schemas.ts re-export precedent).
 //
 // The token hash is canonical: object keys are recursively sorted at mint

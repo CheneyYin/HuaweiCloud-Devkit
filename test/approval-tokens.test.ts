@@ -10,7 +10,7 @@ import {
   hashArgs,
 } from '../plugins/huaweicloud-core/src/lib/approval-tokens.ts';
 
-// The round-2 hardening of the face-neutral approval store: canonical
+// The round-2 hardening of the CLI face's approval store: canonical
 // hashing (agent re-serialization cannot change a token's hash) and the
 // exclusive-create marker that closes the two-process double-consume window.
 
