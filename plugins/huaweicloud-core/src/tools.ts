@@ -21,7 +21,7 @@ import {
   runtimePacksOverride,
 } from './packs/enable.ts';
 import { PACK_IDS, type PackId } from './lib/pack-types.ts';
-import { parseDevkitPacks } from './lib/dependency-model.ts';
+import { closePackEnablement } from './lib/dependency-model.ts';
 // Service region descriptor (the old inline `known` table in
 // getRegionalAvailability, migrated verbatim — see services/regions.ts for
 // its guarantee scope).
@@ -263,7 +263,7 @@ const TOOL_DEFINITIONS_LITERALS = [
   {
     name: 'huaweicloud_packs_configure',
     description:
-      'Enable or disable capability packs for THIS session, or reset to the operator posture. Session-scoped: the change lives in this server process only and the next session restart restores the DEVKIT_PACKS posture the operator configured. Takes enable (pack ids to add), disable (pack ids to remove; core cannot be disabled), and reset (drop the session override). The refreshed tool list is pushed to the agent immediately. The persistent equivalent is the operator CLI: npx huaweicloud-devkit packs enable <ids> --target <agent>.',
+      'Enable or disable capability packs for THIS session, or reset to the operator posture. Session-scoped: the change lives in this server process only and the next session restart restores the DEVKIT_PACKS posture the operator configured. Takes enable (pack ids to add), disable (pack ids to remove; core cannot be disabled), and reset (drop the session override). The refreshed tool list is pushed to the agent immediately. Confirm with the user before enabling a pack the operator trimmed: widening re-exposes that pack\u2019s tools, including state mutators that carry no approval chain of their own. The persistent equivalent is the operator CLI (npx huaweicloud-devkit packs enable <ids> --target <agent>); ask the operator to run it and restart the agent.',
   },
   {
     name: 'huaweicloud_search_apis',
@@ -430,6 +430,17 @@ function toolInvokeValue(name: ToolName, args: ToolArgs): string {
   if (name === 'huaweicloud_retrieve_skill' && args.name) {
     return args.name;
   }
+  if (name === 'huaweicloud_packs_configure') {
+    // The delta is the telemetry value: which packs crossed the operator
+    // posture line in this session is the auditable fact.
+    const parts: string[] = [];
+    const enabled = (args.enable ?? []).map((id) => String(id));
+    const disabled = (args.disable ?? []).map((id) => String(id));
+    if (enabled.length > 0) parts.push('+' + enabled.join(','));
+    if (disabled.length > 0) parts.push('-' + disabled.join(','));
+    if (args.reset === true) parts.push('reset');
+    if (parts.length > 0) return parts.join(' ');
+  }
   if (name === 'huaweicloud_hook_check_command' && args.command) {
     const parts = args.command.split(/\s+/).filter((p) => !p.startsWith('--'));
     if (parts[0] === 'hcloud' && parts[1]) return `hcloud ${parts.slice(1, 3).join(' ')}`;
@@ -495,9 +506,9 @@ export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: Cal
     case 'huaweicloud_explain_error':
       return explainError(args);
     case 'huaweicloud_list_packs':
-      return listPacks();
+      return listPacks(opts);
     case 'huaweicloud_pack_info':
-      return packInfo(args.pack || '');
+      return packInfo(args.pack || '', opts);
     case 'huaweicloud_packs_configure':
       return configurePacks(args, opts);
     default: {
@@ -709,8 +720,13 @@ const SKILL_OWNER = new Map<string, PackId>(
   PACKS.flatMap((pack) => pack.skills.map((skill) => [skill, pack.id] as const)),
 );
 
-function listPacks() {
+function listPacks(opts: CallToolOptions = {}) {
   const enabled = resolveEnabledPacks();
+  // packs_configure is core-owned but registered only on surfaces that carry
+  // session state (stdio). The meta tools must not advertise a tool where
+  // tools/list will never carry it, so core's tool list is filtered by the
+  // same seam the registration factory uses.
+  const runtimeToggling = Boolean(opts.onPacksChanged);
   return {
     ok: true,
     count: PACKS.length,
@@ -719,13 +735,16 @@ function listPacks() {
       title: pack.title,
       description: pack.description,
       skills: pack.skills,
-      tools: pack.tools,
+      tools:
+        pack.id === 'core' && !runtimeToggling
+          ? pack.tools.filter((name) => name !== 'huaweicloud_packs_configure')
+          : pack.tools,
       enabled: enabled.has(pack.id),
     })),
   };
 }
 
-function packInfo(pack: string) {
+function packInfo(pack: string, opts: CallToolOptions = {}) {
   const packId = String(pack || '').trim();
   if (!packId) return { ok: false, error: 'Pack id is required.' };
   const found = PACKS.find((entry) => entry.id === packId);
@@ -740,12 +759,19 @@ function packInfo(pack: string) {
       error:
         'Pack "' +
         found.id +
-        '" is not enabled. Enable it for this session with huaweicloud_packs_configure, or persistently by running npx huaweicloud-devkit packs enable ' +
+        '" is not enabled. Enable it for this session with huaweicloud_packs_configure (confirm with the user when the operator trimmed the pack on purpose), or ask the operator to persist it with npx huaweicloud-devkit packs enable ' +
         found.id +
-        ' --target <agent> and restarting the agent (that command rewrites DEVKIT_PACKS in the agent MCP config).',
+        ' --target <agent>, then restart the agent (that command rewrites DEVKIT_PACKS in the agent MCP config).',
     };
   }
-  const tools = found.tools.map((name) => {
+  // Same surface filter as listPacks: core owns packs_configure, but only
+  // session-carrying surfaces register it, and pack_info must not advertise
+  // a tool tools/list will never carry.
+  const toolNames =
+    found.id === 'core' && !opts.onPacksChanged
+      ? found.tools.filter((name) => name !== 'huaweicloud_packs_configure')
+      : found.tools;
+  const tools = toolNames.map((name) => {
     const definition = TOOL_DEFINITIONS.find((tool) => tool.name === name);
     const schema = z.toJSONSchema(getToolSchema(name)) as Record<string, unknown>;
     for (const key of SCHEMA_DRIFT_IGNORED_KEYS) delete schema[key];
@@ -763,11 +789,13 @@ function packInfo(pack: string) {
 }
 
 // Session pack configuration. One mutation with three shapes (enable,
-// disable, reset) over the override state in packs/enable.ts. The value math
-// mirrors the operator CLI family (setup-cli "packs enable/disable/all") so
-// both surfaces stay one semantic: the seed is joined in PACK_IDS order,
-// core is the disable floor, and a set covering every pack is stored as the
-// full seed, never as a blank (blank means the full surface in env terms).
+// disable, reset) over the override state in packs/enable.ts. The delta math
+// works at the effective level (the closed enablement set), never at the raw
+// requested seed: a duplicated DEVKIT_PACKS id or a closure-pulled pack must
+// not turn a no-op into a stored override. The seed is joined in PACK_IDS
+// order and always carries core (the base set includes it and disable cannot
+// remove it), so the blank-value trap (blank means the full surface) is
+// unreachable and needs no fallback branch.
 function configurePacks(args: ToolArgs, opts: CallToolOptions): unknown {
   const enable = (args.enable ?? []).map((id) => String(id));
   const disable = (args.disable ?? []).map((id) => String(id));
@@ -789,6 +817,13 @@ function configurePacks(args: ToolArgs, opts: CallToolOptions): unknown {
         'core is always enabled (the pack meta, safety, and discovery surface is force-included) and cannot be disabled.',
     };
   }
+  const overlap = enable.filter((id) => disable.includes(id));
+  if (overlap.length > 0) {
+    return {
+      ok: false,
+      error: 'Pack id(s) cannot be both enabled and disabled in one call: ' + overlap.join(', ') + '.',
+    };
+  }
   if (!opts.onPacksChanged) {
     return {
       ok: false,
@@ -796,7 +831,6 @@ function configurePacks(args: ToolArgs, opts: CallToolOptions): unknown {
         'Runtime pack configuration is available in stdio agent sessions only; this surface carries no session state.',
     };
   }
-
   const current = runtimePacksOverride();
   if (reset && (enable.length > 0 || disable.length > 0)) {
     return {
@@ -804,11 +838,17 @@ function configurePacks(args: ToolArgs, opts: CallToolOptions): unknown {
       error: 'reset drops the whole session override and cannot be combined with enable or disable.',
     };
   }
-  const envParsed = parseDevkitPacks(process.env.DEVKIT_PACKS);
-  const base: string[] = current ? [...current.requested] : envParsed.raw ? [...envParsed.requested] : [...PACK_IDS];
-  const next = new Set(base.filter((id) => !disable.includes(id)));
-  for (const id of enable) next.add(id);
-  const same = next.size === base.length && base.every((id) => next.has(id));
+
+  const currentEffective = resolveEnabledPacks();
+  // Both lists were validated against PACK_IDS above, so the ids are PackId
+  // at runtime; one narrowing here keeps the set math below typewise clean.
+  const enableIds = enable as PackId[];
+  const disableIds = disable as PackId[];
+  const next = new Set<PackId>(currentEffective);
+  for (const id of disableIds) next.delete(id);
+  for (const id of enableIds) next.add(id);
+  const wouldEnable = closePackEnablement(next).enabled;
+  const same = wouldEnable.size === currentEffective.size && [...currentEffective].every((id) => wouldEnable.has(id));
 
   let changed = false;
   if (reset) {
@@ -817,8 +857,7 @@ function configurePacks(args: ToolArgs, opts: CallToolOptions): unknown {
       changed = true;
     }
   } else if (!same) {
-    const seed = PACK_IDS.filter((id) => next.has(id));
-    setRuntimePacksOverride((seed.length > 0 ? seed : (['core'] as const)).join(','));
+    setRuntimePacksOverride(PACK_IDS.filter((id) => next.has(id)).join(','));
     changed = true;
   }
   if (changed) opts.onPacksChanged();
@@ -1044,9 +1083,9 @@ async function retrieveSkill(name: string) {
         skillName +
         '" belongs to pack "' +
         owner +
-        '" which is not enabled. Enable it for this session with huaweicloud_packs_configure, or persistently by running npx huaweicloud-devkit packs enable ' +
+        '" which is not enabled. Enable it for this session with huaweicloud_packs_configure (confirm with the user when the operator trimmed the pack on purpose), or ask the operator to persist it with npx huaweicloud-devkit packs enable ' +
         owner +
-        ' --target <agent> and restarting the agent (that command rewrites DEVKIT_PACKS in the agent MCP config).',
+        ' --target <agent>, then restart the agent (that command rewrites DEVKIT_PACKS in the agent MCP config).',
     };
   }
   const content = readFileSync(skillPath, 'utf8');

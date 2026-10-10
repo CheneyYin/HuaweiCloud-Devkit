@@ -108,12 +108,12 @@ export function normalizeToolCallParams(message: JSONRPCMessage): JSONRPCMessage
 
 export function createDevkitMcpServer({ sessionId, runtimePacks = false }: DevkitServerOptions = {}): McpServer {
   assertConstructedSchemas();
-  // Read per construction: stdio resolves once at boot (fail-fast exit on a
-  // bogus DEVKIT_PACKS), the stateless remote re-reads env on every request,
-  // so both transports share one code path with no transport branching.
-  // Unknown pack ids throw here; core is always in the set, so its 11 tools
-  // (8 + the two pack meta tools + packs_configure) are never filtered.
-  const enabledPacks = resolveEnabledPacks();
+  // Enablement resolves inside syncDisclosure: stdio resolves once at boot
+  // (fail-fast exit on a bogus DEVKIT_PACKS), the stateless remote re-reads
+  // env on every request, so both transports share one code path with no
+  // transport branching. Unknown pack ids throw here; core is always in the
+  // set, so its 11 tools (8 + the two pack meta tools + packs_configure) are
+  // never filtered.
   const server = new McpServer({ name: 'huaweicloud-devkit', version: pkgVersion });
   const registered = new Map<ToolName, RegisteredTool>();
 
@@ -151,8 +151,10 @@ export function createDevkitMcpServer({ sessionId, runtimePacks = false }: Devki
 
   // Re-disclosure after huaweicloud_packs_configure mutates the override:
   // diff the wanted set against the registered set, add what appeared,
-  // remove what vanished (RegisteredTool.remove), then notify the client to
-  // re-list. A client that ignores tools/list_changed still converges on its
+  // remove what vanished (RegisteredTool.remove). The SDK emits one
+  // tools/list_changed per register/remove and no-ops them before connect,
+  // so boot and re-sync share this one path and no extra notification is
+  // needed. A client that ignores tools/list_changed still converges on its
   // next reconnect.
   const syncDisclosure = (): void => {
     const enabled = resolveEnabledPacks();
@@ -165,13 +167,9 @@ export function createDevkitMcpServer({ sessionId, runtimePacks = false }: Devki
         registered.delete(tool.name);
       }
     }
-    server.sendToolListChanged();
   };
 
-  for (const tool of TOOL_DEFINITIONS) {
-    if (!isWanted(tool, enabledPacks)) continue;
-    registerOne(tool);
-  }
+  syncDisclosure();
 
   return server;
 }

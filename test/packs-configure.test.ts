@@ -32,7 +32,7 @@ function withEnv(devkitPacks: string | undefined, fn: () => Promise<void>): () =
 
 async function withClient(
   options: Parameters<typeof createLinkedDevkitServers>[0],
-  fn: (client: Client) => Promise<void>,
+  fn: (_client: Client) => Promise<void>,
 ): Promise<void> {
   const { server, transport } = await createLinkedDevkitServers(options);
   const client = new Client({ name: 'packs-configure-test', version: '0.0.0' });
@@ -45,11 +45,23 @@ async function withClient(
   }
 }
 
-async function callJson(client: Client, name: string, args: Record<string, unknown>): Promise<any> {
+async function callJson(client: Client, name: string, args: Record<string, unknown>): Promise<ToolPayload> {
   const res = await client.callTool({ name, arguments: args });
   const text = res.content?.[0]?.type === 'text' ? res.content[0].text : '{}';
   if (res.isError) throw new Error(`MCP tool error from ${name}: ${text}`);
-  return JSON.parse(typeof text === 'string' ? text : '{}');
+  return JSON.parse(typeof text === 'string' ? text : '{}') as ToolPayload;
+}
+
+// Loose payload shape for the JSON the tools return; assertions stay
+// narrow via the fields they read.
+interface ToolPayload {
+  ok?: boolean;
+  changed?: boolean;
+  override?: string | null;
+  effectivePacks?: string[];
+  error?: string;
+  note?: string;
+  packs?: Array<{ id: string; enabled: boolean }>;
 }
 
 async function toolNames(client: Client): Promise<string[]> {
@@ -78,7 +90,7 @@ test(
       assert.ok(after.includes('huaweicloud_obs_set_website_config'), 'both obs tools re-disclose together');
 
       const listed = await callJson(client, 'huaweicloud_list_packs', {});
-      const flags = new Map(listed.packs.map((pack: any) => [pack.id, pack.enabled]));
+      const flags = new Map((listed.packs ?? []).map((pack) => [pack.id, pack.enabled]));
       assert.equal(flags.get('obs'), true, 'list_packs reflects the session override');
 
       const skill = await callJson(client, 'huaweicloud_retrieve_skill', { name: 'huawei-obs' });
@@ -273,4 +285,47 @@ test('enabling an already-enabled pack is a noop', () =>
     assert.equal(result.ok, true);
     assert.equal(result.changed, false);
     assert.equal(result.override, null, 'no override is stored when env already carries the pack');
+  })());
+
+test('a duplicated DEVKIT_PACKS id does not eat a real enable', () =>
+  withEnv('core,core', async () => {
+    const result = await callTool('huaweicloud_packs_configure', { enable: ['obs'] }, { onPacksChanged: noopSync });
+    assert.equal(result.ok, true);
+    assert.equal(result.changed, true, 'enable must apply even when env requested ids repeat');
+    assert.equal(result.override, 'core,obs');
+    assert.ok(resolveEnabledPacks().has('obs'), 'obs must actually be enabled');
+  })());
+
+test('enabling closure-pulled core is a noop', () =>
+  withEnv('obs', async () => {
+    const result = await callTool('huaweicloud_packs_configure', { enable: ['core'] }, { onPacksChanged: noopSync });
+    assert.equal(result.ok, true);
+    assert.equal(result.changed, false, 'core is already effectively enabled via the closure');
+    assert.equal(result.override, null);
+  })());
+
+test('the same pack in enable and disable is refused', () =>
+  withEnv('core', async () => {
+    const refused = await callTool(
+      'huaweicloud_packs_configure',
+      { enable: ['obs'], disable: ['obs'] },
+      { onPacksChanged: noopSync },
+    );
+    assert.equal(refused.ok, false);
+    assert.match(refused.error, /cannot be both enabled and disabled/);
+    assert.equal(runtimePacksOverride(), null);
+  })());
+
+test('list_packs advertises the toggle only on session-carrying surfaces', () =>
+  withEnv('core', async () => {
+    const plain = await callTool('huaweicloud_list_packs', {});
+    const coreEntry = plain.packs.find((pack) => pack.id === 'core');
+    assert.ok(!coreEntry.tools.includes('huaweicloud_packs_configure'), 'no opts means no session surface');
+
+    const toggling = await callTool('huaweicloud_list_packs', {}, { onPacksChanged: noopSync });
+    const togglingCore = toggling.packs.find((pack) => pack.id === 'core');
+    assert.ok(
+      togglingCore.tools.includes('huaweicloud_packs_configure'),
+      'the seam present means the toggle is registered',
+    );
   })());

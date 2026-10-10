@@ -367,7 +367,7 @@ test('MCP tools/list includes all required core tools with valid schemas', async
     }
     assert.equal(
       REQUIRED_TOOLS.length + perPackNames.length,
-      51,
+      52,
       'always-on + per-pack lists must cover the full registry',
     );
     assert.ok(toolNames.length >= 25, `Expected >= 25 tools, got ${toolNames.length}`);

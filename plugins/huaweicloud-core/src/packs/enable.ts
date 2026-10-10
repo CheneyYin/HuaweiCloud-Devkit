@@ -69,12 +69,12 @@ export function runtimePacksOverride(): ParsedPacksEnv | null {
 }
 
 // The simplest shape wins: callers consume the set directly, so no wrapper
-// interface is exported. Pure function — env in, set out, no process state.
-// The parse and closure live in lib/dependency-model.ts; this file keeps only
-// the boot-boundary policy: unknown ids throw fail-fast with the valid list.
-// The runtime override, when present, wins over env — every reader (disclosure
-// at boot, per-call gates, list_packs status) flips together through this one
-// function, so no reader can disagree with another.
+// interface is exported. The parse and closure live in lib/dependency-model.ts;
+// this file keeps only the boot-boundary policy: unknown ids throw fail-fast
+// with the valid list. The runtime override, when present, wins over the env
+// parameter — every reader (disclosure at boot, per-call gates, list_packs
+// status) flips together through this one function, so no reader can
+// disagree with another.
 export function resolveEnabledPacks(env: NodeJS.ProcessEnv = process.env): ReadonlySet<PackId> {
   if (runtimeOverride) return runtimeOverride.enabled;
   const raw = (env.DEVKIT_PACKS ?? '').trim();
