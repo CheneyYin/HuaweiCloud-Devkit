@@ -257,6 +257,90 @@ function listSkillDirsAll(): string[] {
     .map((name) => join(skillsDir, name));
 }
 
+test('the fixture grammar mirrors lib/policy-grammar (lockstep over a shared corpus)', async () => {
+  // The .mjs fixture cannot import the .ts lib, so it carries a verbatim
+  // mirror of the gateway grammar. A verbatim-copy claim needs an
+  // executable contract: drive BOTH implementations over the same line
+  // corpus and assert identical equivalence classes (round-11 — the
+  // mirror previously drifted silently; rounds 7-10 kept finding
+  // copies-of-copies). The fixture exposes its grammar via
+  // FAKE_GRAMMAR_ONLY=1, which skips the stdio server entirely.
+  process.env.FAKE_GRAMMAR_ONLY = '1';
+  let fixture;
+  try {
+    fixture = await import('../test/fixtures/fake-open-mcp-sidecar.mjs');
+  } finally {
+    delete process.env.FAKE_GRAMMAR_ONLY;
+  }
+  const lib = await import('../plugins/huaweicloud-core/src/lib/policy-grammar.ts');
+
+  const corpus = [
+    'ECS:CreateServers=allow',
+    'ECS : CreateServers = allow',
+    'ecs:createservers=ALLOW',
+    'ECS:Create?ervers=deny',
+    'RDS:List[!P]alavors=deny',
+    'RDS:List[A-Z]pcs=deny',
+    'OBS:*Object=deny',
+    '*=deny',
+    'server:gw1=allow',
+    'server:gw1:tool*=deny',
+    'ECS:X=maybe',
+    'ECS:X=allow # inline note',
+    'no equals sign',
+    '   ',
+    '# whole-line comment',
+    'RDS=deny',
+    'ECS:CreateAccessKey=allow',
+    'IAM:CreateToken=<redacted>',
+  ];
+
+  // Equivalence-class agreement: two lines are "the same rule" under the
+  // lib's semantic key iff they are the same under the fixture's. The
+  // fixture returns null for unparseable/server lines; the lib returns
+  // per-line unique keys — both express "never equal to anything else",
+  // so the class comparison treats null as its own line-identity.
+  const libKey = (line: string) => lib.ruleSemanticKey(line);
+  const fixtureKey = (line: string) => fixture.grammar.semanticKey(line) ?? `fixture-null:${line.trim().toLowerCase()}`;
+  for (const a of corpus) {
+    for (const b of corpus) {
+      assert.equal(
+        libKey(a) === libKey(b),
+        fixtureKey(a) === fixtureKey(b),
+        `equivalence disagreement: ${JSON.stringify(a)} vs ${JSON.stringify(b)}`,
+      );
+    }
+  }
+
+  // Matcher agreement over the wildcard surface: the fixture's
+  // sideMatches/productMatches must accept/reject exactly what the lib's
+  // do for every (pattern, value) pair drawn from the corpus patterns.
+  const patterns = ['CreateServers', 'Create?ervers', 'List[!P]alavors', 'List[A-Z]pcs', '*Object', '*', 'Create*'];
+  const values = [
+    'CreateServers',
+    'CreateXervers',
+    'ListMalavors',
+    'ListPalavors',
+    'ListIpcs',
+    'GetObject',
+    'anything',
+  ];
+  for (const pattern of patterns) {
+    for (const value of values) {
+      assert.equal(
+        lib.sideMatches(pattern, value),
+        fixture.grammar.sideMatches(pattern, value),
+        `sideMatches disagreement: ${pattern} vs ${value}`,
+      );
+    }
+    assert.equal(
+      lib.productMatches(pattern, 'ecs'),
+      fixture.grammar.productMatches(pattern, 'ecs'),
+      `productMatches disagreement: ${pattern}`,
+    );
+  }
+});
+
 test('skill SKILL.md files meet minimum content quality bar', () => {
   const skillsDir = join(pluginRoot, 'skills');
   const skillNames = readdirSync(skillsDir).filter((name) => existsSync(join(skillsDir, name, 'SKILL.md')));

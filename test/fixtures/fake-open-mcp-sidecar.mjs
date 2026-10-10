@@ -78,12 +78,14 @@ function callableToolNames() {
   return gatewayToolNames().filter((name) => !hidden.has(name));
 }
 
-// fnmatch translation, a verbatim copy of fnmatchRegex in
-// packs/huaweicloud-open-mcp/approval.ts (the .ts source; the fixture is
-// .mjs and cannot import it without tsc allowJs — keep the two in lockstep
-// when editing). Class translation per fnmatch.translate: '!' after '['
-// negates, ']' right after '[' or '[!' is literal, '\' escaped,
-// unterminated '[' literal, guarded construction with literal fallback.
+// fnmatch translation, a verbatim mirror of fnmatchRegex in
+// src/lib/policy-grammar.ts (the .mjs fixture cannot import the .ts lib).
+// structure.test's lockstep check drives both implementations over a
+// shared corpus and asserts identical equivalence classes — edit both
+// together or the lockstep test goes red. Class translation per
+// fnmatch.translate: '!' after '[' negates, ']' right after '[' or '[!'
+// is literal, '\' escaped, unterminated '[' literal, guarded construction
+// with literal fallback.
 function fnmatchRegex(pattern) {
   let out = '';
   for (let index = 0; index < pattern.length; index += 1) {
@@ -183,18 +185,46 @@ function matchingFileRule(product, api) {
   return file === undefined ? null : { line: file, scope: 'permanent' };
 }
 
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', (chunk) => {
-  buffer += chunk;
-  let newline = buffer.indexOf('\n');
-  while (newline >= 0) {
-    const line = buffer.slice(0, newline).trim();
-    buffer = buffer.slice(newline + 1);
-    if (line) handleLine(line);
-    newline = buffer.indexOf('\n');
-  }
-});
-process.stdin.on('end', () => process.exit(0));
+// The grammar surface this fixture mirrors from lib/policy-grammar.ts —
+// exported for the structure.test lockstep check (FAKE_GRAMMAR_ONLY=1
+// imports this module without starting the stdio server below).
+export const grammar = { fnmatchRegex, productMatches, sideMatches, semanticKey: (text) => semanticKeyOf(text) };
+
+// The fixture's inline remove-path key (mirror of ruleSemanticKey's
+// product branch; named to avoid colliding with the local remove closure).
+function semanticKeyOf(text) {
+  const stripped = String(text).trim();
+  if (stripped === '' || stripped.startsWith('#')) return null;
+  const eq = stripped.lastIndexOf('=');
+  if (eq < 0) return null;
+  const effect = stripped
+    .slice(eq + 1)
+    .trim()
+    .toLowerCase();
+  if (effect !== 'allow' && effect !== 'deny') return null;
+  const target = stripped.slice(0, eq).trim();
+  if (target.startsWith('server:')) return null;
+  const colon = target.indexOf(':');
+  if (colon < 0 && target !== '*') return null;
+  const product = (colon < 0 ? '*' : target.slice(0, colon)).trim() || '*';
+  const apiPattern = (colon < 0 ? '*' : target.slice(colon + 1)).trim() || '*';
+  return `${product.toLowerCase()}::${apiPattern.toLowerCase()}::${effect}`;
+}
+
+if (process.env.FAKE_GRAMMAR_ONLY !== '1') {
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk) => {
+    buffer += chunk;
+    let newline = buffer.indexOf('\n');
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      if (line) handleLine(line);
+      newline = buffer.indexOf('\n');
+    }
+  });
+  process.stdin.on('end', () => process.exit(0));
+}
 
 function send(message) {
   process.stdout.write(JSON.stringify(message) + '\n');
@@ -398,25 +428,7 @@ function handleLine(line) {
           });
           return;
         }
-        const semanticKey = (text) => {
-          const stripped = String(text).trim();
-          if (stripped === '' || stripped.startsWith('#')) return null;
-          const eq = stripped.lastIndexOf('=');
-          if (eq < 0) return null;
-          const effect = stripped
-            .slice(eq + 1)
-            .trim()
-            .toLowerCase();
-          if (effect !== 'allow' && effect !== 'deny') return null;
-          const target = stripped.slice(0, eq).trim();
-          if (target.startsWith('server:')) return null;
-          const colon = target.indexOf(':');
-          if (colon < 0 && target !== '*') return null;
-          const product = (colon < 0 ? '*' : target.slice(0, colon)).trim() || '*';
-          const apiPattern = (colon < 0 ? '*' : target.slice(colon + 1)).trim() || '*';
-          return `${product.toLowerCase()}::${apiPattern.toLowerCase()}::${effect}`;
-        };
-        const wanted = semanticKey(line);
+        const wanted = semanticKeyOf(line);
         if (wanted === null) {
           respond(request.id, { ok: false, reason: `规则格式非法：${line}` });
           return;
@@ -424,13 +436,13 @@ function handleLine(line) {
         let removed = false;
         // Overlay first, then the file layer — the real gateway's
         // cross-layer remove order.
-        const index = rules.findIndex((rule) => semanticKey(rule.line) === wanted);
+        const index = rules.findIndex((rule) => semanticKeyOf(rule.line) === wanted);
         if (index >= 0) {
           rules.splice(index, 1);
           removed = true;
         } else {
           const file = fileLines();
-          const fileIndex = file.findIndex((fileLine) => semanticKey(fileLine) === wanted);
+          const fileIndex = file.findIndex((fileLine) => semanticKeyOf(fileLine) === wanted);
           if (fileIndex >= 0) {
             file.splice(fileIndex, 1);
             writeFileLines(file);
