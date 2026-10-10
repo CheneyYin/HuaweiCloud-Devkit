@@ -233,7 +233,25 @@ function acquireLock(dir: string, takeoverMs: number = LOCK_TAKEOVER_MS): void {
       sleepSync(LOCK_POLL_MS);
       continue;
     }
-    rmSync(lock, { recursive: true, force: true });
+    // The removal itself must be an atomic claim: two contenders can both
+    // pass the re-read above against the SAME dead lock (both re-reads
+    // happen while the dead directory still stands), and a plain rmSync
+    // then races — the slower rm deletes the FASTER taker's fresh lock
+    // (rmSync never validates content), and both go on to hold at once.
+    // This is the observed tmpfs/loaded-box flake. Renaming the dead
+    // directory to a per-process unique path is the atomic arbiter: only
+    // one contender's rename succeeds; the loser's rename fails (the
+    // source is gone) and it goes back to waiting while the winner's
+    // next mkdir claims the lock outright. The loser's unique-named
+    // directory is cleaned after.
+    const uniqueStash = `${lock}.${process.pid}.${Date.now()}.takeover`;
+    try {
+      renameSync(lock, uniqueStash);
+    } catch {
+      sleepSync(LOCK_POLL_MS);
+      continue;
+    }
+    rmSync(uniqueStash, { recursive: true, force: true });
   }
 }
 
