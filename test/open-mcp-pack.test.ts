@@ -850,6 +850,74 @@ test(
 );
 
 test(
+  'a once-burn removes the matched overlay rule, not the last one',
+  withGatewayEnv({ FAKE_POLICY: '1' }, async () => {
+    // Two once rules, not one: burning the wrong element is only
+    // observable when a second rule sits behind the matched one, and the
+    // gateway burns the rule that granted the call.
+    for (const line of ['ECS:RuleA=allow', 'ECS:RuleB=allow']) {
+      const added = await callTool('huaweicloud_gateway_call', {
+        tool: 'manage_policy',
+        toolArgs: { action: 'add', line, scope: 'once' },
+      });
+      assert.equal(added.ok, true, JSON.stringify(added));
+    }
+
+    const executed = await callTool('huaweicloud_gateway_call', {
+      tool: 'execute_api',
+      toolArgs: { product: 'ECS', api: 'RuleA' },
+    });
+    assert.equal(executed.ok, true, JSON.stringify(executed));
+
+    const listing = await callTool('huaweicloud_gateway_call', { tool: 'manage_policy', toolArgs: { action: 'list' } });
+    assert.equal(listing.ok, true, JSON.stringify(listing));
+    const lines = new Set(listing.rules.map((rule) => rule.line));
+    assert.ok(!lines.has('ECS:RuleA=allow'), 'the executed once rule burned');
+    assert.ok(lines.has('ECS:RuleB=allow'), 'the untouched once rule survives');
+  }),
+);
+
+test(
+  "the fixture mirrors the gateway's exact-string manage_policy semantics",
+  withGatewayEnv({ FAKE_POLICY: '1' }, async () => {
+    // The devkit floor denies every non-canonical shape before the
+    // forward, so these pin the fixture's own dispatch through
+    // callOpenMcpTool directly, bypassing gateway_call.
+    const upper = await callOpenMcpTool('manage_policy', { action: 'ADD', line: 'ECS:X=allow', scope: 'once' });
+    assert.equal(upper.ok, false, JSON.stringify(upper));
+    assert.match(String(upper.error), /unsupported manage_policy action/);
+
+    const bogus = await callOpenMcpTool('manage_policy', { action: 'add', line: 'ECS:X=allow', scope: 'bogus' });
+    assert.equal(bogus.ok, false, JSON.stringify(bogus));
+    assert.match(
+      String(bogus.error),
+      /未知 scope: bogus（可选 permanent\/temporary\/session\/once）/,
+      'the probed vocabulary, in the probed order',
+    );
+
+    // v0.2.0a4 (re-probed 2026-10-11) rejects the verbatim ' ONCE '
+    // spelling at add; round-5's accept-and-never-burn measurement was
+    // the pre-a4 gateway. The rejection echoes the raw spelling, never a
+    // normalized one.
+    const spaced = await callOpenMcpTool('manage_policy', { action: 'add', line: 'ECS:X=allow', scope: ' ONCE ' });
+    assert.equal(spaced.ok, false, JSON.stringify(spaced));
+    assert.match(
+      String(spaced.error),
+      /未知 scope:\s+ONCE\s+（可选 permanent\/temporary\/session\/once）/,
+      'the raw spelling crosses un-normalized',
+    );
+
+    const ttlRemove = await callOpenMcpTool('manage_policy', {
+      action: 'remove',
+      line: 'ECS:X=allow',
+      ttl_seconds: 3600,
+    });
+    assert.equal(ttlRemove.ok, false, JSON.stringify(ttlRemove));
+    assert.match(String(ttlRemove.error), /remove 不接受 scope/);
+  }),
+);
+
+test(
   'the floor matrix denies end-to-end through the dispatch',
   withGatewayEnv({ FAKE_POLICY: '1' }, async () => {
     const protectedTree = join(stateHome, '.config', 'huaweicloud', 'leak.csv');
@@ -955,6 +1023,9 @@ test(
     // pins AR1 (docs/safety-model.md) as concrete behavior: manage_policy
     // remove is cross-layer and rewrites the operator's file.
     const policyPath = join(stateHome, '.config', 'huaweicloud', 'packs', 'huaweicloud-open-mcp', 'policy');
+    // The directory otherwise appears only with the first spawn's
+    // provisioning; a standalone run must create it before writing.
+    mkdirSync(dirname(policyPath), { recursive: true });
     writeFileSync(policyPath, 'ECS:ListServers=allow\n');
     try {
       const execArgs = { product: 'ECS', api: 'ListServers' };

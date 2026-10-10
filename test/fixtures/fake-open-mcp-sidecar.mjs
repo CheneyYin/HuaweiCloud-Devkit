@@ -155,8 +155,13 @@ function sideMatchOf(line, product, api) {
 }
 
 function matchingRule(product, api) {
-  const hit = rules.find((rule) => sideMatchOf(rule.line, product, api) !== null);
-  return hit === undefined ? undefined : { ...hit, grants: sideMatchOf(hit.line, product, api) === true };
+  const hitIndex = rules.findIndex((rule) => sideMatchOf(rule.line, product, api) !== null);
+  if (hitIndex < 0) return undefined;
+  const hit = rules[hitIndex];
+  // hitIndex rides along because the returned object is a spread copy, not
+  // the array element: the once-burn in execute_api splices by index (a
+  // copy's indexOf is -1, and splice(-1) eats the LAST rule).
+  return { ...hit, grants: sideMatchOf(hit.line, product, api) === true, hitIndex };
 }
 
 // File-layer rule match for execute (the real gateway evaluates the
@@ -327,8 +332,10 @@ function handleLine(line) {
       if (action === 'list') {
         // The real gateway's list shape (source-verified): the rules array
         // carries the overlay AND the file's semantic lines (scope
-        // 'permanent'), the 'policy' text field carries the raw file
-        // including comments.
+        // 'permanent'), overlay entries first (the gateway's own order,
+        // re-probed 2026-10-11 against v0.2.0a4 — also this fixture's
+        // overlay-first match precedence), and the 'policy' text field
+        // carries the raw file including comments.
         const fileText = readFileText();
         const fileRows = fileLines().map((fileLine) => ({ line: fileLine, scope: 'permanent', expires_in: null }));
         respond(request.id, {
@@ -336,15 +343,17 @@ function handleLine(line) {
           tool: name,
           action: 'list',
           policy: fileText,
-          rules: [...fileRows, ...rules.map((rule) => ({ line: rule.line, scope: rule.scope, expires_in: null }))],
+          rules: [...rules.map((rule) => ({ line: rule.line, scope: rule.scope, expires_in: null })), ...fileRows],
         });
       } else if (action === 'add') {
         // The real gateway's add validates the line through parse_policy
         // and rejects unparseable ones outright (round-8 mirror). A line is
-        // addable iff its semantic key is a product RULE. The scope is
-        // matched and stored verbatim: the gateway compares exact strings
-        // (round-5 probe: a verbatim ' ONCE ' grant never burns), so the
-        // burn check in execute_api fires only on the canonical spelling.
+        // addable iff its semantic key is a product RULE. The scope check
+        // is exact-string against the vocabulary: v0.2.0a4 rejects ' ONCE '
+        // at add (re-probed 2026-10-11; round-5's never-burning ' ONCE '
+        // grant was the pre-a4 gateway), so only canonical spellings are
+        // ever stored — and burned — and the raw spelling echoes in the
+        // rejection, never normalized.
         const key = semanticKeyOf(line);
         if (key.startsWith('empty:') || key.startsWith('unparseable:') || key.startsWith('server:')) {
           respond(request.id, { ok: false, reason: `规则格式非法：${line}` });
@@ -356,7 +365,9 @@ function handleLine(line) {
           return;
         }
         rules.push({ line, scope });
-        respond(request.id, { ok: true, tool: name, action: 'add', line, scope });
+        // Success responses may carry fixture fields beyond the gateway's
+        // envelope (tool, line, removed) — they serve test assertions.
+        respond(request.id, { ok: true, tool: name, action: 'add', line, scope, policy: readFileText() });
       } else if (action === 'remove') {
         // The real gateway's remove envelope (source-verified rounds 7-8):
         // a scoped remove is rejected outright ("remove 不接受
@@ -364,7 +375,10 @@ function handleLine(line) {
         // ("规则格式非法"); a valid line that matches nothing is rejected
         // ("未找到匹配的规则"); a hit removes by SEMANTIC key, overlay
         // first then file, so spacing/case variants do not protect a rule.
-        if (args.scope !== undefined && args.scope !== null) {
+        if (
+          (args.scope !== undefined && args.scope !== null) ||
+          (args.ttl_seconds !== undefined && args.ttl_seconds !== null)
+        ) {
           respond(request.id, {
             ok: false,
             reason: 'remove 不接受 scope/ttl_seconds 参数（跨层匹配：先会话/临时后文件，首个语义命中移除）',
@@ -396,7 +410,7 @@ function handleLine(line) {
           respond(request.id, { ok: false, reason: `未找到匹配的规则：${line}` });
           return;
         }
-        respond(request.id, { ok: true, tool: name, action: 'remove', line, removed: true });
+        respond(request.id, { ok: true, tool: name, action: 'remove', line, removed: true, policy: readFileText() });
       } else {
         respond(request.id, { ok: false, reason: `unsupported manage_policy action: ${args.action}` });
       }
@@ -413,7 +427,7 @@ function handleLine(line) {
       }
       // Burns only the canonical 'once' spelling: scope values are stored
       // verbatim, mirroring the gateway's exact-string matching.
-      if (rule.scope === 'once') rules.splice(rules.indexOf(rule), 1);
+      if (rule.scope === 'once' && rule.hitIndex !== undefined) rules.splice(rule.hitIndex, 1);
       respond(request.id, { ok: true, tool: name, executed: { product, api }, pid: process.pid });
       return;
     }
