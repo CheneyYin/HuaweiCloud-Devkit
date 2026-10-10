@@ -113,7 +113,6 @@ class OpenMcpSidecar {
     if (currentSidecar === this) {
       currentSidecar = null;
       sidecarPromise = null;
-      gatewaySurface = null;
     }
   }
 
@@ -187,26 +186,6 @@ let sidecarPromise: Promise<OpenMcpSidecar> | null = null;
 // The resolved instance behind sidecarPromise; onExit compares against it so
 // a stale child's late exit cannot clear a healthy replacement.
 let currentSidecar: OpenMcpSidecar | null = null;
-// Advisory cache of the live child's tools/list names, populated after every
-// successful handshake and refreshed when a call reports Unknown tool. The
-// gateway_call classifier turns a surface lacking execute_api into a deny
-// instead of spending user consent on a call the child cannot serve; null
-// means unknown, which skips the drift check entirely.
-let gatewaySurface: Set<string> | null = null;
-
-// One tools/list against a live child, normalized into the surface cache.
-// Failures propagate to the caller: spawn treats them as "leave the cache
-// alone and continue" (advisory), and the Unknown-tool refresh swallows
-// them so the caller still sees its original error.
-async function fetchGatewaySurface(sidecar: OpenMcpSidecar): Promise<void> {
-  const raw = (await sidecar.request('tools/list', {}, CALL_TIMEOUT_MS)) as {
-    tools?: Array<{ name?: unknown }>;
-  };
-  const names = (Array.isArray(raw?.tools) ? raw.tools : [])
-    .map((entry) => (typeof entry?.name === 'string' ? entry.name : ''))
-    .filter((name) => name !== '');
-  gatewaySurface = new Set(names);
-}
 
 // Supported install paths, in resolution order: OPENMCP_BIN (absolute path
 // to the gateway binary; tests point it at the fake fixture) → a persistent
@@ -241,8 +220,10 @@ export function resolveGatewayCommand(env: NodeJS.ProcessEnv = process.env): Gat
 //   --elicitation off  always: the sidecar is a non-interactive child by
 //                      construction, and elicitation is not probe-able at
 //                      handshake (not declared in capabilities even with
-//                      --elicitation auto), so consent flows through the
-//                      devkit approval face instead.
+//                      --elicitation auto). Consent is the gateway policy
+//                      engine's business: it refuses under policy and its
+//                      refusal reason teaches the conversational consent
+//                      flow (confirm with the user, then manage_policy).
 //   --mode openapi     only when HUAWEICLOUD_MCP_MODE is unset; when the
 //                      operator set the gateway's own env, no arg is passed
 //                      so the env wins (args outrank env in the gateway).
@@ -368,12 +349,6 @@ async function spawnSidecar(): Promise<OpenMcpSidecar> {
     sidecar.kill();
     throw error;
   }
-  try {
-    await fetchGatewaySurface(sidecar);
-  } catch {
-    // The cache is advisory: a child that completes the handshake but
-    // cannot answer tools/list still serves calls; drift checks stay off.
-  }
   return sidecar;
 }
 
@@ -433,9 +408,8 @@ export async function callOpenMcpTool(
   args: Record<string, unknown>,
   timeoutMs?: number,
 ): Promise<OpenMcpToolResult> {
-  let sidecar: OpenMcpSidecar | undefined;
   try {
-    sidecar = await openMcpSidecar();
+    const sidecar = await openMcpSidecar();
     const raw = (await sidecar.call(name, args, timeoutMs)) as {
       content?: Array<{ text?: string }>;
       structuredContent?: Record<string, unknown>;
@@ -446,7 +420,6 @@ export async function callOpenMcpTool(
         .map((part) => part.text || '')
         .join('\n')
         .trim();
-      await refreshSurfaceOnUnknownTool(sidecar, text);
       return { ok: false, tool: name, error: redactErrorText(text) || 'open-mcp gateway tool error' };
     }
     if (raw.structuredContent && typeof raw.structuredContent === 'object') {
@@ -473,22 +446,7 @@ export async function callOpenMcpTool(
     }
   } catch (error) {
     const message = redactSecrets(error instanceof Error ? error.message : String(error));
-    if (sidecar) await refreshSurfaceOnUnknownTool(sidecar, String(message));
     return { ok: false, tool: name, error: message };
-  }
-}
-
-// "Unknown tool" from the child means the surface drifted since the cache
-// was populated: refresh before the error returns so the next classify sees
-// the live surface. Speaks to the sidecar request directly (no recursion
-// into callOpenMcpTool) and swallows its own failure — a dead child leaves
-// the error the caller already has, and the next spawn repopulates.
-async function refreshSurfaceOnUnknownTool(sidecar: OpenMcpSidecar, message: string): Promise<void> {
-  if (!/Unknown tool/i.test(message)) return;
-  try {
-    await fetchGatewaySurface(sidecar);
-  } catch {
-    // dead child or failed list: the pending respawn path owns recovery
   }
 }
 
@@ -498,12 +456,10 @@ export interface GatewayToolListing {
   inputSchema?: unknown;
 }
 
-// The child's tools/list, normalized for the gateway_list_tools face.
-// Kept distinct from the surface cache on purpose: this returns full
-// entries (descriptions, input schemas) while the cache keeps only the
-// names the classifier needs — but it writes the cache too, so the drift
-// report a call just read also arms the classifier for the very next
-// call instead of waiting for the next spawn or an Unknown-tool error.
+// The child's tools/list, normalized for the gateway_list_tools face:
+// full entries (descriptions, input schemas) plus the drift report
+// against the devkit's static projection (KNOWN_GATEWAY_TOOLS in
+// tools.ts).
 export async function listGatewayTools(): Promise<GatewayToolListing[]> {
   const sidecar = await openMcpSidecar();
   const raw = (await sidecar.request('tools/list', {}, CALL_TIMEOUT_MS)) as {
@@ -518,7 +474,6 @@ export async function listGatewayTools(): Promise<GatewayToolListing[]> {
       inputSchema: entry.inputSchema,
     });
   }
-  gatewaySurface = new Set(tools.map((entry) => entry.name));
   return tools;
 }
 
@@ -529,15 +484,10 @@ export function _openMcpSidecarStats(): { spawns: number; alive: boolean; lastPi
   return { spawns: stats.spawns, alive: sidecarPromise !== null, lastPid: stats.lastPid };
 }
 
-export function _gatewaySurface(): ReadonlySet<string> | null {
-  return gatewaySurface;
-}
-
 export async function _resetOpenMcpSidecar(): Promise<void> {
   const promise = sidecarPromise;
   currentSidecar = null;
   sidecarPromise = null;
-  gatewaySurface = null;
   if (!promise) return;
   try {
     const sidecar = await promise;
@@ -565,7 +515,6 @@ export async function _resetOpenMcpSidecar(): Promise<void> {
 export function restartOpenMcpSidecar(): Promise<{ pid: number | null; spawns: number }> {
   const previous = sidecarPromise;
   currentSidecar = null;
-  gatewaySurface = null;
   const next = (async () => {
     if (previous) {
       try {

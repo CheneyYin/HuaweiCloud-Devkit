@@ -123,7 +123,7 @@ async function handleGatewayListTools() {
         missing,
         note:
           missing.length > 0
-            ? `warning: the live gateway surface no longer exposes ${missing.join(', ')}; state-changing names among them are denied as drift before consent, read-only names pass through and fail at the gateway`
+            ? `warning: the live gateway surface no longer exposes ${missing.join(', ')}; calls to these names are still forwarded and fail at the gateway with Unknown tool`
             : 'the live surface covers every gateway tool the devkit projects',
       },
     };
