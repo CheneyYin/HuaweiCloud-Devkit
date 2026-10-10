@@ -14,14 +14,12 @@ import {
   callOpenMcpTool,
   resolveGatewayCommand,
   resolveGatewaySpawnArgs,
-  _gatewaySurface,
   _openMcpSidecarStats,
   _resetOpenMcpSidecar,
 } from '../plugins/huaweicloud-core/src/packs/huaweicloud-open-mcp/sidecar.ts';
 import {
   classify,
   GATEWAY_TOOL_VOCABULARY,
-  matchingDenyRule,
   resolveApprovalMode,
 } from '../plugins/huaweicloud-core/src/packs/huaweicloud-open-mcp/approval.ts';
 
@@ -508,136 +506,141 @@ test('an operator policy env suppresses devkit provisioning', async () => {
   }
 });
 
-// ── approval.ts unit surface (pure decision table; no gateway child) ──
+// ── approval.ts unit surface (pure floor table; no gateway child) ──
 
-test('classify: read-only discovery tools and manage_policy list pass through', () => {
+test('classify: read-only discovery tools and manage_policy list forward', () => {
   for (const tool of ['search_apis', 'list_products', 'get_product', 'list_apis', 'get_api', 'get_api_examples']) {
-    assert.deepEqual(classify(tool, {}, 'devkit', null), { verdict: 'passthrough' }, tool);
-    assert.deepEqual(
-      classify(tool, {}, 'native', null),
-      { verdict: 'passthrough' },
-      `${tool} stays readonly in native mode`,
-    );
+    assert.deepEqual(classify(tool, {}), { verdict: 'forward' }, tool);
   }
-  assert.deepEqual(classify('manage_policy', { action: 'list' }, 'devkit', null), { verdict: 'passthrough' });
+  assert.deepEqual(classify('manage_policy', { action: 'list' }), { verdict: 'forward' });
 });
 
-test('classify: manage_policy add demands an explicit ephemeral scope', () => {
-  for (const scope of ['once', 'session', 'temporary', ' ONCE ', 'Session']) {
-    assert.deepEqual(
-      classify('manage_policy', { action: 'add', line: 'ECS:X=allow', scope }, 'devkit', null),
-      {
-        verdict: 'token',
-      },
-      `scope ${scope}`,
-    );
+test('classify: manage_policy add demands a canonical ephemeral scope', () => {
+  for (const scope of ['once', 'session', 'temporary']) {
+    assert.deepEqual(classify('manage_policy', { action: 'add', line: 'ECS:X=allow', scope }), {
+      verdict: 'forward',
+    });
   }
-  // The allow-list failure direction is closed: unknown, missing, and every
-  // persistent spelling deny (round-4 probe bought an eternal grant
-  // through 'PERMANENT' before this). Non-string scopes deny too — an
-  // array ['once'] stringifies to 'once' and must not slip the gate.
-  for (const scope of ['permanent', 'PERMANENT', ' permanent ', 'forever', 'banana', '', ['once'], { once: 1 }, 42]) {
+  // F1 spelling floor: the gateway matches by exact string, so a verbatim
+  // ' ONCE '/'Once' is a grant the engine never burns. The normalization
+  // the token ceremony used to do is gone; non-canonical spellings deny
+  // before the call leaves.
+  for (const scope of [' ONCE ', 'Once', 'ONCE', 'session ', ' Temporary']) {
+    const ruling = classify('manage_policy', { action: 'add', line: 'ECS:X=allow', scope });
+    assert.equal(ruling.verdict, 'deny', `scope ${JSON.stringify(scope)} must deny`);
+    assert.match(String(ruling.reason), /canonical spelling/);
+  }
+  // The ephemeral allow-list failure direction stays closed: unknown,
+  // missing, and every persistent spelling deny, and non-string scopes
+  // deny too — an array ['once'] stringifies to 'once' and must not slip
+  // the gate. The gateway itself would accept scope=permanent and write
+  // the rule into the operator's policy file; this floor is the barrier.
+  for (const scope of ['permanent', 'forever', 'banana', '', undefined, ['once'], { once: 1 }, 42]) {
     const toolArgs: Record<string, unknown> = { action: 'add', line: 'ECS:X=allow' };
-    toolArgs.scope = scope;
-    const ruling = classify('manage_policy', toolArgs, 'devkit', null);
+    if (scope !== undefined) toolArgs.scope = scope;
+    const ruling = classify('manage_policy', toolArgs);
     assert.equal(ruling.verdict, 'deny', `scope ${JSON.stringify(scope)} must deny`);
     assert.match(String(ruling.reason), /ephemeral scopes|policy file/);
   }
-  // remove: the token binds the rule text; scope is REJECTED on remove
-  // (round-8: the gateway refuses a scoped remove outright — a token-gated
-  // remove+scope burned the approval on a guaranteed rejection).
-  assert.deepEqual(classify('manage_policy', { action: 'remove', line: 'ECS:X=allow' }, 'devkit', null), {
-    verdict: 'token',
-  });
-  for (const scope of ['once', 'permanent']) {
-    const scoped = classify('manage_policy', { action: 'remove', line: 'ECS:X=allow', scope }, 'native', null);
-    assert.equal(scoped.verdict, 'deny', `remove with scope ${scope} denies before consent is spent`);
-    assert.match(String(scoped.reason), /takes no scope/);
+  // Non-canonical persistent spellings ('PERMANENT', ' permanent ') hit
+  // the F1 floor first — denied either way, with spelling guidance; the
+  // canonical 'permanent' spelling is the one that reaches (and is
+  // refused by) the ephemeral floor with the operator-file pointer.
+  for (const scope of ['PERMANENT', ' permanent ']) {
+    const ruling = classify('manage_policy', { action: 'add', line: 'ECS:X=allow', scope });
+    assert.equal(ruling.verdict, 'deny', `scope ${JSON.stringify(scope)} must deny`);
+    assert.match(String(ruling.reason), /canonical spelling/);
   }
-  // Action normalization (round-6): case/whitespace variants route into
-  // the add/remove branches like their canonical spellings — 'ADD' with a
-  // valid ephemeral scope spends a token, not a deny. Genuinely unknown
-  // actions (and non-strings) deny: scope admission must never depend on
-  // the gateway being spelling-stricter than the classifier.
-  assert.deepEqual(
-    classify('manage_policy', { action: 'ADD', line: 'ECS:X=allow', scope: 'once' }, 'devkit', null),
-    { verdict: 'token' },
-    'normalized ADD routes into the add branch',
-  );
+});
+
+test('classify: manage_policy add rejects ttl_seconds outright (F2)', () => {
+  // The gateway honors ttl_seconds only with scope=temporary, where it
+  // stretches an "ephemeral" grant into a long-lived one. The knob denies
+  // on every scope spelling, including the gateway-legal combination.
+  for (const scope of ['once', 'session', 'temporary']) {
+    const ruling = classify('manage_policy', {
+      action: 'add',
+      line: 'ECS:X=allow',
+      scope,
+      ttl_seconds: 3600,
+    });
+    assert.equal(ruling.verdict, 'deny', `ttl_seconds with scope=${scope} must deny`);
+    assert.match(String(ruling.reason), /ttl_seconds/);
+    assert.match(String(ruling.reason), /policy file/, 'the denial points at the operator alternative');
+  }
+  // A null ttl is absent, the same reading the remove-scope floor gives a
+  // null scope: only a value that reaches the gateway as a number can
+  // stretch a grant.
+  const nullTtl = classify('manage_policy', { action: 'add', line: 'ECS:X=allow', scope: 'once', ttl_seconds: null });
+  assert.equal(nullTtl.verdict, 'forward', 'an explicit null ttl carries no value and forwards');
+});
+
+test('classify: manage_policy remove takes no scope; the action allowlist denies everything else', () => {
+  assert.deepEqual(classify('manage_policy', { action: 'remove', line: 'ECS:X=allow' }), { verdict: 'forward' });
+  for (const scope of ['once', 'permanent']) {
+    const ruling = classify('manage_policy', { action: 'remove', line: 'ECS:X=allow', scope });
+    assert.equal(ruling.verdict, 'deny', `remove with scope ${scope} denies before the forward`);
+    assert.match(String(ruling.reason), /takes no scope/);
+  }
+  // F1: non-canonical action spellings deny as spelling, not as unknown
+  // actions — the message must name the fix, not the allowlist.
+  const upper = classify('manage_policy', { action: 'ADD', line: 'ECS:X=allow', scope: 'once' });
+  assert.equal(upper.verdict, 'deny', "'ADD' is a grant the gateway would never burn");
+  assert.match(String(upper.reason), /canonical spelling/);
   for (const action of ['append', ['add'], 42, undefined]) {
     const toolArgs: Record<string, unknown> = { line: 'ECS:X=allow', scope: 'once' };
     if (action !== undefined) toolArgs.action = action;
-    const ruling = classify('manage_policy', toolArgs, 'devkit', null);
+    const ruling = classify('manage_policy', toolArgs);
     assert.equal(ruling.verdict, 'deny', `action ${JSON.stringify(action)} must deny`);
     assert.match(String(ruling.reason), /only list, add, and remove/);
   }
 });
 
-test('classify: execute_api secret reads are denied in both modes', () => {
-  for (const mode of ['devkit', 'native']) {
-    const ruling = classify('execute_api', { product: 'DEW', api: 'ShowSecretVersion' }, mode, null);
-    assert.equal(ruling.verdict, 'deny', mode);
-    assert.match(String(ruling.reason), /secret/i);
+test('classify: execute_api secret reads deny; every other execute forwards', () => {
+  const ruling = classify('execute_api', { product: 'DEW', api: 'ShowSecretVersion' });
+  assert.equal(ruling.verdict, 'deny');
+  assert.match(String(ruling.reason), /secret/i);
+  assert.deepEqual(classify('execute_api', { product: 'ECS', api: 'ListServers' }), { verdict: 'forward' });
+});
+
+test('classify: unknown tool names deny against the static vocabulary', () => {
+  // Fail-closed on ignorance, judged against the static table — the live
+  // surface is never consulted. Every vocabulary name (readonly AND
+  // routed) is known; anything else denies with the vocabulary reason.
+  // Known names may still deny on their own floors (manage_policy with
+  // empty args denies on the action allowlist), so the known-name check
+  // asserts the absence of the vocabulary denial, not a forward verdict.
+  for (const tool of [...GATEWAY_TOOL_VOCABULARY.readonly, ...GATEWAY_TOOL_VOCABULARY.routed]) {
+    const ruling = classify(tool, {});
+    assert.doesNotMatch(
+      String(ruling.reason ?? ''),
+      /not in the gateway tool vocabulary/,
+      `${tool} is a known name and must not unknown-deny`,
+    );
+  }
+  for (const tool of ['failing_tool', 'envelope_fail_tool', 'no_such_tool', 'ExecuteApi', 'manage-policy']) {
+    const ruling = classify(tool, {});
+    assert.equal(ruling.verdict, 'deny', `${tool} is outside the vocabulary and must deny`);
+    assert.match(String(ruling.reason), /not in the gateway tool vocabulary/);
   }
 });
 
-test('classify: surface drift denies execute_api in both modes; native passes through otherwise', () => {
-  const args = { product: 'ECS', api: 'CreateServers' };
-  assert.deepEqual(classify('execute_api', args, 'devkit', null), { verdict: 'token' }, 'unknown surface: token');
-  assert.deepEqual(
-    classify('execute_api', args, 'native', new Set(['execute_api'])),
-    { verdict: 'passthrough' },
-    'native delegates to the gateway policy engine',
-  );
-  const withoutExecuteApi = new Set(['search_apis']);
-  for (const mode of ['devkit', 'native']) {
-    const ruling = classify('execute_api', args, mode, withoutExecuteApi);
-    assert.equal(ruling.verdict, 'deny', mode);
-    assert.match(String(ruling.reason), /drift/);
-  }
-});
-
-test('classify: the drift gate covers every non-read-only tool and skips read-only names', () => {
-  const surface = new Set(['search_apis', 'list_products']);
-  // The routed half of the vocabulary table is the drift-gate subject
-  // set — iterating the table (not a hand-written list) keeps the gate
-  // and the vocabulary in lockstep.
-  for (const tool of [...GATEWAY_TOOL_VOCABULARY.routed, 'unknown_tool']) {
-    const ruling = classify(tool, {}, 'devkit', surface);
-    assert.equal(ruling.verdict, 'deny', `${tool} missing from the live surface denies as drift`);
-    assert.match(String(ruling.reason), new RegExp(`no longer exposes ${tool}`));
-  }
-  // Read-only names skip the gate: a missing discovery tool never costs a
-  // token and fails harmlessly at the gateway.
-  assert.deepEqual(classify('list_products', {}, 'devkit', surface), { verdict: 'passthrough' });
-});
-
-test('classify: transform_data guards the protected tree; everything else fails closed', () => {
-  const inside = classify(
-    'transform_data',
-    { out: { path: join(stateHome, '.config', 'huaweicloud', 'leak.csv') } },
-    'devkit',
-    null,
-  );
+test('classify: transform_data guards the protected tree; clean calls forward', () => {
+  const inside = classify('transform_data', { out: { path: join(stateHome, '.config', 'huaweicloud', 'leak.csv') } });
   assert.equal(inside.verdict, 'deny');
   assert.match(String(inside.reason), /consent infrastructure|protected state tree/);
-  assert.deepEqual(classify('transform_data', { out: { path: join(tmpdir(), 'plain.csv') } }, 'devkit', null), {
-    verdict: 'token',
+  assert.deepEqual(classify('transform_data', { out: { path: join(tmpdir(), 'plain.csv') } }), {
+    verdict: 'forward',
   });
-  assert.deepEqual(
-    classify('transform_data', { sql: 'select 1' }, 'devkit', null),
-    { verdict: 'token' },
-    'no out path: token',
-  );
-  assert.deepEqual(classify('query_data', { sql: 'select 1' }, 'devkit', null), { verdict: 'token' });
-  assert.deepEqual(classify('unknown_tool', {}, 'native', null), { verdict: 'token' }, 'fail-closed on ignorance');
+  assert.deepEqual(classify('transform_data', { sql: 'select 1' }), { verdict: 'forward' }, 'no out path: forward');
+  assert.deepEqual(classify('query_data', { sql: 'select 1' }), { verdict: 'forward' });
 });
 
 test('classify: every structured file target and credential-shaped SQL is denied for the data tools', () => {
   const protectedPath = join(stateHome, '.config', 'huaweicloud', 'approvals.json');
   // out.path on transform_data (the write target).
   assert.equal(
-    classify('transform_data', { out: { path: protectedPath } }, 'devkit', null).verdict,
+    classify('transform_data', { out: { path: protectedPath } }).verdict,
     'deny',
     'out.path into the tree denies',
   );
@@ -645,29 +648,21 @@ test('classify: every structured file target and credential-shaped SQL is denied
   // resolves them too) — round-4: the guard covered out.path only.
   for (const tool of ['query_data', 'transform_data']) {
     assert.equal(
-      classify(tool, { sql: 'select * from t', tables: { victim: { path: protectedPath } } }, 'devkit', null).verdict,
+      classify(tool, { sql: 'select * from t', tables: { victim: { path: protectedPath } } }).verdict,
       'deny',
       `${tool} tables path into the tree denies`,
     );
     assert.equal(
-      classify(
-        tool,
-        { sql: 'select * from t', tables: { fine: { path: join(tmpdir(), 'plain.csv') } } },
-        'devkit',
-        null,
-      ).verdict,
-      'token',
-      `${tool} tables path outside the tree spends a token`,
+      classify(tool, { sql: 'select * from t', tables: { fine: { path: join(tmpdir(), 'plain.csv') } } }).verdict,
+      'forward',
+      `${tool} tables path outside the tree forwards`,
     );
   }
   // Best-effort text scan: a credential file referenced only inside SQL
-  // (read_csv) trips the CLI face's own credential patterns.
-  const sqlRead = classify(
-    'query_data',
-    { sql: "select * from read_csv('/home/u/.hcloud/config.json')" },
-    'devkit',
-    null,
-  );
+  // (read_csv) trips the CLI face's own credential patterns. The floors
+  // are the entire gate for these tools — the gateway does not
+  // policy-gate them at all.
+  const sqlRead = classify('query_data', { sql: "select * from read_csv('/home/u/.hcloud/config.json')" });
   assert.equal(sqlRead.verdict, 'deny', 'SQL credential literal denies');
   assert.match(String(sqlRead.reason), /credential/i);
 });
@@ -676,35 +671,27 @@ test('classify: the path scan survives Windows separators and ignores separator-
   // Raw values are walked, never JSON.stringify: serialization doubles
   // backslashes, and 'C:\hcloud\config' (dotless, single separator) then
   // defeated the credential patterns (round-5 probe).
-  const windowsDotless = classify(
-    'query_data',
-    { sql: "select * from read_csv('C:\\hcloud\\config')" },
-    'devkit',
-    null,
-  );
+  const windowsDotless = classify('query_data', { sql: "select * from read_csv('C:\\hcloud\\config')" });
   assert.equal(windowsDotless.verdict, 'deny', 'dotless Windows path in SQL denies');
-  const windowsDotted = classify(
-    'query_data',
-    { sql: "select * from read_csv('C:\\Users\\u\\.hcloud\\config.json')" },
-    'devkit',
-    null,
-  );
+  const windowsDotted = classify('query_data', {
+    sql: "select * from read_csv('C:\\Users\\u\\.hcloud\\config.json')",
+  });
   assert.equal(windowsDotted.verdict, 'deny', 'dotted Windows path in SQL denies');
   // False-positive direction closed: a '.hcloud' mention with no path
   // separator is prose, not a file reference.
-  const benign = classify('query_data', { sql: "select 'see the .hcloud docs for details'" }, 'devkit', null);
-  assert.equal(benign.verdict, 'token', 'separator-free mentions are not file references');
+  const benign = classify('query_data', { sql: "select 'see the .hcloud docs for details'" });
+  assert.equal(benign.verdict, 'forward', 'separator-free mentions are not file references');
   // Circular input terminates instead of throwing: classify rules, never
   // rejects.
   const circular: Record<string, unknown> = { sql: 'select 1' };
   circular.self = circular;
-  assert.doesNotThrow(() => classify('query_data', circular, 'devkit', null));
-  assert.equal(classify('query_data', circular, 'devkit', null).verdict, 'token');
+  assert.doesNotThrow(() => classify('query_data', circular));
+  assert.equal(classify('query_data', circular).verdict, 'forward');
   // A value that is itself a JSON string carries doubled separators in
   // memory (read_json('{"path":"C:\\\\hcloud\\\\config"}')); the collapsed
   // variant of each candidate restores the single separator the patterns
   // require (round-6).
-  const jsonNested = classify('query_data', { sql: JSON.stringify({ path: 'C:\\hcloud\\config' }) }, 'devkit', null);
+  const jsonNested = classify('query_data', { sql: JSON.stringify({ path: 'C:\\hcloud\\config' }) });
   assert.equal(jsonNested.verdict, 'deny', 'JSON-nested doubled separators still deny');
 });
 
@@ -724,119 +711,49 @@ test('redactString covers auth-header values, quoted AK/SK, and Bearer forms', (
   assert.equal(redactSecrets({ input_value: 'SECRET' }).input_value, '<redacted>', 'object keys redact');
 });
 
-test('classify: manage_policy list is drift-denied when the tool is missing from the surface', () => {
-  // Pinned behavior (fail-closed by design): manage_policy is not in the
-  // read-only set, so a surface lacking it denies every action including
-  // the read-only list — the tool is unreachable, its list most of all.
-  const ruling = classify('manage_policy', { action: 'list' }, 'devkit', new Set(['search_apis']));
-  assert.equal(ruling.verdict, 'deny');
-  assert.match(String(ruling.reason), /drift/);
-});
-
-test('resolveApprovalMode: unset/devkit/native, and a loud failure for anything else', () => {
-  assert.equal(resolveApprovalMode({}), 'devkit');
-  assert.equal(resolveApprovalMode({ HUAWEICLOUD_OPENMCP_APPROVAL: '' }), 'devkit');
-  assert.equal(resolveApprovalMode({ HUAWEICLOUD_OPENMCP_APPROVAL: ' devkit ' }), 'devkit');
-  assert.equal(resolveApprovalMode({ HUAWEICLOUD_OPENMCP_APPROVAL: 'native' }), 'native');
-  assert.throws(() => resolveApprovalMode({ HUAWEICLOUD_OPENMCP_APPROVAL: 'bogus' }), /HUAWEICLOUD_OPENMCP_APPROVAL/);
-});
-
-test('matchingDenyRule: JSON and plain-line files, wildcards, missing files', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'openmcp-deny-'));
-  const jsonPolicy = join(dir, 'rules.json');
-  writeFileSync(jsonPolicy, JSON.stringify(['*=allow', 'ECS:CreateServers=deny']));
-  const linesPolicy = join(dir, 'rules.lines');
-  writeFileSync(linesPolicy, 'ECS:CreateServers=deny\n*=deny\n');
-
-  assert.equal(
-    matchingDenyRule('ECS', 'CreateServers', { HUAWEICLOUD_MCP_POLICY_FILE: jsonPolicy })?.line,
-    'ECS:CreateServers=deny',
-    'a deny beats an earlier wildcard allow (stricter than the gateway first-match)',
-  );
-  assert.equal(
-    matchingDenyRule('VPC', 'ListVpcs', { HUAWEICLOUD_MCP_POLICY_FILE: jsonPolicy }),
-    null,
-    'an allow-only match reads as no denial',
-  );
-  assert.equal(
-    matchingDenyRule('vpc', 'listvpcs', { HUAWEICLOUD_MCP_POLICY_FILE: linesPolicy })?.line,
-    '*=deny',
-    'sides match anchored and case-insensitively',
-  );
-  assert.equal(
-    matchingDenyRule('RDS', 'ListInstances', { HUAWEICLOUD_MCP_POLICY_FILE: join(dir, 'absent') }),
-    null,
-    'a missing file reads as no denial',
-  );
-});
-
-test('matchingDenyRule: whole-line comments, spaced separators, unparseable forms', () => {
-  // Round-8 (source-verified against the installed module): parse_policy
-  // raises on inline '#' comments, on colon-less non-'*' targets, and on
-  // any effect other than allow/deny — the gateway keeps its last valid
-  // rules and the line is inert gateway-side. The devkit reads those
-  // lines as UNPARSEABLE denials (fail-closed, distinct message) so a
-  // broken operator file surfaces instead of silently trusting stale
-  // rules. Only WHOLE-LINE comments are dropped.
-  const dir = mkdtempSync(join(tmpdir(), 'openmcp-deny-hard-'));
-  const policy = join(dir, 'policy');
-  writeFileSync(
-    policy,
-    ['ECS : ListServers = deny', '# a whole-line comment', '', 'ECS:CreateServers=deny # inline note'].join('\n'),
-  );
-  const env = { HUAWEICLOUD_MCP_POLICY_FILE: policy };
-  const spaced = matchingDenyRule('ECS', 'ListServers', env);
-  assert.ok(spaced && !spaced.unparseable && spaced.line.startsWith('ECS : ListServers'), 'spaced separators parse');
-
-  // The inline-comment line is unparseable: it denies every query with
-  // the distinct broken-file flag, not the operator-deny framing.
-  const inline = matchingDenyRule('ECS', 'CreateServers', env);
-  assert.ok(inline && inline.unparseable, 'inline comments are parse failures');
-  assert.match(inline.line, /# inline note/);
-  const bystander = matchingDenyRule('DEW', 'ListSecrets', env);
-  assert.ok(bystander && bystander.unparseable, 'an unparseable line denies unrelated products too');
-  assert.equal(bystander.line, inline.line, 'the same broken line is reported');
-
-  // Colon-less non-'*' targets and bad effects are unparseable as well
-  // (the gateway raises on both).
-  for (const bad of ['RDS=deny', 'VPC:DisassociateRouteTable=maybe', 'no equals sign']) {
-    const dir2 = mkdtempSync(join(tmpdir(), 'openmcp-deny-bad-'));
-    const policy2 = join(dir2, 'policy');
-    writeFileSync(policy2, `${bad}\n`);
-    const hit = matchingDenyRule('RDS', 'ListFlavors', { HUAWEICLOUD_MCP_POLICY_FILE: policy2 });
-    assert.ok(hit && hit.unparseable, `${bad} is an unparseable deny (fail-closed)`);
-    assert.equal(hit.line, bad);
+test('resolveApprovalMode: unset passes; any set value throws the retirement guard', () => {
+  // HUAWEICLOUD_OPENMCP_APPROVAL died with the devkit/native split. An
+  // operator who set it must not upgrade into a silent no-op: the guard
+  // throws with the migration pointer and stays for at least one release.
+  assert.doesNotThrow(() => resolveApprovalMode({}));
+  assert.doesNotThrow(() => resolveApprovalMode({ HUAWEICLOUD_OPENMCP_APPROVAL: '' }));
+  assert.doesNotThrow(() => resolveApprovalMode({ HUAWEICLOUD_OPENMCP_APPROVAL: '   ' }));
+  for (const value of ['devkit', 'native', 'bogus']) {
+    assert.throws(
+      () => resolveApprovalMode({ HUAWEICLOUD_OPENMCP_APPROVAL: value }),
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        return (
+          message.includes('HUAWEICLOUD_OPENMCP_APPROVAL is retired') &&
+          message.includes('policy engine') &&
+          message.includes('docs/safety-model.md')
+        );
+      },
+      `${value} must throw the retirement guidance`,
+    );
   }
-});
-
-test('matchingDenyRule: fnmatch wildcards (?, classes, negation) match the gateway', () => {
-  // Round-7: the gateway's matcher is fnmatch — '?', '[...]' and negated
-  // '[!...]' classes are PATTERNS gateway-side; the old escaper treated
-  // '?' and '[' literally. Round-8: negation was still mistranslated
-  // ('[!A]' became a positive JS class of '!'|'A', both directions
-  // wrong) and a backslash inside a class threw out of the pre-check.
-  const dir = mkdtempSync(join(tmpdir(), 'openmcp-deny-fn-'));
-  const policy = join(dir, 'policy');
-  writeFileSync(
-    policy,
-    ['ECS:Create?ervers=deny', 'VPC:List[A-Z]pcs=deny', 'OBS:*Object=deny', 'RDS:List[!P]alavors=deny'].join('\n'),
-  );
-  const env = { HUAWEICLOUD_MCP_POLICY_FILE: policy };
-  assert.ok(matchingDenyRule('ECS', 'CreateServers', env), '? matches one character');
-  assert.ok(matchingDenyRule('ECS', 'CreateXervers', env), 'any single character');
-  assert.equal(matchingDenyRule('ECS', 'CreateSerrvers', env), null, '? matches exactly one');
-  assert.ok(matchingDenyRule('VPC', 'ListIpcs', env), 'character class matches inside');
-  assert.equal(matchingDenyRule('VPC', 'List1pcs', env), null, 'class excludes outside');
-  assert.ok(matchingDenyRule('OBS', 'GetObject', env), 'star still works');
-  // Negation: '[!P]' matches any single character EXCEPT P.
-  assert.ok(matchingDenyRule('RDS', 'ListMalavors', env), 'negated class admits a non-P character');
-  assert.equal(matchingDenyRule('RDS', 'ListPalavors', env), null, 'negated class excludes P');
-
-  // A backslash inside a class no longer throws out of the pre-check.
-  const dir3 = mkdtempSync(join(tmpdir(), 'openmcp-deny-bs-'));
-  const policy3 = join(dir3, 'policy');
-  writeFileSync(policy3, 'ECS:List[\\w]pcs=deny\n');
-  assert.doesNotThrow(() => matchingDenyRule('ECS', 'Listwpcs', { HUAWEICLOUD_MCP_POLICY_FILE: policy3 }));
+  // The guidance names the operator policy file: the devkit-provisioned
+  // pack state path when no operator env is set, the operator's own path
+  // when it is.
+  const home = mkdtempSync(join(tmpdir(), 'openmcp-retire-home-'));
+  try {
+    resolveApprovalMode({ HUAWEICLOUD_HOME: home });
+  } catch (error) {
+    assert.match(
+      error instanceof Error ? error.message : String(error),
+      new RegExp(join('.config', 'huaweicloud', 'packs', 'huaweicloud-open-mcp', 'policy').replace(/\\/g, '\\\\')),
+      'the retirement error names the provisioned policy file path',
+    );
+  }
+  try {
+    resolveApprovalMode({ HUAWEICLOUD_MCP_POLICY_FILE: '/opt/gw-policy' });
+  } catch (error) {
+    assert.match(
+      error instanceof Error ? error.message : String(error),
+      /\/opt\/gw-policy/,
+      'the retirement error names the operator policy file when one is configured',
+    );
+  }
 });
 
 // ── gateway_list_tools / gateway_call through the real dispatch ──
@@ -861,111 +778,62 @@ test('gateway_call passes read-only discovery tools straight through', async () 
   assert.equal(result.requiresApproval, undefined, 'read-only tools never demand consent');
 });
 
+// ── the delegated approval face through the real dispatch ──
+// First call forwards, every routed tool, no consent round trip: the
+// gateway's own policy engine is the authority, and the fake mirrors its
+// refusal envelope ({ok:false, reason}) for ungranted calls.
+
 test(
-  'gateway_call token round trip: redacted echo, approved replay, single use',
+  'gateway_call forwards each routed tool to the gateway on the first call',
   withGatewayEnv({ FAKE_POLICY: '1' }, async () => {
-    const toolArgs = { sql: 'select 1', out: { path: 'x.csv' }, adminPass: 'Secret123' };
-    const first = await callTool('huaweicloud_gateway_call', { tool: 'transform_data', toolArgs });
-    assert.equal(first.ok, false);
-    assert.equal(first.requiresApproval, true);
-    assert.equal(first.classification, 'token');
-    assert.equal(typeof first.approvalToken, 'string');
-    assert.equal(first.toolArgs.adminPass, '<redacted>', 'the echoed copy must not carry the secret');
-    assert.doesNotMatch(JSON.stringify(first), /Secret123/);
-
-    const second = await callTool('huaweicloud_gateway_call', {
-      tool: 'transform_data',
-      toolArgs,
-      approvalToken: first.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(second.ok, true, JSON.stringify(second));
-    assert.equal(second.tool, 'transform_data');
-    assert.equal(second.arguments.adminPass, '<redacted>', 'the result boundary redacts gateway echoes too');
-
-    const third = await callTool('huaweicloud_gateway_call', {
-      tool: 'transform_data',
-      toolArgs,
-      approvalToken: first.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(third.ok, false);
-    assert.match(String(third.error), /Invalid or expired approval token/);
+    const cases = [
+      ['execute_api', { product: 'ECS', api: 'CreateServers' }],
+      ['manage_policy', { action: 'list' }],
+      ['manage_policy', { action: 'add', line: 'ECS:ListServers=allow', scope: 'once' }],
+      ['manage_policy', { action: 'remove', line: 'ECS:ListServers=allow' }],
+      ['query_data', { sql: 'select 1 as x' }],
+      ['transform_data', { sql: 'select 1 as x', out: { path: join(tmpdir(), 'plain.csv') } }],
+    ];
+    for (const [tool, toolArgs] of cases) {
+      const result = await callTool('huaweicloud_gateway_call', { tool, toolArgs });
+      // Every gateway-served result carries the tool name; the mint path
+      // never did. tool presence is the forwarding proof.
+      assert.equal(result.tool, tool, `${tool} must be served by the gateway, not refused locally`);
+      assert.equal(result.requiresApproval, undefined, 'the delegated face never demands consent');
+      assert.equal(result.classification, undefined, 'no floor fired for these benign arguments');
+    }
   }),
 );
 
 test(
-  'a replay with different toolArgs is refused and names the ORIGINAL unredacted copy',
+  'an engine refusal returns the {ok:false} envelope with the reason preserved',
   withGatewayEnv({ FAKE_POLICY: '1' }, async () => {
-    const minted = await callTool('huaweicloud_gateway_call', {
-      tool: 'transform_data',
-      toolArgs: { sql: 'select 1' },
+    const result = await callTool('huaweicloud_gateway_call', {
+      tool: 'execute_api',
+      toolArgs: { product: 'ECS', api: 'CreateServers' },
     });
-    assert.equal(minted.requiresApproval, true);
-    const mismatch = await callTool('huaweicloud_gateway_call', {
-      tool: 'transform_data',
-      toolArgs: { sql: 'select 2' },
-      approvalToken: minted.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(mismatch.ok, false);
-    assert.match(String(mismatch.error), /ORIGINAL unredacted/);
+    assert.equal(result.ok, false, JSON.stringify(result));
+    assert.equal(result.requiresApproval, undefined, 'refusals are engine verdicts, not consent demands');
+    assert.match(String(result.error), /safety policy/);
+    assert.equal(result.reason, String(result.error), 'the engine refusal text is preserved verbatim');
   }),
 );
 
 test(
-  'a same-line grant refuses the bridge without burning the token; removal unblocks it',
+  'the delegated consent round: refuse, grant with an ephemeral scope, retry, burn',
   withGatewayEnv({ FAKE_POLICY: '1' }, async () => {
-    // An agent-purchased once-grant for the exact line the bridge would add.
-    const grantArgs = { action: 'add', line: 'ECS:CreateServers=allow', scope: 'once' };
-    const plan = await callTool('huaweicloud_gateway_call', { tool: 'manage_policy', toolArgs: grantArgs });
-    assert.equal(plan.requiresApproval, true);
-    const added = await callTool('huaweicloud_gateway_call', {
-      tool: 'manage_policy',
-      toolArgs: grantArgs,
-      approvalToken: plan.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(added.ok, true, JSON.stringify(added));
+    const execArgs = { product: 'ECS', api: 'CreateServers' };
+    const refused = await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs });
+    assert.equal(refused.ok, false, 'the empty policy refuses the first execute');
+    assert.match(String(refused.error), /safety policy/);
 
-    // The bridged execute refuses: the bridge's line-based cleanup would
-    // delete the existing grant and leave its own standing. The refusal
-    // happens BEFORE the token is consumed.
-    const execArgs = { product: 'ECS', api: 'CreateServers', region: 'cn-north-4' };
-    const execPlan = await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs });
-    assert.equal(execPlan.requiresApproval, true);
-    const refused = await callTool('huaweicloud_gateway_call', {
-      tool: 'execute_api',
-      toolArgs: execArgs,
-      approvalToken: execPlan.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(refused.ok, false);
-    assert.match(String(refused.error), /already exists/);
-    assert.match(String(refused.error), /Remove the conflicting rule first/);
-
-    // Removing the conflicting grant is itself a token-gated action.
-    const removePlan = await callTool('huaweicloud_gateway_call', {
+    const granted = await callTool('huaweicloud_gateway_call', {
       tool: 'manage_policy',
-      toolArgs: { action: 'remove', line: 'ECS:CreateServers=allow' },
+      toolArgs: { action: 'add', line: 'ECS:CreateServers=allow', scope: 'once' },
     });
-    assert.equal(removePlan.requiresApproval, true);
-    const removed = await callTool('huaweicloud_gateway_call', {
-      tool: 'manage_policy',
-      toolArgs: { action: 'remove', line: 'ECS:CreateServers=allow' },
-      approvalToken: removePlan.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(removed.ok, true, JSON.stringify(removed));
+    assert.equal(granted.ok, true, JSON.stringify(granted));
 
-    // The SAME execute token still works: the conflict refusal never
-    // spent it. The bridge adds its grant, executes, burns, cleans up.
-    const executed = await callTool('huaweicloud_gateway_call', {
-      tool: 'execute_api',
-      toolArgs: execArgs,
-      approvalToken: execPlan.approvalToken,
-      approvedByUser: true,
-    });
+    const executed = await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs });
     assert.equal(executed.ok, true, JSON.stringify(executed));
     assert.deepEqual(executed.executed, { product: 'ECS', api: 'CreateServers' });
 
@@ -973,432 +841,105 @@ test(
     assert.equal(listing.ok, true, JSON.stringify(listing));
     assert.ok(
       !listing.rules.some((rule) => rule.line === 'ECS:CreateServers=allow'),
-      'the bridged execute burned its own grant and left no residue',
+      'the once-scope grant burned with the execute',
     );
   }),
 );
 
 test(
-  'the conflict pre-check sees redaction-mangled rule lines (token-suffixed APIs)',
+  'the floor matrix denies end-to-end through the dispatch',
   withGatewayEnv({ FAKE_POLICY: '1' }, async () => {
-    // A rule whose line trips the result redactor ('CreateToken' matches
-    // the bare token alternative): the listing arrives as
-    // 'IAM:CreateToken=<redacted>' while the local grant line is raw.
-    // Round-6: the one-sided comparison silently defeated the whole
-    // pre-check for exactly the IAM token class; both sides now go
-    // through the same redactor.
-    const grantArgs = { action: 'add', line: 'IAM:CreateToken=allow', scope: 'session' };
-    const plan = await callTool('huaweicloud_gateway_call', { tool: 'manage_policy', toolArgs: grantArgs });
-    const added = await callTool('huaweicloud_gateway_call', {
-      tool: 'manage_policy',
-      toolArgs: grantArgs,
-      approvalToken: plan.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(added.ok, true, JSON.stringify(added));
-
-    const execArgs = { product: 'IAM', api: 'CreateToken' };
-    const execPlan = await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs });
-    const refused = await callTool('huaweicloud_gateway_call', {
-      tool: 'execute_api',
-      toolArgs: execArgs,
-      approvalToken: execPlan.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(refused.ok, false, 'the mangled listing must still read as a conflict');
-    assert.match(String(refused.error), /already exists/);
-    assert.match(String(refused.error), /Remove the conflicting rule first/);
-  }),
-);
-
-test(
-  'the conflict pre-check matches the gateway semantic key: spacing and case',
-  withGatewayEnv({ FAKE_POLICY: '1' }, async () => {
-    // Round-7: the gateway's remove matches on its semantic rule key
-    // (source-verified), so 'ECS : CreateServers = allow' is the SAME
-    // rule to the gateway as 'ECS:CreateServers=allow'. The literal
-    // comparison previously missed it while the bridge's cleanup still
-    // deleted the operator's rule. (Inline '#' comments are NOT valid
-    // add lines — the gateway and the fake both reject them now — so
-    // this test exercises spacing and case only.)
-    const spaced = 'ECS : CreateServers = allow';
-    const grantArgs = { action: 'add', line: spaced, scope: 'session' };
-    const plan = await callTool('huaweicloud_gateway_call', { tool: 'manage_policy', toolArgs: grantArgs });
-    const added = await callTool('huaweicloud_gateway_call', {
-      tool: 'manage_policy',
-      toolArgs: grantArgs,
-      approvalToken: plan.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(added.ok, true, JSON.stringify(added));
-
-    const execArgs = { product: 'ECS', api: 'CreateServers' };
-    const execPlan = await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs });
-    const refused = await callTool('huaweicloud_gateway_call', {
-      tool: 'execute_api',
-      toolArgs: execArgs,
-      approvalToken: execPlan.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(refused.ok, false, 'a semantically equal spaced rule is a conflict');
-    assert.match(String(refused.error), /already exists/);
-
-    // And the lowercase variant too: 'ecs:createservers=allow'.
-    const lower = { action: 'add', line: 'ecs:createservers=allow', scope: 'session' };
-    const lowerPlan = await callTool('huaweicloud_gateway_call', { tool: 'manage_policy', toolArgs: lower });
-    const lowerAdded = await callTool('huaweicloud_gateway_call', {
-      tool: 'manage_policy',
-      toolArgs: lower,
-      approvalToken: lowerPlan.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(lowerAdded.ok, true, JSON.stringify(lowerAdded));
-    const refusedAgain = await callTool('huaweicloud_gateway_call', {
-      tool: 'execute_api',
-      toolArgs: execArgs,
-      approvalToken: execPlan.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(refusedAgain.ok, false, 'the lowercase spelling is the same semantic rule');
-  }),
-);
-
-test(
-  'distinct token-suffixed rules do not cross-conflict through the redaction boundary',
-  withGatewayEnv({ FAKE_POLICY: '1' }, async () => {
-    // Round-8: the shared wildcard sentinel made every redaction-mangled
-    // rule one semantic key, so an unrelated IAM:CreateAccessKey grant
-    // falsely conflicted with an IAM:DeleteAccessKey execute (probe: the
-    // remediation dead-looped on remove). Unparseable keys are per-line
-    // now: the equal-pair match still works, the cross-pair does not.
-    const grantArgs = { action: 'add', line: 'IAM:CreateAccessKey=allow', scope: 'session' };
-    const plan = await callTool('huaweicloud_gateway_call', { tool: 'manage_policy', toolArgs: grantArgs });
-    const added = await callTool('huaweicloud_gateway_call', {
-      tool: 'manage_policy',
-      toolArgs: grantArgs,
-      approvalToken: plan.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(added.ok, true, JSON.stringify(added));
-
-    // A DIFFERENT token-suffixed API: both lines mangle to
-    // '...<redacted>' in the listing, but their keys stay distinct.
-    const execArgs = { product: 'IAM', api: 'DeleteAccessKey' };
-    const execPlan = await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs });
-    const notConflicted = await callTool('huaweicloud_gateway_call', {
-      tool: 'execute_api',
-      toolArgs: execArgs,
-      approvalToken: execPlan.approvalToken,
-      approvedByUser: true,
-    });
-    assert.ok(!/already exists/.test(String(notConflicted.error)), 'a different rule is not a conflict');
-    assert.ok(
-      notConflicted.ok === true || /safety policy/.test(String(notConflicted.error)),
-      'the bridge proceeds (the fake denies the ungranted API, which is the point)',
-    );
-  }),
-);
-
-test(
-  'a file-layer policy line is a conflict (the text layer is load-bearing)',
-  withGatewayEnv({ FAKE_POLICY: '1', FAKE_POLICY_TEXT_ONLY: '1' }, async () => {
-    // Round-7 probe: the gateway's list exposes rules in BOTH layers
-    // (array = overlay + file-with-scope-permanent, text = raw file).
-    // FAKE_POLICY_TEXT_ONLY deliberately reduces the array to overlay-only
-    // so this test proves the consumer reads the policy TEXT branch —
-    // without the knob, an array-only reader passes too and the test
-    // proves nothing. The devkit state home's policy file backs the
-    // fake's file layer.
-    const policyDir = join(stateHome, '.config', 'huaweicloud', 'packs', 'huaweicloud-open-mcp');
-    mkdirSync(policyDir, { recursive: true });
-    const policyPath = join(policyDir, 'policy');
-    writeFileSync(policyPath, 'ECS : CreateServers = allow\n');
-    try {
-      const execArgs = { product: 'ECS', api: 'CreateServers' };
-      const execPlan = await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs });
-      const refused = await callTool('huaweicloud_gateway_call', {
-        tool: 'execute_api',
-        toolArgs: execArgs,
-        approvalToken: execPlan.approvalToken,
-        approvedByUser: true,
-      });
-      assert.equal(refused.ok, false, 'the text-only file layer still reads as a conflict');
-      assert.match(String(refused.error), /already exists/);
-    } finally {
-      writeFileSync(policyPath, '');
-    }
-    // With the file cleared, a fresh approval bridges (the overlay grant
-    // authorizes; the file layer contributes nothing).
-    const execArgs = { product: 'ECS', api: 'CreateServers' };
-    const fresh = await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs });
-    const bridging = await callTool('huaweicloud_gateway_call', {
-      tool: 'execute_api',
-      toolArgs: execArgs,
-      approvalToken: fresh.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(bridging.ok, true, JSON.stringify(bridging));
-  }),
-);
-
-test(
-  'the fake execute path honors deny lines and trimmed sides (gateway semantics)',
-  withGatewayEnv({ FAKE_POLICY: '1' }, async () => {
-    // Round-11: the fixture's old inline matcher was effect-blind (a deny
-    // line could authorize an execute) and skipped the per-side trim
-    // (spaced lines failed to match). The gateway refuses on any matching
-    // line whose allow is false and parses sides with strip() — this pins
-    // the routed-through-grammar behavior.
-    const denyAdd = { action: 'add', line: 'ECS:CreateServers=deny', scope: 'session' };
-    const denyMint = await callTool('huaweicloud_gateway_call', { tool: 'manage_policy', toolArgs: denyAdd });
-    const denyGrant = await callTool('huaweicloud_gateway_call', {
-      tool: 'manage_policy',
-      toolArgs: denyAdd,
-      approvalToken: denyMint.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(denyGrant.ok, true, JSON.stringify(denyGrant));
-
-    const execArgs = { product: 'ECS', api: 'CreateServers' };
-    const execMint = await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs });
-    const denied = await callTool('huaweicloud_gateway_call', {
-      tool: 'execute_api',
-      toolArgs: execArgs,
-      approvalToken: execMint.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(denied.ok, false, 'a matching deny line must refuse the execute');
-    assert.match(String(denied.error), /safety policy/);
-
-    // A SPACED allow line grants: parse_policy trims each side.
-    const spacedAdd = { action: 'add', line: 'VPC : ListVpcs = allow', scope: 'session' };
-    const spacedMint = await callTool('huaweicloud_gateway_call', { tool: 'manage_policy', toolArgs: spacedAdd });
-    const spacedGrant = await callTool('huaweicloud_gateway_call', {
-      tool: 'manage_policy',
-      toolArgs: spacedAdd,
-      approvalToken: spacedMint.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(spacedGrant.ok, true, JSON.stringify(spacedGrant));
-    const spacedExec = await callTool('huaweicloud_gateway_call', {
-      tool: 'execute_api',
-      toolArgs: { product: 'VPC', api: 'ListVpcs' },
-      approvedByUser: true,
-      approvalToken: '00000000-0000-0000-0000-000000000000',
-    });
-    // The unapproved call mints; the fake's matcher must see the spaced
-    // rule as a grant for the bridge to even reach the token stage.
-    const spacedMint2 = await callTool('huaweicloud_gateway_call', {
-      tool: 'execute_api',
-      toolArgs: { product: 'VPC', api: 'ListVpcs' },
-    });
-    assert.equal(spacedMint2.requiresApproval, true, 'the spaced allow line grants: the call reaches the token stage');
-  }),
-);
-
-test(
-  'a listing failure is its own refusal, not a false conflict',
-  withGatewayEnv({ FAKE_POLICY: '1' }, async () => {
-    // Round-7: the fail-closed branch previously reported "a policy rule
-    // already exists" for a dead listing, sending the agent to remove a
-    // rule that does not exist. Hide manage_policy from the callable set
-    // while keeping it in tools/list (the drift gate only checks the
-    // called tool), so the pre-check's listing fails with Unknown tool.
-    process.env.FAKE_HIDE_CALLABLE = 'manage_policy';
-    try {
-      const execArgs = { product: 'ECS', api: 'CreateServers' };
-      const execPlan = await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs });
-      assert.equal(execPlan.requiresApproval, true);
-      const refused = await callTool('huaweicloud_gateway_call', {
-        tool: 'execute_api',
-        toolArgs: execArgs,
-        approvalToken: execPlan.approvalToken,
-        approvedByUser: true,
-      });
-      assert.equal(refused.ok, false, 'a failed listing refuses the bridge');
-      assert.match(String(refused.error), /policy listing failed/);
-      assert.match(String(refused.error), /Unknown tool|error/i);
-      assert.ok(!/already exists/.test(String(refused.error)), 'the failure must not masquerade as a conflict');
-    } finally {
-      delete process.env.FAKE_HIDE_CALLABLE;
-      await _resetOpenMcpSidecar();
+    const protectedTree = join(stateHome, '.config', 'huaweicloud', 'leak.csv');
+    const denies: Array<[string, Record<string, unknown>, RegExp]> = [
+      ['execute_api', { product: 'DEW', api: 'ShowSecretVersion' }, /secret/i],
+      [
+        'transform_data',
+        { sql: 'select 1', out: { path: protectedTree } },
+        /protected state tree|consent infrastructure/,
+      ],
+      ['query_data', { sql: "select * from read_csv('/home/u/.hcloud/config.json')" }, /credential/i],
+      ['manage_policy', { action: 'add', line: 'ECS:X=allow', scope: 'permanent' }, /ephemeral scopes/],
+      ['manage_policy', { action: 'add', line: 'ECS:X=allow', scope: ' ONCE ' }, /canonical spelling/],
+      ['manage_policy', { action: 'ADD', line: 'ECS:X=allow', scope: 'once' }, /canonical spelling/],
+      ['manage_policy', { action: 'add', line: 'ECS:X=allow', scope: 'once', ttl_seconds: 3600 }, /ttl_seconds/],
+      ['manage_policy', { action: 'remove', line: 'ECS:X=allow', scope: 'once' }, /takes no scope/],
+      ['no_such_tool', {}, /not in the gateway tool vocabulary/],
+    ];
+    for (const [tool, toolArgs, reasonPattern] of denies) {
+      const result = await callTool('huaweicloud_gateway_call', { tool, toolArgs });
+      assert.equal(result.ok, false, `${tool} ${JSON.stringify(toolArgs)} must deny`);
+      assert.equal(result.classification, 'deny', 'the denial is a floor ruling');
+      assert.equal(result.tool, undefined, 'a floor denial never reaches the gateway');
+      assert.equal(result.requiresApproval, undefined, 'the delegated face never demands consent');
+      assert.match(String(result.error), reasonPattern);
     }
   }),
 );
 
-test(
-  'action spellings bind and forward canonically (ADD does not burn the approval)',
-  withGatewayEnv({ FAKE_POLICY: '1' }, async () => {
-    // Round-7: classify normalized the action but the token bound and the
-    // forward carried the RAW spelling — an 'ADD' approval died at the
-    // gateway after consume. The mint now normalizes both action and
-    // scope; the gateway receives the canonical form.
-    const minted = await callTool('huaweicloud_gateway_call', {
-      tool: 'manage_policy',
-      toolArgs: { action: ' ADD ', line: 'ECS:ActNorm=allow', scope: ' ONCE ' },
-    });
-    assert.equal(minted.requiresApproval, true);
-    assert.equal(minted.toolArgs.action, 'add', 'the echoed action is normalized');
-    assert.equal(minted.toolArgs.scope, 'once');
-
-    const replay = await callTool('huaweicloud_gateway_call', {
-      tool: 'manage_policy',
-      toolArgs: { action: 'ADD', line: 'ECS:ActNorm=allow', scope: 'Once' },
-      approvalToken: minted.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(replay.ok, true, JSON.stringify(replay));
-    assert.equal(replay.received.action, 'add', 'the gateway received the canonical action (asserted on the raw echo)');
-    assert.equal(replay.received.scope, 'once', 'the gateway received the canonical scope');
-  }),
-);
-
-test(
-  'an operator deny rule refuses the replay without burning the token',
-  withGatewayEnv({ FAKE_POLICY: '1' }, async () => {
-    const policyPath = join(stateHome, '.config', 'huaweicloud', 'packs', 'huaweicloud-open-mcp', 'policy');
-    const execArgs = { product: 'ECS', api: 'CreateServers' };
-    const plan = await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs });
-    assert.equal(plan.requiresApproval, true);
-    writeFileSync(policyPath, 'ECS:CreateServers=deny\n');
-    try {
-      const refused = await callTool('huaweicloud_gateway_call', {
-        tool: 'execute_api',
-        toolArgs: execArgs,
-        approvalToken: plan.approvalToken,
-        approvedByUser: true,
-      });
-      assert.equal(refused.ok, false);
-      assert.match(String(refused.error), /operator policy denies this call \(ECS:CreateServers=deny\)/);
-    } finally {
-      writeFileSync(policyPath, '');
-    }
-    const bridged = await callTool('huaweicloud_gateway_call', {
-      tool: 'execute_api',
-      toolArgs: execArgs,
-      approvalToken: plan.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(bridged.ok, true, JSON.stringify(bridged));
-    assert.deepEqual(bridged.executed, { product: 'ECS', api: 'CreateServers' }, 'the token survived the refusal');
-  }),
-);
-
-test('a live surface without execute_api degrades to deny, not a token demand', async () => {
-  const savedPolicy = process.env.FAKE_POLICY;
-  const savedHide = process.env.FAKE_HIDE_TOOLS;
-  process.env.FAKE_POLICY = '1';
-  delete process.env.FAKE_HIDE_TOOLS;
+test('floor denials do not spend a gateway spawn', async () => {
   await _resetOpenMcpSidecar();
   try {
-    const execArgs = { product: 'ECS', api: 'CreateServers' };
-    const plan = await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs });
-    assert.equal(plan.requiresApproval, true, 'with the tool live, the first call mints');
-
-    process.env.FAKE_HIDE_TOOLS = 'execute_api';
-    await _resetOpenMcpSidecar();
-    const firstCall = await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs });
-    assert.equal(firstCall.ok, false);
-    assert.equal(firstCall.classification, 'deny');
-    assert.equal(firstCall.requiresApproval, undefined, 'drift denies; it does not demand consent');
-    assert.match(String(firstCall.error), /drift/);
-
-    const replay = await callTool('huaweicloud_gateway_call', {
-      tool: 'execute_api',
-      toolArgs: execArgs,
-      approvalToken: plan.approvalToken,
-      approvedByUser: true,
+    const before = _openMcpSidecarStats().spawns;
+    const denied = await callTool('huaweicloud_gateway_call', {
+      tool: 'manage_policy',
+      toolArgs: { action: 'add', line: 'ECS:X=allow', scope: 'permanent' },
     });
-    assert.equal(replay.ok, false);
-    assert.equal(replay.classification, 'deny', 'the classify deny fires before the token is consumed');
-    assert.match(String(replay.error), /drift/);
-
-    delete process.env.FAKE_HIDE_TOOLS;
-    await _resetOpenMcpSidecar();
-    const bridged = await callTool('huaweicloud_gateway_call', {
-      tool: 'execute_api',
-      toolArgs: execArgs,
-      approvalToken: plan.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(bridged.ok, true, JSON.stringify(bridged));
-    assert.deepEqual(
-      bridged.executed,
-      { product: 'ECS', api: 'CreateServers' },
-      'the token survived the drift denials',
-    );
+    assert.equal(denied.ok, false);
+    assert.equal(denied.classification, 'deny');
+    assert.equal(_openMcpSidecarStats().spawns, before, 'floors rule on the arguments alone, before any sidecar');
   } finally {
-    if (savedPolicy === undefined) delete process.env.FAKE_POLICY;
-    else process.env.FAKE_POLICY = savedPolicy;
-    if (savedHide === undefined) delete process.env.FAKE_HIDE_TOOLS;
-    else process.env.FAKE_HIDE_TOOLS = savedHide;
     await _resetOpenMcpSidecar();
   }
 });
 
 test(
-  'native mode delegates execute_api to the gateway policy engine',
-  withGatewayEnv({ FAKE_POLICY: '1', HUAWEICLOUD_OPENMCP_APPROVAL: 'native' }, async () => {
+  'a set HUAWEICLOUD_OPENMCP_APPROVAL surfaces the retirement guidance as the tool error',
+  withGatewayEnv({ HUAWEICLOUD_OPENMCP_APPROVAL: 'native' }, async () => {
+    const result = await callTool('huaweicloud_gateway_call', { tool: 'search_apis', toolArgs: { query: 'x' } });
+    assert.equal(result.ok, false);
+    assert.match(String(result.error), /HUAWEICLOUD_OPENMCP_APPROVAL is retired/);
+    assert.match(String(result.error), /docs\/safety-model\.md/);
+  }),
+);
+
+test(
+  'a known tool missing from the live surface is forwarded and fails at the gateway',
+  withGatewayEnv({ FAKE_POLICY: '1', FAKE_HIDE_TOOLS: 'execute_api' }, async () => {
     const result = await callTool('huaweicloud_gateway_call', {
       tool: 'execute_api',
       toolArgs: { product: 'ECS', api: 'CreateServers' },
     });
     assert.equal(result.ok, false, JSON.stringify(result));
-    assert.equal(result.requiresApproval, undefined, 'native mode never mints');
-    assert.match(String(result.error), /safety policy/);
-    assert.equal(result.reason, String(result.error), 'the gateway denial envelope is preserved verbatim');
+    assert.equal(result.tool, 'execute_api', 'the call was forwarded, not pre-denied as drift');
+    assert.match(String(result.error), /Unknown tool/);
   }),
 );
 
 test(
-  'a CLI-trimmed configuration keeps gateway writes behind the token gate',
+  'a CLI-trimmed configuration keeps the gateway write path alive through delegation; the operator policy file is the control plane',
   withGatewayEnv({ FAKE_POLICY: '1' }, () =>
     withDevkitPacks('core,huaweicloud-open-mcp', async () => {
-      const result = await callTool('huaweicloud_gateway_call', {
-        tool: 'transform_data',
-        toolArgs: { sql: 'select 1' },
-      });
-      assert.equal(result.ok, false);
-      assert.equal(result.requiresApproval, true, 'the write path exists only through the approval token');
+      const execArgs = { product: 'ECS', api: 'CreateServers' };
+      const forwarded = await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs });
+      assert.equal(forwarded.tool, 'execute_api', 'the write path forwards instead of demanding consent');
+      assert.equal(forwarded.requiresApproval, undefined);
+      assert.equal(forwarded.ok, false, 'the empty policy refuses it: the engine is the gate');
+
+      const policyPath = join(stateHome, '.config', 'huaweicloud', 'packs', 'huaweicloud-open-mcp', 'policy');
+      writeFileSync(policyPath, 'ECS:CreateServers=allow\n');
+      try {
+        const executed = await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs });
+        assert.equal(executed.ok, true, JSON.stringify(executed));
+        assert.deepEqual(
+          executed.executed,
+          { product: 'ECS', api: 'CreateServers' },
+          'an operator allow line in the policy file authorizes the call',
+        );
+      } finally {
+        writeFileSync(policyPath, '');
+      }
     })(),
   ),
-);
-
-test('the surface cache follows the sidecar lifecycle', async () => {
-  await _resetOpenMcpSidecar();
-  try {
-    assert.equal(_gatewaySurface(), null, 'no spawn yet: unknown surface');
-    await callTool('huaweicloud_search_apis', { query: 'surface' });
-    const surface = _gatewaySurface();
-    assert.ok(surface, 'a successful spawn populates the cache');
-    assert.ok(surface.has('search_apis'));
-    assert.ok(surface.has('failing_tool'), "the cache mirrors the child's full tools/list, not the devkit projection");
-  } finally {
-    await _resetOpenMcpSidecar();
-    assert.equal(_gatewaySurface(), null, 'reset clears the cache with the singleton');
-  }
-});
-
-test(
-  'gateway_list_tools writes through to the surface cache the classifier reads',
-  withGatewayEnv({ FAKE_FAIL_LIST_ONCE: '1' }, async () => {
-    // The spawn's own tools/list fails (advisory: the cache stays null and
-    // calls still work); the drift report's successful list is then the
-    // ONLY thing that can arm the classifier's cache.
-    const passthrough = await callTool('huaweicloud_gateway_call', {
-      tool: 'search_apis',
-      toolArgs: { query: 'write-through' },
-    });
-    assert.equal(passthrough.ok, true, JSON.stringify(passthrough));
-    assert.equal(_gatewaySurface(), null, 'the failed spawn-time list leaves the cache unknown');
-
-    const report = await callTool('huaweicloud_gateway_list_tools', {});
-    assert.equal(report.ok, true, JSON.stringify(report));
-    const surface = _gatewaySurface();
-    assert.ok(surface, 'the report populated the cache');
-    assert.ok(surface.has('search_apis'), 'with the real names');
-    assert.ok(!surface.has('execute_api'), 'and without the policy tools the default fake hides');
-  }),
 );
 
 test('resolveGatewaySpawnArgs rejects relative operator policy/audit paths', () => {
@@ -1413,20 +954,6 @@ test('resolveGatewaySpawnArgs rejects relative operator policy/audit paths', () 
   const plan = resolveGatewaySpawnArgs({ HOME: '/h', HUAWEICLOUD_MCP_POLICY_FILE: '/opt/gw-policy' });
   assert.ok(!plan.args.includes('--policy'));
 });
-
-test(
-  'gateway_call rejects non-object toolArgs explicitly instead of coercing',
-  withGatewayEnv({}, async () => {
-    for (const bad of ['a string', 42, ['array'], null]) {
-      const result = await callTool('huaweicloud_gateway_call', { tool: 'search_apis', toolArgs: bad });
-      assert.equal(result.ok, false);
-      assert.match(String(result.error), /toolArgs must be an object/);
-    }
-    // undefined behaves as an empty object (the MCP optional-field case).
-    const fine = await callTool('huaweicloud_gateway_call', { tool: 'list_products' });
-    assert.equal(fine.ok, true, JSON.stringify(fine));
-  }),
-);
 
 test('error envelopes cross the normalization boundary redacted', async () => {
   // failing_tool echoes its arguments as key=value text inside an
@@ -1452,91 +979,27 @@ test('JSON-shaped error envelopes redact through the object walk', async () => {
 });
 
 test(
-  'a doubly-refused bridge leaves no residue grant behind',
-  withGatewayEnv({ FAKE_POLICY: '1', FAKE_REFUSE_EXECUTE: '1' }, async () => {
-    const execArgs = { product: 'ECS', api: 'CreateServers' };
-    const plan = await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs });
-    assert.equal(plan.requiresApproval, true);
-    const refused = await callTool('huaweicloud_gateway_call', {
-      tool: 'execute_api',
-      toolArgs: execArgs,
-      approvalToken: plan.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(refused.ok, false);
-    // attempt 2 is the retry evidence: a no-retry bridge would surface
-    // attempt 1 and leave identical residue state.
-    assert.match(String(refused.error), /safety policy/, 'the refusal surfaces, not a hang or a loop');
-    assert.match(String(refused.error), /attempt 2/, 'the refusal surfaced is the SECOND forward');
-
-    // The bridge added its once-grant, was refused, re-added under the
-    // retry, was refused again — the finally must remove BOTH adds or a
-    // standing authorization for exactly this product:api survives.
-    const listing = await callTool('huaweicloud_gateway_call', {
-      tool: 'manage_policy',
-      toolArgs: { action: 'list' },
-    });
-    assert.equal(listing.ok, true, JSON.stringify(listing));
-    assert.ok(
-      !listing.rules.some((rule) => rule.line === 'ECS:CreateServers=allow'),
-      'no residue grant may survive a refused bridge',
-    );
+  'gateway_call rejects non-object toolArgs explicitly instead of coercing',
+  withGatewayEnv({}, async () => {
+    for (const bad of ['a string', 42, ['array'], null]) {
+      const result = await callTool('huaweicloud_gateway_call', { tool: 'search_apis', toolArgs: bad });
+      assert.equal(result.ok, false);
+      assert.match(String(result.error), /toolArgs must be an object/);
+    }
+    // undefined behaves as an empty object (the MCP optional-field case).
+    const fine = await callTool('huaweicloud_gateway_call', { tool: 'list_products' });
+    assert.equal(fine.ok, true, JSON.stringify(fine));
   }),
 );
 
-test(
-  'a non-refusal failure is never re-sent: one approval, one forward',
-  withGatewayEnv({ FAKE_POLICY: '1', FAKE_BROKEN_EXECUTE: '1' }, async () => {
-    const execArgs = { product: 'ECS', api: 'CreateServers' };
-    const plan = await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs });
-    assert.equal(plan.requiresApproval, true);
-    const broken = await callTool('huaweicloud_gateway_call', {
-      tool: 'execute_api',
-      toolArgs: execArgs,
-      approvalToken: plan.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(broken.ok, false);
-    assert.match(String(broken.error), /gateway exploded/);
-    assert.match(String(broken.error), /attempt 1/, 'unknown execution state must not be re-sent');
-  }),
-);
-
-test(
-  'the token binds the normalized scope; either spelling replays successfully',
-  withGatewayEnv({ FAKE_POLICY: '1' }, async () => {
-    // ' ONCE ' passes classify (normalized) — the mint echo and the token
-    // must both carry 'once' (round-5: the gateway stored a spelling its
-    // burn semantics never matched). Round-6: the replay normalizes too,
-    // so following the note ("your ORIGINAL unredacted toolArgs") cannot
-    // waste the approval on a spelling mismatch.
-    const minted = await callTool('huaweicloud_gateway_call', {
-      tool: 'manage_policy',
-      toolArgs: { action: 'add', line: 'ECS:NormScope=allow', scope: ' ONCE ' },
-    });
-    assert.equal(minted.requiresApproval, true);
-    assert.equal(minted.toolArgs.scope, 'once', 'the echoed scope is the normalized form');
-
-    const replayRaw = await callTool('huaweicloud_gateway_call', {
-      tool: 'manage_policy',
-      toolArgs: { action: 'add', line: 'ECS:NormScope=allow', scope: ' ONCE ' },
-      approvalToken: minted.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(replayRaw.ok, true, JSON.stringify(replayRaw));
-    assert.equal(replayRaw.scope, 'once', 'the raw spelling replays; the gateway receives the canonical form');
-
-    const mintedMixed = await callTool('huaweicloud_gateway_call', {
-      tool: 'manage_policy',
-      toolArgs: { action: 'add', line: 'ECS:NormScope2=allow', scope: 'Once' },
-    });
-    const replayMixed = await callTool('huaweicloud_gateway_call', {
-      tool: 'manage_policy',
-      toolArgs: { action: 'add', line: 'ECS:NormScope2=allow', scope: 'ONCE' },
-      approvalToken: mintedMixed.approvalToken,
-      approvedByUser: true,
-    });
-    assert.equal(replayMixed.ok, true, 'any classify-accepted spelling hashes to the same normalized bound form');
-    assert.equal(replayMixed.scope, 'once');
-  }),
-);
+// Last in the file on purpose: withGatewayEnv resets the sidecar in its
+// finally, so the suite does not exit with a live fake-gateway child
+// holding the stdio pipes (node --test then never drains).
+test('gatewayCallSchema no longer declares the retired consent fields', async () => {
+  const { getToolSchema } = await import('../plugins/huaweicloud-core/src/tool-schemas.ts');
+  const rendered = JSON.stringify(getToolSchema('huaweicloud_gateway_call').toJSONSchema());
+  assert.ok(!rendered.includes('approvalToken'), 'approvalToken must be absent from the rendered schema');
+  assert.ok(!rendered.includes('approvedByUser'), 'approvedByUser must be absent from the rendered schema');
+  assert.match(rendered, /"tool"/, 'the tool field is still declared');
+  assert.match(rendered, /"toolArgs"/, 'the toolArgs field is still declared');
+});
