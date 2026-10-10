@@ -74,9 +74,19 @@ function renderGenerated(packId, skillName, relativeFile, content) {
   const frontmatter = /^---\n[\s\S]*?\n---\n/.exec(normalized);
   if (frontmatter && relativeFile === 'SKILL.md') {
     const cut = frontmatter[0].length;
-    return `${normalized.slice(0, cut)}${marker}\n${normalized.slice(cut)}`;
+    // Prettier-settled shape: one blank line between the frontmatter block
+    // and the marker (the source's own blank after the frontmatter
+    // separates marker from content). Emitting the settled shape closes
+    // the format loop structurally — the raw insertion previously failed
+    // format:check, so every sync-without-format re-broke CI exactly the
+    // way the batch-3 commit did (round-10 finding). stripMarkerLine
+    // tolerates both shapes, so the --check round-trip is unaffected.
+    return `${normalized.slice(0, cut)}\n${marker}\n${normalized.slice(cut)}`;
   }
-  return `${marker}\n${normalized}`;
+  // Reference files: prettier settles one blank after a first-line marker.
+  // A source that already starts with a blank produces that shape under
+  // the plain concatenation; otherwise the blank is inserted here.
+  return `${marker}\n${normalized.startsWith('\n') ? normalized : `\n${normalized}`}`;
 }
 
 // Strip the injected marker line (wherever it sits — first line for files

@@ -66,6 +66,23 @@ test('renderGenerated and stripMarkerLine are inverses for every pack skill sour
           source.replace(/\r\n/g, '\n'),
           `round-trip failed for ${packId}/${skillName}/${relativeFile} — run prettier on the source`,
         );
+        // The rendered output must be prettier-settled as emitted (round-10:
+        // the raw insertion failed format:check, so every sync-without-format
+        // re-broke CI — the blank-after-frontmatter shape is now emitted
+        // directly and pinned here instead of relying on the operator's
+        // format pass).
+        const frontmatter = /^---\n[\s\S]*?\n---\n/.exec(rendered);
+        if (frontmatter && relativeFile === 'SKILL.md') {
+          assert.ok(
+            rendered.startsWith(`${frontmatter[0]}\n<!--`),
+            `${packId}/${skillName}/SKILL.md must carry one blank line between frontmatter and the marker`,
+          );
+        } else {
+          assert.ok(
+            rendered.startsWith('<!--') && rendered.includes('\n\n'),
+            `${packId}/${skillName}/${relativeFile} must carry one blank line after the first-line marker`,
+          );
+        }
         checked++;
       }
     }

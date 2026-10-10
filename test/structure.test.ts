@@ -164,34 +164,98 @@ test('huawei-openapi skill teaches only vocabulary-table tools and the real para
   // layout contradicting the gateway's contract, misroutes real consent
   // (round-9: the wrong body-nesting row burned approvals on silently
   // dropped parameters). Guard the teachable claims mechanically.
-  const { GATEWAY_TOOL_VOCABULARY } = await import(
-    join(pluginRoot, 'src', 'packs', 'huaweicloud-open-mcp', 'approval.ts')
-  );
+  const { GATEWAY_TOOL_VOCABULARY } =
+    await import('../plugins/huaweicloud-core/src/packs/huaweicloud-open-mcp/approval.ts');
   const skill = readFileSync(join(pluginRoot, 'skills', 'huawei-openapi', 'SKILL.md'), 'utf8');
 
-  const known = new Set([...GATEWAY_TOOL_VOCABULARY.readonly, ...GATEWAY_TOOL_VOCABULARY.routed]);
-  const mentioned = new Set(
-    skill.match(
-      /\b(?:search_apis|list_products|get_product|list_apis|get_api|get_api_examples|execute_api|manage_policy|query_data|transform_data)\b/g,
-    ) ?? [],
-  );
-  for (const name of mentioned) {
-    assert.ok(known.has(name), `the skill mentions ${name}, which is not in GATEWAY_TOOL_VOCABULARY`);
-  }
-  // The params contract (gateway server.py: path/query flatten into
-  // params, body in params["body"]).
-  assert.match(skill, /toolArgs\.params\.body/);
-  assert.doesNotMatch(skill, /toolArgs\.body[^.]/, 'the flat toolArgs.body spelling taught wrong nesting (round-9)');
+  const gatewayTools = [...GATEWAY_TOOL_VOCABULARY.readonly, ...GATEWAY_TOOL_VOCABULARY.routed];
+  const known = new Set(gatewayTools);
 
-  // Cross-references resolve to real skills (dead ends are the documented
-  // failure mode).
-  for (const ref of skill.matchAll(/See `([a-z0-9-]+)`/g)) {
+  // Positive direction first: every vocabulary name is TAUGHT, bare or
+  // with the devkit prefix (round-10: '_' is a word character, so the
+  // old \b alternation never matched inside huaweicloud_search_apis and
+  // four discovery names went unchecked entirely).
+  for (const name of gatewayTools) {
     assert.ok(
-      existsSync(join(pluginRoot, 'skills', ref[1], 'SKILL.md')),
-      `cross-reference ${ref[1]} must resolve to a real skill`,
+      skill.includes(name) || skill.includes(`huaweicloud_${name}`),
+      `the skill must teach the vocabulary-table tool ${name}`,
     );
   }
+
+  // Reverse sweep: every snake_case token that looks like a gateway tool
+  // name (optionally prefixed with the devkit prefix) must be either in
+  // the vocabulary table or a declared non-tool identifier. This is the
+  // direction that catches hallucinated/renamed names — a hand-written
+  // alternation of known names can only ever check itself (round-10's
+  // circularity finding).
+  const nonToolIdentifiers = new Set([
+    'search_apis',
+    'tag_groups',
+    'project_id',
+    'approval_token',
+    'approved_by_user',
+    'huaweicloud_search_apis',
+    'huaweicloud_list_products',
+    'huaweicloud_get_product',
+    'huaweicloud_list_apis',
+    'huaweicloud_get_api',
+    'huaweicloud_get_api_examples',
+    'huaweicloud_gateway_list_tools',
+    'huaweicloud_gateway_call',
+    'huaweicloud_gateway_restart',
+    'huaweicloud_list_packs',
+    'huaweicloud_pack_info',
+    'huaweicloud_retrieve_skill',
+  ]);
+  const candidates = new Set(skill.match(/[a-z][a-z0-9]*(_[a-z0-9]+)+/g) ?? []);
+  for (const token of candidates) {
+    const bare = token.startsWith('huaweicloud_') ? token.slice('huaweicloud_'.length) : token;
+    if (nonToolIdentifiers.has(token)) continue;
+    if (known.has(bare)) continue;
+    // Multi-word prose identifiers that are not tool-shaped are allowed;
+    // tool-shaped means matching a routed/readonly name OR carrying the
+    // devkit prefix. Anything else with 2+ underscores and a gateway-ish
+    // verb is suspicious, but the strict rule is: devkit-prefixed tokens
+    // must resolve to real devkit tools.
+    if (token.startsWith('huaweicloud_')) {
+      assert.ok(
+        TOOL_DEFINITIONS.some((tool) => tool.name === token),
+        `the skill references devkit tool ${token}, which does not exist`,
+      );
+    }
+  }
+
+  // The params contract (gateway server.py: path/query flatten into
+  // params, body in params["body"]). Word boundary, not [^.]: the flat
+  // spelling must be unteachable even at end-of-sentence (round-10:
+  // 'toolArgs.body.' evaded the sentinel).
+  assert.match(skill, /toolArgs\.params\.body/);
+  assert.doesNotMatch(skill, /toolArgs\.body\b/, 'the flat toolArgs.body spelling taught wrong nesting (round-9)');
+  // The contract row is scoped to execute_api (round-10: discovery tools
+  // take top-level named args — an unscoped row misleads search calls).
+  assert.match(skill, /For `execute_api`, path and query parameters flatten into `toolArgs\.params`/);
+
+  // Cross-references resolve to real skills — form-agnostic (See/see/load)
+  // and across the whole generated tree, not just this file (round-10:
+  // this commit's own capability-discovery ref used lowercase 'see' and
+  // evaded the original resolver).
+  for (const skillDir of listSkillDirsAll()) {
+    const skillText = readFileSync(join(skillDir, 'SKILL.md'), 'utf8');
+    for (const ref of skillText.matchAll(/(?:[Ss]ee|load) `([a-z0-9-]+)`/g)) {
+      assert.ok(
+        existsSync(join(pluginRoot, 'skills', ref[1], 'SKILL.md')),
+        `${skillDir} cross-references ${ref[1]}, which does not resolve to a real skill`,
+      );
+    }
+  }
 });
+
+function listSkillDirsAll(): string[] {
+  const skillsDir = join(pluginRoot, 'skills');
+  return readdirSync(skillsDir)
+    .filter((name) => existsSync(join(skillsDir, name, 'SKILL.md')))
+    .map((name) => join(skillsDir, name));
+}
 
 test('skill SKILL.md files meet minimum content quality bar', () => {
   const skillsDir = join(pluginRoot, 'skills');

@@ -7,28 +7,38 @@
 //
 // Usage: node scripts/eval-generic-face.mjs [--json]
 //
-// Face accounting (round-9 correction): the token round trip is a consent
-// property a first-class tool would ALSO carry, so both faces count it.
-// The generic face's structural overhead is the NAME-DISCOVERY call
-// (gateway_list_tools) that a cold, skill-less agent makes before its
-// first state-changing generic call — an agent that loaded huawei-openapi
-// knows the tool names statically and pays zero. The harness reports the
-// unskilled-agent bound per task and names that framing.
+// Face accounting (round-9/10 corrections): the token round trip is a
+// consent property a first-class tool would ALSO carry, so both faces
+// count it. The generic face's structural cost is the NAME-DISCOVERY
+// call (gateway_list_tools) — modeled ONCE PER SESSION (not per task)
+// for an unskilled agent. Zero-cost paths, in order of reach: (1) an
+// agent that loaded huawei-openapi knows the names statically; (2) an
+// agent that reads tool descriptions also knows them —
+// huaweicloud_gateway_call's own description names all four routed tools
+// and every agent consumes tools/list to discover the tool in the first
+// place. The +1 therefore bounds only an agent that skips BOTH: the
+// upper bound of the unskilled face, not its typical cost.
 //
 // Preflight: the gateway binary must resolve and complete a handshake, or
 // the harness exits non-zero with a loud error — a green table must never
 // be producible from absence.
+//
+// Timing note: the sidecar is warm across tasks and across both faces
+// (spawn/handshake excluded); the generic face runs first, so gateway
+// cache warming can bias the ms columns by ordering alone. Calls, not
+// ms, are the decision metric.
 
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
 
 const asJson = process.argv.includes('--json');
-const repoRoot = new URL('..', import.meta.url).pathname;
+const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const gatewayBin =
   process.env.OPENMCP_BIN || join(process.env.HOME || '/home/cheney', '.local/bin/huaweicloud-open-mcp');
 
-import { existsSync } from 'node:fs';
 if (!existsSync(gatewayBin)) {
   console.error(
     `eval-generic-face: gateway binary not found at ${gatewayBin} (set OPENMCP_BIN). Refusing to produce evidence from absence.`,
@@ -58,6 +68,12 @@ if (preflight.ok !== true) {
 // Each task returns { dispatches, final }: dispatches counts actual
 // callTool invocations (mint AND replay both count — the consent round
 // trip rides both faces), final is the last result for the outcome row.
+// firstClass: an alternate zero-discovery run for the same task — the
+// first-class lower bound (curated tool or same flow without the list).
+// needsDiscovery: the task's generic-face run requires knowing a gateway
+// tool name the curated surface does not teach (declared per task, not
+// derived from the id string — round-10: a rename silently changed the
+// measured overhead).
 async function tokenTask(tool, toolArgs) {
   const minted = await callTool('huaweicloud_gateway_call', { tool, toolArgs });
   if (minted.requiresApproval !== true) return { dispatches: 1, final: minted };
@@ -73,54 +89,58 @@ async function tokenTask(tool, toolArgs) {
 const TASKS = [
   {
     id: 'curated-read',
-    // The curated discovery tools are first-class ALREADY — both faces
-    // call the same tool. Included so the read-path row is measured, not
-    // asserted.
+    needsDiscovery: false,
     run: async () => ({ dispatches: 1, final: await callTool('huaweicloud_search_apis', { query: 'ecs', limit: 1 }) }),
+    firstClass: async () => ({
+      dispatches: 1,
+      final: await callTool('huaweicloud_search_apis', { query: 'ecs', limit: 1 }),
+    }),
   },
   {
     id: 'generic-read',
+    // search_apis is a curated name too (the devkit ships
+    // huaweicloud_search_apis), so the generic call needs no discovery.
+    needsDiscovery: false,
     run: async () => ({
       dispatches: 1,
       final: await callTool('huaweicloud_gateway_call', { tool: 'search_apis', toolArgs: { query: 'vpc', limit: 1 } }),
     }),
+    // The first-class bound for a read is the curated tool itself.
+    firstClass: async () => ({
+      dispatches: 1,
+      final: await callTool('huaweicloud_search_apis', { query: 'vpc', limit: 1 }),
+    }),
   },
-  { id: 'generic-data-query', run: () => tokenTask('query_data', { sql: 'select 1 as x' }) },
+  {
+    id: 'generic-data-query',
+    needsDiscovery: true,
+    run: () => tokenTask('query_data', { sql: 'select 1 as x' }),
+  },
   {
     id: 'generic-execute-approved',
+    needsDiscovery: true,
     run: () => tokenTask('execute_api', { product: 'IAM', api: 'KeystoneListRegions' }),
   },
 ];
 
-async function runGeneric(task) {
-  // The unskilled-agent shape: the agent does not know the gateway tool
-  // names and lists the surface once before its first state-changing
-  // generic call. This is the face's structural cost being measured.
-  const dispatches = [await task.run()];
-  const needsDiscovery = task.id.startsWith('generic-') && task.id !== 'generic-read';
-  let listCalls = 0;
-  if (needsDiscovery) {
-    const listing = await callTool('huaweicloud_gateway_list_tools', {});
-    listCalls = 1;
-    if (listing.ok !== true)
-      throw new Error(`gateway_list_tools failed mid-eval: ${JSON.stringify(listing).slice(0, 120)}`);
-  }
-  return { calls: dispatches[0].dispatches + listCalls, final: dispatches[0].final };
-}
-
-async function runFirstClass(task) {
-  // The first-class lower bound: the same consent flow, no name-discovery
-  // call. The token round trip counts here too — a first-class execute
-  // tool would still mint and verify.
-  const { dispatches, final } = await task.run();
-  return { calls: dispatches, final };
-}
-
 async function measure(label, runner) {
   const rows = [];
+  let sessionDiscoveryCalls = 0;
+  let listedThisSession = null;
+  // The unskilled agent lists ONCE per session: the first
+  // state-changing generic call triggers the listing; later tasks reuse
+  // the knowledge (round-10: per-task listing overstated the session).
+  // charged tells the caller whether THIS call is the session's first
+  // (the only one that carries the +1).
+  const listOncePerSession = async () => {
+    if (listedThisSession) return { listing: listedThisSession, charged: false };
+    sessionDiscoveryCalls += 1;
+    listedThisSession = await callTool('huaweicloud_gateway_list_tools', {});
+    return { listing: listedThisSession, charged: true };
+  };
   for (const task of TASKS) {
     const started = process.hrtime.bigint();
-    const { calls, final } = await runner(task);
+    const { calls, final } = await runner(task, listOncePerSession);
     const ms = Number(process.hrtime.bigint() - started) / 1e6;
     // ok = the FACE completed consent + forwarding. A gateway-side
     // capability refusal (datafusion missing on this host) still proves
@@ -129,10 +149,34 @@ async function measure(label, runner) {
     const reached = final.ok === true || (final.ok === false && typeof final.reason === 'string');
     rows.push({ task: task.id, calls, ms: Math.round(ms), ok: reached });
   }
-  return { label, rows };
+  return { label, rows, sessionDiscoveryCalls };
 }
 
-const generic = await measure('generic (unskilled-agent bound)', runGeneric);
+// Generic face: an unskilled agent lists the surface ONCE per session
+// before its first state-changing generic call; later discovery-needing
+// tasks reuse that knowledge, so only the FIRST carries the +1 (the
+// per-row overhead then sums to the session total).
+async function runGeneric(task, listOncePerSession) {
+  const { dispatches, final } = await task.run();
+  let listCalls = 0;
+  if (task.needsDiscovery) {
+    const { listing, charged } = await listOncePerSession();
+    listCalls = charged ? 1 : 0;
+    if (listing.ok !== true)
+      throw new Error(`gateway_list_tools failed mid-eval: ${JSON.stringify(listing).slice(0, 120)}`);
+  }
+  return { calls: dispatches + listCalls, final };
+}
+
+// First-class lower bound: the same consent flow (token round trip
+// counted) with NO name-discovery call.
+async function runFirstClass(task) {
+  const runner = task.firstClass ?? task.run;
+  const { dispatches, final } = await runner();
+  return { calls: dispatches, final };
+}
+
+const generic = await measure('generic (unskilled-agent upper bound)', runGeneric);
 const firstClass = await measure('first-class bounds', runFirstClass);
 await _resetOpenMcpSidecar();
 
@@ -158,9 +202,10 @@ if (asJson) {
       `${row.task.padEnd(28)}${String(row.genericCalls).padStart(6)}  ${String(row.firstClassCalls).padStart(9)}  ${String(row.callOverhead).padStart(12)}  ${String(row.genericMs).padStart(10)}  ${row.bothReached ? 'yes' : 'NO'}`,
     );
   }
-  const totalOverhead = comparison.reduce((sum, row) => sum + row.callOverhead, 0);
-  console.log(`\ntotal name-discovery overhead (unskilled agent): ${totalOverhead}`);
-  console.log('an agent that loaded huawei-openapi pays 0: the skill teaches the tool names.');
+  console.log(`\nsession name-discovery calls (unskilled agent): ${generic.sessionDiscoveryCalls}`);
+  console.log('zero-cost paths: an agent that loaded huawei-openapi knows the names statically;');
+  console.log('an agent that reads tool descriptions also knows them (gateway_call names all routed tools).');
+  console.log('the +1 bounds only an agent that skips both — the unskilled upper bound.');
   console.log(
     'decision rule (design v4): dynamic registration lands only if this overhead is material in agent evaluations.',
   );
