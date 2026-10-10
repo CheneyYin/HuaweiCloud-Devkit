@@ -32,12 +32,12 @@ If all checks pass, the stored args are used to execute `runHcloud`.
 
 ### Token Storage
 
-Tokens are persisted to a per-user file (`~/.config/huaweicloud-devkit/approvals.json`, mode 0600) so plan and run survive the process boundary (in-memory storage lost tokens across MCP sessions, issue #578). Only the sha256 of the canonical args plus the redacted form are stored, never the raw args.
+Tokens are persisted to a per-user file (`~/.config/huaweicloud/approvals.json`, mode 0600; the whole tree relocates via `HUAWEICLOUD_HOME`) so plan and run survive the process boundary (in-memory storage lost tokens across MCP sessions, issue #578). Only the sha256 of the canonical args plus the redacted form are stored, never the raw args.
 
 - Token is a UUID
 - Tokens are single-use (exclusive-create claim marker next to the store)
 - Tokens expire after 5 minutes
-- Stale entries and markers are pruned on every mint and consume
+- Stale entries and markers are pruned on every mint (consume deletes only its own entry)
 
 ### Key Functions
 

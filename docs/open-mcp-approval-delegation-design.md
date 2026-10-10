@@ -1,6 +1,6 @@
 # open-mcp 授权委托重设计
 
-- 状态: 已决策, 待实施
+- 状态: 已实施（v2-pack，2026-10-10）
 - 决策日期: 2026-10-10
 - 评审基础: 三模型对抗评审 (interrogate)。两处共识级安全发现由维护者决策接受, 记录于第 8 节。
 
@@ -83,7 +83,7 @@ classify() 的裁决词表坍缩为 `{deny, forward}`。委托后 passthrough �
 
 ## 5. 探针协议 (实施前置)
 
-对象是真实网关, pip 包 huaweicloud-open-mcp, 不是测试夹具。夹具的 deny-by-default 只是被钉的假设, 探针验证真实网关是否同判。
+对象是真实网关, pip 包 huaweicloud-open-mcp, 不是测试夹具。夹具的 deny-by-default 只是被钉的假设, 探针验证真实网关是否同判。已执行, 绿色分支: 空 policy 拒绝 execute_api, reason 自带同意教学; probe facts 记录于 docs/safety-model.md。
 
 1. execute_api 空 policy 文件下的默认裁决。
 2. query_data 与 transform_data 空 policy 下的行为。

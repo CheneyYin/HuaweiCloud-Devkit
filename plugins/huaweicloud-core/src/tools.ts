@@ -448,7 +448,7 @@ export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: Cal
   const toolValue = toolInvokeValue(name, args);
   trackToolInvoke(name, toolValue);
 
-  // Pack tools (the 40 non-core names) dispatch through the central handler
+  // Pack tools (the 41 non-core names) dispatch through the central handler
   // map in packs/registry.ts before the switch; the type guard narrows
   // `name` to the core remainder, which is what the switch below and its
   // never-guard are exhaustive over. opts rides through verbatim: every pack

@@ -50,8 +50,8 @@ function asCreds(value: unknown): CredentialLike | null {
 // Approval tokens must survive a process boundary: plan and run land in
 // different MCP sessions/processes (and headless subprocesses), so the old
 // in-memory Map lost the token and plan→approve→run became unreachable (#578).
-// The machinery lives in src/lib/approval-tokens.ts (face-neutral consent
-// layer, shared with the open-mcp approval bridge).
+// The machinery lives in src/lib/approval-tokens.ts (the CLI face's
+// consent layer for plan_cli_command / run_approved_command).
 
 function saveLargeOutput(rawStdout: string): string | null {
   if (rawStdout.length <= LARGE_OUTPUT_THRESHOLD) return null;
