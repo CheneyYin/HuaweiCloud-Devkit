@@ -158,6 +158,41 @@ test('skills document KooCLI installation, operation discovery, region intent, a
   assert.ok(!cliSkill.includes('hwcloudcli.obs.cn-north-1'), 'no stale hwcloudcli endpoint in cli-and-auth');
 });
 
+test('huawei-openapi skill teaches only vocabulary-table tools and the real params layout', async () => {
+  // The teaching layer is a consent surface: a gateway tool name the
+  // skill mentions but the vocabulary table does not know, or a params
+  // layout contradicting the gateway's contract, misroutes real consent
+  // (round-9: the wrong body-nesting row burned approvals on silently
+  // dropped parameters). Guard the teachable claims mechanically.
+  const { GATEWAY_TOOL_VOCABULARY } = await import(
+    join(pluginRoot, 'src', 'packs', 'huaweicloud-open-mcp', 'approval.ts')
+  );
+  const skill = readFileSync(join(pluginRoot, 'skills', 'huawei-openapi', 'SKILL.md'), 'utf8');
+
+  const known = new Set([...GATEWAY_TOOL_VOCABULARY.readonly, ...GATEWAY_TOOL_VOCABULARY.routed]);
+  const mentioned = new Set(
+    skill.match(
+      /\b(?:search_apis|list_products|get_product|list_apis|get_api|get_api_examples|execute_api|manage_policy|query_data|transform_data)\b/g,
+    ) ?? [],
+  );
+  for (const name of mentioned) {
+    assert.ok(known.has(name), `the skill mentions ${name}, which is not in GATEWAY_TOOL_VOCABULARY`);
+  }
+  // The params contract (gateway server.py: path/query flatten into
+  // params, body in params["body"]).
+  assert.match(skill, /toolArgs\.params\.body/);
+  assert.doesNotMatch(skill, /toolArgs\.body[^.]/, 'the flat toolArgs.body spelling taught wrong nesting (round-9)');
+
+  // Cross-references resolve to real skills (dead ends are the documented
+  // failure mode).
+  for (const ref of skill.matchAll(/See `([a-z0-9-]+)`/g)) {
+    assert.ok(
+      existsSync(join(pluginRoot, 'skills', ref[1], 'SKILL.md')),
+      `cross-reference ${ref[1]} must resolve to a real skill`,
+    );
+  }
+});
+
 test('skill SKILL.md files meet minimum content quality bar', () => {
   const skillsDir = join(pluginRoot, 'skills');
   const skillNames = readdirSync(skillsDir).filter((name) => existsSync(join(skillsDir, name, 'SKILL.md')));

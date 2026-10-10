@@ -610,6 +610,11 @@ function serviceCatalog(intent: string = '') {
       services: ['DDS', 'DCS'],
     },
     {
+      keywords: ['openapi', 'api catalog', 'api explorer', 'rest call', 'open api', '全量目录', '接口目录'],
+      skills: ['huawei-openapi'],
+      services: [],
+    },
+    {
       keywords: ['voucher', 'coupon', 'incentive', 'credit', '领券', '代金券', '优惠券', '激励金', '领取'],
       skills: ['huawei-voucher'],
       services: ['Incentive Voucher'],

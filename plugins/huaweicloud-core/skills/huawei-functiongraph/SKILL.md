@@ -3,6 +3,7 @@ name: huawei-functiongraph
 description: 'Use when creating, deploying, or managing serverless functions on FunctionGraph. Covers triggers (APIG/OBS/timer/SMN), cold start, reserved concurrency. Triggers: FunctionGraph, serverless, function, Lambda, trigger. NOT for: CCE containers (use huawei-cce).'
 version: 1
 ---
+
 <!-- generated from src/packs/huaweicloud-cli/skills/huawei-functiongraph - do not edit -->
 
 # Huawei Cloud FunctionGraph

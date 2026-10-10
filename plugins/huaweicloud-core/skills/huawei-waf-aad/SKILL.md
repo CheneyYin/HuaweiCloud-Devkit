@@ -3,6 +3,7 @@ name: huawei-waf-aad
 description: 'Use when configuring Web Application Firewall (WAF) policies/rules, or Anti-DDoS (AAD) protection on Huawei Cloud. Triggers: WAF, AAD, firewall, DDoS, web protection, IP blacklist, rate limiting, CC attack. NOT for: security groups (use huawei-vpc), CTS audit (use huawei-cts).'
 version: 1
 ---
+
 <!-- generated from src/packs/huaweicloud-cli/skills/huawei-waf-aad - do not edit -->
 
 # Huawei Cloud WAF / AAD

@@ -1,27 +1,25 @@
 #!/usr/bin/env node
 // Eval harness for the generic call face (the round-1 deferred decision:
 // dynamic registration only lands if the two-step generic face materially
-// underperforms first-class tools). Measures, per task: tool-call count,
-// round trips, and outcome, driving the REAL callTool dispatch against
-// the REAL gateway binary in openapi,data mode.
+// underperforms first-class tools). Measures, per task: tool-call count
+// and outcome, driving the REAL callTool dispatch against the REAL
+// gateway binary in openapi,data mode.
 //
 // Usage: node scripts/eval-generic-face.mjs [--json]
 //
-// Mode A (generic, shipped): gateway_call with tool+toolArgs; discovery
-// tasks additionally call gateway_list_tools first when the task model
-// requires knowing the surface (the "two-step" cost the eval quantifies).
-// Mode B (first-class simulation): the same callTool flow WITHOUT the
-// list step and without the token round trip for read-only-ish tasks —
-// the lower bound a dynamic-registration face could reach only if the
-// gateway tool were directly callable with zero discovery overhead.
+// Face accounting (round-9 correction): the token round trip is a consent
+// property a first-class tool would ALSO carry, so both faces count it.
+// The generic face's structural overhead is the NAME-DISCOVERY call
+// (gateway_list_tools) that a cold, skill-less agent makes before its
+// first state-changing generic call — an agent that loaded huawei-openapi
+// knows the tool names statically and pays zero. The harness reports the
+// unskilled-agent bound per task and names that framing.
 //
-// The comparison is intentionally conservative for B: B skips ONLY the
-// discovery round trip that A's flow needs. The token round trip on
-// state-changing calls is a consent property shared by both faces (a
-// first-class execute_api tool would still mint/verify the token), so it
-// is excluded from the difference rather than credited to B.
+// Preflight: the gateway binary must resolve and complete a handshake, or
+// the harness exits non-zero with a loud error — a green table must never
+// be producible from absence.
 
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -29,6 +27,14 @@ const asJson = process.argv.includes('--json');
 const repoRoot = new URL('..', import.meta.url).pathname;
 const gatewayBin =
   process.env.OPENMCP_BIN || join(process.env.HOME || '/home/cheney', '.local/bin/huaweicloud-open-mcp');
+
+import { existsSync } from 'node:fs';
+if (!existsSync(gatewayBin)) {
+  console.error(
+    `eval-generic-face: gateway binary not found at ${gatewayBin} (set OPENMCP_BIN). Refusing to produce evidence from absence.`,
+  );
+  process.exit(1);
+}
 
 const home = mkdtempSync(join(tmpdir(), 'openmcp-eval-'));
 process.env.HUAWEICLOUD_HOME = home;
@@ -40,111 +46,95 @@ const { _resetOpenMcpSidecar } = await import(
   join(repoRoot, 'plugins/huaweicloud-core/src/packs/huaweicloud-open-mcp/sidecar.ts')
 );
 
+// Preflight: one real dispatch must reach the gateway (spawn + handshake +
+// proxy round trip). Any failure here aborts before a table exists.
+await _resetOpenMcpSidecar();
+const preflight = await callTool('huaweicloud_gateway_list_tools', {});
+if (preflight.ok !== true) {
+  console.error(`eval-generic-face: gateway preflight failed: ${JSON.stringify(preflight).slice(0, 200)}`);
+  process.exit(1);
+}
+
+// Each task returns { dispatches, final }: dispatches counts actual
+// callTool invocations (mint AND replay both count — the consent round
+// trip rides both faces), final is the last result for the outcome row.
+async function tokenTask(tool, toolArgs) {
+  const minted = await callTool('huaweicloud_gateway_call', { tool, toolArgs });
+  if (minted.requiresApproval !== true) return { dispatches: 1, final: minted };
+  const replay = await callTool('huaweicloud_gateway_call', {
+    tool,
+    toolArgs,
+    approvalToken: minted.approvalToken,
+    approvedByUser: true,
+  });
+  return { dispatches: 2, final: replay };
+}
+
 const TASKS = [
   {
-    id: 'discover-product',
-    kind: 'discovery',
-    run: () => callTool('huaweicloud_search_apis', { query: 'ecs', limit: 1 }),
-  },
-  {
-    id: 'read-api-doc',
-    kind: 'read',
-    run: () => callTool('huaweicloud_get_api', { product: 'ECS', api: 'ListServersDetails' }),
-  },
-  {
-    id: 'read-examples',
-    kind: 'read',
-    run: () => callTool('huaweicloud_get_api_examples', { product: 'ECS', api: 'CreateServers' }),
+    id: 'curated-read',
+    // The curated discovery tools are first-class ALREADY — both faces
+    // call the same tool. Included so the read-path row is measured, not
+    // asserted.
+    run: async () => ({ dispatches: 1, final: await callTool('huaweicloud_search_apis', { query: 'ecs', limit: 1 }) }),
   },
   {
     id: 'generic-read',
-    kind: 'generic-read',
-    run: () => callTool('huaweicloud_gateway_call', { tool: 'search_apis', toolArgs: { query: 'vpc', limit: 1 } }),
+    run: async () => ({
+      dispatches: 1,
+      final: await callTool('huaweicloud_gateway_call', { tool: 'search_apis', toolArgs: { query: 'vpc', limit: 1 } }),
+    }),
   },
-  {
-    id: 'generic-data-query',
-    kind: 'generic-token',
-    run: async () => {
-      const minted = await callTool('huaweicloud_gateway_call', {
-        tool: 'query_data',
-        toolArgs: { sql: 'select 1 as x' },
-      });
-      if (minted.requiresApproval !== true) return minted;
-      return callTool('huaweicloud_gateway_call', {
-        tool: 'query_data',
-        toolArgs: { sql: 'select 1 as x' },
-        approvalToken: minted.approvalToken,
-        approvedByUser: true,
-      });
-    },
-  },
+  { id: 'generic-data-query', run: () => tokenTask('query_data', { sql: 'select 1 as x' }) },
   {
     id: 'generic-execute-approved',
-    kind: 'generic-token',
-    run: async () => {
-      const minted = await callTool('huaweicloud_gateway_call', {
-        tool: 'execute_api',
-        toolArgs: { product: 'IAM', api: 'KeystoneListRegions' },
-      });
-      if (minted.requiresApproval !== true) return minted;
-      return callTool('huaweicloud_gateway_call', {
-        tool: 'execute_api',
-        toolArgs: { product: 'IAM', api: 'KeystoneListRegions' },
-        approvalToken: minted.approvalToken,
-        approvedByUser: true,
-      });
-    },
+    run: () => tokenTask('execute_api', { product: 'IAM', api: 'KeystoneListRegions' }),
   },
 ];
 
-// The generic face needs the surface known before a state-changing call
-// (the drift gate reads the cache; the first generic call populates it
-// via spawn). Model that honestly: generic tasks that do NOT go through
-// a curated tool first include one gateway_list_tools round trip.
 async function runGeneric(task) {
-  const calls = [];
-  if (task.kind === 'generic-token') {
+  // The unskilled-agent shape: the agent does not know the gateway tool
+  // names and lists the surface once before its first state-changing
+  // generic call. This is the face's structural cost being measured.
+  const dispatches = [await task.run()];
+  const needsDiscovery = task.id.startsWith('generic-') && task.id !== 'generic-read';
+  let listCalls = 0;
+  if (needsDiscovery) {
     const listing = await callTool('huaweicloud_gateway_list_tools', {});
-    calls.push({ tool: 'huaweicloud_gateway_list_tools', ok: listing.ok === true });
+    listCalls = 1;
+    if (listing.ok !== true)
+      throw new Error(`gateway_list_tools failed mid-eval: ${JSON.stringify(listing).slice(0, 120)}`);
   }
-  const result = await task.run();
-  const steps = task.kind === 'generic-token' ? 2 : 1;
-  for (let index = 0; index < steps; index += 1) calls.push({ tool: task.id, ok: result.ok === true });
-  return { calls, result };
+  return { calls: dispatches[0].dispatches + listCalls, final: dispatches[0].final };
 }
 
 async function runFirstClass(task) {
-  // First-class mode runs the SAME task flow (the token round trip is a
-  // consent property a first-class tool would keep); only the discovery
-  // round trip (gateway_list_tools) is the face's structural cost being
-  // measured against.
-  const result = await task.run();
-  const steps = task.kind === 'generic-token' && result.requiresApproval === true ? 2 : 1;
-  const calls = [];
-  for (let index = 0; index < steps; index += 1) calls.push({ tool: task.id, ok: result.ok === true || index === 0 });
-  return { calls, result };
+  // The first-class lower bound: the same consent flow, no name-discovery
+  // call. The token round trip counts here too — a first-class execute
+  // tool would still mint and verify.
+  const { dispatches, final } = await task.run();
+  return { calls: dispatches, final };
 }
 
 async function measure(label, runner) {
-  await _resetOpenMcpSidecar();
   const rows = [];
   for (const task of TASKS) {
-    if (task.kind === 'discovery' || task.kind === 'read') continue; // curated tools are identical in both faces
     const started = process.hrtime.bigint();
-    const { calls, result } = await runner(task);
+    const { calls, final } = await runner(task);
     const ms = Number(process.hrtime.bigint() - started) / 1e6;
-    // ok = the face completed its job (consent + forwarding). A gateway-side
-    // capability gap (e.g. datafusion not installed on this host) is the
-    // environment's verdict, not the face's — reachedGateway captures it.
-    const reachedGateway = result.ok === true || (result.ok === false && result.requiresApproval === undefined);
-    rows.push({ task: task.id, calls: calls.length, ms: Math.round(ms), ok: reachedGateway });
+    // ok = the FACE completed consent + forwarding. A gateway-side
+    // capability refusal (datafusion missing on this host) still proves
+    // the face reached the gateway; an ok:false carrying the gateway's
+    // own reason text is a reached-and-refused outcome.
+    const reached = final.ok === true || (final.ok === false && typeof final.reason === 'string');
+    rows.push({ task: task.id, calls, ms: Math.round(ms), ok: reached });
   }
-  await _resetOpenMcpSidecar();
   return { label, rows };
 }
 
-const generic = await measure('generic', runGeneric);
-const firstClass = await measure('first-class-bounds', runFirstClass);
+const generic = await measure('generic (unskilled-agent bound)', runGeneric);
+const firstClass = await measure('first-class bounds', runFirstClass);
+await _resetOpenMcpSidecar();
 
 const comparison = generic.rows.map((row) => {
   const b = firstClass.rows.find((other) => other.task === row.task);
@@ -155,21 +145,22 @@ const comparison = generic.rows.map((row) => {
     callOverhead: row.calls - b.calls,
     genericMs: row.ms,
     firstClassMs: b.ms,
-    bothOk: row.ok && b.ok,
+    bothReached: row.ok && b.ok,
   };
 });
 
 if (asJson) {
   console.log(JSON.stringify({ generic, firstClass, comparison }, null, 2));
 } else {
-  console.log('task                        generic  first-class  call-overhead  generic-ms  ok');
+  console.log('task                        generic  first-class  call-overhead  generic-ms  reached');
   for (const row of comparison) {
     console.log(
-      `${row.task.padEnd(28)}${String(row.genericCalls).padStart(6)}  ${String(row.firstClassCalls).padStart(9)}  ${String(row.callOverhead).padStart(12)}  ${String(row.genericMs).padStart(10)}  ${row.bothOk ? 'yes' : 'NO'}`,
+      `${row.task.padEnd(28)}${String(row.genericCalls).padStart(6)}  ${String(row.firstClassCalls).padStart(9)}  ${String(row.callOverhead).padStart(12)}  ${String(row.genericMs).padStart(10)}  ${row.bothReached ? 'yes' : 'NO'}`,
     );
   }
   const totalOverhead = comparison.reduce((sum, row) => sum + row.callOverhead, 0);
-  console.log(`\ntotal call overhead of the generic face across the task set: ${totalOverhead}`);
+  console.log(`\ntotal name-discovery overhead (unskilled agent): ${totalOverhead}`);
+  console.log('an agent that loaded huawei-openapi pays 0: the skill teaches the tool names.');
   console.log(
     'decision rule (design v4): dynamic registration lands only if this overhead is material in agent evaluations.',
   );

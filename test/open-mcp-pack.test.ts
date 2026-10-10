@@ -20,6 +20,7 @@ import {
 } from '../plugins/huaweicloud-core/src/packs/huaweicloud-open-mcp/sidecar.ts';
 import {
   classify,
+  GATEWAY_TOOL_VOCABULARY,
   matchingDenyRule,
   resolveApprovalMode,
 } from '../plugins/huaweicloud-core/src/packs/huaweicloud-open-mcp/approval.ts';
@@ -598,7 +599,10 @@ test('classify: surface drift denies execute_api in both modes; native passes th
 
 test('classify: the drift gate covers every non-read-only tool and skips read-only names', () => {
   const surface = new Set(['search_apis', 'list_products']);
-  for (const tool of ['transform_data', 'query_data', 'manage_policy', 'unknown_tool']) {
+  // The routed half of the vocabulary table is the drift-gate subject
+  // set — iterating the table (not a hand-written list) keeps the gate
+  // and the vocabulary in lockstep.
+  for (const tool of [...GATEWAY_TOOL_VOCABULARY.routed, 'unknown_tool']) {
     const ruling = classify(tool, {}, 'devkit', surface);
     assert.equal(ruling.verdict, 'deny', `${tool} missing from the live surface denies as drift`);
     assert.match(String(ruling.reason), new RegExp(`no longer exposes ${tool}`));

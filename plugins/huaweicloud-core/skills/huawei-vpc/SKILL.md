@@ -3,6 +3,7 @@ name: huawei-vpc
 description: 'Use when creating, configuring, or managing VPC networks, subnets, security groups, EIPs, NAT gateways, VPN connections, or network ACLs on Huawei Cloud. Triggers on: VPC, subnet, security group, EIP, NAT, VPN, network ACL, route table, bandwidth. NOT for: DNS or CDN configuration.'
 version: 1
 ---
+
 <!-- generated from src/packs/huaweicloud-cli/skills/huawei-vpc - do not edit -->
 
 # Huawei Cloud VPC

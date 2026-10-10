@@ -3,6 +3,7 @@ name: huawei-billing
 description: 'Use when querying bills, costs, resource usage, or billing details on Huawei Cloud (BSS). Triggers: billing, BSS, cost, bill, expense, usage report, resource usage, budget. NOT for: resource management (use huawei-ecs etc.), creating resources.'
 version: 1
 ---
+
 <!-- generated from src/packs/huaweicloud-cli/skills/huawei-billing - do not edit -->
 
 # Huawei Cloud Billing (BSS)

@@ -3,6 +3,7 @@ name: huawei-cce
 description: 'Use when creating or managing CCE Kubernetes clusters. Covers cluster creation, node pools, SWR registry, autoscaling. Triggers: CCE, Kubernetes, K8s, cluster, node pool, container, SWR. NOT for: serverless functions (use huawei-functiongraph), serverless containers (use huawei-cce for CCI redirect).'
 version: 1
 ---
+
 <!-- generated from src/packs/huaweicloud-cli/skills/huawei-cce - do not edit -->
 
 # Huawei Cloud CCE

@@ -3,6 +3,7 @@ name: huawei-cbr
 description: 'Use when creating or managing Cloud Backup and Recovery (CBR) vaults, backups, and restore operations on Huawei Cloud. Triggers: CBR, backup, restore, vault, snapshot, disaster recovery. NOT for: OBS object versioning (use huawei-obs), RDS automated backups (use huawei-rds).'
 version: 1
 ---
+
 <!-- generated from src/packs/huaweicloud-cli/skills/huawei-cbr - do not edit -->
 
 # Huawei Cloud CBR

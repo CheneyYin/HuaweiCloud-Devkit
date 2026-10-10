@@ -14,7 +14,7 @@ Use this skill to turn vague developer intent into a precise Huawei Cloud capabi
 1. Classify the goal: application hosting, compute, container, serverless, storage, database, network, security, observability, AI, data, migration, cost, or troubleshooting.
 2. Search Huawei Cloud Skills first when the task is scenario-based or operational.
 3. Discover devkit capability packs: call `huaweicloud_list_packs` for the pack overview, then `huaweicloud_pack_info` for a pack's tools and claimed skills, then load the skill with `huaweicloud_retrieve_skill`.
-4. Use official docs for exact service limits, API request/response fields, regions, and pricing-sensitive behavior.
+4. For exact service limits, API request/response fields, regions, and pricing-sensitive behavior: prefer the OpenAPI catalog tools (`huaweicloud_search_apis` → `huaweicloud_list_apis` → `huaweicloud_get_api`, see `huawei-openapi`) over web docs when the operation may need executing — the catalog covers 300+ products and feeds the same approval-gated execution face. Fall back to official docs for pricing and quota policy.
 5. Prefer KooCLI for local read-only discovery after auth is configured.
 6. Before using KooCLI, discover exact operation names with `hcloud <Service> --help`; do not guess from intuition. Examples: list ECS instances with `ECS ListServersDetails`, create ECS with `ECS CreateServers`, inspect images through `IMS GlanceShowImage`.
 7. Prefer SDK docs when the deliverable is application code.

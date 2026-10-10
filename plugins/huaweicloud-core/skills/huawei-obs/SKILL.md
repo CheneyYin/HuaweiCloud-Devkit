@@ -3,6 +3,7 @@ name: huawei-obs
 description: 'Use when creating, configuring, or managing OBS buckets and objects on Huawei Cloud. Covers bucket creation, lifecycle policies, versioning, static website hosting, CORS, access control (IAM/bucket policy/ACL), cross-region replication, event notifications, and presigned URLs. Triggers on: OBS, bucket, object storage, lifecycle, versioning, static website, CORS, presigned, replication. NOT for: EVS block storage (use huawei-ecs), SFS file storage, CBR backup (use huawei-cbr).'
 version: 1
 ---
+
 <!-- generated from src/packs/obs/skills/huawei-obs - do not edit -->
 
 # Huawei Cloud OBS

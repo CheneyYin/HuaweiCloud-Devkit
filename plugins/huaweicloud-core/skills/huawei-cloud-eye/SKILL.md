@@ -3,6 +3,7 @@ name: huawei-cloud-eye
 description: 'Use when setting up monitoring, alarms, dashboards, or event rules on Huawei Cloud Eye (CES). Triggers: Cloud Eye, CES, monitoring, alarm, metrics, dashboard, event monitoring. NOT for: CTS audit logs (use huawei-cts), AAD anti-DDoS (use huawei-waf-aad).'
 version: 1
 ---
+
 <!-- generated from src/packs/huaweicloud-cli/skills/huawei-cloud-eye - do not edit -->
 
 # Huawei Cloud Cloud Eye (CES)
