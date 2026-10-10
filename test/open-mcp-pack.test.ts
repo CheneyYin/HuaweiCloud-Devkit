@@ -521,10 +521,11 @@ test('classify: manage_policy add demands a canonical ephemeral scope', () => {
       verdict: 'forward',
     });
   }
-  // F1 spelling floor: the gateway matches by exact string, so a verbatim
-  // ' ONCE '/'Once' is a grant the engine never burns. The normalization
-  // the token ceremony used to do is gone; non-canonical spellings deny
-  // before the call leaves.
+  // F1 spelling floor: v0.2.0a4 rejects non-canonical spellings at add
+  // (未知 scope), so this deny is the devkit's actionable English floor
+  // firing before a gateway rejection. The floor is fail-closed on its
+  // own: a future gateway that relaxes its scope validation still meets
+  // this floor first.
   for (const scope of [' ONCE ', 'Once', 'ONCE', 'session ', ' Temporary']) {
     const ruling = classify('manage_policy', { action: 'add', line: 'ECS:X=allow', scope });
     assert.equal(ruling.verdict, 'deny', `scope ${JSON.stringify(scope)} must deny`);
@@ -592,7 +593,7 @@ test('classify: manage_policy remove takes no scope or ttl_seconds; the action a
   // F1: non-canonical action spellings deny as spelling, not as unknown
   // actions — the message must name the fix, not the allowlist.
   const upper = classify('manage_policy', { action: 'ADD', line: 'ECS:X=allow', scope: 'once' });
-  assert.equal(upper.verdict, 'deny', "'ADD' is a grant the gateway would never burn");
+  assert.equal(upper.verdict, 'deny', "'ADD' is a non-canonical action spelling and denies with the spelling fix");
   assert.match(String(upper.reason), /canonical spelling/);
   for (const action of ['append', ['add'], 42, undefined]) {
     const toolArgs: Record<string, unknown> = { line: 'ECS:X=allow', scope: 'once' };
@@ -819,6 +820,8 @@ test(
     assert.equal(result.requiresApproval, undefined, 'refusals are engine verdicts, not consent demands');
     assert.match(String(result.error), /safety policy/);
     assert.equal(result.reason, String(result.error), 'the engine refusal text is preserved verbatim');
+    assert.match(String(result.error), /api_session=最小规则/, 'the consent-teaching tail names the session preset');
+    assert.match(String(result.error), /readonly=产品级只读规则集/, 'the tail names the readonly preset too');
   }),
 );
 
@@ -852,10 +855,13 @@ test(
 test(
   'a once-burn removes the matched overlay rule, not the last one',
   withGatewayEnv({ FAKE_POLICY: '1' }, async () => {
-    // Two once rules, not one: burning the wrong element is only
-    // observable when a second rule sits behind the matched one, and the
-    // gateway burns the rule that granted the call.
-    for (const line of ['ECS:RuleA=allow', 'ECS:RuleB=allow']) {
+    // Three once rules with the MIDDLE one executed: splice(-1) eats C,
+    // splice(0) eats A, and indexOf on the spread copy is -1, so it eats
+    // C too; every wrong shape fails an assertion. That the burn hits
+    // the granting rule is inferred from documented once semantics, not
+    // measured: executions against nonexistent APIs stop at catalog
+    // resolution, so the real gateway never gets far enough to burn.
+    for (const line of ['ECS:RuleA=allow', 'ECS:RuleB=allow', 'ECS:RuleC=allow']) {
       const added = await callTool('huaweicloud_gateway_call', {
         tool: 'manage_policy',
         toolArgs: { action: 'add', line, scope: 'once' },
@@ -865,15 +871,16 @@ test(
 
     const executed = await callTool('huaweicloud_gateway_call', {
       tool: 'execute_api',
-      toolArgs: { product: 'ECS', api: 'RuleA' },
+      toolArgs: { product: 'ECS', api: 'RuleB' },
     });
     assert.equal(executed.ok, true, JSON.stringify(executed));
 
     const listing = await callTool('huaweicloud_gateway_call', { tool: 'manage_policy', toolArgs: { action: 'list' } });
     assert.equal(listing.ok, true, JSON.stringify(listing));
     const lines = new Set(listing.rules.map((rule) => rule.line));
-    assert.ok(!lines.has('ECS:RuleA=allow'), 'the executed once rule burned');
-    assert.ok(lines.has('ECS:RuleB=allow'), 'the untouched once rule survives');
+    assert.ok(!lines.has('ECS:RuleB=allow'), 'the executed once rule burned');
+    assert.ok(lines.has('ECS:RuleA=allow'), 'the untouched rule ahead of it survives');
+    assert.ok(lines.has('ECS:RuleC=allow'), 'the untouched rule behind it survives');
   }),
 );
 
@@ -882,38 +889,74 @@ test(
   withGatewayEnv({ FAKE_POLICY: '1' }, async () => {
     // The devkit floor denies every non-canonical shape before the
     // forward, so these pin the fixture's own dispatch through
-    // callOpenMcpTool directly, bypassing gateway_call.
-    const upper = await callOpenMcpTool('manage_policy', { action: 'ADD', line: 'ECS:X=allow', scope: 'once' });
-    assert.equal(upper.ok, false, JSON.stringify(upper));
-    assert.match(String(upper.error), /unsupported manage_policy action/);
+    // callOpenMcpTool directly, bypassing gateway_call. The policy file
+    // is written before this test's spawn so both layers are populated
+    // for the list-order and policy-echo pins below (provisioning is
+    // exclusive-create, so the pre-written file survives untouched).
+    const policyPath = join(stateHome, '.config', 'huaweicloud', 'packs', 'huaweicloud-open-mcp', 'policy');
+    mkdirSync(dirname(policyPath), { recursive: true });
+    writeFileSync(policyPath, '# operator-authored\nECS:FromFile=allow\n');
+    try {
+      const upper = await callOpenMcpTool('manage_policy', { action: 'ADD', line: 'ECS:X=allow', scope: 'once' });
+      assert.equal(upper.ok, false, JSON.stringify(upper));
+      assert.match(String(upper.error), /unsupported manage_policy action/);
 
-    const bogus = await callOpenMcpTool('manage_policy', { action: 'add', line: 'ECS:X=allow', scope: 'bogus' });
-    assert.equal(bogus.ok, false, JSON.stringify(bogus));
-    assert.match(
-      String(bogus.error),
-      /未知 scope: bogus（可选 permanent\/temporary\/session\/once）/,
-      'the probed vocabulary, in the probed order',
-    );
+      const bogus = await callOpenMcpTool('manage_policy', { action: 'add', line: 'ECS:X=allow', scope: 'bogus' });
+      assert.equal(bogus.ok, false, JSON.stringify(bogus));
+      assert.match(
+        String(bogus.error),
+        /未知 scope: bogus（可选 permanent\/temporary\/session\/once）/,
+        'the probed vocabulary, in the probed order',
+      );
 
-    // v0.2.0a4 (re-probed 2026-10-11) rejects the verbatim ' ONCE '
-    // spelling at add; round-5's accept-and-never-burn measurement was
-    // the pre-a4 gateway. The rejection echoes the raw spelling, never a
-    // normalized one.
-    const spaced = await callOpenMcpTool('manage_policy', { action: 'add', line: 'ECS:X=allow', scope: ' ONCE ' });
-    assert.equal(spaced.ok, false, JSON.stringify(spaced));
-    assert.match(
-      String(spaced.error),
-      /未知 scope:\s+ONCE\s+（可选 permanent\/temporary\/session\/once）/,
-      'the raw spelling crosses un-normalized',
-    );
+      // v0.2.0a4 (re-probed 2026-10-11) rejects the verbatim ' ONCE '
+      // spelling at add; round-5's accept-and-never-burn measurement was
+      // the pre-a4 gateway. The rejection echoes the raw spelling, never
+      // a normalized one.
+      const spaced = await callOpenMcpTool('manage_policy', { action: 'add', line: 'ECS:X=allow', scope: ' ONCE ' });
+      assert.equal(spaced.ok, false, JSON.stringify(spaced));
+      assert.equal(
+        String(spaced.error),
+        '未知 scope:  ONCE （可选 permanent/temporary/session/once）',
+        'the raw spelling crosses un-normalized, byte-faithful to the probe',
+      );
 
-    const ttlRemove = await callOpenMcpTool('manage_policy', {
-      action: 'remove',
-      line: 'ECS:X=allow',
-      ttl_seconds: 3600,
-    });
-    assert.equal(ttlRemove.ok, false, JSON.stringify(ttlRemove));
-    assert.match(String(ttlRemove.error), /remove 不接受 scope/);
+      const ttlRemove = await callOpenMcpTool('manage_policy', {
+        action: 'remove',
+        line: 'ECS:X=allow',
+        ttl_seconds: 3600,
+      });
+      assert.equal(ttlRemove.ok, false, JSON.stringify(ttlRemove));
+      assert.match(String(ttlRemove.error), /remove 不接受 scope/);
+
+      const added = await callOpenMcpTool('manage_policy', {
+        action: 'add',
+        line: 'ECS:OverlayRule=allow',
+        scope: 'once',
+      });
+      assert.equal(added.ok, true, JSON.stringify(added));
+      assert.ok(
+        String(added.policy).includes('# operator-authored'),
+        'the add success envelope echoes the raw file text, comment included',
+      );
+
+      const listed = await callOpenMcpTool('manage_policy', { action: 'list' });
+      assert.equal(listed.ok, true, JSON.stringify(listed));
+      assert.equal(listed.rules[0].line, 'ECS:OverlayRule=allow', 'overlay rules list before file rules');
+      assert.ok(
+        listed.rules.some((rule) => rule.line === 'ECS:FromFile=allow'),
+        'the file rule appears later in the listing',
+      );
+
+      const removed = await callOpenMcpTool('manage_policy', { action: 'remove', line: 'ECS:FromFile=allow' });
+      assert.equal(removed.ok, true, JSON.stringify(removed));
+      assert.ok(
+        !String(removed.policy).includes('ECS:FromFile=allow'),
+        'the remove envelope echoes the file after the rewrite, rule gone',
+      );
+    } finally {
+      writeFileSync(policyPath, '');
+    }
   }),
 );
 
@@ -1042,6 +1085,10 @@ test(
         toolArgs: { action: 'remove', line: 'ECS:ListServers=allow' },
       });
       assert.equal(removed.ok, true, JSON.stringify(removed));
+      assert.ok(
+        !String(removed.policy).includes('ECS:ListServers=allow'),
+        'the remove envelope echoes the rewritten file: the rule is gone from the policy text',
+      );
 
       const refused = await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs });
       assert.equal(refused.ok, false, 'the cross-layer remove rewrote the policy file, so the rule is gone');

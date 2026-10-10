@@ -166,8 +166,8 @@ function matchingRule(product, api) {
 
 // File-layer rule match for execute (the real gateway evaluates the
 // overlay ++ file rules as one ordered set; the file layer grants with
-// scope 'permanent' semantics and never burns). First-match-wins with
-// the same effect discipline.
+// scope 'permanent' semantics, so a matching file grant survives every
+// execute). First-match-wins with the same effect discipline.
 function matchingFileRule(product, api) {
   const file = fileLines().find((fileLine) => sideMatchOf(fileLine, product, api) !== null);
   if (file === undefined) return null;
@@ -329,6 +329,11 @@ function handleLine(line) {
       // and the devkit face refuses non-canonical input outright — the
       // fixture never normalizes what it receives.
       const action = args.action;
+      // Deliberate unmodeled divergences, probe-observed: real add
+      // rejections echo {action, scope, policy} next to reason (that
+      // shape is unreachable through gateway_call, the F1 floor fires
+      // first), and real remove successes echo the removed rule's scope
+      // (no test reads it).
       if (action === 'list') {
         // The real gateway's list shape (source-verified): the rules array
         // carries the overlay AND the file's semantic lines (scope
@@ -359,6 +364,8 @@ function handleLine(line) {
           respond(request.id, { ok: false, reason: `规则格式非法：${line}` });
           return;
         }
+        // A non-string scope stores scope:null, a grant that survives
+        // every execute; only the devkit floor stops it on the real face.
         const scope = typeof args.scope === 'string' ? args.scope : null;
         if (scope !== null && !SCOPE_VOCAB.has(scope)) {
           respond(request.id, { ok: false, reason: `未知 scope: ${scope}（可选 ${[...SCOPE_VOCAB].join('/')}）` });
@@ -422,11 +429,18 @@ function handleLine(line) {
       const api = String(args.api ?? '');
       const rule = matchingRule(product, api) ?? matchingFileRule(product, api);
       if (!rule || rule.grants !== true) {
-        respond(request.id, { ok: false, reason: `safety policy 拒绝执行 ${product}:${api}` });
+        // The probed v0.2.0a4 refusal reason in full: the tail teaches the
+        // consent path (the manage_policy grant shapes) inline.
+        respond(request.id, {
+          ok: false,
+          reason: `safety policy 拒绝执行 ${product}:${api}；如确需执行，请先经对话/交互式问询（如 question 工具）向用户确认后，调用 manage_policy 授予（line 支持传数组一次批量授予）：api=最小规则 '${product}:${api}=allow'（一次性）/api_session=最小规则 '${product}:${api}=allow'（会话内）/product=产品级规则 '${product}:*=allow'（会话内）/readonly=产品级只读规则集 '${product}:*List*=allow/${product}:*Show*=allow/${product}:*Get*=allow/${product}:*Query*=allow'（会话内，重启即失）/none=不授予`,
+        });
         return;
       }
-      // Burns only the canonical 'once' spelling: scope values are stored
-      // verbatim, mirroring the gateway's exact-string matching.
+      // Only canonical spellings are ever stored (the add-side vocab
+      // check rejects the rest), so the burn condition firing on 'once'
+      // is vacuous-safe; the hitIndex splice is what aims the burn at
+      // the granting rule instead of the last one.
       if (rule.scope === 'once' && rule.hitIndex !== undefined) rules.splice(rule.hitIndex, 1);
       respond(request.id, { ok: true, tool: name, executed: { product, api }, pid: process.pid });
       return;
