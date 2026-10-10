@@ -74,7 +74,7 @@ classify() 的裁决词表坍缩为 `{deny, forward}`。委托后 passthrough �
 
 - execute_api。classifyTextCommand 判 risk 为 secret 则 deny。
 - data tools。localFileTargetViolation 命中则 deny, 覆盖受保护树与凭证路径模式。
-- manage_policy。action 限 list, add, remove。add 的 scope 限 once, session, temporary。remove 不带 scope。
+- manage_policy。action 限 list, add, remove。add 的 scope 限 once, session, temporary。remove 不带 scope 与 ttl_seconds。
 
 新增形状地板。D2 与 D3 的直接后果, 不是新授权层:
 
@@ -126,7 +126,7 @@ classify() 的裁决词表坍缩为 `{deny, forward}`。委托后 passthrough �
 
 新增不变量:
 
-- 地板矩阵端到端。秘密、受保护树、凭证路径、永久 add、F1 拼写、F2 ttl、remove 带 scope、unknown 工具名, 每条一个 deny 断言。
+- 地板矩阵端到端。秘密、受保护树、凭证路径、永久 add、F1 拼写、F2 ttl、remove 带 scope 或 ttl_seconds、unknown 工具名, 每条一个 deny 断言。
 - unknown-deny 按静态词表判定。
 - 引擎拒绝以 `{ok:false}` 信封返回且 reason 保留。
 - schema 形状断言: approvalToken 与 approvedByUser 缺席。

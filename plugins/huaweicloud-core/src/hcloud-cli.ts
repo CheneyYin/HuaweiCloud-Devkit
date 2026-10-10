@@ -10,9 +10,9 @@ import { getProxySettings } from './proxy/proxy-config.ts';
 import { findHcloudBin, resolveHcloudCommand } from './hcloud-probe.ts';
 import { parseStsExpiry, resolveCredentialsWithRuntime } from './auth/credentials.ts';
 
-// The face-neutral consent layer lives in src/lib/approval-tokens.ts; these
-// re-exports keep existing import sites (tools.ts pack handlers, tests)
-// compiling — the tool-schemas.ts re-export precedent.
+// The CLI face's consent layer lives in src/lib/approval-tokens.ts; these
+// re-exports keep existing import sites (tests) compiling — the
+// tool-schemas.ts re-export precedent.
 export { hashArgs, createApprovalToken, consumeApprovalToken } from './lib/approval-tokens.ts';
 
 const DEFAULT_TIMEOUT_MS = 60_000;

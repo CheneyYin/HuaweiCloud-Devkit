@@ -33,7 +33,7 @@ Probed 2026-10-10 against huaweicloud-open-mcp v0.2.0a4 (report: `/tmp/opencode/
 - An empty policy file makes the engine deny every `execute_api` with a consent-teaching reason. The delegated face is fail-closed out of the box.
 - The engine itself accepts `scope=permanent` adds (writing the operator's policy file) and has no secret guard and no policy gate on `query_data`/`transform_data`. Its `ttl_seconds` acceptance with `scope=temporary` is known from the gateway's own error message ("ttl_seconds 仅支持 scope=temporary"), not from the probe — only the session-scope rejection was probed.
 
-The devkit-side floors (`src/packs/huaweicloud-open-mcp/approval.ts`) are the barriers for what the engine does not enforce: secret operations deny outright; the structured `out.path`/`tables.*.path` fields cross the protected-tree check, while other path-like strings (SQL literals included) are denied only when credential-shaped — the residual recorded in the module comment; `manage_policy` accepts only canonical `list`/`add`/`remove` with ephemeral scopes and no `ttl_seconds`.
+The devkit-side floors (`src/packs/huaweicloud-open-mcp/approval.ts`) are the barriers for what the engine does not enforce: secret operations deny outright; the structured `out.path`/`tables.*.path` fields cross the protected-tree check, while other path-like strings (SQL literals included) are denied only when credential-shaped — the residual recorded in the module comment; `manage_policy` accepts only canonical `list`/`add`/`remove`, where `add` requires an ephemeral scope and takes no `ttl_seconds`, and `remove` takes no scope or `ttl_seconds`.
 
 Accepted risks of the delegation (decision record in `docs/open-mcp-approval-delegation-design.md`):
 

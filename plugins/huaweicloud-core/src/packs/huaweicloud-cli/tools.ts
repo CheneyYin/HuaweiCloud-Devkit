@@ -11,11 +11,11 @@ import type { CallToolOptions, ToolArgs } from '../../tools.ts';
 // The seven KooCLI-coupled execution tools sunk from core (src/tools.ts):
 // version/profile inspection, plan/read-only/approved command execution,
 // operation discovery, and region listing. The consent layer is imported
-// directly from src/lib/approval-tokens.ts (the face-neutral module), not the
-// hcloud-cli.ts re-export shim — new faces import the lib. The only
-// allowWrites:true call site in the codebase (runApprovedCommand) lives here,
-// so trimming this pack removes the CLI execution face and its approval tools
-// together: a trimmed configuration has no legal write path.
+// directly from src/lib/approval-tokens.ts (the CLI face's consent module),
+// not the hcloud-cli.ts re-export shim. The only allowWrites:true call site
+// in the codebase (runApprovedCommand) lives here, so trimming this pack
+// removes the CLI execution face and its approval tools together: a trimmed
+// configuration has no legal write path.
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};

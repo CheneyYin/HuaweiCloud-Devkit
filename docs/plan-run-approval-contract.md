@@ -64,7 +64,7 @@ Token-based approval eliminates the string round-trip entirely. Args stay in the
 
 ❌ Do NOT attempt to match `approvedCommand` string against `plan.command`.
 
-❌ Do NOT store approval tokens in files or external storage. In-memory Map is sufficient.
+❌ Do NOT revert token storage to an in-memory Map — plan and run land in different processes (#578); the per-user file is the sanctioned store.
 
 ## Migration
 
