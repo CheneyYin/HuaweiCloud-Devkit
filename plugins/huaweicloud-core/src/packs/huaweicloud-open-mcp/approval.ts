@@ -1,126 +1,143 @@
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { parseRuleLine, productMatches, sideMatches } from '../../lib/policy-grammar.ts';
 import { isInsideProtectedTree, packStateDir } from '../../lib/pack-state.ts';
 import { classifyTextCommand } from '../../safety-policy.ts';
 import { POLICY_FILE } from './sidecar.ts';
 
-// The gateway_call approval boundary: a pure decision table over (tool,
-// toolArgs, mode, live surface) plus the operator-policy reader behind the
-// devkit-mode execute_api pre-check. The table is the whole agent-facing
-// classification vocabulary for this pack — every state-changing gateway
-// tool routes through it, so the deny semantics live in one place instead
-// of scattered conditionals in the handler.
-//
-// Modes: 'devkit' routes every state-changing call through the plan-run
-// approval token (this pack's share of the consent authority the CLI face
-// established); 'native' delegates execute_api to the gateway's own policy
-// engine, chosen by an operator who manages consent in the policy file
-// directly. Mode resolution is call-time validation, deliberately NOT
-// wired into createDevkitMcpServer: the protocol layer stays
-// pack-agnostic, and a bad value surfaces as an actionable tool error
-// instead of a failed boot.
+// The gateway_call floor table: the devkit-side residue of the delegated
+// approval face. Authorization for every routed gateway tool belongs to
+// the gateway's own policy engine (probed 2026-10-10 against the real
+// gateway v0.2.0a4: an empty policy file makes it refuse execute_api with
+// a consent-teaching reason, while query_data/transform_data are not
+// policy-gated gateway-side at all). What stays here are the floors the
+// gateway cannot enforce for this face: secret operations, the protected
+// state tree, and the shape of manage_policy itself. Every ruling is one
+// of {deny, forward} — this face never mints consent, it only refuses
+// before forwarding; everything else is the engine's call.
 
-export type ApprovalMode = 'devkit' | 'native';
-export type Verdict = 'passthrough' | 'token' | 'deny';
+export type Verdict = 'deny' | 'forward';
 
 export interface Ruling {
   verdict: Verdict;
-  /** Populated for deny: actionable, names the violated boundary. */
+  /** Populated for deny: actionable, names the violated floor. */
   reason?: string;
 }
 
-export function resolveApprovalMode(env: NodeJS.ProcessEnv = process.env): ApprovalMode {
+// HUAWEICLOUD_OPENMCP_APPROVAL is retired with the devkit/native mode
+// split. An operator who set it must not upgrade into a silent no-op:
+// the guard throws with the migration pointer and stays for at least one
+// release (the DEVKIT_PACKS unknown-id precedent). Call-time validation,
+// deliberately NOT wired into createDevkitMcpServer: the protocol layer
+// stays pack-agnostic, and the error surfaces as an actionable tool
+// result instead of a failed boot.
+export function resolveApprovalMode(env: NodeJS.ProcessEnv = process.env): void {
   const value = (env.HUAWEICLOUD_OPENMCP_APPROVAL ?? '').trim();
-  if (value === '' || value === 'devkit') return 'devkit';
-  if (value === 'native') return 'native';
+  if (value === '') return;
+  const operatorPath = (env.HUAWEICLOUD_MCP_POLICY_FILE ?? '').trim();
+  const policyFile = operatorPath !== '' ? operatorPath : join(packStateDir('huaweicloud-open-mcp', env), POLICY_FILE);
   throw new Error(
-    `HUAWEICLOUD_OPENMCP_APPROVAL "${value}" is not a valid gateway approval mode. Supported: devkit, native.`,
+    `HUAWEICLOUD_OPENMCP_APPROVAL is retired (was set to "${value}"): gateway tool approval is delegated to the gateway's own policy engine. ` +
+      `Manage consent in the operator policy file (${policyFile}); it hot-reloads, so edits take effect without a restart. ` +
+      'See docs/safety-model.md for the delegation contract and the floors this face still enforces.',
   );
 }
 
 // The one vocabulary table for the gateway tool surface. Every list that
 // enumerates gateway tool names derives from here: classify's read-only
-// set, the drift gate's exemption set, and gateway_list_tools' projection
+// set, the unknown-tool deny, and gateway_list_tools' projection
 // (KNOWN_GATEWAY_TOOLS in tools.ts). Adding a gateway tool is a one-row
-// edit plus a classify row — no hand-maintained duplicates (round-7/8
-// review's consolidation note).
+// edit plus a classify row — no hand-maintained duplicates.
 export const GATEWAY_TOOL_VOCABULARY = {
   readonly: ['search_apis', 'list_products', 'get_product', 'list_apis', 'get_api', 'get_api_examples'],
   routed: ['manage_policy', 'execute_api', 'query_data', 'transform_data'],
 } as const;
 
 const READONLY_TOOLS = new Set<string>(GATEWAY_TOOL_VOCABULARY.readonly);
+const KNOWN_TOOLS = new Set<string>([...GATEWAY_TOOL_VOCABULARY.readonly, ...GATEWAY_TOOL_VOCABULARY.routed]);
 
-// The only scopes an agent may buy with a token: every one of them dies
-// with the process or the clock. An allow-list, not a deny-list of known
-// persistent spellings — round-4 probed 'PERMANENT', 'permanent ', and
-// unknown scopes all falling through to token, buying an eternal grant.
+// The only scopes an agent may grant through manage_policy add: every one
+// of them dies with the process or the clock. An allow-list, not a
+// deny-list of known persistent spellings. The gateway itself would
+// accept scope=permanent and write the rule straight into the operator's
+// policy file (probed 2026-10-10) — this floor is the only barrier
+// between an agent and a grant that outlives every consent boundary.
 const EPHEMERAL_SCOPES = new Set(['once', 'session', 'temporary']);
 
-// Permanent grants are the one policy mutation the token can never buy: a
-// permanent allow outlives every consent boundary this devkit enforces, so
-// it stays an operator gesture against the file itself.
+// Permanent grants are the one policy mutation an agent can never buy: a
+// permanent allow outlives every consent boundary this devkit enforces,
+// so it stays an operator gesture against the file itself.
 function permanentGrantReason(): string {
   const operatorPath = (process.env.HUAWEICLOUD_MCP_POLICY_FILE ?? '').trim();
   const path = operatorPath !== '' ? operatorPath : join(packStateDir('huaweicloud-open-mcp'), POLICY_FILE);
   return `permanent-scope grants are an operator gesture, not an agent action: edit the policy file directly (${path}); it hot-reloads, so the change takes effect without a restart`;
 }
 
-export function classify(
-  tool: string,
-  toolArgs: Record<string, unknown>,
-  mode: ApprovalMode,
-  surface: ReadonlySet<string> | null,
-): Ruling {
-  if (READONLY_TOOLS.has(tool)) return { verdict: 'passthrough' };
-
-  // Drift gate for every non-read-only tool, before any branch routing:
-  // a tool the live child no longer exposes is denied without spending
-  // consent, whichever branch would have handled it. Read-only names skip
-  // the gate — a missing discovery tool fails harmlessly at the gateway
-  // and never costs a token.
-  if (surface !== null && !surface.has(tool)) {
-    return {
-      verdict: 'deny',
-      reason: `the gateway child's live tool surface no longer exposes ${tool} (drift); do not spend user consent on a call that cannot succeed`,
-    };
-  }
+export function classify(tool: string, toolArgs: Record<string, unknown>): Ruling {
+  if (READONLY_TOOLS.has(tool)) return { verdict: 'forward' };
 
   if (tool === 'manage_policy') {
-    // Action allow-list, the same construction as the scope allow-list
-    // below: 'ADD'/' add '/['add'] previously fell through to token,
-    // leaving scope admission dependent on the gateway being
-    // spelling-stricter than the classifier (round-6).
-    const action = typeof toolArgs.action === 'string' ? toolArgs.action.trim().toLowerCase() : '';
-    if (action === 'list') return { verdict: 'passthrough' };
-    if (action !== 'add' && action !== 'remove') {
+    const rawAction = toolArgs.action;
+    if (typeof rawAction !== 'string') {
       return {
         verdict: 'deny',
-        reason: `manage_policy accepts only list, add, and remove through this face (got ${JSON.stringify(toolArgs.action)}).`,
+        reason: `manage_policy accepts only list, add, and remove through this face (got ${JSON.stringify(rawAction)}).`,
       };
     }
-    if (action === 'add') {
-      // Normalized allow-list: unknown, missing, or persistent spellings
-      // all deny. Non-string scopes deny too — String(['once']) stringifies
-      // to 'once' and would slip a gate that only lowercases. The gateway's
-      // own documented default for an omitted scope is session, but this
-      // face demands the scope explicitly so the failure direction never
-      // depends on gateway defaults.
-      const rawScope = toolArgs.scope;
-      const scope = typeof rawScope === 'string' ? rawScope.trim().toLowerCase() : '';
-      if (EPHEMERAL_SCOPES.has(scope)) return { verdict: 'token' };
+    // F1 spelling floor: the gateway matches action and scope by exact
+    // string, so a verbatim 'ADD' or ' ONCE ' is a grant its burn
+    // semantics never touch. The token ceremony that used to normalize
+    // spellings before forwarding is gone — the canonical form must
+    // arrive from the caller or the call does not leave.
+    if (rawAction !== rawAction.trim().toLowerCase()) {
       return {
         verdict: 'deny',
-        reason: `manage_policy add accepts only the ephemeral scopes (${[...EPHEMERAL_SCOPES].join(', ')}) through this face; pass one explicitly. ${permanentGrantReason()}`,
+        reason: `manage_policy action must use the exact canonical spelling (got ${JSON.stringify(rawAction)}); resend with "list", "add", or "remove" in lowercase, no surrounding whitespace.`,
       };
+    }
+    if (rawAction === 'list') return { verdict: 'forward' };
+    if (rawAction !== 'add' && rawAction !== 'remove') {
+      return {
+        verdict: 'deny',
+        reason: `manage_policy accepts only list, add, and remove through this face (got ${JSON.stringify(rawAction)}).`,
+      };
+    }
+    if (rawAction === 'add') {
+      const rawScope = toolArgs.scope;
+      if (typeof rawScope !== 'string') {
+        return {
+          verdict: 'deny',
+          reason: `manage_policy add accepts only the ephemeral scopes (${[...EPHEMERAL_SCOPES].join(', ')}) through this face; pass one explicitly. ${permanentGrantReason()}`,
+        };
+      }
+      if (rawScope !== rawScope.trim().toLowerCase()) {
+        return {
+          verdict: 'deny',
+          reason: `manage_policy add requires the scope in its exact canonical spelling (once, session, temporary); got ${JSON.stringify(rawScope)}.`,
+        };
+      }
+      if (!EPHEMERAL_SCOPES.has(rawScope)) {
+        return {
+          verdict: 'deny',
+          reason: `manage_policy add accepts only the ephemeral scopes (${[...EPHEMERAL_SCOPES].join(', ')}) through this face; pass one explicitly. ${permanentGrantReason()}`,
+        };
+      }
+      // F2 ttl floor: the gateway honors ttl_seconds only with
+      // scope=temporary (probed 2026-10-10), where it stretches an
+      // "ephemeral" grant into an arbitrarily long-lived one. The knob
+      // is denied outright; durable rules are the operator's file edit.
+      if (toolArgs.ttl_seconds !== undefined && toolArgs.ttl_seconds !== null) {
+        return {
+          verdict: 'deny',
+          reason:
+            'manage_policy add takes no ttl_seconds through this face: the gateway honors it only with scope=temporary, where it would stretch an ephemeral grant into a long-lived one. ' +
+            `${permanentGrantReason()}`,
+        };
+      }
+      return { verdict: 'forward' };
     }
     // remove: the gateway REJECTS remove with a scope (manage_policy_ops:
-    // "remove 不接受 scope/ttl_seconds 参数") — a token-gated remove+scope
-    // would burn the approval on a guaranteed gateway rejection (round-8,
-    // the same class as the 'ADD' forwarding gap). The token binds the
-    // exact rule text the user sees.
+    // "remove 不接受 scope/ttl_seconds 参数") — a forwarded remove+scope
+    // is a guaranteed gateway rejection, so the shape is refused here.
     if (toolArgs.scope !== undefined && toolArgs.scope !== null) {
       return {
         verdict: 'deny',
@@ -128,27 +145,33 @@ export function classify(
           'manage_policy remove takes no scope: removal is cross-layer by line, and the gateway rejects a scoped remove outright.',
       };
     }
-    return { verdict: 'token' };
+    return { verdict: 'forward' };
   }
 
   if (tool === 'execute_api') {
-    // Hard, both modes: the hcloud secret rules encode which operations
+    // The secret floor: the hcloud secret rules encode which operations
     // must never surface plaintext in the agent context, and no gateway
-    // policy setting can widen that.
+    // policy setting can widen that (the gateway itself has no secret
+    // guard — probed 2026-10-10, an allowed KMS ShowSecretVersion rule
+    // proceeded to catalog resolution).
     const secretCheck = classifyTextCommand(`hcloud ${toolArgs.product} ${toolArgs.api}`);
     if (secretCheck.risk === 'secret') return { verdict: 'deny', reason: secretCheck.reason };
-    if (mode === 'native') return { verdict: 'passthrough' };
-    return { verdict: 'token' };
+    return { verdict: 'forward' };
   }
 
   if (tool === 'query_data' || tool === 'transform_data') {
     const violation = localFileTargetViolation(toolArgs);
     if (violation) return { verdict: 'deny', reason: violation };
-    return { verdict: 'token' };
+    return { verdict: 'forward' };
   }
 
-  // Unknown tools: fail closed — no free pass on ignorance.
-  return { verdict: 'token' };
+  // Unknown tool names deny against the static vocabulary: the live
+  // surface is not consulted, and no name outside the table gets a free
+  // pass on ignorance. Fail closed.
+  return {
+    verdict: 'deny',
+    reason: `${tool} is not in the gateway tool vocabulary this face routes (${[...KNOWN_TOOLS].join(', ')}); the call is denied rather than forwarded blind.`,
+  };
 }
 
 // The local-file boundary for the data tools: every structured path field
@@ -217,102 +240,3 @@ function collectPathLikeStrings(value: unknown, out: Set<string>, seen = new Set
     collectPathLikeStrings(child, out, seen);
   }
 }
-
-// Operator policy reader for the devkit-mode execute_api pre-check: the
-// LIVE file, not a spawn-time snapshot, so an operator edit between mint
-// and replay is honored. Resolution mirrors the sidecar's pin-unless-env
-// spawn policy: the operator's HUAWEICLOUD_MCP_POLICY_FILE when set, else
-// the devkit-provisioned pack state file.
-function operatorPolicyPath(env: NodeJS.ProcessEnv): string {
-  const operatorPath = (env.HUAWEICLOUD_MCP_POLICY_FILE ?? '').trim();
-  return operatorPath !== '' ? operatorPath : join(packStateDir('huaweicloud-open-mcp', env), POLICY_FILE);
-}
-
-// The gateway's rule-line grammar lives in src/lib/policy-grammar.ts
-// (source-verified rounds 7-8; extracted round-11 so the fixture's .mjs
-// mirror has one authoritative counterpart, with structure.test driving
-// both against the same corpus). parseRuleLine semantics: strip, drop
-// only WHOLE-LINE '#' comments and blanks (inline '#' is part of the
-// action gateway-side — parse_policy raises on it), rpartition on '=',
-// action must be allow/deny, target partitioned on the FIRST ':', each
-// side stripped-or-'*', a colon-less non-'*' product target is a parse
-// failure, server: prefix is out of scope for this face. Parse failures
-// are their own kind: matchingDenyRule treats them as fail-closed
-// denials, ruleSemanticKey maps them per-line so mangled lines never
-// collide with each other (round-8: the shared wildcard sentinel made
-// every redaction-mangled rule one key, so unrelated token-suffixed
-// rules cross-conflicted).
-
-export interface DenialMatch {
-  line: string;
-  /** The line is one the gateway itself cannot load (parse failure) — the message must say so, not blame an operator deny. */
-  unparseable: boolean;
-}
-
-export function matchingDenyRule(
-  product: string,
-  api: string,
-  env: NodeJS.ProcessEnv = process.env,
-): DenialMatch | null {
-  let lines: string[];
-  try {
-    const text = readFileSync(operatorPolicyPath(env), 'utf8');
-    const trimmed = text.trim();
-    if (trimmed === '') return null;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch {
-      parsed = undefined;
-    }
-    if (parsed === undefined) {
-      // Plain-text lines, the gateway's tolerance for hand-edited files.
-      lines = trimmed
-        .split('\n')
-        .map((line) => line.trim())
-        .filter((line) => line !== '');
-    } else if (Array.isArray(parsed)) {
-      lines = parsed.filter((line): line is string => typeof line === 'string');
-    } else {
-      // JSON, but not a rule list (an object, a bare number): nothing to read.
-      return null;
-    }
-  } catch {
-    // Missing or unreadable: no operator denial to enforce.
-    return null;
-  }
-  // Deliberately stricter than the gateway's first-match resolution: an
-  // allow line earlier in the file wins gateway-side, but a matching deny
-  // wins here regardless of position. Operator intent to deny must not be
-  // neutralized by line ordering. Unparseable lines deny everything
-  // (fail-closed): gateway-side the store keeps its last valid version
-  // when a line fails to parse, so the operator's file is inert until
-  // fixed — refusing here surfaces the broken file instead of silently
-  // trusting the stale rules.
-  for (const rawLine of lines) {
-    const rule = parseRuleLine(rawLine);
-    if (rule?.kind === 'server') continue; // out of scope for this face
-    if (rule === null) continue; // blank or whole-line comment
-    if (rule.kind === 'unparseable') return { line: rawLine.trim(), unparseable: true };
-    if (rule.allow) continue;
-    if (productMatches(rule.product, product) && sideMatches(rule.apiPattern, api)) {
-      return { line: rawLine.trim(), unparseable: false };
-    }
-  }
-  return null;
-}
-
-// The gateway's semantic rule key (policy_store._rule_key): rules equal
-// under this key are interchangeable to the gateway's add/remove/evaluate,
-// regardless of spacing or case in the source line. Exported for the
-// bridge's conflict check, which must see conflicts the gateway's remove
-// would act on. Unparseable and server lines map to per-line unique keys:
-// they can never equal a product grant key, and two DIFFERENT mangled
-// lines never collide with each other (round-8: the shared sentinel key
-// made every redaction-mangled rule equivalent, so an unrelated
-// token-suffixed rule falsely conflicted with the bridge).
-// The semantic key and the parser/matchers all live in lib/policy-grammar;
-// re-exported here so the pack's consumers (tools.ts, tests) keep one import
-// site. Re-exports instead of direct re-declaration keep the single
-// authority in the lib module.
-export { ruleSemanticKey } from '../../lib/policy-grammar.ts';

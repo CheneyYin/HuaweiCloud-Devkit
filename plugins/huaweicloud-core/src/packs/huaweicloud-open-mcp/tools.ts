@@ -1,24 +1,9 @@
 import { z } from 'zod';
 
 import type { PackToolDefinition, LooseToolSchema } from '../../lib/pack-types.ts';
-import { consumeApprovalToken, createApprovalToken, hashArgs } from '../../lib/approval-tokens.ts';
 import { redactSecrets } from '../../safety-policy.ts';
-import {
-  classify,
-  GATEWAY_TOOL_VOCABULARY,
-  matchingDenyRule,
-  resolveApprovalMode,
-  ruleSemanticKey,
-  type ApprovalMode,
-} from './approval.ts';
-import {
-  callOpenMcpTool,
-  listGatewayTools,
-  openMcpSidecar,
-  restartOpenMcpSidecar,
-  _gatewaySurface,
-  type OpenMcpToolResult,
-} from './sidecar.ts';
+import { classify, GATEWAY_TOOL_VOCABULARY, resolveApprovalMode } from './approval.ts';
+import { callOpenMcpTool, listGatewayTools, openMcpSidecar, restartOpenMcpSidecar } from './sidecar.ts';
 
 // Nine tools over the huaweicloud-open-mcp gateway: six metadata proxies
 // (search_apis, list_products, get_product, list_apis, get_api,
@@ -28,11 +13,12 @@ import {
 // own tool inputs; these zod schemas only guard the boundary (required
 // identity fields plus passthrough), and the sidecar normalizes results to
 // {ok, tool, ...}.
-// State-changing gateway tools are reachable only through
-// huaweicloud_gateway_call: approval.ts classifies each call, read-only
-// discovery passes through, everything else mints a plan-bound approval
-// token, and the devkit-mode execute_api path bridges through a once-scope
-// policy grant added and removed around the approved call.
+// Every gateway tool is reachable through huaweicloud_gateway_call on the
+// delegated approval face: approval.ts rules only the devkit floors
+// (secret operations, the protected state tree, manage_policy shape) and
+// forwards everything else to the gateway's own policy engine, whose
+// refusal reason teaches the consent flow (confirm with the user, grant
+// via manage_policy with an ephemeral scope, retry).
 
 // The gateway's pydantic ints reject null (verified: limit=null fails with
 // "Input should be a valid integer"), so unlike numericArg these stay
@@ -151,16 +137,13 @@ async function handleGatewayListTools() {
   }
 }
 
-const GATEWAY_CALL_APPROVAL_NOTE =
-  'Present the tool and arguments to the user. Re-send with approvalToken and approvedByUser:true and your ORIGINAL unredacted toolArgs (the echoed copy is redacted); any scope value is matched in its normalized lowercase form, so either spelling works. Scope labels translated: once/session/temporary grants live for this server process (shared across its HTTP sessions); permanent is not grantable through this face.';
-
 async function handleGatewayCall(args: Record<string, unknown>) {
   const tool = String(args.tool || '').trim();
   const rawToolArgs = args.toolArgs;
   if (!tool) return { ok: false, error: 'tool is required' };
   // Explicit, not silent coercion: the MCP boundary already rejects these
-  // shapes, but direct callTool callers would otherwise mint a token for
-  // an empty plan while believing they sent arguments.
+  // shapes, but direct callTool callers would otherwise forward a call
+  // built on an empty plan while believing they sent arguments.
   if (
     rawToolArgs !== undefined &&
     (rawToolArgs === null || typeof rawToolArgs !== 'object' || Array.isArray(rawToolArgs))
@@ -170,266 +153,26 @@ async function handleGatewayCall(args: Record<string, unknown>) {
   }
   const toolArgs = (rawToolArgs ?? {}) as Record<string, unknown>;
 
-  let mode: ApprovalMode;
   try {
-    mode = resolveApprovalMode();
+    resolveApprovalMode();
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
+
+  // Floors refuse before the sidecar is even spawned: they are local
+  // decisions over the arguments, and a denial must not depend on (or
+  // pay for) a live gateway child.
+  const ruling = classify(tool, toolArgs);
+  if (ruling.verdict === 'deny') {
+    return { ok: false, classification: 'deny', error: ruling.reason };
+  }
+
   try {
-    // Awaiting the sidecar also populates the surface cache classify reads.
     await openMcpSidecar();
   } catch (error) {
     return { ok: false, error: redactSecrets(error instanceof Error ? error.message : String(error)) };
   }
-
-  const ruling = classify(tool, toolArgs, mode, _gatewaySurface());
-  if (ruling.verdict === 'deny') {
-    return { ok: false, classification: 'deny', error: ruling.reason };
-  }
-  if (ruling.verdict === 'passthrough') {
-    return await callOpenMcpTool(tool, toolArgs);
-  }
-
-  // The token binds the NORMALIZED scope AND action, not the raw spelling:
-  // classify accepted ' ONCE '/'Once' and 'ADD'/' add ' by trimming and
-  // lowercasing, but the gateway must receive exactly the canonical form
-  // (round-5 probe: a verbatim ' ONCE ' grant never burned; round-7: an
-  // 'ADD' mint burned the approval on a guaranteed gateway rejection). The
-  // mint echo shows the normalized shape; the replay hash also normalizes,
-  // so any accepted spelling replays.
-  let boundArgs = toolArgs;
-  if (tool === 'manage_policy') {
-    const next: Record<string, unknown> = { ...toolArgs };
-    let changed = false;
-    if (typeof toolArgs.scope === 'string') {
-      const normalized = toolArgs.scope.trim().toLowerCase();
-      if (normalized !== toolArgs.scope) {
-        next.scope = normalized;
-        changed = true;
-      }
-    }
-    if (typeof toolArgs.action === 'string') {
-      const normalized = toolArgs.action.trim().toLowerCase();
-      if (normalized !== toolArgs.action) {
-        next.action = normalized;
-        changed = true;
-      }
-    }
-    if (changed) boundArgs = next;
-  }
-
-  if (args.approvedByUser !== true) {
-    return {
-      ok: false,
-      requiresApproval: true,
-      classification: 'token',
-      tool,
-      toolArgs: redactSecrets(boundArgs),
-      approvalToken: createApprovalToken({ tool, toolArgs: boundArgs }),
-      note: GATEWAY_CALL_APPROVAL_NOTE,
-    };
-  }
-
-  // Operator deny beats token spend: the pre-check runs before
-  // consumeApprovalToken, so a refused call leaves the token consumable
-  // once the operator adjusts the policy file.
-  let product = '';
-  let api = '';
-  if (tool === 'execute_api' && mode === 'devkit') {
-    product = typeof toolArgs.product === 'string' ? toolArgs.product : '';
-    api = typeof toolArgs.api === 'string' ? toolArgs.api : '';
-    const validIdentity =
-      product.trim() !== '' && api.trim() !== '' && !/[*#:=\n\r\t]/.test(product) && !/[*#:=\n\r\t]/.test(api);
-    if (!validIdentity) {
-      return { ok: false, error: 'execute_api requires non-empty product and api without wildcards' };
-    }
-    const denial = matchingDenyRule(product, api);
-    if (denial) {
-      if (denial.unparseable) {
-        return {
-          ok: false,
-          error: `the policy file contains a line the gateway itself cannot load (${denial.line}); the gateway keeps its last valid rules and ignores that line, but this face denies until it is fixed or removed.`,
-        };
-      }
-      return {
-        ok: false,
-        error: `operator policy denies this call (${denial.line}); remove or adjust the deny rule in the policy file before approving`,
-      };
-    }
-    // A pre-existing rule the gateway would treat as the bridge's own
-    // makes the bridge unsafe: its cleanup removes by semantic key, first
-    // match, so it would delete the existing grant and leave its own
-    // once-grant standing (round-5 probe; round-7: the comparison is the
-    // gateway's semantic key, not the literal line — a spaced or
-    // lowercased operator line previously bypassed this check while the
-    // gateway's remove still deleted the rule). Refused before the token
-    // is consumed; removing the conflicting rule and retrying the SAME
-    // approved call works.
-    const grantLine = `${product}:${api}=allow`;
-    const conflict = await sameLineRuleExists(grantLine);
-    if (conflict === 'conflict') {
-      return {
-        ok: false,
-        error: `a policy rule equivalent to "${grantLine}" already exists; the execute bridge refuses to run beside it because its cleanup would remove that rule and leave its own grant. Remove the conflicting rule first (gateway_call manage_policy remove, which requires user approval), then retry this call with the same token.`,
-      };
-    }
-    if (conflict.startsWith('listing-failed:')) {
-      return {
-        ok: false,
-        error: `the policy listing failed (${conflict.slice('listing-failed:'.length)}); the execute bridge refuses to run blind — a rule it cannot read could still collide with its cleanup. Recycle the gateway (huaweicloud_gateway_restart) or check that manage_policy is available, then retry this call with the same token.`,
-      };
-    }
-  }
-
-  const stored = consumeApprovalToken(String(args.approvalToken || ''));
-  if (!stored) {
-    return { ok: false, error: 'Invalid or expired approval token. Re-plan the call.' };
-  }
-  // Both hash sides carry the NORMALIZED scope (the mint bound it): a
-  // replay in the spelling classify accepted (' ONCE ', 'Once') normalizes
-  // to the same value, so following the note's instruction cannot waste
-  // the approval on a spelling mismatch.
-  if (hashArgs({ tool, toolArgs: boundArgs }) !== stored.argsHash) {
-    return {
-      ok: false,
-      error:
-        'Arguments do not match the approved plan. Re-send your ORIGINAL unredacted toolArgs exactly as echoed; the approval echo showed a redacted copy.',
-    };
-  }
-  if (tool === 'execute_api' && mode === 'devkit') {
-    return await bridgeExecuteApi(product, api, boundArgs);
-  }
-  return await callOpenMcpTool(tool, boundArgs);
-}
-
-type ConflictCheck = 'no-conflict' | 'conflict' | `listing-failed:${string}`;
-
-// The bridge cannot safely create its once-grant when a semantically
-// equal rule already exists: the gateway's remove matches on its semantic
-// rule key (kind/connect_only/product/api-pattern/allow, case- and
-// whitespace-insensitive, comment-tolerant), so the bridge's cleanup would
-// delete that rule — whatever spelling it was written in — and leave its
-// own. Checked live through the gateway (overlay + file), not against a
-// cached snapshot. Tri-state with the failure detail inline:
-// 'listing-failed:<reason>' is NOT a conflict and must not be reported as
-// one (round-7: the conflated message sent the agent to remove a rule
-// that did not exist).
-async function sameLineRuleExists(line: string): Promise<ConflictCheck> {
-  const listing = await callOpenMcpTool('manage_policy', { action: 'list' });
-  if (!listing.ok) {
-    return `listing-failed:${String(listing.error ?? 'unknown error')}`;
-  }
-  // The listing exposes rules in two layers: the structured rules array
-  // (overlay rules with their scope, plus the file's semantic lines with
-  // scope 'permanent' — list_rules appends both) AND the policy file's
-  // raw text in the 'policy' string field (including comments and the
-  // verbatim spacing). Reading BOTH is the superset that survives either
-  // layer being reduced; the raw text is also the only place verbatim
-  // spacing survives redaction of the structured echo. Both layers reduce
-  // through the semantic key.
-  const candidates: string[] = [];
-  if (Array.isArray(listing.rules)) {
-    for (const rule of listing.rules) {
-      if (typeof rule === 'string') candidates.push(rule);
-      else if (rule !== null && typeof rule === 'object') {
-        const ruleLine = String((rule as Record<string, unknown>).line);
-        if (ruleLine !== '') candidates.push(ruleLine);
-      }
-    }
-  }
-  if (typeof listing.policy === 'string' && listing.policy.trim() !== '') {
-    candidates.push(...listing.policy.split('\n'));
-  }
-  if (candidates.length === 0 && !Array.isArray(listing.rules)) {
-    return `listing-failed:rules neither array nor policy text (${JSON.stringify(listing).slice(0, 120)})`;
-  }
-  // The listing crossed the result-redaction boundary, so a line for a
-  // token/password-suffixed API arrives as '...:<redacted>' while the
-  // local grantLine is raw (round-6). Both sides go through the same
-  // redactor so the redacted pair still matches, AND both sides reduce to
-  // the gateway's semantic key so spelling variants cannot slip past
-  // (round-7: 'ECS : CreateServers = allow' previously bypassed this
-  // check while the gateway's semantic remove deleted the rule).
-  const grantKey = ruleSemanticKey(String(redactSecrets(line)));
-  const rawGrantKey = ruleSemanticKey(line);
-  for (const candidate of candidates) {
-    if (candidate.trim() === '') continue;
-    const candidateKey = ruleSemanticKey(candidate);
-    if (candidateKey === rawGrantKey || candidateKey === grantKey) {
-      return 'conflict';
-    }
-  }
-  return 'no-conflict';
-}
-
-// One in-flight bridge per product:api. Two approved calls for the same API
-// would otherwise race their once-grants — call A adds the grant, call B
-// adds it again, A's execute burns one copy, B's execute burns the other,
-// and A's cleanup removes a grant B still expects. Tail-chaining the gate
-// closes the race structurally: the second call's grant exists only after
-// the first call's cleanup finished.
-const bridgeLocks = new Map<string, Promise<unknown>>();
-
-async function bridgeExecuteApi(
-  product: string,
-  api: string,
-  toolArgs: Record<string, unknown>,
-): Promise<OpenMcpToolResult> {
-  const key = `${product}:${api}`;
-  const previous = bridgeLocks.get(key) ?? Promise.resolve();
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  bridgeLocks.set(key, gate);
-  await previous;
-  try {
-    return await forwardWithOnceGrant(product, api, toolArgs);
-  } finally {
-    release();
-    if (bridgeLocks.get(key) === gate) bridgeLocks.delete(key);
-  }
-}
-
-async function forwardWithOnceGrant(
-  product: string,
-  api: string,
-  toolArgs: Record<string, unknown>,
-): Promise<OpenMcpToolResult> {
-  const line = `${product}:${api}=allow`;
-  // The internal grant add bypasses the agent-facing classifier: the line
-  // is derived from token-bound product/api, never free agent input.
-  const grant = await callOpenMcpTool('manage_policy', { action: 'add', line, scope: 'once' });
-  if (!grant.ok) return grant;
-  let grantsLive = 1;
-  try {
-    const first = await callOpenMcpTool('execute_api', toolArgs);
-    if (first.ok) return first;
-    // Only a safety-policy refusal proves non-execution: the gateway
-    // rejected the call before running anything, so one approval may
-    // re-send it (the child may have restarted between grant and call,
-    // coming back with an empty overlay). A timeout or a sidecar failure
-    // leaves the execution state UNKNOWN — the server may have completed
-    // the write — and re-sending would spend one approval twice.
-    if (/safety policy/.test(String(first.error ?? ''))) {
-      const reAdd = await callOpenMcpTool('manage_policy', { action: 'add', line, scope: 'once' });
-      if (reAdd.ok) {
-        grantsLive += 1;
-        const second = await callOpenMcpTool('execute_api', toolArgs);
-        return second;
-      }
-    }
-    return first;
-  } finally {
-    // One remove per live grant: a doubly-refused bridge leaves two adds,
-    // and a single remove would strand a standing once-authorization for
-    // exactly this product:api. Burned grants are already gone; removing
-    // a missing line is a harmless best-effort no-op either way.
-    for (let index = 0; index < grantsLive; index += 1) {
-      await callOpenMcpTool('manage_policy', { action: 'remove', line });
-    }
-  }
+  return await callOpenMcpTool(tool, toolArgs);
 }
 
 export const HUAWEICLOUD_OPEN_MCP_TOOLS = [
