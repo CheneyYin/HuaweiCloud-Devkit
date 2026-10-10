@@ -78,7 +78,7 @@ classify() 的裁决词表坍缩为 `{deny, forward}`。委托后 passthrough �
 
 新增形状地板。D2 与 D3 的直接后果, 不是新授权层:
 
-- **F1 拼写严格**。scope 或 action 的原值不等于 `trim().toLowerCase()` 的结果则 deny。理由: boundArgs 规范化随仪式删除, round-5 实测 verbatim `' ONCE '` 授权在网关侧永不燃烧, 门必须自守拼写。
+- **F1 拼写严格**。scope 或 action 的原值不等于 `trim().toLowerCase()` 的结果则 deny。理由: 网关在 add 时自校验 scope 词表（2026-10-11 复测 v0.2.0a4, `' ONCE '` 与 `'Once'` 均被 `未知 scope` 拒绝; round-5 的 verbatim 授权行为测的是 pre-a4 构建）, 地板保持 fail-closed 不依赖网关侧校验, 且 devkit 的可行动英文拒绝优于转发网关的中文拒绝。
 - **F2 ttl 拒绝**。manage_policy add 携带 ttl_seconds 则 deny。理由: remove 的拒绝信息暴露 add 可能存在独立时长旋钮, temporary 配 ttl 可掏空 ephemeral 线。探针 (第 5 节) 证明 ttl_seconds 受 scope 寿命约束前, 默认拒绝。
 
 ## 5. 探针协议 (实施前置)

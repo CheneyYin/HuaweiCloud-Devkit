@@ -83,11 +83,14 @@ export function classify(tool: string, toolArgs: Record<string, unknown>): Rulin
         reason: `manage_policy accepts only list, add, and remove through this face (got ${JSON.stringify(rawAction)}).`,
       };
     }
-    // F1 spelling floor: the gateway matches action and scope by exact
-    // string, so a verbatim 'ADD' or ' ONCE ' is a grant its burn
-    // semantics never touch. The token ceremony that used to normalize
-    // spellings before forwarding is gone — the canonical form must
-    // arrive from the caller or the call does not leave.
+    // F1 spelling floor: only canonical spellings cross. The gateway
+    // validates its own scope vocabulary at add (re-probed 2026-10-11
+    // against v0.2.0a4: ' ONCE '/'Once' are rejected with 未知 scope), and
+    // round-5's verbatim-' ONCE '-grant behavior measured a pre-a4 build.
+    // The floor stays fail-closed regardless of gateway-side validation:
+    // the devkit's actionable English deny beats relaying a Chinese
+    // rejection, and a future gateway that relaxes validation meets this
+    // floor first.
     if (rawAction !== rawAction.trim().toLowerCase()) {
       return {
         verdict: 'deny',
