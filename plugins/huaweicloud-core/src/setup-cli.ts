@@ -2783,6 +2783,16 @@ function hermesConfigFile(): string {
 
 // Returns true when the config file was written, false when it was already correct.
 function ensureHermesMcpConfig(): boolean {
+  // Resolve the packs policy before any block rewrite: the current
+  // DEVKIT_PACKS value lives inside the block writeHermesMcpConfig rewrites.
+  return writeHermesMcpConfig(packsCarryValue('Hermes Agent', readDevkitPacksFromYaml(hermesConfigFile())));
+}
+
+// The Hermes MCP block render path, parameterized with the DEVKIT_PACKS value
+// to carry. Install/update resolve the value through the --packs policy; the
+// `packs` command passes the operator's set-math result. User-added args
+// inside the block survive the rewrite exactly as install preserves them.
+function writeHermesMcpConfig(devkitPacks: string | null): boolean {
   const configPath = hermesConfigFile();
   const mcpPath = join(hermesPluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
   const hcloudBin = findHcloudBin();
@@ -2798,11 +2808,7 @@ function ensureHermesMcpConfig(): boolean {
   if (hcloudBin) {
     blockLines.push(`      HCLOUD_BIN: "${hcloudBin.replace(/\\/g, '/')}"`);
   }
-  // Resolve the packs policy before any block rewrite: the current
-  // DEVKIT_PACKS value lives inside the block removeHermesMcpConfigBlock
-  // strips below, and the "unchanged" check must account for it.
-  const hermesPacks = packsCarryValue('Hermes Agent', readDevkitPacksFromYaml(configPath));
-  const hermesPacksLine = hermesPacks !== null ? `      DEVKIT_PACKS: "${hermesPacks.replace(/"/g, '\\"')}"` : null;
+  const hermesPacksLine = devkitPacks !== null ? `      DEVKIT_PACKS: "${devkitPacks.replace(/"/g, '\\"')}"` : null;
   if (hermesPacksLine !== null) blockLines.push(hermesPacksLine);
 
   let existing = '';
@@ -4197,62 +4203,273 @@ async function cmdStatus(): Promise<void> {
   console.log(`  Platform: ${platform()}`);
 }
 
+// --- Post-install pack management (the `packs` command family) -------------
+//
+// Install-time --packs never overwrites an existing DEVKIT_PACKS value (the
+// keptUserValue contract, issue #615): a re-run with a different flag keeps
+// what the operator typed. The `packs` commands are the one write path
+// allowed to overwrite, because the command is the operator's explicit
+// management action. One slot table owns the per-target knowledge (where the
+// config lives, which env spelling it reads, how to surgically write the
+// DEVKIT_PACKS key); doctor's pack status display derives from the same
+// table, so the read and write paths can never disagree.
+
+type PackWriteResult =
+  | { ok: true; changed: boolean }
+  | { ok: false; reason: 'parse-failed' | 'bundle-owned' | 'not-installed'; detail: string };
+
+interface PackSlot {
+  /** SUPPORTED_AGENT_TARGETS member; codex has no slot (display-only). */
+  id: string;
+  /** Doctor's per-target label spelling. */
+  label: string;
+  installed(): boolean;
+  /** Raw DEVKIT_PACKS value; null when the key (or its file) is absent. */
+  read(): string | null;
+  write(_next: string | null): PackWriteResult;
+}
+
+// Surgical DEVKIT_PACKS write into one MCP settings JSON file: parse, touch
+// only the DEVKIT_PACKS key under the entry's canonical env spelling (a copy
+// under the opposite spelling is removed so exactly one key remains), write
+// through the 0600/0700 path. readDevkitPacksFromJson checks both spellings
+// in the same order, so a write followed by a read round-trips.
+function writeDevkitPacksInJson(
+  configPath: string,
+  mapKey: 'mcp' | 'mcpServers',
+  envKey: 'env' | 'environment',
+  next: string | null,
+): PackWriteResult {
+  if (!existsSync(configPath)) {
+    return { ok: false, reason: 'not-installed', detail: `config file missing: ${configPath}` };
+  }
+  let config: Record<string, unknown>;
+  try {
+    config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
+  } catch {
+    return { ok: false, reason: 'parse-failed', detail: `${configPath} is not valid JSON (jsonc comments?)` };
+  }
+  const servers = asRecord(config[mapKey]);
+  const entry: unknown = servers['huaweicloud-devkit'];
+  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+    return { ok: false, reason: 'not-installed', detail: `no mcp.huaweicloud-devkit entry in ${configPath}` };
+  }
+  const entryRecord = entry as Record<string, unknown>;
+  if (readDevkitPacksFromJson(configPath, mapKey) === next) return { ok: true, changed: false };
+  const otherKey: 'env' | 'environment' = envKey === 'env' ? 'environment' : 'env';
+  for (const key of [envKey, otherKey]) {
+    const rawEnv: unknown = entryRecord[key];
+    if (rawEnv === null || typeof rawEnv !== 'object' || Array.isArray(rawEnv)) continue;
+    const envRecord = rawEnv as Record<string, unknown>;
+    if (!Object.hasOwn(envRecord, 'DEVKIT_PACKS')) continue;
+    delete envRecord.DEVKIT_PACKS;
+    if (Object.keys(envRecord).length === 0) delete entryRecord[key];
+  }
+  if (next !== null) {
+    const rawEnv: unknown = entryRecord[envKey];
+    const base =
+      rawEnv !== null && typeof rawEnv === 'object' && !Array.isArray(rawEnv)
+        ? (rawEnv as Record<string, unknown>)
+        : {};
+    entryRecord[envKey] = { ...base, DEVKIT_PACKS: next };
+  }
+  writeMcpSettingsFile(configPath, config);
+  return { ok: true, changed: true };
+}
+
+// CodeArts writes user-level always and the cwd-relative project-level file
+// only when it already carries the devkit entry (mirroring the install pair
+// registerCodeartsMcp(user) + registerCodeartsMcp(project)). Status reads
+// user-level only, matching doctor.
+function writeCodeartsDevkitPacks(next: string | null): PackWriteResult {
+  const result = writeDevkitPacksInJson(codeartsMcpSettingsFile(), 'mcpServers', 'env', next);
+  const projectFile = codeartsProjectMcpSettingsFile();
+  if (existsSync(projectFile)) {
+    const project = writeDevkitPacksInJson(projectFile, 'mcpServers', 'env', next);
+    if (!project.ok && project.reason === 'parse-failed') {
+      console.log(`  \x1b[33m[WARN]\x1b[0m Could not parse ${projectFile}; project-level DEVKIT_PACKS not written.`);
+    }
+  }
+  return result;
+}
+
+// DSH managed-block rewrite, parameterized with the next value instead of
+// re-reading it. The bundle-provided patch has no managed block and is not
+// ours to rewrite, so it is refused.
+function writeDevkitPacksInDshPatch(next: string | null): PackWriteResult {
+  const patchFile = dshPatchFile();
+  if (!existsSync(patchFile)) {
+    return { ok: false, reason: 'not-installed', detail: `patch file missing: ${patchFile}` };
+  }
+  let existing: string;
+  try {
+    existing = readFileSync(patchFile, 'utf8');
+  } catch (error) {
+    return { ok: false, reason: 'parse-failed', detail: errorMessage(error) };
+  }
+  if (!existing.includes(DSH_MCP_PATCH_START) || !existing.includes(DSH_MCP_PATCH_END)) {
+    if (existing.includes('@deepseek-ai/dsh-mcp-client') && existing.includes('serverName: huaweicloud')) {
+      return { ok: false, reason: 'bundle-owned', detail: 'the bundled DSH patch provides the MCP config' };
+    }
+    return { ok: false, reason: 'not-installed', detail: `no managed block in ${patchFile}` };
+  }
+  const cleaned = removeManagedDshPatchBlock(existing);
+  const block = dshPatchBlock(next);
+  let nextContent: string;
+  if (dshPatchHasOnlyCommentsOrEmptyList(cleaned)) {
+    const prefix = cleaned
+      .split(/\r?\n/)
+      .filter((line) => line.trim() !== '[]')
+      .join('\n')
+      .trimEnd();
+    nextContent = `${prefix ? `${prefix}\n` : ''}${block}\n`;
+  } else {
+    nextContent = `${cleaned}\n\n${block}\n`;
+  }
+  if (existing.replace(/\r\n/g, '\n') === nextContent) return { ok: true, changed: false };
+  writeFileSync(patchFile, nextContent);
+  return { ok: true, changed: true };
+}
+
+// OfficeAce stores DEVKIT_PACKS as an env_json row. The write touches only
+// that row: replace its value, insert it, or delete it.
+function writeDevkitPacksInOfficeace(next: string | null): PackWriteResult {
+  const dbPath = officeaceSqlitePath();
+  if (!existsSync(dbPath)) {
+    return { ok: false, reason: 'not-installed', detail: `database not found: ${dbPath}` };
+  }
+  let db: SqliteDatabase | null = null;
+  try {
+    db = openOfficeaceDb();
+    const row: unknown = db.prepare("SELECT id, env_json FROM mcp_connectors WHERE name = 'huaweicloud-devkit'").get();
+    const existing = asRecord(row);
+    if (!('id' in existing)) {
+      return { ok: false, reason: 'not-installed', detail: `no huaweicloud-devkit connector in ${dbPath}` };
+    }
+    let env: unknown = [];
+    try {
+      env = JSON.parse(String(existing.env_json || '[]'));
+    } catch {}
+    const rows: unknown[] = Array.isArray(env) ? env : [];
+    const idx = rows.findIndex((e) => asRecord(e).key === 'DEVKIT_PACKS');
+    const current = idx >= 0 ? asRecord(rows[idx]).value : null;
+    if ((typeof current === 'string' ? current : null) === next) return { ok: true, changed: false };
+    let nextRows: unknown[];
+    if (next === null) {
+      nextRows = rows.filter((e) => asRecord(e).key !== 'DEVKIT_PACKS');
+    } else if (idx >= 0) {
+      nextRows = rows.map((e, i) =>
+        i === idx ? { ...asRecord(e), key: 'DEVKIT_PACKS', value: next, sensitive: false } : e,
+      );
+    } else {
+      nextRows = [...rows, { key: 'DEVKIT_PACKS', value: next, sensitive: false }];
+    }
+    db.prepare('UPDATE mcp_connectors SET env_json = ?, updated_at = ? WHERE id = ?').run(
+      JSON.stringify(nextRows),
+      Date.now(),
+      existing.id,
+    );
+    return { ok: true, changed: true };
+  } catch (error) {
+    return { ok: false, reason: 'parse-failed', detail: errorMessage(error) };
+  } finally {
+    try {
+      db?.close();
+    } catch {}
+  }
+}
+
+const PACK_SLOTS: PackSlot[] = [
+  {
+    id: 'opencode',
+    label: 'OpenCode',
+    installed: () => mcpServerInstalled(opencodePluginsDir()),
+    read: () => readDevkitPacksFromJson(opencodeConfigFile(), 'mcp'),
+    write: (next) => writeDevkitPacksInJson(opencodeConfigFile(), 'mcp', 'environment', next),
+  },
+  {
+    id: 'codex-desktop',
+    label: 'Codex Desktop',
+    installed: () => mcpServerInstalled(codexDesktopPluginsDir()),
+    read: () => readDevkitPacksFromJson(join(codexDesktopPluginsDir(), '.mcp.json'), 'mcpServers'),
+    write: (next) => writeDevkitPacksInJson(join(codexDesktopPluginsDir(), '.mcp.json'), 'mcpServers', 'env', next),
+  },
+  {
+    id: 'codearts',
+    label: 'CodeArts',
+    installed: () => mcpServerInstalled(codeartsPluginsDir()),
+    read: () => readDevkitPacksFromJson(codeartsMcpSettingsFile(), 'mcpServers'),
+    write: (next) => writeCodeartsDevkitPacks(next),
+  },
+  {
+    id: 'codearts-work',
+    label: 'CodeArts Work',
+    installed: () => mcpServerInstalled(codeartsWorkPluginsDir()),
+    read: () => readDevkitPacksFromJson(codeartsWorkMcpSettingsFile(), 'mcp'),
+    write: (next) => writeDevkitPacksInJson(codeartsWorkMcpSettingsFile(), 'mcp', 'environment', next),
+  },
+  {
+    id: 'workbuddy',
+    label: 'WorkBuddy',
+    installed: () => mcpServerInstalled(workbuddyPluginsDir()),
+    read: () => readDevkitPacksFromJson(workbuddyMcpConfigFile(), 'mcpServers'),
+    write: (next) => writeDevkitPacksInJson(workbuddyMcpConfigFile(), 'mcpServers', 'env', next),
+  },
+  {
+    id: 'openclaw',
+    label: 'OpenClaw',
+    installed: () => mcpServerInstalled(openclawPluginsDir()),
+    read: () => readDevkitPacksFromJson(join(openclawPluginsDir(), '.mcp.json'), 'mcpServers'),
+    write: (next) => writeDevkitPacksInJson(join(openclawPluginsDir(), '.mcp.json'), 'mcpServers', 'env', next),
+  },
+  {
+    id: 'atomcode',
+    label: 'AtomCode',
+    installed: () => mcpServerInstalled(atomcodePluginsDir()),
+    read: () => readDevkitPacksFromJson(atomcodeMcpConfigFile(), 'mcpServers'),
+    write: (next) => writeDevkitPacksInJson(atomcodeMcpConfigFile(), 'mcpServers', 'env', next),
+  },
+  {
+    id: 'dsh',
+    label: 'DSH',
+    installed: () => mcpServerInstalled(dshPluginsDir()),
+    read: () => readDevkitPacksFromYaml(dshPatchFile()),
+    write: (next) => writeDevkitPacksInDshPatch(next),
+  },
+  {
+    id: 'hermes',
+    label: 'Hermes Agent',
+    installed: () => mcpServerInstalled(hermesPluginsDir()),
+    read: () => readDevkitPacksFromYaml(hermesConfigFile()),
+    write: (next) => ({ ok: true, changed: writeHermesMcpConfig(next) }),
+  },
+  {
+    id: 'officeace',
+    label: 'OfficeAce',
+    installed: () => mcpServerInstalled(officeacePluginsDir()),
+    read: () => readOfficeaceDevkitPacks(),
+    write: (next) => writeDevkitPacksInOfficeace(next),
+  },
+];
+
 // Reader-backed pack status: one entry per installable agent target that
 // has an MCP config to read DEVKIT_PACKS from. Shared by doctor (per-target
-// pack status) and install-time provisioning (the effective pack union).
+// pack status) and install-time provisioning (the effective pack union);
+// derived from PACK_SLOTS so it cannot drift from the write path.
 function packStatusReaders(): Array<{ label: string; installed: boolean; read: () => string | null }> {
-  return [
-    {
-      label: 'OpenCode',
-      installed: mcpServerInstalled(opencodePluginsDir()),
-      read: () => readDevkitPacksFromJson(opencodeConfigFile(), 'mcp'),
-    },
-    {
-      label: 'Codex Desktop',
-      installed: mcpServerInstalled(codexDesktopPluginsDir()),
-      read: () => readDevkitPacksFromJson(join(codexDesktopPluginsDir(), '.mcp.json'), 'mcpServers'),
-    },
-    {
-      label: 'CodeArts',
-      installed: mcpServerInstalled(codeartsPluginsDir()),
-      read: () => readDevkitPacksFromJson(codeartsMcpSettingsFile(), 'mcpServers'),
-    },
-    {
-      label: 'CodeArts Work',
-      installed: mcpServerInstalled(codeartsWorkPluginsDir()),
-      read: () => readDevkitPacksFromJson(codeartsWorkMcpSettingsFile(), 'mcp'),
-    },
-    {
-      label: 'WorkBuddy',
-      installed: mcpServerInstalled(workbuddyPluginsDir()),
-      read: () => readDevkitPacksFromJson(workbuddyMcpConfigFile(), 'mcpServers'),
-    },
-    {
-      label: 'OpenClaw',
-      installed: mcpServerInstalled(openclawPluginsDir()),
-      read: () => readDevkitPacksFromJson(join(openclawPluginsDir(), '.mcp.json'), 'mcpServers'),
-    },
-    {
-      label: 'AtomCode',
-      installed: mcpServerInstalled(atomcodePluginsDir()),
-      read: () => readDevkitPacksFromJson(atomcodeMcpConfigFile(), 'mcpServers'),
-    },
-    {
-      label: 'DSH',
-      installed: mcpServerInstalled(dshPluginsDir()),
-      read: () => readDevkitPacksFromYaml(dshPatchFile()),
-    },
-    {
-      label: 'Hermes Agent',
-      installed: mcpServerInstalled(hermesPluginsDir()),
-      read: () => readDevkitPacksFromYaml(hermesConfigFile()),
-    },
-    {
-      label: 'OfficeAce',
-      installed: mcpServerInstalled(officeacePluginsDir()),
-      read: () => readOfficeaceDevkitPacks(),
-    },
-  ];
+  return PACK_SLOTS.map((slot) => ({ label: slot.label, installed: slot.installed(), read: () => slot.read() }));
+}
+
+// The Codex CLI attribution line shared by doctor and `packs status`: codex
+// has no DEVKIT_PACKS write path (the codex CLI owns its MCP config), so it
+// always contributes the full surface when the plugin is verifiably
+// installed or the probe fails (fail-safe polarity).
+function renderCodexPacksLine(contributes: boolean, probeOk: boolean): void {
+  if (!contributes) return;
+  const why = probeOk
+    ? 'the devkit plugin is installed for codex'
+    : 'codex plugin list could not be read, assuming the full surface (fail-safe)';
+  console.log(`  \x1b[36m[INFO]\x1b[0m Packs (Codex CLI): all — ${why}`);
 }
 
 // The effective pack union for provisioning, `dep status`, doctor's
@@ -4693,7 +4910,7 @@ async function cmdDoctor(): Promise<void> {
         `  \x1b[33m[WARN]\x1b[0m Packs (${target.label}): unknown id(s) in DEVKIT_PACKS="${target.raw}": ${target.unknown.join(', ')}`,
       );
       console.log(
-        `        The MCP server will refuse to start until the value is fixed. Clear it: npx huaweicloud-devkit install --target <agent> --packs all`,
+        `        The MCP server will refuse to start until the value is fixed. Clear it: npx huaweicloud-devkit packs all --target <agent>`,
       );
       continue;
     }
@@ -4702,11 +4919,7 @@ async function cmdDoctor(): Promise<void> {
   // Attribution for the codex contribution to the union above: a widened
   // union with no explaining line reads as a phantom.
   if (packReport.codex) {
-    const why =
-      packReport.codex.reason === 'plugin-installed'
-        ? 'the devkit plugin is installed for codex'
-        : 'codex plugin list could not be read, assuming the full surface (fail-safe)';
-    console.log(`  \x1b[36m[INFO]\x1b[0m Packs (Codex CLI): all — ${why}`);
+    renderCodexPacksLine(true, packReport.codex.reason === 'plugin-installed');
   }
   const { union: enabledPacksUnion, carriers } = packReport;
   if (carriers.length > 0) {
@@ -5631,6 +5844,208 @@ async function cmdDep(): Promise<void> {
   process.exitCode = 1;
 }
 
+// --- the `packs` command family (post-install pack management) -------------
+
+function printPacksUsage(): void {
+  console.error(
+    'Usage: npx huaweicloud-devkit packs <status | enable <id,...> | disable <id,...> | all> [--target <agent>|all]',
+  );
+  console.error(`Valid pack ids: ${PACK_IDS.join(', ')}`);
+}
+
+// Target selection for the packs commands. parseTarget's
+// auto-detect-single-target semantics are wrong here: the useful default is
+// every installed agent, not whichever one happens to be detected alone.
+function resolvePacksCommandTarget(): PackSlot[] | null {
+  const idx = process.argv.indexOf('--target');
+  if (idx < 0 || (process.argv[idx + 1] || '').toLowerCase() === 'all') {
+    return PACK_SLOTS.filter((slot) => slot.installed());
+  }
+  const val = (process.argv[idx + 1] || '').toLowerCase();
+  if (val === 'codex') {
+    console.error('codex target is managed by codex CLI; set DEVKIT_PACKS in its MCP config manually');
+    process.exitCode = 1;
+    return null;
+  }
+  if (!SUPPORTED_AGENT_TARGETS.includes(val)) {
+    console.error(`Unknown target: ${val}`);
+    console.error(`Supported: ${SUPPORTED_AGENT_TARGETS.join(', ')} (or "all")`);
+    process.exitCode = 1;
+    return null;
+  }
+  const slot = PACK_SLOTS.find((s) => s.id === val);
+  if (!slot || !slot.installed()) {
+    console.error(`${val} not installed — run install first`);
+    process.exitCode = 1;
+    return null;
+  }
+  return [slot];
+}
+
+// The unknown-id WARN in doctor's wording, shared by `packs status` and the
+// enable/disable refusals: the server boot fail-fasts on unknown ids, and
+// the fix hint is the `packs all` reset hatch.
+function warnPacksUnknownIds(slot: PackSlot, raw: string, unknown: readonly string[]): void {
+  console.log(
+    `  \x1b[33m[WARN]\x1b[0m Packs (${slot.label}): unknown id(s) in DEVKIT_PACKS="${raw}": ${unknown.join(', ')}`,
+  );
+  console.log(
+    `        The MCP server will refuse to start until the value is fixed. Clear it: npx huaweicloud-devkit packs all --target <agent>`,
+  );
+}
+
+function cmdPacksStatus(): void {
+  const slots = resolvePacksCommandTarget();
+  if (!slots) return;
+  if (slots.length === 0) {
+    console.log('No installed targets found; run install first.');
+    return;
+  }
+  for (const slot of slots) {
+    const raw = slot.read() ?? '';
+    if (raw.trim() === '') {
+      console.log(`  \x1b[36m[INFO]\x1b[0m Packs (${slot.label}): all — DEVKIT_PACKS not set`);
+      continue;
+    }
+    const parsed = parseDevkitPacks(raw);
+    if (parsed.unknown.length > 0) {
+      warnPacksUnknownIds(slot, raw, parsed.unknown);
+      continue;
+    }
+    console.log(`  \x1b[36m[INFO]\x1b[0m Packs (${slot.label}): ${[...parsed.enabled].join(', ')}`);
+  }
+  const probe = codexPluginProbe();
+  renderCodexPacksLine(probe.ok ? probe.installed : true, probe.ok);
+}
+
+// Write modes stay silent about codex by design (no write path there), but
+// the silence needs one visible line when the plugin is installed or the
+// probe fails, or the operator cannot tell the target was skipped.
+function renderCodexPacksWriteNote(probe: CodexPluginProbe): void {
+  const contributes = probe.ok ? probe.installed : true;
+  if (!contributes) return;
+  console.log(
+    `  \x1b[36m[INFO]\x1b[0m Packs (Codex CLI): codex target is managed by codex CLI; set DEVKIT_PACKS in its MCP config manually`,
+  );
+}
+
+function joinPackIds(ids: Iterable<PackId>): string {
+  const set = new Set(ids);
+  return PACK_IDS.filter((id) => set.has(id)).join(',');
+}
+
+// A requested seed that, with core force-included, spans every pack is
+// stored as the unset full surface instead of a nine-id list.
+function coversFullSurface(ids: ReadonlySet<PackId>): boolean {
+  return PACK_IDS.every((id) => id === 'core' || ids.has(id));
+}
+
+function cmdPacksWrite(mode: 'enable' | 'disable' | 'all'): void {
+  let ids: string[] = [];
+  if (mode !== 'all') {
+    const raw = process.argv[4];
+    if (raw === undefined || raw === '' || raw.startsWith('--')) {
+      printPacksUsage();
+      process.exitCode = 1;
+      return;
+    }
+    ids = raw
+      .split(',')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0);
+    const bogus = ids.filter((id) => !PACK_ID_SET.has(id));
+    if (bogus.length > 0) {
+      console.error(`Unknown pack id(s): ${bogus.join(', ')}`);
+      console.error(`Valid pack ids: ${PACK_IDS.join(', ')}`);
+      process.exitCode = 1;
+      return;
+    }
+    if (mode === 'disable' && ids.includes('core')) {
+      console.error(
+        'core is always enabled (the pack meta, safety, and discovery surface is force-included) and cannot be disabled',
+      );
+      process.exitCode = 1;
+      return;
+    }
+  }
+  const slots = resolvePacksCommandTarget();
+  if (!slots) return;
+  let written = 0;
+  let refusals = 0;
+  for (const slot of slots) {
+    const raw = slot.read() ?? '';
+    const unset = raw.trim() === '';
+    const parsed = parseDevkitPacks(raw);
+    // `all` is the reset hatch: it clears even a value this command cannot
+    // interpret. Enable and disable refuse instead, so operator-typed
+    // information is never destroyed by set math the ids do not support.
+    if (mode !== 'all' && parsed.unknown.length > 0) {
+      warnPacksUnknownIds(slot, raw, parsed.unknown);
+      refusals++;
+      continue;
+    }
+    let next: string | null;
+    if (mode === 'all') {
+      if (unset) {
+        console.log(`Packs (${slot.label}): unchanged (DEVKIT_PACKS not set)`);
+        continue;
+      }
+      next = null;
+    } else if (mode === 'enable') {
+      if (unset) {
+        console.log(`Packs (${slot.label}): already the full surface (DEVKIT_PACKS not set)`);
+        continue;
+      }
+      const nextSet = new Set<PackId>(parsed.requested);
+      for (const id of ids) nextSet.add(id as PackId);
+      next = coversFullSurface(nextSet) ? null : joinPackIds(nextSet);
+    } else {
+      const base = unset ? new Set<PackId>(PACK_IDS) : new Set<PackId>(parsed.requested);
+      const nextSet = new Set(base);
+      for (const id of ids) nextSet.delete(id as PackId);
+      if (nextSet.size === base.size) {
+        console.log(`Packs (${slot.label}): ${ids.join(', ')} ${ids.length === 1 ? 'was' : 'were'} not enabled`);
+        continue;
+      }
+      next = nextSet.size === 0 || (nextSet.size === 1 && nextSet.has('core')) ? 'core' : joinPackIds(nextSet);
+    }
+    const result = slot.write(next);
+    if (result.ok) {
+      if (result.changed) {
+        written++;
+        const from = unset ? 'not set' : `"${raw}"`;
+        console.log(
+          next === null
+            ? `Packs (${slot.label}): DEVKIT_PACKS ${from} → all (key removed)`
+            : `Packs (${slot.label}): DEVKIT_PACKS ${from} → "${next}"`,
+        );
+      } else {
+        console.log(`Packs (${slot.label}): unchanged`);
+      }
+      continue;
+    }
+    refusals++;
+    const detail = result.reason === 'parse-failed' ? `could not write DEVKIT_PACKS (${result.detail})` : result.detail;
+    console.log(`  \x1b[33m[WARN]\x1b[0m Packs (${slot.label}): ${detail}`);
+  }
+  renderCodexPacksWriteNote(codexPluginProbe());
+  if (written === 0 && refusals > 0) process.exitCode = 1;
+}
+
+function cmdPacks(): void {
+  const sub = (process.argv[3] || '').toLowerCase();
+  if (sub === 'status') {
+    cmdPacksStatus();
+    return;
+  }
+  if (sub === 'enable' || sub === 'disable' || sub === 'all') {
+    cmdPacksWrite(sub);
+    return;
+  }
+  printPacksUsage();
+  process.exitCode = 1;
+}
+
 async function main(): Promise<void> {
   const cmd = process.argv[2] || 'help';
 
@@ -5664,6 +6079,9 @@ async function main(): Promise<void> {
     case 'dep':
       await cmdDep();
       break;
+    case 'packs':
+      cmdPacks();
+      break;
     case 'auth':
       await cmdAuth();
       break;
@@ -5693,6 +6111,7 @@ async function main(): Promise<void> {
       console.log('  doctor       Self-check: hcloud, MCP, skills, auth');
       console.log('  install-hcloud  Show KooCLI install commands for your OS');
       console.log('  dep          Dependency tooling: status | install <id> | uninstall <id>');
+      console.log('  packs        Post-install pack surface: status | enable <ids> | disable <ids> | all');
       console.log('  auth         Manage unified auth: init | sync | status | reconcile');
       console.log('  proxy        Manage proxy config: init | show | clear');
       console.log('  version      Print CLI version and installed plugin version per agent');
@@ -5726,6 +6145,8 @@ async function main(): Promise<void> {
       console.log('  npx huaweicloud-devkit install --target atomcode');
       console.log('  npx huaweicloud-devkit install --target all');
       console.log('  npx huaweicloud-devkit install --target opencode --packs sandbox');
+      console.log('  npx huaweicloud-devkit packs status');
+      console.log('  npx huaweicloud-devkit packs enable sandbox,obs');
       console.log('  npx huaweicloud-devkit dep status');
       console.log('  npx huaweicloud-devkit dep install hcloud');
       console.log('  npx huaweicloud-devkit dep uninstall hcloud');

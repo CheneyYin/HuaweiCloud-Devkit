@@ -116,10 +116,7 @@ test('disable from an unset config writes the complement (all minus the ids)', (
     assert.equal(runCli(home, ['install', '--target', 'opencode']).status, 0);
     const res = runCli(home, ['packs', 'disable', 'obs']);
     assert.equal(res.status, 0, res.stderr);
-    assert.equal(
-      readPacks(home),
-      'core,huaweicloud-cli,sandbox,auth,voucher,update,discovery,huaweicloud-open-mcp',
-    );
+    assert.equal(readPacks(home), 'core,huaweicloud-cli,sandbox,auth,voucher,update,discovery,huaweicloud-open-mcp');
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -164,10 +161,11 @@ test('enable that covers the full surface removes the key', () => {
   const home = mkdtempSync(join(tmpdir(), 'devkit-packs-cover-'));
   try {
     assert.equal(runCli(home, ['install', '--target', 'opencode', '--packs', 'core']).status, 0);
-    const res = runCli(
-      home,
-      ['packs', 'enable', 'huaweicloud-cli,sandbox,auth,obs,voucher,update,discovery,huaweicloud-open-mcp'],
-    );
+    const res = runCli(home, [
+      'packs',
+      'enable',
+      'huaweicloud-cli,sandbox,auth,obs,voucher,update,discovery,huaweicloud-open-mcp',
+    ]);
     assert.equal(res.status, 0, res.stderr);
     assert.equal(readPacks(home), undefined, 'a seed covering every pack is stored as the unset full surface');
     assert.match(res.stdout, /Packs \(OpenCode\): DEVKIT_PACKS "core" → all \(key removed\)/);
@@ -300,7 +298,10 @@ test('refused-everywhere runs exit 1', () => {
     assert.equal(runCli(home, ['install', '--target', 'hermes', '--packs', 'core']).status, 0);
     seedUserPacks(home, 'bogus,core');
     const hermesCfg = join(home, '.hermes', 'config.yaml');
-    writeFileSync(hermesCfg, readFileSync(hermesCfg, 'utf8').replace('DEVKIT_PACKS: "core"', 'DEVKIT_PACKS: "bogus,core"'));
+    writeFileSync(
+      hermesCfg,
+      readFileSync(hermesCfg, 'utf8').replace('DEVKIT_PACKS: "core"', 'DEVKIT_PACKS: "bogus,core"'),
+    );
     const res = runCli(home, ['packs', 'enable', 'sandbox']);
     assert.equal(res.status, 1, res.stdout);
     assert.match(res.stdout, /Packs \(OpenCode\): unknown id\(s\) in DEVKIT_PACKS="bogus,core": bogus/);
@@ -318,10 +319,7 @@ test('hermes: the managed block carries, floors, and drops the DEVKIT_PACKS line
     assert.match(readFileSync(cfgPath, 'utf8'), /DEVKIT_PACKS: "core"/);
 
     // A user-added arg inside the block must survive every packs rewrite.
-    writeFileSync(
-      cfgPath,
-      readFileSync(cfgPath, 'utf8').replace(/(args: \["[^"]+")(])/, '$1, "--user-flag"$2'),
-    );
+    writeFileSync(cfgPath, readFileSync(cfgPath, 'utf8').replace(/(args: \["[^"]+")(])/, '$1, "--user-flag"$2'));
 
     let res = runCli(home, ['packs', 'enable', 'sandbox']);
     assert.equal(res.status, 0, res.stderr);
