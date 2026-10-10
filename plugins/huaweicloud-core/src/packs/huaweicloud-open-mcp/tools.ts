@@ -69,11 +69,6 @@ const gatewayListToolsSchema = z.looseObject({});
 const gatewayCallSchema = z.looseObject({
   tool: z.string().describe('Gateway tool name, e.g. execute_api, query_data (see huaweicloud_gateway_list_tools).'),
   toolArgs: z.record(z.string(), z.unknown()).optional().describe('Arguments object for the gateway tool.'),
-  approvalToken: z.string().optional().describe('The approvalToken from the first call; required with approvedByUser.'),
-  approvedByUser: z
-    .boolean()
-    .optional()
-    .describe('Only true after the user explicitly approved this exact tool and arguments.'),
 });
 
 async function handleSearchApis(args: Record<string, unknown>) {
