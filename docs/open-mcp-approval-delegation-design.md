@@ -6,14 +6,14 @@
 
 ## 1. 决策记录
 
-| # | 决策 | 状态 |
-| --- | --- | --- |
-| D1 | gateway 面四个路由工具 (execute_api, manage_policy, query_data, transform_data) 的授权全部委托网关 policy engine | 已决 |
-| D2 | manage_policy 放行委托。不退回 operator 手势, 不保留 token | 已决, 否决主审 1a 建议 |
-| D3 | data tools 放行委托。不加目标路径白名单, 不保留 token | 已决, 否决主审白名单建议 |
-| D4 | devkit/native 模式二分删除。HUAWEICLOUD_OPENMCP_APPROVAL 退役 | 已决 |
-| D5 | 三个 devkit 地板保留: 秘密操作拒绝、受保护树、永久 scope 不可由 agent 购买 | 已决 |
-| D6 | src/lib/approval-tokens.ts 的 token 机制保持为 CLI 面机制, 不动 | 已决 |
+| #   | 决策                                                                                                             | 状态                     |
+| --- | ---------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| D1  | gateway 面四个路由工具 (execute_api, manage_policy, query_data, transform_data) 的授权全部委托网关 policy engine | 已决                     |
+| D2  | manage_policy 放行委托。不退回 operator 手势, 不保留 token                                                       | 已决, 否决主审 1a 建议   |
+| D3  | data tools 放行委托。不加目标路径白名单, 不保留 token                                                            | 已决, 否决主审白名单建议 |
+| D4  | devkit/native 模式二分删除。HUAWEICLOUD_OPENMCP_APPROVAL 退役                                                    | 已决                     |
+| D5  | 三个 devkit 地板保留: 秘密操作拒绝、受保护树、永久 scope 不可由 agent 购买                                       | 已决                     |
+| D6  | src/lib/approval-tokens.ts 的 token 机制保持为 CLI 面机制, 不动                                                  | 已决                     |
 
 D2 与 D3 的后果是评审共识级安全发现。处置是接受并记录 (第 8 节), 不以补丁回填。
 
@@ -21,13 +21,13 @@ D2 与 D3 的后果是评审共识级安全发现。处置是接受并记录 (�
 
 classify() 的裁决词表坍缩为 `{deny, forward}`。委托后 passthrough 与 delegate 行为相同, 三词表无承载。
 
-| 调用 | devkit 侧 | 授权权威 |
-| --- | --- | --- |
-| 六个只读发现工具 (GATEWAY_TOOL_VOCABULARY.readonly) | forward | 无需授权 |
-| execute_api | 秘密地板, 其余 forward | gateway policy engine |
-| manage_policy | 形状地板 (第 4 节), 其余 forward | engine 自身。网关不自守此工具, 见 AR1 |
-| query_data, transform_data | 受保护树与凭证地板, 其余 forward | engine 无文件路径词汇, 地板即全部门, 见 AR2 |
-| 未知工具名 | deny, 按静态 GATEWAY_TOOL_VOCABULARY 判定 | fail-closed |
+| 调用                                                | devkit 侧                                 | 授权权威                                    |
+| --------------------------------------------------- | ----------------------------------------- | ------------------------------------------- |
+| 六个只读发现工具 (GATEWAY_TOOL_VOCABULARY.readonly) | forward                                   | 无需授权                                    |
+| execute_api                                         | 秘密地板, 其余 forward                    | gateway policy engine                       |
+| manage_policy                                       | 形状地板 (第 4 节), 其余 forward          | engine 自身。网关不自守此工具, 见 AR1       |
+| query_data, transform_data                          | 受保护树与凭证地板, 其余 forward          | engine 无文件路径词汇, 地板即全部门, 见 AR2 |
+| 未知工具名                                          | deny, 按静态 GATEWAY_TOOL_VOCABULARY 判定 | fail-closed                                 |
 
 原开放问题 (a) 过山车语义在纯委托下消解。地板拒绝发生在转发前, 引擎拒绝发生在执行前, 两者都是执行前拒绝, 不存在事后状态翻转。
 
