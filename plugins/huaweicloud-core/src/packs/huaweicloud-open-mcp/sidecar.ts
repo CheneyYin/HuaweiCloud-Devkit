@@ -229,7 +229,7 @@ export function resolveGatewayCommand(env: NodeJS.ProcessEnv = process.env): Gat
 //                      so the env wins (args outrank env in the gateway).
 //                      discover is rejected here: it proxies arbitrary
 //                      external MCP servers, a capability face the devkit's
-//                      approval boundary does not model.
+//                      floors do not model.
 //   --policy <state>   only when HUAWEICLOUD_MCP_POLICY_FILE is unset; the
 //                      devkit-provisioned file lives in the pack state
 //                      space (lib/pack-state.ts) and the caller creates it
@@ -251,10 +251,10 @@ export interface GatewaySpawnPlan {
 const SUPPORTED_MODE_TOKENS = new Set(['openapi', 'data']);
 
 // Single definition of the provisioned policy file name: the spawn arg,
-// the provisioning call, and the approval module's operator-policy reader
-// all derive from it, so they cannot drift apart (the gateway fail-fasts on
-// a missing --policy target, which is exactly the failure pre-spawn
-// provisioning exists to prevent).
+// the provisioning call, and the approval module's permanent-grant
+// guidance all derive from it, so they cannot drift apart (the gateway
+// fail-fasts on a missing --policy target, which is exactly the failure
+// pre-spawn provisioning exists to prevent).
 export const POLICY_FILE = 'policy';
 
 export function resolveGatewaySpawnArgs(env: NodeJS.ProcessEnv = process.env): GatewaySpawnPlan {
@@ -320,7 +320,7 @@ async function spawnSidecar(): Promise<OpenMcpSidecar> {
   const plan = resolveGatewaySpawnArgs();
   if (plan.provision) {
     // Precedes spawn: the gateway fail-fasts on a missing policy file, and
-    // the policy store is the approval base for both consent modes.
+    // the policy store is the authorization base for the delegated face.
     ensurePackState('huaweicloud-open-mcp', [POLICY_FILE]);
   }
   // Per-child scratch cwd, not the shared tmpdir root: two MCP server

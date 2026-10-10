@@ -13,7 +13,7 @@ export const huaweicloudOpenMcpPack: Pack = {
   id: 'huaweicloud-open-mcp',
   title: 'Open MCP Gateway',
   description:
-    'Direct Huawei Cloud OpenAPI discovery proxied through the local huaweicloud-open-mcp gateway: search the full catalog (300+ products, 17,000+ APIs), narrow to one API, read its schema and examples, inspect the live gateway tool surface, and call gateway tools generically through the approval-token gate (devkit mode) or the gateway policy engine (HUAWEICLOUD_OPENMCP_APPROVAL=native).',
+    "Direct Huawei Cloud OpenAPI discovery proxied through the local huaweicloud-open-mcp gateway: search the full catalog (300+ products, 17,000+ APIs), narrow to one API, read its schema and examples, inspect the live gateway tool surface, and call gateway tools generically on the delegated approval face — the gateway's own policy engine authorizes every routed call, while the devkit enforces only the floors (secret operations, the protected state tree, manage_policy shape).",
   skills: ['huawei-openapi'],
   tools: HUAWEICLOUD_OPEN_MCP_TOOLS.map((tool) => tool.name),
 };

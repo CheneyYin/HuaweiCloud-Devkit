@@ -90,8 +90,9 @@ async function handleGetApiExamples(args: Record<string, unknown>) {
   return callOpenMcpTool('get_api_examples', args);
 }
 
-// In-process lifecycle only — no hcloud I/O, so no approval token (the
-// auth_init class of state mutation, not the run_approved_command class).
+// In-process lifecycle only — no hcloud I/O, so no CLI-face approval
+// token (the auth_init class of state mutation, not the
+// run_approved_command class).
 async function handleGatewayRestart() {
   try {
     const { pid, spawns } = await restartOpenMcpSidecar();
@@ -223,7 +224,7 @@ export const HUAWEICLOUD_OPEN_MCP_TOOLS = [
   {
     name: 'huaweicloud_gateway_call',
     description:
-      'Call one open-mcp gateway tool generically with tool and toolArgs. Read-only discovery tools pass through. State-changing tools (execute_api, manage_policy grants, transform_data, query_data, unknown tools) require user approval: the first call returns an approvalToken bound to the exact tool and arguments; re-send with approvalToken and approvedByUser:true after the user approves. Secret reads, permanent grants, and writes into devkit state are denied outright. With HUAWEICLOUD_OPENMCP_APPROVAL=native, execute_api delegates to the gateway policy engine instead of per-call tokens.',
+      "Call one open-mcp gateway tool generically with tool and toolArgs. Read-only discovery tools pass through. execute_api, manage_policy, query_data, and transform_data are delegated to the gateway's own policy engine: the first call forwards immediately, and when the engine refuses, its reason names the grant options — confirm with the user in conversation, grant with manage_policy add using an ephemeral scope (once/session/temporary), then retry the call. Permanent grants are an operator policy-file edit (hot-reload). Denied outright, no grant path: secret operations, file targets inside devkit state, non-canonical manage_policy action/scope spellings, ttl_seconds on add, and tool names outside the devkit's static vocabulary.",
     schema: gatewayCallSchema,
     handler: handleGatewayCall,
   },

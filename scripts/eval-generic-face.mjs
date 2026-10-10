@@ -7,16 +7,17 @@
 //
 // Usage: node scripts/eval-generic-face.mjs [--json]
 //
-// Face accounting (round-9/10 corrections): the token round trip is a
-// consent property a first-class tool would ALSO carry, so both faces
-// count it. The generic face's structural cost is the NAME-DISCOVERY
-// call (gateway_list_tools) — modeled ONCE PER SESSION (not per task)
-// for an unskilled agent. Zero-cost paths, in order of reach: (1) an
-// agent that loaded huawei-openapi knows the names statically; (2) an
-// agent that reads tool descriptions also knows them —
-// huaweicloud_gateway_call's own description names all four routed tools
-// and every agent consumes tools/list to discover the tool in the first
-// place. The +1 therefore bounds only an agent that skips BOTH: the
+// Face accounting (delegation face): consent is the gateway policy
+// engine's business, so a state-changing generic call is ONE dispatch —
+// forward, and either the engine grants it or the refusal reason teaches
+// the grant flow. The generic face's structural cost is the
+// NAME-DISCOVERY call (gateway_list_tools) — modeled ONCE PER SESSION
+// (not per task) for an unskilled agent. Zero-cost paths, in order of
+// reach: (1) an agent that loaded huawei-openapi knows the names
+// statically; (2) an agent that reads tool descriptions also knows them
+// — huaweicloud_gateway_call's own description names all four routed
+// tools and every agent consumes tools/list to discover the tool in the
+// first place. The +1 therefore bounds only an agent that skips BOTH: the
 // upper bound of the unskilled face, not its typical cost.
 //
 // Preflight: the gateway binary must resolve and complete a handshake, or
@@ -28,11 +29,10 @@
 // cache warming can bias the ms columns by ordering alone. Calls, not
 // ms, are the decision metric.
 
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync } from 'node:fs';
 
 const asJson = process.argv.includes('--json');
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -66,24 +66,19 @@ if (preflight.ok !== true) {
 }
 
 // Each task returns { dispatches, final }: dispatches counts actual
-// callTool invocations (mint AND replay both count — the consent round
-// trip rides both faces), final is the last result for the outcome row.
+// callTool invocations, final is the last result for the outcome row.
+// The delegated face spends exactly ONE dispatch per task: the call
+// forwards and the engine either grants it or refuses with the
+// consent-teaching reason (a reached-and-refused outcome).
 // firstClass: an alternate zero-discovery run for the same task — the
 // first-class lower bound (curated tool or same flow without the list).
 // needsDiscovery: the task's generic-face run requires knowing a gateway
 // tool name the curated surface does not teach (declared per task, not
 // derived from the id string — round-10: a rename silently changed the
 // measured overhead).
-async function tokenTask(tool, toolArgs) {
-  const minted = await callTool('huaweicloud_gateway_call', { tool, toolArgs });
-  if (minted.requiresApproval !== true) return { dispatches: 1, final: minted };
-  const replay = await callTool('huaweicloud_gateway_call', {
-    tool,
-    toolArgs,
-    approvalToken: minted.approvalToken,
-    approvedByUser: true,
-  });
-  return { dispatches: 2, final: replay };
+async function delegatedTask(tool, toolArgs) {
+  const final = await callTool('huaweicloud_gateway_call', { tool, toolArgs });
+  return { dispatches: 1, final };
 }
 
 const TASKS = [
@@ -114,12 +109,14 @@ const TASKS = [
   {
     id: 'generic-data-query',
     needsDiscovery: true,
-    run: () => tokenTask('query_data', { sql: 'select 1 as x' }),
+    run: () => delegatedTask('query_data', { sql: 'select 1 as x' }),
   },
   {
-    id: 'generic-execute-approved',
+    // The engine refuses an ungranted execute and its reason teaches the
+    // grant flow; reached-and-refused is the expected outcome row.
+    id: 'generic-execute',
     needsDiscovery: true,
-    run: () => tokenTask('execute_api', { product: 'IAM', api: 'KeystoneListRegions' }),
+    run: () => delegatedTask('execute_api', { product: 'IAM', api: 'KeystoneListRegions' }),
   },
 ];
 
@@ -168,8 +165,7 @@ async function runGeneric(task, listOncePerSession) {
   return { calls: dispatches + listCalls, final };
 }
 
-// First-class lower bound: the same consent flow (token round trip
-// counted) with NO name-discovery call.
+// First-class lower bound: the same flow with NO name-discovery call.
 async function runFirstClass(task) {
   const runner = task.firstClass ?? task.run;
   const { dispatches, final } = await runner();

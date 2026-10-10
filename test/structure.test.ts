@@ -192,8 +192,6 @@ test('huawei-openapi skill teaches only vocabulary-table tools and the real para
     'search_apis',
     'tag_groups',
     'project_id',
-    'approval_token',
-    'approved_by_user',
     'huaweicloud_search_apis',
     'huaweicloud_list_products',
     'huaweicloud_get_product',
@@ -234,6 +232,19 @@ test('huawei-openapi skill teaches only vocabulary-table tools and the real para
   // The contract row is scoped to execute_api (round-10: discovery tools
   // take top-level named args — an unscoped row misleads search calls).
   assert.match(skill, /For `execute_api`, path and query parameters flatten into `toolArgs\.params`/);
+
+  // The delegated approval contract: the skill must teach the delegation
+  // flow (engine refuses → its reason guides → confirm → grant with an
+  // ephemeral scope → retry) and must not resurrect the retired token
+  // ceremony. gatewayCallSchema is a loose object, so a stale field name
+  // in the teaching layer would silently round-trip as an ignored extra
+  // while an agent believes it is consenting.
+  assert.match(skill, /delegated to the gateway's own policy engine/, 'the consent authority is named');
+  assert.match(skill, /confirm with the user in conversation/, 'the refusal-guided consent flow is taught');
+  assert.match(skill, /ephemeral scope/, 'the grant scope vocabulary is taught');
+  assert.doesNotMatch(skill, /approvalToken/, 'the retired approvalToken field must not be taught');
+  assert.doesNotMatch(skill, /approvedByUser/, 'the retired approvedByUser field must not be taught');
+  assert.doesNotMatch(skill, /HUAWEICLOUD_OPENMCP_APPROVAL/, 'the retired mode env must not be taught');
 
   // Cross-references resolve to real skills — form-agnostic (See/see/load)
   // and across the whole generated tree, not just this file (round-10:

@@ -14,16 +14,13 @@ import { dirname, join } from 'node:path';
 import { redactSecrets } from '../safety-policy.ts';
 import { huaweiConfigBase } from './pack-state.ts';
 
-// Face-neutral approval tokens: the consent layer every execution face
-// shares. The CLI face (plan_cli_command / run_approved_command in the
-// huaweicloud-cli pack) and the API face (the open-mcp approval bridge)
-// both mint and consume tokens through this module; nothing here knows
-// hcloud — the payload is an opaque serializable value, hashed, redacted,
-// and persisted with a TTL.
+// The CLI face's approval tokens: the consent layer for
+// plan_cli_command / run_approved_command in the huaweicloud-cli pack.
+// Nothing here knows hcloud — the payload is an opaque serializable
+// value, hashed, redacted, and persisted with a TTL.
 //
 // hcloud-cli.ts re-exports these for its own call sites (the
-// tool-schemas.ts re-export precedent); new faces should import this
-// module directly.
+// tool-schemas.ts re-export precedent).
 //
 // The token hash is canonical: object keys are recursively sorted at mint
 // and verify, so the same logical arguments hash identically no matter how

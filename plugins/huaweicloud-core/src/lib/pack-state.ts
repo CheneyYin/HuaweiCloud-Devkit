@@ -9,16 +9,17 @@ import type { PackId } from './pack-types.ts';
 // HUAWEICLOUD_HOME).
 //
 // Ownership criterion, stated here so the next state file does not have to
-// guess: the writer/reader set decides where state lives. approvals.json is
-// face-neutral (the CLI and gateway approval faces both mint and consume),
-// credentials.json is the devkit-wide S1 store, and deps/ belongs to the
-// dependency domain — all three stay at the config root. State with exactly
-// one pack as writer and reader (the open-mcp gateway's policy file) lives
-// under packs/<id>/, so ownership is derivable from the directory name and
-// an uninstall can preserve user state without a manifest. Modules that
-// still hand-roll the base (auth/credentials, dep-receipts, update-check,
-// proxy-config, officeace-paths) migrate here when next touched; the guard
-// below already resolves through this module, so guard and store cannot
+// guess: the writer/reader set decides where state lives. approvals.json
+// is the CLI approval face's store (plan_cli_command /
+// run_approved_command mint and consume), credentials.json is the
+// devkit-wide S1 store, and deps/ belongs to the dependency domain — all
+// three stay at the config root. State with exactly one pack as writer
+// and reader (the open-mcp gateway's policy file) lives under packs/<id>/,
+// so ownership is derivable from the directory name and an uninstall can
+// preserve user state without a manifest. Modules that still hand-roll
+// the base (auth/credentials, dep-receipts, update-check, proxy-config,
+// officeace-paths) migrate here when next touched; the guard below
+// already resolves through this module, so guard and store cannot
 // disagree about where the tree is.
 //
 // The same resolver backs the protected-tree guard the gateway face uses:
