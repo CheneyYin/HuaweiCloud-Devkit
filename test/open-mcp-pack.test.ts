@@ -575,13 +575,20 @@ test('classify: manage_policy add rejects ttl_seconds outright (F2)', () => {
   assert.equal(nullTtl.verdict, 'forward', 'an explicit null ttl carries no value and forwards');
 });
 
-test('classify: manage_policy remove takes no scope; the action allowlist denies everything else', () => {
+test('classify: manage_policy remove takes no scope or ttl_seconds; the action allowlist denies everything else', () => {
   assert.deepEqual(classify('manage_policy', { action: 'remove', line: 'ECS:X=allow' }), { verdict: 'forward' });
   for (const scope of ['once', 'permanent']) {
     const ruling = classify('manage_policy', { action: 'remove', line: 'ECS:X=allow', scope });
     assert.equal(ruling.verdict, 'deny', `remove with scope ${scope} denies before the forward`);
     assert.match(String(ruling.reason), /takes no scope/);
   }
+  // F2 symmetry with the add branch: the gateway rejects remove carrying
+  // ttl_seconds the same way as scope, and a null ttl passes as absent.
+  const ttl = classify('manage_policy', { action: 'remove', line: 'ECS:X=allow', ttl_seconds: 3600 });
+  assert.equal(ttl.verdict, 'deny', 'remove with ttl_seconds denies before the forward');
+  assert.match(String(ttl.reason), /ttl_seconds/);
+  const nullTtl = classify('manage_policy', { action: 'remove', line: 'ECS:X=allow', ttl_seconds: null });
+  assert.equal(nullTtl.verdict, 'forward', 'an explicit null ttl carries no value and forwards');
   // F1: non-canonical action spellings deny as spelling, not as unknown
   // actions — the message must name the fix, not the allowlist.
   const upper = classify('manage_policy', { action: 'ADD', line: 'ECS:X=allow', scope: 'once' });
@@ -736,24 +743,20 @@ test('resolveApprovalMode: unset passes; any set value throws the retirement gua
   // pack state path when no operator env is set, the operator's own path
   // when it is.
   const home = mkdtempSync(join(tmpdir(), 'openmcp-retire-home-'));
-  try {
-    resolveApprovalMode({ HUAWEICLOUD_HOME: home });
-  } catch (error) {
-    assert.match(
-      error instanceof Error ? error.message : String(error),
-      new RegExp(join('.config', 'huaweicloud', 'packs', 'huaweicloud-open-mcp', 'policy').replace(/\\/g, '\\\\')),
-      'the retirement error names the provisioned policy file path',
-    );
-  }
-  try {
-    resolveApprovalMode({ HUAWEICLOUD_MCP_POLICY_FILE: '/opt/gw-policy' });
-  } catch (error) {
-    assert.match(
-      error instanceof Error ? error.message : String(error),
-      /\/opt\/gw-policy/,
-      'the retirement error names the operator policy file when one is configured',
-    );
-  }
+  assert.throws(
+    () => resolveApprovalMode({ HUAWEICLOUD_HOME: home, HUAWEICLOUD_OPENMCP_APPROVAL: 'devkit' }),
+    (error: unknown) =>
+      new RegExp(join('.config', 'huaweicloud', 'packs', 'huaweicloud-open-mcp', 'policy').replace(/\\/g, '\\\\')).test(
+        error instanceof Error ? error.message : String(error),
+      ),
+    'the retirement error names the provisioned policy file path',
+  );
+  assert.throws(
+    () =>
+      resolveApprovalMode({ HUAWEICLOUD_MCP_POLICY_FILE: '/opt/gw-policy', HUAWEICLOUD_OPENMCP_APPROVAL: 'devkit' }),
+    (error: unknown) => /\/opt\/gw-policy/.test(error instanceof Error ? error.message : String(error)),
+    'the retirement error names the operator policy file when one is configured',
+  );
 });
 
 // ── gateway_list_tools / gateway_call through the real dispatch ──
@@ -863,6 +866,7 @@ test(
       ['manage_policy', { action: 'ADD', line: 'ECS:X=allow', scope: 'once' }, /canonical spelling/],
       ['manage_policy', { action: 'add', line: 'ECS:X=allow', scope: 'once', ttl_seconds: 3600 }, /ttl_seconds/],
       ['manage_policy', { action: 'remove', line: 'ECS:X=allow', scope: 'once' }, /takes no scope/],
+      ['manage_policy', { action: 'remove', line: 'ECS:X=allow', ttl_seconds: 3600 }, /ttl_seconds/],
       ['no_such_tool', {}, /not in the gateway tool vocabulary/],
     ];
     for (const [tool, toolArgs, reasonPattern] of denies) {
@@ -940,6 +944,41 @@ test(
       }
     })(),
   ),
+);
+
+test(
+  'the operator policy file is the delegated control plane — a file-layer rule grants, and a cross-layer remove rewrites it',
+  withGatewayEnv({ FAKE_POLICY: '1' }, async () => {
+    // Written before the first gateway_call so the spawned child reads it
+    // from --policy: provisioning is exclusive-create, so an
+    // operator-authored file survives the spawn untouched. The remove half
+    // pins AR1 (docs/safety-model.md) as concrete behavior: manage_policy
+    // remove is cross-layer and rewrites the operator's file.
+    const policyPath = join(stateHome, '.config', 'huaweicloud', 'packs', 'huaweicloud-open-mcp', 'policy');
+    writeFileSync(policyPath, 'ECS:ListServers=allow\n');
+    try {
+      const execArgs = { product: 'ECS', api: 'ListServers' };
+      const granted = await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs });
+      assert.equal(granted.ok, true, JSON.stringify(granted));
+      assert.deepEqual(
+        granted.executed,
+        { product: 'ECS', api: 'ListServers' },
+        'a file-layer rule authorizes the call with no overlay grant',
+      );
+
+      const removed = await callTool('huaweicloud_gateway_call', {
+        tool: 'manage_policy',
+        toolArgs: { action: 'remove', line: 'ECS:ListServers=allow' },
+      });
+      assert.equal(removed.ok, true, JSON.stringify(removed));
+
+      const refused = await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs });
+      assert.equal(refused.ok, false, 'the cross-layer remove rewrote the policy file, so the rule is gone');
+      assert.match(String(refused.error), /safety policy/);
+    } finally {
+      writeFileSync(policyPath, '');
+    }
+  }),
 );
 
 test('resolveGatewaySpawnArgs rejects relative operator policy/audit paths', () => {

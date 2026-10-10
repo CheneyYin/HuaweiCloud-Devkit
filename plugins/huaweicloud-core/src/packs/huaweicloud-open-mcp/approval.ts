@@ -135,14 +135,18 @@ export function classify(tool: string, toolArgs: Record<string, unknown>): Rulin
       }
       return { verdict: 'forward' };
     }
-    // remove: the gateway REJECTS remove with a scope (manage_policy_ops:
-    // "remove 不接受 scope/ttl_seconds 参数") — a forwarded remove+scope
-    // is a guaranteed gateway rejection, so the shape is refused here.
-    if (toolArgs.scope !== undefined && toolArgs.scope !== null) {
+    // remove: the gateway REJECTS remove with a scope or ttl_seconds
+    // (manage_policy_ops: "remove 不接受 scope/ttl_seconds 参数") — a
+    // forwarded remove carrying either is a guaranteed gateway rejection,
+    // so the shape is refused here.
+    if (
+      (toolArgs.scope !== undefined && toolArgs.scope !== null) ||
+      (toolArgs.ttl_seconds !== undefined && toolArgs.ttl_seconds !== null)
+    ) {
       return {
         verdict: 'deny',
         reason:
-          'manage_policy remove takes no scope: removal is cross-layer by line, and the gateway rejects a scoped remove outright.',
+          'manage_policy remove takes no scope or ttl_seconds: removal is cross-layer by line, and the gateway rejects a scoped remove outright.',
       };
     }
     return { verdict: 'forward' };

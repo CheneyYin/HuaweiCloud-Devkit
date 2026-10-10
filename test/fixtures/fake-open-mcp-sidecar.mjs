@@ -3,12 +3,13 @@
 // huaweicloud-open-mcp gateway in the open-mcp-pack tests. Known tools echo
 // their arguments as structuredContent (the branch the REAL gateway's
 // successful calls always take — its SDK derives structuredContent from the
-// return annotations) plus a content-text mirror. Three synthetic tools pin
-// the remaining normalization branches, and FAKE_FAIL_HANDSHAKE=1 makes
-// initialize answer with a JSON-RPC error to exercise the spawn-failure
-// path. Exits on stdin EOF, which is exactly the parent-death semantics the
-// real gateway's stdio transport has and the sidecar lifetime contract
-// depends on.
+// return annotations) plus a content-text mirror. Four synthetic tools pin
+// the remaining normalization branches (the fourth echoes JSON inside an
+// isError envelope, the strongest redaction shape), and
+// FAKE_FAIL_HANDSHAKE=1 makes initialize answer with a JSON-RPC error to
+// exercise the spawn-failure path. Exits on stdin EOF, which is exactly the
+// parent-death semantics the real gateway's stdio transport has and the
+// sidecar lifetime contract depends on.
 //
 // Drift/policy knobs (read from the inherited env, so set them before the
 // spawn that must see them):
@@ -16,28 +17,13 @@
 //                              and transform_data to both tools/list and the
 //                              callable set, with policy-lite semantics:
 //                              manage_policy keeps an in-memory {line, scope}
-//                              rules array (no TTL/burn logic here — once
-//                              burns happen on execute), execute_api finds a
-//                              rule whose both sides wildcard-match and burns
-//                              it when its scope is 'once', refusing with the
+//                              rules array on top of the --policy file,
+//                              execute_api resolves overlay ++ file as one
+//                              ordered rule set and burns a matching
+//                              scope 'once' rule, refusing with the
 //                              gateway's envelope-failure shape otherwise.
-//   FAKE_HIDE_TOOLS=a,b        removes those names from both tools/list and
-//                              the callable set (drift-degrade tests).
-//   FAKE_HIDE_CALLABLE=a,b     removes those names from the callable set
-//                              ONLY (the surface cache still lists them —
-//                              drives listing-failure paths past the drift
-//                              gate).
-//   FAKE_REFUSE_EXECUTE=1      execute_api always answers with the
-//                              safety-policy refusal, even when a matching
-//                              rule exists (bridge double-refusal tests).
-//   FAKE_BROKEN_EXECUTE=1      execute_api answers a non-refusal failure
-//                              (bridge must not re-send unknown-state
-//                              failures).
-//   FAKE_FAIL_LIST_ONCE=1      the first tools/list answers a JSON-RPC
-//                              error, later ones succeed (write-through
-//                              tests: the spawn cache stays null).
-//   json_error_tool            echoes its arguments as JSON inside an
-//                              isError envelope (redaction shape).
+//   FAKE_HIDE_TOOLS=a,b        removes those names from tools/list and the
+//                              callable set (drift-degrade tests).
 const CORE_TOOLS = [
   'search_apis',
   'list_products',
@@ -52,8 +38,6 @@ const CORE_TOOLS = [
 ];
 const POLICY_TOOLS = ['execute_api', 'manage_policy', 'query_data', 'transform_data'];
 const rules = [];
-let executeAttempts = 0;
-let listFailedOnce = false;
 let buffer = '';
 
 function gatewayToolNames() {
@@ -68,24 +52,12 @@ function gatewayToolNames() {
   return names.filter((name) => !hidden.has(name));
 }
 
-function callableToolNames() {
-  const hidden = new Set(
-    (process.env.FAKE_HIDE_CALLABLE ?? '')
-      .split(',')
-      .map((name) => name.trim())
-      .filter(Boolean),
-  );
-  return gatewayToolNames().filter((name) => !hidden.has(name));
-}
-
-// fnmatch translation, a verbatim mirror of fnmatchRegex in
-// src/lib/policy-grammar.ts (the .mjs fixture cannot import the .ts lib).
-// structure.test's lockstep check drives both implementations over a
-// shared corpus and asserts identical equivalence classes — edit both
-// together or the lockstep test goes red. Class translation per
-// fnmatch.translate: '!' after '[' negates, ']' right after '[' or '[!'
-// is literal, '\' escaped, unterminated '[' literal, guarded construction
-// with literal fallback.
+// fnmatch translation for the api-pattern side of a rule. Hand-maintained
+// against the gateway's fnmatch semantics with no lockstep contract: when
+// the gateway's matching changes, this must be re-derived by hand. Class
+// translation per fnmatch.translate: '!' after '[' negates, ']' right
+// after '[' or '[!' is literal, '\' escaped, unterminated '[' literal,
+// guarded construction with literal fallback.
 function fnmatchRegex(pattern) {
   let out = '';
   for (let index = 0; index < pattern.length; index += 1) {
@@ -119,7 +91,7 @@ function fnmatchRegex(pattern) {
 }
 
 // The gateway's evaluate is exact-or-'*' on the PRODUCT side; only the api
-// pattern goes through fnmatch (mirror of productMatches in approval.ts).
+// pattern goes through fnmatch.
 function productMatches(side, product) {
   return side === '*' || side.toLowerCase() === product.toLowerCase();
 }
@@ -128,13 +100,19 @@ function sideMatches(side, value) {
   return fnmatchRegex(side).test(value);
 }
 
-// File-layer mirror (FAKE_POLICY_FILE): the real gateway resolves its
-// policy file from --policy; this fixture reuses that argv entry when the
-// env points a test at a specific file, so file-layer conflicts and
+// The gateway's add scope vocabulary (probed 2026-10-10): exactly these
+// four, matched by exact string. permanent is among them — the real
+// gateway accepts it and writes the rule into the operator's policy file;
+// this fixture keeps every add in the in-memory overlay, and the devkit
+// face's permanent floor makes the spelling unreachable through
+// gateway_call anyway.
+const SCOPE_VOCAB = new Set(['permanent', 'temporary', 'session', 'once']);
+
+// File-layer mirror: the real gateway resolves its policy file from
+// --policy; this fixture reuses that argv entry, so file-layer rules and
 // removes run against real bytes instead of the in-memory overlay alone.
 const fs = await import('node:fs');
 function policyFilePath() {
-  if (process.env.FAKE_POLICY_FILE) return process.env.FAKE_POLICY_FILE;
   const index = process.argv.indexOf('--policy');
   return index >= 0 ? process.argv[index + 1] : null;
 }
@@ -191,16 +169,10 @@ function matchingFileRule(product, api) {
   return { line: file, scope: 'permanent', grants: sideMatchOf(file, product, api) === true };
 }
 
-// The grammar surface this fixture mirrors from lib/policy-grammar.ts —
-// exported for the structure.test lockstep check (FAKE_GRAMMAR_ONLY=1
-// imports this module without starting the stdio server below).
-export const grammar = { fnmatchRegex, productMatches, sideMatches, semanticKey: (text) => semanticKeyOf(text) };
-
-// The fixture's mirror of ruleSemanticKey (lib/policy-grammar.ts): the
-// SAME prefixed per-line keys — empty:/unparseable:/server: for the
-// non-rule kinds, product::pattern::effect for rules — so the lockstep
-// test asserts per-line key EQUALITY (round-11: the equivalence-class
-// comparison was blind to parse-kind divergence for singleton classes).
+// Per-line semantic keys, the fixture's single parse authority:
+// empty:/unparseable:/server: for the non-rule kinds,
+// product::pattern::effect for rules — acceptance checks and
+// side-matching share one parse instead of two drifting copies.
 function semanticKeyOf(text) {
   const stripped = String(text).trim();
   if (stripped === '' || stripped.startsWith('#')) return `empty:${stripped.toLowerCase()}`;
@@ -222,20 +194,18 @@ function semanticKeyOf(text) {
   return `${product.toLowerCase()}::${apiPattern.toLowerCase()}::${effect}`;
 }
 
-if (process.env.FAKE_GRAMMAR_ONLY !== '1') {
-  process.stdin.setEncoding('utf8');
-  process.stdin.on('data', (chunk) => {
-    buffer += chunk;
-    let newline = buffer.indexOf('\n');
-    while (newline >= 0) {
-      const line = buffer.slice(0, newline).trim();
-      buffer = buffer.slice(newline + 1);
-      if (line) handleLine(line);
-      newline = buffer.indexOf('\n');
-    }
-  });
-  process.stdin.on('end', () => process.exit(0));
-}
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  let newline = buffer.indexOf('\n');
+  while (newline >= 0) {
+    const line = buffer.slice(0, newline).trim();
+    buffer = buffer.slice(newline + 1);
+    if (line) handleLine(line);
+    newline = buffer.indexOf('\n');
+  }
+});
+process.stdin.on('end', () => process.exit(0));
 
 function send(message) {
   process.stdout.write(JSON.stringify(message) + '\n');
@@ -275,15 +245,6 @@ function handleLine(line) {
       },
     });
   } else if (request.method === 'tools/list') {
-    // FAKE_FAIL_LIST_ONCE: the first tools/list answers a JSON-RPC error.
-    // The spawn path swallows it (advisory cache stays null); a later
-    // gateway_list_tools succeeds and its write-through is then the only
-    // thing that can populate the classifier's cache.
-    if (process.env.FAKE_FAIL_LIST_ONCE === '1' && !listFailedOnce) {
-      listFailedOnce = true;
-      send({ jsonrpc: '2.0', id: request.id, error: { code: -32603, message: 'fake tools/list failure' } });
-      return;
-    }
     send({
       jsonrpc: '2.0',
       id: request.id,
@@ -297,7 +258,7 @@ function handleLine(line) {
     });
   } else if (request.method === 'tools/call') {
     const name = request.params?.name;
-    if (typeof name !== 'string' || !callableToolNames().includes(name)) {
+    if (typeof name !== 'string' || !gatewayToolNames().includes(name)) {
       send({ jsonrpc: '2.0', id: request.id, error: { code: -32602, message: `Unknown tool: ${name}` } });
       return;
     }
@@ -358,18 +319,16 @@ function handleLine(line) {
     if (name === 'manage_policy') {
       const args = request.params?.arguments ?? {};
       const line = String(args.line ?? '');
-      // Action normalization, mirroring the devkit face: the fixture accepts
-      // what classify accepts (case/whitespace variants) and routes them to
-      // the canonical branch.
-      const action = typeof args.action === 'string' ? args.action.trim().toLowerCase() : String(args.action ?? '');
+      // Exact-string action dispatch: the real gateway compares the raw
+      // value (round-7 probe: 'ADD' is a guaranteed gateway rejection),
+      // and the devkit face refuses non-canonical input outright — the
+      // fixture never normalizes what it receives.
+      const action = args.action;
       if (action === 'list') {
         // The real gateway's list shape (source-verified): the rules array
         // carries the overlay AND the file's semantic lines (scope
         // 'permanent'), the 'policy' text field carries the raw file
-        // including comments. FAKE_POLICY_TEXT_ONLY=1 deliberately omits
-        // the file lines from the array so tests prove the consumer reads
-        // the text layer too — the real gateway reports both, this knob
-        // is branch-coverage instrumentation only.
+        // including comments.
         const fileText = readFileText();
         const fileRows = fileLines().map((fileLine) => ({ line: fileLine, scope: 'permanent', expires_in: null }));
         respond(request.id, {
@@ -377,40 +336,27 @@ function handleLine(line) {
           tool: name,
           action: 'list',
           policy: fileText,
-          rules: [
-            ...(process.env.FAKE_POLICY_TEXT_ONLY === '1' ? [] : fileRows),
-            ...rules.map((rule) => ({ line: rule.line, scope: rule.scope, expires_in: null })),
-          ],
+          rules: [...fileRows, ...rules.map((rule) => ({ line: rule.line, scope: rule.scope, expires_in: null }))],
         });
       } else if (action === 'add') {
         // The real gateway's add validates the line through parse_policy
-        // and rejects unparseable ones outright (round-8 mirror); the
-        // inline parser matches semanticKey below / parseRuleLine in
-        // approval.ts. The scope is normalized on entry: the devkit face
-        // binds and forwards the canonical spelling, and the burn check
-        // compares normalized values only. The response echoes BOTH the
-        // normalized form and the raw received value — tests assert the
-        // devkit's forwarding against 'received', not against this
-        // fixture's own normalization (which would be circular).
-        // A line is addable iff its semantic key is a product RULE (the
-        // gateway's parse_policy acceptance, mirrored via semanticKeyOf —
-        // round-11: the separate parseKey copy is deleted; the shared
-        // semantic surface is the single acceptance authority).
+        // and rejects unparseable ones outright (round-8 mirror). A line is
+        // addable iff its semantic key is a product RULE. The scope is
+        // matched and stored verbatim: the gateway compares exact strings
+        // (round-5 probe: a verbatim ' ONCE ' grant never burns), so the
+        // burn check in execute_api fires only on the canonical spelling.
         const key = semanticKeyOf(line);
         if (key.startsWith('empty:') || key.startsWith('unparseable:') || key.startsWith('server:')) {
           respond(request.id, { ok: false, reason: `规则格式非法：${line}` });
           return;
         }
-        const scope = typeof args.scope === 'string' ? args.scope.trim().toLowerCase() : null;
+        const scope = typeof args.scope === 'string' ? args.scope : null;
+        if (scope !== null && !SCOPE_VOCAB.has(scope)) {
+          respond(request.id, { ok: false, reason: `未知 scope: ${scope}（可选 ${[...SCOPE_VOCAB].join('/')}）` });
+          return;
+        }
         rules.push({ line, scope });
-        respond(request.id, {
-          ok: true,
-          tool: name,
-          action: 'add',
-          line,
-          scope,
-          received: { action: args.action, scope: args.scope ?? null },
-        });
+        respond(request.id, { ok: true, tool: name, action: 'add', line, scope });
       } else if (action === 'remove') {
         // The real gateway's remove envelope (source-verified rounds 7-8):
         // a scoped remove is rejected outright ("remove 不接受
@@ -418,9 +364,6 @@ function handleLine(line) {
         // ("规则格式非法"); a valid line that matches nothing is rejected
         // ("未找到匹配的规则"); a hit removes by SEMANTIC key, overlay
         // first then file, so spacing/case variants do not protect a rule.
-        // The inline key mirrors parseRuleLine in approval.ts (whole-line
-        // comments only — inline '#' is part of the action; colon-less
-        // non-'*' targets are parse failures).
         if (args.scope !== undefined && args.scope !== null) {
           respond(request.id, {
             ok: false,
@@ -463,31 +406,15 @@ function handleLine(line) {
       const args = request.params?.arguments ?? {};
       const product = String(args.product ?? '');
       const api = String(args.api ?? '');
-      // Per-child execute counter, echoed in every response: bridge tests
-      // distinguish one forward from two by the attempt number.
-      executeAttempts += 1;
-      const attempt = executeAttempts;
-      // FAKE_BROKEN_EXECUTE: a non-refusal failure (transport-level). The
-      // bridge must NOT re-send these — the execution state is unknown —
-      // so the test pins attempt === 1 on this path.
-      if (process.env.FAKE_BROKEN_EXECUTE === '1') {
-        respond(request.id, { ok: false, reason: `gateway exploded mid-call (attempt ${attempt})` });
-        return;
-      }
-      // FAKE_REFUSE_EXECUTE forces the safety-policy refusal even when a
-      // matching rule exists: the bridge-retry tests need a grant that
-      // never executes, including after the re-add.
-      if (process.env.FAKE_REFUSE_EXECUTE === '1') {
-        respond(request.id, { ok: false, reason: `safety policy 拒绝执行 ${product}:${api} (attempt ${attempt})` });
-        return;
-      }
       const rule = matchingRule(product, api) ?? matchingFileRule(product, api);
       if (!rule || rule.grants !== true) {
-        respond(request.id, { ok: false, reason: `safety policy 拒绝执行 ${product}:${api} (attempt ${attempt})` });
+        respond(request.id, { ok: false, reason: `safety policy 拒绝执行 ${product}:${api}` });
         return;
       }
+      // Burns only the canonical 'once' spelling: scope values are stored
+      // verbatim, mirroring the gateway's exact-string matching.
       if (rule.scope === 'once') rules.splice(rules.indexOf(rule), 1);
-      respond(request.id, { ok: true, tool: name, executed: { product, api }, attempt, pid: process.pid });
+      respond(request.id, { ok: true, tool: name, executed: { product, api }, pid: process.pid });
       return;
     }
     // query_data / transform_data fall through to the echo below, which
