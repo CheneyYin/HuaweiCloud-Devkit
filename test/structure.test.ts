@@ -293,29 +293,49 @@ test('the fixture grammar mirrors lib/policy-grammar (lockstep over a shared cor
     'RDS=deny',
     'ECS:CreateAccessKey=allow',
     'IAM:CreateToken=<redacted>',
+    // Round-11 corpus gaps — the shapes where the mirror historically
+    // broke or where the parse contract is load-bearing:
+    'ECS:a=b=deny', // multi-'=' pins the rpartition choice
+    'ECS:List:V2=allow', // ':' inside the api pattern pins the FIRST-colon split
+    'ECS:=deny', // empty api pattern
+    ':x=allow', // empty product
+    'SERVER:gw=allow', // case-sensitivity of the server prefix
+    '  server:gw2=allow', // leading whitespace before the prefix
   ];
 
-  // Equivalence-class agreement: two lines are "the same rule" under the
-  // lib's semantic key iff they are the same under the fixture's. The
-  // fixture returns null for unparseable/server lines; the lib returns
-  // per-line unique keys — both express "never equal to anything else",
-  // so the class comparison treats null as its own line-identity.
-  const libKey = (line: string) => lib.ruleSemanticKey(line);
-  const fixtureKey = (line: string) => fixture.grammar.semanticKey(line) ?? `fixture-null:${line.trim().toLowerCase()}`;
-  for (const a of corpus) {
-    for (const b of corpus) {
-      assert.equal(
-        libKey(a) === libKey(b),
-        fixtureKey(a) === fixtureKey(b),
-        `equivalence disagreement: ${JSON.stringify(a)} vs ${JSON.stringify(b)}`,
-      );
-    }
+  // Per-line key EQUALITY (round-11: the equivalence-class comparison was
+  // blind to parse-kind divergence — a line the lib parses as a rule and
+  // the fixture nulls passed every pair when neither collided; the
+  // fixture's semanticKey now returns the same prefixed per-line keys as
+  // the lib, so equality is assertable directly).
+  for (const line of corpus) {
+    assert.equal(
+      fixture.grammar.semanticKey(line),
+      lib.ruleSemanticKey(line),
+      `semantic key disagreement on ${JSON.stringify(line)}`,
+    );
   }
 
   // Matcher agreement over the wildcard surface: the fixture's
   // sideMatches/productMatches must accept/reject exactly what the lib's
   // do for every (pattern, value) pair drawn from the corpus patterns.
-  const patterns = ['CreateServers', 'Create?ervers', 'List[!P]alavors', 'List[A-Z]pcs', '*Object', '*', 'Create*'];
+  // The fnmatchRegex branches where round-8's bugs lived are in the sweep
+  // too: negation, backslash-in-class, unterminated class, leading
+  // ']'/^' as literals.
+  const patterns = [
+    'CreateServers',
+    'Create?ervers',
+    'List[!P]alavors',
+    'List[A-Z]pcs',
+    '*Object',
+    '*',
+    'Create*',
+    'List[!P]alavors[!',
+    'List[\\w]pcs',
+    ']first',
+    '^caret',
+    'List[]pcs',
+  ];
   const values = [
     'CreateServers',
     'CreateXervers',

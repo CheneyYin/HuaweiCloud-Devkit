@@ -301,16 +301,15 @@ test('lock: same-process re-entry recurses instead of deadlocking', () => {
 
 // The mutual-exclusion pin: two real contender processes against a
 // pre-seeded dead lock must never hold the critical section at the same
-// time. Under the file+rename designs this failed ~25% of rounds (every
-// rename of a possibly-live lock opens a free-path window); the directory
-// design removes the class — only a verifiably-dead holder's lock is ever
-// removed, verified by an immediate re-read. Known flake, recorded honestly:
-// the contenders' mkdir observably both succeed on tmpfs-backed temp dirs
-// (~30% of isolated runs) AND under full-suite load on ext4, while isolated
-// ext4 runs are clean (4/4). Production receipt dirs (~/.config) are not
-// tmpfs, but the mechanism is not yet explained — investigate the
-// filesystem/scheduler interaction before trusting this pin on a loaded
-// box. Each contender records its enter/leave timestamps; the sections must
+// time. History: the file+rename designs failed ~25% of rounds; the
+// directory design with plain rmSync removal flaked ~30% on
+// tmpfs/loaded-box runs (mechanism: both contenders pass the re-read
+// against the same dead lock, and the slower mutation lands after the
+// faster one's fresh claim and steals it — live-reproduced round-11).
+// The fix is the self-validating rename: the takeover moves the lock to
+// a stash and re-reads the stash's pid; only a stash still naming the
+// judged-dead holder honors the win, and a stolen live claim is restored.
+// Each contender records its enter/leave timestamps; the sections must
 // not overlap.
 test('lock: two contenders against a dead lock never overlap critical sections', async () => {
   const receiptsModule = fileURLToPath(new URL('../plugins/huaweicloud-core/src/dep-receipts.ts', import.meta.url));
@@ -380,6 +379,90 @@ mod.withDepLock(() => {
     [],
     `critical sections overlapped (the live lock was stolen):\n${overlapped.join('\n')}`,
   );
+});
+
+// Round-11's live reproduction: a contender whose mutation lands AFTER
+// the winner's fresh claim must NOT steal it. The bare rename closed
+// only the rename-vs-rename window; rename-against-fresh-mkdir stole the
+// live lock (both held, ~291ms, silent). The self-validating stash read
+// restores the stolen claim. This test forces the interleaving directly:
+// the slow contender sleeps between its re-read and its rename — the
+// stall the round-11 probe injected artificially, here deterministic.
+test("lock: a stalled contender does not steal the winner's fresh claim", async () => {
+  const receiptsModule = fileURLToPath(new URL('../plugins/huaweicloud-core/src/dep-receipts.ts', import.meta.url));
+  const fastScript = `
+const mod = await import(process.argv[1]);
+const fs = await import('node:fs');
+const [dir, timingsFile, sentinel] = process.argv.slice(2);
+while (!fs.existsSync(sentinel)) {}
+mod.withDepLock(() => {
+  const start = Date.now();
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400);
+  fs.writeFileSync(timingsFile, JSON.stringify({ start, end: Date.now() }));
+}, dir, 15000);
+`;
+  const slowScript = `
+const mod = await import(process.argv[1]);
+const fs = await import('node:fs');
+const [dir, timingsFile, sentinel, stallMs] = process.argv.slice(2);
+while (!fs.existsSync(sentinel)) {}
+// The deterministic stand-in for preemption between the passed re-read
+// and the rename: the FAST contender completes its full takeover and
+// enters its section while we are stalled here.
+Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(stallMs));
+mod.withDepLock(() => {
+  const start = Date.now();
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  fs.writeFileSync(timingsFile, JSON.stringify({ start, end: Date.now() }));
+}, dir, 15000);
+`;
+  const dir = tempDir();
+  try {
+    const dead = spawn(process.execPath, ['-e', 'process.exit(0)']);
+    const deadPid = dead.pid;
+    await new Promise<void>((resolve) => dead.on('exit', resolve));
+    mkdirSync(dir, { recursive: true });
+    seedLock(dir, deadPid);
+    const sentinel = join(dir, 'go');
+    const fastTimings = join(dir, 'fast.json');
+    const slowTimings = join(dir, 'slow.json');
+    const fast = spawn(process.execPath, [
+      '--input-type=module',
+      '-e',
+      fastScript,
+      receiptsModule,
+      dir,
+      fastTimings,
+      sentinel,
+    ]);
+    const slow = spawn(process.execPath, [
+      '--input-type=module',
+      '-e',
+      slowScript,
+      receiptsModule,
+      dir,
+      slowTimings,
+      sentinel,
+      '250',
+    ]);
+    writeFileSync(sentinel, 'go', 'utf8');
+    const codes = await Promise.all(
+      [fast, slow].map((child) => new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)))),
+    );
+    assert.deepEqual(codes, [0, 0], 'both contenders exited cleanly');
+    const [fastSection, slowSection] = [fastTimings, slowTimings].map((file) => {
+      assert.ok(existsSync(file), `no timings at ${file}`);
+      return JSON.parse(readFileSync(file, 'utf8')) as { start: number; end: number };
+    });
+    const overlapped = fastSection.start < slowSection.end && slowSection.start < fastSection.end;
+    assert.equal(
+      overlapped,
+      false,
+      `the stalled contender stole the live lock: fast=${JSON.stringify(fastSection)} slow=${JSON.stringify(slowSection)}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test(

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -104,13 +104,13 @@ export function removeReceipt(id: DependencyId, dir: string = receiptDir()): voi
 // EEXIST means someone holds it), carrying a pid file written by the holder
 // AFTER the claim, into the holder's own directory, where no other process
 // can observe a half-written state as stealable. A path FILE plus rename
-// takeover was tried three times (unconditional rm, verified-claim rename,
-// link-based restore with a post-claim re-read) and kept failing the
-// two-contender mutual-exclusion test at ~25% of rounds: every rename of a
-// possibly-live lock opens a free-path window in which a third claim
-// overlaps the displaced holder, and the create→write gap lets a taker
-// judge a just-created lock as unattributed and steal it while the creator
-// is still writing. The directory design removes the class structurally:
+// takeover was tried three times and kept failing the two-contender
+// mutual-exclusion test; the directory design narrows the windows but does
+// NOT remove the race class structurally — round-11 live-reproduced a
+// double hold through the takeover path (two contenders both pass the
+// re-read against the same dead lock; the slower one's mutation lands
+// after the faster one's fresh claim and steals it). Every mutation of the
+// lock path is therefore a SELF-VALIDATING rename:
 //
 //   - acquiring = mkdir; the only writer of the pid file is the holder, and
 //     it writes into its OWN directory (no cross-process half-state);
@@ -119,15 +119,21 @@ export function removeReceipt(id: DependencyId, dir: string = receiptDir()): voi
 //     release later) or when the takeover window expired on a wedged holder
 //     (documented residual: a >90s "live" holder is assumed wedged; the
 //     critical sections cap at ~60s);
+//   - the takeover renames the lock to a per-process stash and re-reads
+//     the stash's pid: only a stash still naming the SAME judged-dead
+//     holder honors the win; anything else means the rename stole a live
+//     claim and the stash is restored;
 //   - an EMPTY lock directory (holder between mkdir and its pid write —
 //     microseconds) is unknown, never stealable: waiters poll past it;
-//   - release removes the directory only while the pid file still names
-//     this process, so a wedged holder releasing after a takeover cannot
-//     delete the new holder's lock.
+//   - release is the same self-validating rename: the lock moves to a
+//     stash whose pid must still name THIS process before removal, so a
+//     wedged holder releasing after a takeover restores the taker's claim
+//     instead of deleting it.
 //
 // Residual: pid reuse could make a dead holder's pid look alive — that only
-// DELAYS a takeover past the window (bounded, converges); it can never
-// cause a double hold.
+// DELAYS a takeover past the window (bounded, converges). A crash between
+// a winning rename and its verification leaves a reclaimable stash; the
+// acquire-time sweep removes those.
 // ---------------------------------------------------------------------------
 
 const LOCK_DIR_NAME = 'lock';
@@ -184,16 +190,47 @@ function sleepSync(ms: number): void {
 // write) or unreadable — unknown, which callers treat as "keep waiting",
 // never as stealable.
 function readHolderPid(dir: string): number | null {
+  return readPidAt(join(lockDirPath(dir), LOCK_PID_FILE));
+}
+
+// The pid inside a takeover stash — same layout as a live lock directory,
+// at an arbitrary path. Round-11: the arbitration validates the stash's
+// contents AFTER winning the rename, so a rename that stole a live claim
+// is detected and restored instead of honored.
+function readStashHolderPid(stashDir: string): number | null {
+  return readPidAt(join(stashDir, LOCK_PID_FILE));
+}
+
+function readPidAt(pidFile: string): number | null {
   try {
-    const pid = Number.parseInt(readFileSync(join(lockDirPath(dir), LOCK_PID_FILE), 'utf8').trim(), 10);
+    const pid = Number.parseInt(readFileSync(pidFile, 'utf8').trim(), 10);
     return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
   } catch {
     return null;
   }
 }
 
+// Crash-orphaned takeover/release stashes: a process that died between
+// its winning rename and the stash rm left `${lock}.*.takeover` (or
+// `.release`) behind. The lock machinery never looks at them again, so
+// they would accumulate forever (round-11). Any stale stash is
+// unclaimed by construction — a live winner renames its OWN stash away —
+// so a best-effort sweep at acquire time is safe.
+function sweepStaleStashes(dir: string): void {
+  try {
+    for (const entry of readdirSync(dir)) {
+      if (entry.startsWith(`${LOCK_DIR_NAME}.`) && (entry.endsWith('.takeover') || entry.endsWith('.release'))) {
+        rmSync(join(dir, entry), { recursive: true, force: true });
+      }
+    }
+  } catch {
+    // unreadable or absent receipt dir: the claim below will recreate it
+  }
+}
+
 function acquireLock(dir: string, takeoverMs: number = LOCK_TAKEOVER_MS): void {
   mkdirSync(dir, { recursive: true });
+  sweepStaleStashes(dir);
   const lock = lockDirPath(dir);
   const deadline = Date.now() + takeoverMs;
   for (;;) {
@@ -233,17 +270,14 @@ function acquireLock(dir: string, takeoverMs: number = LOCK_TAKEOVER_MS): void {
       sleepSync(LOCK_POLL_MS);
       continue;
     }
-    // The removal itself must be an atomic claim: two contenders can both
-    // pass the re-read above against the SAME dead lock (both re-reads
-    // happen while the dead directory still stands), and a plain rmSync
-    // then races — the slower rm deletes the FASTER taker's fresh lock
-    // (rmSync never validates content), and both go on to hold at once.
-    // This is the observed tmpfs/loaded-box flake. Renaming the dead
-    // directory to a per-process unique path is the atomic arbiter: only
-    // one contender's rename succeeds; the loser's rename fails (the
-    // source is gone) and it goes back to waiting while the winner's
-    // next mkdir claims the lock outright. The loser's unique-named
-    // directory is cleaned after.
+    // The removal is a SELF-VALIDATING arbitration (round-11: the bare
+    // rename did not close the race — a loser whose rename lands after
+    // the winner's mkdir steals the winner's FRESH live lock; both hold.
+    // Live-reproduced with a stalled contender). renameSync moves the
+    // lock to a per-process stash, then the stash's pid is re-read: only
+    // a stash that still names the SAME judged-dead holder (or the
+    // empty-past-deadline case) honors the win. A stash naming anyone
+    // else means the rename stole a live claim — restore it and wait.
     const uniqueStash = `${lock}.${process.pid}.${Date.now()}.takeover`;
     try {
       renameSync(lock, uniqueStash);
@@ -251,14 +285,50 @@ function acquireLock(dir: string, takeoverMs: number = LOCK_TAKEOVER_MS): void {
       sleepSync(LOCK_POLL_MS);
       continue;
     }
+    const stashHolder = readStashHolderPid(uniqueStash);
+    const stashStillOurs = holder === null ? stashHolder === null : stashHolder === holder;
+    if (!stashStillOurs) {
+      // The rename took a live claim: put it back and wait.
+      try {
+        renameSync(uniqueStash, lock);
+      } catch {
+        // The lock path is occupied again — the stash is orphaned; the
+        // entry sweep below reclaims it.
+      }
+      sleepSync(LOCK_POLL_MS);
+      continue;
+    }
     rmSync(uniqueStash, { recursive: true, force: true });
   }
 }
 
-// Remove the lock only while its pid file still names this process: a
-// wedged holder whose lock was taken over must not delete the new holder's.
+// Remove the lock only while its pid file still names this process, and
+// do it as a SELF-VALIDATING rename (round-11): the read-then-rmSync
+// shape had the same steal window the acquisition path had — a wedged
+// holder releasing just after a takeover could delete the NEW holder's
+// lock between its pid read and its rm. Renaming to a per-process stash
+// and verifying the stash's pid still names THIS process makes the
+// release fail-safe: a stash naming anyone else means the lock was taken
+// over, and the stash is restored.
 function releaseLock(dir: string): void {
-  if (readHolderPid(dir) === process.pid) rmSync(lockDirPath(dir), { recursive: true, force: true });
+  const lock = lockDirPath(dir);
+  const stash = `${lock}.${process.pid}.${Date.now()}.release`;
+  try {
+    renameSync(lock, stash);
+  } catch {
+    return; // already gone or taken over: nothing to release
+  }
+  if (readStashHolderPid(stash) === process.pid) {
+    rmSync(stash, { recursive: true, force: true });
+  } else {
+    // The lock was taken over between our rename and this read: restore
+    // the taker's claim. A failed restore leaves a reclaimable stash.
+    try {
+      renameSync(stash, lock);
+    } catch {
+      // the sweep in acquireLock reclaims the orphan
+    }
+  }
 }
 
 function installExitCleanup(): void {

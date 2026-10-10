@@ -1142,6 +1142,61 @@ test(
 );
 
 test(
+  'the fake execute path honors deny lines and trimmed sides (gateway semantics)',
+  withGatewayEnv({ FAKE_POLICY: '1' }, async () => {
+    // Round-11: the fixture's old inline matcher was effect-blind (a deny
+    // line could authorize an execute) and skipped the per-side trim
+    // (spaced lines failed to match). The gateway refuses on any matching
+    // line whose allow is false and parses sides with strip() — this pins
+    // the routed-through-grammar behavior.
+    const denyAdd = { action: 'add', line: 'ECS:CreateServers=deny', scope: 'session' };
+    const denyMint = await callTool('huaweicloud_gateway_call', { tool: 'manage_policy', toolArgs: denyAdd });
+    const denyGrant = await callTool('huaweicloud_gateway_call', {
+      tool: 'manage_policy',
+      toolArgs: denyAdd,
+      approvalToken: denyMint.approvalToken,
+      approvedByUser: true,
+    });
+    assert.equal(denyGrant.ok, true, JSON.stringify(denyGrant));
+
+    const execArgs = { product: 'ECS', api: 'CreateServers' };
+    const execMint = await callTool('huaweicloud_gateway_call', { tool: 'execute_api', toolArgs: execArgs });
+    const denied = await callTool('huaweicloud_gateway_call', {
+      tool: 'execute_api',
+      toolArgs: execArgs,
+      approvalToken: execMint.approvalToken,
+      approvedByUser: true,
+    });
+    assert.equal(denied.ok, false, 'a matching deny line must refuse the execute');
+    assert.match(String(denied.error), /safety policy/);
+
+    // A SPACED allow line grants: parse_policy trims each side.
+    const spacedAdd = { action: 'add', line: 'VPC : ListVpcs = allow', scope: 'session' };
+    const spacedMint = await callTool('huaweicloud_gateway_call', { tool: 'manage_policy', toolArgs: spacedAdd });
+    const spacedGrant = await callTool('huaweicloud_gateway_call', {
+      tool: 'manage_policy',
+      toolArgs: spacedAdd,
+      approvalToken: spacedMint.approvalToken,
+      approvedByUser: true,
+    });
+    assert.equal(spacedGrant.ok, true, JSON.stringify(spacedGrant));
+    const spacedExec = await callTool('huaweicloud_gateway_call', {
+      tool: 'execute_api',
+      toolArgs: { product: 'VPC', api: 'ListVpcs' },
+      approvedByUser: true,
+      approvalToken: '00000000-0000-0000-0000-000000000000',
+    });
+    // The unapproved call mints; the fake's matcher must see the spaced
+    // rule as a grant for the bridge to even reach the token stage.
+    const spacedMint2 = await callTool('huaweicloud_gateway_call', {
+      tool: 'execute_api',
+      toolArgs: { product: 'VPC', api: 'ListVpcs' },
+    });
+    assert.equal(spacedMint2.requiresApproval, true, 'the spaced allow line grants: the call reaches the token stage');
+  }),
+);
+
+test(
   'a listing failure is its own refusal, not a false conflict',
   withGatewayEnv({ FAKE_POLICY: '1' }, async () => {
     // Round-7: the fail-closed branch previously reported "a policy rule

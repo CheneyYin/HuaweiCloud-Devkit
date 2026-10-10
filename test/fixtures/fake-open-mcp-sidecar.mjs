@@ -159,30 +159,36 @@ function writeFileLines(lines) {
   fs.writeFileSync(path, lines.length === 0 ? '' : `${lines.join('\n')}\n`);
 }
 
+// The fixture's execute-path matching, routed through the SHARED
+// semantic surface (round-11: the previous inline lastIndexOf/split copy
+// was effect-blind — a deny line could authorize an execute — and
+// skipped the per-side trim the gateway's parse_policy applies). The
+// gateway's evaluate is FIRST-MATCH-WINS over side-matching lines: the
+// first line whose sides match decides, and a deny there refuses (the
+// probe must not skip past a matching deny to a later allow).
+function sideMatchOf(line, product, api) {
+  const key = semanticKeyOf(line);
+  if (key.startsWith('empty:') || key.startsWith('unparseable:') || key.startsWith('server:')) return null;
+  const eq = key.lastIndexOf('::');
+  const effect = key.slice(eq + 2);
+  const [productSide, apiPattern] = key.slice(0, eq).split('::');
+  if (!productMatches(productSide, product) || !sideMatches(apiPattern, api)) return null;
+  return effect === 'allow';
+}
+
 function matchingRule(product, api) {
-  return rules.find((rule) => {
-    const eq = rule.line.lastIndexOf('=');
-    if (eq < 0) return false;
-    const sides = rule.line.slice(0, eq).split(':');
-    const productSide = sides[0] ?? '';
-    const apiSide = sides.length > 1 ? sides.slice(1).join(':') : (sides[0] ?? '');
-    return productMatches(productSide, product) && sideMatches(apiSide, api);
-  });
+  const hit = rules.find((rule) => sideMatchOf(rule.line, product, api) !== null);
+  return hit === undefined ? undefined : { ...hit, grants: sideMatchOf(hit.line, product, api) === true };
 }
 
 // File-layer rule match for execute (the real gateway evaluates the
 // overlay ++ file rules as one ordered set; the file layer grants with
-// scope 'permanent' semantics and never burns).
+// scope 'permanent' semantics and never burns). First-match-wins with
+// the same effect discipline.
 function matchingFileRule(product, api) {
-  const file = fileLines().find((fileLine) => {
-    const eq = fileLine.lastIndexOf('=');
-    if (eq < 0) return false;
-    const sides = fileLine.slice(0, eq).split(':');
-    const productSide = sides[0] ?? '';
-    const apiSide = sides.length > 1 ? sides.slice(1).join(':') : (sides[0] ?? '');
-    return productMatches(productSide, product) && sideMatches(apiSide, api);
-  });
-  return file === undefined ? null : { line: file, scope: 'permanent' };
+  const file = fileLines().find((fileLine) => sideMatchOf(fileLine, product, api) !== null);
+  if (file === undefined) return null;
+  return { line: file, scope: 'permanent', grants: sideMatchOf(file, product, api) === true };
 }
 
 // The grammar surface this fixture mirrors from lib/policy-grammar.ts —
@@ -190,22 +196,27 @@ function matchingFileRule(product, api) {
 // imports this module without starting the stdio server below).
 export const grammar = { fnmatchRegex, productMatches, sideMatches, semanticKey: (text) => semanticKeyOf(text) };
 
-// The fixture's inline remove-path key (mirror of ruleSemanticKey's
-// product branch; named to avoid colliding with the local remove closure).
+// The fixture's mirror of ruleSemanticKey (lib/policy-grammar.ts): the
+// SAME prefixed per-line keys — empty:/unparseable:/server: for the
+// non-rule kinds, product::pattern::effect for rules — so the lockstep
+// test asserts per-line key EQUALITY (round-11: the equivalence-class
+// comparison was blind to parse-kind divergence for singleton classes).
 function semanticKeyOf(text) {
   const stripped = String(text).trim();
-  if (stripped === '' || stripped.startsWith('#')) return null;
+  if (stripped === '' || stripped.startsWith('#')) return `empty:${stripped.toLowerCase()}`;
   const eq = stripped.lastIndexOf('=');
-  if (eq < 0) return null;
-  const effect = stripped
-    .slice(eq + 1)
-    .trim()
-    .toLowerCase();
-  if (effect !== 'allow' && effect !== 'deny') return null;
+  const effect =
+    eq < 0
+      ? ''
+      : stripped
+          .slice(eq + 1)
+          .trim()
+          .toLowerCase();
+  if (effect !== 'allow' && effect !== 'deny') return `unparseable:${stripped.toLowerCase()}`;
   const target = stripped.slice(0, eq).trim();
-  if (target.startsWith('server:')) return null;
+  if (target.startsWith('server:')) return `server:${stripped.toLowerCase()}`;
   const colon = target.indexOf(':');
-  if (colon < 0 && target !== '*') return null;
+  if (colon < 0 && target !== '*') return `unparseable:${stripped.toLowerCase()}`;
   const product = (colon < 0 ? '*' : target.slice(0, colon)).trim() || '*';
   const apiPattern = (colon < 0 ? '*' : target.slice(colon + 1)).trim() || '*';
   return `${product.toLowerCase()}::${apiPattern.toLowerCase()}::${effect}`;
@@ -381,23 +392,12 @@ function handleLine(line) {
         // normalized form and the raw received value — tests assert the
         // devkit's forwarding against 'received', not against this
         // fixture's own normalization (which would be circular).
-        const parseKey = (text) => {
-          const stripped = String(text).trim();
-          if (stripped === '' || stripped.startsWith('#')) return null;
-          const eq = stripped.lastIndexOf('=');
-          if (eq < 0) return null;
-          const effect = stripped
-            .slice(eq + 1)
-            .trim()
-            .toLowerCase();
-          if (effect !== 'allow' && effect !== 'deny') return null;
-          const target = stripped.slice(0, eq).trim();
-          if (target.startsWith('server:')) return null;
-          const colon = target.indexOf(':');
-          if (colon < 0 && target !== '*') return null;
-          return 'ok';
-        };
-        if (parseKey(line) === null) {
+        // A line is addable iff its semantic key is a product RULE (the
+        // gateway's parse_policy acceptance, mirrored via semanticKeyOf —
+        // round-11: the separate parseKey copy is deleted; the shared
+        // semantic surface is the single acceptance authority).
+        const key = semanticKeyOf(line);
+        if (key.startsWith('empty:') || key.startsWith('unparseable:') || key.startsWith('server:')) {
           respond(request.id, { ok: false, reason: `规则格式非法：${line}` });
           return;
         }
@@ -429,7 +429,7 @@ function handleLine(line) {
           return;
         }
         const wanted = semanticKeyOf(line);
-        if (wanted === null) {
+        if (wanted.startsWith('empty:') || wanted.startsWith('unparseable:') || wanted.startsWith('server:')) {
           respond(request.id, { ok: false, reason: `规则格式非法：${line}` });
           return;
         }
@@ -482,7 +482,7 @@ function handleLine(line) {
         return;
       }
       const rule = matchingRule(product, api) ?? matchingFileRule(product, api);
-      if (!rule) {
+      if (!rule || rule.grants !== true) {
         respond(request.id, { ok: false, reason: `safety policy 拒绝执行 ${product}:${api} (attempt ${attempt})` });
         return;
       }
