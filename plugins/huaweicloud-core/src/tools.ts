@@ -266,36 +266,6 @@ const TOOL_DEFINITIONS_LITERALS = [
       'Enable or disable capability packs for THIS session, or reset to the operator posture. Session-scoped: the change lives in this server process only and the next session restart restores the DEVKIT_PACKS posture the operator configured. Takes enable (pack ids to add), disable (pack ids to remove; core cannot be disabled), and reset (drop the session override). The refreshed tool list is pushed to the agent immediately. Confirm with the user before enabling a pack the operator trimmed: widening re-exposes that pack\u2019s tools, including state mutators that carry no approval chain of their own. The persistent equivalent is the operator CLI (npx huaweicloud-devkit packs enable <ids> --target <agent>); ask the operator to run it and restart the agent.',
   },
   {
-    name: 'huaweicloud_search_apis',
-    description:
-      'Search the full Huawei Cloud API catalog (300+ products, 17,000+ APIs) by entity keywords when the intent does not name a product. Returns candidate products with representative APIs and match evidence. Step 0 of openapi discovery: search_apis → list_apis → get_api. Read-only; needs no credentials.',
-  },
-  {
-    name: 'huaweicloud_list_products',
-    description:
-      'List Huawei Cloud products with categories and API counts, optionally filtered by category or keyword. Use when the task domain is known but the product is not, then narrow with huaweicloud_list_apis. Read-only; needs no credentials.',
-  },
-  {
-    name: 'huaweicloud_get_product',
-    description:
-      "Get one product's catalog entry (category, display name, whether it is a global-level service). Global-level services use a different auth model. Read-only; needs no credentials.",
-  },
-  {
-    name: 'huaweicloud_list_apis',
-    description:
-      'List the API catalog of one product with tag_groups for narrowing; paginate with search/limit/offset. Read the chosen API with huaweicloud_get_api before doing anything with it. Read-only; needs no credentials.',
-  },
-  {
-    name: 'huaweicloud_get_api',
-    description:
-      "Get one API's full documentation: method, path, parameter names/requiredness/types/enums, x-constraint preconditions, response schema, and the region-specific endpoint. Must-read before executing or hand-writing a call to that API. Read-only; needs no credentials.",
-  },
-  {
-    name: 'huaweicloud_get_api_examples',
-    description:
-      'Get the official request examples (x-request-examples) for one API to guide parameter construction. Read-only; needs no credentials.',
-  },
-  {
     name: 'huaweicloud_gateway_list_tools',
     description:
       "List the open-mcp gateway child's live tool surface (names, descriptions, input schemas) as its tools/list reports. Use it to check gateway capabilities and drift from the devkit projection before generic calls. Read-only; needs no credentials.",
@@ -303,7 +273,7 @@ const TOOL_DEFINITIONS_LITERALS = [
   {
     name: 'huaweicloud_gateway_call',
     description:
-      "Call one open-mcp gateway tool generically with tool and toolArgs. Read-only discovery tools pass through. execute_api, manage_policy, query_data, and transform_data are delegated to the gateway's own policy engine: the first call forwards immediately, and when the engine refuses, its reason names the grant options — confirm with the user in conversation, grant with manage_policy add using an ephemeral scope (once/session/temporary), then retry the call. Permanent grants are an operator policy-file edit (hot-reload). Denied outright, no grant path: secret operations, file targets inside devkit state, non-canonical manage_policy action/scope spellings, permanent-scope add, ttl_seconds on add or remove, remove with scope, and tool names outside the devkit's static vocabulary.",
+      "Call one open-mcp gateway tool generically with tool and toolArgs — the single face for every gateway tool. Read-only discovery (no credentials): search_apis (query; optional limit/category) finds products by entity keywords when none is named; list_products (optional category/keyword) and get_product (product) cover the product dimension (category, is_global); list_apis (product; optional tag/search/limit/offset) lists one product's API catalog with tag_groups; get_api (product, api; optional region) returns full API documentation — parameter types/enums, x-constraint preconditions, response schema, region endpoint — a must-read before any call; get_api_examples (product, api; optional region) returns official request examples. Discovery chain: search_apis → list_apis → get_api → get_api_examples. execute_api, manage_policy, query_data, and transform_data are delegated to the gateway's own policy engine: the first call forwards immediately, and when the engine refuses, its reason names the grant options — confirm with the user in conversation, grant with manage_policy add using an ephemeral scope (once/session/temporary), then retry the call. Permanent grants are an operator policy-file edit (hot-reload). Denied outright, no grant path: secret operations, file targets inside devkit state, non-canonical manage_policy action/scope spellings, permanent-scope add, ttl_seconds on add or remove, remove with scope, and tool names outside the devkit's static vocabulary.",
   },
   {
     name: 'huaweicloud_gateway_restart',
@@ -477,7 +447,7 @@ export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: Cal
   const toolValue = toolInvokeValue(name, args);
   trackToolInvoke(name, toolValue);
 
-  // Pack tools (the 41 non-core names) dispatch through the central handler
+  // Pack tools (the 35 non-core names) dispatch through the central handler
   // map in packs/registry.ts before the switch; the type guard narrows
   // `name` to the core remainder, which is what the switch below and its
   // never-guard are exhaustive over. opts rides through verbatim: every pack

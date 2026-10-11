@@ -38,12 +38,6 @@ const stateHome = mkdtempSync(join(tmpdir(), 'openmcp-state-home-'));
 process.env.HUAWEICLOUD_HOME = stateHome;
 
 const OPEN_MCP_TOOLS = new Set([
-  'huaweicloud_search_apis',
-  'huaweicloud_list_products',
-  'huaweicloud_get_product',
-  'huaweicloud_list_apis',
-  'huaweicloud_get_api',
-  'huaweicloud_get_api_examples',
   'huaweicloud_gateway_list_tools',
   'huaweicloud_gateway_call',
   'huaweicloud_gateway_restart',
@@ -112,11 +106,11 @@ test(
   }),
 );
 
-test('pack meta discloses the huaweicloud-open-mcp pack with its nine tools', async () => {
+test('pack meta discloses the huaweicloud-open-mcp pack with its three tools', async () => {
   const info = await callTool('huaweicloud_pack_info', { pack: 'huaweicloud-open-mcp' });
   assert.equal(info.ok, true);
   assert.equal(info.enabled, true);
-  assert.equal(info.tools.length, 9);
+  assert.equal(info.tools.length, 3);
   for (const entry of info.tools) {
     assert.ok(OPEN_MCP_TOOLS.has(entry.name), `${entry.name} must be one of the pack's tools`);
     assert.equal(typeof entry.description, 'string');
@@ -124,8 +118,11 @@ test('pack meta discloses the huaweicloud-open-mcp pack with its nine tools', as
   assert.equal(_openMcpSidecarStats().spawns, 0, 'pack meta must not spawn the sidecar');
 });
 
-test('metadata proxy round-trips through the sidecar', async () => {
-  const result = await callTool('huaweicloud_search_apis', { query: 'ecs', limit: 5 });
+test('the generic call face round-trips discovery tools through the sidecar', async () => {
+  const result = await callTool('huaweicloud_gateway_call', {
+    tool: 'search_apis',
+    toolArgs: { query: 'ecs', limit: 5 },
+  });
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.tool, 'search_apis');
   assert.equal(result.arguments.query, 'ecs');
@@ -145,20 +142,20 @@ test('remote-style per-request server construction does not touch the sidecar', 
   const second = createDevkitMcpServer({ sessionId: 'remote-2' });
   await second.close();
   assert.equal(_openMcpSidecarStats().spawns, before.spawns, 'server construct/close must not spawn or kill');
-  const result = await callTool('huaweicloud_list_products', { keyword: 'ecs' });
+  const result = await callTool('huaweicloud_gateway_call', { tool: 'list_products', toolArgs: { keyword: 'ecs' } });
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.tool, 'list_products');
   assert.equal(_openMcpSidecarStats().spawns, before.spawns, 'the existing singleton serves later calls');
 });
 
 test('a dead sidecar is respawned by the next call, not awaited forever', async () => {
-  const first = await callTool('huaweicloud_get_product', { product: 'ECS' });
+  const first = await callTool('huaweicloud_gateway_call', { tool: 'get_product', toolArgs: { product: 'ECS' } });
   assert.equal(first.ok, true, JSON.stringify(first));
   const spawnsBefore = _openMcpSidecarStats().spawns;
   process.kill(first.pid, 'SIGKILL');
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(_openMcpSidecarStats().alive, false, 'the singleton must register the child death');
-  const second = await callTool('huaweicloud_get_product', { product: 'VPC' });
+  const second = await callTool('huaweicloud_gateway_call', { tool: 'get_product', toolArgs: { product: 'VPC' } });
   assert.equal(second.ok, true, JSON.stringify(second));
   assert.notEqual(second.pid, first.pid, 'the next call must be served by a fresh child');
   assert.equal(_openMcpSidecarStats().spawns, spawnsBefore + 1);
@@ -193,7 +190,7 @@ test('normalization covers structuredContent, isError, envelope failures, and ra
 // (reproduced by probe). The stdin error handler must turn it into a fast
 // {ok:false} instead.
 test('a call racing child death fails fast instead of crashing the server', async () => {
-  const first = await callTool('huaweicloud_get_product', { product: 'ECS' });
+  const first = await callTool('huaweicloud_gateway_call', { tool: 'get_product', toolArgs: { product: 'ECS' } });
   assert.equal(first.ok, true, JSON.stringify(first));
   process.kill(first.pid, 'SIGKILL');
   // Block the event loop so 'exit' cannot be delivered yet: the write below
@@ -213,7 +210,7 @@ test('a call racing child death fails fast instead of crashing the server', asyn
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   assert.ok(cleared, 'the singleton must clear once the child death is delivered');
-  const revived = await callTool('huaweicloud_get_product', { product: 'RDS' });
+  const revived = await callTool('huaweicloud_gateway_call', { tool: 'get_product', toolArgs: { product: 'RDS' } });
   assert.equal(revived.ok, true, JSON.stringify(revived));
 });
 
@@ -261,7 +258,7 @@ test('a tool call runs end to end through the uvx fallback', { skip: process.pla
   process.env.PATH = `/usr/bin:${binDir}`;
   try {
     await _resetOpenMcpSidecar();
-    const result = await callTool('huaweicloud_search_apis', { query: 'via-uvx' });
+    const result = await callTool('huaweicloud_gateway_call', { tool: 'search_apis', toolArgs: { query: 'via-uvx' } });
     assert.equal(result.ok, true, JSON.stringify(result));
     assert.equal(result.arguments.query, 'via-uvx');
     assert.equal(typeof result.pid, 'number');
@@ -375,7 +372,7 @@ test('huaweicloud_gateway_restart recycles a live child and spawns fresh when no
     assert.notEqual(result.pid, firstPid, 'the recycled child must be a new process');
 
     // The replacement actually serves proxy calls.
-    const probe = await callTool('huaweicloud_list_products', {});
+    const probe = await callTool('huaweicloud_gateway_call', { tool: 'list_products', toolArgs: {} });
     assert.equal(probe.ok, true, JSON.stringify(probe));
   } finally {
     await _resetOpenMcpSidecar();

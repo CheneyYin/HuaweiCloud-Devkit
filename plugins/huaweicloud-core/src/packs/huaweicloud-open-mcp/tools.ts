@@ -5,62 +5,24 @@ import { redactSecrets } from '../../safety-policy.ts';
 import { classify, GATEWAY_TOOL_VOCABULARY, resolveApprovalMode } from './approval.ts';
 import { callOpenMcpTool, listGatewayTools, openMcpSidecar, restartOpenMcpSidecar } from './sidecar.ts';
 
-// Nine tools over the huaweicloud-open-mcp gateway: six metadata proxies
-// (search_apis, list_products, get_product, list_apis, get_api,
-// get_api_examples — src/mcp_openapi/server.py), one lifecycle tool that
-// recycles the gateway child in-session, and two generic faces over the
-// child's full surface. The gateway is the authoritative validator of its
-// own tool inputs; these zod schemas only guard the boundary (required
-// identity fields plus passthrough), and the sidecar normalizes results to
-// {ok, tool, ...}.
+// Three tools over the huaweicloud-open-mcp gateway: the generic call
+// face (every gateway tool, discovery and execution alike), the live
+// surface listing, and one lifecycle tool that recycles the gateway child
+// in-session. The six first-class discovery proxies were deleted in favor
+// of the single call face: classify() in approval.ts is now the only path
+// to the sidecar's tools/call, and gateway_call's served description
+// (mirrored byte-identically in src/tools.ts TOOL_DEFINITIONS_LITERALS;
+// structure.test.ts pins both the lockstep and the readonly-name content)
+// is the zero-cost name-discovery path at the tools/list layer. The
+// gateway is the authoritative validator of its own tool inputs; the zod
+// schema here only guards the boundary, and the sidecar normalizes
+// results to {ok, tool, ...}.
 // Every gateway tool is reachable through huaweicloud_gateway_call on the
 // delegated approval face: approval.ts rules only the devkit floors
 // (secret operations, the protected state tree, manage_policy shape) and
 // forwards everything else to the gateway's own policy engine, whose
 // refusal reason teaches the consent flow (confirm with the user, grant
 // via manage_policy with an ephemeral scope, retry).
-
-// The gateway's pydantic ints reject null (verified: limit=null fails with
-// "Input should be a valid integer"), so unlike numericArg these stay
-// non-nullable; numeric strings pass through and coerce gateway-side.
-const gatewayInt = z.union([z.number(), z.string()]).optional();
-
-const searchApisSchema = z.looseObject({
-  query: z.string().describe('Entity keywords for the cross-product search, e.g. "弹性云服务器" or "database".'),
-  limit: gatewayInt.describe('Max candidates per product (default 8, max 20; -1 = all).'),
-  category: z.string().optional().describe('Optional product category filter.'),
-});
-
-const listProductsSchema = z.looseObject({
-  category: z.string().optional().describe('Optional category filter.'),
-  keyword: z.string().optional().describe('Search products by name when the task does not name one.'),
-});
-
-const getProductSchema = z.looseObject({
-  product: z.string().describe('Product short name, e.g. ECS, VPC, OBS (from search_apis or list_products).'),
-  include_sops: z.boolean().optional().describe('Include full SOP texts (default false: name+description index only).'),
-});
-
-const listApisSchema = z.looseObject({
-  product: z.string().describe('Product short name whose API catalog to list.'),
-  tag: z.string().optional().describe('Filter by tag (see tag_groups in the result).'),
-  search: z.string().optional().describe('Search within the product APIs by name.'),
-  limit: gatewayInt.describe('Page size (default 20).'),
-  offset: gatewayInt.describe('Page offset (default 0).'),
-  include_sops: z.boolean().optional().describe('Include full SOP texts per page (default false: index only).'),
-});
-
-const getApiSchema = z.looseObject({
-  product: z.string().describe('Product short name, e.g. ECS.'),
-  api: z.string().describe('API name, e.g. ListServersDetails.'),
-  region: z.string().optional().describe('Region for endpoint resolution; use the same region you will execute in.'),
-});
-
-const getApiExamplesSchema = z.looseObject({
-  product: z.string().describe('Product short name, e.g. ECS.'),
-  api: z.string().describe('API name, e.g. CreateServers.'),
-  region: z.string().optional().describe('Region; same semantics as get_api.'),
-});
 
 const gatewayRestartSchema = z.looseObject({});
 
@@ -70,25 +32,6 @@ const gatewayCallSchema = z.looseObject({
   tool: z.string().describe('Gateway tool name, e.g. execute_api, query_data (see huaweicloud_gateway_list_tools).'),
   toolArgs: z.record(z.string(), z.unknown()).optional().describe('Arguments object for the gateway tool.'),
 });
-
-async function handleSearchApis(args: Record<string, unknown>) {
-  return callOpenMcpTool('search_apis', args);
-}
-async function handleListProducts(args: Record<string, unknown>) {
-  return callOpenMcpTool('list_products', args);
-}
-async function handleGetProduct(args: Record<string, unknown>) {
-  return callOpenMcpTool('get_product', args);
-}
-async function handleListApis(args: Record<string, unknown>) {
-  return callOpenMcpTool('list_apis', args);
-}
-async function handleGetApi(args: Record<string, unknown>) {
-  return callOpenMcpTool('get_api', args);
-}
-async function handleGetApiExamples(args: Record<string, unknown>) {
-  return callOpenMcpTool('get_api_examples', args);
-}
 
 // In-process lifecycle only — no hcloud I/O, so no CLI-face approval
 // token (the auth_init class of state mutation, not the
@@ -173,48 +116,6 @@ async function handleGatewayCall(args: Record<string, unknown>) {
 
 export const HUAWEICLOUD_OPEN_MCP_TOOLS = [
   {
-    name: 'huaweicloud_search_apis',
-    description:
-      'Search the full Huawei Cloud API catalog (300+ products, 17,000+ APIs) by entity keywords when the intent does not name a product. Returns candidate products with representative APIs and match evidence. Step 0 of openapi discovery: search_apis → list_apis → get_api. Read-only; needs no credentials.',
-    schema: searchApisSchema,
-    handler: handleSearchApis,
-  },
-  {
-    name: 'huaweicloud_list_products',
-    description:
-      'List Huawei Cloud products with categories and API counts, optionally filtered by category or keyword. Use when the task domain is known but the product is not, then narrow with huaweicloud_list_apis. Read-only; needs no credentials.',
-    schema: listProductsSchema,
-    handler: handleListProducts,
-  },
-  {
-    name: 'huaweicloud_get_product',
-    description:
-      "Get one product's catalog entry (category, display name, whether it is a global-level service). Global-level services use a different auth model. Read-only; needs no credentials.",
-    schema: getProductSchema,
-    handler: handleGetProduct,
-  },
-  {
-    name: 'huaweicloud_list_apis',
-    description:
-      'List the API catalog of one product with tag_groups for narrowing; paginate with search/limit/offset. Read the chosen API with huaweicloud_get_api before doing anything with it. Read-only; needs no credentials.',
-    schema: listApisSchema,
-    handler: handleListApis,
-  },
-  {
-    name: 'huaweicloud_get_api',
-    description:
-      "Get one API's full documentation: method, path, parameter names/requiredness/types/enums, x-constraint preconditions, response schema, and the region-specific endpoint. Must-read before executing or hand-writing a call to that API. Read-only; needs no credentials.",
-    schema: getApiSchema,
-    handler: handleGetApi,
-  },
-  {
-    name: 'huaweicloud_get_api_examples',
-    description:
-      'Get the official request examples (x-request-examples) for one API to guide parameter construction. Read-only; needs no credentials.',
-    schema: getApiExamplesSchema,
-    handler: handleGetApiExamples,
-  },
-  {
     name: 'huaweicloud_gateway_list_tools',
     description:
       "List the open-mcp gateway child's live tool surface (names, descriptions, input schemas) as its tools/list reports. Use it to check gateway capabilities and drift from the devkit projection before generic calls. Read-only; needs no credentials.",
@@ -224,7 +125,7 @@ export const HUAWEICLOUD_OPEN_MCP_TOOLS = [
   {
     name: 'huaweicloud_gateway_call',
     description:
-      "Call one open-mcp gateway tool generically with tool and toolArgs. Read-only discovery tools pass through. execute_api, manage_policy, query_data, and transform_data are delegated to the gateway's own policy engine: the first call forwards immediately, and when the engine refuses, its reason names the grant options — confirm with the user in conversation, grant with manage_policy add using an ephemeral scope (once/session/temporary), then retry the call. Permanent grants are an operator policy-file edit (hot-reload). Denied outright, no grant path: secret operations, file targets inside devkit state, non-canonical manage_policy action/scope spellings, permanent-scope add, ttl_seconds on add or remove, remove with scope, and tool names outside the devkit's static vocabulary.",
+      "Call one open-mcp gateway tool generically with tool and toolArgs — the single face for every gateway tool. Read-only discovery (no credentials): search_apis (query; optional limit/category) finds products by entity keywords when none is named; list_products (optional category/keyword) and get_product (product) cover the product dimension (category, is_global); list_apis (product; optional tag/search/limit/offset) lists one product's API catalog with tag_groups; get_api (product, api; optional region) returns full API documentation — parameter types/enums, x-constraint preconditions, response schema, region endpoint — a must-read before any call; get_api_examples (product, api; optional region) returns official request examples. Discovery chain: search_apis → list_apis → get_api → get_api_examples. execute_api, manage_policy, query_data, and transform_data are delegated to the gateway's own policy engine: the first call forwards immediately, and when the engine refuses, its reason names the grant options — confirm with the user in conversation, grant with manage_policy add using an ephemeral scope (once/session/temporary), then retry the call. Permanent grants are an operator policy-file edit (hot-reload). Denied outright, no grant path: secret operations, file targets inside devkit state, non-canonical manage_policy action/scope spellings, permanent-scope add, ttl_seconds on add or remove, remove with scope, and tool names outside the devkit's static vocabulary.",
     schema: gatewayCallSchema,
     handler: handleGatewayCall,
   },
@@ -240,12 +141,6 @@ export const HUAWEICLOUD_OPEN_MCP_TOOLS = [
 export type HuaweicloudOpenMcpToolName = (typeof HUAWEICLOUD_OPEN_MCP_TOOLS)[number]['name'];
 
 export const HUAWEICLOUD_OPEN_MCP_TOOL_SCHEMAS: Readonly<Record<HuaweicloudOpenMcpToolName, LooseToolSchema>> = {
-  huaweicloud_search_apis: searchApisSchema,
-  huaweicloud_list_products: listProductsSchema,
-  huaweicloud_get_product: getProductSchema,
-  huaweicloud_list_apis: listApisSchema,
-  huaweicloud_get_api: getApiSchema,
-  huaweicloud_get_api_examples: getApiExamplesSchema,
   huaweicloud_gateway_list_tools: gatewayListToolsSchema,
   huaweicloud_gateway_call: gatewayCallSchema,
   huaweicloud_gateway_restart: gatewayRestartSchema,
@@ -254,12 +149,6 @@ export const HUAWEICLOUD_OPEN_MCP_TOOL_SCHEMAS: Readonly<Record<HuaweicloudOpenM
 export const HUAWEICLOUD_OPEN_MCP_TOOL_HANDLERS: Readonly<
   Record<HuaweicloudOpenMcpToolName, PackToolDefinition['handler']>
 > = {
-  huaweicloud_search_apis: handleSearchApis,
-  huaweicloud_list_products: handleListProducts,
-  huaweicloud_get_product: handleGetProduct,
-  huaweicloud_list_apis: handleListApis,
-  huaweicloud_get_api: handleGetApi,
-  huaweicloud_get_api_examples: handleGetApiExamples,
   huaweicloud_gateway_list_tools: handleGatewayListTools,
   huaweicloud_gateway_call: handleGatewayCall,
   huaweicloud_gateway_restart: handleGatewayRestart,

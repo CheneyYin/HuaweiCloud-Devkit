@@ -12,16 +12,18 @@ The KooCLI service catalog exposes ~70 services. The open-mcp gateway proxies th
 
 ## Discovery Chain
 
-1. `huaweicloud_search_apis` — entity keywords when the product is unknown ("弹性云服务器", "database"). Returns candidate products with representative APIs and match evidence.
-2. `huaweicloud_list_apis` — the product's catalog with tag_groups for narrowing; paginate with search/limit/offset.
-3. `huaweicloud_get_api` — the chosen API's full documentation: parameter requiredness/types/enums, x-constraint preconditions, response schema, region endpoint. Read this before any call.
-4. `huaweicloud_get_api_examples` — official request examples for parameter construction.
+Every gateway tool is called through `huaweicloud_gateway_call` with `tool` + `toolArgs`; the discovery names take top-level named args (`toolArgs.query`, `toolArgs.limit`, ...):
 
-`huaweicloud_list_products` and `huaweicloud_get_product` cover the product dimension (category, is_global — global services use a different auth model).
+1. `search_apis` — entity keywords when the product is unknown ("弹性云服务器", "database"). Returns candidate products with representative APIs and match evidence.
+2. `list_apis` — the product's catalog with tag_groups for narrowing; paginate with search/limit/offset.
+3. `get_api` — the chosen API's full documentation: parameter requiredness/types/enums, x-constraint preconditions, response schema, region endpoint. Read this before any call.
+4. `get_api_examples` — official request examples for parameter construction.
+
+`list_products` and `get_product` cover the product dimension (category, is_global — global services use a different auth model).
 
 All discovery tools are read-only, need no credentials, and pass straight through.
 
-## Generic Call Face
+## Delegated Approval Face
 
 `huaweicloud_gateway_list_tools` shows the live gateway tool surface (names, schemas, drift from the devkit projection). `huaweicloud_gateway_call` calls any gateway tool with `tool` + `toolArgs`:
 

@@ -67,18 +67,12 @@ export const PACK_OF = {
   huaweicloud_voucher_claim: 'voucher',
   huaweicloud_check_update: 'update',
   huaweicloud_upgrade: 'update',
-  huaweicloud_search_apis: 'huaweicloud-open-mcp',
-  huaweicloud_list_products: 'huaweicloud-open-mcp',
-  huaweicloud_get_product: 'huaweicloud-open-mcp',
-  huaweicloud_list_apis: 'huaweicloud-open-mcp',
-  huaweicloud_get_api: 'huaweicloud-open-mcp',
-  huaweicloud_get_api_examples: 'huaweicloud-open-mcp',
   huaweicloud_gateway_list_tools: 'huaweicloud-open-mcp',
   huaweicloud_gateway_call: 'huaweicloud-open-mcp',
   huaweicloud_gateway_restart: 'huaweicloud-open-mcp',
 } as const satisfies Record<ToolName, PackId>;
 
-// The 41 pack-owned tool names: every PACK_OF key whose owner is not core.
+// The 35 pack-owned tool names: every PACK_OF key whose owner is not core.
 // Derived from PACK_OF (the ownership truth) rather than hand-listed from the
 // per-pack XToolName unions, so moving a tool into a pack automatically adds
 // it here — and the PACK_TOOL_HANDLERS check below immediately demands its

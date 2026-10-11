@@ -115,7 +115,7 @@ test('pack_info schema output matches the tools/list rendering after stripping i
         compared++;
       }
     }
-    assert.equal(compared, 51, 'every registered tool must be compared');
+    assert.equal(compared, 45, 'every registered tool must be compared');
   } finally {
     await client.close();
     await server.close();

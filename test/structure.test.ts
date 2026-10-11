@@ -173,7 +173,7 @@ test('huawei-openapi skill teaches only vocabulary-table tools and the real para
 
   // Positive direction first: every vocabulary name is TAUGHT, bare or
   // with the devkit prefix (round-10: '_' is a word character, so the
-  // old \b alternation never matched inside huaweicloud_search_apis and
+  // old \b alternation never matched inside huaweicloud_gateway_call and
   // four discovery names went unchecked entirely).
   for (const name of gatewayTools) {
     assert.ok(
@@ -192,12 +192,6 @@ test('huawei-openapi skill teaches only vocabulary-table tools and the real para
     'search_apis',
     'tag_groups',
     'project_id',
-    'huaweicloud_search_apis',
-    'huaweicloud_list_products',
-    'huaweicloud_get_product',
-    'huaweicloud_list_apis',
-    'huaweicloud_get_api',
-    'huaweicloud_get_api_examples',
     'huaweicloud_gateway_list_tools',
     'huaweicloud_gateway_call',
     'huaweicloud_gateway_restart',
@@ -222,6 +216,28 @@ test('huawei-openapi skill teaches only vocabulary-table tools and the real para
       );
     }
   }
+
+  // The served gateway_call description is the surviving zero-cost
+  // name-discovery path at the tools/list layer (the six first-class
+  // discovery faces were deleted): it must carry every readonly name and
+  // teach the chain order, or an agent that skips the skill pays a
+  // gateway_list_tools call to learn what this description should have
+  // told it.
+  const gatewayCall = TOOL_DEFINITIONS.find((tool) => tool.name === 'huaweicloud_gateway_call');
+  assert.ok(gatewayCall, 'huaweicloud_gateway_call must exist in TOOL_DEFINITIONS');
+  for (const name of GATEWAY_TOOL_VOCABULARY.readonly) {
+    assert.ok(
+      gatewayCall.description.includes(name),
+      `the served gateway_call description must teach the readonly tool ${name}`,
+    );
+  }
+  const chainPositions = ['search_apis', 'list_apis', 'get_api'].map((name) => gatewayCall.description.indexOf(name));
+  assert.ok(
+    chainPositions.every((position) => position >= 0) &&
+      chainPositions[0] < chainPositions[1] &&
+      chainPositions[1] < chainPositions[2],
+    'the description teaches the discovery chain in order (search_apis → list_apis → get_api)',
+  );
 
   // The params contract (gateway server.py: path/query flatten into
   // params, body in params["body"]). Word boundary, not [^.]: the flat
@@ -982,7 +998,7 @@ test('update pack registers version-update tools; registry carries the central d
 test('seven packs register their tools; the central map dispatches them', () => {
   // Same contract as the update pack, asserted for the packs materialized
   // after P4: sandbox (11), auth (5), obs (2), voucher (2), discovery (3),
-  // huaweicloud-open-mcp (9), huaweicloud-cli (7) — 39 tools total. Their
+  // huaweicloud-open-mcp (3), huaweicloud-cli (7) — 33 tools total. Their
   // handlers reach callTool only through the PACK_TOOL_HANDLERS merge in
   // packs/registry.ts.
   const packs = [
@@ -991,7 +1007,7 @@ test('seven packs register their tools; the central map dispatches them', () => 
     { id: 'obs', tools: OBS_TOOLS, count: 2 },
     { id: 'voucher', tools: VOUCHER_TOOLS, count: 2 },
     { id: 'discovery', tools: DISCOVERY_TOOLS, count: 3 },
-    { id: 'huaweicloud-open-mcp', tools: HUAWEICLOUD_OPEN_MCP_TOOLS, count: 9 },
+    { id: 'huaweicloud-open-mcp', tools: HUAWEICLOUD_OPEN_MCP_TOOLS, count: 3 },
     { id: 'huaweicloud-cli', tools: HUAWEICLOUD_CLI_TOOLS, count: 7 },
   ];
   const tools = readSource(join('src', 'tools.ts'));
