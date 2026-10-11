@@ -11,10 +11,11 @@ process.env.HDKITSERVICE_ENDPOINT = 'https://example.test/hdkitservice/';
 // Every test in this file stubs global.fetch and asserts its envelopes:
 // the direct branch of hdkitRequest is the premise. Ambient proxy
 // configuration — either env spelling (the resolver reads
-// process.env.HTTPS_PROXY || process.env.https_proxy) or a developer's
-// proxy.json — routes the request through the undici dispatcher instead
-// and bypasses the stub entirely. Establish "no proxy" from every source
-// the resolver reads, for the whole file.
+// process.env.HTTPS_PROXY || process.env.https_proxy; the https_proxy
+// spelling routes these https:// endpoints) or a developer's proxy.json —
+// routes the request through the undici dispatcher instead and bypasses
+// the stub entirely. Establish "no proxy" from every source the resolver
+// reads, for the whole file.
 const PROXY_ENV_KEYS = ['HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy'] as const;
 const savedProxyEnv: Record<string, string | undefined> = {};
 for (const key of PROXY_ENV_KEYS) {

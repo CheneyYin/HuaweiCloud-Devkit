@@ -28,14 +28,13 @@
 // excluded); calls, not ms, are the decision metric.
 
 import { existsSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const asJson = process.argv.includes('--json');
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
-const gatewayBin =
-  process.env.OPENMCP_BIN || join(process.env.HOME || '/home/cheney', '.local/bin/huaweicloud-open-mcp');
+const gatewayBin = process.env.OPENMCP_BIN || join(homedir(), '.local/bin/huaweicloud-open-mcp');
 
 if (!existsSync(gatewayBin)) {
   console.error(
@@ -63,10 +62,11 @@ if (preflight.ok !== true) {
   process.exit(1);
 }
 
-// Each task is ONE gateway_call dispatch. needsDiscovery is declared per
-// task, not derived from the id string (round-10: a rename silently
-// changed the measured overhead) — post-consolidation every gateway tool
-// name is discovery-needing for an unskilled agent.
+// Each task is ONE gateway_call dispatch. Post-consolidation every
+// gateway tool name is discovery-needing for an unskilled agent, so the
+// harness lists once per session before the first dispatch and charges
+// the +1 there (round-10's per-task needsDiscovery field died with the
+// first-class faces it measured against).
 const TASKS = [
   {
     id: 'read-discovery',
@@ -108,11 +108,15 @@ for (const task of TASKS) {
   const started = process.hrtime.bigint();
   const final = await task.run();
   const ms = Number(process.hrtime.bigint() - started) / 1e6;
-  // ok = the FACE completed consent + forwarding. A gateway-side
-  // capability refusal (datafusion missing on this host) still proves the
-  // face reached the gateway; an ok:false carrying the gateway's own
-  // reason text is a reached-and-refused outcome.
-  const reached = final.ok === true || (final.ok === false && typeof final.reason === 'string');
+  // ok = the FACE reached the gateway. The wire envelope's `tool` field is
+  // set only by callOpenMcpTool after a proxied round trip (sidecar.ts),
+  // so it is the forwarding proof for every failure shape: the policy
+  // envelope ({ok:false, reason}), the protocol-level isError envelope
+  // ({ok:false, error} — a missing backend reports this way), and
+  // successes alike. Devkit-side floor denials carry classification:'deny'
+  // and no tool field, and spawn failures carry neither — both stay
+  // unreached, as they should.
+  const reached = final.ok === true || (final.ok === false && typeof final.tool === 'string');
   rows.push({ task: task.id, calls: 1 + listCalls, ms: Math.round(ms), ok: reached });
 }
 await _resetOpenMcpSidecar();

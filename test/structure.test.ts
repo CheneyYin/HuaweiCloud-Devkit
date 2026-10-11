@@ -173,8 +173,9 @@ test('huawei-openapi skill teaches only vocabulary-table tools and the real para
 
   // Positive direction first: every vocabulary name is TAUGHT, bare or
   // with the devkit prefix (round-10: '_' is a word character, so the
-  // old \b alternation never matched inside huaweicloud_gateway_call and
-  // four discovery names went unchecked entirely).
+  // old \b alternation never matched inside the then-existing
+  // huaweicloud_search_apis skill mention and four discovery names went
+  // unchecked entirely).
   for (const name of gatewayTools) {
     assert.ok(
       skill.includes(name) || skill.includes(`huaweicloud_${name}`),
@@ -189,7 +190,6 @@ test('huawei-openapi skill teaches only vocabulary-table tools and the real para
   // alternation of known names can only ever check itself (round-10's
   // circularity finding).
   const nonToolIdentifiers = new Set([
-    'search_apis',
     'tag_groups',
     'project_id',
     'huaweicloud_gateway_list_tools',
@@ -216,28 +216,6 @@ test('huawei-openapi skill teaches only vocabulary-table tools and the real para
       );
     }
   }
-
-  // The served gateway_call description is the surviving zero-cost
-  // name-discovery path at the tools/list layer (the six first-class
-  // discovery faces were deleted): it must carry every readonly name and
-  // teach the chain order, or an agent that skips the skill pays a
-  // gateway_list_tools call to learn what this description should have
-  // told it.
-  const gatewayCall = TOOL_DEFINITIONS.find((tool) => tool.name === 'huaweicloud_gateway_call');
-  assert.ok(gatewayCall, 'huaweicloud_gateway_call must exist in TOOL_DEFINITIONS');
-  for (const name of GATEWAY_TOOL_VOCABULARY.readonly) {
-    assert.ok(
-      gatewayCall.description.includes(name),
-      `the served gateway_call description must teach the readonly tool ${name}`,
-    );
-  }
-  const chainPositions = ['search_apis', 'list_apis', 'get_api'].map((name) => gatewayCall.description.indexOf(name));
-  assert.ok(
-    chainPositions.every((position) => position >= 0) &&
-      chainPositions[0] < chainPositions[1] &&
-      chainPositions[1] < chainPositions[2],
-    'the description teaches the discovery chain in order (search_apis → list_apis → get_api)',
-  );
 
   // The params contract (gateway server.py: path/query flatten into
   // params, body in params["body"]). Word boundary, not [^.]: the flat
@@ -275,6 +253,56 @@ test('huawei-openapi skill teaches only vocabulary-table tools and the real para
       );
     }
   }
+});
+
+// The served gateway_call description (the src/tools.ts copy that
+// tools/list actually serves; the pack copy is pinned byte-equal to it by
+// the pack-lockstep test below) is the surviving zero-cost name-discovery
+// path at the tools/list layer now that the six first-class discovery
+// faces are gone. Literal fragments, not bare substring names: 'get_api'
+// alone is satisfied by the 'get_api_examples' substring — the same
+// word-character blind spot round-10 recorded for \b alternations.
+test('the served gateway_call description teaches the readonly discovery surface', async () => {
+  const { GATEWAY_TOOL_VOCABULARY } =
+    await import('../plugins/huaweicloud-core/src/packs/huaweicloud-open-mcp/approval.ts');
+  const gatewayCall = TOOL_DEFINITIONS.find((tool) => tool.name === 'huaweicloud_gateway_call');
+  assert.ok(gatewayCall, 'huaweicloud_gateway_call must exist in TOOL_DEFINITIONS');
+  const description = gatewayCall.description;
+
+  // One literal teaching fragment per readonly tool: the name plus the
+  // opening of its parameter list. A dropped tool, a renamed tool, or a
+  // lost parameter list all fail here.
+  const fragments = [
+    'search_apis (query',
+    'list_products (optional',
+    'get_product (product',
+    'list_apis (product',
+    'get_api (product, api',
+    'get_api_examples (product, api',
+  ];
+  for (const fragment of fragments) {
+    assert.ok(
+      description.includes(fragment),
+      `the served gateway_call description must teach the literal fragment "${fragment}"`,
+    );
+  }
+  // The fragment set and the vocabulary table must not drift apart: a
+  // vocabulary rename with a stale fragment list (or vice versa) fails
+  // here rather than silently pinning the old names.
+  const fragmentNames = fragments.map((fragment) => fragment.slice(0, fragment.indexOf(' ')));
+  assert.deepEqual(
+    [...fragmentNames].sort((a, b) => a.localeCompare(b)),
+    [...GATEWAY_TOOL_VOCABULARY.readonly].sort((a, b) => a.localeCompare(b)),
+  );
+
+  // The chain sentence itself, not positions derived from indexOf: the
+  // round-10-style substring blind spot made the old positional check
+  // pass even with the standalone get_api entry deleted.
+  assert.match(
+    description,
+    /Discovery chain: search_apis → list_apis → get_api → get_api_examples/,
+    'the description teaches the discovery chain sentence verbatim',
+  );
 });
 
 function listSkillDirsAll(): string[] {

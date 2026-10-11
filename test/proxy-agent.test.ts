@@ -9,9 +9,10 @@ const { getProxyDispatcher, clearProxyDispatcherCache, PROXY_TLS_OPTIONS } =
 
 // The resolver reads BOTH spellings of each variable (proxy-config.ts:
 // process.env.HTTPS_PROXY || process.env.https_proxy), so a test premise
-// must clear both — an ambient lowercase http_proxy (the curl convention)
-// leaks through an uppercase-only cleanup and turned the no-proxy test
-// red on proxied developer machines.
+// must clear both — an ambient lowercase spelling (the curl convention;
+// https_proxy is the one that routes these https:// test targets) leaks
+// through an uppercase-only cleanup and turns the no-proxy test red on
+// proxied developer machines.
 const PROXY_ENV_KEYS = ['HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy'] as const;
 
 function pushProxyEnv() {
@@ -146,6 +147,52 @@ test(
 
       assert.ok(captured, 'expected ProxyAgent to be constructed from the lowercase spelling');
       assert.equal(captured.uri, 'http://lower.proxy:8080');
+    } finally {
+      restoreProxyEnv(saved);
+      if (savedHome === undefined) delete process.env.HUAWEICLOUD_HOME;
+      else process.env.HUAWEICLOUD_HOME = savedHome;
+      clearProxyDispatcherCache();
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'getProxyDispatcher reads the uppercase HTTPS_PROXY spelling alone',
+  { skip: typeof mock?.module !== 'function' },
+  async (t) => {
+    const saved = pushProxyEnv();
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'proxy-agent-test-'));
+    const savedHome = process.env.HUAWEICLOUD_HOME;
+    let captured = null;
+
+    t.mock.module('undici', {
+      namedExports: {
+        ProxyAgent: class {
+          constructor(options) {
+            captured = options;
+          }
+          dispatch() {}
+        },
+      },
+    });
+
+    try {
+      // Only the uppercase spelling, the CI/docker convention: the
+      // lowercase keys stay absent, so the primary read in the chain
+      // (HTTPS_PROXY || https_proxy) must resolve. A refactor that drops
+      // either half of the chain keeps the other tests green (both
+      // spellings set to the same value) — this pair of single-spelling
+      // pins is what fails it.
+      for (const key of PROXY_ENV_KEYS) delete process.env[key];
+      process.env.HTTPS_PROXY = 'http://upper.proxy:8080';
+      process.env.HUAWEICLOUD_HOME = tmpHome;
+      clearProxyDispatcherCache();
+
+      await getProxyDispatcher('https://devkit.huaweicloud.com/rest/developer/server/hdkitservice/');
+
+      assert.ok(captured, 'expected ProxyAgent to be constructed from the uppercase spelling');
+      assert.equal(captured.uri, 'http://upper.proxy:8080');
     } finally {
       restoreProxyEnv(saved);
       if (savedHome === undefined) delete process.env.HUAWEICLOUD_HOME;

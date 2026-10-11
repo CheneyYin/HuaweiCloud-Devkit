@@ -299,7 +299,7 @@ export type ObsToolName = (typeof OBS_TOOLS)[number]['name'];
 
 // Schema map keyed by tool name for src/tool-schemas.ts: TOOL_SCHEMAS spreads
 // it in place, keeping the satisfies Record<ToolName, LooseToolSchema>
-// completeness check over all 51 tools.
+// completeness check over every ToolName key.
 export const OBS_TOOL_SCHEMAS: Readonly<Record<ObsToolName, LooseToolSchema>> = {
   huaweicloud_setup_obs_config: setupObsConfigSchema,
   huaweicloud_obs_set_website_config: obsWebsiteConfigSchema,

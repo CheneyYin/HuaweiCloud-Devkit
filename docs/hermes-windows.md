@@ -53,7 +53,7 @@ def call_tool(name, args):
 result = call_tool("huaweicloud_sandbox_check_user", {})
 ```
 
-This bypasses the Hermes MCP transport layer entirely and calls the devkit's MCP server directly. All 35 tools are available through this method.
+This bypasses the Hermes MCP transport layer entirely and calls the devkit's MCP server directly. Every registered tool is available through this method.
 
 ## Report
 

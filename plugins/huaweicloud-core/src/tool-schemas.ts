@@ -76,37 +76,37 @@ const TOOL_SCHEMAS = {
   }),
   // The discovery pack owns its tool schemas (src/packs/discovery/tools.ts);
   // the spread keeps them in TOOL_SCHEMAS so the satisfies check below still
-  // covers all 46 ToolName keys.
+  // covers every ToolName key.
   ...DISCOVERY_TOOL_SCHEMAS,
   // The obs pack owns its tool schemas (src/packs/obs/tools.ts); the
   // spread keeps them in TOOL_SCHEMAS so the satisfies check below still
-  // covers all 46 ToolName keys.
+  // covers every ToolName key.
   ...OBS_TOOL_SCHEMAS,
   // The voucher pack owns its tool schemas (src/packs/voucher/tools.ts);
   // the spread keeps them in TOOL_SCHEMAS so the satisfies check below still
-  // covers all 46 ToolName keys.
+  // covers every ToolName key.
   ...VOUCHER_TOOL_SCHEMAS,
   // The auth pack owns its tool schemas (src/packs/auth/tools.ts); the
   // spread keeps them in TOOL_SCHEMAS so the satisfies check below still
-  // covers all 46 ToolName keys.
+  // covers every ToolName key.
   ...AUTH_TOOL_SCHEMAS,
   // The sandbox pack owns its tool schemas (src/packs/sandbox/tools.ts);
   // the spread keeps them in TOOL_SCHEMAS so the satisfies check below still
-  // covers all 46 ToolName keys.
+  // covers every ToolName key.
   ...SANDBOX_TOOL_SCHEMAS,
   // The update pack owns its tool schemas (src/packs/update/tools.ts); the
   // spread keeps them in TOOL_SCHEMAS so the satisfies check below still
-  // covers all 46 ToolName keys.
+  // covers every ToolName key.
   ...UPDATE_TOOL_SCHEMAS,
   // The huaweicloud-open-mcp pack owns its tool schemas
   // (src/packs/huaweicloud-open-mcp/tools.ts);
   // the spread keeps them in TOOL_SCHEMAS so the satisfies check below still
-  // covers all 46 ToolName keys.
+  // covers every ToolName key.
   ...HUAWEICLOUD_OPEN_MCP_TOOL_SCHEMAS,
   // The huaweicloud-cli pack owns its tool schemas (the seven KooCLI
   // execution tools sunk from core; src/packs/huaweicloud-cli/tools.ts);
   // the spread keeps them in TOOL_SCHEMAS so the satisfies check below still
-  // covers all 46 ToolName keys.
+  // covers every ToolName key.
   ...HUAWEICLOUD_CLI_TOOL_SCHEMAS,
   huaweicloud_list_packs: z.looseObject({}),
   huaweicloud_pack_info: z.looseObject({

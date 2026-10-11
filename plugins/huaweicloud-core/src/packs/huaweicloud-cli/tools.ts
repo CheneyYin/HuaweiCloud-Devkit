@@ -312,7 +312,7 @@ export type HuaweicloudCliToolName = (typeof HUAWEICLOUD_CLI_TOOLS)[number]['nam
 
 // Schema map keyed by tool name for src/tool-schemas.ts: TOOL_SCHEMAS spreads
 // it in place, keeping the satisfies Record<ToolName, LooseToolSchema>
-// completeness check over all 51 tools.
+// completeness check over every ToolName key.
 export const HUAWEICLOUD_CLI_TOOL_SCHEMAS: Readonly<Record<HuaweicloudCliToolName, LooseToolSchema>> = {
   huaweicloud_check_cli: checkCliSchema,
   huaweicloud_plan_cli_command: planCliCommandSchema,
