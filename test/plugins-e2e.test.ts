@@ -176,7 +176,7 @@ const REQUIRED_TOOLS = [
 ];
 
 // Optional-pack tools, grouped by pack id (same grouping as
-// packs/registry.ts). Together with REQUIRED_TOOLS these cover all 46 tools.
+// packs/registry.ts). Together with REQUIRED_TOOLS these cover every registered tool.
 const PER_PACK_TOOLS = {
   'huaweicloud-cli': [
     'huaweicloud_check_cli',

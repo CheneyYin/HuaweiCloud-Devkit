@@ -403,6 +403,17 @@ function redactErrorText(text: string): string {
 // payloads cross this boundary redacted (gateway output can echo secret
 // arguments); error paths redact too — refusal prose survives verbatim,
 // only credential-shaped values are rewritten.
+//
+// forwarded marks a COMPLETED proxied tools/call: only the returns past
+// sidecar.call's await carry it, never the catch. The catch covers every
+// non-round-trip failure (timeout, mid-call child death, spawn/handshake
+// failure) and one answered-but-rejected shape: a JSON-RPC error reply
+// (Unknown tool) rejects in onLine and lands here too — conservative, and
+// unreachable for the eval's vocabulary-pinned tasks. Callers
+// distinguishing "the gateway answered" from "the call never completed"
+// (the eval harness's reached verdict, drift reporting) must read this
+// flag, not infer it from tool presence — the catch also sets tool, so
+// tool alone proves only that callOpenMcpTool was entered.
 export async function callOpenMcpTool(
   name: string,
   args: Record<string, unknown>,
@@ -420,13 +431,14 @@ export async function callOpenMcpTool(
         .map((part) => part.text || '')
         .join('\n')
         .trim();
-      return { ok: false, tool: name, error: redactErrorText(text) || 'open-mcp gateway tool error' };
+      return { ok: false, forwarded: true, tool: name, error: redactErrorText(text) || 'open-mcp gateway tool error' };
     }
     if (raw.structuredContent && typeof raw.structuredContent === 'object') {
       // Redact the payload object itself, not the ok/tool envelope keys the
       // devkit layers on top of the spread.
       return withErrorKey({
         ok: true,
+        forwarded: true,
         tool: name,
         ...(redactSecrets(raw.structuredContent) as Record<string, unknown>),
       });
@@ -438,11 +450,12 @@ export async function callOpenMcpTool(
     try {
       return withErrorKey({
         ok: true,
+        forwarded: true,
         tool: name,
         ...(redactSecrets(JSON.parse(text)) as Record<string, unknown>),
       });
     } catch {
-      return { ok: true, tool: name, raw: redactSecrets(text) };
+      return { ok: true, forwarded: true, tool: name, raw: redactSecrets(text) };
     }
   } catch (error) {
     const message = redactSecrets(error instanceof Error ? error.message : String(error));

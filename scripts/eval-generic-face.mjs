@@ -108,15 +108,14 @@ for (const task of TASKS) {
   const started = process.hrtime.bigint();
   const final = await task.run();
   const ms = Number(process.hrtime.bigint() - started) / 1e6;
-  // ok = the FACE reached the gateway. The wire envelope's `tool` field is
-  // set only by callOpenMcpTool after a proxied round trip (sidecar.ts),
-  // so it is the forwarding proof for every failure shape: the policy
-  // envelope ({ok:false, reason}), the protocol-level isError envelope
-  // ({ok:false, error} — a missing backend reports this way), and
-  // successes alike. Devkit-side floor denials carry classification:'deny'
-  // and no tool field, and spawn failures carry neither — both stay
-  // unreached, as they should.
-  const reached = final.ok === true || (final.ok === false && typeof final.tool === 'string');
+  // ok = the call COMPLETED a proxied round trip. callOpenMcpTool sets
+  // forwarded:true only on returns past the tools/call await — successes,
+  // the policy envelope ({ok:false, reason}), and protocol-level isError
+  // refusals (a missing backend reports this way) alike. Timeouts,
+  // mid-call child death, and spawn/handshake failures land in the catch
+  // and carry no forwarded, so a hung or crashed gateway prints NO, never
+  // a false green.
+  const reached = final.forwarded === true;
   rows.push({ task: task.id, calls: 1 + listCalls, ms: Math.round(ms), ok: reached });
 }
 await _resetOpenMcpSidecar();

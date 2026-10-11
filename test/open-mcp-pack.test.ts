@@ -184,6 +184,32 @@ test('normalization covers structuredContent, isError, envelope failures, and ra
   assert.equal(rawText.raw, 'not json at all');
 });
 
+// forwarded is the completed-round-trip fact: the eval harness's reached
+// verdict reads it, so the three round-trip branches must carry it and the
+// catch shapes must not. tool presence proves nothing here — the catch
+// sets it too (third-round review: the tool-presence inference marked
+// timeouts and mid-call child death as reached).
+test('forwarded marks completed round trips and nothing else', async () => {
+  // Round-trip shapes: success, protocol-level isError, policy envelope.
+  const ok = await callOpenMcpTool('search_apis', { query: 'ecs' });
+  assert.equal(ok.forwarded, true, 'a successful call is forwarded');
+  const isError = await callOpenMcpTool('failing_tool', {});
+  assert.equal(isError.forwarded, true, 'an isError answer completed the round trip');
+  const envelope = await callOpenMcpTool('envelope_fail_tool', {});
+  assert.equal(envelope.forwarded, true, 'a policy refusal envelope completed the round trip');
+
+  // Timeout: the request never completed — no forwarded, tool still set.
+  // FAKE_SLOW_MS makes the fixture's answer slower than the caller's
+  // 200ms bound, so the rejection comes from sidecar.request's timer.
+  await withGatewayEnv({ FAKE_SLOW_MS: '2000' }, async () => {
+    const timedOut = await callOpenMcpTool('search_apis', { query: 'slow' }, 200);
+    assert.equal(timedOut.ok, false, 'the timeout rejects');
+    assert.match(String(timedOut.error), /timed out/);
+    assert.equal(timedOut.tool, 'search_apis', 'the catch still names the tool');
+    assert.notEqual(timedOut.forwarded, true, 'a timed-out call is NOT forwarded');
+  });
+});
+
 // Regression for the EPIPE crash: a call whose write lands between the
 // child's OS-level death and Node's 'exit' delivery used to raise an
 // unhandled 'error' on the stdin socket and take down the whole server

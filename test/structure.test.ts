@@ -270,13 +270,15 @@ test('the served gateway_call description teaches the readonly discovery surface
   const description = gatewayCall.description;
 
   // One literal teaching fragment per readonly tool: the name plus the
-  // opening of its parameter list. A dropped tool, a renamed tool, or a
-  // lost parameter list all fail here.
+  // opening of its parameter list, carried far enough to pin the
+  // load-bearing parameters (include_sops — dropped once during
+  // absorption and undiscoverable anywhere else, so the fragments own it
+  // now). A dropped tool, a renamed tool, or a lost parameter fails here.
   const fragments = [
     'search_apis (query',
     'list_products (optional',
-    'get_product (product',
-    'list_apis (product',
+    'get_product (product; optional include_sops',
+    'list_apis (product; optional tag/search/limit/offset/include_sops',
     'get_api (product, api',
     'get_api_examples (product, api',
   ];
@@ -289,7 +291,7 @@ test('the served gateway_call description teaches the readonly discovery surface
   // The fragment set and the vocabulary table must not drift apart: a
   // vocabulary rename with a stale fragment list (or vice versa) fails
   // here rather than silently pinning the old names.
-  const fragmentNames = fragments.map((fragment) => fragment.slice(0, fragment.indexOf(' ')));
+  const fragmentNames = fragments.map((fragment) => fragment.split(' ')[0]);
   assert.deepEqual(
     [...fragmentNames].sort((a, b) => a.localeCompare(b)),
     [...GATEWAY_TOOL_VOCABULARY.readonly].sort((a, b) => a.localeCompare(b)),
@@ -1026,9 +1028,8 @@ test('update pack registers version-update tools; registry carries the central d
 test('seven packs register their tools; the central map dispatches them', () => {
   // Same contract as the update pack, asserted for the packs materialized
   // after P4: sandbox (11), auth (5), obs (2), voucher (2), discovery (3),
-  // huaweicloud-open-mcp (3), huaweicloud-cli (7) — 33 tools total. Their
-  // handlers reach callTool only through the PACK_TOOL_HANDLERS merge in
-  // packs/registry.ts.
+  // huaweicloud-open-mcp (3), huaweicloud-cli (7). Their handlers reach
+  // callTool only through the PACK_TOOL_HANDLERS merge in packs/registry.ts.
   const packs = [
     { id: 'sandbox', tools: SANDBOX_TOOLS, count: 11 },
     { id: 'auth', tools: AUTH_TOOLS, count: 5 },

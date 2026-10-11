@@ -72,7 +72,7 @@ export const PACK_OF = {
   huaweicloud_gateway_restart: 'huaweicloud-open-mcp',
 } as const satisfies Record<ToolName, PackId>;
 
-// The 35 pack-owned tool names: every PACK_OF key whose owner is not core.
+// The pack-owned tool names: every PACK_OF key whose owner is not core.
 // Derived from PACK_OF (the ownership truth) rather than hand-listed from the
 // per-pack XToolName unions, so moving a tool into a pack automatically adds
 // it here — and the PACK_TOOL_HANDLERS check below immediately demands its

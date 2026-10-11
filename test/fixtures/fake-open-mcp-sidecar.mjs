@@ -24,6 +24,9 @@
 //                              gateway's envelope-failure shape otherwise.
 //   FAKE_HIDE_TOOLS=a,b        removes those names from tools/list and the
 //                              callable set (drift-degrade tests).
+//   FAKE_SLOW_MS=<ms>          delays every tools/call answer by <ms> so a
+//                              short caller timeout lands in sidecar.request's
+//                              timer (the forwarded:false catch path).
 const CORE_TOOLS = [
   'search_apis',
   'list_products',
@@ -262,209 +265,219 @@ function handleLine(line) {
       },
     });
   } else if (request.method === 'tools/call') {
-    const name = request.params?.name;
-    if (typeof name !== 'string' || !gatewayToolNames().includes(name)) {
-      send({ jsonrpc: '2.0', id: request.id, error: { code: -32602, message: `Unknown tool: ${name}` } });
+    // FAKE_SLOW_MS delays every tools/call answer by <ms> so a short caller
+    // timeout lands in sidecar.request's timer (the forwarded:false catch
+    // path) instead of a fast fake answer.
+    const slowMs = Number(process.env.FAKE_SLOW_MS ?? '0');
+    if (Number.isFinite(slowMs) && slowMs > 0) {
+      setTimeout(() => handleToolsCall(request), slowMs);
       return;
     }
-    if (name === 'failing_tool') {
-      // With arguments present, echo them as key=value text: validation
-      // failures echo the offending input, and the error-path redaction
-      // tests pin that shape. Empty arguments keep the fixed string so the
-      // long-standing normalization assertions stay byte-identical.
-      const args = request.params?.arguments ?? {};
-      const entries = Object.entries(args);
-      const text =
-        entries.length === 0
-          ? 'fake gateway tool failure'
-          : `fake gateway tool failure ${entries.map(([key, value]) => `${key}=${typeof value === 'string' ? value : JSON.stringify(value)}`).join(' ')}`;
-      send({
-        jsonrpc: '2.0',
-        id: request.id,
-        result: { content: [{ type: 'text', text }], isError: true },
-      });
-      return;
-    }
-    if (name === 'envelope_fail_tool') {
-      send({
-        jsonrpc: '2.0',
-        id: request.id,
-        result: {
-          content: [{ type: 'text', text: JSON.stringify({ ok: false, reason: 'fake envelope failure' }) }],
-          structuredContent: { ok: false, reason: 'fake envelope failure', tool: name },
-          isError: false,
-        },
-      });
-      return;
-    }
-    if (name === 'raw_text_tool') {
-      send({
-        jsonrpc: '2.0',
-        id: request.id,
-        result: { content: [{ type: 'text', text: 'not json at all' }], isError: false },
-      });
-      return;
-    }
-    if (name === 'json_error_tool') {
-      // Validation failures echo the offending input as JSON inside an
-      // isError envelope: the strongest redaction shape (the object walk
-      // applies only when the text parses).
-      send({
-        jsonrpc: '2.0',
-        id: request.id,
-        result: {
-          content: [
-            { type: 'text', text: JSON.stringify({ error: 'validation failed', ...request.params?.arguments }) },
-          ],
-          isError: true,
-        },
-      });
-      return;
-    }
-    if (name === 'manage_policy') {
-      const args = request.params?.arguments ?? {};
-      const line = String(args.line ?? '');
-      // Exact-string action dispatch: the real gateway compares the raw
-      // value (round-7 probe: 'ADD' is a guaranteed gateway rejection),
-      // and the devkit face refuses non-canonical input outright — the
-      // fixture never normalizes what it receives.
-      const action = args.action;
-      // Deliberate unmodeled divergences, probe-observed: real add
-      // rejections echo {action, scope, policy} next to reason (that
-      // shape is unreachable through gateway_call, the F1 floor fires
-      // first), and real remove successes echo the removed rule's scope
-      // (no test reads it).
-      if (action === 'list') {
-        // The real gateway's list shape (source-verified): the rules array
-        // carries the overlay AND the file's semantic lines (scope
-        // 'permanent'), overlay entries first (the gateway's own order,
-        // re-probed 2026-10-11 against v0.2.0a4 — also this fixture's
-        // overlay-first match precedence), and the 'policy' text field
-        // carries the raw file including comments.
-        const fileText = readFileText();
-        const fileRows = fileLines().map((fileLine) => ({ line: fileLine, scope: 'permanent', expires_in: null }));
-        respond(request.id, {
-          ok: true,
-          tool: name,
-          action: 'list',
-          policy: fileText,
-          rules: [...rules.map((rule) => ({ line: rule.line, scope: rule.scope, expires_in: null })), ...fileRows],
-        });
-      } else if (action === 'add') {
-        // The real gateway's add validates the line through parse_policy
-        // and rejects unparseable ones outright (round-8 mirror). A line is
-        // addable iff its semantic key is a product RULE. The scope check
-        // is exact-string against the vocabulary: v0.2.0a4 rejects ' ONCE '
-        // at add (re-probed 2026-10-11; round-5's never-burning ' ONCE '
-        // grant was the pre-a4 gateway), so only canonical spellings are
-        // ever stored — and burned — and the raw spelling echoes in the
-        // rejection, never normalized.
-        const key = semanticKeyOf(line);
-        if (key.startsWith('empty:') || key.startsWith('unparseable:') || key.startsWith('server:')) {
-          respond(request.id, { ok: false, reason: `规则格式非法：${line}` });
-          return;
-        }
-        // A non-string scope stores scope:null, a grant that survives
-        // every execute; only the devkit floor stops it on the real face.
-        const scope = typeof args.scope === 'string' ? args.scope : null;
-        if (scope !== null && !SCOPE_VOCAB.has(scope)) {
-          respond(request.id, { ok: false, reason: `未知 scope: ${scope}（可选 ${[...SCOPE_VOCAB].join('/')}）` });
-          return;
-        }
-        rules.push({ line, scope });
-        // Success responses may carry fixture fields beyond the gateway's
-        // envelope (tool, line, removed) — they serve test assertions.
-        respond(request.id, { ok: true, tool: name, action: 'add', line, scope, policy: readFileText() });
-      } else if (action === 'remove') {
-        // The real gateway's remove envelope (source-verified rounds 7-8):
-        // a scoped remove is rejected outright ("remove 不接受
-        // scope/ttl_seconds 参数"); an unparseable line is rejected
-        // ("规则格式非法"); a valid line that matches nothing is rejected
-        // ("未找到匹配的规则"); a hit removes by SEMANTIC key, overlay
-        // first then file, so spacing/case variants do not protect a rule.
-        if (
-          (args.scope !== undefined && args.scope !== null) ||
-          (args.ttl_seconds !== undefined && args.ttl_seconds !== null)
-        ) {
-          respond(request.id, {
-            ok: false,
-            reason: 'remove 不接受 scope/ttl_seconds 参数（跨层匹配：先会话/临时后文件，首个语义命中移除）',
-          });
-          return;
-        }
-        const wanted = semanticKeyOf(line);
-        if (wanted.startsWith('empty:') || wanted.startsWith('unparseable:') || wanted.startsWith('server:')) {
-          respond(request.id, { ok: false, reason: `规则格式非法：${line}` });
-          return;
-        }
-        let removed = false;
-        // Overlay first, then the file layer — the real gateway's
-        // cross-layer remove order.
-        const index = rules.findIndex((rule) => semanticKeyOf(rule.line) === wanted);
-        if (index >= 0) {
-          rules.splice(index, 1);
-          removed = true;
-        } else {
-          const file = fileLines();
-          const fileIndex = file.findIndex((fileLine) => semanticKeyOf(fileLine) === wanted);
-          if (fileIndex >= 0) {
-            file.splice(fileIndex, 1);
-            writeFileLines(file);
-            removed = true;
-          }
-        }
-        if (!removed) {
-          respond(request.id, { ok: false, reason: `未找到匹配的规则：${line}` });
-          return;
-        }
-        respond(request.id, { ok: true, tool: name, action: 'remove', line, removed: true, policy: readFileText() });
-      } else {
-        respond(request.id, { ok: false, reason: `unsupported manage_policy action: ${args.action}` });
-      }
-      return;
-    }
-    if (name === 'execute_api') {
-      const args = request.params?.arguments ?? {};
-      const product = String(args.product ?? '');
-      const api = String(args.api ?? '');
-      const rule = matchingRule(product, api) ?? matchingFileRule(product, api);
-      if (!rule || rule.grants !== true) {
-        // The probed v0.2.0a4 refusal reason in full: the tail teaches the
-        // consent path (the manage_policy grant shapes) inline.
-        respond(request.id, {
-          ok: false,
-          reason: `safety policy 拒绝执行 ${product}:${api}；如确需执行，请先经对话/交互式问询（如 question 工具）向用户确认后，调用 manage_policy 授予（line 支持传数组一次批量授予）：api=最小规则 '${product}:${api}=allow'（一次性）/api_session=最小规则 '${product}:${api}=allow'（会话内）/product=产品级规则 '${product}:*=allow'（会话内）/readonly=产品级只读规则集 '${product}:*List*=allow/${product}:*Show*=allow/${product}:*Get*=allow/${product}:*Query*=allow'（会话内，重启即失）/none=不授予`,
-        });
-        return;
-      }
-      // Only canonical spellings are ever stored (the add-side vocab
-      // check rejects the rest), so the burn condition firing on 'once'
-      // is vacuous-safe; the hitIndex splice is what aims the burn at
-      // the granting rule instead of the last one.
-      if (rule.scope === 'once' && rule.hitIndex !== undefined) rules.splice(rule.hitIndex, 1);
-      respond(request.id, { ok: true, tool: name, executed: { product, api }, pid: process.pid });
-      return;
-    }
-    // query_data / transform_data fall through to the echo below, which
-    // carries their arguments (transform_data's out.path included).
-    const payload = {
-      ok: true,
-      tool: name,
-      arguments: request.params?.arguments ?? {},
-      pid: process.pid,
-      // Spawn-introspection echo: tests assert the sidecar's pin-unless-env
-      // arg policy (was --mode passed? was --policy passed?) and the scratch
-      // cwd through the round trip, without any extra protocol surface.
-      argv: process.argv,
-      cwd: process.cwd(),
-      env: {
-        HUAWEICLOUD_MCP_MODE: process.env.HUAWEICLOUD_MCP_MODE ?? null,
-        HUAWEICLOUD_MCP_POLICY_FILE: process.env.HUAWEICLOUD_MCP_POLICY_FILE ?? null,
-        HUAWEICLOUD_MCP_AUDIT_FILE: process.env.HUAWEICLOUD_MCP_AUDIT_FILE ?? null,
-      },
-    };
-    respond(request.id, payload);
+    handleToolsCall(request);
   } else if (request.id !== undefined) {
     send({ jsonrpc: '2.0', id: request.id, error: { code: -32601, message: `Method not found: ${request.method}` } });
   }
+}
+
+function handleToolsCall(request) {
+  const name = request.params?.name;
+  if (typeof name !== 'string' || !gatewayToolNames().includes(name)) {
+    send({ jsonrpc: '2.0', id: request.id, error: { code: -32602, message: `Unknown tool: ${name}` } });
+    return;
+  }
+  if (name === 'failing_tool') {
+    // With arguments present, echo them as key=value text: validation
+    // failures echo the offending input, and the error-path redaction
+    // tests pin that shape. Empty arguments keep the fixed string so the
+    // long-standing normalization assertions stay byte-identical.
+    const args = request.params?.arguments ?? {};
+    const entries = Object.entries(args);
+    const text =
+      entries.length === 0
+        ? 'fake gateway tool failure'
+        : `fake gateway tool failure ${entries.map(([key, value]) => `${key}=${typeof value === 'string' ? value : JSON.stringify(value)}`).join(' ')}`;
+    send({
+      jsonrpc: '2.0',
+      id: request.id,
+      result: { content: [{ type: 'text', text }], isError: true },
+    });
+    return;
+  }
+  if (name === 'envelope_fail_tool') {
+    send({
+      jsonrpc: '2.0',
+      id: request.id,
+      result: {
+        content: [{ type: 'text', text: JSON.stringify({ ok: false, reason: 'fake envelope failure' }) }],
+        structuredContent: { ok: false, reason: 'fake envelope failure', tool: name },
+        isError: false,
+      },
+    });
+    return;
+  }
+  if (name === 'raw_text_tool') {
+    send({
+      jsonrpc: '2.0',
+      id: request.id,
+      result: { content: [{ type: 'text', text: 'not json at all' }], isError: false },
+    });
+    return;
+  }
+  if (name === 'json_error_tool') {
+    // Validation failures echo the offending input as JSON inside an
+    // isError envelope: the strongest redaction shape (the object walk
+    // applies only when the text parses).
+    send({
+      jsonrpc: '2.0',
+      id: request.id,
+      result: {
+        content: [{ type: 'text', text: JSON.stringify({ error: 'validation failed', ...request.params?.arguments }) }],
+        isError: true,
+      },
+    });
+    return;
+  }
+  if (name === 'manage_policy') {
+    const args = request.params?.arguments ?? {};
+    const line = String(args.line ?? '');
+    // Exact-string action dispatch: the real gateway compares the raw
+    // value (round-7 probe: 'ADD' is a guaranteed gateway rejection),
+    // and the devkit face refuses non-canonical input outright — the
+    // fixture never normalizes what it receives.
+    const action = args.action;
+    // Deliberate unmodeled divergences, probe-observed: real add
+    // rejections echo {action, scope, policy} next to reason (that
+    // shape is unreachable through gateway_call, the F1 floor fires
+    // first), and real remove successes echo the removed rule's scope
+    // (no test reads it).
+    if (action === 'list') {
+      // The real gateway's list shape (source-verified): the rules array
+      // carries the overlay AND the file's semantic lines (scope
+      // 'permanent'), overlay entries first (the gateway's own order,
+      // re-probed 2026-10-11 against v0.2.0a4 — also this fixture's
+      // overlay-first match precedence), and the 'policy' text field
+      // carries the raw file including comments.
+      const fileText = readFileText();
+      const fileRows = fileLines().map((fileLine) => ({ line: fileLine, scope: 'permanent', expires_in: null }));
+      respond(request.id, {
+        ok: true,
+        tool: name,
+        action: 'list',
+        policy: fileText,
+        rules: [...rules.map((rule) => ({ line: rule.line, scope: rule.scope, expires_in: null })), ...fileRows],
+      });
+    } else if (action === 'add') {
+      // The real gateway's add validates the line through parse_policy
+      // and rejects unparseable ones outright (round-8 mirror). A line is
+      // addable iff its semantic key is a product RULE. The scope check
+      // is exact-string against the vocabulary: v0.2.0a4 rejects ' ONCE '
+      // at add (re-probed 2026-10-11; round-5's never-burning ' ONCE '
+      // grant was the pre-a4 gateway), so only canonical spellings are
+      // ever stored — and burned — and the raw spelling echoes in the
+      // rejection, never normalized.
+      const key = semanticKeyOf(line);
+      if (key.startsWith('empty:') || key.startsWith('unparseable:') || key.startsWith('server:')) {
+        respond(request.id, { ok: false, reason: `规则格式非法：${line}` });
+        return;
+      }
+      // A non-string scope stores scope:null, a grant that survives
+      // every execute; only the devkit floor stops it on the real face.
+      const scope = typeof args.scope === 'string' ? args.scope : null;
+      if (scope !== null && !SCOPE_VOCAB.has(scope)) {
+        respond(request.id, { ok: false, reason: `未知 scope: ${scope}（可选 ${[...SCOPE_VOCAB].join('/')}）` });
+        return;
+      }
+      rules.push({ line, scope });
+      // Success responses may carry fixture fields beyond the gateway's
+      // envelope (tool, line, removed) — they serve test assertions.
+      respond(request.id, { ok: true, tool: name, action: 'add', line, scope, policy: readFileText() });
+    } else if (action === 'remove') {
+      // The real gateway's remove envelope (source-verified rounds 7-8):
+      // a scoped remove is rejected outright ("remove 不接受
+      // scope/ttl_seconds 参数"); an unparseable line is rejected
+      // ("规则格式非法"); a valid line that matches nothing is rejected
+      // ("未找到匹配的规则"); a hit removes by SEMANTIC key, overlay
+      // first then file, so spacing/case variants do not protect a rule.
+      if (
+        (args.scope !== undefined && args.scope !== null) ||
+        (args.ttl_seconds !== undefined && args.ttl_seconds !== null)
+      ) {
+        respond(request.id, {
+          ok: false,
+          reason: 'remove 不接受 scope/ttl_seconds 参数（跨层匹配：先会话/临时后文件，首个语义命中移除）',
+        });
+        return;
+      }
+      const wanted = semanticKeyOf(line);
+      if (wanted.startsWith('empty:') || wanted.startsWith('unparseable:') || wanted.startsWith('server:')) {
+        respond(request.id, { ok: false, reason: `规则格式非法：${line}` });
+        return;
+      }
+      let removed = false;
+      // Overlay first, then the file layer — the real gateway's
+      // cross-layer remove order.
+      const index = rules.findIndex((rule) => semanticKeyOf(rule.line) === wanted);
+      if (index >= 0) {
+        rules.splice(index, 1);
+        removed = true;
+      } else {
+        const file = fileLines();
+        const fileIndex = file.findIndex((fileLine) => semanticKeyOf(fileLine) === wanted);
+        if (fileIndex >= 0) {
+          file.splice(fileIndex, 1);
+          writeFileLines(file);
+          removed = true;
+        }
+      }
+      if (!removed) {
+        respond(request.id, { ok: false, reason: `未找到匹配的规则：${line}` });
+        return;
+      }
+      respond(request.id, { ok: true, tool: name, action: 'remove', line, removed: true, policy: readFileText() });
+    } else {
+      respond(request.id, { ok: false, reason: `unsupported manage_policy action: ${args.action}` });
+    }
+    return;
+  }
+  if (name === 'execute_api') {
+    const args = request.params?.arguments ?? {};
+    const product = String(args.product ?? '');
+    const api = String(args.api ?? '');
+    const rule = matchingRule(product, api) ?? matchingFileRule(product, api);
+    if (!rule || rule.grants !== true) {
+      // The probed v0.2.0a4 refusal reason in full: the tail teaches the
+      // consent path (the manage_policy grant shapes) inline.
+      respond(request.id, {
+        ok: false,
+        reason: `safety policy 拒绝执行 ${product}:${api}；如确需执行，请先经对话/交互式问询（如 question 工具）向用户确认后，调用 manage_policy 授予（line 支持传数组一次批量授予）：api=最小规则 '${product}:${api}=allow'（一次性）/api_session=最小规则 '${product}:${api}=allow'（会话内）/product=产品级规则 '${product}:*=allow'（会话内）/readonly=产品级只读规则集 '${product}:*List*=allow/${product}:*Show*=allow/${product}:*Get*=allow/${product}:*Query*=allow'（会话内，重启即失）/none=不授予`,
+      });
+      return;
+    }
+    // Only canonical spellings are ever stored (the add-side vocab
+    // check rejects the rest), so the burn condition firing on 'once'
+    // is vacuous-safe; the hitIndex splice is what aims the burn at
+    // the granting rule instead of the last one.
+    if (rule.scope === 'once' && rule.hitIndex !== undefined) rules.splice(rule.hitIndex, 1);
+    respond(request.id, { ok: true, tool: name, executed: { product, api }, pid: process.pid });
+    return;
+  }
+  // query_data / transform_data fall through to the echo below, which
+  // carries their arguments (transform_data's out.path included).
+  const payload = {
+    ok: true,
+    tool: name,
+    arguments: request.params?.arguments ?? {},
+    pid: process.pid,
+    // Spawn-introspection echo: tests assert the sidecar's pin-unless-env
+    // arg policy (was --mode passed? was --policy passed?) and the scratch
+    // cwd through the round trip, without any extra protocol surface.
+    argv: process.argv,
+    cwd: process.cwd(),
+    env: {
+      HUAWEICLOUD_MCP_MODE: process.env.HUAWEICLOUD_MCP_MODE ?? null,
+      HUAWEICLOUD_MCP_POLICY_FILE: process.env.HUAWEICLOUD_MCP_POLICY_FILE ?? null,
+      HUAWEICLOUD_MCP_AUDIT_FILE: process.env.HUAWEICLOUD_MCP_AUDIT_FILE ?? null,
+    },
+  };
+  respond(request.id, payload);
 }

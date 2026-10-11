@@ -112,8 +112,8 @@ export function createDevkitMcpServer({ sessionId, runtimePacks = false }: Devki
   // (fail-fast exit on a bogus DEVKIT_PACKS), the stateless remote re-reads
   // env on every request, so both transports share one code path with no
   // transport branching. Unknown pack ids throw here; core is always in the
-  // set, so its 11 tools (8 + the two pack meta tools + packs_configure) are
-  // never filtered.
+  // set, so its tools (the base face plus the two pack meta tools and
+  // packs_configure) are never filtered.
   const server = new McpServer({ name: 'huaweicloud-devkit', version: pkgVersion });
   const registered = new Map<ToolName, RegisteredTool>();
 

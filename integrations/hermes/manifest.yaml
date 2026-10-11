@@ -34,7 +34,7 @@ post_install: |
   Huawei Cloud DevKit installed successfully!
 
   What was set up:
-    • MCP tools (42 tools for CLI, auth, sandbox, safety, skills) → config.yaml
+    • MCP tools (every registered tool of the devkit server) → config.yaml
     • Safety hooks (pre_tool_call terminal guard) → config.yaml
     • Safety policy + skills tree (server data) → ~/.hermes/huaweicloud-plugins/
 
