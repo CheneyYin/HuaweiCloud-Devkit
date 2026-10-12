@@ -4510,6 +4510,26 @@ async function provisionPackBinaries(): Promise<void> {
   });
 }
 
+// Every agent whose installer ships the server payload (dist + safety +
+// skills + undici + .installed marker) into a plugin dir. Doctor's payload
+// checks (MCP server, undici, safety policy, skills tree, restart markers)
+// and update's willPlacePayload all derive from this one table, so a target
+// cannot appear in one check and miss another — the atomcode undici miss
+// and the openclaw-wide miss were both this drift class. Labels follow the
+// doctor spellings ('Hermes Agent', not AGENT_LABELS' 'Hermes').
+const PAYLOAD_TARGETS = [
+  { id: 'opencode', label: 'OpenCode', dir: opencodePluginsDir },
+  { id: 'codex-desktop', label: 'Codex Desktop', dir: codexDesktopPluginsDir },
+  { id: 'codearts', label: 'CodeArts', dir: codeartsPluginsDir },
+  { id: 'codearts-work', label: 'CodeArts Work', dir: codeartsWorkPluginsDir },
+  { id: 'workbuddy', label: 'WorkBuddy', dir: workbuddyPluginsDir },
+  { id: 'dsh', label: 'DSH', dir: dshPluginsDir },
+  { id: 'officeace', label: 'OfficeAce', dir: officeacePluginsDir },
+  { id: 'hermes', label: 'Hermes Agent', dir: hermesPluginsDir },
+  { id: 'openclaw', label: 'OpenClaw', dir: openclawPluginsDir },
+  { id: 'atomcode', label: 'AtomCode', dir: atomcodePluginsDir },
+] as const;
+
 async function cmdDoctor(): Promise<void> {
   console.log(BANNER);
   console.log('HuaweiCloud DevKit Doctor\n');
@@ -4531,75 +4551,22 @@ async function cmdDoctor(): Promise<void> {
   // Node.js
   check('Node.js >= 22', Number(process.versions.node.split('.')[0]) >= 22, 'Run: nvm install 22 && nvm use 22');
 
-  // MCP server — check OpenCode, Codex Desktop, CodeArts, WorkBuddy, and DSH paths
-  const opencodePluginDir = opencodePluginsDir();
-  const codexPluginDir = codexDesktopPluginsDir();
-  const codeartsPluginDir = codeartsPluginsDir();
-  const codeartsWorkPluginDir = codeartsWorkPluginsDir();
-  const workbuddyPluginDir = workbuddyPluginsDir();
-  const dshPluginDir = dshPluginsDir();
-  const officeacePluginDir = officeacePluginsDir();
-  const hermesPluginDir = hermesPluginsDir();
-  const atomcodePluginDir = atomcodePluginsDir();
-  const mcpOk =
-    mcpServerInstalled(opencodePluginDir) ||
-    mcpServerInstalled(codexPluginDir) ||
-    mcpServerInstalled(codeartsPluginDir) ||
-    mcpServerInstalled(codeartsWorkPluginDir) ||
-    mcpServerInstalled(workbuddyPluginDir) ||
-    mcpServerInstalled(dshPluginDir) ||
-    mcpServerInstalled(officeacePluginDir) ||
-    mcpServerInstalled(hermesPluginDir) ||
-    mcpServerInstalled(atomcodePluginDir);
-  const mcpTarget = mcpServerInstalled(opencodePluginDir)
-    ? 'OpenCode'
-    : mcpServerInstalled(codexPluginDir)
-      ? 'Codex Desktop'
-      : mcpServerInstalled(codeartsPluginDir)
-        ? 'CodeArts'
-        : mcpServerInstalled(codeartsWorkPluginDir)
-          ? 'CodeArts Work'
-          : mcpServerInstalled(workbuddyPluginDir)
-            ? 'WorkBuddy'
-            : mcpServerInstalled(dshPluginDir)
-              ? 'DSH'
-              : mcpServerInstalled(officeacePluginDir)
-                ? 'OfficeAce'
-                : mcpServerInstalled(hermesPluginDir)
-                  ? 'Hermes Agent'
-                  : mcpServerInstalled(atomcodePluginDir)
-                    ? 'AtomCode'
-                    : '';
+  // MCP server — derived from PAYLOAD_TARGETS (one membership table for
+  // every payload check in this doctor run).
+  const payloadDirs = PAYLOAD_TARGETS.map((target) => target.dir());
+  const installedPayload = PAYLOAD_TARGETS.find((target) => mcpServerInstalled(target.dir()));
+  const mcpOk = installedPayload !== undefined;
+  const mcpTarget = installedPayload ? installedPayload.label : '';
   check('MCP server installed', mcpOk, 'Run: npx huaweicloud-devkit install');
 
   if (mcpOk) {
     check(`MCP server can start (${mcpTarget})`, true, '');
   }
 
-  const undiciPluginDirs = [
-    opencodePluginDir,
-    codexPluginDir,
-    codeartsPluginDir,
-    codeartsWorkPluginDir,
-    workbuddyPluginDir,
-    dshPluginDir,
-    officeacePluginDir,
-    hermesPluginDir,
-    atomcodePluginDir,
-  ];
-  const undiciOk = undiciPluginDirs.some((d) => existsSync(join(d, 'node_modules', 'undici')));
+  const undiciOk = payloadDirs.some((d) => existsSync(join(d, 'node_modules', 'undici')));
   check('Runtime deps (undici) installed', undiciOk, 'Run: npx huaweicloud-devkit install');
 
-  const safetyOk =
-    existsSync(join(opencodePluginDir, 'safety', 'policy.json')) ||
-    existsSync(join(codexPluginDir, 'safety', 'policy.json')) ||
-    existsSync(join(codeartsPluginDir, 'safety', 'policy.json')) ||
-    existsSync(join(codeartsWorkPluginDir, 'safety', 'policy.json')) ||
-    existsSync(join(workbuddyPluginDir, 'safety', 'policy.json')) ||
-    existsSync(join(dshPluginDir, 'safety', 'policy.json')) ||
-    existsSync(join(officeacePluginDir, 'safety', 'policy.json')) ||
-    existsSync(join(hermesPluginDir, 'safety', 'policy.json')) ||
-    existsSync(join(atomcodePluginDir, 'safety', 'policy.json'));
+  const safetyOk = payloadDirs.some((d) => existsSync(join(d, 'safety', 'policy.json')));
   check('Safety policy installed', safetyOk, 'Run: npx huaweicloud-devkit install');
 
   const hookConfigPath = join(PLUGIN_ROOT, 'hooks', 'hooks.json');
@@ -4714,6 +4681,20 @@ async function cmdDoctor(): Promise<void> {
       } catch {}
     }
   }
+  if (!mcpConfigured) {
+    // OpenClaw's .mcp.json is written by the same writeMcpServersFile the
+    // codex-desktop flow uses (mcpServers key).
+    const openclawCfg = join(openclawPluginsDir(), '.mcp.json');
+    if (existsSync(openclawCfg)) {
+      try {
+        const cfg = asRecord(JSON.parse(readFileSync(openclawCfg, 'utf8')));
+        if (cfg.mcpServers && asRecord(cfg.mcpServers)['huaweicloud-devkit']) {
+          mcpConfigured = true;
+          mcpCfgTarget = 'OpenClaw';
+        }
+      } catch {}
+    }
+  }
   check(
     'MCP configured',
     mcpConfigured,
@@ -4786,21 +4767,10 @@ async function cmdDoctor(): Promise<void> {
   // Skills are server data disclosed over MCP: the health signal is the
   // tree sitting in an installed plugin dir, never agent-native dirs. The
   // tree check is decoupled from the bundled server (the Hermes clone flow
-  // --skip-mcp-server ships skills without dist), includes OpenClaw, and
-  // accepts the running package root when the DSH npm-in-profile patch is
-  // configured (that layout resolves skills from the package root).
-  const skillsTreeDirs = [
-    opencodePluginDir,
-    codexPluginDir,
-    codeartsPluginDir,
-    codeartsWorkPluginDir,
-    workbuddyPluginDir,
-    dshPluginDir,
-    officeacePluginDir,
-    hermesPluginDir,
-    atomcodePluginDir,
-    openclawPluginsDir(),
-  ];
+  // --skip-mcp-server ships skills without dist), and accepts the running
+  // package root when the DSH npm-in-profile patch is configured (that
+  // layout resolves skills from the package root).
+  const skillsTreeDirs = [...payloadDirs];
   if (dshPatchConfigured()) skillsTreeDirs.push(join(PLUGIN_ROOT, 'skills'));
   const skillsTreeOk = skillsTreeDirs.some((dir) => serverSkillCount(dir) >= 6);
   check('Skills tree (server data, MCP-disclosed)', skillsTreeOk, 'Run: npx huaweicloud-devkit install');
@@ -4916,22 +4886,12 @@ async function cmdDoctor(): Promise<void> {
     console.log('\n\x1b[32mAll checks passed.\x1b[0m You can now describe your Huawei Cloud task');
   }
 
-  // Detect "installed but not restarted" — check all supported agents
-  const installedMarkers = [
-    { path: join(opencodePluginsDir(), '.installed'), name: 'OpenCode' },
-    { path: join(codexDesktopPluginsDir(), '.installed'), name: 'Codex Desktop' },
-    { path: join(workbuddyPluginsDir(), '.installed'), name: 'WorkBuddy' },
-    { path: join(codeartsPluginsDir(), '.installed'), name: 'CodeArts' },
-    { path: join(codeartsWorkPluginsDir(), '.installed'), name: 'CodeArts Work' },
-    { path: join(dshPluginsDir(), '.installed'), name: 'DSH' },
-    { path: join(hermesPluginsDir(), '.installed'), name: 'Hermes Agent' },
-    { path: join(officeacePluginsDir(), '.installed'), name: 'OfficeAce' },
-    { path: join(atomcodePluginsDir(), '.installed'), name: 'AtomCode' },
-  ];
-  for (const marker of installedMarkers) {
-    if (existsSync(marker.path)) {
+  // Detect "installed but not restarted" — every payload target's marker,
+  // derived from the same table as the checks above.
+  for (const target of PAYLOAD_TARGETS) {
+    if (existsSync(join(target.dir(), '.installed'))) {
       console.log(`\n\x1b[1m\x1b[31m╔══════════════════════════════════════════╗`);
-      console.log(`\x1b[1m\x1b[31m║  请重启 ${marker.name}！MCP 工具尚未激活     ║`);
+      console.log(`\x1b[1m\x1b[31m║  请重启 ${target.label}！MCP 工具尚未激活     ║`);
       console.log(`\x1b[1m\x1b[31m║  关闭当前会话 → 重新打开即可             ║`);
       console.log(`\x1b[1m\x1b[31m╚══════════════════════════════════════════╝\x1b[0m`);
       break;
@@ -4951,20 +4911,7 @@ async function cmdUpdate(): Promise<void> {
   // purge harmlessly.
   const markerDir = installMarkerDirForTarget(target);
   const willPlacePayload =
-    target === 'all'
-      ? [
-          opencodePluginsDir(),
-          codexDesktopPluginsDir(),
-          codeartsPluginsDir(),
-          codeartsWorkPluginsDir(),
-          workbuddyPluginsDir(),
-          dshPluginsDir(),
-          officeacePluginsDir(),
-          hermesPluginsDir(),
-          openclawPluginsDir(),
-          atomcodePluginsDir(),
-        ].some((dir) => mcpServerInstalled(dir))
-      : markerDir !== null && mcpServerInstalled(markerDir);
+    target === 'all' ? PAYLOAD_TARGETS.some((t) => mcpServerInstalled(t.dir())) : markerDir !== null && mcpServerInstalled(markerDir);
   if (willPlacePayload) {
     const purged = purgeStaleNativeSkills();
     if (purged > 0)
