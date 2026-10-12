@@ -194,7 +194,7 @@ const TOOL_DEFINITIONS_LITERALS = [
   {
     name: 'huaweicloud_sandbox_upload_project',
     description:
-      'Package a local project directory and upload it to a sandbox workspace via HTTP tunnel. Falls back to base64 chunking if tunnel fails. Creates a tar.gz archive, uploads it, and extracts it on the sandbox by default.',
+      'Package a local project directory and upload it to a sandbox workspace via HTTP tunnel. Creates a tar.gz archive, uploads it, and extracts it on the sandbox by default.',
   },
   {
     name: 'huaweicloud_sandbox_deploy_nginx',
