@@ -1,14 +1,19 @@
 import { existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 
+import { resolveHcloudCommand } from '../hcloud-probe.ts';
+
 function hcloudCommand(args: string[]): { file: string; args: string[] } {
-  const bin = process.env.HCLOUD_BIN || 'hcloud';
+  // The shared resolution chain (guarded HCLOUD_BIN tier, candidates, PATH)
+  // so project-id resolution agrees with check_cli and the executor on
+  // which binary runs.
+  const { executable, argsPrefix } = resolveHcloudCommand();
   // Test doubles (and exotic setups) may point HCLOUD_BIN at a Node script;
   // those must be launched through node instead of the shell.
-  if (/\.(mjs|cjs|js)$/i.test(bin) && existsSync(bin)) {
-    return { file: process.execPath, args: [bin, ...args] };
+  if (/\.(mjs|cjs|js)$/i.test(executable) && existsSync(executable)) {
+    return { file: process.execPath, args: [executable, ...argsPrefix, ...args] };
   }
-  return { file: bin, args };
+  return { file: executable, args: [...argsPrefix, ...args] };
 }
 
 function runHcloud(args: string[], timeoutMs: number = 20000): ReturnType<typeof spawnSync> {

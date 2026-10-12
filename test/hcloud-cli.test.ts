@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import test from 'node:test';
+
+const isWin = process.platform === 'win32';
 
 import {
   consumeApprovalToken,
@@ -431,6 +433,42 @@ test('runHcloud appends STS args to executed command when runtime token is set',
     assert.ok(parsed.args.some((a) => a.startsWith('--cli-secret-key=')));
     clearRuntimeCredentials();
   });
+});
+
+test('per-call env cannot bypass binary resolution with a stale HCLOUD_BIN', { skip: isWin }, async () => {
+  const home = fixtureDir('huaweicloud-toolkit-stale-home-');
+  const binDir = join(home, 'bin');
+  mkdirSync(binDir, { recursive: true });
+  const fake = join(binDir, 'hcloud');
+  writeFileSync(
+    fake,
+    '#!/usr/bin/env node\nconsole.log(JSON.stringify({ ok: true, args: process.argv.slice(2) }));\n',
+    'utf8',
+  );
+  chmodSync(fake, 0o755);
+  // HOME redirected and the fake named `hcloud` on a prepended PATH so the
+  // candidate tier cannot answer with a machine's real install.
+  const savedPath = process.env.PATH;
+  const savedBin = process.env.HCLOUD_BIN;
+  const savedHome = process.env.HOME;
+  process.env.PATH = `${binDir}${delimiter}${savedPath || ''}`;
+  delete process.env.HCLOUD_BIN;
+  process.env.HOME = home;
+  try {
+    const result = await runHcloud(['VPC', 'ListVpcs'], {
+      env: { HCLOUD_BIN: join(binDir, 'no-such-binary') },
+      maxRetries: 0,
+    });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    const parsed = JSON.parse(result.stdout);
+    assert.deepEqual(parsed.args.slice(0, 2), ['VPC', 'ListVpcs'], 'the PATH fake answered');
+  } finally {
+    process.env.PATH = savedPath;
+    if (savedBin === undefined) delete process.env.HCLOUD_BIN;
+    else process.env.HCLOUD_BIN = savedBin;
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+  }
 });
 
 test('runHcloud does NOT inject STS args for long-lived creds (no token)', async () => {

@@ -5309,7 +5309,10 @@ function configureHcloud(credentials: { ak: unknown; sk: unknown; region?: unkno
   code: number | null;
   error: string;
 } {
-  const hcloudBin = findHcloudBin() || process.env.HCLOUD_BIN || 'hcloud';
+  // findHcloudBin already honors a valid HCLOUD_BIN through the guarded
+  // shared chain; a raw env fallback here would resurrect the stale-override
+  // divergence the chain exists to prevent.
+  const hcloudBin = findHcloudBin() || 'hcloud';
   const args = [
     'configure',
     'set',
