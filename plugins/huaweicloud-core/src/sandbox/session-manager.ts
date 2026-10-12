@@ -1,4 +1,4 @@
-import { spawn, execFile } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createConnection as netConnect } from 'node:net';
 import {
@@ -112,13 +112,6 @@ interface WsExecModule {
 interface TunnelSession {
   mux: HwlinkMultiplexer;
   close: () => void;
-}
-
-interface NodeExecResult {
-  error?: string;
-  data?: string;
-  exitCode: number;
-  [key: string]: unknown;
 }
 
 interface UploadTunnelResponse {
@@ -257,49 +250,6 @@ function setWorkspaceId(id: string | null): void {
   // Node coerces env assignments to strings (`null` -> "null"); String() keeps
   // that behavior while satisfying the typed ProcessEnv setter.
   process.env.HW_WORKSPACE_ID = String(id);
-}
-
-function resolveEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env };
-  env.PATH = `${env.HOME || '/root'}/.huawei/bin:${env.PATH || ''}`;
-  return env;
-}
-
-async function runNodeExec(args: string[], timeoutMs = 30000): Promise<NodeExecResult> {
-  const env = resolveEnv();
-  return new Promise<NodeExecResult>((resolve) => {
-    const proc = spawn('node', args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    proc.stdout.on('data', (d: Buffer) => {
-      stdout += d.toString();
-    });
-    proc.stderr.on('data', (d: Buffer) => {
-      stderr += d.toString();
-    });
-
-    const timer = setTimeout(() => {
-      proc.kill();
-      resolve({ error: 'timed out', exitCode: 124 });
-    }, timeoutMs);
-
-    proc.on('close', (code) => {
-      clearTimeout(timer);
-      const out = stdout.trim();
-      if (out) {
-        try {
-          const parsed: unknown = JSON.parse(out);
-          resolve({ ...asRecord(parsed), exitCode: code || 0 });
-          return;
-        } catch {}
-      }
-      if (code && code !== 0 && !out) {
-        resolve({ error: stderr.trim() || `exit code ${code}`, exitCode: code });
-        return;
-      }
-      resolve({ data: out, exitCode: code || 0 });
-    });
-  });
 }
 
 const sessions = new Map<string, HwlinkTerminalSession>();
@@ -1394,4 +1344,4 @@ export async function closeAllSessions(): Promise<void> {
   }
 }
 
-export { getCurrentWorkspaceId, setWorkspaceId, runNodeExec };
+export { getCurrentWorkspaceId, setWorkspaceId };
