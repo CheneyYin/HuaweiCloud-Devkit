@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -9,6 +9,7 @@ import {
   createApprovalToken,
   hashArgs,
 } from '../plugins/huaweicloud-core/src/lib/approval-tokens.ts';
+import { fixtureDir } from './fixture-dir.ts';
 
 // The round-2 hardening of the CLI face's approval store: canonical
 // hashing (agent re-serialization cannot change a token's hash) and the
@@ -17,7 +18,7 @@ import {
 function withAuthHome(fn: () => void | Promise<unknown>): () => Promise<void> {
   return async () => {
     const previous = process.env.HUAWEICLOUD_HOME;
-    const home = mkdtempSync(join(tmpdir(), 'approval-home-'));
+    const home = fixtureDir('approval-home-');
     process.env.HUAWEICLOUD_HOME = home;
     try {
       await fn();

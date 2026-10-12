@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
@@ -17,9 +16,10 @@ import {
 } from '../plugins/huaweicloud-core/src/hcloud-cli.ts';
 import { clearRuntimeCredentials, setRuntimeCredentials } from '../plugins/huaweicloud-core/src/auth/credentials.ts';
 import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
+import { fixtureDir } from './fixture-dir.ts';
 
 async function withTempAuthHome(fn) {
-  const home = mkdtempSync(join(tmpdir(), 'huaweicloud-toolkit-auth-'));
+  const home = fixtureDir('huaweicloud-toolkit-auth-');
   const previous = {
     HUAWEICLOUD_HOME: process.env.HUAWEICLOUD_HOME,
     HCLOUD_CONFIG_PATH: process.env.HCLOUD_CONFIG_PATH,
@@ -47,14 +47,14 @@ async function withTempAuthHome(fn) {
 }
 
 function fakeHcloudScript(source) {
-  const dir = mkdtempSync(join(tmpdir(), 'huaweicloud-toolkit-'));
+  const dir = fixtureDir('huaweicloud-toolkit-');
   const script = join(dir, 'fake-hcloud.mjs');
   writeFileSync(script, source, 'utf8');
   return script;
 }
 
 function fakeHcloudExecutable(source) {
-  const dir = mkdtempSync(join(tmpdir(), 'huaweicloud-toolkit-bin-'));
+  const dir = fixtureDir('huaweicloud-toolkit-bin-');
   const script = join(dir, 'fake-hcloud');
   writeFileSync(script, `#!/usr/bin/env node\n${source}`, 'utf8');
   chmodSync(script, 0o755);
@@ -62,7 +62,7 @@ function fakeHcloudExecutable(source) {
 }
 
 function withMetaRepo(files) {
-  const dir = mkdtempSync(join(tmpdir(), 'huaweicloud-toolkit-meta-'));
+  const dir = fixtureDir('huaweicloud-toolkit-meta-');
   for (const [name, items] of Object.entries(files)) {
     writeFileSync(join(dir, name), JSON.stringify({ items }));
   }
@@ -138,7 +138,7 @@ test('approval token survives a fresh file read (cross-process) and expires by T
 });
 
 test('runHcloud retries transient network errors and reports retry count', async () => {
-  const stateFile = join(mkdtempSync(join(tmpdir(), 'huaweicloud-toolkit-state-')), 'count.txt');
+  const stateFile = join(fixtureDir('huaweicloud-toolkit-state-'), 'count.txt');
   const script = fakeHcloudScript(`
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 const stateFile = ${JSON.stringify(stateFile)};
@@ -175,7 +175,7 @@ test('runHcloud returns a timeout result instead of hanging', async () => {
 });
 
 test('runHcloud respects cwd parameter', async () => {
-  const cwdDir = mkdtempSync(join(tmpdir(), 'huaweicloud-toolkit-cwd-'));
+  const cwdDir = fixtureDir('huaweicloud-toolkit-cwd-');
   writeFileSync(join(cwdDir, 'test.txt'), 'works', 'utf8');
   const script = fakeHcloudScript(`
 import { readFileSync } from 'node:fs';
@@ -287,13 +287,13 @@ test(
   'koocli lang G4: approved plan end-to-end does NOT mutate the approved command',
   { skip: process.platform === 'win32' },
   async () => {
-    const home = mkdtempSync(join(tmpdir(), 'appr-home-'));
+    const home = fixtureDir('appr-home-');
     const metaRepo = join(home, '.hcloud', 'metaRepo');
     mkdirSync(metaRepo, { recursive: true });
     writeFileSync(join(metaRepo, 'services_cn.json'), JSON.stringify({ items: [{ Service: { Text: 'BSS' } }] }));
     writeFileSync(join(metaRepo, 'services_en.json'), JSON.stringify({ items: [{ Service: { Text: 'ECS' } }] }));
 
-    const binDir = mkdtempSync(join(tmpdir(), 'appr-bin-'));
+    const binDir = fixtureDir('appr-bin-');
     const logFile = join(binDir, 'calls.txt');
     const fake = fakeHcloudExecutable(`
 import { appendFileSync } from 'node:fs';

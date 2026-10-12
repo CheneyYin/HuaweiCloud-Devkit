@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import test from 'node:test';
@@ -11,6 +11,7 @@ import {
   packStateDir,
   protectedTreeRoots,
 } from '../plugins/huaweicloud-core/src/lib/pack-state.ts';
+import { fixtureDir } from './fixture-dir.ts';
 
 // The pack state space and the protected-tree guard: one resolver for the
 // devkit config tree, idempotent provisioning with per-pass permission
@@ -19,7 +20,7 @@ import {
 // prefix check.
 
 function tempHome(): string {
-  return mkdtempSync(join(tmpdir(), 'pack-state-home-'));
+  return fixtureDir('pack-state-home-');
 }
 
 test('huaweiConfigBase honors HUAWEICLOUD_HOME over the platform home', () => {
@@ -134,7 +135,7 @@ test('dotdot composition through a planted symlink is denied (kernel-order resol
   if (process.platform === 'win32') return; // symlink creation needs privileges there
   const home = tempHome();
   const env = { HUAWEICLOUD_HOME: home };
-  const scratch = mkdtempSync(join(tmpdir(), 'pack-state-scratch-'));
+  const scratch = fixtureDir('pack-state-scratch-');
 
   // The round-3 attack shape: path.resolve() collapses 'link/..' lexically
   // to the scratch dir, but the kernel resolves '..' AFTER the symlink
@@ -169,7 +170,7 @@ test('planted symlinks resolve through to their targets in both directions', () 
   if (process.platform === 'win32') return; // symlink creation needs privileges there
   const home = tempHome();
   const env = { HUAWEICLOUD_HOME: home };
-  const scratch = mkdtempSync(join(tmpdir(), 'pack-state-scratch-'));
+  const scratch = fixtureDir('pack-state-scratch-');
 
   // Outside link pointing IN: the classic round-2 plant. Writing through it
   // modifies the protected file, so it must be denied.
@@ -195,7 +196,7 @@ test('planted symlinks resolve through to their targets in both directions', () 
 test('dangling symlinks fail closed: unresolvable writes are protected', () => {
   if (process.platform === 'win32') return;
   const home = tempHome();
-  const scratch = mkdtempSync(join(tmpdir(), 'pack-state-scratch-'));
+  const scratch = fixtureDir('pack-state-scratch-');
   const dangling = join(scratch, 'dangling-link');
   symlinkSync(join(home, '.config', 'huaweicloud', 'approvals.json'), dangling); // target does not exist
 

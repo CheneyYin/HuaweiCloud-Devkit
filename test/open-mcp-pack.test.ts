@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -22,6 +22,7 @@ import {
   GATEWAY_TOOL_VOCABULARY,
   resolveApprovalMode,
 } from '../plugins/huaweicloud-core/src/packs/huaweicloud-open-mcp/approval.ts';
+import { fixtureDir } from './fixture-dir.ts';
 
 // The five huaweicloud-open-mcp pack lifecycle invariants from the pack-system decision
 // record, driven through the real dispatch surfaces with a fake gateway
@@ -34,7 +35,7 @@ process.env.OPENMCP_BIN = fakeSidecar;
 
 // The sidecar's lazy spawn now provisions the policy base; pin the state
 // home so tests never write into the real user config tree.
-const stateHome = mkdtempSync(join(tmpdir(), 'openmcp-state-home-'));
+const stateHome = fixtureDir('openmcp-state-home-');
 process.env.HUAWEICLOUD_HOME = stateHome;
 
 const OPEN_MCP_TOOLS = new Set([
@@ -248,8 +249,8 @@ test('gateway resolution prefers OPENMCP_BIN, then disk, then uvx', () => {
   assert.equal(direct.command, fakeSidecar);
   assert.deepEqual(direct.argsPrefix, []);
 
-  const home = mkdtempSync(join(tmpdir(), 'openmcp-res-home-'));
-  const binDir = mkdtempSync(join(tmpdir(), 'openmcp-res-bin-'));
+  const home = fixtureDir('openmcp-res-home-');
+  const binDir = fixtureDir('openmcp-res-bin-');
   const fakeUvx = join(binDir, 'uvx');
   writeFileSync(fakeUvx, `#!/bin/sh\nshift\nexec "${process.execPath}" "${fakeSidecar}" "$@"\n`, { mode: 0o755 });
   const envUvxOnly = { HOME: home, PATH: `/usr/bin:${binDir}` };
@@ -271,8 +272,8 @@ test('gateway resolution prefers OPENMCP_BIN, then disk, then uvx', () => {
 // uvx on PATH, a tool call must spawn through it (uvx <package> <args>)
 // and complete the round trip.
 test('a tool call runs end to end through the uvx fallback', { skip: process.platform === 'win32' }, async () => {
-  const home = mkdtempSync(join(tmpdir(), 'openmcp-uvx-home-'));
-  const binDir = mkdtempSync(join(tmpdir(), 'openmcp-uvx-bin-'));
+  const home = fixtureDir('openmcp-uvx-home-');
+  const binDir = fixtureDir('openmcp-uvx-bin-');
   const fakeUvx = join(binDir, 'uvx');
   writeFileSync(fakeUvx, `#!/bin/sh\nshift\nexec "${process.execPath}" "${fakeSidecar}" "$@"\n`, { mode: 0o755 });
 
@@ -412,7 +413,7 @@ test('huaweicloud_gateway_restart recycles a live child and spawns fresh when no
 // real sidecar and assert them from the fake gateway's argv/env echo.
 
 test('resolveGatewaySpawnArgs pins openapi + the provisioned policy when gateway envs are unset', () => {
-  const home = mkdtempSync(join(tmpdir(), 'openmcp-args-home-'));
+  const home = fixtureDir('openmcp-args-home-');
   const plan = resolveGatewaySpawnArgs({ HOME: home, HUAWEICLOUD_HOME: home });
   assert.deepEqual(
     plan.args.filter((arg) => arg.startsWith('--')),
@@ -457,9 +458,13 @@ test('resolveGatewaySpawnArgs rejects discover and unknown modes with a devkit-a
 
 test('spawn wires the pinned mode, the provisioned policy file, and the scratch cwd', async () => {
   await _resetOpenMcpSidecar();
+  // Captured so the finally can pin the cleanup contract: the per-child
+  // scratch cwd must not outlive the child that owned it.
+  let scratchCwd: string | null = null;
   try {
     const result = await callOpenMcpTool('search_apis', { query: 'spawn-args' });
     assert.equal(result.ok, true, JSON.stringify(result));
+    scratchCwd = String(result.cwd);
     const argv = result.argv as string[];
     assert.ok(Array.isArray(argv), 'the fake echoes its argv');
     const modeIndex = argv.indexOf('--mode');
@@ -488,6 +493,14 @@ test('spawn wires the pinned mode, the provisioned policy file, and the scratch 
     }
   } finally {
     await _resetOpenMcpSidecar();
+    // The reset kills the child and waits out its death; the close hook in
+    // spawnSidecar must have removed the scratch cwd with it. Regression
+    // pin for the per-spawn leak: before the fix every spawn left one
+    // openmcp-gw-* dir behind (~23 per suite under an isolated TMPDIR),
+    // and deleting the hook passed the whole suite green.
+    if (scratchCwd !== null) {
+      assert.equal(existsSync(scratchCwd), false, 'the scratch cwd is removed when the gateway child closes');
+    }
   }
 });
 
@@ -766,7 +779,7 @@ test('resolveApprovalMode: unset passes; any set value throws the retirement gua
   // The guidance names the operator policy file: the devkit-provisioned
   // pack state path when no operator env is set, the operator's own path
   // when it is.
-  const home = mkdtempSync(join(tmpdir(), 'openmcp-retire-home-'));
+  const home = fixtureDir('openmcp-retire-home-');
   assert.throws(
     () => resolveApprovalMode({ HUAWEICLOUD_HOME: home, HUAWEICLOUD_OPENMCP_APPROVAL: 'devkit' }),
     (error: unknown) =>

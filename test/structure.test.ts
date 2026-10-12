@@ -1403,3 +1403,61 @@ test('requiredDependencies unions pack edges; core alone requires nothing', () =
   assert.deepEqual([...requiredDependencies(new Set(['sandbox']))], ['devbridge']);
   assert.deepEqual([...requiredDependencies(new Set(['huaweicloud-open-mcp']))], ['open-mcp-gateway']);
 });
+
+test('test fixtures: raw mkdtempSync is denied by default across the suite', () => {
+  // 2026-10-09: TMPDIR=$HOME verification runs leaked 614 unremoved
+  // mkdtemp fixture dirs into $HOME (plus a stray node-compile-cache) —
+  // invisible on tmpfs /tmp, where reboots hide the leak. Deny-by-default:
+  // every test/*.test.ts that still writes mkdtempSync must either route
+  // its fixtures through the shared registry (test/fixture-dir.ts:
+  // registry-created dirs are removed at process exit, so a partially
+  // migrated file fails too) or appear on the per-test-cleaner allowlist
+  // below — every entry there removes its own fixtures in finally blocks,
+  // verified by the isolated-TMPDIR full-suite residue check. This file is
+  // exempt from its own scan: its mkdtempSync occurrences are assertion
+  // regexes, never fixture creation. A new fixture-heavy test file either
+  // adopts fixtureDir or joins the allowlist with cleanup of its own;
+  // nothing passes silently by default.
+  const perTestCleaners = new Set([
+    'agent-install.test.ts',
+    'auth-credentials.test.ts',
+    'codearts-adaptation.test.ts',
+    'cred-reconcile-e2e.test.ts',
+    'cross-platform-install.test.ts',
+    'dep-receipts.test.ts',
+    'dsh-adaptation.test.ts',
+    'hdkitservice-api.test.ts',
+    'hook-node.test.ts',
+    'issue-443-fix.test.ts',
+    'mcp-server.test.ts',
+    'officeace-adaptation.test.ts',
+    'packs-command.test.ts',
+    'plugins-e2e.test.ts',
+    'proxy-agent.test.ts',
+    'reconcile.test.ts',
+    'safety-policy.test.ts',
+    'setup-packs.test.ts',
+    'telemetry.test.ts',
+    'uninstall-cleanup.test.ts',
+    'update-check.test.ts',
+    'upgrade-session.test.ts',
+  ]);
+  const testDir = join(root, 'test');
+  for (const entry of readdirSync(testDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.test.ts')) continue;
+    if (entry.name === 'structure.test.ts') continue; // the guard file itself
+    const source = readFileSync(join(testDir, entry.name), 'utf8');
+    if (!source.includes('mkdtempSync')) continue;
+    if (source.includes("from './fixture-dir.ts'")) {
+      assert.ok(
+        !source.includes('mkdtempSync('),
+        `${entry.name} imports the fixtureDir registry but still creates a raw mkdtemp fixture (partial migration)`,
+      );
+      continue;
+    }
+    assert.ok(
+      perTestCleaners.has(entry.name),
+      `${entry.name} creates mkdtemp fixtures without the fixtureDir registry and is not on the per-test-cleaner allowlist; adopt fixtureDir() or clean per-test and join the list`,
+    );
+  }
+});

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 
@@ -310,6 +310,33 @@ export function resolveGatewaySpawnArgs(env: NodeJS.ProcessEnv = process.env): G
   return { args, provision };
 }
 
+// Scratch-cwd bookkeeping for spawnSidecar: every spawn pins its gateway
+// child to a per-child mkdtemp cwd, and each is removed when that child
+// closes, plus a process-exit sweep. 'close', not 'exit': a failed spawn
+// (a resolvable-but-broken gateway binary, ENOENT/EACCES) emits 'error'
+// then 'close' and never 'exit', and openMcpSidecar resets its promise on
+// failure — an exit-only hook would stack one scratch dir per retried
+// call for the process lifetime. The sweep is
+// required for the production path — the child follows the parent's stdin,
+// but a parent racing through process exit cannot wait for the child's
+// exit event — and the close hook covers mid-process death so a
+// replacement spawn does not stack scratch dirs (one per spawn leaked
+// before; the 2026-10-09 TMPDIR=$HOME runs made ~23 per suite visible).
+// Registered lazily inside spawnSidecar so module scope stays
+// side-effect free. Removal is best-effort: a gateway artifact the host
+// refuses to delete must never fail the server.
+const scratchCwds = new Set<string>();
+let scratchExitSweepInstalled = false;
+
+function removeScratchCwd(dir: string): void {
+  scratchCwds.delete(dir);
+  try {
+    rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // best-effort by design
+  }
+}
+
 async function spawnSidecar(): Promise<OpenMcpSidecar> {
   const gateway = resolveGatewayCommand();
   if (!gateway) {
@@ -332,11 +359,19 @@ async function spawnSidecar(): Promise<OpenMcpSidecar> {
   // with a protected root), never under-denied, because any climb out
   // needs '..' — which the guard refuses outright.
   const scratchCwd = mkdtempSync(join(tmpdir(), 'openmcp-gw-'));
+  scratchCwds.add(scratchCwd);
+  if (!scratchExitSweepInstalled) {
+    scratchExitSweepInstalled = true;
+    process.on('exit', () => {
+      for (const dir of scratchCwds) removeScratchCwd(dir);
+    });
+  }
   const child = spawn(gateway.command, [...gateway.argsPrefix, ...plan.args], {
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
     cwd: scratchCwd,
   });
+  child.on('close', () => removeScratchCwd(scratchCwd));
   stats.spawns += 1;
   stats.lastPid = child.pid ?? null;
   const sidecar = new OpenMcpSidecar(child);

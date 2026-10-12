@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+
+import { fixtureDir } from './fixture-dir.ts';
 
 // CLI-level integration coverage for issue #615: user-customized MCP config
 // fields (extra args, timeout) must survive update, uninstall, and reinstall
@@ -21,7 +22,7 @@ const ENDPOINT_ARGS = [
 ];
 
 function makeHome() {
-  return mkdtempSync(join(tmpdir(), 'devkit-mcp-cli-'));
+  return fixtureDir('devkit-mcp-cli-');
 }
 
 function makeEnv(home) {
