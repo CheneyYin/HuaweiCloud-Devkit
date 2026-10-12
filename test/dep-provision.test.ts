@@ -1114,6 +1114,18 @@ test('doctor reports no pack dependencies for a core-only trim', () => {
   assert.doesNotMatch(res.stdout, /Pack .* uses .* soft dependency/);
 });
 
+test('doctor undici check counts the atomcode payload dir', () => {
+  const home = tempHome();
+  // Only the atomcode plugin dir carries undici; every other target's
+  // node_modules is absent, so the check passes only when atomcode is on
+  // the doctor's undici list (installAtomCode runs installRuntimeDeps).
+  mkdirSync(join(home, '.atomcode', 'huaweicloud-plugins', 'node_modules', 'undici'), { recursive: true });
+  const emptyPath = fixtureDir('dep-provision-path-');
+  const res = runSetupCli(['doctor'], home, { PATH: emptyPath, HUAWEICLOUD_HOME: home });
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /\[PASS\].*Runtime deps \(undici\) installed/);
+});
+
 // ---- the codex probe's fail-safe polarity at the uninstall safety gate ----
 
 // A codex stub on PATH: --version answers like a real codex CLI (so the

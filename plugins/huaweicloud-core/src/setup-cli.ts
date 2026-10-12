@@ -4585,6 +4585,7 @@ async function cmdDoctor(): Promise<void> {
     dshPluginDir,
     officeacePluginDir,
     hermesPluginDir,
+    atomcodePluginDir,
   ];
   const undiciOk = undiciPluginDirs.some((d) => existsSync(join(d, 'node_modules', 'undici')));
   check('Runtime deps (undici) installed', undiciOk, 'Run: npx huaweicloud-devkit install');
