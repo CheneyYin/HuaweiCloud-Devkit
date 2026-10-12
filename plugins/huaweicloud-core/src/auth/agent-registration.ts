@@ -50,10 +50,15 @@ function opencodeRegistered(): boolean {
 }
 
 function codexDesktopRegistered(): boolean {
-  const path = join(baseHome(), '.codex', 'config.toml');
-  if (!existsSync(path)) return false;
+  // Current-era installs ship the server payload to
+  // ~/plugins/huaweicloud-devkit (codexDesktopPluginsDir in setup-cli);
+  // config.toml sections are pre-marketplace residue the uninstaller
+  // actively removes, kept only as a legacy fallback.
+  if (existsSync(join(homedir(), 'plugins', 'huaweicloud-devkit', 'dist', 'mcp-server.js'))) return true;
+  const legacyPath = join(homedir(), '.codex', 'config.toml');
+  if (!existsSync(legacyPath)) return false;
   try {
-    return readFileSync(path, 'utf8').includes('[mcp_servers.huaweicloud-devkit]');
+    return readFileSync(legacyPath, 'utf8').includes('[mcp_servers.huaweicloud-devkit]');
   } catch {
     return false;
   }
@@ -225,12 +230,11 @@ function openclawRegistered(): boolean {
 }
 
 function hermesHome(): string {
+  // Mirrors the installer's hermesHomeDir: HERMES_HOME override, then
+  // ~/.hermes on every platform (docs/hermes-windows.md documents
+  // %USERPROFILE%\.hermes as the layout, not LOCALAPPDATA).
   if (process.env.HERMES_HOME) return process.env.HERMES_HOME;
-  // Hermes on Windows stores under LOCALAPPDATA, not ~/.hermes
-  if (process.platform === 'win32' && process.env.LOCALAPPDATA) {
-    return join(process.env.LOCALAPPDATA, 'hermes');
-  }
-  return join(baseHome(), '.hermes');
+  return join(homedir(), '.hermes');
 }
 
 function hermesRegistered(): boolean {

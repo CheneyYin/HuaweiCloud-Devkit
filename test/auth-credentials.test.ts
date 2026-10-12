@@ -284,6 +284,75 @@ process.exit(0);
   });
 });
 
+// Home isolation for probes that resolve through os.homedir() (codex-desktop
+// payload dir, hermes layout). os.homedir() reads $HOME at call time, so
+// pointing HOME at a temp dir keeps these process-private; USERPROFILE is
+// redirected alongside it for Windows runs.
+function withAgentHome(fn) {
+  const dir = mkdtempSync(join(tmpdir(), 'huaweicloud-agent-home-'));
+  const prevHome = process.env.HOME;
+  const prevProfile = process.env.USERPROFILE;
+  process.env.HOME = dir;
+  if (prevProfile !== undefined) process.env.USERPROFILE = dir;
+  try {
+    return fn(dir);
+  } finally {
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    if (prevProfile !== undefined) process.env.USERPROFILE = prevProfile;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('agent registration detects current-era codex-desktop install', () => {
+  withAgentHome((home) => {
+    const distDir = join(home, 'plugins', 'huaweicloud-devkit', 'dist');
+    mkdirSync(distDir, { recursive: true });
+    writeFileSync(join(distDir, 'mcp-server.js'), '// fake server\n', 'utf8');
+    const status = getAgentRegistrationStatuses('codex-desktop');
+    assert.equal(status.agents['codex-desktop'].configured, true);
+  });
+});
+
+test('agent registration still detects legacy codex-desktop config.toml', () => {
+  withAgentHome((home) => {
+    const codexDir = join(home, '.codex');
+    mkdirSync(codexDir, { recursive: true });
+    writeFileSync(join(codexDir, 'config.toml'), '[mcp_servers.huaweicloud-devkit]\ncommand = "node"\n', 'utf8');
+    const status = getAgentRegistrationStatuses('codex-desktop');
+    assert.equal(status.agents['codex-desktop'].configured, true);
+  });
+});
+
+test('agent registration detects hermes config under the installer layout', () => {
+  withAgentHome((home) => {
+    const hermesDir = join(home, '.hermes');
+    mkdirSync(hermesDir, { recursive: true });
+    writeFileSync(join(hermesDir, 'config.yaml'), 'mcp_servers:\n  huaweicloud-devkit:\n    command: node\n', 'utf8');
+    const status = getAgentRegistrationStatuses('hermes');
+    assert.equal(status.agents.hermes.configured, true);
+  });
+});
+
+test('agent registration reads hermes from the real home, not HUAWEICLOUD_HOME', () => {
+  withAgentHome((home) => {
+    const devkitOnly = mkdtempSync(join(tmpdir(), 'huaweicloud-devkit-only-'));
+    const hermesDir = join(home, '.hermes');
+    mkdirSync(hermesDir, { recursive: true });
+    writeFileSync(join(hermesDir, 'config.yaml'), 'mcp_servers:\n  huaweicloud-devkit:\n    command: node\n', 'utf8');
+    const saved = process.env.HUAWEICLOUD_HOME;
+    try {
+      process.env.HUAWEICLOUD_HOME = devkitOnly;
+      const status = getAgentRegistrationStatuses('hermes');
+      assert.equal(status.agents.hermes.configured, true);
+    } finally {
+      if (saved === undefined) delete process.env.HUAWEICLOUD_HOME;
+      else process.env.HUAWEICLOUD_HOME = saved;
+      rmSync(devkitOnly, { recursive: true, force: true });
+    }
+  });
+});
+
 test('resolveCredentialsWithRuntime prioritizes runtime > env > vault', () => {
   withTempHome(() => {
     clearRuntimeCredentials();
