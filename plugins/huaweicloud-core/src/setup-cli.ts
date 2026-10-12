@@ -1534,13 +1534,23 @@ function uninstallCodexDesktop(): void {
   }
 }
 
-function registerCodeartsMcp(configPath: string, agentKey = 'codearts'): void {
-  const mcpPath = join(codeartsPluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
-  const hcloudBin = findHcloudBin();
-  const env: Record<string, string> = { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local' };
-  if (hcloudBin) env.HCLOUD_BIN = hcloudBin.replace(/\\/g, '/');
+// One read-merge-write skeleton for the mcpServers-style JSON configs
+// (CodeArts, WorkBuddy, AtomCode). User fields survive every write: the
+// merge functions in mcp-config-merge.ts own the entry semantics, the
+// issue #615 delta restore owns reinstall recovery, and applyPacksToEntry
+// owns the keptUserValue DEVKIT_PACKS contract. Opencode (command style,
+// jsonc-tolerant) and codearts-work (environment naming + peer-env
+// inheritance) keep their bespoke writers.
+function ensureMcpServersConfig(options: {
+  configPath: string;
+  mcpPath: string;
+  agentKey: string;
+  label: string;
+  env: Record<string, string>;
+  enabledByDefault?: boolean;
+}): boolean {
+  const { configPath, mcpPath, agentKey, label, env } = options;
   let config: Record<string, unknown> = {};
-  let existing: unknown;
   if (existsSync(configPath)) {
     try {
       config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
@@ -1548,15 +1558,15 @@ function registerCodeartsMcp(configPath: string, agentKey = 'codearts'): void {
       console.log(
         `  \x1b[33m[WARN]\x1b[0m Could not parse ${configPath}. Skipping MCP config write; ensure "mcpServers.huaweicloud-devkit" points to ${mcpPath}.`,
       );
-      return;
+      return false;
     }
-    existing = asRecord(config.mcpServers)['huaweicloud-devkit'];
+    const existing: unknown = asRecord(config.mcpServers)['huaweicloud-devkit'];
     if (existing) {
       const { entry, changed } = mergeArgsStyle(existing, { mcpPath, env });
-      const packsChanged = applyPacksToEntry(entry, 'env', 'CodeArts');
+      const packsChanged = applyPacksToEntry(entry, 'env', label);
       if (!changed && !packsChanged) {
         console.log(`  MCP config unchanged: ${configPath}`);
-        return;
+        return false;
       }
       const servers = asRecord(config.mcpServers);
       servers['huaweicloud-devkit'] = entry;
@@ -1564,22 +1574,32 @@ function registerCodeartsMcp(configPath: string, agentKey = 'codearts'): void {
       mkdirSync(dirname(configPath), { recursive: true });
       writeMcpSettingsFile(configPath, config);
       console.log(`  MCP config merged (user fields preserved): ${configPath}`);
-      return;
+      return true;
     }
   }
   const servers: Record<string, unknown> = asRecord(config.mcpServers);
   config.mcpServers = servers;
   let entry = mergeArgsStyle(undefined, { mcpPath, env }).entry;
-  entry.enabled = true;
-  // Restore user fields saved by a previous uninstall (issue #615) before the
-  // packs write so a delta-carried DEVKIT_PACKS counts as the current value.
+  if (options.enabledByDefault) entry.enabled = true;
+  // Restore user fields saved by a previous uninstall (issue #615) before
+  // the packs write so a delta-carried DEVKIT_PACKS counts as the current
+  // value.
   const delta = takeAgentDelta(agentKey);
   if (delta) entry = asRecord(applyUserDelta(entry, delta, 'args'));
-  applyPacksToEntry(entry, 'env', 'CodeArts');
+  applyPacksToEntry(entry, 'env', label);
   servers['huaweicloud-devkit'] = entry;
   mkdirSync(dirname(configPath), { recursive: true });
   writeMcpSettingsFile(configPath, config);
   console.log(`  MCP config updated: ${configPath}`);
+  return true;
+}
+
+function registerCodeartsMcp(configPath: string, agentKey = 'codearts'): void {
+  const mcpPath = join(codeartsPluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
+  const env: Record<string, string> = { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local' };
+  const hcloudBin = findHcloudBin();
+  if (hcloudBin) env.HCLOUD_BIN = hcloudBin.replace(/\\/g, '/');
+  ensureMcpServersConfig({ configPath, mcpPath, agentKey, label: 'CodeArts', env, enabledByDefault: true });
 }
 
 async function installCodeArts(): Promise<void> {
@@ -1818,51 +1838,16 @@ function codeartsWorkStatus(): void {
 
 // Returns true when the config file was written, false when it was already correct.
 function ensureWorkbuddyMcpConfig(): boolean {
-  const configPath = workbuddyMcpConfigFile();
-  const mcpPath = join(workbuddyPluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
   const env: Record<string, string> = { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local' };
   const hcloudBin = findHcloudBin();
   if (hcloudBin) env.HCLOUD_BIN = hcloudBin.replace(/\\/g, '/');
-  let config: Record<string, unknown> = {};
-  if (existsSync(configPath)) {
-    try {
-      config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
-    } catch {
-      console.log(
-        `  \x1b[33m[WARN]\x1b[0m Could not parse ${configPath}. Skipping MCP config write; ensure "mcpServers.huaweicloud-devkit" points to ${mcpPath}.`,
-      );
-      return false;
-    }
-    const existing: unknown = asRecord(config.mcpServers)['huaweicloud-devkit'];
-    if (existing) {
-      const { entry, changed } = mergeArgsStyle(existing, { mcpPath, env });
-      const packsChanged = applyPacksToEntry(entry, 'env', 'WorkBuddy');
-      if (!changed && !packsChanged) {
-        console.log(`  MCP config unchanged: ${configPath}`);
-        return false;
-      }
-      const servers = asRecord(config.mcpServers);
-      servers['huaweicloud-devkit'] = entry;
-      config.mcpServers = servers;
-      mkdirSync(dirname(configPath), { recursive: true });
-      writeMcpSettingsFile(configPath, config);
-      console.log(`  MCP config merged (user fields preserved): ${configPath}`);
-      return true;
-    }
-  }
-  const servers: Record<string, unknown> = asRecord(config.mcpServers);
-  config.mcpServers = servers;
-  let entry = mergeArgsStyle(undefined, { mcpPath, env }).entry;
-  // Restore user fields saved by a previous uninstall (issue #615) before the
-  // packs write so a delta-carried DEVKIT_PACKS counts as the current value.
-  const delta = takeAgentDelta('workbuddy');
-  if (delta) entry = asRecord(applyUserDelta(entry, delta, 'args'));
-  applyPacksToEntry(entry, 'env', 'WorkBuddy');
-  servers['huaweicloud-devkit'] = entry;
-  mkdirSync(dirname(configPath), { recursive: true });
-  writeMcpSettingsFile(configPath, config);
-  console.log(`  MCP config updated: ${configPath}`);
-  return true;
+  return ensureMcpServersConfig({
+    configPath: workbuddyMcpConfigFile(),
+    mcpPath: join(workbuddyPluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/'),
+    agentKey: 'workbuddy',
+    label: 'WorkBuddy',
+    env,
+  });
 }
 
 // Resolve WorkBuddy's managed Python binary to run the hook tracker.
@@ -2135,51 +2120,16 @@ function workbuddyStatus(): void {
 }
 
 function ensureAtomcodeMcpConfig(): boolean {
-  const configPath = atomcodeMcpConfigFile();
-  const mcpPath = join(atomcodePluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
   const env: Record<string, string> = { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local', AGENT_HARNESS: 'atomcode' };
   const hcloudBin = findHcloudBin();
   if (hcloudBin) env.HCLOUD_BIN = hcloudBin.replace(/\\/g, '/');
-  let config: Record<string, unknown> = {};
-  if (existsSync(configPath)) {
-    try {
-      config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
-    } catch {
-      console.log(
-        `  \x1b[33m[WARN]\x1b[0m Could not parse ${configPath}. Skipping MCP config write; ensure "mcpServers.huaweicloud-devkit" points to ${mcpPath}.`,
-      );
-      return false;
-    }
-    const existing: unknown = asRecord(config.mcpServers)['huaweicloud-devkit'];
-    if (existing) {
-      const { entry, changed } = mergeArgsStyle(existing, { mcpPath, env });
-      const packsChanged = applyPacksToEntry(entry, 'env', 'AtomCode');
-      if (!changed && !packsChanged) {
-        console.log(`  MCP config unchanged: ${configPath}`);
-        return false;
-      }
-      const servers = asRecord(config.mcpServers);
-      servers['huaweicloud-devkit'] = entry;
-      config.mcpServers = servers;
-      mkdirSync(dirname(configPath), { recursive: true });
-      writeMcpSettingsFile(configPath, config);
-      console.log(`  MCP config merged (user fields preserved): ${configPath}`);
-      return true;
-    }
-  }
-  const servers: Record<string, unknown> = asRecord(config.mcpServers);
-  config.mcpServers = servers;
-  let entry = mergeArgsStyle(undefined, { mcpPath, env }).entry;
-  // Restore user fields saved by a previous uninstall (issue #615) before the
-  // packs write so a delta-carried DEVKIT_PACKS counts as the current value.
-  const delta = takeAgentDelta('atomcode');
-  if (delta) entry = asRecord(applyUserDelta(entry, delta, 'args'));
-  applyPacksToEntry(entry, 'env', 'AtomCode');
-  servers['huaweicloud-devkit'] = entry;
-  mkdirSync(dirname(configPath), { recursive: true });
-  writeMcpSettingsFile(configPath, config);
-  console.log(`  MCP config updated: ${configPath}`);
-  return true;
+  return ensureMcpServersConfig({
+    configPath: atomcodeMcpConfigFile(),
+    mcpPath: join(atomcodePluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/'),
+    agentKey: 'atomcode',
+    label: 'AtomCode',
+    env,
+  });
 }
 
 async function installAtomCode(): Promise<void> {
