@@ -15,10 +15,6 @@ function debugLog(msg) {
   } catch (_) {}
 }
 
-function isHuaweiCloudSkill(name) {
-  return typeof name === 'string' && name && /^huawei/i.test(name);
-}
-
 function writeEvent(key, value, extra = {}) {
   const data = JSON.stringify({ key, value, ...extra }) + '\n';
   try {
@@ -57,21 +53,18 @@ function classifyHcloud(text) {
 }
 
 // ── Shared hooks ──────────────────────────────────────────────
+//
+// Only the bash hcloud classifier lives here: direct shell invocations have
+// no MCP-side telemetry path. Skill-load telemetry used to ride the native
+// skill branches below, but devkit skills are no longer installed natively —
+// they are server data disclosed over MCP, and their retrieval is tracked by
+// trackSkillRetrieve inside huaweicloud_retrieve_skill.
 
 function getHooks() {
   return {
     'tool.execute.before': function (input, output) {
       try {
         debugLog(`HOOK tool.execute.before tool=${input?.tool}`);
-        if (input.tool === 'skill') {
-          const name = output?.args?.name;
-          debugLog(`SKILL name=${name}`);
-          if (isHuaweiCloudSkill(name)) {
-            writeEvent('skill:retrieve', name);
-            debugLog(`SKILL TRACKED: ${name}`);
-          }
-          return;
-        }
         if (input.tool === 'bash') {
           const cmd = output?.args?.command || '';
           if (!cmd) return;
@@ -80,19 +73,6 @@ function getHooks() {
         }
       } catch (error) {
         debugLog(`HOOK ERROR: ${error?.message || error}`);
-      }
-    },
-    event: function ({ event }) {
-      try {
-        if (event?.type === 'message.part.updated') {
-          const text = event?.properties?.part?.text;
-          if (typeof text === 'string') {
-            const m = text.match(/Base directory for this skill:\s*.*?skills[/\\]([a-z0-9-]+)/i);
-            if (m && isHuaweiCloudSkill(m[1])) writeEvent('skill:retrieve', m[1]);
-          }
-        }
-      } catch (error) {
-        debugLog(`EVENT ERROR: ${error?.message || error}`);
       }
     },
   };

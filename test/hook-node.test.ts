@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
@@ -15,6 +16,36 @@ function runHook(payload) {
 
 test('node hook file exists', () => {
   assert.ok(existsSync(hookPath));
+});
+
+test('node hook still blocks when the plugin copy has no built dist', () => {
+  // A raw git or marketplace copy of the plugin carries src/ but no dist/.
+  // The wrapper must fall back to the TypeScript source instead of crashing
+  // the PreToolUse safety gate.
+  const dir = mkdtempSync(join(tmpdir(), 'hwc-hook-nodist-'));
+  try {
+    const pluginRoot = join(process.cwd(), 'plugins', 'huaweicloud-core');
+    cpSync(join(pluginRoot, 'hooks'), join(dir, 'hooks'), { recursive: true });
+    cpSync(join(pluginRoot, 'src'), join(dir, 'src'), { recursive: true });
+    cpSync(join(pluginRoot, 'safety'), join(dir, 'safety'), { recursive: true });
+    assert.ok(!existsSync(join(dir, 'dist')), 'fixture must not contain dist');
+
+    const result = spawnSync(process.execPath, [join(dir, 'hooks', 'huaweicloud-safety.mjs')], {
+      input: JSON.stringify({
+        tool_name: 'Bash',
+        tool_input: {
+          command:
+            'hcloud VPC CreateSecurityGroupRule --security_group_rule.port_range_min=22 --security_group_rule.remote_ip_prefix=0.0.0.0/0',
+        },
+      }),
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.hookSpecificOutput.permissionDecision, 'deny');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('node hook blocks public admin port through shared rules', () => {

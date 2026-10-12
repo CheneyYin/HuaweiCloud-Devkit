@@ -15,7 +15,11 @@ if (!cwd.startsWith(profilesRoot)) {
   process.exit(0);
 }
 
-// ── Inside a DSH profile: copy skills to ~/.dsh/skills/ ──
+// ── Inside a DSH profile ──
+// Skills are server data disclosed over MCP; the DSH patch points the server
+// at the package root, so no copy is made. Pre-MCP installs left native
+// copies in ~/.dsh/skills/ — purge them (ownership-precise: only names the
+// shipped tree still carries).
 const packageRoot = path.resolve(__dirname, '..');
 
 // Rewrite the bundled patch's relative MCP server path to the absolute package
@@ -39,36 +43,27 @@ if (fs.existsSync(bundledPatch)) {
 const skillsSrc = path.join(packageRoot, 'plugins', 'huaweicloud-core', 'skills');
 const skillsDest = path.join(dshHome, 'skills');
 
-if (!fs.existsSync(skillsSrc)) {
-  console.log('HuaweiCloud DevKit: skills source not found, skipping auto-setup');
-  process.exit(0);
-}
-
-fs.mkdirSync(skillsDest, { recursive: true });
-
-function copyDir(src, dest) {
-  if (!fs.existsSync(src)) return;
-  fs.mkdirSync(dest, { recursive: true });
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    const s = path.join(src, entry.name);
-    const d = path.join(dest, entry.name);
-    if (entry.isDirectory()) {
-      copyDir(s, d);
-    } else {
-      fs.copyFileSync(s, d);
+if (fs.existsSync(skillsSrc) && fs.existsSync(skillsDest)) {
+  const owned = new Set(
+    fs
+      .readdirSync(skillsSrc, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name),
+  );
+  let purged = 0;
+  for (const entry of fs.readdirSync(skillsDest, { withFileTypes: true })) {
+    if (entry.isDirectory() && owned.has(entry.name)) {
+      fs.rmSync(path.join(skillsDest, entry.name), { recursive: true, force: true });
+      purged++;
     }
   }
-}
-
-let count = 0;
-for (const entry of fs.readdirSync(skillsSrc, { withFileTypes: true })) {
-  if (entry.isDirectory()) {
-    copyDir(path.join(skillsSrc, entry.name), path.join(skillsDest, entry.name));
-    count++;
+  if (purged > 0) {
+    console.log(
+      `HuaweiCloud DevKit: cleaned ${purged} stale native skill cop${purged === 1 ? 'y' : 'ies'} (skills are MCP-disclosed)`,
+    );
   }
 }
 
-console.log(`\nHuaweiCloud DevKit: ${count} skills installed to ~/.dsh/skills/`);
 console.log('MCP server will be available after DSH restart.');
 console.log('\n\u001b[1m\u001b[36m  首次使用请配置环境：\u001b[0m');
 console.log('  1. 安装 KooCLI：npx huaweicloud-devkit install-hcloud');

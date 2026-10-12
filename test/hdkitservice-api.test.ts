@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,8 +8,36 @@ process.env.HW_ACCESS_KEY = 'TESTAK';
 process.env.HW_SECRET_KEY = 'TESTSK';
 process.env.HDKITSERVICE_ENDPOINT = 'https://example.test/hdkitservice/';
 
+// Every test in this file stubs global.fetch and asserts its envelopes:
+// the direct branch of hdkitRequest is the premise. Ambient proxy
+// configuration — either env spelling (the resolver reads
+// process.env.HTTPS_PROXY || process.env.https_proxy; the https_proxy
+// spelling routes these https:// endpoints) or a developer's proxy.json —
+// routes the request through the undici dispatcher instead and bypasses
+// the stub entirely. Establish "no proxy" from every source the resolver
+// reads, for the whole file.
+const PROXY_ENV_KEYS = ['HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy'] as const;
+const savedProxyEnv: Record<string, string | undefined> = {};
+for (const key of PROXY_ENV_KEYS) {
+  savedProxyEnv[key] = process.env[key];
+  delete process.env[key];
+}
+const savedHermeticHome = process.env.HUAWEICLOUD_HOME;
+const hermeticHome = fs.mkdtempSync(path.join(os.tmpdir(), 'hdkit-no-proxy-'));
+process.env.HUAWEICLOUD_HOME = hermeticHome;
+
+after(() => {
+  for (const key of PROXY_ENV_KEYS) {
+    if (savedProxyEnv[key] === undefined) delete process.env[key];
+    else process.env[key] = savedProxyEnv[key];
+  }
+  if (savedHermeticHome === undefined) delete process.env.HUAWEICLOUD_HOME;
+  else process.env.HUAWEICLOUD_HOME = savedHermeticHome;
+  fs.rmSync(hermeticHome, { recursive: true, force: true });
+});
+
 const { hdkitConnect, hdkitVoucherStatus, hdkitVoucherClaim } =
-  await import('../plugins/huaweicloud-core/src/sandbox/hdkitservice-api.ts');
+  await import('../plugins/huaweicloud-core/src/lib/hdkit/hdkitservice-api.ts');
 const { clearRuntimeCredentials } = await import('../plugins/huaweicloud-core/src/auth/credentials.ts');
 
 test('hdkitservice connect parses backend traceId (camelCase) on error', async () => {

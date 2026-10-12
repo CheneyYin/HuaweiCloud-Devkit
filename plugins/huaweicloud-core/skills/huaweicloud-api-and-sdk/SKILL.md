@@ -54,3 +54,4 @@ Terraform Provider is low priority in V1. Mention it when the user needs reviewe
 
 - **CLI setup**: See `huaweicloud-cli-and-auth` for KooCLI credential setup
 - **Safety**: See `huaweicloud-safety` for write operation approval flow
+- **OpenAPI catalog**: See `huawei-openapi` when the operation has no KooCLI command — the open-mcp gateway tools cover the full 300+ product catalog; execution goes through the gateway's own policy engine, and an engine refusal guides the consent round

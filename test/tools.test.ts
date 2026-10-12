@@ -1,25 +1,21 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import {
-  callTool,
-  runVersionCheck,
-  TOOL_DEFINITIONS,
-  findSkillsRoot,
-  listSkillDirs,
-} from '../plugins/huaweicloud-core/src/tools.ts';
+import { callTool, TOOL_DEFINITIONS, listSkillDirs } from '../plugins/huaweicloud-core/src/tools.ts';
+import { runVersionCheck } from '../plugins/huaweicloud-core/src/packs/huaweicloud-cli/tools.ts';
+import { getToolSchema, TOOL_SCHEMAS } from '../plugins/huaweicloud-core/src/tool-schemas.ts';
 import {
   clearRuntimeCredentials,
   resolveCredentialsWithRuntime,
   setRuntimeCredentials,
 } from '../plugins/huaweicloud-core/src/auth/credentials.ts';
 import { getKooCliVersion } from '../plugins/huaweicloud-core/src/koocli-version.ts';
+import { fixtureDir } from './fixture-dir.ts';
 
 test('runVersionCheck uses hcloud version instead of --version', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'huaweicloud-toolkit-version-'));
+  const dir = fixtureDir('huaweicloud-toolkit-version-');
   const script = join(dir, 'fake-hcloud.mjs');
   writeFileSync(script, 'console.log(JSON.stringify({ version: "7.0.0", args: process.argv.slice(2) }));', 'utf8');
 
@@ -44,7 +40,7 @@ test('runVersionCheck returns installed:false and errorCode on ENOENT', async ()
 });
 
 test('runVersionCheck reports versionMismatch when installed version differs from kooCliVersion', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'huaweicloud-toolkit-version-'));
+  const dir = fixtureDir('huaweicloud-toolkit-version-');
   const script = join(dir, 'fake-hcloud.mjs');
   writeFileSync(script, 'console.log(JSON.stringify({ version: "7.0.0", args: process.argv.slice(2) }));', 'utf8');
 
@@ -61,7 +57,7 @@ test('runVersionCheck reports versionMismatch when installed version differs fro
 });
 
 test('runVersionCheck reports no versionMismatch when installed version matches kooCliVersion', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'huaweicloud-toolkit-version-'));
+  const dir = fixtureDir('huaweicloud-toolkit-version-');
   const script = join(dir, 'fake-hcloud.mjs');
   writeFileSync(script, `console.log("当前KooCLI版本:${getKooCliVersion()}");`, 'utf8');
 
@@ -103,6 +99,8 @@ test('TOOL_DEFINITIONS includes all required tools including sandbox', () => {
     'huaweicloud_sandbox_credentials',
     'huaweicloud_voucher_status',
     'huaweicloud_voucher_claim',
+    'huaweicloud_list_packs',
+    'huaweicloud_pack_info',
   ];
   for (const name of required) {
     assert.ok(names.includes(name), `Missing tool: ${name}`);
@@ -112,11 +110,11 @@ test('TOOL_DEFINITIONS includes all required tools including sandbox', () => {
 });
 
 test('TOOL_DEFINITIONS expose cwd parameter on run tools', () => {
-  const readonlyTool = TOOL_DEFINITIONS.find((t) => t.name === 'huaweicloud_run_readonly_command');
-  assert.ok(Object.hasOwn(readonlyTool.inputSchema.properties, 'cwd'), 'run_readonly_command should have cwd param');
+  const readonlySchema = getToolSchema('huaweicloud_run_readonly_command').toJSONSchema();
+  assert.ok(Object.hasOwn(readonlySchema.properties, 'cwd'), 'run_readonly_command should have cwd param');
 
-  const approvedTool = TOOL_DEFINITIONS.find((t) => t.name === 'huaweicloud_run_approved_command');
-  assert.ok(Object.hasOwn(approvedTool.inputSchema.properties, 'cwd'), 'run_approved_command should have cwd param');
+  const approvedSchema = getToolSchema('huaweicloud_run_approved_command').toJSONSchema();
+  assert.ok(Object.hasOwn(approvedSchema.properties, 'cwd'), 'run_approved_command should have cwd param');
 });
 
 test('TOOL_DEFINITIONS includes proactive hook check tools', () => {
@@ -124,6 +122,16 @@ test('TOOL_DEFINITIONS includes proactive hook check tools', () => {
   assert.ok(names.has('huaweicloud_hook_check_command'));
   assert.ok(names.has('huaweicloud_hook_check_artifacts'));
   assert.ok(names.has('huaweicloud_hook_check_deploy_plan'));
+});
+
+test('TOOL_SCHEMAS keys exactly match TOOL_DEFINITIONS names (no orphans either way)', () => {
+  const registryNames = TOOL_DEFINITIONS.map((tool) => tool.name).sort((a, b) => a.localeCompare(b));
+  const schemaKeys = Object.keys(TOOL_SCHEMAS).sort((a, b) => a.localeCompare(b));
+  assert.deepEqual(
+    schemaKeys,
+    registryNames,
+    'a tool registered without a schema is unreachable over MCP; a schema without a registry entry is dead code',
+  );
 });
 
 test('huaweicloud_hook_check_command returns deny finding', async () => {
@@ -235,28 +243,8 @@ test('service_catalog keeps storage routing for pure storage intent', async () =
   assert.notEqual(result.recommendedSkills[0], 'huawei-sandbox');
 });
 
-test('findSkillsRoot skips stale dirs without SKILL.md and picks the first real skills root', () => {
-  const base = mkdtempSync(join(tmpdir(), 'huaweicloud-skills-root-'));
-  try {
-    const empty = join(base, 'empty');
-    const stale = join(base, 'stale');
-    const real = join(base, 'real');
-    mkdirSync(empty);
-    mkdirSync(stale);
-    mkdirSync(join(stale, 'leftover'), { recursive: true });
-    mkdirSync(join(real, 'huawei-ecs'), { recursive: true });
-    writeFileSync(join(real, 'huawei-ecs', 'SKILL.md'), '---\nname: huawei-ecs\n---\n', 'utf8');
-
-    assert.equal(findSkillsRoot([empty, stale, real]), real);
-    assert.equal(findSkillsRoot([empty, stale]), null);
-    assert.equal(findSkillsRoot([]), null);
-  } finally {
-    rmSync(base, { recursive: true, force: true });
-  }
-});
-
 test('listSkillDirs ignores files, subdirs without SKILL.md, and counts symlinked skill dirs', () => {
-  const base = mkdtempSync(join(tmpdir(), 'huaweicloud-list-skills-'));
+  const base = fixtureDir('huaweicloud-list-skills-');
   try {
     const root = join(base, 'root');
     const external = join(base, 'external');
@@ -275,6 +263,26 @@ test('listSkillDirs ignores files, subdirs without SKILL.md, and counts symlinke
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
+});
+
+// retrieve_skill is the sole skill-loading surface, so its name boundary is
+// security-relevant: traversal-shaped names must be rejected before any
+// filesystem access.
+test('retrieve_skill rejects traversal-shaped and non-skill names', async () => {
+  for (const name of ['../src/packs/obs/skills/huawei-obs', '..%2f..', 'huawei ecs', 'HUAWAI-ECS', '/etc', '']) {
+    const result = await callTool('huaweicloud_retrieve_skill', { name });
+    assert.equal(result.ok, false, `name ${JSON.stringify(name)} must be rejected`);
+    assert.match(result.error, /Invalid skill name|Skill name is required/);
+  }
+});
+
+test('retrieve_skill serves the full skill from the server-relative tree', async () => {
+  const result = await callTool('huaweicloud_retrieve_skill', { name: 'huawei-ecs' });
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.name, 'huawei-ecs');
+  assert.match(result.content, /^---\r?\nname: huawei-ecs/);
+  assert.ok(result.references.length > 0, 'huawei-ecs ships reference files');
+  assert.ok(result.references.some((ref) => ref.filename === 'create-instance.md'));
 });
 
 test('auth_switch temporary sets runtime credentials for api path', async () => {
@@ -305,7 +313,7 @@ test('auth_switch temporary sets runtime credentials for api path', async () => 
 });
 
 test('auth_switch clear resets runtime', async () => {
-  const isolatedHome = mkdtempSync(join(tmpdir(), 'huaweicloud-auth-clear-'));
+  const isolatedHome = fixtureDir('huaweicloud-auth-clear-');
   const prevHome = process.env.HUAWEICLOUD_HOME;
   process.env.HUAWEICLOUD_HOME = isolatedHome;
   try {
@@ -327,7 +335,7 @@ test('auth_switch clear resets runtime', async () => {
 });
 
 test('auth_switch persist(mode=import) rejects missing region and keeps import file (#502)', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'auth-import-region-'));
+  const home = fixtureDir('auth-import-region-');
   const prevHome = process.env.HUAWEICLOUD_HOME;
   process.env.HUAWEICLOUD_HOME = home;
   try {
@@ -354,7 +362,7 @@ test('auth_switch persist(mode=import) rejects missing region and keeps import f
 });
 
 test('auth_switch temporary(mode=import) clears import file on success', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'auth-import-temp-'));
+  const home = fixtureDir('auth-import-temp-');
   const prevHome = process.env.HUAWEICLOUD_HOME;
   process.env.HUAWEICLOUD_HOME = home;
   try {
@@ -377,7 +385,7 @@ test('auth_switch temporary(mode=import) clears import file on success', async (
 });
 
 test('auth_switch persist(mode=import) with STS token is rejected and clears import file', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'auth-import-sts-'));
+  const home = fixtureDir('auth-import-sts-');
   const prevHome = process.env.HUAWEICLOUD_HOME;
   process.env.HUAWEICLOUD_HOME = home;
   try {

@@ -64,7 +64,8 @@ test('dsh install copies skills, MCP server, safety policy, and patch row', () =
     assert.match(res.stdout, /\[DSH\]/);
     assert.match(res.stdout, /Installation complete!/);
 
-    assert.ok(countSkills(join(dshHome, 'skills')) >= 6, 'DSH skills installed');
+    assert.ok(countSkills(join(dshHome, 'huaweicloud-plugins', 'skills')) >= 6, 'DSH skills tree in plugin dir');
+    assert.equal(countSkills(join(dshHome, 'skills')), 0, 'native DSH skills dir stays empty');
     const pluginDir = join(dshHome, 'huaweicloud-plugins');
     assert.ok(existsSync(join(pluginDir, 'dist', 'mcp-server.js')));
     assert.ok(existsSync(join(pluginDir, 'dist', 'tools.js')));
@@ -141,6 +142,49 @@ test('dsh install is idempotent and preserves unrelated patch entries', () => {
   }
 });
 
+test('dsh update migrates a pre-2.0 patch path to dist', () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-home-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'dsh-proj-'));
+  try {
+    const dshHome = join(home, '.dsh');
+    const install = runCli(home, cwd, ['install', '--target', 'dsh'], dshHome);
+    assert.equal(install.status, 0, install.stderr);
+
+    // Rewrite the installed patch into the pre-2.0 shape: bundle markers plus
+    // the absolute src/mcp-server.mjs path the old postinstall baked in.
+    const patchFile = join(dshHome, 'profiles', 'web', 'cordis.patch.yml');
+    const oldCache = '/old/npx-cache/lib/node_modules/huaweicloud-devkit';
+    writeFileSync(
+      patchFile,
+      [
+        '- insert:',
+        '    - id: huaweicloud-devkit',
+        "      name: '@deepseek-ai/dsh-mcp-client'",
+        '      config:',
+        '        serverName: huaweicloud',
+        '        transport: stdio',
+        '        command: node',
+        '        args:',
+        `          - '${oldCache}/plugins/huaweicloud-core/src/mcp-server.mjs'`,
+        '        failOnStartupError: false',
+        '',
+      ].join('\n'),
+    );
+
+    const update = runCli(home, cwd, ['update', '--target', 'dsh'], dshHome);
+    assert.equal(update.status, 0, update.stderr);
+    assert.match(update.stdout, /DSH patch MCP path migrated to dist/);
+
+    const patch = readPatch(dshHome);
+    assert.match(patch, /plugins\/huaweicloud-core\/dist\/mcp-server\.js/);
+    assert.doesNotMatch(patch, /src\/mcp-server\.mjs/);
+    assert.equal(countMcpRows(patch), 1, patch);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test('dsh update refreshes installed files and keeps one patch row', () => {
   const home = mkdtempSync(join(tmpdir(), 'dsh-home-'));
   const cwd = mkdtempSync(join(tmpdir(), 'dsh-proj-'));
@@ -154,7 +198,7 @@ test('dsh update refreshes installed files and keeps one patch row', () => {
     assert.match(update.stdout, /Update complete/);
 
     assert.ok(existsSync(join(dshHome, 'huaweicloud-plugins', 'dist', 'mcp-server.js')));
-    assert.ok(countSkills(join(dshHome, 'skills')) >= 6);
+    assert.ok(countSkills(join(dshHome, 'huaweicloud-plugins', 'skills')) >= 6, 'skills tree refreshed in plugin dir');
     assert.equal(countMcpRows(readPatch(dshHome)), 1);
   } finally {
     rmSync(home, { recursive: true, force: true });

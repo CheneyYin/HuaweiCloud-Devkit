@@ -1,6 +1,16 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { classifyTextCommand } from '../dist/safety-policy.js';
+const __dirname = dirname(fileURLToPath(import.meta.url));
+// npm tarballs and built checkouts carry dist/; a raw git or marketplace copy
+// of the plugin does not. Prefer the compiled module and fall back to the
+// TypeScript source (Node >= 22.18 strips types outside node_modules) so the
+// PreToolUse safety gate keeps running instead of crashing open.
+const policyModule = existsSync(join(__dirname, '..', 'dist', 'safety-policy.js'))
+  ? await import('../dist/safety-policy.js')
+  : await import('../src/safety-policy.ts');
+const { classifyTextCommand } = policyModule;
 
 const DENY_PREFIX = 'Huawei Cloud safety hook blocked this action: ';
 

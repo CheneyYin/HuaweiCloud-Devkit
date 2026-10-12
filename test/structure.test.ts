@@ -1,8 +1,32 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import test from 'node:test';
+
+import { TOOL_DEFINITIONS } from '../plugins/huaweicloud-core/src/tools.ts';
+import { PACK_OF, PACKS } from '../plugins/huaweicloud-core/src/packs/registry.ts';
+import { PACK_IDS } from '../plugins/huaweicloud-core/src/lib/pack-types.ts';
+import {
+  closeEnablement,
+  DEPENDENCIES,
+  DEPENDENCY_IDS,
+  parseDevkitPacks,
+  PACK_DEPENDENCIES,
+  PACK_REQUIRES,
+  PACK_USES,
+  requiredDependencies,
+} from '../plugins/huaweicloud-core/src/lib/dependency-model.ts';
+import { UPDATE_TOOLS } from '../plugins/huaweicloud-core/src/packs/update/tools.ts';
+import { AUTH_TOOLS } from '../plugins/huaweicloud-core/src/packs/auth/tools.ts';
+import { OBS_TOOLS } from '../plugins/huaweicloud-core/src/packs/obs/tools.ts';
+import { VOUCHER_TOOLS } from '../plugins/huaweicloud-core/src/packs/voucher/tools.ts';
+import { DISCOVERY_TOOLS } from '../plugins/huaweicloud-core/src/packs/discovery/tools.ts';
+import { SANDBOX_TOOLS } from '../plugins/huaweicloud-core/src/packs/sandbox/tools.ts';
+import { HUAWEICLOUD_OPEN_MCP_TOOLS } from '../plugins/huaweicloud-core/src/packs/huaweicloud-open-mcp/tools.ts';
+import { HUAWEICLOUD_CLI_TOOLS } from '../plugins/huaweicloud-core/src/packs/huaweicloud-cli/tools.ts';
+import { checkPackBoundaries } from '../scripts/lib/pack-boundaries.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const pluginRoot = join(root, 'plugins', 'huaweicloud-core');
@@ -11,21 +35,19 @@ function readJson(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
-// Runtime sources migrate from .mjs to .ts phase by phase. Resolve whichever
-// extension exists so path assertions survive each rename.
+// Sources are TypeScript; a few call sites still pass legacy .mjs paths.
 function readSource(relativePath) {
-  const candidates = [relativePath, relativePath.replace(/\.mjs$/, '.ts')];
-  for (const candidate of candidates) {
-    const full = join(pluginRoot, candidate);
-    if (existsSync(full)) return readFileSync(full, 'utf8');
-  }
-  assert.fail(`source file not found: ${relativePath}`);
+  const full = join(pluginRoot, relativePath.replace(/\.mjs$/, '.ts'));
+  assert.ok(existsSync(full), `source file not found: ${relativePath}`);
+  return readFileSync(full, 'utf8');
 }
 
 test('Codex plugin manifest and marketplace are installable', () => {
   const manifest = readJson(join(pluginRoot, '.codex-plugin', 'plugin.json'));
   assert.equal(manifest.name, 'huaweicloud-devkit');
-  assert.equal(manifest.skills, './skills/');
+  // Skills are server data disclosed over MCP; the manifest must not declare
+  // a native skills surface (same field-absence discipline as hooks).
+  assert.ok(!Object.hasOwn(manifest, 'skills'), 'Codex manifest declares no native skills surface');
   assert.equal(manifest.mcpServers, './.mcp.json');
   assert.ok(!Object.hasOwn(manifest, 'hooks'), 'Codex manifest keeps hooks out');
 
@@ -55,10 +77,11 @@ test('OpenClaw plugin manifest matches other agent manifests', () => {
   assert.equal(names.size, 1, 'All plugin.json name fields must be identical');
 });
 
-test('OpenCode integration exposes skills, commands, and MCP config', () => {
+test('OpenCode integration exposes commands and MCP config', () => {
   assert.ok(existsSync(join(root, 'integrations', 'opencode', 'opencode.json')));
   assert.ok(existsSync(join(root, 'integrations', 'opencode', 'commands', 'huaweicloud-doctor.md')));
-  assert.ok(existsSync(join(root, 'integrations', 'opencode', 'skills', 'huaweicloud-core', 'SKILL.md')));
+  // No native OpenCode entry-point skill: MCP tools are the entry point.
+  assert.ok(!existsSync(join(root, 'integrations', 'opencode', 'skills')));
 });
 
 test('Hermes MCP Catalog manifest is present and valid', () => {
@@ -135,6 +158,162 @@ test('skills document KooCLI installation, operation discovery, region intent, a
   assert.ok(!cliSkill.includes('hwcloudcli.obs.cn-north-1'), 'no stale hwcloudcli endpoint in cli-and-auth');
 });
 
+test('huawei-openapi skill teaches only vocabulary-table tools and the real params layout', async () => {
+  // The teaching layer is a consent surface: a gateway tool name the
+  // skill mentions but the vocabulary table does not know, or a params
+  // layout contradicting the gateway's contract, misroutes real consent
+  // (round-9: the wrong body-nesting row burned approvals on silently
+  // dropped parameters). Guard the teachable claims mechanically.
+  const { GATEWAY_TOOL_VOCABULARY } =
+    await import('../plugins/huaweicloud-core/src/packs/huaweicloud-open-mcp/approval.ts');
+  const skill = readFileSync(join(pluginRoot, 'skills', 'huawei-openapi', 'SKILL.md'), 'utf8');
+
+  const gatewayTools = [...GATEWAY_TOOL_VOCABULARY.readonly, ...GATEWAY_TOOL_VOCABULARY.routed];
+  const known = new Set(gatewayTools);
+
+  // Positive direction first: every vocabulary name is TAUGHT, bare or
+  // with the devkit prefix (round-10: '_' is a word character, so the
+  // old \b alternation never matched inside the then-existing
+  // huaweicloud_search_apis skill mention and four discovery names went
+  // unchecked entirely).
+  for (const name of gatewayTools) {
+    assert.ok(
+      skill.includes(name) || skill.includes(`huaweicloud_${name}`),
+      `the skill must teach the vocabulary-table tool ${name}`,
+    );
+  }
+
+  // Reverse sweep: every snake_case token that looks like a gateway tool
+  // name (optionally prefixed with the devkit prefix) must be either in
+  // the vocabulary table or a declared non-tool identifier. This is the
+  // direction that catches hallucinated/renamed names — a hand-written
+  // alternation of known names can only ever check itself (round-10's
+  // circularity finding).
+  const nonToolIdentifiers = new Set([
+    'tag_groups',
+    'project_id',
+    'huaweicloud_gateway_list_tools',
+    'huaweicloud_gateway_call',
+    'huaweicloud_gateway_restart',
+    'huaweicloud_list_packs',
+    'huaweicloud_pack_info',
+    'huaweicloud_retrieve_skill',
+  ]);
+  const candidates = new Set(skill.match(/[a-z][a-z0-9]*(_[a-z0-9]+)+/g) ?? []);
+  for (const token of candidates) {
+    const bare = token.startsWith('huaweicloud_') ? token.slice('huaweicloud_'.length) : token;
+    if (nonToolIdentifiers.has(token)) continue;
+    if (known.has(bare)) continue;
+    // Multi-word prose identifiers that are not tool-shaped are allowed;
+    // tool-shaped means matching a routed/readonly name OR carrying the
+    // devkit prefix. Anything else with 2+ underscores and a gateway-ish
+    // verb is suspicious, but the strict rule is: devkit-prefixed tokens
+    // must resolve to real devkit tools.
+    if (token.startsWith('huaweicloud_')) {
+      assert.ok(
+        TOOL_DEFINITIONS.some((tool) => tool.name === token),
+        `the skill references devkit tool ${token}, which does not exist`,
+      );
+    }
+  }
+
+  // The params contract (gateway server.py: path/query flatten into
+  // params, body in params["body"]). Word boundary, not [^.]: the flat
+  // spelling must be unteachable even at end-of-sentence (round-10:
+  // 'toolArgs.body.' evaded the sentinel).
+  assert.match(skill, /toolArgs\.params\.body/);
+  assert.doesNotMatch(skill, /toolArgs\.body\b/, 'the flat toolArgs.body spelling taught wrong nesting (round-9)');
+  // The contract row is scoped to execute_api (round-10: discovery tools
+  // take top-level named args — an unscoped row misleads search calls).
+  assert.match(skill, /For `execute_api`, path and query parameters flatten into `toolArgs\.params`/);
+
+  // The delegated approval contract: the skill must teach the delegation
+  // flow (engine refuses → its reason guides → confirm → grant with an
+  // ephemeral scope → retry) and must not resurrect the retired token
+  // ceremony. gatewayCallSchema is a loose object, so a stale field name
+  // in the teaching layer would silently round-trip as an ignored extra
+  // while an agent believes it is consenting.
+  assert.match(skill, /delegated to the gateway's own policy engine/, 'the consent authority is named');
+  assert.match(skill, /confirm with the user in conversation/, 'the refusal-guided consent flow is taught');
+  assert.match(skill, /ephemeral scope/, 'the grant scope vocabulary is taught');
+  assert.doesNotMatch(skill, /approvalToken/, 'the retired approvalToken field must not be taught');
+  assert.doesNotMatch(skill, /approvedByUser/, 'the retired approvedByUser field must not be taught');
+  assert.doesNotMatch(skill, /HUAWEICLOUD_OPENMCP_APPROVAL/, 'the retired mode env must not be taught');
+
+  // Cross-references resolve to real skills — form-agnostic (See/see/load)
+  // and across the whole generated tree, not just this file (round-10:
+  // this commit's own capability-discovery ref used lowercase 'see' and
+  // evaded the original resolver).
+  for (const skillDir of listSkillDirsAll()) {
+    const skillText = readFileSync(join(skillDir, 'SKILL.md'), 'utf8');
+    for (const ref of skillText.matchAll(/(?:[Ss]ee|load) `([a-z0-9-]+)`/g)) {
+      assert.ok(
+        existsSync(join(pluginRoot, 'skills', ref[1], 'SKILL.md')),
+        `${skillDir} cross-references ${ref[1]}, which does not resolve to a real skill`,
+      );
+    }
+  }
+});
+
+// The served gateway_call description (the src/tools.ts copy that
+// tools/list actually serves; the pack copy is pinned byte-equal to it by
+// the pack-lockstep test below) is the surviving zero-cost name-discovery
+// path at the tools/list layer now that the six first-class discovery
+// faces are gone. Literal fragments, not bare substring names: 'get_api'
+// alone is satisfied by the 'get_api_examples' substring — the same
+// word-character blind spot round-10 recorded for \b alternations.
+test('the served gateway_call description teaches the readonly discovery surface', async () => {
+  const { GATEWAY_TOOL_VOCABULARY } =
+    await import('../plugins/huaweicloud-core/src/packs/huaweicloud-open-mcp/approval.ts');
+  const gatewayCall = TOOL_DEFINITIONS.find((tool) => tool.name === 'huaweicloud_gateway_call');
+  assert.ok(gatewayCall, 'huaweicloud_gateway_call must exist in TOOL_DEFINITIONS');
+  const description = gatewayCall.description;
+
+  // One literal teaching fragment per readonly tool: the name plus the
+  // opening of its parameter list, carried far enough to pin the
+  // load-bearing parameters (include_sops — dropped once during
+  // absorption and undiscoverable anywhere else, so the fragments own it
+  // now). A dropped tool, a renamed tool, or a lost parameter fails here.
+  const fragments = [
+    'search_apis (query',
+    'list_products (optional',
+    'get_product (product; optional include_sops',
+    'list_apis (product; optional tag/search/limit/offset/include_sops',
+    'get_api (product, api',
+    'get_api_examples (product, api',
+  ];
+  for (const fragment of fragments) {
+    assert.ok(
+      description.includes(fragment),
+      `the served gateway_call description must teach the literal fragment "${fragment}"`,
+    );
+  }
+  // The fragment set and the vocabulary table must not drift apart: a
+  // vocabulary rename with a stale fragment list (or vice versa) fails
+  // here rather than silently pinning the old names.
+  const fragmentNames = fragments.map((fragment) => fragment.split(' ')[0]);
+  assert.deepEqual(
+    [...fragmentNames].sort((a, b) => a.localeCompare(b)),
+    [...GATEWAY_TOOL_VOCABULARY.readonly].sort((a, b) => a.localeCompare(b)),
+  );
+
+  // The chain sentence itself, not positions derived from indexOf: the
+  // round-10-style substring blind spot made the old positional check
+  // pass even with the standalone get_api entry deleted.
+  assert.match(
+    description,
+    /Discovery chain: search_apis → list_apis → get_api → get_api_examples/,
+    'the description teaches the discovery chain sentence verbatim',
+  );
+});
+
+function listSkillDirsAll(): string[] {
+  const skillsDir = join(pluginRoot, 'skills');
+  return readdirSync(skillsDir)
+    .filter((name) => existsSync(join(skillsDir, name, 'SKILL.md')))
+    .map((name) => join(skillsDir, name));
+}
+
 test('skill SKILL.md files meet minimum content quality bar', () => {
   const skillsDir = join(pluginRoot, 'skills');
   const skillNames = readdirSync(skillsDir).filter((name) => existsSync(join(skillsDir, name, 'SKILL.md')));
@@ -197,12 +376,15 @@ test('web/static-site deployment intent offers target options with sandbox first
   assert.match(core, /Sandbox \(DevStation\) — recommended/);
   assert.match(core, /NEVER default to a single service such as OBS/);
 
-  const obs = readFileSync(join(pluginRoot, 'skills', 'huawei-obs', 'SKILL.md'), 'utf8');
+  const obs = readFileSync(join(pluginRoot, 'src', 'packs', 'obs', 'skills', 'huawei-obs', 'SKILL.md'), 'utf8');
   assert.match(obs, /Routing Guard: Deploy vs Store/);
   assert.match(obs, /do NOT default to OBS/);
   assert.match(obs, /① huawei-sandbox \(recommended\)/);
 
-  const sandbox = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
+  const sandbox = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'SKILL.md'),
+    'utf8',
+  );
   assert.match(sandbox, /present options, sandbox first/i);
   assert.match(sandbox, /建议优先部署到沙箱/);
 
@@ -212,7 +394,10 @@ test('web/static-site deployment intent offers target options with sandbox first
 });
 
 test('devbridge uses the valid `list` command, not the non-existent `ls`', () => {
-  const sandbox = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
+  const sandbox = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'SKILL.md'),
+    'utf8',
+  );
   const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
 
   assert.doesNotMatch(sandbox, /devbridge ls\b/);
@@ -223,7 +408,10 @@ test('devbridge uses the valid `list` command, not the non-existent `ls`', () =>
 });
 
 test('huawei-sandbox skill documents devbridge description and host/connect traps', () => {
-  const body = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
+  const body = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'SKILL.md'),
+    'utf8',
+  );
   assert.match(body, /only Chinese characters, digits, letters/);
   assert.match(body, /Connection failed, retrying/);
   assert.match(body, /devbridge host/);
@@ -231,7 +419,10 @@ test('huawei-sandbox skill documents devbridge description and host/connect trap
 });
 
 test('devbridge tunnel handling is migrated to the s2 gateway domain', () => {
-  const sandbox = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
+  const sandbox = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'SKILL.md'),
+    'utf8',
+  );
   const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
 
   // Code must construct tunnel URLs exclusively from the s2 gateway domain.
@@ -249,8 +440,13 @@ test('devbridge tunnel handling is migrated to the s2 gateway domain', () => {
 });
 
 test('devbridge 0.2.x flow: auth capability probe, version detection, in-place upgrade guidance', () => {
-  const sandbox = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
-  const tools = readSource(join('src', 'tools.ts'));
+  const sandbox = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'SKILL.md'),
+    'utf8',
+  );
+  // The credentials tool handler moved to the sandbox pack
+  // (src/packs/sandbox/tools.ts) with the P2 pack program.
+  const sandboxPack = readSource(join('src', 'packs', 'sandbox', 'tools.ts'));
 
   // SKILL.md must never teach the removed 0.1.x login flow (--huaweicloud SSO flag is
   // gone from every 0.2.x build), and the obsolete warning row must stay gone.
@@ -280,29 +476,33 @@ test('devbridge 0.2.x flow: auth capability probe, version detection, in-place u
   // The credentials tool must support injecting the DevBridge API Key:
   // - env-first precedence (keeps the long-lived key out of the conversation)
   // - separate storage from the temporary AK/SK (/tmp/hw_api_key vs /tmp/hw_creds.sh)
-  assert.match(tools, /api_key/);
-  assert.match(tools, /process\.env\.HW_API_KEY \|\| args\.api_key/);
-  assert.match(tools, /\/tmp\/hw_api_key/);
+  assert.match(sandboxPack, /api_key/);
+  assert.match(sandboxPack, /process\.env\.HW_API_KEY \|\| args\.api_key/);
+  assert.match(sandboxPack, /\/tmp\/hw_api_key/);
   assert.match(sandbox, /\/tmp\/hw_api_key/);
 
   // The API Key must NOT be written into the shared AK/SK creds script.
-  const credsWrite = tools.match(/const credsScript = \[[\s\S]*?\]/);
-  assert.ok(credsWrite, 'credsScript block not found in tools.ts');
+  const credsWrite = sandboxPack.match(/const credsScript = \[[\s\S]*?\]/);
+  assert.ok(credsWrite, 'credsScript block not found in packs/sandbox/tools.ts');
   assert.doesNotMatch(credsWrite[0], /HW_API_KEY/);
 
   // The CodeArts Doer sidecopy must mirror the probe-branch flow and not regress
-  // to the removed 0.1.x flow either.
-  const sidecopy = readFileSync(join(root, '.codeartsdoer', 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
-  assert.doesNotMatch(sidecopy, /auth login --huaweicloud/);
-  assert.doesNotMatch(sidecopy, /res-hd\.hc-cdn\.cn/);
-  assert.doesNotMatch(sidecopy, /devbridge ls\b/);
-  assert.doesNotMatch(sidecopy, /https:\/\/<id>-<port>\.cn-north-4-bridge/);
-  assert.match(sidecopy, /auth login --help 2>&1 \| grep -q -- '--access-key'/);
-  assert.match(sidecopy, /AUTH_MODE=AKSK_SUPPORTED/);
-  assert.match(sidecopy, /AUTH_MODE=API_KEY_ONLY/);
-  assert.match(sidecopy, /auth login --api-key "\$HW_API_KEY"/);
-  assert.match(sidecopy, /devbridge-s2\.hwtunnel\.com/);
-  assert.match(sidecopy, /\/tmp\/hw_api_key/);
+  // to the removed 0.1.x flow either. .codeartsdoer is a gitignored install
+  // copy (never tracked), so a clean checkout has no sidecopy to check.
+  const sidecopyPath = join(root, '.codeartsdoer', 'skills', 'huawei-sandbox', 'SKILL.md');
+  if (existsSync(sidecopyPath)) {
+    const sidecopy = readFileSync(sidecopyPath, 'utf8');
+    assert.doesNotMatch(sidecopy, /auth login --huaweicloud/);
+    assert.doesNotMatch(sidecopy, /res-hd\.hc-cdn\.cn/);
+    assert.doesNotMatch(sidecopy, /devbridge ls\b/);
+    assert.doesNotMatch(sidecopy, /https:\/\/<id>-<port>\.cn-north-4-bridge/);
+    assert.match(sidecopy, /auth login --help 2>&1 \| grep -q -- '--access-key'/);
+    assert.match(sidecopy, /AUTH_MODE=AKSK_SUPPORTED/);
+    assert.match(sidecopy, /AUTH_MODE=API_KEY_ONLY/);
+    assert.match(sidecopy, /auth login --api-key "\$HW_API_KEY"/);
+    assert.match(sidecopy, /devbridge-s2\.hwtunnel\.com/);
+    assert.match(sidecopy, /\/tmp\/hw_api_key/);
+  }
 });
 
 test('all plugin manifests are valid JSON', () => {
@@ -316,7 +516,10 @@ test('all plugin manifests are valid JSON', () => {
   for (const path of manifests) {
     const data = readJson(path);
     assert.ok(data.name, `Manifest ${path} missing name`);
-    assert.ok(data.skills || data.interface, `Manifest ${path} missing skills/interface`);
+    assert.ok(data.interface, `Manifest ${path} missing interface`);
+    // No manifest may declare a native skills surface: skills are server
+    // data disclosed over MCP only.
+    assert.ok(!Object.hasOwn(data, 'skills'), `Manifest ${path} must not declare skills`);
   }
 });
 
@@ -405,15 +608,16 @@ test('setup-cli.ts supports the codearts target end to end', () => {
   assert.match(setup, /function codeartsProjectSkillsDir\(\)/);
   assert.match(setup, /function codeartsProjectMcpSettingsFile\(\)/);
   assert.match(setup, /function codeartsPluginsDir\(\)/);
-  // install copies to user + project skills and registers both MCP configs
-  assert.match(setup, /copyDir\(skillsSrc, codeartsSkillsDir\(\)\)/);
-  assert.match(setup, /copyDir\(skillsSrc, codeartsProjectSkillsDir\(\)\)/);
+  // install ships the server payload (dist + safety + skills server data)
+  // into the codearts plugin dir and registers both MCP configs
+  assert.match(setup, /async function installCodeArts\(\): Promise<void> \{\s*\n\s*const pluginSrc/);
+  assert.match(setup, /copyServerPayload\(pluginDest\)/);
   assert.match(setup, /registerCodeartsMcp\(codeartsMcpSettingsFile\(\)\)/);
   assert.match(setup, /registerCodeartsMcp\(codeartsProjectMcpSettingsFile\(\)\)/);
   // MCP registration writes an enabled server with local mode env
   assert.match(setup, /config\.mcpServers\['huaweicloud-devkit'\] = \{/);
   assert.match(setup, /HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local'/);
-  assert.match(setup, /enabled: true,/);
+  assert.match(setup, /entry\.enabled = true;/);
   // command dispatch covers codearts for install / uninstall / status
   const branches = setup.match(/target === 'codearts' \|\| target === 'all'/g);
   const installDispatch = setup.match(/shouldInstall\('codearts'\)/g);
@@ -426,11 +630,10 @@ test('setup-cli.ts supports the codearts target end to end', () => {
   assert.match(setup, /if \(target === 'codex'\) return null;/);
   assert.match(setup, /if \(target === 'codearts'\) return codeartsPluginsDir\(\);/);
   assert.match(setup, /function writeInstallMarker\(target: string\)/);
-  // doctor checks the codearts skills dir alongside opencode
-  assert.match(
-    setup,
-    /const skillsOptions = \[[\s\S]*?opencodeSkillsDir\(\)[\s\S]*?codexDesktopSkillsDir\(\)[\s\S]*?codeartsSkillsDir\(\)[\s\S]*?codeartsWorkSkillsDir\(\)[\s\S]*?workbuddySkillsDir\(\)[\s\S]*?dshSkillsDir\(\)[\s\S]*?\];/,
-  );
+  // doctor checks the skills tree inside installed plugin dirs, and native
+  // skill dirs only for stale-copy detection
+  assert.match(setup, /serverSkillCount\(dir\) >= 6/);
+  assert.match(setup, /staleNativeSkillDirs\(\)\.length/);
   // help text documents the target
   assert.match(
     setup,
@@ -439,40 +642,51 @@ test('setup-cli.ts supports the codearts target end to end', () => {
   assert.match(setup, /install --target codearts/);
 });
 
-test('tools.ts resolves skills from the codearts directory', () => {
+test('tools.ts resolves skills from the server-relative tree only', () => {
   const tools = readSource(join('src', 'tools.ts'));
-  assert.match(tools, /function codeartsSkillsDir\(\)/);
-  assert.match(tools, /return join\(home, '\.codeartsdoer', 'skills'\);/);
-  // candidates only count when they contain at least one skill with SKILL.md
-  assert.match(tools, /export function findSkillsRoot/);
+  // SKILLS_ROOT is server data next to dist/ — no agent-native dir probing
+  assert.match(tools, /const SKILLS_ROOT = join\(__dirname, '\.\.', 'skills'\);/);
+  assert.doesNotMatch(tools, /function opencodeSkillsDir\(\)/, 'native dir probe must be gone');
+  assert.doesNotMatch(tools, /findSkillsRoot/, 'multi-root fallback must be gone');
   assert.match(tools, /export function listSkillDirs/);
   assert.match(tools, /existsSync\(join\(root, d\.name, 'SKILL\.md'\)\)/);
-  assert.match(
-    tools,
-    /findSkillsRoot\(\[[\s\S]*?SKILLS_ROOT_DEV[\s\S]*?dshSkillsDir\(\)[\s\S]*?codeartsSkillsDir\(\)[\s\S]*?opencodeSkillsDir\(\)[\s\S]*?workbuddySkillsDir\(\)[\s\S]*?officeaceSkillsRoot\(\)[\s\S]*?\]\)/,
-  );
 });
 
-test('setup-cli.ts handles KooCLI sandbox blockers and privacy agreement', () => {
+test('KooCLI sandbox blockers and privacy agreement live in their extracted modules', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
   const hcloudProbe = readSource(join('src', 'hcloud-probe.ts'));
-  // sandbox detection reads the CodeArts permission config
-  assert.match(setup, /function detectCodeartsSandbox\(\)/);
-  assert.match(setup, /codearts-data', 'storage', 'permission', 'config\.json'/);
-  assert.match(setup, /config\.bash_mode/);
-  // hcloud lookup covers HCLOUD_BIN and ~/hcloud on Windows
+  const codeartsSandbox = readSource(join('src', 'codearts-sandbox.ts'));
+  const depProvision = readSource(join('src', 'dep-provision.ts'));
+  // sandbox detection reads the CodeArts permission config (codearts-sandbox.ts,
+  // shared by doctor and the KooCLI installer; no leftover local copy in setup-cli)
+  assert.match(codeartsSandbox, /function detectCodeartsSandbox\(\)/);
+  assert.match(codeartsSandbox, /codearts-data', 'storage', 'permission', 'config\.json'/);
+  assert.match(codeartsSandbox, /config\.bash_mode/);
+  // sandbox warning prompts user to install externally or disable sandbox
+  assert.match(codeartsSandbox, /function printSandboxWarning\(/);
+  assert.match(codeartsSandbox, /检测到码道沙箱模式/);
+  assert.match(codeartsSandbox, /在码道外的终端安装并使用 KooCLI/);
+  assert.match(codeartsSandbox, /关闭沙箱模式后重试/);
+  assert.match(setup, /from '\.\/codearts-sandbox\.(?:mjs|ts)'/);
+  assert.doesNotMatch(setup, /function detectCodeartsSandbox\(\)/, 'detection must not be duplicated in setup-cli');
+  // hcloud lookup delegates to the shared resolution chain; the HCLOUD_BIN
+  // override is a property of the dependency catalog (envBin), not a literal
+  // in this module — the old process.env.HCLOUD_BIN regex here passed only
+  // because HCLOUD_BIN_ARGS_JSON prefixes it.
   assert.match(setup, /from '\.\/hcloud-probe\.(?:mjs|ts)'/);
   assert.match(hcloudProbe, /function findHcloudBin\(\)/);
-  assert.match(hcloudProbe, /process\.env\.HCLOUD_BIN/);
-  assert.match(hcloudProbe, /homedir\(\), 'hcloud', 'hcloud\.exe'/);
+  assert.equal(DEPENDENCIES.hcloud.resolution.envBin, 'HCLOUD_BIN');
+  assert.match(hcloudProbe, /resolveDependencyCommand\(DEPENDENCIES\.hcloud\.resolution\)/);
   assert.match(hcloudProbe, /sandbox_home_failure/);
-  // sandbox warning prompts user to install externally or disable sandbox
-  assert.match(setup, /function printSandboxWarning\(/);
-  assert.match(setup, /检测到码道沙箱模式/);
-  assert.match(setup, /在码道外的终端安装并使用 KooCLI/);
-  assert.match(setup, /关闭沙箱模式后重试/);
-  // install-hcloud surfaces sandbox guidance on failure and after install
-  assert.match(setup, /沙箱模式拦截了 KooCLI 自动安装/);
+  // install-hcloud surfaces sandbox guidance on failure (caller moved with the installer)
+  assert.match(depProvision, /沙箱模式拦截了 KooCLI 自动安装/);
+  // privacy agreement is gated on the tty flag on BOTH platforms (the Windows
+  // branch used to lack the gate and hang non-interactive sessions)
+  assert.match(depProvision, /await offerPrivacyAcceptance\(join\(installDir, 'hcloud\.exe'\), opts\.tty\)/);
+  assert.match(depProvision, /await offerPrivacyAcceptance\(binPath, opts\.tty\)/);
+  assert.match(depProvision, /非交互会话：请稍后在终端运行 hcloud version/);
+  // the caller computes the gate; the installer stays testable
+  assert.match(setup, /process\.stdin\.isTTY === true && process\.stdout\.isTTY === true/);
   // MCP env injects HCLOUD_BIN when an hcloud binary is found
   assert.match(setup, /if \(hcloudBin\) env\.HCLOUD_BIN = hcloudBin\.replace/);
   // doctor warns about sandbox mode with the accurate settings path (#261)
@@ -480,17 +694,64 @@ test('setup-cli.ts handles KooCLI sandbox blockers and privacy agreement', () =>
   assert.match(setup, /设置 → 对话流 → 智能体 终端命令运行模式 → 自动运行/);
 });
 
-test('setup-cli.ts covers hermes restart hints, unix auto-install, and grouped status (#280)', () => {
+test('hermes restart hints, unix auto-install in dep-provision, grouped status (#280)', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
+  const depProvision = readSource(join('src', 'dep-provision.ts'));
   // Hermes .installed marker is read for restart hints (#280-4)
   assert.match(setup, /hermesPluginsDir\(\), '\.installed'/);
-  // Unix install-hcloud executes for real: download → extract → install → verify (#280-3)
-  assert.match(setup, /Auto-installing to \$\{binDir\}/);
-  assert.match(setup, /spawnSync\('curl', \['-fL', url, '-o', tmpTar\]/);
-  assert.match(setup, /spawnSync\('tar', \['-xzf', tmpTar, '-C', tmpdir\(\)\]/);
+  // Unix install-hcloud executes for real: download → extract → install → verify
+  // (#280-3); the body moved to dep-provision.ts when provisioning absorbed it.
+  assert.match(depProvision, /Auto-installing to \$\{binDir\}/);
+  assert.match(depProvision, /spawnSync\('curl', \['-fL', url, '-o', tmpTar\]/);
+  assert.match(depProvision, /spawnSync\('tar', \['-xzf', tmpTar, '-C', scratch\]/);
+  // download/extract scratch is per-run (mkdtemp) and cleaned up in finally:
+  // the fixed tmpdir()/huaweicloud-cli-<pkg>.tar.gz path collided across
+  // concurrent installs, and auto-provisioning made concurrent installs normal.
+  assert.match(depProvision, /mkdtempSync\(join\(tmpdir\(\), 'huaweicloud-devkit-'\)\)/);
+  assert.match(depProvision, /rmSync\(scratch, \{ recursive: true, force: true \}\)/);
   // status groups sections by install state, installed first (#280-9)
   assert.match(setup, /stateOrder = \{ installed: 0, partial: 1, unknown: 2, not: 3 \}/);
   assert.match(setup, /已安装: /);
+});
+
+test('dependency provisioning: new modules stay unbundled; setup-cli delegates', () => {
+  const setup = readSource(join('src', 'setup-cli.ts'));
+  const depProvision = readSource(join('src', 'dep-provision.ts'));
+  const codeartsSandbox = readSource(join('src', 'codearts-sandbox.ts'));
+  const depResolve = readSource(join('src', 'lib', 'dep-resolve.ts'));
+  // These compile into the unbundled dist/setup-cli.js graph, where only
+  // undici exists at runtime: no zod, no SDK, ever.
+  for (const [name, source] of [
+    ['dep-provision.ts', depProvision],
+    ['codearts-sandbox.ts', codeartsSandbox],
+    ['lib/dep-resolve.ts', depResolve],
+  ]) {
+    assert.doesNotMatch(source, /from 'zod'/, `${name} must not import zod`);
+    assert.doesNotMatch(source, /@modelcontextprotocol/, `${name} must not import the SDK`);
+  }
+  // lib/dep-resolve keeps the src/lib contract: runtime imports are node:*
+  // builtins only; the dependency-model edge is type-only.
+  const importLines = depResolve.split('\n').filter((line) => line.startsWith('import '));
+  assert.ok(importLines.length >= 5, 'dep-resolve should import node builtins');
+  for (const line of importLines) {
+    assert.ok(
+      line.includes("from 'node:") || line.startsWith('import type '),
+      `lib/dep-resolve.ts runtime import must be node:* or type-only: ${line}`,
+    );
+  }
+  // The installer body is absorbed, not duplicated: setup-cli owns the CLI
+  // wrapper only.
+  assert.doesNotMatch(setup, /spawnSync\('curl'/, 'the KooCLI installer body lives in dep-provision.ts');
+  assert.match(
+    setup,
+    /await installKooCli\(\{ tty: process\.stdin\.isTTY === true && process\.stdout\.isTTY === true \}\)/,
+    'cmdInstallHcloud is the thin wrapper',
+  );
+  // Install and update both provision after payload placement, gated on the flag.
+  assert.match(setup, /Provisioning pack binaries \(enabled packs: \$\{union\.size\}\)/);
+  assert.match(setup, /hasCliFlag\('--skip-binaries'\)/);
+  assert.match(setup, /const updated = await dispatchUpdateTarget\(target\);/);
+  assert.match(setup, /--skip-binaries {3}\(with: install\/update\) skip provisioning host binaries/);
 });
 
 test('setup-cli.ts supports the dsh target end to end', () => {
@@ -510,10 +771,9 @@ test('setup-cli.ts supports the dsh target end to end', () => {
   assert.match(setup, /async function updateDsh\(\)/);
   assert.match(setup, /function uninstallDsh\(\)/);
   assert.match(setup, /function dshStatus\(\)/);
-  // install copies skills/server/safety and registers MCP through cordis.patch.yml
-  assert.match(setup, /copyDir\(skillsSrc, dshSkillsDir\(\)\)/);
-  assert.match(setup, /copyDir\(distDir, join\(pluginDest, 'dist'\)\)/);
-  assert.match(setup, /copyDir\(safetyDir, join\(pluginDest, 'safety'\)\)/);
+  // install ships the server payload and registers MCP through cordis.patch.yml
+  assert.match(setup, /copyServerPayload\(pluginDest\)/);
+  assert.doesNotMatch(setup, /copyDir\(skillsSrc, dshSkillsDir\(\)\)/, 'DSH skills stay server data');
   assert.match(setup, /ensureDshMcpPatch\(\)/);
   assert.match(setup, /tryInstallDshMcpClient\(\)/);
   // DSH MCP patch uses dsh-mcp-client with stdio local server mode
@@ -533,10 +793,9 @@ test('setup-cli.ts supports the dsh target end to end', () => {
   );
   // .installed marker goes to the dsh plugins dir
   assert.match(setup, /if \(target === 'dsh'\) return dshPluginsDir\(\);/);
-  // doctor checks DSH plugin dir, patch, and skills dir
+  // doctor checks the DSH plugin dir and patch
   assert.match(setup, /const dshPluginDir = dshPluginsDir\(\);/);
   assert.match(setup, /dshPatchConfigured\(\)/);
-  assert.match(setup, /dshSkillsDir\(\)/);
   // help text documents the target
   assert.match(
     setup,
@@ -545,26 +804,26 @@ test('setup-cli.ts supports the dsh target end to end', () => {
   assert.match(setup, /install --target dsh/);
 });
 
-test('tools.ts resolves skills from the dsh directory', () => {
+test('tools.ts resolves skills from the server-relative tree only (dsh fallback removed)', () => {
   const tools = readSource(join('src', 'tools.ts'));
-  assert.match(tools, /function dshSkillsDir\(\)/);
-  assert.match(tools, /process\.env\.DSH_HOME \|\| join\(homedir\(\), '\.dsh'\)/);
-  assert.match(tools, /return join\(home, 'skills'\);/);
-  // stale or empty dirs must not short-circuit the fallback chain
-  assert.match(tools, /resolveSkillsRoot[\s\S]*?findSkillsRoot\(\[/);
-  assert.match(tools, /\|\|\s*SKILLS_ROOT_DEV/);
+  // No DSH (or any agent) dir probing survives in the server: skills are
+  // server data resolved next to dist/.
+  assert.doesNotMatch(tools, /function dshSkillsDir\(\)/, 'dsh dir probe must be gone');
+  assert.match(tools, /const SKILLS_ROOT = join\(__dirname, '\.\.', 'skills'\);/);
+  // The agent-target list moved to the zod schema descriptions when the
+  // JSON-Schema registry was replaced, and into the auth pack when the
+  // schemas were materialized per pack (src/packs/auth/tools.ts).
+  const authPack = readSource(join('src', 'packs', 'auth', 'tools.ts'));
   assert.match(
-    tools,
+    authPack,
     /opencode, codex, codex-desktop, codearts, codearts-work, workbuddy, dsh, officeace, hermes, openclaw, atomcode, or all/,
   );
 });
 
-test('tools.ts resolves skills from the officeace directory', () => {
-  const tools = readSource(join('src', 'tools.ts'));
-  assert.match(tools, /function officeaceSkillsRoot\(\)/);
-  assert.match(tools, /function readOfficeaceRegistryInstallDir\(\)/);
-  assert.match(tools, /office-claw/);
-  assert.match(tools, /capabilities\.json/);
+test('setup-cli.ts keeps officeace capability cleanup (no native skill registration)', () => {
+  const setup = readSource(join('src', 'setup-cli.ts'));
+  assert.match(setup, /function removeOfficeaceSkillCapabilities\(\)/);
+  assert.match(setup, /function officeaceSkillsDir\(\)/);
 });
 
 test('setup-cli.ts supports the officeace target end to end', () => {
@@ -581,11 +840,11 @@ test('setup-cli.ts supports the officeace target end to end', () => {
   assert.match(setup, /function readOfficeaceRegistryInstallDir\(\)/);
   assert.match(setup, /function ensureOfficeaceMcpInSqlite\(\)/);
   assert.match(setup, /function removeOfficeaceMcpFromSqlite\(\)/);
-  assert.match(setup, /function registerOfficeaceSkillEntries\(\)/);
-  assert.match(setup, /copyDir\(skillsSrc, officeaceSkillsDir\(\)\)/);
-  assert.match(setup, /ensureOfficeaceMcpInSqlite\(\)/);
-  assert.match(setup, /registerOfficeaceSkillEntries\(\)/);
-  assert.match(setup, /type.*skill.*source.*custom/s);
+  // Native skill registration is gone; install/update actively clean the
+  // capabilities entries older versions wrote.
+  assert.doesNotMatch(setup, /registerOfficeaceSkillEntries/, 'no native skill registration');
+  assert.match(setup, /copyServerPayload\(pluginDest\)/);
+  assert.match(setup, /removeOfficeaceSkillCapabilities\(\)/);
   assert.match(setup, /mcpServer.*command.*node/s);
   assert.match(setup, /capabilities\.json/);
   const branches = setup.match(/target === 'officeace' \|\| target === 'all'/g);
@@ -618,7 +877,7 @@ test('setup-cli.ts supports the hermes target end to end', () => {
   assert.match(setup, /function hermesSafetyPluginDir\(\)/);
   assert.match(setup, /function ensureHermesHookPlugin\(\)/);
   assert.match(setup, /function removeHermesHookPlugin\(\)/);
-  assert.match(setup, /copyDir\(skillsSrc, hermesSkillsDir\(\)\)/);
+  assert.match(setup, /copyServerPayload\(pluginDest, \{ skipDist: skipMcp \}\)/);
   assert.match(setup, /copyDir\(hooksDir, join\(pluginDest, 'hooks'\)\)/);
   assert.match(setup, /ensureHermesMcpConfig\(\)/);
   assert.match(setup, /ensureHermesHooksConfig\(\)/);
@@ -683,21 +942,11 @@ test('setup-cli.ts checks for updates on install/update via shared query', () =>
   assert.ok(calls && calls.length >= 2, 'checkForUpdate should be awaited in both cmdInstall and cmdUpdate');
 });
 
-test('tools.ts resolves skills from the hermes directory', () => {
+test('tools.ts no longer probes hermes/atomcode native skill dirs', () => {
   const tools = readSource(join('src', 'tools.ts'));
-  assert.match(tools, /function hermesSkillsDir\(\)/);
-  assert.match(tools, /process\.env\.HERMES_HOME/);
-  assert.match(tools, /LOCALAPPDATA/);
-  assert.match(tools, /return join\(home, '\.hermes', 'skills'\)/);
-  assert.match(tools, /hermesSkillsDir\(\)/);
-});
-
-test('tools.ts resolves skills from the atomcode directory', () => {
-  const tools = readSource(join('src', 'tools.ts'));
-  assert.match(tools, /function atomcodeSkillsDir\(\)/);
-  assert.match(tools, /process\.env\.ATOMCODE_HOME/);
-  assert.match(tools, /return join\(home, '\.atomcode', 'skills'\)/);
-  assert.match(tools, /atomcodeSkillsDir\(\)/);
+  assert.doesNotMatch(tools, /function hermesSkillsDir\(\)/, 'hermes dir probe must be gone');
+  assert.doesNotMatch(tools, /function atomcodeSkillsDir\(\)/, 'atomcode dir probe must be gone');
+  assert.match(tools, /const SKILLS_ROOT = join\(__dirname, '\.\.', 'skills'\);/);
 });
 
 test('agent-registration reports openclaw registration status', () => {
@@ -710,7 +959,9 @@ test('agent-registration reports openclaw registration status', () => {
 test('official Huawei Cloud Icons library is integrated', () => {
   const tools = readSource(join('src', 'tools.ts'));
   assert.match(tools, /name: 'huaweicloud_get_service_icon'/);
-  assert.match(tools, /getServiceIcon\(args\.service/);
+
+  const discoveryPack = readSource(join('src', 'packs', 'discovery', 'tools.ts'));
+  assert.match(discoveryPack, /getServiceIcon\(args\.service/);
 
   const snapshotPath = join(pluginRoot, 'src', 'data', 'icons-manifest.v1.json');
   assert.ok(existsSync(snapshotPath), 'Missing icons-manifest.v1.json snapshot');
@@ -731,25 +982,137 @@ test('official Huawei Cloud Icons library is integrated', () => {
   assert.match(discovery, /open\.huaweicloud\.com\/openplatform\/icons\.html/);
 });
 
-test('tools.ts registers version-update tools', () => {
+test('per-pack modules stay inside the pack boundary allowlist', () => {
+  // Same implementation as scripts/validate-package.mjs (second entry):
+  // packs import only their own root, src/lib, the core shared whitelist,
+  // node:/zod/undici, and type-only edges into core. registry.ts is the
+  // composition root and is not scanned.
+  const result = checkPackBoundaries({ root });
+  assert.deepEqual(result.lines, [], `pack boundary violations:\n${result.lines.join('\n')}`);
+});
+
+test('update pack registers version-update tools; registry carries the central dispatch', () => {
+  // The update pack (src/packs/update/tools.ts) owns the tool wiring
+  // (name/description/schema/handler); since P4 callTool has no per-pack case
+  // labels — the PACK_TOOL_HANDLERS merge in packs/registry.ts dispatches
+  // every pack tool, satisfies-checked for completeness at compile time.
+  // Semantics unchanged: both update tools are registered and wired end to
+  // end.
+  const packTools = readSource(join('src', 'packs', 'update', 'tools.ts'));
+  for (const name of ['huaweicloud_check_update', 'huaweicloud_upgrade']) {
+    assert.match(packTools, new RegExp(`name: '${name}'`));
+  }
+  assert.match(packTools, /from '\.\.\/\.\.\/update-check\.(?:mjs|ts)'/);
+
   const tools = readSource(join('src', 'tools.ts'));
   for (const name of ['huaweicloud_check_update', 'huaweicloud_upgrade']) {
-    assert.match(tools, new RegExp(`name: '${name}'`));
-    assert.match(tools, new RegExp(`case '${name}':`));
+    assert.doesNotMatch(tools, new RegExp(`case '${name}':`));
   }
-  assert.match(tools, /from '\.\/update-check\.(?:mjs|ts)'/);
+  assert.match(tools, /isPackToolName\(name\)/);
+  assert.match(tools, /PACK_TOOL_HANDLERS\[name\]\(args, opts\)/);
+
+  // Behavioral lockstep: the pack tool list equals the PACK_OF ownership for
+  // 'update', and the pack descriptions match the tools/list definitions.
+  const ownedByUpdate = Object.keys(PACK_OF).filter((tool) => PACK_OF[tool] === 'update');
+  assert.deepEqual(
+    UPDATE_TOOLS.map((tool) => tool.name).sort((a, b) => a.localeCompare(b)),
+    [...ownedByUpdate].sort((a, b) => a.localeCompare(b)),
+  );
+  for (const tool of UPDATE_TOOLS) {
+    const definition = TOOL_DEFINITIONS.find((entry) => entry.name === tool.name);
+    assert.ok(definition, `${tool.name} missing from TOOL_DEFINITIONS`);
+    assert.equal(tool.description, definition.description);
+  }
+});
+
+test('seven packs register their tools; the central map dispatches them', () => {
+  // Same contract as the update pack, asserted for the packs materialized
+  // after P4: sandbox (11), auth (5), obs (2), voucher (2), discovery (3),
+  // huaweicloud-open-mcp (3), huaweicloud-cli (7). Their handlers reach
+  // callTool only through the PACK_TOOL_HANDLERS merge in packs/registry.ts.
+  const packs = [
+    { id: 'sandbox', tools: SANDBOX_TOOLS, count: 11 },
+    { id: 'auth', tools: AUTH_TOOLS, count: 5 },
+    { id: 'obs', tools: OBS_TOOLS, count: 2 },
+    { id: 'voucher', tools: VOUCHER_TOOLS, count: 2 },
+    { id: 'discovery', tools: DISCOVERY_TOOLS, count: 3 },
+    { id: 'huaweicloud-open-mcp', tools: HUAWEICLOUD_OPEN_MCP_TOOLS, count: 3 },
+    { id: 'huaweicloud-cli', tools: HUAWEICLOUD_CLI_TOOLS, count: 7 },
+  ];
+  const tools = readSource(join('src', 'tools.ts'));
+  const registry = readSource(join('src', 'packs', 'registry.ts'));
+  for (const { id, tools: packTools, count } of packs) {
+    assert.equal(packTools.length, count, `${id} pack tool count`);
+    const packSource = readSource(join('src', 'packs', id, 'tools.ts'));
+    for (const tool of packTools) {
+      assert.match(packSource, new RegExp(`name: '${tool.name}'`));
+      assert.doesNotMatch(tools, new RegExp(`case '${tool.name}':`));
+      const definition = TOOL_DEFINITIONS.find((entry) => entry.name === tool.name);
+      assert.ok(definition, `${tool.name} missing from TOOL_DEFINITIONS`);
+      assert.equal(tool.description, definition.description);
+    }
+    // The pack's handler map is merged into the central dispatch table. The
+    // export-name convention maps the pack id to UPPER_SNAKE: hyphens in the
+    // id become underscores (huaweicloud-open-mcp →
+    // HUAWEICLOUD_OPEN_MCP_TOOL_HANDLERS).
+    const exportName = id.toUpperCase().replaceAll('-', '_');
+    assert.match(registry, new RegExp(`\\.\\.\\.${exportName}_TOOL_HANDLERS`));
+    // Behavioral lockstep: the pack tool list equals the PACK_OF ownership.
+    const owned = Object.keys(PACK_OF).filter((tool) => PACK_OF[tool] === id);
+    assert.deepEqual(
+      packTools.map((tool) => tool.name).sort((a, b) => a.localeCompare(b)),
+      [...owned].sort((a, b) => a.localeCompare(b)),
+      `${id} pack tools must match PACK_OF ownership`,
+    );
+  }
+  assert.match(registry, /satisfies Record<PackToolName, PackToolDefinition\['handler'\]>/);
 });
 
 test('stdio server warms update cache; shared protocol decorates first tool call', () => {
-  const server = readSource(join('src', 'mcp-server.mjs'));
+  const server = readSource(join('src', 'mcp-server.ts'));
   assert.match(server, /getCachedUpdateInfo\(readInstalledVersion\(\)/);
   const protocol = readSource(join('src', 'mcp-protocol.ts'));
   assert.match(protocol, /applyUpdateHint\(/);
   assert.match(protocol, /peekCachedUpdateInfo\(\)/);
 });
 
+test('zod tool schemas match the legacy registry snapshot (deep structural diff)', () => {
+  // The legacy JSON-Schema literals are gone; the checked-in snapshot is the
+  // authoritative record of the pre-migration contract. scripts/registry-snapshot-diff.mjs
+  // re-renders every zod schema and compares required sets, property trees,
+  // types, enums, and item schemas against it, failing on any drift.
+  assert.ok(
+    existsSync(join(root, 'test', 'fixtures', 'legacy-registry-snapshot.json')),
+    'legacy registry snapshot fixture is missing',
+  );
+  const run = spawnSync(process.execPath, [join(root, 'scripts', 'registry-snapshot-diff.mjs')], {
+    encoding: 'utf8',
+    timeout: 60_000,
+  });
+  assert.equal(run.status, 0, `registry snapshot diff failed:\n${run.stdout}\n${run.stderr}`);
+});
+
+test('SDK migration invariants: setup-cli stays out of the bundled module graph', () => {
+  // The framing, keepalive, 406, and hint behaviors are pinned by the
+  // process-level suites (mcp-server / remote-mcp-server / dist-bundle);
+  // source-regex assertions on them broke on unrelated refactors. The one
+  // policy no behavioral test can catch: setup-cli runs from the raw tsc
+  // output before any bundling, in agent dirs without SDK node_modules — a
+  // single tools/mcp-protocol/SDK import there breaks production installs
+  // while every in-repo gate stays green.
+  const setup = readSource(join('src', 'setup-cli.ts'));
+  assert.doesNotMatch(setup, /@modelcontextprotocol/, 'setup-cli must not import the SDK (unbundled entry)');
+  assert.doesNotMatch(setup, /from 'zod'/, 'setup-cli must not import zod (unbundled entry)');
+  assert.doesNotMatch(setup, /from '\.\/tools\.ts'/, 'setup-cli must not import tools.ts (pulls the SDK graph)');
+  assert.doesNotMatch(
+    setup,
+    /from '\.\/mcp-protocol\.ts'/,
+    'setup-cli must not import mcp-protocol.ts (pulls the SDK graph)',
+  );
+});
+
 test('hdkitservice-api sends X-HW-Client-Version; SKILL session-start wording', () => {
-  const api = readSource(join('src', 'sandbox', 'hdkitservice-api.ts'));
+  const api = readSource(join('src', 'lib', 'hdkit', 'hdkitservice-api.ts'));
   assert.match(api, /X-HW-Client-Version/);
   assert.match(api, /readInstalledVersion\(\)/);
   const skill = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-core', 'SKILL.md'), 'utf8');
@@ -771,14 +1134,14 @@ test('cmdUpdate has no trailing unreachable reinstall; cmdReinstall keeps it', (
     setup.indexOf('async function cmdUpdate()'),
     setup.indexOf('async function cmdReinstall()'),
   );
-  assert.doesNotMatch(cmdUpdateBody, /await cmdUninstall\(\)/);
-  assert.doesNotMatch(cmdUpdateBody, /await cmdInstall\(\)/);
+  assert.doesNotMatch(cmdUpdateBody, /await cmdUninstall\(/);
+  assert.doesNotMatch(cmdUpdateBody, /await cmdInstall\(/);
   // cmdReinstall 是专职重装：卸载+重装逻辑必须保留。
   const cmdReinstallBody = setup.slice(
     setup.indexOf('async function cmdReinstall()'),
     setup.indexOf('async function cmdInstallHcloud()'),
   );
-  assert.match(cmdReinstallBody, /await cmdUninstall\(\)/);
+  assert.match(cmdReinstallBody, /await cmdUninstall\(\{ fromReinstall: true \}\)/);
   assert.match(cmdReinstallBody, /await cmdInstall\(\)/);
 });
 
@@ -813,7 +1176,13 @@ test('shipped runtime entry points point at built dist JavaScript', () => {
   }
 
   const hookWrapper = readFileSync(join(pluginRoot, 'hooks', 'huaweicloud-safety.mjs'), 'utf8');
-  assert.doesNotMatch(hookWrapper, /from '\.\.\/src\//, 'hook wrapper must import the built dist, not src');
+  assert.match(hookWrapper, /dist\/safety-policy\.js/, 'hook wrapper must prefer the built dist module');
+  assert.doesNotMatch(hookWrapper, /from '\.\.\/src\//, 'hook wrapper must not statically import src');
+
+  // A raw git or marketplace copy of the plugin has no dist; the wrapper must
+  // still run the safety gate from the TypeScript source in that layout.
+  const hookFallback = /existsSync\([^)]*dist[^)]*safety-policy\.js[\s\S]*import\('\.\.\/src\/safety-policy\.ts'\)/;
+  assert.match(hookWrapper, hookFallback, 'hook wrapper needs a src fallback for unbuilt copies');
 
   const cordis = readFileSync(join(root, 'cordis.patch.yml'), 'utf8');
   assert.doesNotMatch(cordis, /\.ts\b/, 'cordis.patch.yml must not reference TypeScript files');
@@ -829,4 +1198,266 @@ test('shipped runtime entry points point at built dist JavaScript', () => {
     'setup-cli must not point at a src mcp-server.js (built output lives in dist)',
   );
   assert.doesNotMatch(setupCli, /join\(PLUGIN_ROOT, 'src'\)/, 'setup-cli must copy dist, not src');
+});
+
+test('plugin src tree is TypeScript only', () => {
+  const walk = (dir) =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory() ? walk(join(dir, entry.name)) : [join(dir, entry.name)],
+    );
+  const scripts = walk(join(pluginRoot, 'src')).filter((file) => /\.(mjs|cjs|js)$/.test(file));
+  assert.deepEqual(
+    scripts,
+    [],
+    `src must hold only TypeScript scripts plus data assets; found JavaScript: ${scripts.join(', ')}`,
+  );
+});
+
+test('pack registry partitions the tool registry and claims every skill directory', () => {
+  // Mirrors test/packs-registry.test.ts: every tool lands in exactly one pack,
+  // the pack union equals the full TOOL_DEFINITIONS registry, and every
+  // skills/ directory is claimed exactly once.
+  const allToolNames = TOOL_DEFINITIONS.map((tool) => tool.name).sort((a, b) => a.localeCompare(b));
+  const packTools = PACKS.flatMap((pack) => pack.tools);
+  const toolClaims = new Set();
+  for (const tool of packTools) {
+    assert.ok(!toolClaims.has(tool), `tool ${tool} is claimed by more than one pack`);
+    toolClaims.add(tool);
+  }
+  assert.deepEqual(
+    [...toolClaims].sort((a, b) => a.localeCompare(b)),
+    allToolNames,
+  );
+
+  const skillsDirs = readdirSync(join(pluginRoot, 'skills'), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort((a, b) => a.localeCompare(b));
+  const skillClaims = new Set();
+  for (const pack of PACKS) {
+    for (const skill of pack.skills) {
+      assert.ok(!skillClaims.has(skill), `skill ${skill} is claimed by more than one pack (${pack.id})`);
+      skillClaims.add(skill);
+    }
+  }
+  assert.deepEqual(
+    [...skillClaims].sort((a, b) => a.localeCompare(b)),
+    skillsDirs,
+  );
+});
+
+test('pack ids match the registry and the legacy binaries table is gone', () => {
+  // PACK_IDS is the installer's zod-free --packs validation list
+  // (setup-cli.ts cannot import the zod-dependent registry); it must equal
+  // the registry's PACKS ids or --packs would reject valid packs or accept
+  // ghosts.
+  const registryIds = PACKS.map((pack) => pack.id).sort((a, b) => a.localeCompare(b));
+  assert.deepEqual(
+    [...PACK_IDS].sort((a, b) => a.localeCompare(b)),
+    registryIds,
+  );
+
+  // The dependency model absorbed the old PACK_BINARIES / Pack.binaries
+  // declaration wave: the binary vocabulary lives only in
+  // lib/dependency-model.ts, and no pack manifest re-grows a binaries field.
+  const packTypes = readSource(join('src', 'lib', 'pack-types.ts'));
+  assert.doesNotMatch(packTypes, /PACK_BINARIES|PackBinary/, 'pack-types must not re-grow the binaries table');
+  for (const pack of PACKS) {
+    assert.ok(!('binaries' in pack), `${pack.id} declares no binaries field`);
+  }
+});
+
+test('doctor renders the pack-binary section from the dependency model', () => {
+  const setupCli = readSource(join('src', 'setup-cli.ts'));
+  assert.doesNotMatch(setupCli, /PACK_BINARIES|PackBinary/, 'doctor must not read the deleted binaries table');
+  assert.match(
+    setupCli,
+    /requiredDependencies\(enabledPacksUnion\)/,
+    'the section iterates requiredDependencies over the enabled union',
+  );
+  assert.match(setupCli, /sandbox-resident, not probed host-side/);
+  assert.match(setupCli, /dep install \$\{id\}/, 'the gateway WARNs point at dep install for the missing dependency');
+  assert.match(setupCli, /Object\.entries\(PACK_USES\)/, 'PACK_USES soft edges warn in the same section');
+  // The dedicated hcloud block stays the explicit plugin-level rule, never
+  // derived from the dependency graph (see the section's comment).
+  assert.match(setupCli, /check\('hcloud CLI installed'/, 'the dedicated hcloud check is untouched');
+});
+
+test('dependency model: catalog keyed by id, kinds pin the process model', () => {
+  assert.deepEqual(
+    Object.keys(DEPENDENCIES).sort((a, b) => a.localeCompare(b)),
+    [...DEPENDENCY_IDS].sort((a, b) => a.localeCompare(b)),
+  );
+  assert.equal(DEPENDENCIES.devbridge.kind, 'sandbox-resident');
+  assert.ok(!('resolution' in DEPENDENCIES.devbridge), 'sandbox-resident carries no host resolution');
+  assert.ok(!('installPolicy' in DEPENDENCIES.devbridge), 'sandbox-resident carries no install policy');
+  assert.equal(DEPENDENCIES.hcloud.kind, 'cli');
+  assert.equal(DEPENDENCIES.hcloud.installPolicy, 'auto');
+  assert.equal(DEPENDENCIES['open-mcp-gateway'].kind, 'managed-child');
+  assert.equal(DEPENDENCIES['open-mcp-gateway'].installPolicy, 'prompt');
+  assert.deepEqual(DEPENDENCIES['open-mcp-gateway'].supervision, {
+    owner: 'mcp-server',
+    spawn: 'lazy-on-first-call',
+    lifetime: 'parent-stdin-pipe',
+    escalation: 'sigterm-sigkill-3s',
+    respawn: 'on-next-call',
+  });
+});
+
+test('dependency model: pack edges are legal, core owns none, hcloud attributed to its consumers', () => {
+  assert.deepEqual(
+    Object.keys(PACK_DEPENDENCIES).sort((a, b) => a.localeCompare(b)),
+    [...PACK_IDS].sort((a, b) => a.localeCompare(b)),
+  );
+  const used = new Set();
+  for (const [packId, deps] of Object.entries(PACK_DEPENDENCIES)) {
+    for (const dep of deps) {
+      assert.ok(
+        (DEPENDENCY_IDS as readonly string[]).includes(dep),
+        `${packId} -> ${dep} must be a declared dependency id`,
+      );
+      used.add(dep);
+    }
+  }
+  assert.deepEqual(
+    [...used].sort((a, b) => a.localeCompare(b)),
+    [...DEPENDENCY_IDS].sort((a, b) => a.localeCompare(b)),
+    'every dependency is required by at least one pack',
+  );
+  assert.deepEqual(
+    PACK_DEPENDENCIES.core,
+    [],
+    'core owns no binary dependency: a core edge would auto-provision hcloud for CLI-less trims and block receipt-gated uninstall',
+  );
+  const hcloudConsumers = Object.entries(PACK_DEPENDENCIES)
+    .filter(([, deps]) => (deps as readonly string[]).includes('hcloud'))
+    .map(([packId]) => packId)
+    .sort((a, b) => a.localeCompare(b));
+  assert.deepEqual(hcloudConsumers, ['auth', 'huaweicloud-cli', 'obs']);
+});
+
+test('dependency model: requires/uses edges are legal and requires is acyclic', () => {
+  for (const table of [PACK_REQUIRES, PACK_USES]) {
+    for (const [packId, deps] of Object.entries(table)) {
+      for (const dep of deps as readonly string[]) {
+        assert.ok((PACK_IDS as readonly string[]).includes(dep), `${packId} -> ${dep} must be a pack id`);
+        assert.notEqual(dep, packId, 'no self edges');
+      }
+    }
+  }
+  const seen = new Set<string>();
+  const stack = new Set<string>();
+  const hasCycle = (id: string): boolean => {
+    if (stack.has(id)) return true;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    stack.add(id);
+    const edges = (PACK_REQUIRES as Record<string, readonly string[]>)[id] ?? [];
+    const cyclic = edges.some((edge) => hasCycle(edge));
+    stack.delete(id);
+    return cyclic;
+  };
+  assert.ok(!(PACK_IDS as readonly string[]).some((id) => hasCycle(id)), 'PACK_REQUIRES must be acyclic');
+  assert.deepEqual(PACK_USES.sandbox, ['discovery', 'obs']);
+});
+
+test('closeEnablement closes transitively and reports pulledBy', () => {
+  const closure = closeEnablement(['obs'], (id) =>
+    id === 'obs' ? ['auth', 'voucher'] : id === 'auth' ? ['discovery'] : [],
+  );
+  assert.deepEqual(
+    [...closure.enabled].sort((a, b) => a.localeCompare(b)),
+    ['auth', 'discovery', 'obs', 'voucher'],
+  );
+  assert.deepEqual(closure.pulledBy.get('auth'), ['obs']);
+  assert.deepEqual(closure.pulledBy.get('voucher'), ['obs']);
+  assert.deepEqual(closure.pulledBy.get('discovery'), ['auth']);
+  assert.equal(closure.pulledBy.has('obs'), false);
+  const cyclic = closeEnablement(['auth'], (id) => (id === 'auth' ? ['voucher'] : id === 'voucher' ? ['auth'] : []));
+  assert.deepEqual(
+    [...cyclic.enabled].sort((a, b) => a.localeCompare(b)),
+    ['auth', 'voucher'],
+  );
+});
+
+test('parseDevkitPacks is tolerant and defaults blank to the full surface', () => {
+  for (const blank of [null, undefined, '', '   ']) {
+    const parsed = parseDevkitPacks(blank);
+    assert.equal(parsed.enabled.size, PACK_IDS.length);
+    assert.deepEqual(parsed.unknown, []);
+  }
+  const parsed = parseDevkitPacks(' sandbox , bogus ');
+  assert.deepEqual(parsed.unknown, ['bogus']);
+  assert.deepEqual(
+    [...parsed.enabled].sort((a, b) => a.localeCompare(b)),
+    ['core', 'sandbox'],
+  );
+});
+
+test('requiredDependencies unions pack edges; core alone requires nothing', () => {
+  assert.deepEqual([...requiredDependencies(new Set(['core']))], []);
+  assert.deepEqual(
+    [...requiredDependencies(new Set(['huaweicloud-cli', 'auth', 'obs']))].sort((a, b) => a.localeCompare(b)),
+    ['hcloud'],
+  );
+  assert.deepEqual([...requiredDependencies(new Set(['sandbox']))], ['devbridge']);
+  assert.deepEqual([...requiredDependencies(new Set(['huaweicloud-open-mcp']))], ['open-mcp-gateway']);
+});
+
+test('test fixtures: raw mkdtempSync is denied by default across the suite', () => {
+  // 2026-10-09: TMPDIR=$HOME verification runs leaked 614 unremoved
+  // mkdtemp fixture dirs into $HOME (plus a stray node-compile-cache) —
+  // invisible on tmpfs /tmp, where reboots hide the leak. Deny-by-default:
+  // every test/*.test.ts that still writes mkdtempSync must either route
+  // its fixtures through the shared registry (test/fixture-dir.ts:
+  // registry-created dirs are removed at process exit, so a partially
+  // migrated file fails too) or appear on the per-test-cleaner allowlist
+  // below — every entry there removes its own fixtures in finally blocks,
+  // verified by the isolated-TMPDIR full-suite residue check. This file is
+  // exempt from its own scan: its mkdtempSync occurrences are assertion
+  // regexes, never fixture creation. A new fixture-heavy test file either
+  // adopts fixtureDir or joins the allowlist with cleanup of its own;
+  // nothing passes silently by default.
+  const perTestCleaners = new Set([
+    'agent-install.test.ts',
+    'auth-credentials.test.ts',
+    'codearts-adaptation.test.ts',
+    'cred-reconcile-e2e.test.ts',
+    'cross-platform-install.test.ts',
+    'dep-receipts.test.ts',
+    'dsh-adaptation.test.ts',
+    'hdkitservice-api.test.ts',
+    'hook-node.test.ts',
+    'issue-443-fix.test.ts',
+    'mcp-server.test.ts',
+    'officeace-adaptation.test.ts',
+    'packs-command.test.ts',
+    'plugins-e2e.test.ts',
+    'proxy-agent.test.ts',
+    'reconcile.test.ts',
+    'safety-policy.test.ts',
+    'setup-packs.test.ts',
+    'telemetry.test.ts',
+    'uninstall-cleanup.test.ts',
+    'update-check.test.ts',
+    'upgrade-session.test.ts',
+  ]);
+  const testDir = join(root, 'test');
+  for (const entry of readdirSync(testDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.test.ts')) continue;
+    if (entry.name === 'structure.test.ts') continue; // the guard file itself
+    const source = readFileSync(join(testDir, entry.name), 'utf8');
+    if (!source.includes('mkdtempSync')) continue;
+    if (source.includes("from './fixture-dir.ts'")) {
+      assert.ok(
+        !source.includes('mkdtempSync('),
+        `${entry.name} imports the fixtureDir registry but still creates a raw mkdtemp fixture (partial migration)`,
+      );
+      continue;
+    }
+    assert.ok(
+      perTestCleaners.has(entry.name),
+      `${entry.name} creates mkdtemp fixtures without the fixtureDir registry and is not on the per-test-cleaner allowlist; adopt fixtureDir() or clean per-test and join the list`,
+    );
+  }
 });

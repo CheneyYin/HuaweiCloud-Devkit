@@ -27,25 +27,31 @@ export interface ClassifyOptions {
   _segmentDepth?: number;
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+// An absent field normalizes to [] (older policies). A field that is present
+// but not an array throws: the pre-migration module crashed on first use of a
+// malformed policy, and silently emptying e.g. writeOperationPrefixes would
+// reclassify write commands as safe — the enforcement layer must fail closed.
+function toStringArray(value: unknown, field: string): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new TypeError(`safety policy field "${field}" must be an array of strings`);
+  }
+  return value.filter((item): item is string => typeof item === 'string');
 }
 
-// Missing / non-array fields normalize to []. Valid policy.json always has all
-// six arrays; malformed fields that used to throw at first use become empty.
-function toStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
-}
-
-export function loadPolicy(): Policy {
-  const raw = asRecord(JSON.parse(readFileSync(policyPath, 'utf8')));
+export function loadPolicy(path: string = policyPath): Policy {
+  const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new TypeError('safety policy must be a JSON object');
+  }
+  const raw = parsed as Record<string, unknown>;
   return {
-    secretKeyNamePatterns: toStringArray(raw.secretKeyNamePatterns),
-    credentialFilePatterns: toStringArray(raw.credentialFilePatterns),
-    blockedConfigureSubcommands: toStringArray(raw.blockedConfigureSubcommands),
-    blockedSecretOperations: toStringArray(raw.blockedSecretOperations),
-    writeOperationPrefixes: toStringArray(raw.writeOperationPrefixes),
-    readOperationPrefixes: toStringArray(raw.readOperationPrefixes),
+    secretKeyNamePatterns: toStringArray(raw.secretKeyNamePatterns, 'secretKeyNamePatterns'),
+    credentialFilePatterns: toStringArray(raw.credentialFilePatterns, 'credentialFilePatterns'),
+    blockedConfigureSubcommands: toStringArray(raw.blockedConfigureSubcommands, 'blockedConfigureSubcommands'),
+    blockedSecretOperations: toStringArray(raw.blockedSecretOperations, 'blockedSecretOperations'),
+    writeOperationPrefixes: toStringArray(raw.writeOperationPrefixes, 'writeOperationPrefixes'),
+    readOperationPrefixes: toStringArray(raw.readOperationPrefixes, 'readOperationPrefixes'),
   };
 }
 
@@ -60,7 +66,7 @@ function isSecretKeyName(key: unknown, policy: Policy = DEFAULT_POLICY): boolean
     .toLowerCase()
     .replace(/[^a-z0-9]/g, '');
   if (
-    /access.*key|secret.*key|security.*token|xauth.*token|authorization|password|passwd|adminpass|credential|private.*key|userdata|metadata/.test(
+    /access.*key|secret.*key|security.*token|xauth.*token|authorization|password|passwd|adminpass|credential|private.*key|userdata|metadata|inputvalue/.test(
       normalized,
     )
   ) {
@@ -75,12 +81,22 @@ function redactString(text: unknown): string {
       // Opaque blob keys (cloud-init user_data, metadata, private_key) carry
       // base64/scripts that may embed SSH keys, DB passwords, bootstrap tokens.
       // Redact the ENTIRE value of this arg — not just the first whitespace token.
-      .replace(/((?:user[_-]?data|metadata|private[_-]?key)\s*[:=]\s*).*/gi, '$1<redacted>')
+      // Quoted-key variants: gateway validation errors echo arguments as JSON
+      // ("adminPass":"...") and pydantic echoes them as input_value=... — the
+      // unquoted key=value form alone left both shapes crossing unredacted.
+      // Auth-style headers carry multi-word values ("Authorization: Bearer
+      // <jwt>"): the first-token capture redacted 'Bearer' and crossed the
+      // credential itself, so this family consumes to end-of-line like the
+      // blob-key branch above.
       .replace(
-        /((?:access[_-]?key|secret[_-]?key|security[_-]?token|x[_-]?auth[_-]?token|token|authorization|password|passwd|admin[_-]?pass|credential)\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)/gi,
+        /(["']?(?:user[_-]?data|metadata|private[_-]?key|authorization|x[_-]?auth[_-]?token)["']?\s*[:=]\s*).*/gi,
         '$1<redacted>',
       )
-      .replace(/(AK|SK)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;]+)/g, '$1=<redacted>')
+      .replace(
+        /(["']?(?:access[_-]?key|secret[_-]?key|security[_-]?token|token|password|passwd|admin[_-]?pass|credential|input[_-]?value)["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)/gi,
+        '$1<redacted>',
+      )
+      .replace(/\b(["']?(?:AK|SK)["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1<redacted>')
   );
 }
 

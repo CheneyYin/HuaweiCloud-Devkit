@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
 import { resolveAndApplyProjectId } from '../plugins/huaweicloud-core/src/auth/project-id.ts';
+import { fixtureDir } from './fixture-dir.ts';
 
 function fakeHcloudScript(source) {
-  const dir = mkdtempSync(join(tmpdir(), 'huaweicloud-project-id-'));
+  const dir = fixtureDir('huaweicloud-project-id-');
   const script = join(dir, 'fake-hcloud.mjs');
   writeFileSync(script, source, 'utf8');
   return script;
@@ -25,7 +25,7 @@ function withFakeHcloud(source, fn) {
 }
 
 test('resolveAndApplyProjectId picks the region project and writes cli-project-id', () => {
-  const log = join(mkdtempSync(join(tmpdir(), 'huaweicloud-project-id-log-')), 'hcloud.log');
+  const log = join(fixtureDir('huaweicloud-project-id-log-'), 'hcloud.log');
   withFakeHcloud(
     `
     import { appendFileSync } from 'node:fs';

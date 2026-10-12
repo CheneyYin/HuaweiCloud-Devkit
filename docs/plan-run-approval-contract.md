@@ -32,26 +32,21 @@ If all checks pass, the stored args are used to execute `runHcloud`.
 
 ### Token Storage
 
-Tokens are stored in an in-memory `Map` in the MCP server process:
+Tokens are persisted to a per-user file (`~/.config/huaweicloud/approvals.json`, mode 0600; the whole tree relocates via `HUAWEICLOUD_HOME`) so plan and run survive the process boundary (in-memory storage lost tokens across MCP sessions, issue #578). Only the sha256 of the canonical args plus the redacted form are stored, never the raw args.
 
-```js
-const approvalStore = new Map(); // token → { rawArgs, createdAt }
-const APPROVAL_TTL_MS = 5 * 60_000; // 5 minutes
-```
-
-- Token is a UUID v4
-- Tokens are single-use (consumed on first retrieval)
+- Token is a UUID
+- Tokens are single-use (exclusive-create claim marker next to the store)
 - Tokens expire after 5 minutes
-- Periodic cleanup runs every 20 stored tokens
+- Stale entries and markers are pruned on every mint (consume deletes only its own entry)
 
 ### Key Functions
 
-| Function                       | Location         | Purpose                                     |
-| ------------------------------ | ---------------- | ------------------------------------------- |
-| `createApprovalToken(rawArgs)` | `hcloud-cli.mjs` | Stores args, returns token                  |
-| `consumeApprovalToken(token)`  | `hcloud-cli.mjs` | Validates, returns args, deletes from store |
-| `planHcloudCommand()`          | `hcloud-cli.mjs` | Returns `approvalToken` in result           |
-| `runApprovedCommand()`         | `tools.mjs`      | Validates token, executes with stored args  |
+| Function                       | Location                             | Purpose                                      |
+| ------------------------------ | ------------------------------------ | -------------------------------------------- |
+| `createApprovalToken(rawArgs)` | `lib/approval-tokens.ts`             | Stores hash + redacted args, returns token   |
+| `consumeApprovalToken(token)`  | `lib/approval-tokens.ts`             | Validates, claims single-use, deletes entry  |
+| `planHcloudCommand()`          | `src/hcloud-cli.ts`                  | Returns `approvalToken` in result            |
+| `runApprovedCommand()`         | `src/packs/huaweicloud-cli/tools.ts` | Validates token, executes with provided args |
 
 ## Why Token Instead of String Comparison
 
@@ -69,7 +64,7 @@ Token-based approval eliminates the string round-trip entirely. Args stay in the
 
 ❌ Do NOT attempt to match `approvedCommand` string against `plan.command`.
 
-❌ Do NOT store approval tokens in files or external storage. In-memory Map is sufficient.
+❌ Do NOT revert token storage to an in-memory Map — plan and run land in different processes (#578); the per-user file is the sanctioned store.
 
 ## Migration
 

@@ -60,12 +60,13 @@ test('codearts install copies skills, MCP server, and safety policy', () => {
     assert.match(res.stdout, /\[CodeArts\]/);
     assert.match(res.stdout, /Installation complete!/);
 
-    const userSkills = countSkills(join(home, '.codeartsdoer', 'skills'));
-    const projSkills = countSkills(join(cwd, '.codeartsdoer', 'skills'));
-    assert.ok(userSkills >= 6, `expected >= 6 user skills, got ${userSkills}`);
-    assert.equal(projSkills, userSkills, 'project skills match user skills');
+    // Skills are server data: native user/project skill dirs stay empty and
+    // the tree ships inside the plugin dir next to the server.
+    assert.equal(countSkills(join(home, '.codeartsdoer', 'skills')), 0, 'user skills dir stays empty');
+    assert.equal(countSkills(join(cwd, '.codeartsdoer', 'skills')), 0, 'project skills dir stays empty');
 
     const pluginDir = join(home, '.codeartsdoer', 'huaweicloud-plugins');
+    assert.ok(countSkills(join(pluginDir, 'skills')) >= 6, 'plugin dir carries the skills tree');
     assert.ok(existsSync(join(pluginDir, 'dist', 'mcp-server.js')));
     assert.ok(existsSync(join(pluginDir, 'dist', 'tools.js')));
     assert.ok(existsSync(join(pluginDir, 'safety', 'policy.json')));
@@ -220,10 +221,10 @@ test('codearts-work install copies skills, MCP server, and safety policy', () =>
     const res = runCli(home, cwd, ['install', '--target', 'codearts-work']);
     assert.equal(res.status, 0, res.stderr);
 
-    const userSkills = countSkills(join(home, '.codeartswork', 'skills'));
-    assert.ok(userSkills >= 6, `user skills (${userSkills})`);
+    assert.equal(countSkills(join(home, '.codeartswork', 'skills')), 0, 'native skills dir stays empty');
 
     const pluginDir = join(home, '.codeartswork', 'huaweicloud-plugins');
+    assert.ok(countSkills(join(pluginDir, 'skills')) >= 6, 'plugin dir carries the skills tree');
     assert.ok(existsSync(join(pluginDir, 'dist', 'mcp-server.js')), 'MCP server');
     assert.ok(existsSync(join(pluginDir, 'safety', 'policy.json')), 'safety policy');
     assert.ok(existsSync(join(pluginDir, '.installed')), '.installed marker');

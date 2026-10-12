@@ -109,6 +109,19 @@ function countSkills(dir) {
   return readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory() && d.name.startsWith('huawei')).length;
 }
 
+// Skills are server data: they ship inside the plugin dir next to dist/ and
+// are disclosed over MCP, never copied into an agent's native skill dir.
+function pluginSkills(pluginsDir) {
+  return countSkills(join(pluginsDir, 'skills'));
+}
+
+// MCP-only disclosure contract for one agent: native skill dir stays empty,
+// plugin dir carries the skills tree next to the server.
+function assertServerDataSkills(nativeSkillsDir, pluginsDir) {
+  assert.equal(countSkills(nativeSkillsDir), 0, 'native skill dir must stay empty (MCP-only disclosure)');
+  assert.ok(pluginSkills(pluginsDir) >= 6, 'plugin dir must carry the skills tree');
+}
+
 function pluginVersion(pluginsDir) {
   const p = join(pluginsDir, 'package.json');
   if (!existsSync(p)) return null;
@@ -123,13 +136,13 @@ test('opencode install creates skills, MCP server, and safety policy', () => {
     assert.equal(res.status, 0, res.stderr);
     assert.match(res.stdout, /\[OpenCode\]/);
     assert.match(res.stdout, /Installation complete/);
-    assert.ok(countSkills(join(home, '.config', 'opencode', 'skills')) >= 6);
     const pd = join(home, '.config', 'opencode', 'huaweicloud-plugins');
     assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
     assert.ok(existsSync(join(pd, 'dist', 'tools.js')));
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
     assert.ok(existsSync(join(pd, '.installed')));
     assert.equal(pluginVersion(pd), pkg.version);
+    assertServerDataSkills(join(home, '.config', 'opencode', 'skills'), pd);
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
@@ -171,7 +184,38 @@ test('opencode install is idempotent', () => {
   try {
     assert.equal(run('opencode', home, cwd, 'install').status, 0);
     assert.equal(run('opencode', home, cwd, 'install').status, 0);
-    assert.ok(countSkills(join(home, '.config', 'opencode', 'skills')) >= 6);
+    assertServerDataSkills(
+      join(home, '.config', 'opencode', 'skills'),
+      join(home, '.config', 'opencode', 'huaweicloud-plugins'),
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+// Pre-MCP installs copied skills into native dirs; an install run must purge
+// exactly those (ownership-precise), never a user skill sharing the prefix.
+test('install purges stale native skill copies and preserves user skills', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
+  try {
+    const nativeDir = join(home, '.config', 'opencode', 'skills');
+    mkdirSync(join(nativeDir, 'huawei-ecs'), { recursive: true });
+    writeFileSync(join(nativeDir, 'huawei-ecs', 'SKILL.md'), '---\nname: huawei-ecs\n---\nstale\n');
+    mkdirSync(join(nativeDir, 'huawei-my-own-runbook'), { recursive: true });
+    writeFileSync(
+      join(nativeDir, 'huawei-my-own-runbook', 'SKILL.md'),
+      '---\nname: huawei-my-own-runbook\n---\nuser\n',
+    );
+    const res = run('opencode', home, cwd, 'install');
+    assert.equal(res.status, 0, res.stderr);
+    assert.ok(!existsSync(join(nativeDir, 'huawei-ecs')), 'stale devkit-owned copy must be purged');
+    assert.ok(existsSync(join(nativeDir, 'huawei-my-own-runbook')), 'user skill sharing the prefix must survive');
+    assert.ok(
+      pluginSkills(join(home, '.config', 'opencode', 'huaweicloud-plugins')) >= 6,
+      'plugin dir must carry the skills tree',
+    );
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
@@ -186,8 +230,8 @@ test('workbuddy install creates skills, MCP server, and safety policy', () => {
     assert.equal(res.status, 0, res.stderr);
     assert.match(res.stdout, /\[WorkBuddy\]/);
     assert.match(res.stdout, /Installation complete/);
-    assert.ok(countSkills(join(home, '.workbuddy', 'skills')) >= 6);
     const pd = join(home, '.workbuddy', 'huaweicloud-plugins');
+    assertServerDataSkills(join(home, '.workbuddy', 'skills'), pd);
     assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
     assert.ok(existsSync(join(pd, 'dist', 'tools.js')));
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
@@ -259,7 +303,7 @@ test('workbuddy install is idempotent', () => {
   try {
     assert.equal(run('workbuddy', home, cwd, 'install').status, 0);
     assert.equal(run('workbuddy', home, cwd, 'install').status, 0);
-    assert.ok(countSkills(join(home, '.workbuddy', 'skills')) >= 6);
+    assertServerDataSkills(join(home, '.workbuddy', 'skills'), join(home, '.workbuddy', 'huaweicloud-plugins'));
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
@@ -328,8 +372,8 @@ test('openclaw install creates skills, MCP server, and safety policy in .agents'
     assert.equal(res.status, 0, res.stderr);
     assert.match(res.stdout, /\[OpenClaw\]/);
     assert.match(res.stdout, /Installation complete/);
-    assert.ok(countSkills(join(home, '.agents', 'skills')) >= 6);
     const pd = join(home, '.agents', 'huaweicloud-plugins');
+    assertServerDataSkills(join(home, '.agents', 'skills'), pd);
     assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
     assert.ok(existsSync(join(pd, 'dist', 'tools.js')));
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
@@ -364,8 +408,8 @@ test('hermes install creates skills, MCP server, and safety policy', () => {
     assert.equal(res.status, 0, res.stderr);
     assert.match(res.stdout, /\[Hermes Agent\]/);
     assert.match(res.stdout, /Installation complete/);
-    assert.ok(countSkills(join(home, '.hermes', 'skills')) >= 6);
     const pd = join(home, '.hermes', 'huaweicloud-plugins');
+    assertServerDataSkills(join(home, '.hermes', 'skills'), pd);
     assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
     assert.equal(pluginVersion(pd), pkg.version);
@@ -428,8 +472,8 @@ test('atomcode install creates skills, MCP server, and safety policy', () => {
     assert.equal(res.status, 0, res.stderr);
     assert.match(res.stdout, /\[AtomCode\]/);
     assert.match(res.stdout, /Installation complete/);
-    assert.ok(countSkills(join(home, '.atomcode', 'skills')) >= 6);
     const pd = join(home, '.atomcode', 'huaweicloud-plugins');
+    assertServerDataSkills(join(home, '.atomcode', 'skills'), pd);
     assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
     assert.ok(existsSync(join(pd, 'dist', 'tools.js')));
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
@@ -478,7 +522,30 @@ test('atomcode install is idempotent', () => {
   try {
     assert.equal(run('atomcode', home, cwd, 'install').status, 0);
     assert.equal(run('atomcode', home, cwd, 'install').status, 0);
-    assert.ok(countSkills(join(home, '.atomcode', 'skills')) >= 6);
+    assertServerDataSkills(join(home, '.atomcode', 'skills'), join(home, '.atomcode', 'huaweicloud-plugins'));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+// The plugin-dir skills tree is pruned on update: a retired skill name must
+// not keep serving stale, ungated content through retrieve_skill.
+test('update prunes retired skills from the plugin-dir tree', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
+  try {
+    assert.equal(run('opencode', home, cwd, 'install').status, 0);
+    const pluginSkillsDir = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'skills');
+    mkdirSync(join(pluginSkillsDir, 'huawei-retired'), { recursive: true });
+    writeFileSync(join(pluginSkillsDir, 'huawei-retired', 'SKILL.md'), '---\nname: huawei-retired\n---\nstale\n');
+    mkdirSync(join(pluginSkillsDir, 'user-foreign'), { recursive: true });
+    writeFileSync(join(pluginSkillsDir, 'user-foreign', 'SKILL.md'), '---\nname: user-foreign\n---\nuser\n');
+    const res = run('opencode', home, cwd, 'update');
+    assert.equal(res.status, 0, res.stderr);
+    assert.ok(!existsSync(join(pluginSkillsDir, 'huawei-retired')), 'retired devkit skill must be pruned');
+    assert.ok(existsSync(join(pluginSkillsDir, 'user-foreign')), 'foreign dir without huawei prefix survives');
+    assert.ok(countSkills(pluginSkillsDir) >= 6, 'shipped tree intact');
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
@@ -619,6 +686,7 @@ test('install auto-detect with multiple agents requires explicit target in non-i
 });
 
 function runAutoPty(home, cwd, cmd, input, extraEnv = {}) {
+  seedProvisionedBinaries(home);
   return spawnSync('script', ['-qec', `${process.execPath} ${setupCli} ${cmd}`, '/dev/null'], {
     cwd,
     env: makeEnv(home, extraEnv),
@@ -629,6 +697,7 @@ function runAutoPty(home, cwd, cmd, input, extraEnv = {}) {
 }
 
 function runAutoPtyStaged(home, cwd, cmd, stages, extraEnv = {}) {
+  seedProvisionedBinaries(home);
   const env = makeEnv(home, extraEnv);
   const innerCmd = `${process.execPath} ${setupCli} ${cmd}`;
   const feed = stages.map((s) => (typeof s === 'number' ? `sleep ${s}` : `printf '%s\\n' "${s}"`)).join('; ');
@@ -638,6 +707,23 @@ function runAutoPtyStaged(home, cwd, cmd, stages, extraEnv = {}) {
     encoding: 'utf8',
     timeout: 150000,
   });
+}
+
+// Hermetic host binaries for PTY-driven installs. Under `script` the child
+// sees a real TTY, so install-time provisioning takes its interactive path:
+// without a present hcloud it downloads KooCLI for real and then blocks on
+// the privacy-agreement prompt with the test's input already exhausted. The
+// fakes make the provisioning loop resolve everything as present and skip —
+// the seam still runs end to end, just without network or prompts.
+function seedProvisionedBinaries(home) {
+  const binDir = join(home, '.local', 'bin');
+  mkdirSync(binDir, { recursive: true });
+  const fakeHcloud = join(binDir, 'hcloud');
+  writeFileSync(fakeHcloud, `#!/bin/sh\necho "Current KooCLI version: ${pkg.kooCliVersion}"\n`, 'utf8');
+  chmodSync(fakeHcloud, 0o755);
+  const fakeGateway = join(binDir, 'huaweicloud-open-mcp');
+  writeFileSync(fakeGateway, '#!/bin/sh\n', 'utf8');
+  chmodSync(fakeGateway, 0o755);
 }
 
 test(
@@ -747,7 +833,10 @@ test('install auto-detect single agent installs only that agent', () => {
     const res = runAuto(home, cwd, 'install');
     assert.equal(res.status, 0, res.stderr);
     assert.match(res.stdout, /Installing HuaweiCloud DevKit for opencode/);
-    assert.ok(countSkills(join(home, '.config', 'opencode', 'skills')) >= 6, 'opencode skills installed');
+    assertServerDataSkills(
+      join(home, '.config', 'opencode', 'skills'),
+      join(home, '.config', 'opencode', 'huaweicloud-plugins'),
+    );
     assert.ok(!existsSync(join(home, '.workbuddy')), 'workbuddy must not be created');
     assert.doesNotMatch(res.stdout, /\[WorkBuddy\]/);
   } finally {
@@ -904,10 +993,10 @@ test('install zero-detect menu option 2 installs to all', { skip: process.platfo
     assert.match(res.stdout, /\[OpenCode\]/);
     assert.ok(existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins', '.installed')));
     assert.ok(existsSync(join(home, '.atomcode', 'huaweicloud-plugins', '.installed')));
-    // OfficeAce cannot fully install in this sandbox (its mcp-connectors.sqlite is absent), so it
-    // fails after the directory prompt is satisfied; that is expected and does not affect the
-    // all-routing proof above. Exit code is therefore 1.
-    assert.match(res.stdout, /Installation failed for: officeace/);
+    // OfficeAce installs cleanly now: native skill registration is gone, so a
+    // capabilities.json without a capabilities array no longer fails the step.
+    assert.ok(existsSync(join(home, '.office-claw', 'huaweicloud-plugins', '.installed')));
+    assert.doesNotMatch(res.stdout, /Installation failed for/);
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });

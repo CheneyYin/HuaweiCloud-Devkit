@@ -4,6 +4,8 @@ description: 'Use when creating, configuring, or managing OBS buckets and object
 version: 1
 ---
 
+<!-- generated from src/packs/obs/skills/huawei-obs - do not edit -->
+
 # Huawei Cloud OBS
 
 **STOP - Do not answer from general knowledge.** Follow the procedure below.

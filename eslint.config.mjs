@@ -92,7 +92,27 @@ export default [
     },
   },
   {
-    files: ['plugins/huaweicloud-core/src/sandbox/hdkitservice-api.ts'],
+    // The SDK and zod are devDependencies inlined into dist/mcp-server.js at
+    // build time (esbuild); they never ship as runtime imports, so the
+    // publish-surface heuristic of n/no-unpublished-import cannot see them.
+    files: [
+      'plugins/huaweicloud-core/src/mcp-protocol.ts',
+      'plugins/huaweicloud-core/src/mcp-stdio-transport.ts',
+      'plugins/huaweicloud-core/src/mcp-server-remote.ts',
+      'plugins/huaweicloud-core/src/tool-schemas.ts',
+      'plugins/huaweicloud-core/src/tools.ts',
+      'plugins/huaweicloud-core/src/lib/pack-types.ts',
+      'plugins/huaweicloud-core/src/lib/tool-schema-parts.ts',
+      'plugins/huaweicloud-core/src/packs/*/tools.ts',
+      'test/upgrade-session.test.ts',
+      'test/remote-mcp-server.test.ts',
+    ],
+    rules: {
+      'n/no-unpublished-import': ['error', { allowModules: ['@modelcontextprotocol/sdk', 'zod'] }],
+    },
+  },
+  {
+    files: ['plugins/huaweicloud-core/src/lib/hdkit/hdkitservice-api.ts'],
     rules: {
       'n/no-missing-import': ['error', { allowModules: ['undici'] }],
     },
@@ -110,6 +130,7 @@ export default [
       'bin/*.cjs',
       'plugins/huaweicloud-core/src/setup-cli.ts',
       'plugins/huaweicloud-core/src/mcp-server.ts',
+      'plugins/huaweicloud-core/src/mcp-stdio-transport.ts',
       'test/huaweicloud-agent-toolkit-test/scripts/invoke-mcp.mjs',
       'test/fixtures/**',
     ],

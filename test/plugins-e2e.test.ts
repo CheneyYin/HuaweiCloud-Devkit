@@ -157,42 +157,69 @@ function invokeMcpToolCall(mcpServerPath, env, toolName, toolArgs, timeout = 150
   });
 }
 
-// Core tools that must always be present. Keep in sync with tools.ts TOOL_DEFINITIONS.
-// When a new tool is added to tools.ts, add it here too.
+// Core-pack tools that must always be present, including the pack meta tools
+// (both registered in the core pack). Keep in sync with tools.ts
+// TOOL_DEFINITIONS and packs/registry.ts. When a new tool is added to tools.ts,
+// add it here or under its pack below.
 const REQUIRED_TOOLS = [
-  'huaweicloud_check_cli',
-  'huaweicloud_plan_cli_command',
-  'huaweicloud_run_readonly_command',
-  'huaweicloud_list_operations',
-  'huaweicloud_run_approved_command',
-  'huaweicloud_show_profile_redacted',
+  'huaweicloud_hook_check_command',
+  'huaweicloud_hook_check_artifacts',
+  'huaweicloud_hook_check_deploy_plan',
   'huaweicloud_service_catalog',
   'huaweicloud_explain_error',
   'huaweicloud_search_docs',
   'huaweicloud_retrieve_skill',
-  'huaweicloud_list_regions',
   'huaweicloud_get_regional_availability',
-  'huaweicloud_search_marketplace',
-  'huaweicloud_setup_obs_config',
-  'huaweicloud_auth_status',
-  'huaweicloud_auth_sync',
-  'huaweicloud_sandbox_exec_with_session',
-  'huaweicloud_sandbox_upload_file',
-  'huaweicloud_sandbox_close_session',
-  'huaweicloud_sandbox_check_user',
-  'huaweicloud_sandbox_sign_agreement',
-  'huaweicloud_sandbox_connect',
-  'huaweicloud_sandbox_credentials',
-  'huaweicloud_voucher_status',
-  'huaweicloud_voucher_claim',
+  'huaweicloud_list_packs',
+  'huaweicloud_pack_info',
+  'huaweicloud_packs_configure',
 ];
+
+// Optional-pack tools, grouped by pack id (same grouping as
+// packs/registry.ts). Together with REQUIRED_TOOLS these cover every registered tool.
+const PER_PACK_TOOLS = {
+  'huaweicloud-cli': [
+    'huaweicloud_check_cli',
+    'huaweicloud_plan_cli_command',
+    'huaweicloud_run_readonly_command',
+    'huaweicloud_list_operations',
+    'huaweicloud_run_approved_command',
+    'huaweicloud_show_profile_redacted',
+    'huaweicloud_list_regions',
+  ],
+  sandbox: [
+    'huaweicloud_sandbox_exec_with_session',
+    'huaweicloud_sandbox_exec_one_shot',
+    'huaweicloud_sandbox_close_session',
+    'huaweicloud_sandbox_upload_file',
+    'huaweicloud_sandbox_upload_project',
+    'huaweicloud_sandbox_deploy_nginx',
+    'huaweicloud_sandbox_deploy_check',
+    'huaweicloud_sandbox_check_user',
+    'huaweicloud_sandbox_sign_agreement',
+    'huaweicloud_sandbox_connect',
+    'huaweicloud_sandbox_credentials',
+  ],
+  auth: [
+    'huaweicloud_auth_status',
+    'huaweicloud_auth_sync',
+    'huaweicloud_auth_init',
+    'huaweicloud_auth_switch',
+    'huaweicloud_auth_confirm',
+  ],
+  obs: ['huaweicloud_setup_obs_config', 'huaweicloud_obs_set_website_config'],
+  voucher: ['huaweicloud_voucher_status', 'huaweicloud_voucher_claim'],
+  update: ['huaweicloud_check_update', 'huaweicloud_upgrade'],
+  discovery: ['huaweicloud_search_marketplace', 'huaweicloud_get_service_icon', 'huaweicloud_detect_framework'],
+  'huaweicloud-open-mcp': ['huaweicloud_gateway_list_tools', 'huaweicloud_gateway_call', 'huaweicloud_gateway_restart'],
+};
 
 const targets = [
   {
     name: 'opencode',
     banner: /\[OpenCode\]/,
     pluginsDir: (h) => join(h, '.config', 'opencode', 'huaweicloud-plugins'),
-    skillsDir: (h) => join(h, '.config', 'opencode', 'skills'),
+    skillsDir: (h) => join(h, '.config', 'opencode', 'huaweicloud-plugins', 'skills'),
     configPath: (h) => join(h, '.config', 'opencode', 'opencode.json'),
     hasServer: (p) => {
       if (!existsSync(p)) return false;
@@ -223,7 +250,7 @@ const targets = [
     name: 'workbuddy',
     banner: /\[WorkBuddy\]/,
     pluginsDir: (h) => join(h, '.workbuddy', 'huaweicloud-plugins'),
-    skillsDir: (h) => join(h, '.workbuddy', 'skills'),
+    skillsDir: (h) => join(h, '.workbuddy', 'huaweicloud-plugins', 'skills'),
     configPath: (h) => join(h, '.workbuddy', 'mcp.json'),
     hasServer: (p) => {
       if (!existsSync(p)) return false;
@@ -323,6 +350,16 @@ test('MCP tools/list includes all required core tools with valid schemas', async
     for (const required of REQUIRED_TOOLS) {
       assert.ok(toolNames.includes(required), `Missing tool: ${required}`);
     }
+    // Plus every optional-pack tool: tools/list must carry the full 46.
+    const perPackNames = Object.values(PER_PACK_TOOLS).flat();
+    for (const name of perPackNames) {
+      assert.ok(toolNames.includes(name), `Missing tool: ${name}`);
+    }
+    assert.equal(
+      REQUIRED_TOOLS.length + perPackNames.length,
+      46,
+      'always-on + per-pack lists must cover the full registry',
+    );
     assert.ok(toolNames.length >= 25, `Expected >= 25 tools, got ${toolNames.length}`);
 
     // Verify every tool has valid schema fields
@@ -345,6 +382,80 @@ test('MCP tools/list includes all required core tools with valid schemas', async
     assert.ok(nameSet.has('huaweicloud_hook_check_command'));
     assert.ok(nameSet.has('huaweicloud_hook_check_artifacts'));
     assert.ok(nameSet.has('huaweicloud_hook_check_deploy_plan'));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('DEVKIT_PACKS=sandbox trims tools/list to core 11 + sandbox 11', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'mcp-trim-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'mcp-trim-proj-'));
+  try {
+    const install = runCli(home, cwd, ['install', '--target', 'opencode']);
+    assert.equal(install.status, 0, install.stderr);
+
+    const mcpServerPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js');
+    // DEVKIT_PACKS rides the spawn env into the stdio server; without it the
+    // suite's other tests above still see the full 46.
+    const responses = await invokeMcpTools(mcpServerPath, { ...makeEnv(home, cwd), DEVKIT_PACKS: 'sandbox' });
+
+    assert.ok(responses[0].result, 'initialize returned result');
+    assert.ok(responses[1].result, 'tools/list returned result');
+    const toolNames = responses[1].result.tools.map((t) => t.name);
+    assert.equal(toolNames.length, 22, `expected core 11 + sandbox 11, got ${toolNames.length}`);
+
+    // The always-on core surface survives any trimming...
+    for (const required of REQUIRED_TOOLS) {
+      assert.ok(toolNames.includes(required), `Missing core tool: ${required}`);
+    }
+    // ...the opted-in sandbox pack registers fully...
+    for (const name of PER_PACK_TOOLS.sandbox) {
+      assert.ok(toolNames.includes(name), `Missing sandbox tool: ${name}`);
+    }
+    // ...and every other pack's tools are absent.
+    for (const [packId, names] of Object.entries(PER_PACK_TOOLS)) {
+      if (packId === 'sandbox') continue;
+      for (const name of names) {
+        assert.ok(!toolNames.includes(name), `${name} from disabled pack ${packId} must not be registered`);
+      }
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('DEVKIT_PACKS=huaweicloud-open-mcp trims tools/list to core 11 + gateway 3', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'mcp-trim-open-mcp-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'mcp-trim-open-mcp-proj-'));
+  try {
+    const install = runCli(home, cwd, ['install', '--target', 'opencode']);
+    assert.equal(install.status, 0, install.stderr);
+
+    const mcpServerPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js');
+    const responses = await invokeMcpTools(mcpServerPath, {
+      ...makeEnv(home, cwd),
+      DEVKIT_PACKS: 'huaweicloud-open-mcp',
+    });
+
+    assert.ok(responses[0].result, 'initialize returned result');
+    assert.ok(responses[1].result, 'tools/list returned result');
+    const toolNames = responses[1].result.tools.map((t) => t.name);
+    assert.equal(toolNames.length, 14, `expected core 11 + gateway 3, got ${toolNames.length}`);
+
+    for (const required of REQUIRED_TOOLS) {
+      assert.ok(toolNames.includes(required), `Missing core tool: ${required}`);
+    }
+    for (const name of PER_PACK_TOOLS['huaweicloud-open-mcp']) {
+      assert.ok(toolNames.includes(name), `Missing gateway tool: ${name}`);
+    }
+    for (const [packId, names] of Object.entries(PER_PACK_TOOLS)) {
+      if (packId === 'huaweicloud-open-mcp') continue;
+      for (const name of names) {
+        assert.ok(!toolNames.includes(name), `${name} from disabled pack ${packId} must not be registered`);
+      }
+    }
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
@@ -473,9 +584,15 @@ test('MCP tools/call with unknown tool name returns error', async () => {
     const responses = await invokeMcpToolCall(mcpServerPath, makeEnv(home, cwd), 'huaweicloud_nonexistent_tool', {});
 
     assert.ok(responses[0].result, 'initialize returned result');
-    // Unknown tool should return JSON-RPC error (code -32603), not crash the server
-    assert.ok(responses[1].error, 'unknown tool name should return JSON-RPC error');
-    assert.match(responses[1].error.message, /Unknown tool/i, 'error message should mention "Unknown tool"');
+    // Unknown tool returns an isError CallToolResult (SDK high-level server
+    // semantics since the migration), not a JSON-RPC error envelope.
+    assert.ok(responses[1].result, 'unknown tool name should return a tool result');
+    assert.equal(responses[1].result.isError, true, 'unknown tool must set isError');
+    assert.match(
+      responses[1].result.content.map((c) => c.text || '').join(' '),
+      /not found/i,
+      'error message should mention the tool was not found',
+    );
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });

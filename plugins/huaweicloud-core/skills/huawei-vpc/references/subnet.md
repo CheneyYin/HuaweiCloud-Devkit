@@ -1,3 +1,5 @@
+<!-- generated from src/packs/huaweicloud-cli/skills/huawei-vpc - do not edit -->
+
 # VPC Subnet Guide
 
 ## Prerequisite: VPC CIDR is Immutable

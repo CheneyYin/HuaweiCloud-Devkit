@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 
@@ -11,9 +10,10 @@ import {
   takeAgentDelta,
   purgeBackup,
 } from '../plugins/huaweicloud-core/src/mcp-config-backup.ts';
+import { fixtureDir } from './fixture-dir.ts';
 
 function tempBase() {
-  return mkdtempSync(join(tmpdir(), 'devkit-mcp-backup-'));
+  return fixtureDir('devkit-mcp-backup-');
 }
 
 test('mcpBackupFilePath honors HUAWEICLOUD_HOME and default layout', () => {

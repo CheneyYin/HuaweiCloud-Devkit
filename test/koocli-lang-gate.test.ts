@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
 import { classifyUnsupported, readServiceCatalogs, runHcloud } from '../plugins/huaweicloud-core/src/hcloud-cli.ts';
+import { fixtureDir } from './fixture-dir.ts';
 
 function withCatalog(files) {
-  const dir = mkdtempSync(join(tmpdir(), 'koocli-meta-'));
+  const dir = fixtureDir('koocli-meta-');
   for (const [name, items] of Object.entries(files)) {
     writeFileSync(join(dir, name), JSON.stringify({ items }));
   }
@@ -15,7 +15,7 @@ function withCatalog(files) {
 }
 
 function fakeHcloudScript(source) {
-  const dir = mkdtempSync(join(tmpdir(), 'koocli-fake-hcloud-'));
+  const dir = fixtureDir('koocli-fake-hcloud-');
   const script = join(dir, 'fake-hcloud.mjs');
   writeFileSync(script, source, 'utf8');
   return script;
@@ -101,7 +101,7 @@ test('runHcloud: Unsupported service (lang-missing) → diagnostic with configur
     'services_cn.json': [{ Service: { Text: 'BSS' } }],
     'services_en.json': [{ Service: { Text: 'ECS' } }],
   });
-  const stateFile = join(mkdtempSync(join(tmpdir(), 'koocli-diag-state-')), 'count.txt');
+  const stateFile = join(fixtureDir('koocli-diag-state-'), 'count.txt');
   const script = fakeHcloudScript(`
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 const stateFile = ${JSON.stringify(stateFile)};

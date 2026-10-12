@@ -92,7 +92,11 @@ test('handles platform-specific home directory resolution', () => {
       timeout: 60000,
     });
     assert.equal(res.status, 0, res.stderr);
-    assert.ok(existsSync(join(home, '.config', 'opencode', 'skills')), 'skills created under correct home');
+    assert.ok(
+      existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins', 'skills')),
+      'skills tree (server data) created under correct home',
+    );
+    assert.ok(!existsSync(join(home, '.config', 'opencode', 'skills')), 'native skill dir must not be created');
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
@@ -217,7 +221,7 @@ test('uninstall --target all (non-TTY) keeps KooCLI/OBS but removes the vault', 
     assert.ok(!existsSync(vault), 'vault should be removed on --target all');
     assert.ok(existsSync(obsFile), 'OBS config must be kept without a flag in non-TTY');
     assert.ok(existsSync(kocliBin), 'KooCLI must be kept without a flag in non-TTY');
-    assert.match(res.stdout, /已保留 KooCLI 与 OBS 配置/);
+    assert.match(res.stdout, /已保留 KooCLI、OBS 配置与 open-mcp-gateway/);
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });

@@ -101,9 +101,6 @@ WRITE_VERBS = re.compile(
     r'Reboot|Suspend|Resume|Terminate|Release|Allocate)\w*', re.IGNORECASE
 )
 
-# Huawei Cloud skill name pattern
-HUAWEI_SKILL_RE = re.compile(r'^huawei', re.IGNORECASE)
-
 
 def classify_hcloud(text):
     """Classify an hcloud CLI command as read / write / invoke.
@@ -130,11 +127,6 @@ def classify_hcloud(text):
     if WRITE_VERBS.search(cmd):
         return {'key': 'cli:write', 'value': f'hcloud {cmd}'}
     return {'key': 'cli:invoke', 'value': f'hcloud {cmd}'}
-
-
-def is_huawei_skill(name):
-    """Check if a skill name belongs to Huawei Cloud."""
-    return name and HUAWEI_SKILL_RE.search(name)
 
 
 # ── Event writer ────────────────────────────────────────────────────
@@ -177,27 +169,6 @@ def command_text(tool_input):
     return json.dumps(tool_input)
 
 
-# ── Skill name extraction ───────────────────────────────────────────
-
-def extract_skill_name(tool_name, tool_input):
-    """Extract skill name from tool_input for skill-related tools.
-
-    Hermes skill tools: skill_view, skills_list, skill_manage.
-    The skill name may be in 'name', 'skill', or 'args' field.
-    """
-    if not isinstance(tool_input, dict):
-        if isinstance(tool_input, str):
-            return tool_input
-        return ""
-
-    # Common field names across agent platforms
-    return (
-        tool_input.get("name", "")
-        or tool_input.get("skill", "")
-        or tool_input.get("command", "")
-        or ""
-    )
-
 
 # ── Main hook logic ─────────────────────────────────────────────────
 
@@ -211,22 +182,19 @@ def main():
     tool_name = data.get("tool_name", "")
     tool_input = data.get("tool_input", {})
 
-    # ── Category 1: Skill tool loading ──
-    # Hermes skill tools: skill_view, skills_list, skill_manage
-    if tool_name in ("skill_view", "skills_list", "skill_manage", "skill"):
-        skill_name = extract_skill_name(tool_name, tool_input)
-        if is_huawei_skill(skill_name):
-            write_event('skill:retrieve', skill_name)
-
-    # ── Category 2: Bash/terminal tool with hcloud commands ──
-    elif tool_name in ("Bash", "terminal", "bash", "pwsh"):
+    # ── Category 1: Bash/terminal tool with hcloud commands ──
+    # Devkit skills are server data disclosed over MCP (never installed
+    # natively), so skill-retrieval telemetry rides trackSkillRetrieve
+    # inside huaweicloud_retrieve_skill; only the CLI classifier and MCP
+    # invocations are tracked here.
+    if tool_name in ("Bash", "terminal", "bash", "pwsh"):
         command = command_text(tool_input)
         if command and HCLOUD_RE.search(command):
             result = classify_hcloud(command)
             if result:
                 write_event(result['key'], result['value'], {'capability': 'cli'})
 
-    # ── Category 3: MCP Huawei Cloud tool invocations ──
+    # ── Category 2: MCP Huawei Cloud tool invocations ──
     elif tool_name.startswith("mcp__huaweicloud") or tool_name.startswith("huaweicloud_"):
         write_event(f"tool:{tool_name}", "1", {'capability': 'mcp'})
 

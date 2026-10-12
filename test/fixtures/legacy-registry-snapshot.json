@@ -1,0 +1,585 @@
+{
+  "huaweicloud_check_cli": {
+    "properties": {},
+    "type": "object"
+  },
+  "huaweicloud_plan_cli_command": {
+    "properties": {
+      "allowWrites": {
+        "type": "boolean"
+      },
+      "args": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "required": ["args"],
+    "type": "object"
+  },
+  "huaweicloud_run_readonly_command": {
+    "properties": {
+      "args": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "cwd": {
+        "type": "string"
+      },
+      "maxRetries": {
+        "type": "number"
+      },
+      "timeoutMs": {
+        "type": "number"
+      }
+    },
+    "required": ["args"],
+    "type": "object"
+  },
+  "huaweicloud_list_operations": {
+    "properties": {
+      "service": {
+        "type": "string"
+      },
+      "timeoutMs": {
+        "type": "number"
+      }
+    },
+    "required": ["service"],
+    "type": "object"
+  },
+  "huaweicloud_run_approved_command": {
+    "properties": {
+      "approvalToken": {
+        "type": "string"
+      },
+      "approvedByUser": {
+        "type": "boolean"
+      },
+      "args": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "cwd": {
+        "type": "string"
+      },
+      "maxRetries": {
+        "type": "number"
+      },
+      "timeoutMs": {
+        "type": "number"
+      }
+    },
+    "required": ["args", "approvalToken", "approvedByUser"],
+    "type": "object"
+  },
+  "huaweicloud_show_profile_redacted": {
+    "properties": {
+      "profile": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "huaweicloud_hook_check_command": {
+    "properties": {
+      "command": {
+        "type": "string"
+      }
+    },
+    "required": ["command"],
+    "type": "object"
+  },
+  "huaweicloud_hook_check_artifacts": {
+    "properties": {
+      "artifacts": {
+        "items": {
+          "properties": {
+            "content": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": ["path", "content"],
+          "type": "object"
+        },
+        "type": "array"
+      }
+    },
+    "required": ["artifacts"],
+    "type": "object"
+  },
+  "huaweicloud_hook_check_deploy_plan": {
+    "properties": {
+      "plan": {}
+    },
+    "required": ["plan"],
+    "type": "object"
+  },
+  "huaweicloud_service_catalog": {
+    "properties": {
+      "intent": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "huaweicloud_explain_error": {
+    "properties": {
+      "errorCode": {
+        "type": "string"
+      },
+      "message": {
+        "type": "string"
+      },
+      "requestId": {
+        "type": "string"
+      },
+      "service": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "huaweicloud_search_docs": {
+    "properties": {
+      "query": {
+        "type": "string"
+      },
+      "topic": {
+        "type": "string"
+      }
+    },
+    "required": ["query"],
+    "type": "object"
+  },
+  "huaweicloud_retrieve_skill": {
+    "properties": {
+      "name": {
+        "type": "string"
+      }
+    },
+    "required": ["name"],
+    "type": "object"
+  },
+  "huaweicloud_list_regions": {
+    "properties": {},
+    "type": "object"
+  },
+  "huaweicloud_get_regional_availability": {
+    "properties": {
+      "region": {
+        "type": "string"
+      },
+      "service": {
+        "type": "string"
+      }
+    },
+    "required": ["service", "region"],
+    "type": "object"
+  },
+  "huaweicloud_search_marketplace": {
+    "properties": {
+      "category": {
+        "type": "string"
+      },
+      "query": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "huaweicloud_get_service_icon": {
+    "properties": {
+      "category": {
+        "type": "string"
+      },
+      "service": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "huaweicloud_detect_framework": {
+    "properties": {
+      "projectPath": {
+        "type": "string"
+      }
+    },
+    "required": ["projectPath"],
+    "type": "object"
+  },
+  "huaweicloud_setup_obs_config": {
+    "properties": {
+      "profile": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "huaweicloud_auth_status": {
+    "properties": {
+      "target": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "huaweicloud_auth_sync": {
+    "properties": {
+      "target": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "huaweicloud_auth_init": {
+    "properties": {
+      "ak": {
+        "type": "string"
+      },
+      "clear": {
+        "type": "boolean"
+      },
+      "region": {
+        "type": "string"
+      },
+      "sk": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "huaweicloud_auth_switch": {
+    "properties": {
+      "action": {
+        "enum": ["persist", "temporary", "clear"],
+        "type": "string"
+      },
+      "ak": {
+        "type": "string"
+      },
+      "mode": {
+        "enum": ["import", "memory", "mcp-config"],
+        "type": "string"
+      },
+      "region": {
+        "type": "string"
+      },
+      "securityToken": {
+        "type": "string"
+      },
+      "sk": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "huaweicloud_auth_confirm": {
+    "properties": {
+      "decision": {
+        "enum": ["s1", "newImported"],
+        "type": "string"
+      },
+      "token": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "huaweicloud_sandbox_exec_with_session": {
+    "properties": {
+      "command": {
+        "type": "string"
+      },
+      "timeout_ms": {
+        "type": "number"
+      },
+      "username": {
+        "type": "string"
+      },
+      "workspace_id": {
+        "type": "string"
+      }
+    },
+    "required": ["command"],
+    "type": "object"
+  },
+  "huaweicloud_sandbox_exec_one_shot": {
+    "properties": {
+      "command": {
+        "type": "string"
+      },
+      "timeout_ms": {
+        "type": "number"
+      },
+      "username": {
+        "type": "string"
+      },
+      "workspace_id": {
+        "type": "string"
+      }
+    },
+    "required": ["command"],
+    "type": "object"
+  },
+  "huaweicloud_sandbox_close_session": {
+    "properties": {
+      "username": {
+        "type": "string"
+      },
+      "workspace_id": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "huaweicloud_sandbox_upload_file": {
+    "properties": {
+      "local_path": {
+        "type": "string"
+      },
+      "remote_path": {
+        "type": "string"
+      },
+      "timeout_ms": {
+        "type": "number"
+      },
+      "username": {
+        "type": "string"
+      },
+      "workspace_id": {
+        "type": "string"
+      }
+    },
+    "required": ["local_path", "remote_path"],
+    "type": "object"
+  },
+  "huaweicloud_sandbox_upload_project": {
+    "properties": {
+      "exclude": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "extract": {
+        "type": "boolean"
+      },
+      "local_dir": {
+        "type": "string"
+      },
+      "remote_dir": {
+        "type": "string"
+      },
+      "timeout_ms": {
+        "type": "number"
+      },
+      "username": {
+        "type": "string"
+      },
+      "workspace_id": {
+        "type": "string"
+      }
+    },
+    "required": ["local_dir"],
+    "type": "object"
+  },
+  "huaweicloud_sandbox_deploy_nginx": {
+    "properties": {
+      "config_name": {
+        "type": "string"
+      },
+      "nginx_type": {
+        "enum": ["spa", "proxy", "static"],
+        "type": "string"
+      },
+      "node_port": {
+        "type": "number"
+      },
+      "output_dir": {
+        "type": "string"
+      },
+      "port": {
+        "type": "number"
+      },
+      "project": {
+        "type": "string"
+      },
+      "public_port": {
+        "type": "number"
+      },
+      "timeout_ms": {
+        "type": "number"
+      },
+      "username": {
+        "type": "string"
+      },
+      "workspace_id": {
+        "type": "string"
+      }
+    },
+    "required": ["nginx_type", "port", "project", "output_dir"],
+    "type": "object"
+  },
+  "huaweicloud_sandbox_deploy_check": {
+    "properties": {
+      "framework_type": {
+        "enum": ["spa", "ssr", "ssg", "cross-platform", "monorepo", "static"],
+        "type": "string"
+      },
+      "output_dir": {
+        "type": "string"
+      },
+      "port": {
+        "type": "number"
+      },
+      "project": {
+        "type": "string"
+      },
+      "timeout_ms": {
+        "type": "number"
+      },
+      "username": {
+        "type": "string"
+      },
+      "workspace_id": {
+        "type": "string"
+      }
+    },
+    "required": ["port", "project", "output_dir"],
+    "type": "object"
+  },
+  "huaweicloud_sandbox_check_user": {
+    "properties": {},
+    "type": "object"
+  },
+  "huaweicloud_sandbox_sign_agreement": {
+    "properties": {},
+    "type": "object"
+  },
+  "huaweicloud_sandbox_connect": {
+    "properties": {
+      "env": {
+        "type": "object"
+      },
+      "flavor_id": {
+        "type": "string"
+      },
+      "git": {
+        "properties": {
+          "open_type": {
+            "type": "string"
+          },
+          "repo_branch": {
+            "type": "string"
+          },
+          "repo_name": {
+            "type": "string"
+          },
+          "repo_url": {
+            "type": "string"
+          },
+          "target_path": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "source": {
+        "type": "string"
+      },
+      "template_id": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "huaweicloud_sandbox_credentials": {
+    "properties": {
+      "api_key": {
+        "type": "string"
+      },
+      "dev_stage_id": {
+        "type": "string"
+      },
+      "enable_sts": {
+        "type": "boolean"
+      },
+      "region": {
+        "type": "string"
+      },
+      "session_id": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "huaweicloud_voucher_status": {
+    "properties": {
+      "domain_id": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "huaweicloud_voucher_claim": {
+    "properties": {
+      "domain_id": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "huaweicloud_check_update": {
+    "properties": {
+      "dismiss": {
+        "type": "boolean"
+      },
+      "dismissVersion": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "huaweicloud_upgrade": {
+    "properties": {
+      "target": {
+        "type": "string"
+      },
+      "version": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "huaweicloud_obs_set_website_config": {
+    "properties": {
+      "action": {
+        "enum": ["set", "get", "delete"],
+        "type": "string"
+      },
+      "bucket": {
+        "type": "string"
+      },
+      "errorDocument": {
+        "type": "string"
+      },
+      "indexDocument": {
+        "type": "string"
+      },
+      "region": {
+        "type": "string"
+      }
+    },
+    "required": ["action", "bucket", "region"],
+    "type": "object"
+  }
+}

@@ -4,6 +4,8 @@ description: '查询和领取华为云激励代金券（一人一次）。当用
 version: 1
 ---
 
+<!-- generated from src/packs/voucher/skills/huawei-voucher - do not edit -->
+
 # 华为云激励代金券
 
 ## 主动提示准则（核心）

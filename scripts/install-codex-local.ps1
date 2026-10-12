@@ -37,7 +37,6 @@ $pluginJson = @{
   repository  = "https://github.com/huaweicloud/HuaweiCloud-Devkit"
   license     = "Apache-2.0"
   keywords    = @("huaweicloud","huawei-cloud","koocli","hcloud","agent","mcp","api","sdk","skills")
-  skills      = "./skills/"
   mcpServers  = "./.mcp.json"
   interface   = @{
     displayName      = "HuaweiCloud DevKit"

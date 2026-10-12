@@ -25,7 +25,12 @@ assertExists(join(root, 'integrations', 'opencode', 'opencode.json'));
 
 const manifest = readJson(join(pluginRoot, '.codex-plugin', 'plugin.json'));
 assert.equal(manifest.name, 'huaweicloud-devkit');
-assert.equal(manifest.skills, './skills/');
+// Skills are server data disclosed over MCP; manifests must not declare a
+// native skills surface (same absence discipline as hooks).
+assert.ok(
+  !Object.hasOwn(manifest, 'skills'),
+  'Codex manifest should not declare skills — skills are MCP-disclosed server data',
+);
 assert.equal(manifest.mcpServers, './.mcp.json');
 assert.ok(!Object.hasOwn(manifest, 'hooks'), 'Codex manifest should not include hooks until supported by validator');
 
@@ -142,6 +147,18 @@ for (const file of walk(join(pluginRoot, 'skills')).concat(walk(join(pluginRoot,
   }
 }
 console.log(`Validated KooCLI version pairing: ${kooCliVersion}.`);
+
+// Pack boundary guard (scripts/lib/pack-boundaries.mjs is the single
+// implementation; this is the authoritative CI entry). Per-pack modules may
+// only import their own pack root, src/lib, the core shared whitelist,
+// node:/zod/undici, and type-only edges into core.
+const { checkPackBoundaries } = await import('./lib/pack-boundaries.mjs');
+const boundaries = checkPackBoundaries({ root });
+if (!boundaries.ok) {
+  for (const line of boundaries.lines) console.error(line);
+  process.exit(1);
+}
+console.log(`Validated pack boundaries: ${boundaries.packFiles} pack module(s) checked.`);
 
 const readmePaths = [join(root, 'README.md'), join(root, 'README.zh-CN.md')];
 

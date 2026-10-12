@@ -87,28 +87,20 @@ test('telemetry hook captures hcloud write commands', () => {
   assert.match(events[0].value, /ECS CreateServers/);
 });
 
-test('telemetry hook captures skill_view for huawei skills', () => {
-  const result = runHookWithTempDir({
-    tool_name: 'skill_view',
-    tool_input: { name: 'huawei-ecs' },
-  });
-  if (pythonUnavailable(result)) return;
+// Devkit skills are server data disclosed over MCP: skill-view events carry
+// no devkit signal anymore, so the hook must not classify them at all
+// (retrieval telemetry rides trackSkillRetrieve in huaweicloud_retrieve_skill).
+test('telemetry hook does not classify skill tool loading', () => {
+  for (const name of ['huawei-ecs', 'some-other-skill']) {
+    const result = runHookWithTempDir({
+      tool_name: 'skill_view',
+      tool_input: { name },
+    });
+    if (pythonUnavailable(result)) return;
 
-  const events = readEvents();
-  assert.equal(events.length, 1);
-  assert.equal(events[0].key, 'skill:retrieve');
-  assert.equal(events[0].value, 'huawei-ecs');
-});
-
-test('telemetry hook ignores non-huawei skills', () => {
-  const result = runHookWithTempDir({
-    tool_name: 'skill_view',
-    tool_input: { name: 'some-other-skill' },
-  });
-  if (pythonUnavailable(result)) return;
-
-  const events = readEvents();
-  assert.equal(events.length, 0);
+    const events = readEvents();
+    assert.equal(events.length, 0, `skill_view of ${name} must produce no event`);
+  }
 });
 
 test('telemetry hook captures MCP huaweicloud tool invocations', () => {

@@ -1,11 +1,47 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import {
   classifyHcloudArgs,
   classifyTextCommand,
+  loadPolicy,
   redactSecrets,
 } from '../plugins/huaweicloud-core/src/safety-policy.ts';
+
+test('loadPolicy fails closed on a malformed policy file', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hwc-policy-'));
+  try {
+    const write = (content) => writeFileSync(join(dir, 'policy.json'), content);
+    const expectThrow = (content, fragment) => {
+      write(content);
+      assert.throws(() => loadPolicy(join(dir, 'policy.json')), /TypeError/, fragment);
+    };
+    expectThrow('[]', 'array root');
+    expectThrow('null', 'null root');
+    expectThrow('{"writeOperationPrefixes": "list-vpcs"}', 'non-array field');
+    expectThrow('{"secretKeyNamePatterns": null}', 'null field');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadPolicy accepts absent fields and the shipped policy', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hwc-policy-'));
+  try {
+    writeFileSync(join(dir, 'policy.json'), '{"writeOperationPrefixes": ["List"]}');
+    const partial = loadPolicy(join(dir, 'policy.json'));
+    assert.deepEqual(partial.writeOperationPrefixes, ['List']);
+    assert.deepEqual(partial.secretKeyNamePatterns, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+
+  const shipped = loadPolicy();
+  assert.ok(shipped.writeOperationPrefixes.length > 0, 'shipped policy keeps write prefixes');
+});
 
 test('redactSecrets removes credential-shaped values recursively', () => {
   const redacted = redactSecrets({
