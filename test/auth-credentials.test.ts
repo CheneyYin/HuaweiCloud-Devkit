@@ -188,7 +188,7 @@ test('auth sync writes OBS and reports all agent registration targets', () => {
 });
 
 test('agent registration detects OpenCode MCP config', () => {
-  withTempHome((home) => {
+  withAgentHome((home) => {
     const cfgDir = join(home, '.config', 'opencode');
     mkdirSync(cfgDir, { recursive: true });
     writeFileSync(
@@ -202,7 +202,7 @@ test('agent registration detects OpenCode MCP config', () => {
 });
 
 test('agent registration detects DSH cordis patch config', () => {
-  withTempHome((home) => {
+  withAgentHome((home) => {
     const profileDir = join(home, '.dsh', 'profiles', 'web');
     mkdirSync(profileDir, { recursive: true });
     writeFileSync(
@@ -219,6 +219,29 @@ test('agent registration detects DSH cordis patch config', () => {
     );
     const status = getAgentRegistrationStatuses('dsh');
     assert.equal(status.agents.dsh.configured, true);
+  });
+});
+
+test('agent registration ignores HUAWEICLOUD_HOME for agent-owned configs', () => {
+  withAgentHome(() => {
+    const devkitHome = mkdtempSync(join(tmpdir(), 'huaweicloud-devkit-home-'));
+    const cfgDir = join(devkitHome, '.config', 'opencode');
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(
+      join(cfgDir, 'opencode.json'),
+      JSON.stringify({ mcp: { 'huaweicloud-devkit': { enabled: true } } }),
+      'utf8',
+    );
+    const saved = process.env.HUAWEICLOUD_HOME;
+    try {
+      process.env.HUAWEICLOUD_HOME = devkitHome;
+      const status = getAgentRegistrationStatuses('opencode');
+      assert.equal(status.agents.opencode.configured, false);
+    } finally {
+      if (saved === undefined) delete process.env.HUAWEICLOUD_HOME;
+      else process.env.HUAWEICLOUD_HOME = saved;
+      rmSync(devkitHome, { recursive: true, force: true });
+    }
   });
 });
 
