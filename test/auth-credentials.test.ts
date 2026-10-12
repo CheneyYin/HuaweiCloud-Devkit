@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
@@ -240,6 +240,46 @@ test('agent registration detects DSH_HOME cordis patch config', () => {
     } finally {
       if (previousDshHome === undefined) delete process.env.DSH_HOME;
       else process.env.DSH_HOME = previousDshHome;
+    }
+  });
+});
+
+test('agent registration reads codex plugin state from JSON, not the table substring', () => {
+  withTempHome((home) => {
+    const binDir = join(home, 'fake-bin');
+    mkdirSync(binDir, { recursive: true });
+    const scriptPath = join(home, 'fake-codex.mjs');
+    writeFileSync(
+      scriptPath,
+      `
+const args = process.argv.slice(2);
+if (args[0] === 'plugin' && args[1] === 'list' && args.includes('--json')) {
+  console.log(process.env.FAKE_CODEX_LIST_JSON || '{"installed":[]}');
+}
+process.exit(0);
+`,
+      'utf8',
+    );
+    const commandPath = join(binDir, 'codex');
+    writeFileSync(commandPath, `#!/usr/bin/env sh\n"${process.execPath}" "${scriptPath}" "$@"\n`, 'utf8');
+    chmodSync(commandPath, 0o755);
+    const savedPath = process.env.PATH;
+    try {
+      process.env.PATH = `${binDir}${delimiter}${savedPath || ''}`;
+      // The legacy table format carries the source directory
+      // (plugins/huaweicloud-core) in its SOURCE column; the old substring
+      // check read that as "installed" even with no installed row.
+      process.env.FAKE_CODEX_LIST_JSON =
+        'NAME                SOURCE\nhuaweicloud-devkit  /repo/plugins/huaweicloud-core';
+      assert.equal(getAgentRegistrationStatuses('codex').agents.codex.configured, false);
+      process.env.FAKE_CODEX_LIST_JSON = JSON.stringify({ installed: [] });
+      assert.equal(getAgentRegistrationStatuses('codex').agents.codex.configured, false);
+      process.env.FAKE_CODEX_LIST_JSON = JSON.stringify({ installed: [{ name: 'huaweicloud-devkit' }] });
+      assert.equal(getAgentRegistrationStatuses('codex').agents.codex.configured, true);
+    } finally {
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+      delete process.env.FAKE_CODEX_LIST_JSON;
     }
   });
 });

@@ -4,6 +4,8 @@ import { homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
+import { codexPluginProbe } from '../codex-probe.ts';
+
 export const SUPPORTED_AGENT_TARGETS: string[] = [
   'opencode',
   'codex',
@@ -58,18 +60,8 @@ function codexDesktopRegistered(): boolean {
 }
 
 function codexCliRegistered(): boolean {
-  try {
-    const r = spawnSync('codex', ['plugin', 'list'], {
-      shell: false,
-      windowsHide: true,
-      stdio: 'pipe',
-      timeout: 10000,
-    });
-    const out = `${r.stdout || ''}${r.stderr || ''}`;
-    return out.includes('huaweicloud-core');
-  } catch {
-    return false;
-  }
+  const probe = codexPluginProbe();
+  return probe.ok && probe.installed;
 }
 
 function codeartsRegistered(): boolean {
