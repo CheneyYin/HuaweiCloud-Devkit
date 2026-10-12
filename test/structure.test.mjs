@@ -107,6 +107,18 @@ test('skills document KooCLI installation, operation discovery, region intent, a
   assert.match(discoverySkill, /Singapore.*ap-southeast-3/s);
   assert.match(discoverySkill, /No blind all-region scans/);
 
+  // E: billing skill must split Partner vs Customer-level BSS APIs and not
+  // mis-diagnose APIGW.0301 as a missing cli-domain-id.
+  const billingSkill = readFileSync(join(pluginRoot, 'skills', 'huawei-billing', 'SKILL.md'), 'utf8');
+  assert.match(billingSkill, /Partner vs Customer-level APIs/);
+  assert.match(billingSkill, /ListCustomerCouponChangeRecords/);
+  assert.match(billingSkill, /ListQuotaCoupons/);
+  assert.match(billingSkill, /identity, not domain-id/);
+
+  // I: cli-and-auth documents the 4-step <Operation> --help discovery chain.
+  assert.match(cliSkill, /hcloud <Service> <Operation> --help/);
+  assert.match(cliSkill, /step 3 \(`<Operation> --help`\) is never skippable/);
+
   const safetySkill = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-safety', 'SKILL.md'), 'utf8');
   assert.match(safetySkill, /shell history/i);
   assert.match(safetySkill, /huaweicloud_run_approved_command/);
@@ -132,10 +144,7 @@ test('skill SKILL.md files meet minimum content quality bar', () => {
     'huaweicloud-api-and-sdk',
     'huaweicloud-safety',
     'huaweicloud-troubleshooting',
-    'huawei-deployment',
     'huawei-getting-started',
-    'huawei-apig',
-    'huawei-gaussdb',
   ]);
 
   for (const name of skillNames) {
@@ -146,22 +155,29 @@ test('skill SKILL.md files meet minimum content quality bar', () => {
   }
 });
 
-test('huawei-deployment skill uses verified KooCLI service and operation names', () => {
-  const body = readFileSync(join(pluginRoot, 'skills', 'huawei-deployment', 'SKILL.md'), 'utf8');
+test('huawei-cloud-deployment-task-management skill uses verified KooCLI service and operation names', () => {
+  const body = readFileSync(join(pluginRoot, 'skills', 'huawei-cloud-deployment-task-management', 'SKILL.md'), 'utf8');
   assert.match(body, /CodeArtsDeploy/);
   assert.match(body, /StartDeployTask/);
   assert.match(body, /ListAllApp/);
   assert.match(body, /DeleteDeployTask/);
+  assert.match(body, /ListDeployTasks/);
+  assert.match(body, /ShowDeployTaskDetail/);
+  assert.match(body, /ListDeployTaskHistoryByDate/);
+  assert.match(body, /CheckIsDuplicateAppName/);
+  assert.match(body, /CreateApp/);
+  assert.match(body, /CreateDeployTaskByTemplate/);
   assert.match(body, /Deploy\.00016902/);
-  assert.match(body, /APIGW\.0301/);
-  assert.match(body, /--app_id/);
-  assert.match(body, /DeleteApplication/);
-  assert.match(body, /deprecated since 2024-09-30/);
-  assert.doesNotMatch(body, /--application_id/);
+  // Service name is CodeArtsDeploy; CloudDeploy/Deploy are NOT valid KooCLI service names.
+  assert.match(body, /CloudDeploy` and `Deploy` are \*\*not\*\* supported service names/);
+  // ShowDeployTaskDetail is the deprecated-but-still-maintained detail operation.
+  assert.match(body, /deprecated after 2024-09-30/);
+  // No legacy or invented operation names.
   assert.doesNotMatch(body, /\bStartTask\b/);
   assert.doesNotMatch(body, /\bListTasks\b/);
   assert.doesNotMatch(body, /\bCreateTask\b/);
   assert.doesNotMatch(body, /\bDeleteTask\b/);
+  assert.doesNotMatch(body, /\bDeleteApplication\b/);
 });
 
 test('skills with references have non-empty reference files', () => {
@@ -248,15 +264,21 @@ test('devbridge 0.2.x flow: auth capability probe, version detection, in-place u
   assert.match(sandbox, /Never expose tunnel details/);
 
   // Auth must be decided by probing the binary's capability, not by the version string —
-  // image builds retain AK/SK (auto), release builds accept only API Key.
+  // the verified waterfall prefers the platform-injected keyring key (API_KEY_KEYRING),
+  // falls back to image-build AK/SK (AKSK_SUPPORTED), then to the user-provided file
+  // (API_KEY_FILE). STS credentials carry --security-token (401 APIGW.0301 without it).
   assert.match(sandbox, /auth login --help 2>&1 \| grep -q -- '--access-key'/);
-  assert.match(sandbox, /AUTH_MODE=AKSK_SUPPORTED/);
-  assert.match(sandbox, /AUTH_MODE=API_KEY_ONLY/);
+  assert.match(sandbox, /API_KEY_KEYRING/);
+  assert.match(sandbox, /AKSK_SUPPORTED/);
+  assert.match(sandbox, /API_KEY_FILE|NO_CREDENTIAL/);
+  assert.match(sandbox, /hwcloud keyring get HW_DEVBRIDGE_API_KEY 2>&1/, 'keyring read must capture stderr');
+  assert.match(sandbox, /devbridge_/);
   assert.match(
     sandbox,
     /auth login --access-key "\$HW_ACCESS_KEY" --secret-key "\$HW_SECRET_KEY"/,
     'image-build branch must teach the direct AK/SK login',
   );
+  assert.match(sandbox, /--security-token "\$HW_SECURITY_TOKEN"/, 'STS login must include the security token');
 
   // The API Key guidance (release-build branch) must survive, incl. version detection
   // and the in-place upgrade.
@@ -292,6 +314,61 @@ test('devbridge 0.2.x flow: auth capability probe, version detection, in-place u
   assert.match(sidecopy, /auth login --api-key "\$HW_API_KEY"/);
   assert.match(sidecopy, /devbridge-s2\.hwtunnel\.com/);
   assert.match(sidecopy, /\/tmp\/hw_api_key/);
+});
+
+test('proxy nginx template listens on targetPort, not the stale listenPort (#738)', () => {
+  const sessionManager = readFileSync(join(pluginRoot, 'src', 'sandbox', 'session-manager.mjs'), 'utf8');
+
+  // The proxy template must reference ${targetPort} (the auto-incremented port),
+  // not ${listenPort} (the original requested port which may be occupied).
+  // spa/static already used targetPort; proxy must follow suit.
+  const proxyBlock = sessionManager.match(/proxy: `server \{[\s\S]*?\}`/);
+  assert.ok(proxyBlock, 'proxy nginx template block not found');
+  assert.match(proxyBlock[0], /listen \$\{targetPort\}/);
+  assert.doesNotMatch(proxyBlock[0], /listen \$\{listenPort\}/);
+});
+
+test('effectiveNodePort for proxy resolves via the pure resolveProxyNodePort helper on targetPort (#738)', () => {
+  const sessionManager = readFileSync(join(pluginRoot, 'src', 'sandbox', 'session-manager.mjs'), 'utf8');
+
+  // effectiveNodePort must track the resolved targetPort so the Node app and
+  // nginx stay in sync after auto-increment, and the resolution must be
+  // extractable into a pure, unit-testable function (Spec v2 C).
+  const nodePortBlock = sessionManager.match(
+    /const effectiveNodePort =[\s\S]*?resolveProxyNodePort\(nodePort, targetPort[^;]*;[\s\S]*?\n\s*: undefined;/,
+  );
+  assert.ok(nodePortBlock, 'effectiveNodePort block not found');
+  const block = nodePortBlock[0];
+  assert.match(block, /resolveProxyNodePort\(nodePort, targetPort/);
+  assert.doesNotMatch(block, /nodePort !== listenPort/);
+
+  const helper = sessionManager.match(
+    /export async function resolveProxyNodePort\(nodePort, nginxListenPort, isPortInUse\)[\s\S]*?\n\}/,
+  );
+  assert.ok(helper, 'resolveProxyNodePort helper not found');
+  assert.match(helper[0], /nodePort && nodePort !== nginxListenPort \? nodePort : nginxListenPort \+ 1/);
+  assert.match(helper[0], /candidate === nginxListenPort \|\| \(await isPortInUse\(candidate\)\)/);
+});
+
+test('port conflict and drift warnings use the unified logic for all nginx types (#738)', () => {
+  const sessionManager = readFileSync(join(pluginRoot, 'src', 'sandbox', 'session-manager.mjs'), 'utf8');
+
+  // The #736 stopgap formatProxyPortWarning must be retired; proxy must get the
+  // same conflict/drift warnings as spa/static (Spec v2 B).
+  assert.doesNotMatch(sessionManager, /formatProxyPortWarning/);
+  assert.match(sessionManager, /formatPortConflictWarning\(basePort, targetPort\)/);
+  assert.match(sessionManager, /formatPortDriftWarning\(basePort, targetPort\)/);
+  assert.doesNotMatch(sessionManager, /nginxType !== 'proxy'\s*\?\s*formatPortDriftWarning/);
+});
+
+test('proxy port warnings are surfaced alongside the tunnel warning (#738)', () => {
+  const sessionManager = readFileSync(join(pluginRoot, 'src', 'sandbox', 'session-manager.mjs'), 'utf8');
+
+  // portWarning must always be collected (not hidden behind the tunnel check)
+  // so SSR port auto-increment is visible to the caller.
+  assert.match(sessionManager, /if \(conflictWarning\)/);
+  assert.match(sessionManager, /warnings\.push\(conflictWarning\)/);
+  assert.match(sessionManager, /warnings\.join\(' \| '\)/);
 });
 
 test('all plugin manifests are valid JSON', () => {
@@ -753,6 +830,20 @@ test('READMEs recommend @latest for updates', () => {
   assert.match(zh, /huaweicloud-devkit@latest update --target all/);
 });
 
+test('READMEs disclose telemetry with opt-out method (#871)', () => {
+  const en = readFileSync(join(root, 'README.md'), 'utf8');
+  assert.match(en, /## Telemetry/);
+  assert.match(en, /HUAWEICLOUD_DEVKIT_TELEMETRY=off/);
+  assert.match(en, /do\s+not/i); // "What We Do Not Collect"
+  assert.match(en, /SHA-256/);
+
+  const zh = readFileSync(join(root, 'README.zh-CN.md'), 'utf8');
+  assert.match(zh, /## 遥测/);
+  assert.match(zh, /HUAWEICLOUD_DEVKIT_TELEMETRY=off/);
+  assert.match(zh, /不.*收集/); // "不收集哪些数据"
+  assert.match(zh, /SHA-256/);
+});
+
 test('cmdUpdate has no trailing unreachable reinstall; cmdReinstall keeps it', () => {
   const setup = readFileSync(join(pluginRoot, 'src', 'setup-cli.mjs'), 'utf8');
   // cmdUpdate（'update'/'upgrade' 入口）本身不得做"卸载+重装"；各 target 分支均 return。
@@ -775,4 +866,23 @@ test('doctor success message does not demand a restart', () => {
   const setupCli = readFileSync(join(root, 'plugins', 'huaweicloud-core', 'src', 'setup-cli.mjs'), 'utf8');
   assert.match(setupCli, /You can now describe your Huawei Cloud task/);
   assert.doesNotMatch(setupCli, /Restart your session, then describe/);
+});
+
+test('agent rules file is included in npm package and injected on install (#758 D4-23)', () => {
+  // The rules file exists in the repo.
+  const rulesPath = join(root, 'rules', 'huawei-agent-rules.mdc');
+  assert.ok(existsSync(rulesPath), 'Missing rules/huawei-agent-rules.mdc');
+
+  // The package.json files array includes "rules" so npm pack ships it.
+  const pkg = readJson(join(root, 'package.json'));
+  assert.ok(Array.isArray(pkg.files) && pkg.files.includes('rules'), 'package.json "files" array must include "rules"');
+
+  // setup-cli.mjs has the injectAgentRules helper.
+  const setup = readFileSync(join(pluginRoot, 'src', 'setup-cli.mjs'), 'utf8');
+  assert.match(setup, /function injectAgentRules\(pluginDest\)/);
+
+  // Every install and update function calls injectAgentRules. There are
+  // 10 supported agents × 2 (install + update) = 20 expected call sites.
+  const calls = setup.match(/injectAgentRules\(pluginDest\)/g) || [];
+  assert.ok(calls.length >= 20, `Expected ≥20 injectAgentRules calls, found ${calls.length}`);
 });

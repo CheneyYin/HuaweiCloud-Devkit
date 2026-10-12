@@ -37,7 +37,7 @@ function invokeMcpTools(mcpServerPath, env, timeout = 15000) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [mcpServerPath], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env,
+      env: { HUAWEICLOUD_SKIP_HCLOUD_PREINSTALL: '1', ...env },
       timeout,
     });
     let buffer = '';
@@ -99,7 +99,7 @@ function invokeMcpToolCall(mcpServerPath, env, toolName, toolArgs, timeout = 150
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [mcpServerPath], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env,
+      env: { HUAWEICLOUD_SKIP_HCLOUD_PREINSTALL: '1', ...env },
       timeout,
     });
     let buffer = '';
@@ -185,6 +185,7 @@ const REQUIRED_TOOLS = [
   'huaweicloud_sandbox_credentials',
   'huaweicloud_voucher_status',
   'huaweicloud_voucher_claim',
+  'huaweicloud_competition_voucher_claim',
 ];
 
 const targets = [
@@ -197,7 +198,9 @@ const targets = [
     hasServer: (p) => {
       if (!existsSync(p)) return false;
       try {
-        return Boolean(JSON.parse(readFileSync(p, 'utf8')).mcp?.['huaweicloud-devkit']);
+        const cfg = JSON.parse(readFileSync(p, 'utf8'));
+        // V2 native (mcp.servers) or V1 legacy (mcp.<name>) form.
+        return Boolean(cfg.mcp?.['huaweicloud-devkit'] || cfg.mcp?.servers?.['huaweicloud-devkit']);
       } catch {
         return false;
       }

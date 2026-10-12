@@ -8,8 +8,10 @@ import {
   globalCredentialsPath,
   isPlaceholder,
   obsConfigPath,
+  parseStsExpiry,
   readCodeArtsCredentials,
   readGlobalCredentials,
+  resolveCredentialsWithRuntime,
   writeLastSync,
   writeObsConfig,
 } from './credentials.mjs';
@@ -162,18 +164,52 @@ export function computeOnboarding({ credentials, reconciled } = {}) {
   return { needsSetup: true, scenario, reason, message, steps, accountHint };
 }
 
+// Compute temporary-STS expiry info for auth_status. Permanent AK/SK creds carry
+// no security token and therefore have no expiry — we return null so callers only
+// see expiry for the platform-injected temporary STS case.
+function computeStsExpiry() {
+  let creds;
+  try {
+    creds = resolveCredentialsWithRuntime({ allowMissing: true });
+  } catch {
+    creds = null;
+  }
+  if (!creds?.ak || !creds?.sk || !creds.securityToken) return null;
+  const expiresAt = parseStsExpiry({ securityToken: creds.securityToken });
+  if (expiresAt === null) return { status: 'unknown', expiresAt: null };
+  const remainingMs = expiresAt - Date.now();
+  const expiresAtUtc = new Date(expiresAt).toISOString();
+  const expiresAtLocal = new Date(expiresAt).toString();
+  let status = 'valid';
+  if (remainingMs <= 0) status = 'expired';
+  else if (remainingMs <= 5 * 60 * 1000) status = 'expiring_soon';
+  return { expiresAt, expiresAtUtc, expiresAtLocal, remainingMs, status };
+}
+
 export function getAuthStatus(target = 'all') {
   const credentials = readGlobalCredentials();
   const reconciled = { ...exportStateForStatus(), runtimeActive: hasRuntimeCredentials() };
   const hcloud = probeHcloud();
   const s4Creds = readCodeArtsCredentials();
   const onboarding = computeOnboarding({ credentials, reconciled });
+  const stsExpiry = computeStsExpiry();
+  const credentialPanel = {
+    sts: stsExpiry, // 临时 STS（MCP==沙箱同源）
+    s1: {
+      configured: Boolean(credentials?.ak && credentials?.sk),
+      fingerprint: credentials?.ak ? fingerprint(credentials.ak, credentials.sk) : null,
+      persistent: true, // 永久，无过期
+    },
+    activeSource: stsExpiry ? 'temporary-sts' : credentials?.ak ? 's1-persistent' : 'none',
+  };
   return {
     target,
     credentialsConfigured: Boolean(credentials?.ak && credentials?.sk),
     credentialsPath: globalCredentialsPath(),
     mcpSettingsConfigured: Boolean(s4Creds?.ak && s4Creds?.sk),
     mcpSettingsSource: s4Creds ? 'codearts' : null,
+    stsExpiry,
+    credentialPanel,
     obsConfigured: existsSync(obsConfigPath()),
     obsConfigPath: obsConfigPath(),
     kooCliInstalled: hcloud.installed,

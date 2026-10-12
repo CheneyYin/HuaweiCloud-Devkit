@@ -8,7 +8,7 @@ import { createHmac, createHash } from 'node:crypto';
 
 import { evaluateArtifacts, evaluateCommandRisk, evaluateDeployPlan } from './risk-rule-engine.mjs';
 import { classifyTextCommand, redactSecrets } from './safety-policy.mjs';
-import { planHcloudCommand, runHcloud, consumeApprovalToken, hashArgs } from './hcloud-cli.mjs';
+import { planHcloudCommand, runHcloud, consumeApprovalToken, inspectApprovalToken, hashArgs } from './hcloud-cli.mjs';
 import { searchMarketplace } from './search-market.mjs';
 import { getServiceIcon } from './icon-library.mjs';
 import { detectFramework } from './detect-framework.mjs';
@@ -20,6 +20,7 @@ import {
   uploadProjectWithSession,
   deployNginx,
   deployCheck,
+  exposeTunnel,
   getCurrentWorkspaceId,
   setWorkspaceId,
 } from './sandbox/session-manager.mjs';
@@ -30,6 +31,7 @@ import {
   hdkitCredentials,
   hdkitVoucherStatus,
   hdkitVoucherClaim,
+  hdkitCompetitionVoucherClaim,
   hdkitGenerateUserHash,
 } from './sandbox/hdkitservice-api.mjs';
 import { getCredentials } from './sandbox/hwlink-api.mjs';
@@ -46,6 +48,7 @@ import {
   writeLastSync,
   readCodeArtsCredentials,
   globalCredentialsPath,
+  parseStsExpiry,
   resolveCredentialsWithRuntime,
 } from './auth/credentials.mjs';
 import { trackToolInvoke, trackSkillRetrieve, clearUserHash } from './telemetry/telemetry.mjs';
@@ -735,6 +738,29 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'huaweicloud_sandbox_expose_tunnel',
+    description:
+      'Expose a port on the sandbox to a public DevBridge tunnel URL (devbridge 0.2.x). Authenticates automatically (probing AK/SK vs API-Key builds, using /tmp/hw_creds.sh and /tmp/hw_api_key as injected by huaweicloud_sandbox_credentials), pre-cleans stale tunnels to avoid quota errors, starts the host, extracts the public URL (https://<id>-<port>.devbridge-s2.hwtunnel.com), and health-checks it before returning. Use the ACTUAL port reported by huaweicloud_sandbox_deploy_nginx (its "port" field auto-increments on conflict) — never the originally requested port. This automates the manual "Expose via DevBridge" 5-step flow. Returns ok, publicUrl, port, tunnelId, and warnings. If the API Key is missing on a release build it returns ok:false with instructions to create one.',
+    inputSchema: {
+      type: 'object',
+      required: ['port'],
+      properties: {
+        port: {
+          type: 'number',
+          description:
+            'Actual port nginx is listening on — use the "port" value returned by huaweicloud_sandbox_deploy_nginx, not the originally requested port.',
+        },
+        workspace_id: {
+          type: 'string',
+          description:
+            'Workspace ID from huaweicloud_sandbox_connect return value. Required - must be passed explicitly when HW_WORKSPACE_ID is not set.',
+        },
+        username: { type: 'string', description: 'Login username (default: root)' },
+        timeout_ms: { type: 'number', description: 'Execution timeout in milliseconds (default: 90000)' },
+      },
+    },
+  },
+  {
     name: 'huaweicloud_sandbox_check_user',
     description:
       'Check if the current user has completed real-name verification and signed the required agreements. Returns 200 {realnameVerified, agreementSigned} when all good; throws 403 HDKIT_NOT_REALNAME / HDKIT_NOT_AGREEMENT / HDKIT_NOT_REALNAME_AND_AGREEMENT to indicate what is missing. Never signs anything itself.',
@@ -821,6 +847,20 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'huaweicloud_voucher_claim',
     description: '领取代金券（一人一次）。重复领取会返回已领取。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        domain_id: {
+          type: 'string',
+          description: 'Optional. Leave empty in production — account is resolved from IAM automatically.',
+        },
+      },
+    },
+  },
+  {
+    name: 'huaweicloud_competition_voucher_claim',
+    description:
+      '领取华为开发者大赛·小红书skill创新赛专属华为云代金券。前置条件：用户已完成该赛事报名（后端自动校验，未报名返回 code=HDKIT_NOT_SIGNED_UP）。仅当用户明确要求领取该赛事代金券时调用，不要主动提示。重复领取会返回已领取。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -989,6 +1029,11 @@ async function transferGitRepo(args, devStageId, connectResult) {
 }
 
 const pendingConfirms = new Map();
+// Tombstones for confirm tokens already consumed, so a repeat
+// huaweicloud_auth_confirm call can be classified as already_processed
+// instead of not_found (D4-24, #745). Kept in-memory only: confirm tokens
+// are session-scoped and never persisted across processes.
+const consumedConfirms = new Map();
 
 function readImportFile() {
   const path = join(dirname(globalCredentialsPath()), 'creds-import.json');
@@ -1256,9 +1301,18 @@ export async function callTool(name, rawArgs = {}, opts = {}) {
       return persisted;
     }
     case 'huaweicloud_auth_confirm': {
+      // D4-24 precise JSON contract (#745): a missing or already-consumed
+      // confirm token returns a structured result instead of throwing a
+      // generic Error string, mirroring runApprovedCommand's contract.
       const pending = pendingConfirms.get(args.token);
-      if (!pending) throw new Error('confirmToken not found or expired.');
+      if (!pending) {
+        if (args.token && consumedConfirms.has(args.token)) {
+          return { status: 'ok', outcome: 'already_processed' };
+        }
+        return { status: 'rejected', code: 'CONFIRM_TOKEN_NOT_FOUND' };
+      }
       pendingConfirms.delete(args.token);
+      consumedConfirms.set(args.token, { consumedAt: Date.now() });
       if (args.decision === 's1') {
         return { status: 'ok', outcome: 'aborted', message: '保持 S1 现有账号，未覆盖。' };
       }
@@ -1404,6 +1458,23 @@ export async function callTool(name, rawArgs = {}, opts = {}) {
         sandboxTimeout8,
       );
     }
+    case 'huaweicloud_sandbox_expose_tunnel': {
+      if (!args.port) {
+        throw new Error(
+          'port is required. Use the ACTUAL "port" value returned by huaweicloud_sandbox_deploy_nginx (it may have been auto-incremented on a port conflict).',
+        );
+      }
+      const sandboxWsId9 = args.workspace_id || getCurrentWorkspaceId();
+      if (!sandboxWsId9) {
+        throw new Error(
+          'workspace_id is required. No sandbox connected — call huaweicloud_sandbox_connect first, ' +
+            'or set HW_WORKSPACE_ID environment variable before starting the agent.',
+        );
+      }
+      const sandboxUser9 = args.username || 'root';
+      const sandboxTimeout9 = args.timeout_ms || 90000;
+      return await exposeTunnel(sandboxWsId9, { port: args.port }, sandboxUser9, sandboxTimeout9);
+    }
     case 'huaweicloud_sandbox_check_user':
       return await hdkitCheckUser();
     case 'huaweicloud_sandbox_sign_agreement':
@@ -1500,10 +1571,10 @@ export async function callTool(name, rawArgs = {}, opts = {}) {
       if (sandboxWsIdCred) result.apiKeyInjected = Boolean(apiKey);
       if (apiKey) {
         result.apiKeyHint =
-          'DevBridge API Key written to /tmp/hw_api_key (0600, kept separate from the temporary AK/SK in /tmp/hw_creds.sh — it is a long-lived account-level credential). Release builds of devbridge 0.2.x use it via: source /tmp/hw_api_key && devbridge auth login --api-key "$HW_API_KEY". Image builds retain AK/SK login — the huawei-sandbox skill probes the capability at expose time. Never echo the key into logs.';
+          'DevBridge API Key written to /tmp/hw_api_key (0600, kept separate from the temporary AK/SK in /tmp/hw_creds.sh — it is a long-lived account-level credential). At expose time the auth waterfall prefers the platform-injected keyring key (API_KEY_KEYRING), falls back to AK/SK, then to this file (API_KEY_FILE). Never echo the key into logs.';
       } else {
         result.apiKeyHint =
-          'No DevBridge API Key provided — release builds of devbridge 0.2.x cannot log in with AK/SK (image builds retain AK/SK; the huawei-sandbox skill probes the build at expose time and uses the injected AK/SK directly when supported). For release builds, ask the user for an API Key (created at https://devstation.connect.huaweicloud.com/space/devbridge/apikey) and re-run with api_key, or set the local HW_API_KEY environment variable (preferred — keeps the key out of the conversation).';
+          'No DevBridge API Key provided locally — that is fine on recent sandbox images (hd-space-ai-shell line): the platform auto-injects the key into the sandbox keyring (HW_DEVBRIDGE_API_KEY via hwcloud) and the expose-time auth waterfall picks it up with zero user action. Only older sandboxes (created before the injection existed, image not upgradeable in place) need the one-time manual fallback: create an API Key at https://devstation.connect.huaweicloud.com/space/devbridge/apikey, set the local HW_API_KEY environment variable (preferred — keeps the key out of the conversation), and re-run this tool to inject it as /tmp/hw_api_key.';
       }
       if (validation.projectId) result.projectId = validation.projectId;
       if (validation.warning) result.warning = validation.warning;
@@ -1514,6 +1585,8 @@ export async function callTool(name, rawArgs = {}, opts = {}) {
       return await hdkitVoucherStatus(args.domain_id);
     case 'huaweicloud_voucher_claim':
       return await hdkitVoucherClaim(args.domain_id);
+    case 'huaweicloud_competition_voucher_claim':
+      return await hdkitCompetitionVoucherClaim(args.domain_id);
     case 'huaweicloud_check_update':
       return await handleCheckUpdate(args, { sessionId: opts?.sessionId, doQuery: opts?.doQuery });
     case 'huaweicloud_upgrade':
@@ -1750,10 +1823,79 @@ const SERVICE_EXAMPLES = {
   DCS: { list: 'DCS ListInstances', create: 'DCS CreateInstance', show: 'DCS ShowInstance' },
 };
 
+// DMS and DEW are Huawei Cloud aggregate service names that do not exist as
+// single KooCLI service identifiers. Each maps to real KooCLI sub-services.
+const AGGREGATE_SERVICE_MAP = {
+  DMS: ['Kafka', 'RabbitMQ', 'RocketMQ'],
+  DEW: ['KMS', 'CSMS'],
+};
+
+// Identity-class notes per service. BSS leads: its operations are split between
+// Customer-level APIs (work with a normal IAM user) and Partner-level APIs
+// (only valid for a partner/dealer identity). Calling a Partner-level API with a
+// customer credential returns APIGW.0301 even when AK/SK are perfectly valid —
+// the common false-positive diagnosis is "cli-domain-id missing".
+const SERVICE_IDENTITY_NOTES = {
+  BSS: [
+    {
+      identity: 'Customer-level (normal IAM user)',
+      apis: [
+        'ShowCustomerAccountBalances',
+        'ListCustomerBillsFeeRecords',
+        'ListCustomerCouponChangeRecords',
+        'ListResourceUsage',
+        'ListCosts',
+      ],
+      note: 'Work with a normal IAM user that has BSS Administrator or Finance role.',
+    },
+    {
+      identity: 'Partner-level (partner/dealer only)',
+      apis: ['ListQuotaCoupons', 'ListSubCustomerCoupons', 'ListSubCustomerBillDetail'],
+      note: 'APIGW.0301 here means the caller identity is not a partner — NOT bad AK/SK or a missing cli-domain-id.',
+    },
+  ],
+};
+
 async function listOperations(service, options = {}) {
   const serviceName = String(service || '').trim();
   if (!/^[A-Za-z][A-Za-z0-9-]{1,63}$/.test(serviceName)) {
     throw new Error('service must be a KooCLI service name such as ECS, VPC, IMS, OBS, RDS, or CDN.');
+  }
+  const upperName = serviceName.toUpperCase();
+  const subServices = AGGREGATE_SERVICE_MAP[upperName];
+  if (subServices && subServices.length) {
+    const results = await Promise.all(
+      subServices.map(async (sub) => {
+        const r = await runHcloud([sub, '--help'], {
+          timeoutMs: options.timeoutMs,
+          maxRetries: 0,
+        });
+        let result = r;
+        if (!result.ok) {
+          result = await runHcloud([sub, 'help'], {
+            timeoutMs: options.timeoutMs,
+            maxRetries: 0,
+          });
+        }
+        return {
+          subService: sub,
+          command: `hcloud ${sub} --help`,
+          examples: SERVICE_EXAMPLES[sub.toUpperCase()] || {
+            note: `No cached examples for ${sub}. Use the help text above to discover available operations.`,
+          },
+          result,
+        };
+      }),
+    );
+    return {
+      service: serviceName,
+      aggregate: true,
+      aggregatedFrom: subServices,
+      selectionRule:
+        'DMS/DEW are aggregate service names. Use each sub-service help text below to select the exact KooCLI operation name.',
+      identityNotes: SERVICE_IDENTITY_NOTES[upperName] || null,
+      subServices: results,
+    };
   }
   const isObs = /^obs$/i.test(serviceName);
   const svc = isObs ? 'obs' : serviceName;
@@ -1771,8 +1913,10 @@ async function listOperations(service, options = {}) {
   return {
     service: serviceName,
     command: isObs ? 'hcloud obs help' : `hcloud ${svc} --help`,
-    selectionRule: 'Use this help text to select the exact KooCLI operation name before planning any service command.',
-    examples: SERVICE_EXAMPLES[serviceName.toUpperCase()] || {
+    selectionRule:
+      'Use this help text to select the exact KooCLI operation name before planning any service command. After selecting an operation, run "hcloud <Service> <Operation> --help" to confirm exact parameter names before constructing the command.',
+    identityNotes: SERVICE_IDENTITY_NOTES[upperName] || null,
+    examples: SERVICE_EXAMPLES[upperName] || {
       note: `No cached examples for ${serviceName}. Use the help text above to discover available operations.`,
     },
     result,
@@ -1784,9 +1928,33 @@ async function runApprovedCommand(args = {}) {
     throw new Error('approvedByUser must be true after explicit user approval for this exact command.');
   }
   const token = String(args.approvalToken || '');
+
+  // D4-24 precise JSON contract (#745): expired and already-consumed tokens
+  // return a structured result instead of throwing a generic Error string, so
+  // clients can machine-assert the two non-success states.
+  const inspection = inspectApprovalToken(token);
+  if (inspection.state === 'already_consumed') {
+    return { status: 'ok', outcome: 'already_processed' };
+  }
+  if (inspection.state === 'expired') {
+    return { status: 'rejected', code: 'CONFIRM_TOKEN_EXPIRED' };
+  }
+  if (inspection.state === 'not_found') {
+    // A token that was never created (typo / unknown / pruned beyond the
+    // tombstone window) is still a rejection, but carries no expired/already
+    // semantics — surface a distinct code so clients can tell the cases apart.
+    return { status: 'rejected', code: 'CONFIRM_TOKEN_NOT_FOUND' };
+  }
+
   const stored = consumeApprovalToken(token);
   if (!stored) {
-    throw new Error('Invalid or expired approval token. Please re-plan the command.');
+    // Defensive: inspectApprovalToken said 'valid' but consume returned null
+    // (e.g. raced and pruned between the two reads). Re-classify so we never
+    // return a misleading success.
+    const recheck = inspectApprovalToken(token);
+    if (recheck.state === 'expired') return { status: 'rejected', code: 'CONFIRM_TOKEN_EXPIRED' };
+    if (recheck.state === 'already_consumed') return { status: 'ok', outcome: 'already_processed' };
+    return { status: 'rejected', code: 'CONFIRM_TOKEN_NOT_FOUND' };
   }
   const providedArgs = Array.isArray(args.args) ? args.args.map(String) : [];
   if (hashArgs(providedArgs) !== stored.argsHash) {
@@ -1816,22 +1984,79 @@ function serviceCatalog(intent = '') {
   const it = String(intent).toLowerCase();
   const routeMap = [
     {
-      keywords: ['ecs', 'server', 'vm', 'instance', 'compute', 'flavor', 'image'],
+      keywords: [
+        'ecs',
+        'server',
+        'vm',
+        'instance',
+        'compute',
+        'flavor',
+        'image',
+        '弹性云服务器',
+        '云服务器',
+        '服务器',
+        '虚拟机',
+        '镜像',
+      ],
       skills: ['huawei-ecs'],
       services: ['ECS'],
     },
     {
-      keywords: ['vpc', 'subnet', 'network', 'security group', 'eip', 'nat', 'vpn', 'bandwidth'],
+      keywords: [
+        'vpc',
+        'subnet',
+        'network',
+        'security group',
+        'eip',
+        'nat',
+        'vpn',
+        'bandwidth',
+        '虚拟私有云',
+        '子网',
+        '网络',
+        '安全组',
+        '弹性公网IP',
+        'NAT网关',
+        'VPN网关',
+        '带宽',
+      ],
       skills: ['huawei-vpc'],
       services: ['VPC', 'EIP'],
     },
     {
-      keywords: ['obs', 'bucket', 'storage', 'object', 'static website', 'static site', 'hosting'],
+      keywords: [
+        'obs',
+        'bucket',
+        'storage',
+        'object',
+        'static website',
+        'static site',
+        'hosting',
+        '对象存储',
+        '存储桶',
+        '桶',
+        '存储',
+        '对象',
+        '静态网站',
+        '静态托管',
+      ],
       skills: ['huawei-obs'],
       services: ['OBS'],
     },
     {
-      keywords: ['functiongraph', 'serverless', 'function', 'lambda', 'trigger', 'faas'],
+      keywords: [
+        'functiongraph',
+        'serverless',
+        'function',
+        'lambda',
+        'trigger',
+        'faas',
+        '函数工作流',
+        '函数',
+        '触发器',
+        '无服务器',
+        '函数计算',
+      ],
       skills: ['huawei-functiongraph'],
       services: ['FunctionGraph'],
     },
@@ -1840,21 +2065,61 @@ function serviceCatalog(intent = '') {
       skills: ['huawei-cce'],
       services: ['CCE', 'SWR'],
     },
-    { keywords: ['apig', 'api gateway', 'publish', 'throttle'], skills: ['huawei-apig'], services: ['APIG'] },
-    { keywords: ['rds', 'mysql', 'postgresql', 'database', 'db'], skills: ['huawei-rds'], services: ['RDS'] },
     {
-      keywords: ['gaussdb', 'distributed', 'sharding', 'opengauss'],
-      skills: ['huawei-gaussdb'],
+      keywords: ['apig', 'api gateway', 'publish', 'throttle', 'API网关', '限流'],
+      skills: ['huawei-cloud-apig-instance-management'],
+      services: ['APIG'],
+    },
+    {
+      keywords: ['rds', 'mysql', 'postgresql', 'database', 'db', '关系型数据库', '数据库'],
+      skills: ['huawei-rds'],
+      services: ['RDS'],
+    },
+    {
+      keywords: ['gaussdb', 'distributed', 'sharding', 'opengauss', '高斯数据库', '分布式数据库'],
+      skills: ['huawei-cloud-gaussdb-instance-management'],
       services: ['GaussDB'],
     },
     {
-      keywords: ['iam', 'permission', 'policy', 'role', 'user', 'ak/sk', 'access key', 'agency'],
+      keywords: [
+        'iam',
+        'permission',
+        'policy',
+        'role',
+        'user',
+        'ak/sk',
+        'access key',
+        'agency',
+        '身份认证',
+        '身份管理',
+        '权限',
+        '策略',
+        '角色',
+        '用户',
+        '访问密钥',
+        '委托',
+      ],
       skills: ['huawei-iam'],
       services: ['IAM'],
     },
     {
-      keywords: ['dew', 'secret', 'kms', 'encrypt', 'decrypt', 'certificate', 'csms'],
-      skills: ['huawei-dew'],
+      keywords: [
+        'dew',
+        'secret',
+        'kms',
+        'encrypt',
+        'decrypt',
+        'certificate',
+        'csms',
+        '数据加密服务',
+        '密钥管理',
+        '密钥',
+        '加密',
+        '解密',
+        '证书',
+        '凭据管理',
+      ],
+      skills: ['huawei-cloud-dew-key-management'],
       services: ['CSMS', 'KMS'],
     },
     {
@@ -1863,30 +2128,38 @@ function serviceCatalog(intent = '') {
       services: ['ModelArts'],
     },
     {
-      keywords: ['billing', 'cost', 'bill', 'budget', 'expense', 'bss'],
+      keywords: ['billing', 'cost', 'bill', 'budget', 'expense', 'bss', '计费', '费用', '账单', '预算', '开销'],
       skills: ['huawei-billing'],
       services: ['BSS'],
     },
     {
       keywords: ['waf', 'aad', 'ddos', 'firewall', 'web protection'],
-      skills: ['huawei-waf-aad'],
+      skills: ['huawei-cloud-waf-aad-rule-management'],
       services: ['WAF', 'AAD'],
     },
     {
       keywords: ['smn', 'dms', 'notification', 'message', 'kafka', 'rabbitmq'],
-      skills: ['huawei-smn-dms'],
+      skills: ['huawei-cloud-smn-dms-message'],
       services: ['SMN', 'DMS'],
     },
     {
-      keywords: ['ces', 'monitor', 'alarm', 'metric', 'dashboard', 'cloud eye'],
+      keywords: ['ces', 'monitor', 'alarm', 'metric', 'dashboard', 'cloud eye', '监控', '告警', '云监控'],
       skills: ['huawei-cloud-eye'],
       services: ['CES'],
     },
-    { keywords: ['cts', 'audit', 'trace', 'tracker'], skills: ['huawei-cts'], services: ['CTS'] },
-    { keywords: ['cbr', 'backup', 'restore', 'vault', 'snapshot'], skills: ['huawei-cbr'], services: ['CBR'] },
+    {
+      keywords: ['cts', 'audit', 'trace', 'tracker', '审计', '追踪'],
+      skills: ['huawei-cloud-cts-trace-management'],
+      services: ['CTS'],
+    },
+    {
+      keywords: ['cbr', 'backup', 'restore', 'vault', 'snapshot', '备份', '恢复', '快照', '存储库'],
+      skills: ['huawei-cbr'],
+      services: ['CBR'],
+    },
     {
       keywords: ['deployment', 'deploy', 'ci/cd', 'pipeline', 'release'],
-      skills: ['huawei-deployment'],
+      skills: ['huawei-cloud-deployment-task-management'],
       services: ['CloudDeploy'],
     },
     {
@@ -1909,9 +2182,25 @@ function serviceCatalog(intent = '') {
       services: ['Sandbox', 'DevStation'],
     },
     {
-      keywords: ['dds', 'dcs', 'mongodb', 'redis', 'memcached', 'cache', 'document db'],
-      skills: ['huawei-dds-dcs'],
+      keywords: [
+        'dds',
+        'dcs',
+        'mongodb',
+        'redis',
+        'memcached',
+        'cache',
+        'document db',
+        '文档数据库',
+        '缓存',
+        '内存数据库',
+      ],
+      skills: ['huawei-cloud-dds-dcs-instance-management'],
       services: ['DDS', 'DCS'],
+    },
+    {
+      keywords: ['elb', 'load balancer', '负载均衡', '弹性负载均衡', '监听器', '证书'],
+      skills: ['huawei-vpc'],
+      services: ['ELB'],
     },
     {
       keywords: ['voucher', 'coupon', 'incentive', 'credit', '领券', '代金券', '优惠券', '激励金', '领取'],
@@ -1923,7 +2212,9 @@ function serviceCatalog(intent = '') {
   const tokens = new Set(it.split(/[\s,./-]+/).filter((t) => t.length > 0));
   const cjk = /[\u4e00-\u9fff]/;
   for (const route of routeMap) {
-    if (route.keywords.some((kw) => (kw.includes(' ') || cjk.test(kw) ? it.includes(kw) : tokens.has(kw)))) {
+    if (
+      route.keywords.some((kw) => (kw.includes(' ') || cjk.test(kw) ? it.includes(kw.toLowerCase()) : tokens.has(kw)))
+    ) {
       matched.push(route);
     }
   }
@@ -2013,6 +2304,23 @@ function explainError({ service = 'unknown', errorCode = '', message = '', reque
   for (const [code, tip] of Object.entries(svcPatterns)) {
     if (errorCode && code.includes(errorCode)) {
       if (!suggestions.includes(tip)) suggestions.push(tip);
+    }
+  }
+
+  // G: when the active credential set is a temporary STS token that has already
+  // expired, surface that as the primary cause before generic auth guidance.
+  let activeCreds;
+  try {
+    activeCreds = resolveCredentialsWithRuntime({ allowMissing: true });
+  } catch {
+    activeCreds = null;
+  }
+  if (activeCreds?.ak && activeCreds?.sk && activeCreds.securityToken) {
+    const expiry = parseStsExpiry({ securityToken: activeCreds.securityToken });
+    if (expiry !== null && expiry <= Date.now()) {
+      suggestions.push(
+        'CREDENTIAL_EXPIRED: the temporary STS security token has expired. Re-authenticate to obtain fresh credentials (e.g. run "npx huaweicloud-devkit auth init" or re-login / restart the session).',
+      );
     }
   }
 

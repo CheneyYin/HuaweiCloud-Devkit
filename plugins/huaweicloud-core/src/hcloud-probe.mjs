@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { compareVersion, getKooCliVersion, parseHcloudVersion } from './koocli-version.mjs';
+import { kooCliInstallLogPath } from './preflight.mjs';
 import { redactSecrets } from './safety-policy.mjs';
 
 const VERSION_RE = /KooCLI|Current.*version|当前KooCLI/i;
@@ -13,7 +14,11 @@ export function findHcloudBin() {
   const candidates =
     process.platform === 'win32'
       ? [join(homedir(), 'hcloud', 'hcloud.exe')]
-      : [join(homedir(), '.local', 'bin', 'hcloud'), join(homedir(), 'hcloud', 'hcloud')];
+      : [
+          join(homedir(), '.local', 'bin', 'hcloud'),
+          join(homedir(), 'hcloud', 'hcloud'),
+          join('/', 'usr', 'local', 'bin', 'hcloud'),
+        ];
   const found = candidates.find((candidate) => existsSync(candidate));
   if (found) return found;
 
@@ -148,7 +153,10 @@ export function hcloudProbeNextStep(probe) {
     return 'KooCLI requires accepting its one-time privacy agreement. Run hcloud version in a real terminal and accept the prompt, then restart the agent.';
   }
   if (probe.status === 'not_found') {
-    return 'hcloud executable not found. Set HCLOUD_BIN to the full hcloud path, or install KooCLI: npx huaweicloud-devkit install-hcloud. Then restart the agent.';
+    return (
+      'KooCLI is not installed yet. Background auto-install may be running — please retry shortly instead of assuming failure. To install now: npx huaweicloud-devkit install-hcloud. DevKit picks up the binary from its fixed install dirs (~/.local/bin on Linux, /usr/local/bin on macOS, ~/hcloud on Windows) or HCLOUD_BIN on the next call — no agent restart needed. Install progress: ' +
+      kooCliInstallLogPath()
+    );
   }
   return 'Install Huawei Cloud KooCLI: npx huaweicloud-devkit install-hcloud. Configure credentials outside the agent conversation.';
 }

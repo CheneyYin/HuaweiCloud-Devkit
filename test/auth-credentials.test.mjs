@@ -156,6 +156,26 @@ test('agent registration detects OpenCode MCP config', () => {
   });
 });
 
+test('agent registration detects OpenCode V2 native mcp.servers config', () => {
+  withTempHome((home) => {
+    const cfgDir = join(home, '.config', 'opencode');
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(
+      join(cfgDir, 'opencode.jsonc'),
+      JSON.stringify({
+        mcp: {
+          servers: {
+            'huaweicloud-devkit': { type: 'local', command: ['node', '/x/mcp-server.mjs'] },
+          },
+        },
+      }),
+      'utf8',
+    );
+    const status = getAgentRegistrationStatuses('opencode');
+    assert.equal(status.agents.opencode.configured, true);
+  });
+});
+
 test('agent registration detects DSH cordis patch config', () => {
   withTempHome((home) => {
     const profileDir = join(home, '.dsh', 'profiles', 'web');
@@ -750,4 +770,80 @@ test('pickDevkitMcpServer is order-independent and returns null for empty/non-ob
   assert.equal(pickDevkitMcpServer({}), null);
   assert.equal(pickDevkitMcpServer(null), null);
   assert.equal(pickDevkitMcpServer(undefined), null);
+});
+
+test('J: getAuthStatus ders control Panel with no STS → sts null / s1 persistent', () => {
+  withTempHome(() => {
+    clearRuntimeCredentials();
+    writeGlobalCredentials({ ak: 'PANEL_AK', sk: 'PANEL_SK', region: 'cn-north-4' });
+    const status = getAuthStatus('all');
+    assert.equal(status.stsExpiry, null);
+    const panel = status.credentialPanel;
+    assert.equal(panel.s1.configured, true);
+    assert.equal(panel.s1.persistent, true);
+    assert.ok(typeof panel.s1.fingerprint === 'string' && panel.s1.fingerprint.length >= 8);
+    assert.notEqual(panel.s1.fingerprint, 'PANEL_AK');
+    assert.equal(panel.activeSource, 's1-persistent');
+    assert.equal(typeof panel.sts, 'object');
+  });
+});
+
+test('J: getAuthStatus credentialPanel shows expired temp STS state', () => {
+  withTempHome(() => {
+    clearRuntimeCredentials();
+    const past = Math.floor(Date.now() / 1000) - 3600;
+    const token = Buffer.from(JSON.stringify({ exp: past })).toString('base64url');
+    setRuntimeCredentials('STS_AK', 'STS_SK', token, 'cn-north-4');
+    const status = getAuthStatus('all');
+    assert.ok(status.stsExpiry);
+    assert.equal(status.stsExpiry.status, 'expired');
+    assert.ok(status.stsExpiry.remainingMs <= 0);
+    assert.equal(status.credentialPanel.activeSource, 'temporary-sts');
+    assert.equal(status.credentialPanel.s1.configured, false);
+    clearRuntimeCredentials();
+  });
+});
+
+test('J: getAuthStatus credentialPanel shows valid temp STS state with 3-state timestamps', () => {
+  withTempHome(() => {
+    clearRuntimeCredentials();
+    const future = Math.floor(Date.now() / 1000) + 7200;
+    const token = Buffer.from(JSON.stringify({ exp: future })).toString('base64url');
+    setRuntimeCredentials('STS_AK', 'STS_SK', token, 'cn-north-4');
+    const status = getAuthStatus('all');
+    assert.ok(status.stsExpiry);
+    assert.equal(status.stsExpiry.status, 'valid');
+    assert.ok(status.stsExpiry.remainingMs > 0);
+    assert.equal(status.stsExpiry.expiresAtUtc, new Date(future * 1000).toISOString());
+    assert.match(status.stsExpiry.expiresAtLocal, /GMT/);
+    assert.equal(status.credentialPanel.activeSource, 'temporary-sts');
+    clearRuntimeCredentials();
+  });
+});
+
+test('J: getAuthStatus credentialPanel shows expiring_soon within 5min window', () => {
+  withTempHome(() => {
+    clearRuntimeCredentials();
+    const soon = Math.floor(Date.now() / 1000) + 120;
+    const token = Buffer.from(JSON.stringify({ exp: soon })).toString('base64url');
+    setRuntimeCredentials('STS_AK', 'STS_SK', token, 'cn-north-4');
+    const status = getAuthStatus('all');
+    assert.ok(status.stsExpiry);
+    assert.equal(status.stsExpiry.status, 'expiring_soon');
+    assert.ok(status.stsExpiry.remainingMs > 0 && status.stsExpiry.remainingMs <= 5 * 60 * 1000);
+    clearRuntimeCredentials();
+  });
+});
+
+test('J: getAuthStatus credentialPanel unknown status when temp STS expiry cannot be parsed', () => {
+  withTempHome(() => {
+    clearRuntimeCredentials();
+    setRuntimeCredentials('STS_AK', 'STS_SK', 'NOT_A_TOKEN', 'cn-north-4');
+    const status = getAuthStatus('all');
+    assert.ok(status.stsExpiry);
+    assert.equal(status.stsExpiry.status, 'unknown');
+    assert.equal(status.stsExpiry.expiresAt, null);
+    assert.equal(status.credentialPanel.activeSource, 'temporary-sts');
+    clearRuntimeCredentials();
+  });
 });

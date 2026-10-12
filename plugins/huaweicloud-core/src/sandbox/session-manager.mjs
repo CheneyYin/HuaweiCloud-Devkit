@@ -198,9 +198,17 @@ export function formatPortDriftWarning(basePort, targetPort) {
   return `Port ${basePort} was occupied — nginx now listens on port ${targetPort}. Any DevBridge tunnel bound to port ${basePort} is detached: run "devbridge port create <tunnelId> -p ${targetPort} --protocol http -a" and restart "devbridge host" for the new port.`;
 }
 
-export function formatProxyPortWarning(basePort, targetPort) {
-  if (targetPort === basePort) return undefined;
-  return `Port ${basePort} is in use — the proxy template still listens on port ${basePort}: auto-increment does not apply to proxy configs, so nginx may fail to bind. Free the port or deploy a static/spa build instead.`;
+export async function resolveProxyNodePort(nodePort, nginxListenPort, isPortInUse) {
+  const baseCandidate = nodePort && nodePort !== nginxListenPort ? nodePort : nginxListenPort + 1;
+  let candidate = baseCandidate;
+  for (
+    let attempt = 0;
+    attempt < 10 && (candidate === nginxListenPort || (await isPortInUse(candidate)));
+    attempt += 1
+  ) {
+    candidate += 1;
+  }
+  return candidate;
 }
 
 export function buildExposeRemediation(port) {
@@ -775,7 +783,17 @@ export async function deployNginx(
   }
 
   const effectiveNodePort =
-    nginxType === 'proxy' ? (nodePort && nodePort !== listenPort ? nodePort : listenPort + 1) : undefined;
+    nginxType === 'proxy'
+      ? await resolveProxyNodePort(nodePort, targetPort, async (candidate) => {
+          const portCheck = await execOneShot(
+            workspaceId,
+            `ss -tlnp 2>/dev/null | grep -q ":${candidate} " && echo "IN_USE" || echo "FREE"`,
+            username,
+            10000,
+          );
+          return String(portCheck.stdout || '').includes('IN_USE');
+        })
+      : undefined;
 
   const projectPath = `/workspace/${project}`;
   const outputPath = outputDir.startsWith('/') ? outputDir : `${projectPath}/${outputDir}`;
@@ -803,7 +821,7 @@ fi`;
     }
 }`,
     proxy: `server {
-    listen ${listenPort};
+    listen ${targetPort};
     server_name _;
     large_client_header_buffers 4 32k;
 
@@ -874,6 +892,15 @@ fi`;
     tunnelActive = String(tunnelCheck.stdout || '').includes('ACTIVE');
   } catch {}
 
+  const warnings = [];
+  if (!tunnelActive) {
+    warnings.push('No active DevBridge tunnel — deployment is incomplete. Proceed to Step 7 to expose the app.');
+  }
+  const conflictWarning = formatPortConflictWarning(basePort, targetPort);
+  if (conflictWarning) warnings.push(conflictWarning);
+  const driftWarning = tunnelActive ? formatPortDriftWarning(basePort, targetPort) : undefined;
+  if (driftWarning) warnings.push(driftWarning);
+
   return {
     ok: result.exitCode === 0,
     nginxType,
@@ -884,18 +911,7 @@ fi`;
     exitCode: result.exitCode,
     stdout: result.stdout,
     nextStep: 'expose_via_devbridge',
-    warning:
-      [
-        !tunnelActive
-          ? 'No active DevBridge tunnel — deployment is incomplete. Proceed to Step 7 to expose the app.'
-          : undefined,
-        nginxType === 'proxy'
-          ? formatProxyPortWarning(basePort, targetPort)
-          : formatPortConflictWarning(basePort, targetPort),
-        tunnelActive && nginxType !== 'proxy' ? formatPortDriftWarning(basePort, targetPort) : undefined,
-      ]
-        .filter(Boolean)
-        .join(' ') || undefined,
+    warning: warnings.length > 0 ? warnings.join(' | ') : undefined,
   };
 }
 
@@ -913,17 +929,25 @@ export async function deployCheck(
   const outputPath = outputDir.startsWith('/') ? outputDir : `${projectPath}/${outputDir}`;
   const isCrossPlatform = frameworkType === 'cross-platform';
 
-  const checkScript = [
+  const checkScript = buildDeployCheckScript({ port, project, outputPath, isCrossPlatform });
+  const result = await execOneShot(workspaceId, checkScript, username, timeoutMs);
+  const stdout = String(result.stdout || '');
+  return parseDeployCheckOutput(stdout, { port, isCrossPlatform });
+}
+
+export function buildDeployCheckScript({ port, project, outputPath, isCrossPlatform: _isCrossPlatform }) {
+  return [
     `echo "=== DEPLOY CHECK ==="`,
     `PASS=0`,
     `TOTAL=0`,
     ``,
     `TOTAL=$((TOTAL+1))`,
-    `if curl -s -o /dev/null -w "%{http_code}" http://localhost:${port} 2>/dev/null | grep -qE "^(2|3)"; then`,
-    `  echo "nginx_serving:PASS (port ${port})"`,
+    `HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:${port} 2>/dev/null)`,
+    `if [ -n "$HTTP_CODE" ] && [ "$HTTP_CODE" != "000" ]; then`,
+    `  echo "nginx_serving:PASS (port ${port}, HTTP \${HTTP_CODE})"`,
     `  PASS=$((PASS+1))`,
     `else`,
-    `  echo "nginx_serving:FAIL"`,
+    `  echo "nginx_serving:FAIL (port ${port}, no HTTP response)"`,
     `fi`,
     ``,
     `TOTAL=$((TOTAL+1))`,
@@ -972,12 +996,13 @@ export async function deployCheck(
     `TUNNEL_URL="https://\${TUNNEL_ID}-${port}.${DEVBRIDGE_TUNNEL_DOMAIN}"`,
     `probe_tunnel() {`,
     `  local url="$1" code`,
-    `  code=$(curl -s -o /tmp/.dc_tunnel_body -w "%{http_code}" --max-time 10 "$url" 2>/dev/null || echo "000")`,
+    `  code=$(curl -s -o /tmp/.dc_tunnel_body -w "%{http_code}" --max-time 10 "$url" 2>/dev/null)`,
     `  [ "$code" = "000" ] && return 1`,
     `  # A migrated gateway serves a placeholder page with HTTP 200 — treat it as unreachable.`,
     `  if grep -q "${DEVBRIDGE_MIGRATION_MARKER}" /tmp/.dc_tunnel_body 2>/dev/null; then return 1; fi`,
+    `  # Any non-000 HTTP code means the tunnel is connected and nginx is serving`,
+    `  # (404/502 = content issue, not a connectivity issue — consistent with nginx_serving).`,
     `  rm -f /tmp/.dc_tunnel_body`,
-    `  [ "$code" = "200" ] || [ "$code" = "304" ] || return 1`,
     `  return 0`,
     `}`,
     `if [ -n "$TUNNEL_ID" ] && probe_tunnel "$TUNNEL_URL"; then`,
@@ -1031,16 +1056,18 @@ fi
   ]
     .filter(Boolean)
     .join('\n');
+}
 
-  const result = await execOneShot(workspaceId, checkScript, username, timeoutMs);
-  const stdout = String(result.stdout || '');
+export function parseDeployCheckOutput(stdout, { port, isCrossPlatform } = {}) {
   // Strip ANSI escape sequences (CSI color/cursor codes and OSC shell-integration markers)
   // and split on any line-ending style (\r\n, \r, or \n) to handle all terminal outputs.
   // Use new RegExp to avoid ESLint no-control-regex on literal control chars in regex.
   const ESC = '\x1b';
   const csiRe = new RegExp(ESC + '\\[[0-9;]*[a-zA-Z]', 'g');
   const oscRe = new RegExp(ESC + '\\][^' + ESC + '\x07]*(?:\x07|' + ESC + '\\\\)', 'g');
-  const cleanStdout = stdout.replace(csiRe, '').replace(oscRe, '');
+  const cleanStdout = String(stdout || '')
+    .replace(csiRe, '')
+    .replace(oscRe, '');
   const checks = {};
   const lines = cleanStdout.split(new RegExp('\\r\\n|\\r|\\n'));
   for (const line of lines) {
@@ -1086,7 +1113,7 @@ fi
     publicUrl: tunnelMatch ? tunnelMatch[1] : undefined,
     missingSteps: missing.length > 0 ? missing.join(', ') : undefined,
     parseWarning,
-    rawOutput: parseWarning ? stdout.trim() : undefined,
+    rawOutput: parseWarning ? String(stdout || '').trim() : undefined,
     nextStep: nextStepValue,
     remediation: nextStepValue === 'expose_via_devbridge' ? buildExposeRemediation(port) : undefined,
   };
@@ -1102,6 +1129,267 @@ export async function closeSession(workspaceId, username) {
   } catch {}
   trackSandboxDisconnect();
   return true;
+}
+
+// Build a shell snippet that authenticates devbridge via a verified waterfall:
+//   Tier 1  keyring API Key  — hwcloud keyring get HW_DEVBRIDGE_API_KEY (platform-injected
+//           on hd-space-ai-shell images; the value goes to STDERR so 2>&1 is mandatory and
+//           the devbridge_ prefix filters "(not found)" / error text). A light revive step
+//           (restart the D-Bus session bus + re-unlock the keyring daemon, no dnf) retries
+//           once when the first read fails. Preferred: devbridge is deprecating AK/SK auth.
+//   Tier 2  AK/SK            — image builds keep --access-key/--secret-key; STS credentials
+//           from /tmp/hw_creds.sh need --security-token or the gateway rejects with 401
+//           APIGW.0301; 0.1.x binaries additionally advertise --huaweicloud in help.
+//   Tier 3  /tmp/hw_api_key  — release builds accept only --api-key; the file is written by
+//           huaweicloud_sandbox_credentials from HW_API_KEY / the api_key param.
+// Every tier performs a real `devbridge auth login` and verifies with `auth status`
+// (must print "Logged in"); on failure the waterfall falls through to the next tier.
+// DB_ATTEMPT_* lines are non-sensitive diagnostics for support escalation.
+export function buildDevbridgeAuthProbe() {
+  return [
+    `export PATH="$HOME/.huawei/bin:$PATH"`,
+    `export HOME="\${HOME:-/root}"`,
+    `DB_OK=0`,
+    `db_login_ok() { devbridge auth status 2>/dev/null | grep -q "Logged in"; }`,
+    `db_diag() { echo "DB_ATTEMPT_$1=$2"; }`,
+    ``,
+    `# ---- Tier 1: API Key from the sandbox keyring (platform auto-injection) ----`,
+    `HW_DB_KEY=""`,
+    `if command -v hwcloud >/dev/null 2>&1; then`,
+    `  export DBUS_SESSION_BUS_ADDRESS="\${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/dbus-session}"`,
+    `  HW_DB_KEY=$(hwcloud keyring get HW_DEVBRIDGE_API_KEY 2>&1 || true)`,
+    `  case "$HW_DB_KEY" in`,
+    `    "devbridge_"*) : ;;`,
+    `    *)`,
+    `      # Light revive: bus down or a locked/absent keyring daemon — restart both, retry once.`,
+    `      if ! pgrep -x dbus-daemon >/dev/null 2>&1 && command -v dbus-daemon >/dev/null 2>&1; then`,
+    `        dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork --nopidfile >/dev/null 2>&1 || true`,
+    `        sleep 1`,
+    `      fi`,
+    `      if command -v gnome-keyring-daemon >/dev/null 2>&1; then`,
+    `        pkill -f gnome-keyring-daemon 2>/dev/null || true`,
+    `        sleep 1`,
+    `        printf '\\n' | gnome-keyring-daemon --unlock >/dev/null 2>&1 || true`,
+    `        sleep 1`,
+    `        HW_DB_KEY=$(hwcloud keyring get HW_DEVBRIDGE_API_KEY 2>&1 || true)`,
+    `      fi`,
+    `      case "$HW_DB_KEY" in "devbridge_"*) : ;; *) HW_DB_KEY="";; esac`,
+    `      ;;`,
+    `  esac`,
+    `else`,
+    `  db_diag KEYRING "hwcloud-not-installed"`,
+    `fi`,
+    `if [ -n "$HW_DB_KEY" ]; then`,
+    `  devbridge auth login --api-key "$HW_DB_KEY" >/tmp/db_auth.log 2>&1`,
+    `  if db_login_ok; then`,
+    `    echo "DB_AUTH_MODE=API_KEY_KEYRING"`,
+    `    DB_OK=1`,
+    `  else`,
+    `    db_diag KEYRING "login-failed"`,
+    `  fi`,
+    `else`,
+    `  db_diag KEYRING "no-valid-key"`,
+    `fi`,
+    ``,
+    `# ---- Tier 2: AK/SK from /tmp/hw_creds.sh (image builds; STS needs --security-token) ----`,
+    `if [ "$DB_OK" -eq 0 ]; then`,
+    `  source /tmp/hw_creds.sh 2>/dev/null`,
+    `  if devbridge auth login --help 2>&1 | grep -q -- '--access-key' && [ -n "$HW_ACCESS_KEY" ]; then`,
+    `    DB_TOKEN_ARGS=""`,
+    `    [ -n "$HW_SECURITY_TOKEN" ] && DB_TOKEN_ARGS="--security-token \\"$HW_SECURITY_TOKEN\\""`,
+    `    if devbridge auth login --help 2>&1 | grep -q -- '--huaweicloud'; then`,
+    `      devbridge auth login --huaweicloud --access-key "$HW_ACCESS_KEY" --secret-key "$HW_SECRET_KEY" $DB_TOKEN_ARGS >/tmp/db_auth.log 2>&1`,
+    `    else`,
+    `      devbridge auth login --access-key "$HW_ACCESS_KEY" --secret-key "$HW_SECRET_KEY" $DB_TOKEN_ARGS >/tmp/db_auth.log 2>&1`,
+    `    fi`,
+    `    if db_login_ok; then`,
+    `      echo "DB_AUTH_MODE=AKSK_SUPPORTED"`,
+    `      DB_OK=1`,
+    `    else`,
+    `      db_diag AKSK "login-failed"`,
+    `    fi`,
+    `  else`,
+    `    db_diag AKSK "binary-or-creds-unavailable"`,
+    `  fi`,
+    `fi`,
+    ``,
+    `# ---- Tier 3: API Key from /tmp/hw_api_key (release builds, user-provided) ----`,
+    `if [ "$DB_OK" -eq 0 ]; then`,
+    `  source /tmp/hw_api_key 2>/dev/null`,
+    `  if [ -n "$HW_API_KEY" ]; then`,
+    `    devbridge auth login --api-key "$HW_API_KEY" >/tmp/db_auth.log 2>&1`,
+    `    if db_login_ok; then`,
+    `      echo "DB_AUTH_MODE=API_KEY_FILE"`,
+    `      DB_OK=1`,
+    `    else`,
+    `      db_diag APIKEY_FILE "login-failed"`,
+    `    fi`,
+    `  else`,
+    `    db_diag APIKEY_FILE "no-file"`,
+    `  fi`,
+    `fi`,
+    ``,
+    `if [ "$DB_OK" -eq 0 ]; then`,
+    `  echo "DB_AUTH_MODE=NO_CREDENTIAL"`,
+    `fi`,
+    `unset HW_DB_KEY HW_API_KEY DB_TOKEN_ARGS 2>/dev/null`,
+    `devbridge auth status > /tmp/db_status.log 2>&1 || true`,
+  ].join('\n');
+}
+
+// Parse the raw stdout of buildDevbridgeAuthProbe into { authMode, attempts }.
+// authMode is the LAST DB_AUTH_MODE line; attempts collects the non-sensitive
+// DB_ATTEMPT_* diagnostics emitted by tiers that failed and fell through.
+export function parseDevbridgeAuthOutput(stdout) {
+  const text = String(stdout || '');
+  const modes = text.match(/DB_AUTH_MODE=([A-Z_]+)/g) || [];
+  const authMode = modes.length > 0 ? modes[modes.length - 1].split('=')[1] : '';
+  const attempts = {};
+  for (const m of text.matchAll(/^DB_ATTEMPT_([A-Z_]+)=(\S+)$/gm)) {
+    attempts[m[1]] = m[2];
+  }
+  return { authMode, attempts };
+}
+
+// Start (or replace) a devbridge host bound to a single port, extract the public
+// URL, and health-check it. Mirrors the huaweicloud-sandbox skill's Expose flow:
+// pre-clean stale tunnels (quota 10006), start host in background, read
+// "Tunnel URL: ..." from /tmp/host.log, curl-check, retry once on unreachable.
+export function buildDevbridgeExposeScript(port) {
+  const hostLog = '/tmp/host.log';
+  return [
+    `pkill -f "devbridge host" 2>/dev/null || true`,
+    `sleep 2`,
+    `devbridge delete-all > /dev/null 2>&1 || true`,
+    `nohup devbridge host -p ${port} -e 8 > ${hostLog} 2>&1 &`,
+    `sleep 12`,
+    `TUNNEL_URL=$(sed -n 's/.*Tunnel URL: *//p' ${hostLog} | tail -1)`,
+    `HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$TUNNEL_URL" 2>/dev/null || echo "000")`,
+    `echo "DB_HOST_LOG="`,
+    `tail -n 5 ${hostLog}`,
+    `echo "DB_TUNNEL_URL=$TUNNEL_URL"`,
+    `echo "DB_HTTP_CODE=$HTTP_CODE"`,
+    `echo "DB_QUOTA_ERROR=$(grep -c '10006' ${hostLog} 2>/dev/null || echo 0)"`,
+  ].join('\n');
+}
+
+// Parse the raw stdout of buildDevbridgeExposeScript into structured fields.
+export function parseDevbridgeExposeOutput(stdout) {
+  const text = String(stdout || '');
+  const getField = (key) => {
+    const m = text.match(new RegExp(`^${key}=(.*)$`, 'm'));
+    return m ? m[1].trim() : '';
+  };
+  const tunnelUrl = getField('DB_TUNNEL_URL') || (text.match(/TUNNEL_URL:(https:\/\/[^\s]+)/) || [])[1] || '';
+  const httpCode = getField('DB_HTTP_CODE');
+  const quotaError = getField('DB_QUOTA_ERROR') === '1' || /10006/.test(text);
+  const tunnelId = (tunnelUrl.match(/^https:\/\/([A-Za-z0-9_-]+)-\d+\./) || [])[1] || '';
+  return { tunnelUrl, httpCode, quotaError, tunnelId };
+}
+
+// Parse and validate a TCP port number destined for shell interpolation. Returns
+// the integer when 1..65535; throws otherwise. Guards the `-p ${port}` shell
+// splice in buildDevbridgeExposeScript against non-numeric / out-of-range input.
+export function validateTunnelPort(port) {
+  const n = Number(port);
+  if (!Number.isSafeInteger(n) || n < 1 || n > 65535) {
+    throw new Error(
+      `sandbox expose tunnel: invalid port ${JSON.stringify(port)}. Expected an integer between 1 and 65535 (use the "port" value returned by sandbox_deploy_nginx).`,
+    );
+  }
+  return n;
+}
+
+// Expose a sandbox port to a public DevBridge tunnel URL. `port` MUST be the
+// ACTUAL port reported by deployNginx (deploy_nginx auto-increments on conflict),
+// otherwise the tunnel is bound to a dead port. Returns ok, publicUrl, port,
+// tunnelId, auth mode, and warnings.
+export async function exposeTunnel(workspaceId, { port }, username = 'root', timeoutMs = 90000) {
+  if (!workspaceId) {
+    throw new Error('sandbox expose tunnel: workspace_id is required.');
+  }
+  const validatedPort = validateTunnelPort(port);
+
+  const authScript = buildDevbridgeAuthProbe();
+  const authResult = await execOneShot(workspaceId, authScript, username, 30000);
+  const { authMode, attempts } = parseDevbridgeAuthOutput(authResult.stdout);
+
+  if (authMode !== 'API_KEY_KEYRING' && authMode !== 'AKSK_SUPPORTED' && authMode !== 'API_KEY_FILE') {
+    const loginOutput = String(authResult.stdout || '') + String(authResult.stderr || '');
+    return {
+      ok: false,
+      error: 'DevBridge authentication failed: no usable credential in the sandbox.',
+      authMode: authMode || 'UNKNOWN',
+      attempts,
+      hint:
+        'No DevBridge credential is available in this sandbox. Suggested next steps:\n' +
+        '1) Re-run huaweicloud_sandbox_credentials once, then retry huaweicloud_sandbox_expose_tunnel — ' +
+        'this refreshes the temporary AK/SK (most common quick fix when they simply expired) and rewrites /tmp/hw_creds.sh.\n' +
+        '2) If it still fails, this sandbox was created on an older image and cannot auto-acquire an API Key ' +
+        '(the image cannot be upgraded in place). One-time manual fallback: create an API Key at ' +
+        'https://devstation.connect.huaweicloud.com/space/devbridge/apikey, run `export HW_API_KEY=<key>` locally, ' +
+        're-run huaweicloud_sandbox_credentials, then retry.\n' +
+        '3) The "attempts" field shows which tiers were tried and why they failed — include it when escalating to the platform team.',
+      loginOutput,
+    };
+  }
+
+  let result = null;
+  let attempt = 0;
+  const maxAttempts = 2;
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    const exposeScript = buildDevbridgeExposeScript(validatedPort);
+    result = await execOneShot(workspaceId, exposeScript, username, timeoutMs);
+    const parsed = parseDevbridgeExposeOutput(result.stdout);
+
+    // 10006 quota exceeded: clean up stale tunnels and retry.
+    if (parsed.quotaError && attempt < maxAttempts) {
+      continue;
+    }
+    // Unreachable (000) or a migrated-gateway placeholder: one retry.
+    const unreachable = parsed.httpCode === '000' || parsed.httpCode === '';
+    const migration = /服务已迁移/.test(String(result.stdout || ''));
+    if (unreachable || migration) {
+      if (attempt === 1) {
+        try {
+          await execOneShot(
+            workspaceId,
+            `pkill -f "devbridge host" 2>/dev/null || true; sleep 2; devbridge delete-all > /dev/null 2>&1 || true`,
+            username,
+            20000,
+          );
+        } catch {}
+        continue;
+      }
+    }
+
+    const warnings = [];
+    if (parsed.quotaError)
+      warnings.push('DevBridge tunnel quota (10006) hit — stale tunnels were cleaned up and the host was retried.');
+    if (parsed.httpCode !== '200' && parsed.httpCode !== '304') {
+      warnings.push(
+        `Tunnel reachable check returned HTTP ${parsed.httpCode} (expected 200/304). The URL may not be serving yet.`,
+      );
+    }
+    return {
+      ok: true,
+      publicUrl: parsed.tunnelUrl || undefined,
+      port: validatedPort,
+      tunnelId: parsed.tunnelId || undefined,
+      authMode,
+      httpCode: parsed.httpCode,
+      warnings: warnings.length > 0 ? warnings.join(' ') : undefined,
+      hostLog: String(result.stdout || '').slice(0, 400),
+    };
+  }
+
+  return {
+    ok: false,
+    error: 'Failed to expose a working DevBridge tunnel after retries.',
+    authMode,
+    hostLog: String(result?.stdout || '').slice(0, 400),
+  };
 }
 
 export async function closeAllSessions() {

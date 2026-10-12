@@ -1,43 +1,54 @@
 # Changelog
 
-## 1.1.7 (2026-09-24)
+## 1.1.8-next.3 (2026-10-12)
 
-- chore: merge dev into main for 1.1.7 release (#812)
-- chore(release): 1.1.6 (#796)
-- style: prettier normalize plugin manifests
-- chore(release): 1.1.6
-- chore(release): 1.1.5
-- chore: sync README beta badge to v1.1.5
-- chore: version override for 1.1.5 stable release
-- chore(release): 1.1.4
-- chore(release): 1.1.3 (#620)
-- chore: advance main to 1.1.3-next.4 (business keeps dev; prepare stable 1.1.3) (#619)
-- test(update-check): decouple upgrade-tag logic from repo package.json version
-- chore(release): 1.1.2
-- test: resolve structure.test.mjs to dev version (union-merge artifact)
-- chore(release): 1.1.1 (#515)
-- chore: merge dev into main for 1.1.1 stable release (#513)
-- chore: add dsh.bundle manifest for DSH plugin ecosystem
-- chore(release): 1.1.0 (#440)
-- chore: merge dev into main for 1.1.0 release (#438)
-- chore: version override for 1.1.0 stable release (#433)
-- docs: add Huawei Cloud npm mirror recommendation for China users
-- chore(release): 1.0.2
-- style: prettier format fix
-- feat: v1.0.2 stable - merge all dev changes
-- fix(release): update release trigger to workflow_dispatch and main push only
-- feat(release): sync release workflow to main, seed manifest with 1.0.1
-- fix(release): retire the live Publish Dev workflow on main
-- fix(release): restore full publish flow with quoted step names
-- fix(release): probe publish job with environment only
-- fix(release): probe without job outputs and needs.outputs wiring
-- fix(release): restore full tag-gated publish logic
-- fix(release): reduce npm-publish workflow to minimal probe
-- fix(release): drop workflow_dispatch inputs, derive dist-tag from the tag version
-- fix(release): rename publish workflow to npm-publish to recover a fresh workflow_dispatch index
-- fix(release): add pack-verify script to main
-- fix(release): sync ci.yml with pack verification to main
-- fix(release): add tag-gated Publish workflow to main so workflow_dispatch works from tags
+- style(skills): prettier table alignment for voucher SKILL.md (CI format)
+- feat(voucher): competition voucher claim tool for xiaohongshu skill competition
+- feat: OpenCode V2 install support with V1/V2 dual compatibility (#863)
+- fix: #871 disclose userHash and capability fields in telemetry README
+- feat: #871 disclose telemetry mechanism in README
+
+## 1.1.8-next.2 (2026-10-09)
+
+- fix(security): resolve npm audit failures and scope the CI gate to shipped deps
+- style: prettier formatting for the auth waterfall files
+- feat(sandbox): auto-acquire DevBridge API Key from the sandbox keyring
+- feat(skills): rename 8 service skills to huawei-cloud-* prefix (#834)
+- chore(release): 1.1.8-next.1
+- KooCLI first-use experience: background auto-install + friendly hint + no-restart hot-reload (#832)
+- refactor(sandbox): rename resolveProxyNodePort 2nd param to nginxListenPort (#738)
+- fix(sandbox): proxy nginx listens on targetPort with collision-safe nodePort (#738)
+- fix(approval): implement D4-24 precise JSON contract for token expiry/replay (#745)
+
+## 1.1.8-next.0 (2026-09-29)
+
+- chore: set version-override to 1.1.8 (prepare 1.1.8-next) (#829)
+- fix(safety): #733 rebase to dev, keep D4-3 ShowSecret + D4-6 adminPass artifact/deploy_plan
+- Fix review feedback from #819 (P1-P5) (#820)
+- feat: git-free HTTP skill installs + manual fallback (F)
+- feat: sandbox_expose_tunnel tool + port-consistency guidance (D+H)
+- feat: BSS identity notes + --help discovery discipline (E+I)
+- feat: credential expiry UX (A+B+G+J) — CREDENTIAL_EXPIRED fast-fail, credential panel 3-state, explain_error expiry mapping
+- fix(#740): D3-C3 tunnel non-000 PASS + CRA react-scripts tighten + win32 execPath
+- fix(#740): D3-B7/C3/B5 — approved exec result fields, nginx_serving check, framework detection
+- fix: #767 Windows test injection — shebang→process.execPath+HCLOUD_BIN_ARGS_JSON
+- feat: #767 add CIDR matching to no_proxy + DMS/DEW aggregate service mapping
+- style: #760 prettier 格式化 safety-policy.mjs cred-var 正则块 + 清理 EOF 多空行
+- fix: #760 修复 sudo hcloud 前缀放行回归 + 补 Windows wrapper 覆盖
+- fix(safety): detect shell-wrapped hcloud writes + prompt injection + publish rules (#758)
+- chore: re-trigger CI after base retarget main→dev (#773)
+- fix(safety): add ShowSecret to blockedSecretOperations (#773)
+- feat(catalog): add Chinese intent keywords across routeMap services (#770)
+- fix(safety): block HUAWEICLOUD_SECRET_ACCESS_KEY env dumps and KMS ShowSecret (#770)
+- docs: #742 add proxy command documentation to READMEs (#744)
+- chore(release): 1.1.7-next.2 (#811)
+- feat(auth): codearts STS credential handling + link-B per-command injection (#807)
+- fix(safety): redact bare token= values in redactSecrets/redactOutput (#726) (#729)
+- fix: #725 修复 Prettier 格式问题（stages 内联格式 + 测试文件末尾换行）
+- test: #725 add test cases for hwc-iam-highrisk-write rule
+- feat: #725 add hwc-iam-highrisk-write rule to cloud-risk-rules.json
+- test(#721): add remediation field test cases for HDKIT_CRED_INVALID
+- fix(#721): attach remediation guidance to HDKIT_CRED_INVALID errors
 
 ## 1.1.7-next.1 (2026-09-23)
 

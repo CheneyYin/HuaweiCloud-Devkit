@@ -129,20 +129,29 @@ The agent can fetch this URL using `curl` or its web-fetch tool, then present th
 
 ### Step 3: Install Skill
 
-> **MANDATORY**: Use one of the commands below. Option A is the default; Option C is a fallback when Option A is unavailable.
+> **MANDATORY**: Use one of the commands below. Option A is the default; Options B/C are fallbacks. Option A requires NO git — it downloads the repo ZIP over HTTP and copies the skill folder.
 
 ```bash
-# Option A: npx skills add from GitCode (default)
-npx skills add https://gitcode.com/huaweicloud/huaweicloud-skills.git#master --skill <skill-name> -y
+# Option A: HTTP download (default, no git required)
+# Download the skills repo ZIP, extract, locate the skill folder, copy it into
+# this agent's skills dir. Replace <skills-dir> and <category>/<service> as needed.
+mkdir -p <skills-dir>
+SKILL_SRC=$(find /tmp/hw-skills-net -type d -name "<skill-name>" 2>/dev/null | head -1)
+( curl -fsSL https://gitcode.com/huaweicloud/huaweicloud-skills/-/archive/master/huaweicloud-skills-master.zip -o /tmp/hw-skills.zip \
+  && unzip -oq /tmp/hw-skills.zip -d /tmp/hw-skills-net ) \
+  || ( curl -fsSL https://github.com/huaweicloud/huaweicloud-skills/archive/refs/heads/master.zip -o /tmp/hw-skills.zip \
+  && unzip -oq /tmp/hw-skills.zip -d /tmp/hw-skills-net )
+SKILL_SRC=$(find /tmp/hw-skills-net -type d -name "<skill-name>" 2>/dev/null | head -1)
+[ -n "$SKILL_SRC" ] && cp -r "$SKILL_SRC" "<skills-dir>/<skill-name>" || echo "SKILL_SRC_NOT_FOUND"
 
 # Option B: npx clawhub install (OpenClaw ecosystem)
 npx clawhub install <skill-name> -y
 
-# Option C (fallback): npx skills add from GitHub
-npx skills add huaweicloud/huaweicloud-skills --skill <skill-name> -y
+# Option C: npx skills add via GitCode (requires git on PATH)
+npx skills add https://gitcode.com/huaweicloud/huaweicloud-skills.git#master --skill <skill-name> -y
 ```
 
-If all installation attempts fail, report the error message to the user. Do NOT attempt any method outside the commands above.
+**If all installation attempts fail** (`SKILL_SRC_NOT_FOUND`, download unreachable, `npx` errors), do NOT install git as a workaround. Download `https://github.com/huaweicloud/huaweicloud-skills/archive/refs/heads/master.zip` manually, extract it, copy the skill's folder into the agent skills directory, and tell the user how the skill was installed. <skills-dir> resolves per agent: Claude Code `~/.claude/skills`, OpenCode `~/.config/opencode/skills`, Cursor `~/.cursor/skills`.
 
 ## Parameters
 

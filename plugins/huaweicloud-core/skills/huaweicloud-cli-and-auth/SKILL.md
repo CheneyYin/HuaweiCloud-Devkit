@@ -65,7 +65,14 @@ One-liner (installs `latest`, may drift from v7.2.12):
 curl -sSL https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/latest/hcloud_install.sh -o ./hcloud_install.sh && bash ./hcloud_install.sh -y
 ```
 
-Agent processes find executables through `PATH`. If OpenCode/Codex cannot find `hcloud`, restart after updating `PATH`, or set `HCLOUD_BIN`.
+**No restart needed after install**: DevKit locates `hcloud` dynamically on every
+call — it checks `HCLOUD_BIN`, then the fixed install dirs (`~/.local/bin/hcloud`
+on Linux, `/usr/local/bin/hcloud` on macOS, `~/hcloud/hcloud.exe` on Windows),
+then PATH. Once `install-hcloud` or the background auto-install writes the binary
+to one of those dirs, the very next `check_cli` / `run_*` call uses it. Do not
+tell users to restart the agent.
+
+Agent processes find executables through `PATH`; `HCLOUD_BIN` overrides it. DevKit re-locates hcloud from its **fixed install dirs** on every call, so a freshly installed binary (`~/.local/bin` on Linux, `/usr/local/bin` on macOS, `~/hcloud` on Windows) or a re-set `HCLOUD_BIN` is picked up by the next `check_cli` / `run_*` call without restarting the agent. A custom `PATH` entry is only honored via `HCLOUD_BIN` or the PATH locator fallback, and shell `PATH` changes take effect only for processes started after the update.
 
 ## Configure Credentials Outside Chat
 
@@ -84,7 +91,13 @@ Agent processes find executables through `PATH`. If OpenCode/Codex cannot find `
 2. **KooCLI first-run privacy agreement**: On a fresh KooCLI install, `hcloud` blocks with `同意并继续使用(y)/不同意并退出(N)` and fails with `[USE_ERROR]您输入的是无效字符` in non-interactive mode. Detection: check command output for these strings. Ask the user: "KooCLI needs to accept its privacy agreement. May I accept it on your behalf?" If the user agrees, run `huaweicloud_run_readonly_command` with `args=["version"]` and `stdin="y\n"`. This accepts the agreement once, after which hcloud works normally.
 3. Ask the user to configure credentials outside the agent conversation when setup is needed.
 4. Inspect profile and region only through redacted tooling.
-5. Discover exact operation names with `hcloud <Service> --help` before guessing. Example: ECS instance listing is commonly `ECS ListServersDetails`; ECS creation is commonly `ECS CreateServers`; image lookup may be under `IMS GlanceShowImage`.
+5. **Always discover exact operation names and parameters with `--help` BEFORE constructing the command.** Never guess from general knowledge — parameter names change across API versions. The discovery chain is:
+   1. `hcloud --help` → available services
+   2. `hcloud <Service> --help` → operations (use `huaweicloud_list_operations` or step 2/3 directly)
+   3. `hcloud <Service> <Operation> --help` → exact parameter names, required flags, and value formats
+   4. Execute only after the help text confirms the operation and its parameters
+   - Service skills may skip steps 1-2 when they already provide the correct service and operation names, but step 3 (`<Operation> --help`) is never skippable before planning a write operation or a command with parameters.
+   - Example: ECS instance listing is commonly `ECS ListServersDetails`; ECS creation is commonly `ECS CreateServers`; image lookup may be under `IMS GlanceShowImage`.
 6. Use `--cli-output=json` for machine-readable responses when supported.
 7. For resource operations, include `--cli-region`, `--cli-profile`, and service-specific project information when required.
 8. Classify every command before running it:

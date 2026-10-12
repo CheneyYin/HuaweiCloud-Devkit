@@ -21,7 +21,7 @@ Use this skill to turn vague developer intent into a precise Huawei Cloud capabi
 8. Treat Terraform as a secondary V1 path for reviewed IaC, not the default.
 9. When no built-in devkit skill matches:
    a. Search: use `huaweicloud_search_marketplace` to find a matching skill in the community marketplace
-   b. Install: run `npx skills add huaweicloud/huaweicloud-skills --skill <skill-name> -y -g`
+   b. Install: use the `installCommand` returned by the marketplace tool — it downloads the skill repo ZIP over HTTP and copies the skill folder into the agent skills directory. **No git is required** (`npx skills add` needs git on PATH, which is often absent on Windows Server/sandbox environments). Replace the `<your-agent-skills-dir>` placeholder with this agent's skills directory (Claude Code `~/.claude/skills`, OpenCode `~/.config/opencode/skills`, Cursor `~/.cursor/skills`) before running. If the command reports `SKILL_SRC_NOT_FOUND` (mis-pathed skill location) or the HTTP download itself fails, follow the returned `installHint`: download `https://github.com/huaweicloud/huaweicloud-skills/archive/refs/heads/master.zip` manually, extract it, copy the skill folder, and confirm to the user how it was installed. Never auto-install git just to fetch a skill.
    c. Execute: load the installed skill and follow its procedure
 10. When the deliverable is a PPT, architecture diagram (draw.io), or frontend page that needs official Huawei Cloud service logos, use the `huaweicloud_get_service_icon` MCP tool to get logo URLs from the official Icons library instead of guessing or hotlinking unofficial images.
 

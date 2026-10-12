@@ -189,6 +189,61 @@ test('evaluateCommandRisk does not flag delete-protection toggles as destructive
   }
 });
 
+test('evaluateCommandRisk warns on IAM high-risk write operations (#725)', () => {
+  for (const op of ['CreateUser', 'CreatePolicy', 'CreateRole', 'CreateAgency']) {
+    const result = evaluateCommandRisk(`hcloud IAM ${op} --name admin`);
+    assert.equal(result.decision, 'warn', `IAM ${op} should warn`);
+    assert.equal(result.findings[0].ruleId, 'hwc-iam-highrisk-write');
+  }
+});
+
+test('evaluateCommandRisk warns on IAM CreateUser with name flag (#725)', () => {
+  const result = evaluateCommandRisk('hcloud IAM CreateUser --name admin');
+  assert.equal(result.decision, 'warn');
+  assert.equal(result.findings[0].ruleId, 'hwc-iam-highrisk-write');
+});
+
+test('evaluateCommandRisk warns on IAM CreatePolicy with wildcard action (#725)', () => {
+  const result = evaluateCommandRisk('hcloud IAM CreatePolicy --name admin --action "*"');
+  assert.equal(result.decision, 'warn');
+  const ids = result.findings.map((f) => f.ruleId);
+  assert.ok(ids.includes('hwc-iam-highrisk-write'), 'should include hwc-iam-highrisk-write');
+});
+
+test('evaluateCommandRisk still allows IAM read-only operations (#725)', () => {
+  for (const op of ['ListUsers', 'ShowUser', 'ListPolicies', 'ShowPolicy']) {
+    const result = evaluateCommandRisk(`hcloud IAM ${op} --limit=1`);
+    assert.equal(result.decision, 'allow', `IAM ${op} should be allowed`);
+    assert.equal(result.findings.length, 0, `IAM ${op} should have no findings`);
+  }
+});
+
+test('evaluateCommandRisk blocks env dumps with HW_ prefix (#561 D4-2)', () => {
+  for (const cmd of ['env | grep HW_', 'printenv | grep HW_ACCESS', 'env | grep HUAWEICLOUD']) {
+    const result = evaluateCommandRisk(cmd);
+    assert.equal(result.decision, 'deny', `${cmd} should deny`);
+    assert.equal(result.findings[0].ruleId, 'hwc-command-env-dump');
+  }
+});
+
+test('evaluateCommandRisk warns on plaintext secret in CLI args (#561 D4-3)', () => {
+  const cases = [
+    'hcloud ECS CreateServers --adminPass=SuperSecret123!',
+    'hcloud RDS CreateInstance --password=DbPass456!',
+    'hcloud ECS CreateServers --secret=mysecret',
+    'hcloud ECS CreateServers --token=abc123',
+  ];
+  for (const cmd of cases) {
+    const result = evaluateCommandRisk(cmd);
+    assert.equal(result.decision, 'warn', `${cmd} should warn`);
+    assert.equal(result.findings[0].ruleId, 'hwc-command-secret-in-arg');
+    assert.doesNotMatch(JSON.stringify(result), /SuperSecret123!|DbPass456!|mysecret|abc123/);
+  }
+  // Placeholder values (e.g. <password>) should not trigger the rule.
+  const placeholder = evaluateCommandRisk('hcloud ECS CreateServers --adminPass=<password>');
+  assert.equal(placeholder.findings.length, 0);
+});
+
 test('evaluateCommandRisk fails closed on malformed input (#564)', () => {
   for (const bad of [null, undefined, 12345, { cmd: 'x' }, '', '   ']) {
     const result = evaluateCommandRisk(bad);
@@ -222,4 +277,62 @@ test('evaluateDeployPlan fails closed on malformed input (#564)', () => {
   }
   assert.equal(evaluateDeployPlan({ app: 'x' }).decision !== 'deny', true);
   assert.equal(evaluateDeployPlan('deploy a static site').decision !== 'deny', true);
+});
+
+// ===== #733 D4-3: ShowSecret interception =====
+
+test('evaluateCommandRisk denies hcloud KMS ShowSecret (#733 D4-3)', () => {
+  const result = evaluateCommandRisk('hcloud KMS ShowSecret --secret_id=xxx');
+  assert.equal(result.decision, 'deny');
+  assert.equal(result.findings[0].ruleId, 'hwc-command-secret-value-read');
+  assert.equal(result.findings[0].category, 'secret');
+});
+
+test('evaluateCommandRisk still denies ShowSecretVersion and DownloadSecret (#733 D4-3 regression)', () => {
+  for (const op of ['ShowSecretVersion', 'DownloadSecret', 'GetSecretValue']) {
+    const result = evaluateCommandRisk(`hcloud KMS ${op} --secret_id=xxx`);
+    assert.equal(result.decision, 'deny', `${op} should be denied`);
+    assert.equal(result.findings[0].ruleId, 'hwc-command-secret-value-read');
+  }
+});
+
+// ===== #733 D4-6: adminPass exposure in artifact/deploy_plan stages =====
+// Note: #773 hwc-command-secret-in-arg covers the command stage for
+// --adminPass/--password/--secret/--token (requires \bhcloud\b + value).
+// This rule covers artifact (Terraform admin_pass) and deploy_plan (JSON
+// adminPass) stages where hcloud does not appear in the text. The stages
+// are intentionally disjoint to avoid semantic overlap.
+
+test('evaluateArtifacts warns on admin_pass in Terraform files (#733 D4-6)', () => {
+  const result = evaluateArtifacts([
+    {
+      path: 'terraform.tf',
+      content: 'resource "huaweicloud_compute_instance" "web" {\n  admin_pass = "MyP@ssword1"\n}',
+    },
+  ]);
+  assert.equal(result.decision, 'warn');
+  assert.equal(result.findings[0].ruleId, 'hwc-command-adminpass-exposure');
+  assert.equal(result.findings[0].category, 'secret');
+  assert.equal(result.findings[0].severity, 'warn');
+});
+
+test('evaluateArtifacts warns on adminPass and admin-password variants (#733 D4-6)', () => {
+  for (const [variant, content] of [
+    ['adminPass', 'resource "x" "y" {\n  adminPass = "Secret1"\n}'],
+    ['admin-password', 'resource "x" "y" {\n  admin-password = "Secret2"\n}'],
+  ]) {
+    const result = evaluateArtifacts([{ path: 'main.tf', content }]);
+    assert.equal(result.decision, 'warn', `${variant} should trigger adminpass rule`);
+    assert.equal(result.findings[0].ruleId, 'hwc-command-adminpass-exposure');
+  }
+});
+
+test('evaluateDeployPlan warns when plan contains adminPass field (#733 D4-6)', () => {
+  const result = evaluateDeployPlan({
+    service: 'ECS',
+    action: 'CreateServers',
+    params: { adminPass: 'P@ssw0rd123!' },
+  });
+  assert.equal(result.decision, 'warn');
+  assert.equal(result.findings[0].ruleId, 'hwc-command-adminpass-exposure');
 });

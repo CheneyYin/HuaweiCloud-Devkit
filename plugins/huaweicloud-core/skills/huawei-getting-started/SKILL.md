@@ -55,18 +55,18 @@ hcloud configure list
 
 ## What Can I Do? (Quick Index)
 
-| Goal              | Skill                       |
-| ----------------- | --------------------------- |
-| Create a VM       | huawei-ecs                  |
-| Store files       | huawei-obs                  |
-| Set up a database | huawei-rds / huawei-gaussdb |
-| Create a network  | huawei-vpc                  |
-| Manage access     | huawei-iam                  |
-| Deploy an app     | huawei-deployment           |
-| Run containers    | huawei-cce                  |
-| Build an API      | huawei-apig                 |
-| Run serverless    | huawei-functiongraph        |
-| Monitor resources | huawei-cloud-eye            |
+| Goal              | Skill                                                 |
+| ----------------- | ----------------------------------------------------- |
+| Create a VM       | huawei-ecs                                            |
+| Store files       | huawei-obs                                            |
+| Set up a database | huawei-rds / huawei-cloud-gaussdb-instance-management |
+| Create a network  | huawei-vpc                                            |
+| Manage access     | huawei-iam                                            |
+| Deploy an app     | huawei-cloud-deployment-task-management               |
+| Run containers    | huawei-cce                                            |
+| Build an API      | huawei-cloud-apig-instance-management                 |
+| Run serverless    | huawei-functiongraph                                  |
+| Monitor resources | huawei-cloud-eye                                      |
 
 ## Pro Tips
 

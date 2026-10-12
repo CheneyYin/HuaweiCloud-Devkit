@@ -8,6 +8,7 @@ import {
   consumeApprovalToken,
   createApprovalToken,
   hashArgs,
+  inspectApprovalToken,
   planHcloudCommand,
   redactArgsWithObs,
   resolveStsInjectArgs,
@@ -579,4 +580,264 @@ test('resolveStsInjectArgs skips when obsutil attached -iAK/-kSK/-tTOK present',
   assert.deepEqual(resolveStsInjectArgs(['OBS', 'ls', '-kSK_VAL', '-tTOK_VAL']), []);
   assert.deepEqual(resolveStsInjectArgs(['OBS', 'ls', '-iAK_VAL', '-d']), []);
   clearRuntimeCredentials();
+});
+
+test('D3-B7: runHcloud spawn error result includes ok and exitCode fields', async () => {
+  const result = await runHcloud(['ECS', 'ListServersDetails'], {
+    executable: '/nonexistent/hcloud-binary-that-does-not-exist',
+    maxRetries: 0,
+  });
+  assert.equal(result.ok, false);
+  assert.ok('exitCode' in result, 'exitCode must be present in spawn error result');
+  assert.equal(result.exitCode, null);
+  assert.equal(result.code, 'SPAWN_ERROR');
+});
+
+test('D3-B7: runHcloud timeout result includes ok and exitCode fields', async () => {
+  const script = fakeHcloudScript('setTimeout(() => {}, 10_000);');
+  const result = await runHcloud(['ECS', 'ListServersDetails'], {
+    executable: process.execPath,
+    executableArgs: [script],
+    timeoutMs: 50,
+    forceKillAfterMs: 50,
+    maxRetries: 0,
+  });
+  assert.equal(result.ok, false);
+  assert.ok('exitCode' in result, 'exitCode must be present in timeout result');
+  assert.equal(result.code, 'TIMEOUT');
+  rmSync(join(script, '..'), { recursive: true, force: true });
+});
+
+test('D3-B7: runHcloud approved command result includes ok and exitCode on success', async () => {
+  // Use process.execPath + HCLOUD_BIN_ARGS_JSON instead of a shebang script,
+  // so spawn(shell:false) works on Windows where shebang scripts are not executed
+  // (same pattern as #771 d166294 and test/auth-credentials.test.mjs:116).
+  const script = fakeHcloudScript(`
+console.log(JSON.stringify({ vpcs: [{ id: 'vpc-123', name: 'test-vpc', cidr: '192.168.0.0/16' }] }));
+`);
+  const previousBin = process.env.HCLOUD_BIN;
+  const previousArgsJson = process.env.HCLOUD_BIN_ARGS_JSON;
+  process.env.HCLOUD_BIN = process.execPath;
+  process.env.HCLOUD_BIN_ARGS_JSON = JSON.stringify([script]);
+  await withTempAuthHome(async () => {
+    const plan = await callTool('huaweicloud_plan_cli_command', {
+      args: ['VPC', 'ListVpcs'],
+      allowWrites: true,
+    });
+    assert.ok(plan.approvalToken, 'plan produces an approvalToken');
+    assert.equal(plan.safeToRun, true);
+
+    const result = await callTool('huaweicloud_run_approved_command', {
+      args: ['VPC', 'ListVpcs'],
+      approvalToken: plan.approvalToken,
+      approvedByUser: true,
+      maxRetries: 0,
+    });
+    assert.equal(result.approved, true);
+    assert.ok('ok' in result, 'ok must be present in approved command result');
+    assert.ok('exitCode' in result, 'exitCode must be present in approved command result');
+    assert.equal(result.ok, true);
+    assert.equal(result.exitCode, 0);
+  });
+  if (previousBin === undefined) delete process.env.HCLOUD_BIN;
+  else process.env.HCLOUD_BIN = previousBin;
+  if (previousArgsJson === undefined) delete process.env.HCLOUD_BIN_ARGS_JSON;
+  else process.env.HCLOUD_BIN_ARGS_JSON = previousArgsJson;
+  rmSync(join(script, '..'), { recursive: true, force: true });
+});
+
+test('A: runHcloud fails fast with CREDENTIAL_EXPIRED for expired temp STS (no exec)', async () => {
+  await withTempAuthHome(async () => {
+    const marker = join(mkdtempSync(join(tmpdir(), 'hcdk-gate-')), 'ran.txt');
+    const script = fakeHcloudScript(`
+import { writeFileSync } from 'node:fs';
+writeFileSync(${JSON.stringify(marker)}, 'executed', 'utf8');
+console.log(JSON.stringify({ ok: true }));
+`);
+    const past = Math.floor(Date.now() / 1000) - 300; // expired 5 min ago
+    const token = Buffer.from(JSON.stringify({ exp: past })).toString('base64url');
+    clearRuntimeCredentials();
+    setRuntimeCredentials('GATE_AK', 'GATE_SK', token, 'cn-north-4');
+    const result = await runHcloud(['VPC', 'ListVpcs'], {
+      executable: process.execPath,
+      executableArgs: [script],
+      maxRetries: 0,
+    });
+    clearRuntimeCredentials();
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'CREDENTIAL_EXPIRED');
+    assert.match(result.error, /STS.*expired/i);
+    assert.ok(!existsSync(marker), 'expired STS must not reach hcloud spawn');
+    rmSync(join(script, '..'), { recursive: true, force: true });
+    rmSync(join(marker, '..'), { recursive: true, force: true });
+  });
+});
+
+test('A: runHcloud does NOT gate permanent AK/SK (no token) when none expired', async () => {
+  await withTempAuthHome(async () => {
+    const script = fakeHcloudScript('console.log(JSON.stringify({ ok: true, args: process.argv.slice(2) }));');
+    clearRuntimeCredentials();
+    const result = await runHcloud(['VPC', 'ListVpcs'], {
+      executable: process.execPath,
+      executableArgs: [script],
+    });
+    assert.equal(result.ok, true);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.args.length, 2, JSON.stringify(parsed.args)); // VPC ListVpcs only
+  });
+});
+
+test('A: runHcloud does NOT gate temp STS with unknown expiry (can not prove stale)', async () => {
+  await withTempAuthHome(async () => {
+    const script = fakeHcloudScript('console.log(JSON.stringify({ ok: true, args: process.argv.slice(2) }));');
+    clearRuntimeCredentials();
+    setRuntimeCredentials('GATE_AK', 'GATE_SK', 'NOT_A_DECODABLE_TOKEN', 'cn-north-4');
+    const result = await runHcloud(['VPC', 'ListVpcs'], {
+      executable: process.execPath,
+      executableArgs: [script],
+    });
+    clearRuntimeCredentials();
+    assert.equal(result.ok, true);
+    assert.ok(result.code !== 'CREDENTIAL_EXPIRED');
+  });
+});
+
+// D4-24 (#745): approval token precise JSON contract.
+// Expired and already-consumed tokens must return structured results with
+// machine-assertable codes instead of throwing a generic Error string.
+test('inspectApprovalToken classifies a fresh token as valid', async () => {
+  await withTempAuthHome(() => {
+    const token = createApprovalToken(['ECS', 'ListServersDetails']);
+    const inspection = inspectApprovalToken(token);
+    assert.equal(inspection.state, 'valid');
+    assert.ok(inspection.entry, 'valid state carries the stored entry');
+    assert.equal(inspection.entry.argsHash, hashArgs(['ECS', 'ListServersDetails']));
+  });
+});
+
+test('inspectApprovalToken classifies an expired token as expired', async () => {
+  await withTempAuthHome((home) => {
+    const token = createApprovalToken(['ECS', 'ListServersDetails']);
+    const file = join(home, '.config', 'huaweicloud', 'approvals.json');
+    const map = JSON.parse(readFileSync(file, 'utf8'));
+    map[token].createdAt = Date.now() - 6 * 60_000;
+    writeFileSync(file, JSON.stringify(map), 'utf8');
+
+    const inspection = inspectApprovalToken(token);
+    assert.equal(inspection.state, 'expired');
+    assert.equal(inspection.entry, undefined, 'expired state does not leak the entry');
+  });
+});
+
+test('inspectApprovalToken classifies an already-consumed token as already_consumed', async () => {
+  await withTempAuthHome(() => {
+    const token = createApprovalToken(['ECS', 'ListServersDetails']);
+    const first = consumeApprovalToken(token);
+    assert.ok(first, 'first consume returns the stored entry');
+
+    const inspection = inspectApprovalToken(token);
+    assert.equal(inspection.state, 'already_consumed');
+  });
+});
+
+test('inspectApprovalToken classifies an unknown token as not_found', async () => {
+  await withTempAuthHome(() => {
+    const inspection = inspectApprovalToken('never-created-uuid');
+    assert.equal(inspection.state, 'not_found');
+  });
+});
+
+test('consumeApprovalToken keeps a tombstone so the second call is distinguishable from not_found', async () => {
+  await withTempAuthHome(() => {
+    const token = createApprovalToken(['ECS', 'ListServersDetails']);
+    const first = consumeApprovalToken(token);
+    assert.ok(first);
+    // Second consume still returns null (backward compatible), but
+    // inspectApprovalToken must report already_consumed, not not_found.
+    assert.equal(consumeApprovalToken(token), null);
+    assert.equal(inspectApprovalToken(token).state, 'already_consumed');
+  });
+});
+
+// D4-24 (#745): runApprovedCommand returns precise JSON for expired and
+// already-processed tokens instead of throwing a generic Error string.
+test('runApprovedCommand: expired token returns {status:rejected, code:CONFIRM_TOKEN_EXPIRED}', async () => {
+  await withTempAuthHome(async (home) => {
+    const fake = fakeHcloudExecutable('console.log(JSON.stringify({ ok: true }));');
+    const prevBin = process.env.HCLOUD_BIN;
+    process.env.HCLOUD_BIN = fake;
+    try {
+      const plan = await callTool('huaweicloud_plan_cli_command', {
+        args: ['ECS', 'ListServersDetails'],
+      });
+      assert.ok(plan.approvalToken);
+
+      // Backdate the token past the 5-minute TTL.
+      const file = join(home, '.config', 'huaweicloud', 'approvals.json');
+      const map = JSON.parse(readFileSync(file, 'utf8'));
+      map[plan.approvalToken].createdAt = Date.now() - 6 * 60_000;
+      writeFileSync(file, JSON.stringify(map), 'utf8');
+
+      const result = await callTool('huaweicloud_run_approved_command', {
+        args: ['ECS', 'ListServersDetails'],
+        approvalToken: plan.approvalToken,
+        approvedByUser: true,
+        maxRetries: 0,
+      });
+      assert.equal(result.status, 'rejected');
+      assert.equal(result.code, 'CONFIRM_TOKEN_EXPIRED');
+    } finally {
+      if (prevBin === undefined) delete process.env.HCLOUD_BIN;
+      else process.env.HCLOUD_BIN = prevBin;
+      rmSync(join(fake, '..'), { recursive: true, force: true });
+    }
+  });
+});
+
+test('runApprovedCommand: same token submitted twice returns {status:ok, outcome:already_processed}', async () => {
+  await withTempAuthHome(async () => {
+    const fake = fakeHcloudExecutable('console.log(JSON.stringify({ ok: true }));');
+    const prevBin = process.env.HCLOUD_BIN;
+    process.env.HCLOUD_BIN = fake;
+    try {
+      const plan = await callTool('huaweicloud_plan_cli_command', {
+        args: ['ECS', 'ListServersDetails'],
+      });
+      assert.ok(plan.approvalToken);
+
+      const first = await callTool('huaweicloud_run_approved_command', {
+        args: ['ECS', 'ListServersDetails'],
+        approvalToken: plan.approvalToken,
+        approvedByUser: true,
+        maxRetries: 0,
+      });
+      assert.equal(first.approved, true, 'first call executes the command');
+
+      const second = await callTool('huaweicloud_run_approved_command', {
+        args: ['ECS', 'ListServersDetails'],
+        approvalToken: plan.approvalToken,
+        approvedByUser: true,
+        maxRetries: 0,
+      });
+      assert.equal(second.status, 'ok');
+      assert.equal(second.outcome, 'already_processed');
+    } finally {
+      if (prevBin === undefined) delete process.env.HCLOUD_BIN;
+      else process.env.HCLOUD_BIN = prevBin;
+      rmSync(join(fake, '..'), { recursive: true, force: true });
+    }
+  });
+});
+
+test('runApprovedCommand: unknown token returns {status:rejected, code:CONFIRM_TOKEN_NOT_FOUND}', async () => {
+  await withTempAuthHome(async () => {
+    const result = await callTool('huaweicloud_run_approved_command', {
+      args: ['ECS', 'ListServersDetails'],
+      approvalToken: 'never-created-uuid',
+      approvedByUser: true,
+      maxRetries: 0,
+    });
+    assert.equal(result.status, 'rejected');
+    assert.equal(result.code, 'CONFIRM_TOKEN_NOT_FOUND');
+  });
 });

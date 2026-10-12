@@ -43,6 +43,8 @@ import {
   extractUserDelta,
   applyUserDelta,
   inheritPeerUserEnv,
+  detectOpenCodeEra,
+  mergeOpenCodeEntry,
 } from './mcp-config-merge.mjs';
 import { readAgentDelta, saveAgentDelta, takeAgentDelta, purgeBackup } from './mcp-config-backup.mjs';
 import { isUsableOfficeaceRoot, readOfficeaceRootMarker, writeOfficeaceRootMarker } from './officeace-paths.mjs';
@@ -566,6 +568,20 @@ function copyDir(src, dest) {
   }
 }
 
+// Copy the global agent rules file (rules/huawei-agent-rules.mdc) into the
+// plugin destination so installed agents can load behavioral constraints
+// (#758 D4-23). Idempotent — safe to call on install and update.
+const AGENT_RULES_FILE = 'huawei-agent-rules.mdc';
+
+function injectAgentRules(pluginDest) {
+  const rulesSrc = join(PACKAGE_ROOT, 'rules', AGENT_RULES_FILE);
+  if (!existsSync(rulesSrc)) return;
+  const rulesDestDir = join(pluginDest, 'rules');
+  mkdirSync(rulesDestDir, { recursive: true });
+  copyFileVerified(rulesSrc, join(rulesDestDir, AGENT_RULES_FILE));
+  console.log(`  Agent Rules -> ${join(rulesDestDir, AGENT_RULES_FILE)}`);
+}
+
 function installRuntimeDeps(pluginsDir) {
   const pkgJson = {
     name: 'huaweicloud-devkit',
@@ -632,39 +648,103 @@ function removeIfExists(p) {
   return false;
 }
 
+// ── OpenCode era detection ─────────────────────────────────────────────────
+// OpenCode 2.x reads MCP servers from `mcp.servers.<name>` (native); OpenCode
+// 0.x/1.x read from a flat `mcp.<name>`. We resolve the target form in this order:
+//   1. `--opencode-mcp-era v1|v2` explicit override
+//   2. `opencode --version` major (2 → v2, 0/1 → v1)
+//   3. the existing config's shape (`mcp.servers` → v2, flat `mcp.*` → v1)
+//   4. default `v2` (native, future-proof)
+function detectOpenCodeMajor() {
+  const attempts = process.platform === 'win32' ? [false, true] : [false]; // .cmd shims need a shell on Windows
+  for (const shell of attempts) {
+    try {
+      const r = spawnSync('opencode', ['--version'], { shell, windowsHide: true, stdio: 'pipe', timeout: 10000 });
+      const out = `${r.stdout || ''}${r.stderr || ''}`.trim();
+      const m = out.match(/v?(\d+)\.\d+/);
+      if (m) return Number(m[1]);
+    } catch {
+      // ignore and try the next attempt
+    }
+  }
+  return null;
+}
+
+function parseOpenCodeEraFlag() {
+  const idx = process.argv.indexOf('--opencode-mcp-era');
+  if (idx < 0) return null;
+  const raw = (process.argv[idx + 1] || '').toLowerCase();
+  if (raw === 'v1' || raw === 'v2') return raw;
+  console.error(`Invalid --opencode-mcp-era value "${process.argv[idx + 1] || ''}" (expected v1|v2).`);
+  process.exit(1);
+}
+
+let resolvedOpenCodeEra = null;
+function resolveOpenCodeEra() {
+  if (resolvedOpenCodeEra) return resolvedOpenCodeEra;
+
+  const flagged = parseOpenCodeEraFlag();
+  if (flagged) return (resolvedOpenCodeEra = flagged);
+
+  const major = detectOpenCodeMajor();
+  if (major === 2) return (resolvedOpenCodeEra = 'v2');
+  if (major === 0 || major === 1) return (resolvedOpenCodeEra = 'v1');
+
+  const configPath = opencodeConfigFile();
+  if (existsSync(configPath)) {
+    try {
+      const era = detectOpenCodeEra(JSON.parse(readFileSync(configPath, 'utf8')));
+      if (era !== 'unknown') return (resolvedOpenCodeEra = era);
+    } catch {
+      // fall through to default
+    }
+  }
+
+  return (resolvedOpenCodeEra = 'v2');
+}
+
 function updateOpenCodeConfig(pluginDir) {
   const configPath = opencodeConfigFile();
   const mcpPath = join(pluginDir, 'src', 'mcp-server.mjs').replace(/\\/g, '/');
+  const era = resolveOpenCodeEra();
+  const formLabel = era === 'v2' ? 'mcp.servers.huaweicloud-devkit' : 'mcp.huaweicloud-devkit';
   let config = {};
   if (existsSync(configPath)) {
     try {
       config = JSON.parse(readFileSync(configPath, 'utf8'));
     } catch {
       console.log(
-        `  \x1b[33m[WARN]\x1b[0m Could not parse ${configPath} (jsonc comments?). Skipping MCP config write; ensure "mcp.huaweicloud-devkit" points to ${mcpPath}.`,
+        `  \x1b[33m[WARN]\x1b[0m Could not parse ${configPath} (jsonc comments?). Skipping MCP config write; ensure "${formLabel}" points to ${mcpPath}.`,
       );
       return;
     }
-    const existing = config.mcp?.['huaweicloud-devkit'];
-    const { entry, changed } = mergeCommandStyle(existing, { mcpPath });
-    if (existing && !changed) {
-      console.log(`  OpenCode MCP config unchanged: ${configPath}`);
-      return;
-    }
-    if (existing && changed) {
-      config.mcp['huaweicloud-devkit'] = entry;
-      writeMcpSettingsFile(configPath, config);
-      console.log(`  OpenCode MCP config merged (user fields preserved): ${configPath}`);
-      return;
+  }
+
+  const { config: next, existing, changed } = mergeOpenCodeEntry(config, { mcpPath, era });
+
+  // Restore user fields saved by a previous uninstall (issue #615), on fresh install only.
+  if (!existing) {
+    const delta = takeAgentDelta('opencode');
+    if (delta) {
+      const key = 'huaweicloud-devkit';
+      const entry = era === 'v2' ? next.mcp.servers[key] : next.mcp[key];
+      const restored = applyUserDelta(entry, delta, 'command', era);
+      if (era === 'v2') next.mcp.servers[key] = restored;
+      else next.mcp[key] = restored;
     }
   }
-  config.mcp = config.mcp || {};
-  config.mcp['huaweicloud-devkit'] = mergeCommandStyle(undefined, { mcpPath }).entry;
-  // Restore user fields saved by a previous uninstall (issue #615).
-  const delta = takeAgentDelta('opencode');
-  if (delta) config.mcp['huaweicloud-devkit'] = applyUserDelta(config.mcp['huaweicloud-devkit'], delta, 'command');
-  writeMcpSettingsFile(configPath, config);
-  console.log(`  OpenCode config updated: ${configPath}`);
+
+  if (existing && !changed) {
+    console.log(`  OpenCode MCP config unchanged: ${configPath}`);
+    return;
+  }
+
+  writeMcpSettingsFile(configPath, next);
+  console.log(
+    existing
+      ? `  OpenCode MCP config merged (user fields preserved, ${era}): ${configPath}`
+      : `  OpenCode MCP config updated (${era}): ${configPath}`,
+  );
 }
 
 // Read-merge-write for pluginDir/.mcp.json (OpenClaw, Codex Desktop).
@@ -717,12 +797,22 @@ function removeOpenCodeConfig() {
   } catch {
     return;
   }
-  if (!config.mcp?.['huaweicloud-devkit']) return;
+  const key = 'huaweicloud-devkit';
+  const flatEntry = config.mcp?.[key];
+  const serversEntry = config.mcp?.servers?.[key];
+  const entry = serversEntry || flatEntry;
+  if (!entry) return;
   // Back up user-customized fields before removal so a later reinstall can restore them (issue #615).
-  const delta = extractUserDelta(config.mcp['huaweicloud-devkit'], 'command');
+  const delta = extractUserDelta(entry, 'command');
   if (delta) saveAgentDelta('opencode', delta);
-  delete config.mcp['huaweicloud-devkit'];
-  if (Object.keys(config.mcp).length === 0) delete config.mcp;
+  if (config.mcp) {
+    delete config.mcp[key];
+    if (config.mcp.servers) {
+      delete config.mcp.servers[key];
+      if (Object.keys(config.mcp.servers).length === 0) delete config.mcp.servers;
+    }
+    if (Object.keys(config.mcp).length === 0) delete config.mcp;
+  }
   writeMcpSettingsFile(configPath, config);
   console.log(`  OpenCode MCP config cleaned: ${configPath}`);
 }
@@ -866,6 +956,7 @@ async function installOpenCode() {
   console.log(`  MCP Server -> ${join(pluginDest, 'src')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
+  injectAgentRules(pluginDest);
   const opcPlugins = join(configRoot('opencode'), 'plugins');
   mkdirSync(opcPlugins, { recursive: true });
   copyFileSync(pluginSrc, join(opcPlugins, 'skill-tracker.js'));
@@ -945,6 +1036,7 @@ async function updateOpenCode() {
   console.log(`  MCP Server updated -> ${join(pluginDest, 'src')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
+  injectAgentRules(pluginDest);
   const opcPlugins = join(configRoot('opencode'), 'plugins');
   mkdirSync(opcPlugins, { recursive: true });
   copyFileSync(pluginSrc, join(opcPlugins, 'skill-tracker.js'));
@@ -1045,6 +1137,7 @@ async function installOpenClaw() {
   console.log(`  MCP Server -> ${join(pluginDest, 'src')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
+  injectAgentRules(pluginDest);
 
   const mcpServerAbsPath = join(pluginDest, 'src', 'mcp-server.mjs').replace(/\\/g, '/');
   writeMcpServersFile(pluginDest, mcpServerAbsPath, 'openclaw');
@@ -1105,6 +1198,7 @@ async function updateOpenClaw() {
   console.log(`  MCP Server updated -> ${join(pluginDest, 'src')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
+  injectAgentRules(pluginDest);
 
   const mcpServerAbsPath = join(pluginDest, 'src', 'mcp-server.mjs').replace(/\\/g, '/');
   writeMcpServersFile(pluginDest, mcpServerAbsPath, 'openclaw');
@@ -1135,6 +1229,7 @@ async function installCodexDesktop() {
   console.log(`  MCP Server -> ${join(pluginDest, 'src')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
+  injectAgentRules(pluginDest);
 
   // Copy assets (icons, logos) for Codex Desktop plugin UI
   const codexAssetsSrc = join(PLUGIN_ROOT, 'assets');
@@ -1193,6 +1288,7 @@ async function updateCodexDesktop() {
   console.log(`  MCP Server updated -> ${join(pluginDest, 'src')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
+  injectAgentRules(pluginDest);
 
   // Copy assets (icons, logos) for Codex Desktop plugin UI
   const codexAssetsSrc = join(PLUGIN_ROOT, 'assets');
@@ -1328,6 +1424,7 @@ async function installCodeArts() {
   console.log(`  MCP Server -> ${join(pluginDest, 'src')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
+  injectAgentRules(pluginDest);
 
   const codeartsHookDir = join(homedir(), '.codeartsdoer', 'plugins');
   mkdirSync(codeartsHookDir, { recursive: true });
@@ -1357,6 +1454,7 @@ async function updateCodeArts() {
   console.log(`  MCP Server updated -> ${join(pluginDest, 'src')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
+  injectAgentRules(pluginDest);
 
   const codeartsHookDir = join(homedir(), '.codeartsdoer', 'plugins');
   mkdirSync(codeartsHookDir, { recursive: true });
@@ -1512,6 +1610,7 @@ async function installCodeArtsWork() {
   console.log(`  MCP Server -> ${join(pluginDest, 'src')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
+  injectAgentRules(pluginDest);
 
   registerCodeartsWorkMcp();
   installRuntimeDeps(pluginDest);
@@ -1529,6 +1628,7 @@ async function updateCodeArtsWork() {
   console.log(`  MCP Server updated -> ${join(pluginDest, 'src')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
+  injectAgentRules(pluginDest);
   registerCodeartsWorkMcp();
   mkdirSync(pluginDest, { recursive: true });
   writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
@@ -1792,6 +1892,7 @@ async function installWorkBuddy() {
   console.log(`  MCP Server -> ${join(pluginDest, 'src')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
+  injectAgentRules(pluginDest);
 
   ensureWorkbuddyMcpConfig();
   installRuntimeDeps(pluginDest);
@@ -1814,6 +1915,7 @@ async function updateWorkBuddy() {
   console.log(`  MCP Server updated -> ${join(pluginDest, 'src')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
+  injectAgentRules(pluginDest);
   ensureWorkbuddyMcpConfig();
   mkdirSync(pluginDest, { recursive: true });
   writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
@@ -1985,6 +2087,7 @@ async function installAtomCode() {
   console.log(`  MCP Server -> ${join(pluginDest, 'src')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
+  injectAgentRules(pluginDest);
 
   ensureAtomcodeMcpConfig();
   deployAtomcodeHooks();
@@ -2005,6 +2108,7 @@ async function updateAtomCode() {
   console.log(`  MCP Server updated -> ${join(pluginDest, 'src')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
+  injectAgentRules(pluginDest);
   ensureAtomcodeMcpConfig();
   deployAtomcodeHooks();
   mkdirSync(pluginDest, { recursive: true });
@@ -2294,6 +2398,7 @@ async function installDsh() {
   console.log(`  MCP Server -> ${join(pluginDest, 'src')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
+  injectAgentRules(pluginDest);
   copyFileSync(hookSrc, join(pluginDest, 'hook-plugin.mjs'));
   console.log(`  Hook Plugin -> ${join(pluginDest, 'hook-plugin.mjs')}`);
   ensureDshMcpPatch();
@@ -2317,6 +2422,7 @@ async function updateDsh() {
   console.log(`  MCP Server updated -> ${join(pluginDest, 'src')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
+  injectAgentRules(pluginDest);
   copyFileSync(hookSrc, join(pluginDest, 'hook-plugin.mjs'));
   console.log(`  Hook Plugin updated -> ${join(pluginDest, 'hook-plugin.mjs')}`);
   ensureDshMcpPatch();
@@ -2425,6 +2531,7 @@ async function installOfficeAce() {
   console.log(`  MCP Server -> ${join(pluginDest, 'src')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
+  injectAgentRules(pluginDest);
 
   installRuntimeDeps(pluginDest);
   if (ensureOfficeaceMcpInSqlite() === 'owner-missing') {
@@ -2453,6 +2560,7 @@ async function updateOfficeAce() {
   console.log(`  MCP Server updated -> ${join(pluginDest, 'src')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
+  injectAgentRules(pluginDest);
   installRuntimeDeps(pluginDest);
   if (ensureOfficeaceMcpInSqlite() === 'owner-missing') {
     console.log(
@@ -2950,6 +3058,7 @@ async function installHermes() {
   }
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
+  injectAgentRules(pluginDest);
   copyDir(hooksDir, join(pluginDest, 'hooks'));
   console.log(`  Safety Hooks -> ${join(pluginDest, 'hooks')}`);
   // Telemetry hook lives in integrations/hermes/hooks/ (platform-specific adapter)
@@ -2981,6 +3090,7 @@ async function updateHermes() {
   console.log(`  MCP Server updated -> ${join(pluginDest, 'src')}`);
   copyDir(safetyDir, join(pluginDest, 'safety'));
   console.log(`  Safety Policy updated -> ${join(pluginDest, 'safety')}`);
+  injectAgentRules(pluginDest);
   copyDir(hooksDir, join(pluginDest, 'hooks'));
   console.log(`  Safety Hooks updated -> ${join(pluginDest, 'hooks')}`);
   // Telemetry hook lives in integrations/hermes/hooks/ (platform-specific adapter)
@@ -3146,7 +3256,11 @@ function opencodeStatus() {
     try {
       const config = JSON.parse(readFileSync(configPath, 'utf8'));
       console.log(
-        `  MCP config: ${config.mcp?.['huaweicloud-devkit'] ? '\x1b[32mConfigured\x1b[0m' : '\x1b[31mNot configured\x1b[0m'}`,
+        `  MCP config: ${
+          config.mcp?.['huaweicloud-devkit'] || config.mcp?.servers?.['huaweicloud-devkit']
+            ? '\x1b[32mConfigured\x1b[0m'
+            : '\x1b[31mNot configured\x1b[0m'
+        }`,
       );
     } catch {
       console.log(`  MCP config: \x1b[31mInvalid\x1b[0m`);
@@ -3983,7 +4097,7 @@ async function cmdDoctor() {
   if (existsSync(opencodeCfg)) {
     try {
       const cfg = JSON.parse(readFileSync(opencodeCfg, 'utf8'));
-      if (cfg.mcp && cfg.mcp['huaweicloud-devkit']) {
+      if (cfg.mcp && (cfg.mcp['huaweicloud-devkit'] || cfg.mcp.servers?.['huaweicloud-devkit'])) {
         mcpConfigured = true;
         mcpCfgTarget = 'OpenCode';
       }
@@ -4532,27 +4646,33 @@ async function cmdInstallHcloud() {
       const hcloudBin = join(installDir, 'hcloud.exe');
 
       // Ask user before accepting the privacy agreement — never auto-accept.
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
-      const agree = await new Promise((resolve) => {
-        rl.question('\n  KooCLI requires accepting its privacy agreement. Do you accept? (y/N) ', (answer) => {
-          rl.close();
-          resolve(/^\s*y\s*$/i.test(answer));
+      // Under non-TTY (e.g. preflight spawns with stdin 'ignore'), rl.question()
+      // never resolves — skip the prompt and let the user accept manually.
+      if (process.stdin.isTTY && process.stdout.isTTY) {
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        const agree = await new Promise((resolve) => {
+          rl.question('\n  KooCLI requires accepting its privacy agreement. Do you accept? (y/N) ', (answer) => {
+            rl.close();
+            resolve(/^\s*y\s*$/i.test(answer));
+          });
         });
-      });
-      if (agree) {
-        const r = spawnSync(hcloudBin, ['version'], {
-          input: 'y\n',
-          encoding: 'utf8',
-          timeout: 10000,
-          windowsHide: true,
-        });
-        if (r.status === 0) {
-          console.log('  \x1b[32mPrivacy agreement accepted. KooCLI ready.\x1b[0m');
+        if (agree) {
+          const r = spawnSync(hcloudBin, ['version'], {
+            input: 'y\n',
+            encoding: 'utf8',
+            timeout: 10000,
+            windowsHide: true,
+          });
+          if (r.status === 0) {
+            console.log('  \x1b[32mPrivacy agreement accepted. KooCLI ready.\x1b[0m');
+          } else {
+            console.log('  \x1b[33m无法写入配置目录。请在普通终端运行: echo "y" | hcloud version\x1b[0m');
+          }
         } else {
-          console.log('  \x1b[33m无法写入配置目录。请在普通终端运行: echo "y" | hcloud version\x1b[0m');
+          console.log('  \x1b[33m请手动接受隐私协议：在终端运行 hcloud version 并按提示操作\x1b[0m');
         }
       } else {
-        console.log('  \x1b[33m请手动接受隐私协议：在终端运行 hcloud version 并按提示操作\x1b[0m');
+        console.log('  \x1b[33m非交互会话：请稍后在终端运行 hcloud version 并按提示接受隐私协议\x1b[0m');
       }
 
       console.log('  Or restart terminal and: hcloud version');
@@ -5148,6 +5268,9 @@ async function main() {
         '  --target     Target agent: opencode (default), codex, codearts, codearts-work, workbuddy, dsh, officeace, hermes, openclaw, atomcode, all',
       );
       console.log('  --version    Print CLI version and installed plugin version per agent');
+      console.log(
+        '  --opencode-mcp-era v1|v2   Force OpenCode MCP config form (v1 legacy flat, v2 native mcp.servers)',
+      );
       console.log('  --clean-kocli   (with: uninstall --target all) also remove KooCLI');
       console.log('  --clean-obs     (with: uninstall --target all) also remove OBS config');
       console.log('  --clean-global  (with: uninstall --target all) also remove KooCLI + OBS config');

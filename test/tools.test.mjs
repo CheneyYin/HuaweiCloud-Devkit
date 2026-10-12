@@ -40,7 +40,8 @@ test('runVersionCheck returns installed:false and errorCode on ENOENT', async ()
   });
   assert.equal(result.installed, false);
   assert.equal(result.errorCode, 'HCLOUD_NOT_FOUND');
-  assert.match(result.nextStep, /HCLOUD_BIN/);
+  assert.match(result.nextStep, /koocli-install\.log/);
+  assert.doesNotMatch(result.nextStep, /restart the agent/i);
 });
 
 test('runVersionCheck reports versionMismatch when installed version differs from kooCliVersion', async () => {
@@ -101,8 +102,10 @@ test('TOOL_DEFINITIONS includes all required tools including sandbox', () => {
     'huaweicloud_sandbox_sign_agreement',
     'huaweicloud_sandbox_connect',
     'huaweicloud_sandbox_credentials',
+    'huaweicloud_sandbox_expose_tunnel',
     'huaweicloud_voucher_status',
     'huaweicloud_voucher_claim',
+    'huaweicloud_competition_voucher_claim',
   ];
   for (const name of required) {
     assert.ok(names.includes(name), `Missing tool: ${name}`);
@@ -177,6 +180,44 @@ test('huaweicloud_explain_error still appends support line when requestId is pre
   assert.match(text, /Provide the Request ID \(req-abc-123\) when contacting Huawei Cloud support\./);
 });
 
+test('G: explain_error surfaces CREDENTIAL_EXPIRED first when temp STS has expired', async () => {
+  clearRuntimeCredentials();
+  const past = Math.floor(Date.now() / 1000) - 3600;
+  const token = Buffer.from(JSON.stringify({ exp: past })).toString('base64url');
+  setRuntimeCredentials('EXP_AK', 'EXP_SK', token, 'cn-north-4');
+  try {
+    const result = await callTool('huaweicloud_explain_error', {
+      service: 'VPC',
+      errorCode: 'APIGW.0301',
+      message: 'Incorrect IAM authentication information',
+    });
+    const text = JSON.stringify(result);
+    assert.match(text, /CREDENTIAL_EXPIRED/);
+    assert.match(text, /security token has expired/i);
+    const suggestions = result.suggestions;
+    assert.ok(Array.isArray(suggestions) && suggestions.length > 0);
+    assert.match(suggestions[0], /CREDENTIAL_EXPIRED/);
+  } finally {
+    clearRuntimeCredentials();
+  }
+});
+
+test('G: explain_error does NOT add CREDENTIAL_EXPIRED for permanent credentials', async () => {
+  clearRuntimeCredentials();
+  setRuntimeCredentials('PERM_AK', 'PERM_SK', '', 'cn-north-4');
+  try {
+    const result = await callTool('huaweicloud_explain_error', {
+      service: 'VPC',
+      errorCode: 'APIGW.0301',
+      message: 'Incorrect IAM authentication information',
+    });
+    const text = JSON.stringify(result);
+    assert.doesNotMatch(text, /CREDENTIAL_EXPIRED/);
+  } finally {
+    clearRuntimeCredentials();
+  }
+});
+
 test('callTool rejects invalid numeric timeoutMs instead of silently ignoring it', async () => {
   await assert.rejects(
     () =>
@@ -233,6 +274,47 @@ test('service_catalog keeps storage routing for pure storage intent', async () =
   const result = await callTool('huaweicloud_service_catalog', { intent: 'store files in an obs bucket' });
   assert.ok(result.recommendedSkills.includes('huawei-obs'));
   assert.notEqual(result.recommendedSkills[0], 'huawei-sandbox');
+});
+
+test('service_catalog routes all documented Chinese-intent eval cases >= 80% (#770 D10-3)', async () => {
+  // Daily-test eval set (CodeArtsWork 2026-09-21): 11 documented MISS cases +
+  // 3 baseline HIT guards. EXP-E08 (ECS troubleshooting) is N/A — diagnostics
+  // routing is explicitly out of scope. HIT = expected service appears in
+  // recommendedServices.
+  const cases = [
+    { id: 'EXP-E01', intent: '查询我的云服务器状态', expect: ['ECS'] },
+    { id: 'EXP-E02', intent: '创建一台弹性云服务器', expect: ['ECS'] },
+    { id: 'EXP-E03', intent: '部署静态网站到对象存储', expect: ['OBS'] },
+    { id: 'EXP-E04', intent: '申请一个弹性公网IP', expect: ['EIP', 'VPC'] },
+    { id: 'EXP-E05', intent: '查询数据库实例信息', expect: ['RDS'] },
+    { id: 'EXP-E06', intent: '领取代金券', expect: ['Incentive Voucher'] },
+    { id: 'EXP-E07', intent: '创建一个云备份', expect: ['CBR'] },
+    { id: 'EXP-E09', intent: '部署一个静态网站', expect: ['Sandbox', 'DevStation'] },
+    { id: 'EXP-E10', intent: '创建一个函数', expect: ['FunctionGraph'] },
+    { id: 'EXP-E11', intent: '查询本月账单费用', expect: ['BSS'] },
+    { id: 'EXP-E12', intent: '设置监控告警', expect: ['CES'] },
+    { id: 'EXP-E13', intent: '管理负载均衡证书', expect: ['ELB'] },
+    { id: 'EXP-E14', intent: '查看IAM用户权限', expect: ['IAM'] },
+    { id: 'EXP-E15', intent: '查看云审计事件', expect: ['CTS'] },
+  ];
+  let hits = 0;
+  for (const c of cases) {
+    const result = await callTool('huaweicloud_service_catalog', { intent: c.intent });
+    const ok = c.expect.some((s) => result.recommendedServices.includes(s));
+    assert.equal(ok, true, `${c.id} ('${c.intent}') should route to ${c.expect.join('/')}`);
+    if (ok) hits += 1;
+  }
+  const accuracy = hits / cases.length;
+  assert.ok(accuracy >= 0.8, `Chinese-intent routing accuracy ${accuracy.toFixed(3)} < 0.8`);
+});
+
+test('service_catalog matches CJK+ASCII keywords case-insensitively (#770 D10-3)', async () => {
+  // `it` is lowercased before matching; keywords containing ASCII letters
+  // (弹性公网IP / NAT网关) must match the lowercased intent.
+  const eip = await callTool('huaweicloud_service_catalog', { intent: '申请一个弹性公网IP' });
+  assert.ok(eip.recommendedServices.includes('EIP'));
+  const nat = await callTool('huaweicloud_service_catalog', { intent: '查看NAT网关' });
+  assert.ok(nat.recommendedServices.includes('VPC'));
 });
 
 test('findSkillsRoot skips stale dirs without SKILL.md and picks the first real skills root', () => {

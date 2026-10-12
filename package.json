@@ -1,7 +1,7 @@
 {
   "name": "huaweicloud-devkit",
   "mcpName": "io.github.huaweicloud/huaweicloud-devkit",
-  "version": "1.1.7",
+  "version": "1.1.8-next.3",
   "kooCliVersion": "7.2.12",
   "description": "Agent toolkit that helps coding agents use Huawei Cloud Skills, KooCLI, APIs, SDKs, and future MCP capabilities safely and accurately.",
   "type": "module",
@@ -9,6 +9,7 @@
     "cordis.patch.yml",
     "bin",
     ".agents",
+    "rules",
     "plugins/huaweicloud-core",
     "integrations/hermes",
     "integrations/opencode",
@@ -42,7 +43,7 @@
     "postinstall": "node ./bin/dsh-postinstall.cjs"
   },
   "dependencies": {
-    "undici": "^8.10.0"
+    "undici": "^8.11.2"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -56,7 +57,9 @@
     "prettier": "^3.9.6"
   },
   "overrides": {
-    "smol-toml": "1.8.0"
+    "smol-toml": "^1.9.0",
+    "brace-expansion": "5.0.12",
+    "katex": "^0.19.0"
   },
   "keywords": [
     "huaweicloud",

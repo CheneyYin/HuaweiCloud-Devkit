@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 
 import { classifyHcloudArgs, redactSecrets, assertAllowed } from './safety-policy.mjs';
 import { getProxySettings } from './proxy/proxy-config.mjs';
-import { findHcloudBin, resolveHcloudCommand } from './hcloud-probe.mjs';
+import { resolveHcloudCommand } from './hcloud-probe.mjs';
 import { parseStsExpiry, resolveCredentialsWithRuntime } from './auth/credentials.mjs';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -69,6 +69,17 @@ function pruneStale(map, now = Date.now()) {
   return changed;
 }
 
+// Approval token lifecycle states, surfaced to callers so they can emit the
+// precise JSON contract required by D4-24 (#745):
+//   'valid'            — token exists, not expired, not yet consumed
+//   'expired'          — token exists but createdAt is past APPROVAL_TTL_MS
+//   'already_consumed' — token was consumed on a prior call (tombstone kept)
+//   'not_found'        — token was never created (unknown / typo / pruned)
+const TOKEN_STATE_VALID = 'valid';
+const TOKEN_STATE_EXPIRED = 'expired';
+const TOKEN_STATE_ALREADY_CONSUMED = 'already_consumed';
+const TOKEN_STATE_NOT_FOUND = 'not_found';
+
 export function createApprovalToken(rawArgs) {
   const token = randomUUID();
   const map = readApprovals();
@@ -82,16 +93,36 @@ export function createApprovalToken(rawArgs) {
   return token;
 }
 
+// Inspect a token's lifecycle state WITHOUT consuming it. Used by
+// runApprovedCommand to decide between the 'expired' / 'already_consumed'
+// / 'not_found' JSON shapes. A consumed token leaves a tombstone
+// ({ consumedAt }) until it ages out past APPROVAL_TTL_MS.
+export function inspectApprovalToken(token) {
+  const map = readApprovals();
+  const entry = map[token];
+  if (!entry) return { state: TOKEN_STATE_NOT_FOUND };
+  if (entry.consumedAt !== undefined) return { state: TOKEN_STATE_ALREADY_CONSUMED };
+  if (Date.now() - entry.createdAt > APPROVAL_TTL_MS) return { state: TOKEN_STATE_EXPIRED };
+  return { state: TOKEN_STATE_VALID, entry };
+}
+
+// Backward-compatible single-use consume. Returns the stored entry on first
+// call, then null. After consumption a tombstone ({ consumedAt }) is written
+// so a second call can be distinguished from an unknown token via
+// inspectApprovalToken. Kept for existing tests that assert null on reuse.
 export function consumeApprovalToken(token) {
   const map = readApprovals();
   const entry = map[token];
   if (!entry) return null;
+  if (entry.consumedAt !== undefined) return null;
   if (Date.now() - entry.createdAt > APPROVAL_TTL_MS) {
     delete map[token];
     writeApprovals(map);
     return null;
   }
-  delete map[token];
+  // Mark as consumed (tombstone) instead of deleting outright, so a repeat
+  // call can be classified as already_processed rather than not_found.
+  map[token] = { consumedAt: Date.now(), createdAt: entry.createdAt };
   writeApprovals(map);
   return entry;
 }
@@ -391,6 +422,24 @@ function appendLangHint(result, service, metaDir) {
   };
 }
 
+// Returns true when the current credentials are a TEMPORARY STS set that has
+// already expired (per HW_STS_EXPIRES_AT / token expiry). Lets us fail fast with
+// a clear CREDENTIAL_EXPIRED instead of letting a doomed IAM call return a
+// misleading error. Permanent AK/SK (no token) and unparseable expiry are never
+// treated as expired.
+function isTemporaryStsExpired() {
+  let creds;
+  try {
+    creds = resolveCredentialsWithRuntime({ allowMissing: true });
+  } catch {
+    return false;
+  }
+  if (!creds?.securityToken) return false;
+  const expiry = parseStsExpiry({ securityToken: creds.securityToken });
+  if (expiry === null) return false; // unknown → don't block
+  return expiry <= Date.now();
+}
+
 export async function runHcloud(args, options = {}) {
   const normalizedArgs = Array.isArray(args) ? args.map(String) : [];
   const plan = {
@@ -398,6 +447,21 @@ export async function runHcloud(args, options = {}) {
     rawArgs: normalizedArgs,
   };
   assertAllowed(plan.classification);
+
+  // A: fail fast when the platform-injected temporary STS is already expired —
+  // otherwise hcloud would make a doomed IAM round trip and surface a misleading
+  // error (e.g. "缺少 cli-domain-id"). Permanent AK/SK are unaffected.
+  if (isTemporaryStsExpired()) {
+    return {
+      ok: false,
+      code: 'CREDENTIAL_EXPIRED',
+      error:
+        'Temporary STS credentials have expired. Re-login or start a new session so the platform injects fresh credentials, then retry.',
+      stderr: '',
+      stdout: '',
+      plan,
+    };
+  }
 
   // Link B: when the runtime/environment carries live temporary STS credentials
   // (security token set), KooCLI/obsutil would not see them (they read S2/S3 only
@@ -430,6 +494,8 @@ async function runHcloudOnceWithRetries(plan, options) {
     if (result.ok || attempt >= maxRetries || !isRetryableNetworkError(result)) {
       const merged = {
         ...result,
+        ok: result.ok ?? false,
+        exitCode: result.exitCode ?? null,
         retries: attempt,
         attempts: attempt + 1,
       };
@@ -460,15 +526,15 @@ async function runtimeCurrentMismatchWarning() {
   }
 }
 
-function discoverHcloudPath() {
-  return findHcloudBin();
-}
-
 function runHcloudOnce(plan, options) {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const forceKillAfterMs = options.forceKillAfterMs ?? DEFAULT_FORCE_KILL_AFTER_MS;
-  const executable = options.executable || options.env?.HCLOUD_BIN || discoverHcloudPath() || 'hcloud';
-  const executableArgs = Array.isArray(options.executableArgs) ? options.executableArgs.map(String) : [];
+  const { executable: resolvedExec, argsPrefix } = resolveHcloudCommand({
+    executable: options.executable || options.env?.HCLOUD_BIN,
+    executableArgs: options.executableArgs,
+  });
+  const executable = resolvedExec || 'hcloud';
+  const executableArgs = argsPrefix;
   const cwd = options.cwd || undefined;
   const stdin = options.stdin ?? 'y\n';
   const childOptions = { ...options };
@@ -540,6 +606,8 @@ function runHcloudOnce(plan, options) {
           ok: false,
           code: 'TIMEOUT',
           error: `hcloud command timed out after ${timeoutMs} ms.`,
+          exitCode: null,
+          signal: null,
           stdout: redactOutput(stdout),
           stderr: redactOutput(stderr),
           plan,
@@ -558,6 +626,8 @@ function runHcloudOnce(plan, options) {
         ok: false,
         code: 'SPAWN_ERROR',
         error: error.message,
+        exitCode: null,
+        signal: null,
         plan,
       });
     });

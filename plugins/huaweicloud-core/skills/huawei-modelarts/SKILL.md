@@ -69,5 +69,5 @@ Discover operation parameters with `--help` before executing any write operation
 For advanced workflows (notebook lifecycle, training job diagnosis,
 hyperparameter tuning), search the marketplace:
 `huaweicloud_search_marketplace` query="ModelArts notebook/training/diagnosis"
-→ install via `npx skills add huaweicloud/huaweicloud-skills --skill <name> -y -g`
+→ install via the marketplace tool's `installCommand` (HTTP ZIP download, no git required) and its `installHint` on failure.
 → load and execute.
