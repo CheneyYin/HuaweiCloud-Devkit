@@ -1012,17 +1012,13 @@ test('update pack registers version-update tools; registry carries the central d
   assert.match(tools, /PACK_TOOL_HANDLERS\[name\]\(args, opts\)/);
 
   // Behavioral lockstep: the pack tool list equals the PACK_OF ownership for
-  // 'update', and the pack descriptions match the tools/list definitions.
+  // 'update'. Descriptions are derived from UPDATE_TOOLS in tools.ts itself,
+  // so no byte-equality pin is needed here anymore.
   const ownedByUpdate = Object.keys(PACK_OF).filter((tool) => PACK_OF[tool] === 'update');
   assert.deepEqual(
     UPDATE_TOOLS.map((tool) => tool.name).sort((a, b) => a.localeCompare(b)),
     [...ownedByUpdate].sort((a, b) => a.localeCompare(b)),
   );
-  for (const tool of UPDATE_TOOLS) {
-    const definition = TOOL_DEFINITIONS.find((entry) => entry.name === tool.name);
-    assert.ok(definition, `${tool.name} missing from TOOL_DEFINITIONS`);
-    assert.equal(tool.description, definition.description);
-  }
 });
 
 test('seven packs register their tools; the central map dispatches them', () => {
@@ -1047,9 +1043,6 @@ test('seven packs register their tools; the central map dispatches them', () => 
     for (const tool of packTools) {
       assert.match(packSource, new RegExp(`name: '${tool.name}'`));
       assert.doesNotMatch(tools, new RegExp(`case '${tool.name}':`));
-      const definition = TOOL_DEFINITIONS.find((entry) => entry.name === tool.name);
-      assert.ok(definition, `${tool.name} missing from TOOL_DEFINITIONS`);
-      assert.equal(tool.description, definition.description);
     }
     // The pack's handler map is merged into the central dispatch table. The
     // export-name convention maps the pack id to UPPER_SNAKE: hyphens in the

@@ -580,7 +580,7 @@ export const SANDBOX_TOOL_SCHEMAS: Readonly<Record<SandboxToolName, LooseToolSch
   huaweicloud_sandbox_credentials: credentialsSchema,
 };
 
-// Dispatch map for the callTool case labels in src/tools.ts. Typed over
+// Dispatch map merged into PACK_TOOL_HANDLERS in packs/registry.ts. Typed over
 // SandboxToolName, so a tool added to SANDBOX_TOOLS without a handler entry
 // here — or the reverse — fails to compile instead of failing at runtime.
 export const SANDBOX_TOOL_HANDLERS: Readonly<Record<SandboxToolName, PackToolDefinition['handler']>> = {

@@ -86,7 +86,7 @@ export const DISCOVERY_TOOL_SCHEMAS: Readonly<Record<DiscoveryToolName, LooseToo
   huaweicloud_detect_framework: detectFrameworkSchema,
 };
 
-// Dispatch map for the callTool case labels in src/tools.ts. Typed over
+// Dispatch map merged into PACK_TOOL_HANDLERS in packs/registry.ts. Typed over
 // DiscoveryToolName, so a tool added to DISCOVERY_TOOLS without a handler
 // entry here — or the reverse — fails to compile instead of failing at
 // runtime.
