@@ -61,6 +61,7 @@ interface HwlinkExecResult {
 }
 
 interface HwlinkTerminalSession {
+  state: 'opening' | 'ready' | 'closed';
   exec(_command: string, _options?: { timeoutMs?: number }): Promise<HwlinkExecResult>;
   close(): void;
 }
@@ -303,25 +304,51 @@ async function runNodeExec(args: string[], timeoutMs = 30000): Promise<NodeExecR
 
 const sessions = new Map<string, HwlinkTerminalSession>();
 
-async function getSession(workspaceId: string, username: string, timeoutMs?: number): Promise<HwlinkTerminalSession> {
-  const key = `${workspaceId}:${username}`;
-  const existing = sessions.get(key);
-  if (existing) return existing;
-
+// The side-effecting half of getSession: credentials, the hdkit connection
+// request, and the ws-exec spawn. Split out so the cache orchestration in
+// getSession is the only logic that reads and writes the sessions Map.
+async function connectTerminalSession(
+  workspaceId: string,
+  username: string,
+  timeoutMs?: number,
+): Promise<HwlinkTerminalSession> {
   const { ak, sk, securitytoken } = getCredentials();
   const { wsUrl, source } = await createConnection(workspaceId, ak, sk, securitytoken);
 
   const WebSocketImpl = await getWebSocketImpl(wsUrl);
 
   const wsExec = await loadWsExec();
-  const session = await wsExec.connectHwlinkTerminalSession({
+  return await wsExec.connectHwlinkTerminalSession({
     url: wsUrl,
     source,
     username,
     timeoutMs,
     WebSocketImpl,
   });
+}
 
+let sessionConnector = connectTerminalSession;
+
+// Test seam for the session cache: tests drive execWithSession (the real
+// interface) with only the side-effecting connector replaced.
+export function _setSessionConnectorForTests(
+  connector: ((_workspaceId: string, _username: string, _timeoutMs?: number) => Promise<HwlinkTerminalSession>) | null,
+): void {
+  sessionConnector = connector ?? connectTerminalSession;
+}
+
+async function getSession(workspaceId: string, username: string, timeoutMs?: number): Promise<HwlinkTerminalSession> {
+  const key = `${workspaceId}:${username}`;
+  const existing = sessions.get(key);
+  // A cached session whose transport died (state 'closed') would fail every
+  // exec with the closed-before-marker error until an explicit
+  // close_session; evict it and reconnect instead.
+  if (existing) {
+    if (existing.state !== 'closed') return existing;
+    sessions.delete(key);
+  }
+
+  const session = await sessionConnector(workspaceId, username, timeoutMs);
   sessions.set(key, session);
   return session;
 }

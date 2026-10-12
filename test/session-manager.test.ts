@@ -12,7 +12,65 @@ import {
   formatProxyPortWarning,
   buildExposeRemediation,
   TUNNEL_URL_PATTERN,
+  _setSessionConnectorForTests,
+  execWithSession,
+  closeAllSessions,
 } from '../plugins/huaweicloud-core/src/sandbox/session-manager.ts';
+
+// Models the real HwlinkTerminalExecSession failure surface: once the
+// transport dies (state 'closed'), every exec rejects with the
+// closed-before-marker error until the entry is evicted from the cache.
+class FakeSession {
+  state: 'opening' | 'ready' | 'closed' = 'ready';
+  execCalls: string[] = [];
+  close() {}
+  async exec(command: string): Promise<{ stdout: string; exitCode: number }> {
+    if (this.state === 'closed') {
+      throw new Error('hwlink terminal closed before completion marker');
+    }
+    this.execCalls.push(command);
+    return { stdout: command, exitCode: 0 };
+  }
+}
+
+test('a dead cached session is evicted and replaced on the next exec', async () => {
+  const made: FakeSession[] = [];
+  _setSessionConnectorForTests(async () => {
+    const session = new FakeSession();
+    made.push(session);
+    return session;
+  });
+  try {
+    const first = await execWithSession('ws-evict-test', 'echo one', 'root');
+    assert.equal(first.stdout, 'echo one');
+    made[0].state = 'closed';
+    const second = await execWithSession('ws-evict-test', 'echo two', 'root');
+    assert.equal(second.stdout, 'echo two');
+    assert.equal(made.length, 2, 'a closed session must not be reused');
+    assert.deepEqual(made[1].execCalls, ['echo two']);
+  } finally {
+    _setSessionConnectorForTests(null);
+    closeAllSessions();
+  }
+});
+
+test('a live cached session is reused without reconnecting', async () => {
+  const made: FakeSession[] = [];
+  _setSessionConnectorForTests(async () => {
+    const session = new FakeSession();
+    made.push(session);
+    return session;
+  });
+  try {
+    await execWithSession('ws-reuse-test', 'echo one', 'root');
+    await execWithSession('ws-reuse-test', 'echo two', 'root');
+    assert.equal(made.length, 1, 'a live session must be cached, not recreated');
+    assert.deepEqual(made[0].execCalls, ['echo one', 'echo two']);
+  } finally {
+    _setSessionConnectorForTests(null);
+    closeAllSessions();
+  }
+});
 
 test('ws-exec dynamic import uses file:// URL (Windows-safe)', async () => {
   const wsExecIndexUrl = resolveWsExecIndexUrl();
