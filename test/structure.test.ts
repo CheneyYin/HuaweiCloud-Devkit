@@ -7,6 +7,7 @@ import test from 'node:test';
 
 import { TOOL_DEFINITIONS } from '../plugins/huaweicloud-core/src/tools.ts';
 import { PACK_OF, PACKS } from '../plugins/huaweicloud-core/src/packs/registry.ts';
+import { SUPPORTED_AGENT_TARGETS } from '../plugins/huaweicloud-core/src/auth/agent-registration.ts';
 import { PACK_IDS } from '../plugins/huaweicloud-core/src/lib/pack-types.ts';
 import {
   closeEnablement,
@@ -255,9 +256,9 @@ test('huawei-openapi skill teaches only vocabulary-table tools and the real para
   }
 });
 
-// The served gateway_call description (the src/tools.ts copy that
-// tools/list actually serves; the pack copy is pinned byte-equal to it by
-// the pack-lockstep test below) is the surviving zero-cost name-discovery
+// The served gateway_call description (derived from
+// HUAWEICLOUD_OPEN_MCP_TOOLS in src/tools.ts — descriptions have one copy,
+// in the owning pack) is the surviving zero-cost name-discovery
 // path at the tools/list layer now that the six first-class discovery
 // faces are gone. Literal fragments, not bare substring names: 'get_api'
 // alone is satisfied by the 'get_api_examples' substring — the same
@@ -625,10 +626,10 @@ test('setup-cli.ts supports the codearts target end to end', () => {
     (branches?.length ?? 0) + (installDispatch?.length ?? 0) >= 3,
     `codearts dispatch branches: ${(branches?.length ?? 0) + (installDispatch?.length ?? 0)}`,
   );
-  // .installed marker goes to the codearts plugins dir
+  // .installed marker goes to the codearts plugins dir:
+  // installMarkerDirForTarget is a PAYLOAD_TARGETS lookup (its own test pins
+  // the derivation, every non-codex row, and codex's natural null).
   assert.match(setup, /function installMarkerDirForTarget\(target: string\)/);
-  assert.match(setup, /if \(target === 'codex'\) return null;/);
-  assert.match(setup, /if \(target === 'codearts'\) return codeartsPluginsDir\(\);/);
   assert.match(setup, /function writeInstallMarker\(target: string\)/);
   // doctor checks the skills tree inside installed plugin dirs, and native
   // skill dirs only for stale-copy detection
@@ -795,8 +796,8 @@ test('setup-cli.ts supports the dsh target end to end', () => {
     (branches?.length ?? 0) + (installDispatch?.length ?? 0) >= 4,
     `dsh dispatch branches: ${(branches?.length ?? 0) + (installDispatch?.length ?? 0)}`,
   );
-  // .installed marker goes to the dsh plugins dir
-  assert.match(setup, /if \(target === 'dsh'\) return dshPluginsDir\(\);/);
+  // .installed marker goes to the dsh plugins dir: the table row's dir field
+  // (installMarkerDirForTarget is a lookup over the table — pinned in its own test)
   // doctor and the update dispatch reach DSH through the payload-target table
   assert.match(setup, /id: 'dsh',\s+label: 'DSH',\s+dir: dshPluginsDir,/);
   assert.match(setup, /update: updateDsh,/);
@@ -912,6 +913,33 @@ test('setup-cli.ts supports the hermes target end to end', () => {
   assert.match(setup, /--skip-mcp-server/);
   assert.match(setup, /function ensureHermesMcpSdk\(\)/);
   assert.match(setup, /function hermesMcpSdkOk\(\)/);
+});
+
+test('PAYLOAD_TARGETS is the single id→dir map for payload targets', () => {
+  const setup = readSource(join('src', 'setup-cli.ts'));
+  // The marker-dir function is a lookup over the table, not a second hand
+  // list — the atomcode/openclaw drift class dies only if the lookup stays
+  // derived.
+  const markerFn = setup.match(/function installMarkerDirForTarget\(target: string\): string \| null \{[\s\S]*?\n\}/);
+  assert.ok(markerFn, 'installMarkerDirForTarget must exist');
+  assert.match(markerFn[0], /PAYLOAD_TARGETS\.find\(\(t\) => t\.id === target\)\?\.dir\(\) \?\? null/);
+  assert.doesNotMatch(markerFn[0], /target === '/);
+  // Every non-codex supported target has a table row: doctor's payload
+  // checks, the marker dir, willPlacePayload, and the update dispatch all
+  // follow the table, so a missing row silently drops a target everywhere.
+  const table = setup.match(/const PAYLOAD_TARGETS = \[[\s\S]*?\] as const;/);
+  assert.ok(table, 'PAYLOAD_TARGETS table must exist');
+  for (const id of SUPPORTED_AGENT_TARGETS) {
+    if (id === 'codex') continue;
+    assert.match(table[0], new RegExp(`\\bid: '${id}',`), `${id} must have a PAYLOAD_TARGETS row`);
+  }
+});
+
+test('sandbox timeout defaults stay single-sourced (no raw numeric fallbacks)', () => {
+  const src = readSource(join('src', 'packs', 'sandbox', 'tools.ts'));
+  assert.doesNotMatch(src, /args\.timeout_ms \|\| \d/, 'handler fallbacks must read SANDBOX_TIMEOUT_MS');
+  const fallbacks = src.match(/args\.timeout_ms \|\| SANDBOX_TIMEOUT_MS\.\w+/g);
+  assert.equal(fallbacks?.length ?? 0, 6, 'six tool handlers apply the shared defaults');
 });
 
 test('setup-cli.ts supports the version command', () => {

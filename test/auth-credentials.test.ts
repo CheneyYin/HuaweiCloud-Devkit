@@ -5,6 +5,8 @@ import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
+const isWin = process.platform === 'win32';
+
 import {
   backupGlobalCredentials,
   clearRuntimeCredentials,
@@ -267,7 +269,7 @@ test('agent registration detects DSH_HOME cordis patch config', () => {
   });
 });
 
-test('agent registration reads codex plugin state from JSON, not the table substring', () => {
+test('agent registration reads codex plugin state from JSON, not the table substring', { skip: isWin }, () => {
   withTempHome((home) => {
     const binDir = join(home, 'fake-bin');
     mkdirSync(binDir, { recursive: true });

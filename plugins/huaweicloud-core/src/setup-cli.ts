@@ -1026,6 +1026,10 @@ function updateOpenCodeConfig(pluginDir: string): void {
 
 // Read-merge-write for pluginDir/.mcp.json (OpenClaw, Codex Desktop).
 // Preserves user extra args/env; restores a prior uninstall's backup on fresh install (issue #615).
+// The fourth mcpServers-style writer, kept separate from ensureMcpServersConfig
+// because its target is the devkit-owned file inside the plugin dir, not an
+// agent-owned config: an unparseable file is rewritten fresh (not skipped),
+// fresh entries carry no timeout field, and the delta restore is conditional.
 function writeMcpServersFile(pluginDest: string, mcpPath: string, agentKey: string): void {
   const configPath = join(pluginDest, '.mcp.json');
   let config: unknown;
@@ -1534,13 +1538,14 @@ function uninstallCodexDesktop(): void {
   }
 }
 
-// One read-merge-write skeleton for the mcpServers-style JSON configs
+// One read-merge-write skeleton for the mcpServers-style agent configs
 // (CodeArts, WorkBuddy, AtomCode). User fields survive every write: the
 // merge functions in mcp-config-merge.ts own the entry semantics, the
 // issue #615 delta restore owns reinstall recovery, and applyPacksToEntry
-// owns the keptUserValue DEVKIT_PACKS contract. Opencode (command style,
-// jsonc-tolerant) and codearts-work (environment naming + peer-env
-// inheritance) keep their bespoke writers.
+// owns the keptUserValue DEVKIT_PACKS contract. Family members kept
+// separate: opencode (command style, jsonc-tolerant), codearts-work
+// (environment naming + peer-env inheritance), and writeMcpServersFile
+// (the devkit-owned plugin-dir .mcp.json — see its comment).
 function ensureMcpServersConfig(options: {
   configPath: string;
   mcpPath: string;
@@ -3529,19 +3534,13 @@ async function checkForUpdate(): Promise<void> {
   }
 }
 
+// The .installed marker directory for a target. A lookup over
+// PAYLOAD_TARGETS, not a second hand list: codex (CLI-managed, no plugin
+// dir) and any unknown target are absent from the table, so they naturally
+// return null. writeInstallMarker and the single-target willPlacePayload
+// gate both consume this.
 function installMarkerDirForTarget(target: string): string | null {
-  if (target === 'codex') return null;
-  if (target === 'dsh') return dshPluginsDir();
-  if (target === 'codearts') return codeartsPluginsDir();
-  if (target === 'codearts-work') return codeartsWorkPluginsDir();
-  if (target === 'workbuddy') return workbuddyPluginsDir();
-  if (target === 'officeace') return officeacePluginsDir();
-  if (target === 'hermes') return hermesPluginsDir();
-  if (target === 'openclaw') return openclawPluginsDir();
-  if (target === 'atomcode') return atomcodePluginsDir();
-  if (target === 'codex-desktop') return codexDesktopPluginsDir();
-  if (target === 'opencode') return opencodePluginsDir();
-  return null;
+  return PAYLOAD_TARGETS.find((t) => t.id === target)?.dir() ?? null;
 }
 
 function writeInstallMarker(target: string): void {
@@ -4463,9 +4462,10 @@ async function provisionPackBinaries(): Promise<void> {
 // Every agent whose installer ships the server payload (dist + safety +
 // skills + undici + .installed marker) into a plugin dir. Doctor's payload
 // checks (MCP server, undici, safety policy, skills tree, restart markers),
-// update's willPlacePayload, and the update dispatch itself (one loop for
-// the single-target and all-targets modes) all derive from this one table,
-// so a target cannot appear in one check and miss another — the atomcode
+// the .installed marker directory (installMarkerDirForTarget), update's
+// willPlacePayload, and the update dispatch itself (one loop for the
+// single-target and all-targets modes) all derive from this one table, so
+// a target cannot appear in one check and miss another — the atomcode
 // undici miss and the openclaw-wide miss were both this drift class. Labels
 // follow the doctor spellings ('Hermes Agent', not AGENT_LABELS' 'Hermes');
 // hints are the per-target restart copy. codex is CLI-managed with no
