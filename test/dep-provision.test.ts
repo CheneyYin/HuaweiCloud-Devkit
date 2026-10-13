@@ -8,14 +8,14 @@ import test from 'node:test';
 
 import { DEPENDENCIES, DEPENDENCY_IDS } from '../plugins/huaweicloud-core/src/lib/dependency-model.ts';
 import { lookupOnPath, resolveDependencyCommand } from '../plugins/huaweicloud-core/src/lib/dep-resolve.ts';
-import { installerFor } from '../plugins/huaweicloud-core/src/dep-installers.ts';
-import { installGatewayTool } from '../plugins/huaweicloud-core/src/dep-gateway.ts';
+import { installerFor } from '../plugins/huaweicloud-core/src/dep/installers/table.ts';
+import { installGatewayTool } from '../plugins/huaweicloud-core/src/dep/installers/gateway.ts';
 import {
   provisionDependencies,
   uninstallDependency,
   uninstallPlacedDependency,
-} from '../plugins/huaweicloud-core/src/dep-provision.ts';
-import { readReceipt, writeReceipt, type DepReceipt } from '../plugins/huaweicloud-core/src/dep-receipts.ts';
+} from '../plugins/huaweicloud-core/src/dep/provision.ts';
+import { readReceipt, writeReceipt, type DepReceipt } from '../plugins/huaweicloud-core/src/dep/receipts.ts';
 import { findHcloudBin } from '../plugins/huaweicloud-core/src/hcloud-probe.ts';
 import { fixtureDir } from './fixture-dir.ts';
 
@@ -244,7 +244,7 @@ test('provisioning: a fallback-tier gateway in a TTY session prompts, then insta
   });
   assert.equal(calls.installGateway, 1);
   assert.equal(prompts.length, 1);
-  assert.match(prompts[0], /Install the Open MCP Gateway persistently/);
+  assert.match(prompts[0], /Install the Open MCP Gateway persistently \(uv tool install \/ pipx \/ pip\)\?/);
   assert.match(out.text(), /open-mcp-gateway: installed via uv/);
 });
 

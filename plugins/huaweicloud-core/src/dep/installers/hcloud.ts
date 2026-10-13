@@ -4,25 +4,25 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 
-import { probeHcloud } from './hcloud-probe.ts';
-import { getKooCliVersion, kooCliDownloadBase, KOO_CLI_BASE } from './koocli-version.ts';
-import { detectCodeartsSandbox, printSandboxWarning } from './codearts-sandbox.ts';
+import { probeHcloud } from '../../hcloud-probe.ts';
+import { getKooCliVersion, kooCliDownloadBase, KOO_CLI_BASE } from '../../koocli-version.ts';
+import { detectCodeartsSandbox, printSandboxWarning } from '../../codearts-sandbox.ts';
 import {
   recordInstallReceipt,
   removeReceipt,
   type DepReceipt,
   type DepUninstallResult,
   type ResolvedUninstallContext,
-} from './dep-receipts.ts';
-import { DEPENDENCIES } from './lib/dependency-model.ts';
+} from '../receipts.ts';
+import { DEPENDENCIES } from '../../lib/dependency-model.ts';
 
 // The hcloud (KooCLI) installer module: everything the host may do to one
 // dependency's lifecycle — install (download/extract/place/PATH), the
 // privacy-agreement step, non-interactive manual instructions, and the
 // receipt-gated uninstall with its sudo landing-site whitelist. One module
 // per installable dependency; the composition table that dispatches to
-// these lives in dep-installers.ts, the policy loop and the uninstall
-// decision core in dep-provision.ts. This module must stay zod-free: it
+// these lives in installers/table.ts, the policy loop and the uninstall
+// decision core in ../provision.ts. This module must stay zod-free: it
 // compiles into the unbundled dist/setup-cli.js graph, where only undici
 // exists at runtime.
 
@@ -63,7 +63,7 @@ export function printKooCliManualInstructions(log: (_line: string) => void = con
     log(`\n  Or one-liner (installs LATEST, may differ from pinned ${kooCliVersion || ''}):`);
     log(`  curl -sSL ${latestUrl}/hcloud_install.sh -o ./hcloud_install.sh && bash ./hcloud_install.sh -y`);
     log(
-      `  \x1b[33m⚠️  The one-liner installs the latest KooCLI. If \`hcloud version\` != ${kooCliVersion || ''}, doctor/check_cli will warn — use the pinned download above instead.\x1b[0m`,
+      `  \x1b[33m⚠️  The one-liner installs the latest KooCLI. If \`hcloud version\` != ${kooCliVersion}, doctor/check_cli will warn — use the pinned download above instead.\x1b[0m`,
     );
     log(
       `\nFull guide: https://support.huaweicloud.com/qs-hcli/hcli_02_003_0${process.platform === 'linux' ? '2' : '3'}.html`,

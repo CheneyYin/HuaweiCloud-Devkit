@@ -6,7 +6,7 @@ import { basename, join } from 'node:path';
 import type { DependencyResolution } from './dependency-model.ts';
 
 // The single resolution chain for host binaries, consumed by install-time
-// provisioning (src/dep-provision.ts) and spawn-time resolution
+// provisioning (src/dep/provision.ts) and spawn-time resolution
 // (src/packs/huaweicloud-open-mcp/sidecar.ts, src/hcloud-probe.ts) alike, so
 // the binary that was installed is the binary that runs. Like
 // dependency-model.ts, this module's runtime import graph stays at zero

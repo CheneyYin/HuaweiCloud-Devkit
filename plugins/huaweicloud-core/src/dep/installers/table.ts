@@ -1,20 +1,21 @@
-import { HCLOUD_ESCAPE_HATCH, installKooCli, printKooCliManualInstructions, uninstallHcloud } from './dep-hcloud.ts';
-import {
-  GATEWAY_ESCAPE_HATCH,
-  installGatewayTool,
-  uninstallGateway,
-  type GatewayInstallResult,
-} from './dep-gateway.ts';
-import { probeHcloud } from './hcloud-probe.ts';
-import type { DepReceipt, DepUninstallResult, ResolvedUninstallContext } from './dep-receipts.ts';
-import { DEPENDENCIES, type DependencyId } from './lib/dependency-model.ts';
+import { HCLOUD_ESCAPE_HATCH, installKooCli, printKooCliManualInstructions, uninstallHcloud } from './hcloud.ts';
+import { GATEWAY_ESCAPE_HATCH, installGatewayTool, uninstallGateway } from './gateway.ts';
+import { probeHcloud } from '../../hcloud-probe.ts';
+import type {
+  DepReceipt,
+  DepUninstallResult,
+  ManagedChildInstallResult,
+  ResolvedUninstallContext,
+} from '../receipts.ts';
+import { DEPENDENCIES, type DependencyId } from '../../lib/dependency-model.ts';
 
 // The dependency installer composition root: one installer object per
 // installable dependency, keyed by id, kind-correlated to the dependency
 // catalog by the InstallerFor conditional. The annotation (not satisfies)
-// widens the table to its interface on purpose — every consumer below
-// (dep-provision's policy loop and uninstall gate, setup-cli's dep command)
-// wants CliDepInstaller / ManagedChildDepInstaller, not literal types.
+// widens the table to its interface on purpose — every consumer
+// (dep/provision.ts's policy loop and uninstall gate, setup-cli's dep
+// command) wants CliDepInstaller / ManagedChildDepInstaller, not literal
+// types.
 //
 // The table is the extension point: declaring a new dependency in
 // lib/dependency-model.ts without a matching entry here is a compile error
@@ -22,15 +23,15 @@ import { DEPENDENCIES, type DependencyId } from './lib/dependency-model.ts';
 // wrong-kind installer is rejected the same way. sandbox-resident entries
 // carry null — an explicit declaration that the host never manages them.
 //
-// One module per installable dependency (dep-hcloud.ts, dep-gateway.ts, a
-// future dep-<id>.ts); this file only composes. It must stay zod-free: it
-// compiles into the unbundled dist/setup-cli.js graph, where only undici
-// exists at runtime.
+// One module per installable dependency (installers/hcloud.ts,
+// installers/gateway.ts, a future installers/<id>.ts); this file only
+// composes. It must stay zod-free: it compiles into the unbundled
+// dist/setup-cli.js graph, where only undici exists at runtime.
 
 export type Log = (_line: string) => void;
 
 /** Presence facts the policy loop needs from a cli-kind probe. */
-export interface HcloudPresence {
+export interface CliDepPresence {
   status: string;
   installed: boolean;
   installedVersion?: string | null;
@@ -46,13 +47,20 @@ export interface HcloudPresence {
 export interface CliDepInstaller {
   kind: 'cli';
   /** Presence probe; privacy_pending counts as present (terminal action). */
-  probe(): HcloudPresence;
+  probe(): CliDepPresence;
   /** Download/extract/place. Downloads on non-TTY too — `dep install <id>` is the explicit CI path; only provisioning policy gates on tty. */
   install(_opts: { tty: boolean }): Promise<boolean>;
   /** The pinned manual commands printed when auto-install cannot run. */
   manualInstructions(_log: Log): void;
   /** The no-receipt refusal's escape-hatch sentence. */
   escapeHatch: string;
+  /**
+   * Receipt-gated removal. Receipts are untrusted input: escalate sudo -n
+   * only onto this installer's own known landing sites (the catalog's
+   * platform candidates ∪ the paths this installer places — precedent:
+   * hcloudInstallLandingSites), and never delete an env-tier (user-override)
+   * resolution. AGENTS.md's adding-a-dependency checklist repeats both.
+   */
   uninstall(_receipt: DepReceipt, _dir: string, _ctx: ResolvedUninstallContext): DepUninstallResult;
 }
 
@@ -60,12 +68,13 @@ export interface CliDepInstaller {
  * A managed child of the MCP server (kind: 'managed-child' in the catalog).
  * Presence is resolution-tier semantics (persistent tier = present, fallback
  * = absent), owned by the loop's shared resolve seam, so the installer has
- * no probe member. The install result is gateway-shaped today ({ok, tier});
- * generalize it with the seams when a second managed-child dependency lands.
+ * no probe member. The install outcome is the shared
+ * ManagedChildInstallResult (receipts.ts); the gateway installer refines
+ * its tier to its own tool vocabulary.
  */
 export interface ManagedChildDepInstaller {
   kind: 'managed-child';
-  install(): Promise<GatewayInstallResult>;
+  install(): Promise<ManagedChildInstallResult>;
   /** The confirm-prompt suffix naming the concrete install tools. */
   confirmPromptSuffix: string;
   /** The no-receipt refusal's escape-hatch sentence. */

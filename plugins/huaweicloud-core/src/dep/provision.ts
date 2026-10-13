@@ -6,40 +6,43 @@ import {
   receiptDir,
   withDepLock,
   type DepUninstallResult,
+  type ManagedChildInstallResult,
   type ResolvedUninstallContext,
-} from './dep-receipts.ts';
-import { DEP_INSTALLERS, installerFor, type HcloudPresence, type Log } from './dep-installers.ts';
-import type { GatewayInstallResult } from './dep-gateway.ts';
-import { resolveDependencyCommand, type ResolvedDependency } from './lib/dep-resolve.ts';
+} from './receipts.ts';
+import { DEP_INSTALLERS, installerFor, type CliDepPresence, type Log } from './installers/table.ts';
+import { resolveDependencyCommand, type ResolvedDependency } from '../lib/dep-resolve.ts';
 import {
   DEPENDENCIES,
   PACK_DEPENDENCIES,
   requiredDependencies,
   type DependencyId,
   type DependencySpec,
-} from './lib/dependency-model.ts';
-import type { PackId } from './lib/pack-types.ts';
+} from '../lib/dependency-model.ts';
+import type { PackId } from '../lib/pack-types.ts';
 
 // The dep subsystem's decision core, the half that is dependency-agnostic
 // on purpose: the provisioning policy loop (presence → policy → install,
 // kind-branched because kind is the process model and therefore the policy
 // shape) and the receipt-gated uninstall decision (pack-requirement gate →
 // receipt gate → per-dependency uninstaller, under the receipt lock).
-// Per-dependency behavior lives in dep-hcloud.ts / dep-gateway.ts, composed
-// by the DEP_INSTALLERS table in dep-installers.ts; every id dispatch in
-// this module goes through installerFor. Node builtins plus the zod-free
-// lib/ and dep-receipts modules only — this module compiles into the
-// unbundled dist/setup-cli.js graph, where only undici exists at runtime.
+// Per-dependency behavior lives in installers/hcloud.ts and
+// installers/gateway.ts, composed by the DEP_INSTALLERS table in
+// installers/table.ts; every dispatch resolves per-id through installerFor
+// and every action default comes from the table entry, so a second member
+// of an existing kind provisions through its own installer out of the box.
+// Node builtins plus the zod-free lib/ and dep/receipts modules only — this
+// module compiles into the unbundled dist/setup-cli.js graph, where only
+// undici exists at runtime.
 //
 // The seams, kept injectable for hermetic tests (test/dep-provision.test.ts):
 // the policy loop's probe/install/resolve/confirm seams and the uninstall
-// side's receiptsDir/env/resolveDependency/runCommand seams. The seam names
-// (probeHcloud, installKooCli, installGateway) and the two ids their
-// defaults name reflect today's single-member kinds — each seam covers the
-// one dependency of its kind that exists. When a second cli-kind or
-// managed-child dependency lands, collapse them into a per-id installer
-// override map shaped like DEP_INSTALLERS; the second member is what makes
-// that seam real. Everything else (policy, output, ordering, refusal
+// side's receiptsDir/env/resolveDependency/runCommand seams. The three
+// action seams (probeHcloud, installKooCli, installGateway) are named for
+// the one member of their kind that exists today and capture ONLY that
+// dependency's iteration (identity comparison against the table entry); any
+// other member of the same kind runs its own installer. Collapsing the
+// names into per-id overrides is a cosmetic rename for the day a second
+// member lands. Everything else (policy, output, ordering, refusal
 // wording) is the contract under test.
 
 const INFO = '  \x1b[36m[INFO]\x1b[0m';
@@ -54,10 +57,10 @@ export interface ProvisionOptions {
   tty?: boolean;
   env?: NodeJS.ProcessEnv;
   log?: Log;
-  probeHcloud?: () => HcloudPresence;
+  probeHcloud?: () => CliDepPresence;
   installKooCli?: (_opts: { tty: boolean }) => Promise<boolean>;
   resolveDependency?: (_id: DependencyId, _env: NodeJS.ProcessEnv) => ResolvedDependency | null;
-  installGateway?: () => Promise<GatewayInstallResult>;
+  installGateway?: () => Promise<ManagedChildInstallResult>;
   confirm?: (_prompt: string) => Promise<boolean>;
 }
 
@@ -83,10 +86,7 @@ export async function provisionDependencies(ids: Iterable<DependencyId>, opts: P
   const tty = opts.tty === true;
   const env = opts.env ?? process.env;
   const log = opts.log ?? console.log;
-  const probe = opts.probeHcloud ?? DEP_INSTALLERS.hcloud.probe;
-  const installCli = opts.installKooCli ?? DEP_INSTALLERS.hcloud.install;
   const resolve = opts.resolveDependency ?? defaultResolveDependency;
-  const installGateway = opts.installGateway ?? DEP_INSTALLERS['open-mcp-gateway'].install;
   const confirm = opts.confirm ?? defaultConfirm;
 
   for (const id of ids) {
@@ -101,9 +101,21 @@ export async function provisionDependencies(ids: Iterable<DependencyId>, opts: P
         continue;
       }
       const installer = installerFor(id);
-      if (installer === null) continue;
+      if (installer === null) {
+        // InstallerFor makes this unreachable in compiled code; fail loudly
+        // rather than silently skipping a required binary.
+        log(`${WARN} ${id}: no installer in DEP_INSTALLERS; skipping provisioning`);
+        continue;
+      }
 
       if (installer.kind === 'cli') {
+        // The probeHcloud/installKooCli overrides are named for hcloud, the
+        // one cli-kind member today: they capture only hcloud's iteration.
+        // Every other cli-kind dependency probes and installs through its
+        // own table entry.
+        const probe = installer === DEP_INSTALLERS.hcloud ? (opts.probeHcloud ?? installer.probe) : installer.probe;
+        const installCli =
+          installer === DEP_INSTALLERS.hcloud ? (opts.installKooCli ?? installer.install) : installer.install;
         // Presence is the question; a version mismatch stays doctor's
         // warning territory. privacy_pending also counts as present: the
         // binary exists, acceptance is a terminal action.
@@ -134,6 +146,13 @@ export async function provisionDependencies(ids: Iterable<DependencyId>, opts: P
       }
 
       if (installer.kind === 'managed-child') {
+        // The installGateway override is named for the gateway, the one
+        // managed-child member today: it captures only the gateway's
+        // iteration.
+        const installManagedChild =
+          installer === DEP_INSTALLERS['open-mcp-gateway']
+            ? (opts.installGateway ?? installer.install)
+            : installer.install;
         const resolved = resolve(id, env);
         // Only a PERSISTENT tier (env/candidate/path) counts as present; a
         // fallback-tier resolution does not, so policy 'prompt' still
@@ -161,7 +180,7 @@ export async function provisionDependencies(ids: Iterable<DependencyId>, opts: P
           log(`${INFO} ${id}: skipped. ${hint}`);
           continue;
         }
-        const result = await installGateway();
+        const result = await installManagedChild();
         log(
           result.ok
             ? `${INFO} ${id}: installed via ${result.tier}`
@@ -173,8 +192,8 @@ export async function provisionDependencies(ids: Iterable<DependencyId>, opts: P
       }
 
       // Exhaustiveness: a third installer kind must fail to compile at the
-      // never assignment in dep-installers' InstallerFor, and this arm keeps
-      // the loop honest if one ever slips through.
+      // never assignment in installers/table.ts's InstallerFor, and this
+      // arm keeps the loop honest if one ever slips through.
       const exhaustive: never = installer;
       log(`${WARN} ${id}: unsupported installer kind ${String(exhaustive)}`);
     } catch (error) {
@@ -223,6 +242,12 @@ function defaultRunCommand(
   return { status: r.status ?? null, stdout: String(r.stdout || ''), stderr: String(r.stderr || '') };
 }
 
+// The shared refusal sentence for sandbox-resident ids — one wording
+// consumed by both the spec gate and the table-agreement guard below.
+function sandboxResidentRefusal(id: DependencyId): DepUninstallResult {
+  return { ok: false, message: `${id} ships inside the cloud sandbox; the host never installs or removes it.` };
+}
+
 function requiringPacks(id: DependencyId, enabledPacks: ReadonlySet<PackId>): PackId[] {
   // The naming half of the refusal: the decision itself went through
   // requiredDependencies over the same edge table; this inverse lookup only
@@ -237,7 +262,7 @@ function specRefusal(id: DependencyId): DepUninstallResult | null {
   const spec = DEPENDENCIES[id];
   if (!spec) return { ok: false, message: `Unknown dependency id: ${id}` };
   if (spec.kind === 'sandbox-resident') {
-    return { ok: false, message: `${id} ships inside the cloud sandbox; the host never installs or removes it.` };
+    return sandboxResidentRefusal(id);
   }
   return null;
 }
@@ -249,8 +274,8 @@ function placedUninstall(id: DependencyId, dir: string, opts: DepUninstallOption
   const installer = installerFor(id);
   if (installer === null) {
     // specRefusal already refused sandbox-resident ids before this gate;
-    // this arm is the table-agreement guard, not a second policy.
-    return { ok: false, message: `${id} ships inside the cloud sandbox; the host never installs or removes it.` };
+    // this arm is the table-agreement guard — same wording, one source.
+    return sandboxResidentRefusal(id);
   }
   const receipt = readReceipt(id, dir);
   if (!receipt) {

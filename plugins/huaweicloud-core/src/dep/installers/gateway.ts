@@ -9,15 +9,15 @@ import {
   type DepReceipt,
   type DepUninstallResult,
   type ResolvedUninstallContext,
-} from './dep-receipts.ts';
-import { lookupOnPath } from './lib/dep-resolve.ts';
+} from '../receipts.ts';
+import { lookupOnPath } from '../../lib/dep-resolve.ts';
 
 // The open-mcp-gateway installer module: the package-manager tier chain
 // (uv → pipx → pip3 --user), the tier receipts that make uninstall
 // tier-aware, and the receipt-gated uninstall. One module per installable
 // dependency; the composition table that dispatches to these lives in
-// dep-installers.ts, the policy loop and the uninstall decision core in
-// dep-provision.ts. This module must stay zod-free: it compiles into the
+// installers/table.ts, the policy loop and the uninstall decision core in
+// ../provision.ts. This module must stay zod-free: it compiles into the
 // unbundled dist/setup-cli.js graph, where only undici exists at runtime.
 
 const WARN = '  \x1b[33m[WARN]\x1b[0m';

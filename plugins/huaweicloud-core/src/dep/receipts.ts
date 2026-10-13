@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, w
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { DEPENDENCIES, type DependencyId } from './lib/dependency-model.ts';
-import type { ResolvedDependency } from './lib/dep-resolve.ts';
+import { DEPENDENCIES, type DependencyId } from '../lib/dependency-model.ts';
+import type { ResolvedDependency } from '../lib/dep-resolve.ts';
 
 // Install receipts: the uninstall half's ground truth for "this devkit placed
 // that binary". A receipt exists only for a binary this devkit installed and
@@ -12,11 +12,12 @@ import type { ResolvedDependency } from './lib/dep-resolve.ts';
 // convention (HUAWEICLOUD_HOME || homedir() → ~/.config/huaweicloud/), the
 // same rule as mcp-config-backup.ts, update-check.ts, and officeace-paths.ts.
 //
-// This module is also the leaf home of the dep subsystem's shared uninstall
-// contracts (DepUninstallResult, ResolvedUninstallContext) and the
-// best-effort receipt recorder: the per-dependency installers
-// (dep-hcloud.ts, dep-gateway.ts) and the decision core (dep-provision.ts)
-// both consume them, so they must sit below both.
+// This module is also the leaf home of the dep subsystem's shared contracts
+// (DepUninstallResult, ResolvedUninstallContext,
+// ManagedChildInstallResult) and the best-effort receipt recorder: the
+// per-dependency installers (installers/hcloud.ts, installers/gateway.ts)
+// and the decision core (provision.ts) all consume them, so they must sit
+// below both.
 //
 // Receipts are single-phase on purpose: the receipt is written ONLY after the
 // installing run verified the binary landed. A pending/two-phase scheme (mark
@@ -128,7 +129,7 @@ export interface DepUninstallResult {
 }
 
 // The seams an installer's uninstall body needs, normalized to required
-// fields by the decision core (dep-provision's placedUninstall) before the
+// fields by the decision core (provision.ts's placedUninstall) before the
 // per-dependency uninstaller runs: the env to resolve under, the shared
 // dependency-resolution chain, and the command runner for tier withdrawals
 // and sudo escalation. Injected overrides from DepUninstallOptions keep
@@ -137,6 +138,16 @@ export interface ResolvedUninstallContext {
   env: NodeJS.ProcessEnv;
   resolveDependency: (_id: DependencyId, _env: NodeJS.ProcessEnv) => ResolvedDependency | null;
   runCommand: (_command: string, _args: readonly string[]) => { status: number | null; stdout: string; stderr: string };
+}
+
+// The outcome a managed-child install reports to the policy loop: ok plus
+// the display detail for the "installed via <tier>" line. The gateway
+// installer refines tier to its own tool union (GatewayInstallTier); the
+// shared shape keeps the decision core and the installer interfaces free
+// of gateway vocabulary.
+export interface ManagedChildInstallResult {
+  ok: boolean;
+  tier: string | null;
 }
 
 // ---------------------------------------------------------------------------

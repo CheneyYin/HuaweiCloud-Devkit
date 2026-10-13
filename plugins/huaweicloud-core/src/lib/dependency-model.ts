@@ -18,8 +18,8 @@ import { PACK_IDS, type PackId } from './pack-types.ts';
 //   - src/setup-cli.ts           (parseDevkitPacks — doctor pack status loop;
 //                                 requiredDependencies/PACK_USES — doctor binary
 //                                 section; effectivePackUnion — dep status/uninstall)
-//   - src/dep-provision.ts       (PACK_DEPENDENCIES — receipt-gated uninstall)
-//   - src/dep-receipts.ts        (DEPENDENCIES/DependencyId — receipt ids)
+//   - src/dep/provision.ts      (PACK_DEPENDENCIES — receipt-gated uninstall)
+//   - src/dep/receipts.ts       (DEPENDENCIES/DependencyId — receipt ids)
 
 export const DEPENDENCY_IDS = ['hcloud', 'open-mcp-gateway', 'devbridge'] as const;
 export type DependencyId = (typeof DEPENDENCY_IDS)[number];

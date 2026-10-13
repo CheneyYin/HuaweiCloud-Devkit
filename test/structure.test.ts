@@ -657,7 +657,7 @@ test('KooCLI sandbox blockers and privacy agreement live in their extracted modu
   const setup = readSource(join('src', 'setup-cli.ts'));
   const hcloudProbe = readSource(join('src', 'hcloud-probe.ts'));
   const codeartsSandbox = readSource(join('src', 'codearts-sandbox.ts'));
-  const depHcloud = readSource(join('src', 'dep-hcloud.ts'));
+  const depHcloud = readSource(join('src', 'dep', 'installers', 'hcloud.ts'));
   // sandbox detection reads the CodeArts permission config (codearts-sandbox.ts,
   // shared by doctor and the KooCLI installer; no leftover local copy in setup-cli)
   assert.match(codeartsSandbox, /function detectCodeartsSandbox\(\)/);
@@ -695,9 +695,9 @@ test('KooCLI sandbox blockers and privacy agreement live in their extracted modu
   assert.match(setup, /设置 → 对话流 → 智能体 终端命令运行模式 → 自动运行/);
 });
 
-test('hermes restart hints, unix auto-install in dep-hcloud, grouped status (#280)', () => {
+test('hermes restart hints, unix auto-install in dep/installers/hcloud, grouped status (#280)', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
-  const depHcloud = readSource(join('src', 'dep-hcloud.ts'));
+  const depHcloud = readSource(join('src', 'dep', 'installers', 'hcloud.ts'));
   // Hermes .installed marker is read for restart hints (#280-4): hermes is
   // a row of the payload-target table the marker loop and the update
   // dispatch derive from.
@@ -706,7 +706,8 @@ test('hermes restart hints, unix auto-install in dep-hcloud, grouped status (#28
   assert.match(setup, /join\(target\.dir\(\), '\.installed'\)/);
   // Unix install-hcloud executes for real: download → extract → install → verify
   // (#280-3); the body moved to dep-provision.ts when provisioning absorbed
-  // it, and on to dep-hcloud.ts when the per-dependency installers split.
+  // it, on to dep-hcloud.ts when the per-dependency installers split, and
+  // into dep/installers/ when the subsystem organized by abstraction level.
   assert.match(depHcloud, /Auto-installing to \$\{binDir\}/);
   assert.match(depHcloud, /spawnSync\('curl', \['-fL', url, '-o', tmpTar\]/);
   assert.match(depHcloud, /spawnSync\('tar', \['-xzf', tmpTar, '-C', scratch\]/);
@@ -724,17 +725,18 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
   const setup = readSource(join('src', 'setup-cli.ts'));
   const codeartsSandbox = readSource(join('src', 'codearts-sandbox.ts'));
   const depResolve = readSource(join('src', 'lib', 'dep-resolve.ts'));
-  // The dep modules are globbed, not enumerated: every src/dep-*.ts file —
-  // including one a future dependency adds — joins the guard automatically,
-  // so the zod-free import graph cannot regress by forgetting a list entry.
-  const depModules = readdirSync(join(pluginRoot, 'src'))
-    .filter((name) => name.startsWith('dep-') && name.endsWith('.ts'))
+  // The dep module tree is walked, not enumerated: every .ts file under
+  // src/dep/ — including one a future dependency adds, at any depth — joins
+  // the guard automatically, so the zod-free import graph cannot regress by
+  // forgetting a list entry.
+  const depModules = readdirSync(join(pluginRoot, 'src', 'dep'), { recursive: true })
+    .filter((name) => name.endsWith('.ts'))
     .sort((a, b) => a.localeCompare(b));
   assert.ok(depModules.length >= 5, `expected the dep module family, found: ${depModules.join(', ')}`);
   // These compile into the unbundled dist/setup-cli.js graph, where only
   // undici exists at runtime: no zod, no SDK, ever.
   const guarded = [
-    ...depModules.map((name) => [`src/${name}`, readSource(join('src', name))] as const),
+    ...depModules.map((name) => [`src/dep/${name}`, readSource(join('src', 'dep', name))] as const),
     ['src/codearts-sandbox.ts', codeartsSandbox] as const,
     ['src/lib/dep-resolve.ts', depResolve] as const,
   ];
@@ -754,7 +756,7 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
   }
   // The installer body is absorbed, not duplicated: setup-cli owns the CLI
   // wrapper only.
-  assert.doesNotMatch(setup, /spawnSync\('curl'/, 'the KooCLI installer body lives in dep-hcloud.ts');
+  assert.doesNotMatch(setup, /spawnSync\('curl'/, 'the KooCLI installer body lives in dep/installers/hcloud.ts');
   assert.match(
     setup,
     /await installKooCli\(\{ tty: process\.stdin\.isTTY === true && process\.stdout\.isTTY === true \}\)/,

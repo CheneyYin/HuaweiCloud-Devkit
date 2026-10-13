@@ -38,11 +38,11 @@ import {
   type ProxyConfigFile,
 } from './proxy/proxy-config.ts';
 import { removeKooCli, removeObsConfig } from './sandbox/uninstall-cleanup.ts';
-import { readReceipt, removeReceipt } from './dep-receipts.ts';
+import { readReceipt, removeReceipt } from './dep/receipts.ts';
 import { detectCodeartsSandbox } from './codearts-sandbox.ts';
-import { installKooCli } from './dep-hcloud.ts';
-import { installerFor } from './dep-installers.ts';
-import { provisionDependencies, uninstallDependency, uninstallPlacedDependency } from './dep-provision.ts';
+import { installKooCli } from './dep/installers/hcloud.ts';
+import { installerFor } from './dep/installers/table.ts';
+import { provisionDependencies, uninstallDependency, uninstallPlacedDependency } from './dep/provision.ts';
 import {
   mergeCommandStyle,
   mergeArgsStyle,
@@ -526,7 +526,7 @@ const DSH_MCP_PATCH_END = '# HuaweiCloud DevKit DSH integration end';
 
 // Detect CodeArts sandbox mode (bash_mode in permission config).
 // The implementation lives in ./codearts-sandbox.ts, shared with the KooCLI
-// installer in ./dep-provision.ts.
+// installer in ./dep/installers/hcloud.ts.
 
 function hasCliFlag(name: string): boolean {
   return process.argv.includes(name);
@@ -5020,7 +5020,7 @@ async function confirm(msg: string): Promise<boolean> {
 
 async function cmdInstallHcloud(): Promise<void> {
   console.log(BANNER);
-  // Thin wrapper: the platform installer lives in src/dep-provision.ts
+  // Thin wrapper: the platform installer lives in src/dep/installers/hcloud.ts
   // (installKooCli), shared with install-time provisioning; this command
   // owns the banner and the trailing credentials note. For a TTY user the
   // output is indistinguishable from the pre-extraction command.
@@ -5484,7 +5484,7 @@ function cmdVersion(): void {
 // Dependency tooling: `dep status` renders the catalog rows for the current
 // effective pack union; `dep install <id>` runs one specific installer,
 // bypassing policy; `dep uninstall <id>` is receipt-gated (see
-// dep-provision.ts) and refuses while the effective pack union still
+// dep/provision.ts) and refuses while the effective pack union still
 // requires the id.
 function cmdDepStatus(): void {
   const report = packUnionReport();
