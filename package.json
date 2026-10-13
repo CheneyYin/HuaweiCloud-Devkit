@@ -31,7 +31,7 @@
   },
   "scripts": {
     "build": "node ./scripts/build-plugin.mjs",
-    "typecheck": "tsc -p plugins/huaweicloud-core/tsconfig.json --noEmit",
+    "typecheck": "tsc -p plugins/huaweicloud-core/tsconfig.json --noEmit && tsc -p test/tsconfig.json",
     "pretest": "npm run build",
     "prepack": "npm run build && node ./scripts/sync-skills.mjs --check",
     "skills:sync": "node ./scripts/sync-skills.mjs --write",

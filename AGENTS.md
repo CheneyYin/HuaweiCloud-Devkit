@@ -5,7 +5,7 @@
 ```bash
 npm test                 # all tests (node --test)
 npm run build            # compile plugins/huaweicloud-core/src (TS) → dist/
-npm run typecheck        # tsc --noEmit type gate
+npm run typecheck        # tsc type gate (src + test projects)
 npm run lint             # ESLint + markdownlint
 npm run lint:js          # ESLint only
 npm run lint:md          # markdownlint only
@@ -18,7 +18,7 @@ node --test test/structure.test.ts    # single test file
 node ./scripts/validate-package.mjs   # validation alone
 ```
 
-TypeScript sources under `plugins/huaweicloud-core/src` compile to `dist/`, and every runtime entry point reads `dist/` (`bin/setup.cjs` → `dist/setup-cli.js`, `.mcp.json` → `dist/mcp-server.js`, the Node hook imports `dist/safety-policy.js`). `npm run typecheck` is the type gate. Tests run `.ts` directly, so development needs Node >= 22.18; the published `engines` stays `>= 22`. One runtime dependency (undici for proxy support).
+TypeScript sources under `plugins/huaweicloud-core/src` compile to `dist/`, and every runtime entry point reads `dist/` (`bin/setup.cjs` → `dist/setup-cli.js`, `.mcp.json` → `dist/mcp-server.js`, the Node hook imports `dist/safety-policy.js`). `npm run typecheck` is the type gate and covers two projects: the `src` tsconfig and the strict `test/tsconfig.json` (noEmit, `allowImportingTsExtensions`). A test importing a repo `.mjs` script gets a sibling `.d.mts` declaration (see `scripts/lib/pack-boundaries.d.mts`) instead of per-file suppression. Tests run `.ts` directly, so development needs Node >= 22.18; the published `engines` stays `>= 22`. One runtime dependency (undici for proxy support).
 
 ## Architecture
 
