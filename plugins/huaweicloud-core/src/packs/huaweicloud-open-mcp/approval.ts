@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 
+import { asText } from '../../lib/as-text.ts';
 import { isInsideProtectedTree, packStateDir } from '../../lib/pack-state.ts';
 import { classifyTextCommand } from '../../safety-policy.ts';
 import { POLICY_FILE } from './sidecar.ts';
@@ -70,12 +71,6 @@ function permanentGrantReason(): string {
   const operatorPath = (process.env.HUAWEICLOUD_MCP_POLICY_FILE ?? '').trim();
   const path = operatorPath !== '' ? operatorPath : join(packStateDir('huaweicloud-open-mcp'), POLICY_FILE);
   return `permanent-scope grants are an operator gesture, not an agent action: edit the policy file directly (${path}); it hot-reloads, so the change takes effect without a restart`;
-}
-
-// Interpolating unknown values through asText matches plain ${value} output
-// for every JSON value, the only kind MCP arguments can carry.
-function asText(value: unknown): string {
-  return typeof value === 'string' ? value : String(value);
 }
 
 export function classify(tool: string, toolArgs: Record<string, unknown>): Ruling {

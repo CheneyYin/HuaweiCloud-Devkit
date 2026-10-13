@@ -55,6 +55,7 @@ import { isUsableOfficeaceRoot, readOfficeaceRootMarker, writeOfficeaceRootMarke
 import { queryDistTagsFetch, determineTarget, semverCompare } from './update-check.ts';
 import { getKooCliVersion, compareVersion, kooCliDownloadBase } from './koocli-version.ts';
 import { findHcloudBin, hcloudProbeNextStep, probeHcloud } from './hcloud-probe.ts';
+import { asText } from './lib/as-text.ts';
 import { PACK_IDS, type PackId } from './lib/pack-types.ts';
 import {
   DEPENDENCIES,
@@ -101,10 +102,6 @@ const { DatabaseSync } = sqliteModule;
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
-function asText(value: unknown): string {
-  return typeof value === 'string' ? value : String(value);
 }
 
 function errorMessage(error: unknown): string {

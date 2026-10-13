@@ -14,6 +14,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 import { fetchWithProxy } from '../proxy/proxy-agent.ts';
+import { asText } from '../lib/as-text.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -33,8 +34,8 @@ try {
     if (existsSync(p)) {
       const parsed: unknown = JSON.parse(readFileSync(p, 'utf8'));
       const v = parsed !== null && typeof parsed === 'object' ? (parsed as { version?: unknown }).version : undefined;
-      if (typeof v === 'string' && v) {
-        PLUGIN_VERSION = v;
+      if (v) {
+        PLUGIN_VERSION = asText(v);
         break;
       }
     }
@@ -216,17 +217,7 @@ function capabilityFromKey(key: string): string | undefined {
 }
 
 export function sanitizeValue(value: unknown): string {
-  // Primitives keep their historical String() rendering (the suite pins
-  // sanitizeValue(123) === '123'); objects never occur in real inputs, so
-  // they stringify as JSON instead of '[object Object]'.
-  let text =
-    typeof value === 'string'
-      ? value
-      : value == null
-        ? ''
-        : typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint'
-          ? String(value)
-          : (JSON.stringify(value) ?? '');
+  let text = typeof value === 'string' ? value : value == null ? '' : asText(value);
   text = text.replace(/[\r\n\t]+/g, ' ').trim();
   if (text.length > MAX_VALUE_LENGTH) {
     text = text.slice(0, MAX_VALUE_LENGTH - 3) + '...';

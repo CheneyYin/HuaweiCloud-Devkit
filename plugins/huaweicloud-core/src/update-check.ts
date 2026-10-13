@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 
 import { fetchWithProxy } from './proxy/proxy-agent.ts';
 import { SUPPORTED_AGENT_TARGETS } from './auth/agent-registration.ts';
+import { asText } from './lib/as-text.ts';
 
 const IS_WINDOWS = process.platform === 'win32';
 const NPM_BIN = IS_WINDOWS ? 'npm.cmd' : 'npm';
@@ -168,7 +169,7 @@ export function determineTarget(current: unknown, distTags: DistTags = {}): stri
 
 export function parseDistTagsOutput(stdout: unknown): DistTags | null {
   try {
-    const text = (typeof stdout === 'string' ? stdout : '').trim();
+    const text = asText(stdout || '').trim();
     if (!text) return null; // 空输出视为 npm view 失败
     return toDistTags(JSON.parse(text));
   } catch {
@@ -279,7 +280,7 @@ export function fallbackSkipFilePath(): string {
 
 // 会话化 skip 文件：remote 多会话按 sessionId 拆分，stdio/默认保持原文件(向后兼容)。
 function sanitizeSessionId(sessionId: unknown): string {
-  return (typeof sessionId === 'string' ? sessionId : '').replace(/[^0-9a-zA-Z-]/g, '_');
+  return asText(sessionId || '').replace(/[^0-9a-zA-Z-]/g, '_');
 }
 
 // A1 定稿: 标准 agent 用插件目录副本(有 package.json); codex 等无副本时回退共享文件

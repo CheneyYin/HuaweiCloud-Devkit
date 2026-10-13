@@ -11,6 +11,8 @@ import {
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
+import { asText } from '../lib/as-text.ts';
+
 // The credential vault is JSON on disk shaped like this. Fields stay `unknown`
 // until a typeof/Array.isArray guard surfaces a string, because the file (and
 // platform-injected JSON) is untrusted input.
@@ -171,7 +173,7 @@ export interface StsExpiryInput {
 export function parseStsExpiry({ securityToken, expiresAtEnv = process.env.HW_STS_EXPIRES_AT }: StsExpiryInput = {}):
   number | null {
   if (expiresAtEnv) {
-    const v = typeof expiresAtEnv === 'string' ? expiresAtEnv.trim() : '';
+    const v = asText(expiresAtEnv).trim();
     if (!v) return null;
     const asNum = Number(v);
     if (Number.isFinite(asNum) && asNum > 0) return asNum > 1e12 ? asNum : asNum * 1000;
@@ -222,7 +224,7 @@ function readWorkEnvironmentEntry(config: unknown): CodeArtsCredentials | null {
       ak,
       sk,
       securityToken: present(environment.HW_SECURITY_TOKEN) ? environment.HW_SECURITY_TOKEN : '',
-      region: typeof region === 'string' ? region : '',
+      region: asText(region || ''),
     };
   }
   return null;
@@ -240,10 +242,10 @@ export function writeGlobalCredentials(credentials: WriteGlobalCredentialsInput 
   const path = globalCredentialsPath();
   mkdirSync(dirname(path), { recursive: true });
   const payload = {
-    ak: typeof credentials.ak === 'string' ? credentials.ak : '',
-    sk: typeof credentials.sk === 'string' ? credentials.sk : '',
-    securityToken: typeof credentials.securityToken === 'string' ? credentials.securityToken : '',
-    region: typeof credentials.region === 'string' ? credentials.region : '',
+    ak: asText(credentials.ak || ''),
+    sk: asText(credentials.sk || ''),
+    securityToken: asText(credentials.securityToken || ''),
+    region: asText(credentials.region || ''),
     ...(credentials.configuredBySession === undefined
       ? {}
       : { configuredBySession: Boolean(credentials.configuredBySession) }),
@@ -268,18 +270,15 @@ export interface WriteObsConfigInput {
 }
 
 export function writeObsConfig(credentials: WriteObsConfigInput = {}): { path: string; endpoint: string } {
-  const region = typeof credentials.region === 'string' ? credentials.region : '';
-  const ak = typeof credentials.ak === 'string' ? credentials.ak : '';
-  const sk = typeof credentials.sk === 'string' ? credentials.sk : '';
-  const securityToken = typeof credentials.securityToken === 'string' ? credentials.securityToken : '';
+  const region = asText(credentials.region || '');
+  const ak = asText(credentials.ak || '');
+  const sk = asText(credentials.sk || '');
+  const securityToken = asText(credentials.securityToken || '');
   if (!region || !ak || !sk) {
     throw new Error('region, ak, and sk are required to write OBS config');
   }
   const path = obsConfigPath();
-  const endpoint =
-    typeof credentials.endpoint === 'string' && credentials.endpoint
-      ? credentials.endpoint
-      : `https://obs.${region}.myhuaweicloud.com`;
+  const endpoint = asText(credentials.endpoint || `https://obs.${region}.myhuaweicloud.com`);
   // Flat key=value format (no [default] section) as written by KooCLI 7.x `hcloud OBS config`.
   const content = `endpoint=${endpoint}\nak=${ak}\nsk=${sk}${securityToken ? `\ntoken=${securityToken}` : ''}\n`;
   writeFileSync(path, content, { encoding: 'utf8', mode: 0o600 });
@@ -442,7 +441,7 @@ export function readCodeArtsCredentials(): CodeArtsCredentials | null {
           ak,
           sk,
           securityToken: present(env.HW_SECURITY_TOKEN) ? env.HW_SECURITY_TOKEN : '',
-          region: typeof region === 'string' ? region : '',
+          region: asText(region || ''),
         };
       }
     } catch {
@@ -476,10 +475,10 @@ let runtimeCredentials: ResolvedCredentials | null = null;
 
 export function setRuntimeCredentials(ak: unknown, sk: unknown, securityToken?: unknown, region?: unknown): void {
   runtimeCredentials = {
-    ak: typeof ak === 'string' ? ak : '',
-    sk: typeof sk === 'string' ? sk : '',
-    securityToken: typeof securityToken === 'string' ? securityToken : '',
-    region: typeof region === 'string' ? region : '',
+    ak: asText(ak ?? ''),
+    sk: asText(sk ?? ''),
+    securityToken: asText(securityToken || ''),
+    region: asText(region || ''),
   };
 }
 
@@ -529,12 +528,8 @@ export function writeLastSync(metadata: LastSyncMetadata = {}): void {
   mkdirSync(dirname(path), { recursive: true });
   const payload = {
     ts: Date.now(),
-    ...(metadata.kooCliProfile
-      ? { kooCliProfile: typeof metadata.kooCliProfile === 'string' ? metadata.kooCliProfile : '' }
-      : {}),
-    ...(metadata.s1Fingerprint
-      ? { s1Fingerprint: typeof metadata.s1Fingerprint === 'string' ? metadata.s1Fingerprint : '' }
-      : {}),
+    ...(metadata.kooCliProfile ? { kooCliProfile: asText(metadata.kooCliProfile) } : {}),
+    ...(metadata.s1Fingerprint ? { s1Fingerprint: asText(metadata.s1Fingerprint) } : {}),
   };
   writeFileSync(path, JSON.stringify(payload), { encoding: 'utf8', mode: 0o600 });
   ensurePrivateMode(path);

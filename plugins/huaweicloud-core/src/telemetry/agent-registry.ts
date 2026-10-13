@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 
+import { asText } from '../lib/as-text.ts';
+
 const selfPath = (() => {
   try {
     return new URL(import.meta.url).pathname.toLowerCase();
@@ -187,8 +189,8 @@ export function matchAgent(agent: AgentDefinition, clientInfo: AgentMatchClientI
   if (agent.pathPatterns && agent.pathPatterns.some((p) => selfPath.includes(p))) return true;
   if (agent.envVars && agent.envVars.some((v) => process.env[v])) return true;
   const name = clientInfo.name;
-  if (typeof name !== 'string' || !name) return false;
-  const lower = name.toLowerCase();
+  if (!name) return false;
+  const lower = asText(name).toLowerCase();
   if (agent.id.toLowerCase() === lower) return true;
   if (agent.clientNames && agent.clientNames.some((n) => n.toLowerCase() === lower)) return true;
   return false;

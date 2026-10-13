@@ -2,6 +2,7 @@ import { createHash, createHmac } from 'node:crypto';
 
 import { resolveCredentialsWithRuntime } from '../../auth/credentials.ts';
 import { getProxyDispatcher } from '../../proxy/proxy-agent.ts';
+import { asText } from '../as-text.ts';
 
 const BASE_URL = process.env.HWLINK_ENDPOINT || 'https://devstation.myhuaweicloud.com';
 
@@ -148,12 +149,6 @@ async function apiPost(
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
-// Byte-identical to String(value) for every value; the typeof guard is pure
-// narrowing so no-base-to-string accepts the truthy-narrowed call sites.
-function asText(value: unknown): string {
-  return typeof value === 'string' ? value : String(value);
 }
 
 export async function createConnection(

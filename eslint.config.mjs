@@ -21,7 +21,11 @@ export default [
   },
   js.configs.recommended,
   ...tseslint.configs.recommended.map((config) => ({ ...config, files: config.files ?? tsFiles })),
-  ...tseslint.configs.recommendedTypeChecked.slice(2).map((config) => ({ ...config, files: srcFiles })),
+  ...tseslint.configs.recommendedTypeChecked
+    // Select by entry name, not position: a typescript-eslint reshape must
+    // not silently drop the type-aware gate.
+    .filter((config) => config.name === 'typescript-eslint/recommended-type-checked')
+    .map((config) => ({ ...config, files: srcFiles })),
   {
     files: srcFiles,
     languageOptions: {

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { asText } from './lib/as-text.ts';
 import { evaluateCommandRisk, mergeRiskDecision, type RiskDecision } from './risk-rule-engine.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -440,12 +441,6 @@ function splitSimpleCommand(command: unknown): string[] {
       .match(/"[^"]*"|'[^']*'|\S+/g)
       ?.map((part) => part.replace(/^['"]|['"]$/g, '')) || []
   );
-}
-
-// Byte-identical to String(value) for every value; the typeof guard is pure
-// narrowing so no-base-to-string accepts the truthy-narrowed call sites.
-function asText(value: unknown): string {
-  return typeof value === 'string' ? value : String(value);
 }
 
 export function classifyTextCommand(command: unknown, options: ClassifyOptions = {}): RiskDecision {

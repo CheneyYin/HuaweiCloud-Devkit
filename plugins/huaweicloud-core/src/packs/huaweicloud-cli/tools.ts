@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { runHcloud, planHcloudCommand, type HcloudRunResult } from '../../hcloud-cli.ts';
 import { hcloudProbeNextStep, probeHcloud, type ProbeHcloudOptions } from '../../hcloud-probe.ts';
 import { redactSecrets } from '../../safety-policy.ts';
+import { asText } from '../../lib/as-text.ts';
 import { consumeApprovalToken, hashArgs } from '../../lib/approval-tokens.ts';
 import { numericArg } from '../../lib/tool-schema-parts.ts';
 import type { PackToolDefinition, LooseToolSchema } from '../../lib/pack-types.ts';
@@ -21,12 +22,6 @@ import type { CallToolOptions, ToolArgs } from '../../tools.ts';
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
-// Byte-identical to String(value) for every value; the typeof guard is pure
-// narrowing so no-base-to-string accepts the truthy-narrowed call sites.
-function asText(value: unknown): string {
-  return typeof value === 'string' ? value : String(value);
 }
 
 export async function runVersionCheck(options: ProbeHcloudOptions = {}) {

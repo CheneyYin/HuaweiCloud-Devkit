@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 import { classifyHcloudArgs, redactSecrets, assertAllowed, type ClassifyOptions } from './safety-policy.ts';
 import { createApprovalToken } from './lib/approval-tokens.ts';
+import { asText } from './lib/as-text.ts';
 import type { RiskDecision } from './risk-rule-engine.ts';
 import { getProxySettings } from './proxy/proxy-config.ts';
 import { resolveHcloudCommand } from './hcloud-probe.ts';
@@ -222,7 +223,7 @@ export type UnsupportedCause = 'other' | 'lang-missing' | 'not-found' | 'unknown
 
 export function classifyUnsupported(service: unknown, metaDir?: string): UnsupportedCause {
   const { cn, en, cnPresent, enPresent } = readServiceCatalogs(metaDir);
-  const s = (asString(service) ?? '').toUpperCase();
+  const s = asText(service || '').toUpperCase();
   if (!s) return 'other';
   if (cnPresent && enPresent) {
     if (cn.has(s) && !en.has(s)) return 'lang-missing';
@@ -731,7 +732,7 @@ export interface ApiErrorInfo {
 }
 
 export function extractApiError(stdout: unknown): ApiErrorInfo | null {
-  let text = asString(stdout) ?? '';
+  let text = asText(stdout || '');
   // Strip KooCLI multi-version prefix lines (e.g. "ListVpcs有多个版本,默认使用该API版本v3…")
   const bracketIdx = text.indexOf('{');
   if (bracketIdx > 0) text = text.substring(bracketIdx);
@@ -765,7 +766,7 @@ export function extractApiError(stdout: unknown): ApiErrorInfo | null {
 }
 
 export function redactOutput(output: unknown): string {
-  let text = asString(output) ?? '';
+  let text = asText(output || '');
   const bracketIdx = text.indexOf('{');
   if (bracketIdx > 0) text = text.substring(bracketIdx);
   try {

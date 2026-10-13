@@ -14,6 +14,7 @@ import {
 } from './credentials.ts';
 import { resolveHcloudCommand } from '../hcloud-probe.ts';
 import { redactSecrets } from '../safety-policy.ts';
+import { asText } from '../lib/as-text.ts';
 
 export { hasRuntimeCredentials };
 
@@ -91,7 +92,7 @@ export function kooCliConfigPath(): string {
 export function fingerprint(ak?: unknown, sk?: unknown): string {
   if (!ak || !sk) return '';
   return createHash('sha256')
-    .update(`${typeof ak === 'string' ? ak : ''}${typeof sk === 'string' ? sk : ''}`)
+    .update(`${asText(ak)}${asText(sk)}`)
     .digest('hex')
     .slice(0, 8);
 }
@@ -113,7 +114,7 @@ export function readKooCliProfiles(): KooCliProfilesResult {
   if (!existsSync(configPath)) return { error: 'KooCLI config not found' };
   try {
     const raw = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
-    const current = typeof raw.current === 'string' && raw.current ? raw.current : 'default';
+    const current = asText(raw.current || 'default');
     const profiles: unknown[] = Array.isArray(raw.profiles) ? raw.profiles : [];
     const mtimeMs = statSync(configPath).mtimeMs;
     // KooCLI 7.x stores AK/SK encrypted (authEncrypt=true): the on-disk values
@@ -130,16 +131,11 @@ export function readKooCliProfiles(): KooCliProfilesResult {
       profiles: profiles.map((p) => {
         const profile = asRecord(p);
         return encrypted
-          ? {
-              name: typeof profile.name === 'string' ? profile.name : '',
-              fingerprint: '',
-              accessKeyId: '',
-              encrypted: true,
-            }
+          ? { name: asText(profile.name || ''), fingerprint: '', accessKeyId: '', encrypted: true }
           : {
-              name: typeof profile.name === 'string' ? profile.name : '',
+              name: asText(profile.name || ''),
               fingerprint: fingerprint(profile.accessKeyId, profile.secretAccessKey),
-              accessKeyId: typeof profile.accessKeyId === 'string' ? profile.accessKeyId : '',
+              accessKeyId: asText(profile.accessKeyId || ''),
               encrypted: false,
             };
       }),

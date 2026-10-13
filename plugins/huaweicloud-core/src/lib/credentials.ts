@@ -12,6 +12,7 @@ import {
 import { fingerprint, runHcloudConfigure, resolveManagedProfile } from '../auth/reconcile.ts';
 import { clearUserHash } from '../telemetry/telemetry.ts';
 import { hdkitGenerateUserHash } from './hdkit/hdkitservice-api.ts';
+import { asText } from './as-text.ts';
 
 // Credential session helpers shared by the auth and sandbox packs
 // (src/packs/auth/tools.ts, src/packs/sandbox/tools.ts), hoisted from
@@ -63,10 +64,10 @@ export function readImportFile() {
     const data: unknown = JSON.parse(readFileSync(path, 'utf8'));
     const record = asRecord(data);
     return {
-      ak: typeof record.ak === 'string' ? record.ak : '',
-      sk: typeof record.sk === 'string' ? record.sk : '',
-      securityToken: typeof record.securityToken === 'string' ? record.securityToken : '',
-      region: typeof record.region === 'string' ? record.region : '',
+      ak: asText(record.ak || ''),
+      sk: asText(record.sk || ''),
+      securityToken: asText(record.securityToken || ''),
+      region: asText(record.region || ''),
     };
   } catch {
     // Malformed/undecodable import file is un-replayable — wipe it. A VALID

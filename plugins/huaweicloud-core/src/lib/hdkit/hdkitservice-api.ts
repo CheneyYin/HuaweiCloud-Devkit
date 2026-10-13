@@ -2,6 +2,7 @@ import { getProxyDispatcher } from '../../proxy/proxy-agent.ts';
 import { cacheUserHash } from '../../telemetry/telemetry.ts';
 import { readInstalledVersion } from '../../update-check.ts';
 import { getCredentials } from './hwlink-api.ts';
+import { asText } from '../as-text.ts';
 
 interface HdkitError extends Error {
   code?: string;
@@ -20,12 +21,6 @@ interface HttpResponseLike {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
-// Byte-identical to String(value) for every value; the typeof guard is pure
-// narrowing so no-base-to-string accepts the truthy-narrowed call sites.
-function asText(value: unknown): string {
-  return typeof value === 'string' ? value : String(value);
 }
 
 function getHdkitBaseUrl(): string {

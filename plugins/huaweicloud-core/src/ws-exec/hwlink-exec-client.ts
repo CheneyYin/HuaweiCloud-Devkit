@@ -16,6 +16,7 @@ import {
 } from './ws-exec-client.ts';
 import { HwlinkWebSocketMultiplexer } from './hwlink-multiplexer.ts';
 import { HwlinkTerminalChannel } from './hwlink-terminal-channel.ts';
+import { asText } from '../lib/as-text.ts';
 import type { FrameReport, WebSocketConstructor } from './hwlink-multiplexer.ts';
 
 const decoder = new TextDecoder();
@@ -104,12 +105,6 @@ function errorMessage(error: unknown): string {
 // typeof check is a pure narrowing with identical results.
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
-}
-
-// Byte-identical to String(value) for every value; the typeof guard is pure
-// narrowing so no-base-to-string accepts the truthy-narrowed call sites.
-function asText(value: unknown): string {
-  return typeof value === 'string' ? value : String(value);
 }
 
 function normalizeCommand(command: unknown): string {

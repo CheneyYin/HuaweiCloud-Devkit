@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { asText } from '../../lib/as-text.ts';
 import type { PackToolDefinition, LooseToolSchema } from '../../lib/pack-types.ts';
 import { redactSecrets } from '../../safety-policy.ts';
 import { classify, GATEWAY_TOOL_VOCABULARY, resolveApprovalMode } from './approval.ts';
@@ -73,12 +74,6 @@ async function handleGatewayListTools() {
   } catch (error) {
     return { ok: false, error: redactSecrets(error instanceof Error ? error.message : String(error)) };
   }
-}
-
-// Byte-identical to String(value) for every value; the typeof guard is pure
-// narrowing so the type-aware string rules accept the call site.
-function asText(value: unknown): string {
-  return typeof value === 'string' ? value : String(value);
 }
 
 async function handleGatewayCall(args: Record<string, unknown>) {

@@ -11,6 +11,7 @@ import { Buffer } from 'node:buffer';
 
 import { FairQueue } from './hwlink-fair-queue.ts';
 import { formatPacketOneLine, parsePacket } from './hwlink-packet.ts';
+import { asText } from '../lib/as-text.ts';
 import type { HwlinkPacket } from './hwlink-packet.ts';
 
 const WS_OPEN = 1;
@@ -104,12 +105,6 @@ function hasArrayBuffer(value: unknown): value is ArrayBufferProvider {
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return typeof value === 'object' && value !== null && 'then' in value && typeof value.then === 'function';
-}
-
-// Byte-identical to String(value) for every value; the typeof guard is pure
-// narrowing so no-base-to-string accepts the truthy-narrowed call sites.
-function asText(value: unknown): string {
-  return typeof value === 'string' ? value : String(value);
 }
 
 function eventDataToUint8Array(data: unknown): Promise<Uint8Array> {
