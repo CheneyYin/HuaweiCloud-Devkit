@@ -698,8 +698,10 @@ test('hermes restart hints, unix auto-install in dep-provision, grouped status (
   const setup = readSource(join('src', 'setup-cli.ts'));
   const depProvision = readSource(join('src', 'dep-provision.ts'));
   // Hermes .installed marker is read for restart hints (#280-4): hermes is
-  // a row of the payload-target table the marker loop derives from.
-  assert.match(setup, /\{ id: 'hermes', label: 'Hermes Agent', dir: hermesPluginsDir \}/);
+  // a row of the payload-target table the marker loop and the update
+  // dispatch derive from.
+  assert.match(setup, /id: 'hermes',\s+label: 'Hermes Agent',\s+dir: hermesPluginsDir,/);
+  assert.match(setup, /update: updateHermes,/);
   assert.match(setup, /join\(target\.dir\(\), '\.installed'\)/);
   // Unix install-hcloud executes for real: download → extract → install → verify
   // (#280-3); the body moved to dep-provision.ts when provisioning absorbed it.
@@ -795,8 +797,9 @@ test('setup-cli.ts supports the dsh target end to end', () => {
   );
   // .installed marker goes to the dsh plugins dir
   assert.match(setup, /if \(target === 'dsh'\) return dshPluginsDir\(\);/);
-  // doctor checks the DSH plugin dir (a payload-target table row) and patch
-  assert.match(setup, /\{ id: 'dsh', label: 'DSH', dir: dshPluginsDir \}/);
+  // doctor and the update dispatch reach DSH through the payload-target table
+  assert.match(setup, /id: 'dsh',\s+label: 'DSH',\s+dir: dshPluginsDir,/);
+  assert.match(setup, /update: updateDsh,/);
   assert.match(setup, /dshPatchConfigured\(\)/);
   // help text documents the target
   assert.match(

@@ -4462,22 +4462,73 @@ async function provisionPackBinaries(): Promise<void> {
 
 // Every agent whose installer ships the server payload (dist + safety +
 // skills + undici + .installed marker) into a plugin dir. Doctor's payload
-// checks (MCP server, undici, safety policy, skills tree, restart markers)
-// and update's willPlacePayload all derive from this one table, so a target
-// cannot appear in one check and miss another — the atomcode undici miss
-// and the openclaw-wide miss were both this drift class. Labels follow the
-// doctor spellings ('Hermes Agent', not AGENT_LABELS' 'Hermes').
+// checks (MCP server, undici, safety policy, skills tree, restart markers),
+// update's willPlacePayload, and the update dispatch itself (one loop for
+// the single-target and all-targets modes) all derive from this one table,
+// so a target cannot appear in one check and miss another — the atomcode
+// undici miss and the openclaw-wide miss were both this drift class. Labels
+// follow the doctor spellings ('Hermes Agent', not AGENT_LABELS' 'Hermes');
+// hints are the per-target restart copy. codex is CLI-managed with no
+// plugin dir and stays an explicit branch in dispatchUpdateTarget.
 const PAYLOAD_TARGETS = [
-  { id: 'opencode', label: 'OpenCode', dir: opencodePluginsDir },
-  { id: 'codex-desktop', label: 'Codex Desktop', dir: codexDesktopPluginsDir },
-  { id: 'codearts', label: 'CodeArts', dir: codeartsPluginsDir },
-  { id: 'codearts-work', label: 'CodeArts Work', dir: codeartsWorkPluginsDir },
-  { id: 'workbuddy', label: 'WorkBuddy', dir: workbuddyPluginsDir },
-  { id: 'dsh', label: 'DSH', dir: dshPluginsDir },
-  { id: 'officeace', label: 'OfficeAce', dir: officeacePluginsDir },
-  { id: 'hermes', label: 'Hermes Agent', dir: hermesPluginsDir },
-  { id: 'openclaw', label: 'OpenClaw', dir: openclawPluginsDir },
-  { id: 'atomcode', label: 'AtomCode', dir: atomcodePluginsDir },
+  {
+    id: 'opencode',
+    label: 'OpenCode',
+    dir: opencodePluginsDir,
+    update: updateOpenCode,
+    hint: 'MCP 工具在重启 OpenCode 会话后才生效。',
+  },
+  {
+    id: 'codex-desktop',
+    label: 'Codex Desktop',
+    dir: codexDesktopPluginsDir,
+    update: updateCodexDesktop,
+    hint: 'MCP 工具在重启 Codex Desktop 会话后才生效。',
+  },
+  { id: 'codearts', label: 'CodeArts', dir: codeartsPluginsDir, update: updateCodeArts, hint: 'MCP 工具在重启 CodeArts 会话后才生效。' },
+  {
+    id: 'codearts-work',
+    label: 'CodeArts Work',
+    dir: codeartsWorkPluginsDir,
+    update: updateCodeArtsWork,
+    hint: 'MCP 工具在重启 CodeArts Work 会话后才生效。',
+  },
+  {
+    id: 'workbuddy',
+    label: 'WorkBuddy',
+    dir: workbuddyPluginsDir,
+    update: updateWorkBuddy,
+    hint: 'MCP 工具在重启 WorkBuddy 会话后才生效。',
+  },
+  { id: 'dsh', label: 'DSH', dir: dshPluginsDir, update: updateDsh, hint: 'Restart the DSH session for changes to take effect.' },
+  {
+    id: 'officeace',
+    label: 'OfficeAce',
+    dir: officeacePluginsDir,
+    update: updateOfficeAce,
+    hint: '打开连接器 → 我的连接器 → huaweicloud-devkit → 连接 → 回到对话 → 输入框开启连接器',
+  },
+  {
+    id: 'hermes',
+    label: 'Hermes Agent',
+    dir: hermesPluginsDir,
+    update: updateHermes,
+    hint: 'Restart Hermes Agent for changes to take effect.',
+  },
+  {
+    id: 'openclaw',
+    label: 'OpenClaw',
+    dir: openclawPluginsDir,
+    update: updateOpenClaw,
+    hint: 'Restart OpenClaw for changes to take effect.',
+  },
+  {
+    id: 'atomcode',
+    label: 'AtomCode',
+    dir: atomcodePluginsDir,
+    update: updateAtomCode,
+    hint: 'Restart the AtomCode session for changes to take effect.',
+  },
 ] as const;
 
 async function cmdDoctor(): Promise<void> {
@@ -4879,34 +4930,14 @@ async function cmdUpdate(): Promise<void> {
   }
 }
 
-// The per-target update dispatch. Returns true when the target actually
+// The per-target update dispatch, one loop over PAYLOAD_TARGETS for both
+// the single-target and all-targets modes. codex is the one genuine
+// variant — CLI-managed, no plugin dir — and keeps explicit branches:
+// single-target hard-fails on a missing CLI, all-targets probes plugin
+// state and silently skips. Returns true when at least one target actually
 // updated (drives the post-update provisioning pass); false on the
 // per-target "Not installed" early-returns.
 async function dispatchUpdateTarget(target: string): Promise<boolean> {
-  if (target === 'opencode') {
-    if (!mcpServerInstalled(opencodePluginsDir())) {
-      console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return false;
-    }
-    console.log('[OpenCode]');
-    await updateOpenCode();
-    console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
-    console.log(`\x1b[33mMCP 工具在重启 OpenCode 会话后才生效。\x1b[0m`);
-    return true;
-  }
-
-  if (target === 'codex-desktop') {
-    if (!mcpServerInstalled(codexDesktopPluginsDir())) {
-      console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return false;
-    }
-    console.log('[Codex Desktop]');
-    await updateCodexDesktop();
-    console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
-    console.log(`\x1b[33mMCP 工具在重启 Codex Desktop 会话后才生效。\x1b[0m`);
-    return true;
-  }
-
   if (target === 'codex') {
     if (!hasCodexCLI()) {
       console.log(`  \x1b[31mCodex CLI not found.\x1b[0m`);
@@ -4924,154 +4955,29 @@ async function dispatchUpdateTarget(target: string): Promise<boolean> {
     return true;
   }
 
-  if (target === 'codearts') {
-    if (!mcpServerInstalled(codeartsPluginsDir())) {
-      console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return false;
+  const all = target === 'all';
+  let updatedAny = false;
+  for (const row of PAYLOAD_TARGETS) {
+    if (!all && row.id !== target) continue;
+    if (!mcpServerInstalled(row.dir())) {
+      if (!all) {
+        console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
+        return false;
+      }
+      continue;
     }
-    console.log('[CodeArts]');
-    await updateCodeArts();
-    console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
-    console.log(`\x1b[33mMCP 工具在重启 CodeArts 会话后才生效。\x1b[0m`);
-    return true;
+    // Historical label layout: in all-targets mode every label except
+    // opencode's (the table's first row) prints with a leading blank line.
+    console.log(`${all && row.id !== 'opencode' ? '\n' : ''}[${row.label}]`);
+    await row.update();
+    updatedAny = true;
+    if (!all) {
+      console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
+      console.log(`\x1b[33m${row.hint}\x1b[0m`);
+      return true;
+    }
   }
-
-  if (target === 'codearts-work') {
-    if (!mcpServerInstalled(codeartsWorkPluginsDir())) {
-      console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return false;
-    }
-    console.log('[CodeArts Work]');
-    await updateCodeArtsWork();
-    console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
-    console.log(`\x1b[33mMCP 工具在重启 CodeArts Work 会话后才生效。\x1b[0m`);
-    return true;
-  }
-
-  if (target === 'workbuddy') {
-    if (!mcpServerInstalled(workbuddyPluginsDir())) {
-      console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return false;
-    }
-    console.log('[WorkBuddy]');
-    await updateWorkBuddy();
-    console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
-    console.log(`\x1b[33mMCP 工具在重启 WorkBuddy 会话后才生效。\x1b[0m`);
-    return true;
-  }
-
-  if (target === 'dsh') {
-    if (!mcpServerInstalled(dshPluginsDir())) {
-      console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return false;
-    }
-    console.log('[DSH]');
-    await updateDsh();
-    console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
-    console.log(`\x1b[33mRestart the DSH session for changes to take effect.\x1b[0m`);
-    return true;
-  }
-
-  if (target === 'officeace') {
-    if (!mcpServerInstalled(officeacePluginsDir())) {
-      console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return false;
-    }
-    console.log('[OfficeAce]');
-    await updateOfficeAce();
-    console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
-    console.log(`\x1b[33m打开连接器 → 我的连接器 → huaweicloud-devkit → 连接 → 回到对话 → 输入框开启连接器\x1b[0m`);
-    return true;
-  }
-
-  if (target === 'hermes') {
-    if (!mcpServerInstalled(hermesPluginsDir())) {
-      console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return false;
-    }
-    console.log('[Hermes Agent]');
-    await updateHermes();
-    console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
-    console.log(`\x1b[33mRestart Hermes Agent for changes to take effect.\x1b[0m`);
-    return true;
-  }
-
-  if (target === 'openclaw') {
-    if (!mcpServerInstalled(openclawPluginsDir())) {
-      console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return false;
-    }
-    console.log('[OpenClaw]');
-    await updateOpenClaw();
-    console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
-    console.log(`\x1b[33mRestart OpenClaw for changes to take effect.\x1b[0m`);
-    return true;
-  }
-
-  if (target === 'atomcode') {
-    if (!mcpServerInstalled(atomcodePluginsDir())) {
-      console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return false;
-    }
-    console.log('[AtomCode]');
-    await updateAtomCode();
-    console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
-    console.log(`\x1b[33mRestart the AtomCode session for changes to take effect.\x1b[0m`);
-    return true;
-  }
-
-  if (target === 'all') {
-    let updatedAny = false;
-    if (mcpServerInstalled(opencodePluginsDir())) {
-      console.log('[OpenCode]');
-      await updateOpenCode();
-      updatedAny = true;
-    }
-    if (mcpServerInstalled(codexDesktopPluginsDir())) {
-      console.log('\n[Codex Desktop]');
-      await updateCodexDesktop();
-      updatedAny = true;
-    }
-    if (mcpServerInstalled(codeartsPluginsDir())) {
-      console.log('\n[CodeArts]');
-      await updateCodeArts();
-      updatedAny = true;
-    }
-    if (mcpServerInstalled(codeartsWorkPluginsDir())) {
-      console.log('\n[CodeArts Work]');
-      await updateCodeArtsWork();
-      updatedAny = true;
-    }
-    if (mcpServerInstalled(workbuddyPluginsDir())) {
-      console.log('\n[WorkBuddy]');
-      await updateWorkBuddy();
-      updatedAny = true;
-    }
-    if (mcpServerInstalled(dshPluginsDir())) {
-      console.log('\n[DSH]');
-      await updateDsh();
-      updatedAny = true;
-    }
-    if (mcpServerInstalled(officeacePluginsDir())) {
-      console.log('\n[OfficeAce]');
-      await updateOfficeAce();
-      updatedAny = true;
-    }
-    if (mcpServerInstalled(hermesPluginsDir())) {
-      console.log('\n[Hermes Agent]');
-      await updateHermes();
-      updatedAny = true;
-    }
-    if (mcpServerInstalled(openclawPluginsDir())) {
-      console.log('\n[OpenClaw]');
-      await updateOpenClaw();
-      updatedAny = true;
-    }
-    if (mcpServerInstalled(atomcodePluginsDir())) {
-      console.log('\n[AtomCode]');
-      await updateAtomCode();
-      updatedAny = true;
-    }
+  if (all) {
     if (codexStatus()) {
       console.log('\n[Codex]');
       installCodex();
