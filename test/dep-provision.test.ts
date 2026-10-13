@@ -6,10 +6,11 @@ import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-import { DEPENDENCIES } from '../plugins/huaweicloud-core/src/lib/dependency-model.ts';
+import { DEPENDENCIES, DEPENDENCY_IDS } from '../plugins/huaweicloud-core/src/lib/dependency-model.ts';
 import { lookupOnPath, resolveDependencyCommand } from '../plugins/huaweicloud-core/src/lib/dep-resolve.ts';
+import { installerFor } from '../plugins/huaweicloud-core/src/dep-installers.ts';
+import { installGatewayTool } from '../plugins/huaweicloud-core/src/dep-gateway.ts';
 import {
-  installGatewayTool,
   provisionDependencies,
   uninstallDependency,
   uninstallPlacedDependency,
@@ -294,6 +295,23 @@ test('provisioning: devbridge is one INFO line and invokes nothing', async () =>
   });
   assert.deepEqual(calls, { probe: 0, installKooCli: 0, resolve: 0, installGateway: 0, confirm: 0 });
   assert.match(out.text(), /devbridge: sandbox-resident \(lives inside the cloud sandbox; the host never manages it\)/);
+});
+
+test('provisioning: hcloud absent in a TTY session auto-installs exactly once', async () => {
+  const out = collector();
+  let installerCalls = 0;
+  await provisionDependencies(['hcloud'], {
+    tty: true,
+    log: out.log,
+    probeHcloud: () => ({ status: 'not_found', installed: false }),
+    installKooCli: async () => {
+      installerCalls += 1;
+      return true;
+    },
+  });
+  assert.equal(installerCalls, 1, 'the TTY auto path must call the injected installer');
+  assert.match(out.text(), /hcloud: installed/);
+  assert.doesNotMatch(out.text(), /not found; auto-install needs an interactive session/);
 });
 
 test('provisioning: a failing dependency is isolated and reported, the loop continues', async () => {
@@ -664,6 +682,22 @@ test('uninstall gateway with no tier tool and no resolvable binary clears the st
   assert.equal(result.ok, true);
   assert.match(result.message, /open-mcp-gateway was already gone \(no persistent install resolves\)/);
   assert.equal(readReceipt('open-mcp-gateway', dir), null);
+});
+
+// ---- installers: the composition table agrees with the catalog ----
+
+test('installers: every installable dependency has a kind-matching installer, sandbox-resident none', () => {
+  for (const id of DEPENDENCY_IDS) {
+    const installer = installerFor(id);
+    const kind = DEPENDENCIES[id].kind;
+    if (kind === 'sandbox-resident') {
+      assert.equal(installer, null, `${id} is sandbox-resident: the host never manages it`);
+      continue;
+    }
+    assert.ok(installer, `${id} must have an installer in DEP_INSTALLERS`);
+    assert.equal(installer.kind, kind, `${id}'s installer kind must match the catalog`);
+    assert.ok(installer.escapeHatch.length > 0, `${id}'s no-receipt refusal names an escape hatch`);
+  }
 });
 
 test('installers: a successful gateway install records its tier in a receipt', async () => {

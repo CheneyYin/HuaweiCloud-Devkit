@@ -40,13 +40,9 @@ import {
 import { removeKooCli, removeObsConfig } from './sandbox/uninstall-cleanup.ts';
 import { readReceipt, removeReceipt } from './dep-receipts.ts';
 import { detectCodeartsSandbox } from './codearts-sandbox.ts';
-import {
-  installGatewayTool,
-  installKooCli,
-  provisionDependencies,
-  uninstallDependency,
-  uninstallPlacedDependency,
-} from './dep-provision.ts';
+import { installKooCli } from './dep-hcloud.ts';
+import { installerFor } from './dep-installers.ts';
+import { provisionDependencies, uninstallDependency, uninstallPlacedDependency } from './dep-provision.ts';
 import {
   mergeCommandStyle,
   mergeArgsStyle,
@@ -4833,8 +4829,8 @@ async function cmdDoctor(): Promise<void> {
     } else {
       for (const id of DEPENDENCY_IDS.filter((entry) => requiredDeps.has(entry))) {
         if (id === 'hcloud') continue; // the dedicated hcloud block above owns this check
-        if (id === 'devbridge') {
-          console.log(`  \x1b[36m[INFO]\x1b[0m devbridge: sandbox-resident, not probed host-side`);
+        if (DEPENDENCIES[id].kind === 'sandbox-resident') {
+          console.log(`  \x1b[36m[INFO]\x1b[0m ${id}: sandbox-resident, not probed host-side`);
           continue;
         }
         const resolved = resolveDependencyCommand(DEPENDENCIES[id].resolution);
@@ -5525,19 +5521,24 @@ async function cmdDepInstall(): Promise<void> {
     process.exitCode = 1;
     return;
   }
+  // The explicit install path bypasses installPolicy on purpose — the
+  // command is the user's answer — including non-TTY: scripted CI installs
+  // download for real (the policy loop's non-TTY refusal is provisioning
+  // policy, not installer mechanics).
+  const installer = installerFor(id as DependencyId);
+  if (!installer) {
+    console.error(`${id} ships inside the cloud sandbox; the host never installs or removes it.`);
+    process.exitCode = 1;
+    return;
+  }
   const tty = process.stdin.isTTY === true && process.stdout.isTTY === true;
-  if (id === 'hcloud') {
-    const ok = await installKooCli({ tty });
+  if (installer.kind === 'cli') {
+    const ok = await installer.install({ tty });
     if (!ok) process.exitCode = 1;
     return;
   }
-  if (id === 'open-mcp-gateway') {
-    const result = await installGatewayTool();
-    if (!result.ok) process.exitCode = 1;
-    return;
-  }
-  console.error('devbridge ships inside the cloud sandbox; the host never installs or removes it.');
-  process.exitCode = 1;
+  const result = await installer.install();
+  if (!result.ok) process.exitCode = 1;
 }
 
 function cmdDepUninstall(): void {

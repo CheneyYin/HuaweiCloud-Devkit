@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { DEPENDENCIES, type DependencyId } from './lib/dependency-model.ts';
+import type { ResolvedDependency } from './lib/dep-resolve.ts';
 
 // Install receipts: the uninstall half's ground truth for "this devkit placed
 // that binary". A receipt exists only for a binary this devkit installed and
@@ -10,6 +11,12 @@ import { DEPENDENCIES, type DependencyId } from './lib/dependency-model.ts';
 // user-managed binary. The receipt directory rides the repo's shared home
 // convention (HUAWEICLOUD_HOME || homedir() → ~/.config/huaweicloud/), the
 // same rule as mcp-config-backup.ts, update-check.ts, and officeace-paths.ts.
+//
+// This module is also the leaf home of the dep subsystem's shared uninstall
+// contracts (DepUninstallResult, ResolvedUninstallContext) and the
+// best-effort receipt recorder: the per-dependency installers
+// (dep-hcloud.ts, dep-gateway.ts) and the decision core (dep-provision.ts)
+// both consume them, so they must sit below both.
 //
 // Receipts are single-phase on purpose: the receipt is written ONLY after the
 // installing run verified the binary landed. A pending/two-phase scheme (mark
@@ -92,6 +99,44 @@ export function removeReceipt(id: DependencyId, dir: string = receiptDir()): voi
   withDepLock(() => {
     rmSync(receiptPath(id, dir), { force: true });
   }, dir);
+}
+
+const RECEIPTS_WARN = '  \x1b[33m[WARN]\x1b[0m';
+
+// Receipt writes are best-effort bookkeeping after a verifiably successful
+// install: a failed write must not fail the install (the binary is real, the
+// escape hatch still exists), and an already-present binary never reaches
+// this function — the provisioning loop skips before the installer runs, so
+// devkit only ever claims a binary this run placed.
+export function recordInstallReceipt(receipt: DepReceipt): void {
+  try {
+    writeReceipt(receipt);
+  } catch (error) {
+    console.log(
+      `${RECEIPTS_WARN} could not write the install receipt for ${receipt.binary}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+// The result every receipt-gated uninstall returns: ok=false renders via
+// console.error with exit code 1 in the dep CLI.
+export interface DepUninstallResult {
+  /** False renders via console.error with exit code 1 in the dep CLI. */
+  ok: boolean;
+  message: string;
+  detail?: string[];
+}
+
+// The seams an installer's uninstall body needs, normalized to required
+// fields by the decision core (dep-provision's placedUninstall) before the
+// per-dependency uninstaller runs: the env to resolve under, the shared
+// dependency-resolution chain, and the command runner for tier withdrawals
+// and sudo escalation. Injected overrides from DepUninstallOptions keep
+// their precedence; the defaults are applied exactly once, at the gate.
+export interface ResolvedUninstallContext {
+  env: NodeJS.ProcessEnv;
+  resolveDependency: (_id: DependencyId, _env: NodeJS.ProcessEnv) => ResolvedDependency | null;
+  runCommand: (_command: string, _args: readonly string[]) => { status: number | null; stdout: string; stderr: string };
 }
 
 // ---------------------------------------------------------------------------

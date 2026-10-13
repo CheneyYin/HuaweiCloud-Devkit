@@ -657,7 +657,7 @@ test('KooCLI sandbox blockers and privacy agreement live in their extracted modu
   const setup = readSource(join('src', 'setup-cli.ts'));
   const hcloudProbe = readSource(join('src', 'hcloud-probe.ts'));
   const codeartsSandbox = readSource(join('src', 'codearts-sandbox.ts'));
-  const depProvision = readSource(join('src', 'dep-provision.ts'));
+  const depHcloud = readSource(join('src', 'dep-hcloud.ts'));
   // sandbox detection reads the CodeArts permission config (codearts-sandbox.ts,
   // shared by doctor and the KooCLI installer; no leftover local copy in setup-cli)
   assert.match(codeartsSandbox, /function detectCodeartsSandbox\(\)/);
@@ -680,12 +680,12 @@ test('KooCLI sandbox blockers and privacy agreement live in their extracted modu
   assert.match(hcloudProbe, /resolveDependencyCommand\(DEPENDENCIES\.hcloud\.resolution\)/);
   assert.match(hcloudProbe, /sandbox_home_failure/);
   // install-hcloud surfaces sandbox guidance on failure (caller moved with the installer)
-  assert.match(depProvision, /沙箱模式拦截了 KooCLI 自动安装/);
+  assert.match(depHcloud, /沙箱模式拦截了 KooCLI 自动安装/);
   // privacy agreement is gated on the tty flag on BOTH platforms (the Windows
   // branch used to lack the gate and hang non-interactive sessions)
-  assert.match(depProvision, /await offerPrivacyAcceptance\(join\(installDir, 'hcloud\.exe'\), opts\.tty\)/);
-  assert.match(depProvision, /await offerPrivacyAcceptance\(binPath, opts\.tty\)/);
-  assert.match(depProvision, /非交互会话：请稍后在终端运行 hcloud version/);
+  assert.match(depHcloud, /await offerPrivacyAcceptance\(join\(installDir, 'hcloud\.exe'\), opts\.tty\)/);
+  assert.match(depHcloud, /await offerPrivacyAcceptance\(binPath, opts\.tty\)/);
+  assert.match(depHcloud, /非交互会话：请稍后在终端运行 hcloud version/);
   // the caller computes the gate; the installer stays testable
   assert.match(setup, /process\.stdin\.isTTY === true && process\.stdout\.isTTY === true/);
   // MCP env injects HCLOUD_BIN when an hcloud binary is found
@@ -695,9 +695,9 @@ test('KooCLI sandbox blockers and privacy agreement live in their extracted modu
   assert.match(setup, /设置 → 对话流 → 智能体 终端命令运行模式 → 自动运行/);
 });
 
-test('hermes restart hints, unix auto-install in dep-provision, grouped status (#280)', () => {
+test('hermes restart hints, unix auto-install in dep-hcloud, grouped status (#280)', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
-  const depProvision = readSource(join('src', 'dep-provision.ts'));
+  const depHcloud = readSource(join('src', 'dep-hcloud.ts'));
   // Hermes .installed marker is read for restart hints (#280-4): hermes is
   // a row of the payload-target table the marker loop and the update
   // dispatch derive from.
@@ -705,15 +705,16 @@ test('hermes restart hints, unix auto-install in dep-provision, grouped status (
   assert.match(setup, /update: updateHermes,/);
   assert.match(setup, /join\(target\.dir\(\), '\.installed'\)/);
   // Unix install-hcloud executes for real: download → extract → install → verify
-  // (#280-3); the body moved to dep-provision.ts when provisioning absorbed it.
-  assert.match(depProvision, /Auto-installing to \$\{binDir\}/);
-  assert.match(depProvision, /spawnSync\('curl', \['-fL', url, '-o', tmpTar\]/);
-  assert.match(depProvision, /spawnSync\('tar', \['-xzf', tmpTar, '-C', scratch\]/);
+  // (#280-3); the body moved to dep-provision.ts when provisioning absorbed
+  // it, and on to dep-hcloud.ts when the per-dependency installers split.
+  assert.match(depHcloud, /Auto-installing to \$\{binDir\}/);
+  assert.match(depHcloud, /spawnSync\('curl', \['-fL', url, '-o', tmpTar\]/);
+  assert.match(depHcloud, /spawnSync\('tar', \['-xzf', tmpTar, '-C', scratch\]/);
   // download/extract scratch is per-run (mkdtemp) and cleaned up in finally:
   // the fixed tmpdir()/huaweicloud-cli-<pkg>.tar.gz path collided across
   // concurrent installs, and auto-provisioning made concurrent installs normal.
-  assert.match(depProvision, /mkdtempSync\(join\(tmpdir\(\), 'huaweicloud-devkit-'\)\)/);
-  assert.match(depProvision, /rmSync\(scratch, \{ recursive: true, force: true \}\)/);
+  assert.match(depHcloud, /mkdtempSync\(join\(tmpdir\(\), 'huaweicloud-devkit-'\)\)/);
+  assert.match(depHcloud, /rmSync\(scratch, \{ recursive: true, force: true \}\)/);
   // status groups sections by install state, installed first (#280-9)
   assert.match(setup, /stateOrder = \{ installed: 0, partial: 1, unknown: 2, not: 3 \}/);
   assert.match(setup, /已安装: /);
@@ -721,16 +722,23 @@ test('hermes restart hints, unix auto-install in dep-provision, grouped status (
 
 test('dependency provisioning: new modules stay unbundled; setup-cli delegates', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
-  const depProvision = readSource(join('src', 'dep-provision.ts'));
   const codeartsSandbox = readSource(join('src', 'codearts-sandbox.ts'));
   const depResolve = readSource(join('src', 'lib', 'dep-resolve.ts'));
+  // The dep modules are globbed, not enumerated: every src/dep-*.ts file —
+  // including one a future dependency adds — joins the guard automatically,
+  // so the zod-free import graph cannot regress by forgetting a list entry.
+  const depModules = readdirSync(join(pluginRoot, 'src'))
+    .filter((name) => name.startsWith('dep-') && name.endsWith('.ts'))
+    .sort((a, b) => a.localeCompare(b));
+  assert.ok(depModules.length >= 5, `expected the dep module family, found: ${depModules.join(', ')}`);
   // These compile into the unbundled dist/setup-cli.js graph, where only
   // undici exists at runtime: no zod, no SDK, ever.
-  for (const [name, source] of [
-    ['dep-provision.ts', depProvision],
-    ['codearts-sandbox.ts', codeartsSandbox],
-    ['lib/dep-resolve.ts', depResolve],
-  ]) {
+  const guarded = [
+    ...depModules.map((name) => [`src/${name}`, readSource(join('src', name))] as const),
+    ['src/codearts-sandbox.ts', codeartsSandbox] as const,
+    ['src/lib/dep-resolve.ts', depResolve] as const,
+  ];
+  for (const [name, source] of guarded) {
     assert.doesNotMatch(source, /from 'zod'/, `${name} must not import zod`);
     assert.doesNotMatch(source, /@modelcontextprotocol/, `${name} must not import the SDK`);
   }
@@ -746,7 +754,7 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
   }
   // The installer body is absorbed, not duplicated: setup-cli owns the CLI
   // wrapper only.
-  assert.doesNotMatch(setup, /spawnSync\('curl'/, 'the KooCLI installer body lives in dep-provision.ts');
+  assert.doesNotMatch(setup, /spawnSync\('curl'/, 'the KooCLI installer body lives in dep-hcloud.ts');
   assert.match(
     setup,
     /await installKooCli\(\{ tty: process\.stdin\.isTTY === true && process\.stdout\.isTTY === true \}\)/,
