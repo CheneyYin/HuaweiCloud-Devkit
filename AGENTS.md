@@ -9,6 +9,7 @@ npm run typecheck        # tsc type gate (src + test projects)
 npm run lint             # ESLint + markdownlint
 npm run lint:js          # ESLint only
 npm run lint:md          # markdownlint only
+npm run lint:dup         # jscpd copy/paste scan (local: full clone report; CI/test gate: new clones only)
 npm run format           # Prettier format all files
 npm run format:check     # Prettier check (no write)
 npm run validate         # structural validation + README beta badge sync check
@@ -148,7 +149,7 @@ Policy vocabulary lives in `plugins/huaweicloud-core/safety/policy.json`. Both `
 
 ```bash
 npm run lint            # markdownlint + ESLint
-npm test                # node --test (includes structure.test.ts)
+npm test                # node --test (includes structure.test.ts and the jscpd new-duplication gate)
 npm run validate        # package/version/skill/kooCli pairing checks
 npm run format          # prettier --write
 npm run pack:verify     # simulate npm pack, catch missing files (e.g. new manifests)
@@ -175,3 +176,4 @@ If you changed a SKILL.md, add or update a guard in `test/structure.test.ts` and
 - Node >= 22 required, ESM only. Running the `.ts` test suite directly needs Node >= 22.18 (type stripping); the published `engines` stays `>= 22`.
 - Test temp fixtures: create them through the shared `fixtureDir()` registry (`test/fixture-dir.ts` — registry-created dirs are removed at process exit) or clean them per-test. `test/structure.test.ts` enforces this deny-by-default: a `test/*.test.ts` with raw `mkdtempSync` must import the registry or sit on the per-test-cleaner allowlist. Never run the suite with `TMPDIR=$HOME` — the 2026-10-09 ext4 lock-verification runs leaked 614 fixture dirs into the home directory that way (the same leak is invisible on tmpfs `/tmp`, where reboots erase it). Signal death (SIGKILL/SIGINT/SIGTERM) skips exit handlers, so an interrupted run can still leave dirs behind.
 - npm tarballs ship a built `dist/` (prepack). A raw git clone or marketplace file copy does not: run `npm run build` before using `.mcp.json`/`bin/setup.cjs` from a checkout. The safety hook wrapper falls back to the `.ts` source on its own, but the MCP server config does not.
+- jscpd (`npm run lint:dup`) gates _new_ duplication only. The committed `.jscpd-baseline.json` fingerprints the legacy clones (generated from the v2 tree); the gate compares against it, never against a branch ref, and there is deliberately no `threshold` (total-percentage gates fail builds on legacy duplication and are the documented top reason teams disable copy/paste gates). Scan scope: hand-written TS/JS under `plugins/huaweicloud-core/src`, `hooks`, `scripts`, `bin`, `test`, `integrations`, plus `eslint.config.mjs`; markdown skills trees, `*.d.mts` declaration twins, `test/fixtures/`, and the `test/huaweicloud-*` scaffolding are out of scope. Two legitimate hits: moved-not-deleted duplication (extracting one copy of an intra-file self-clone into a helper) and intentional test repetition — regenerate with `npm run lint:dup -- --baseline .jscpd-baseline.json --update-baseline` and commit the file alongside the change. When upgrading jscpd, keep the exact pin (ratchet flags are documented only in `--help`), re-check config parity (a config-file run must match a CLI-flag run), and regenerate the baseline.

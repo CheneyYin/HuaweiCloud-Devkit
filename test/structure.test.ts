@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -28,6 +28,7 @@ import { SANDBOX_TOOLS } from '../plugins/huaweicloud-core/src/packs/sandbox/too
 import { HUAWEICLOUD_OPEN_MCP_TOOLS } from '../plugins/huaweicloud-core/src/packs/huaweicloud-open-mcp/tools.ts';
 import { HUAWEICLOUD_CLI_TOOLS } from '../plugins/huaweicloud-core/src/packs/huaweicloud-cli/tools.ts';
 import { checkPackBoundaries } from '../scripts/lib/pack-boundaries.mjs';
+import { fixtureDir } from './fixture-dir.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const pluginRoot = join(root, 'plugins', 'huaweicloud-core');
@@ -59,6 +60,24 @@ interface Marketplace {
 interface PackageJson {
   kooCliVersion: string;
   bin?: Record<string, string>;
+  scripts: Record<string, string>;
+  devDependencies: Record<string, string>;
+}
+
+interface JscpdConfig {
+  formats: string[];
+  ignore: string[];
+  reporters: string[];
+  threshold?: unknown;
+}
+
+interface JscpdBaseline {
+  version: number;
+  fingerprints: Record<string, unknown>;
+}
+
+interface JscpdReport {
+  duplicates: Array<{ firstFile: { name: string }; secondFile: { name: string }; format: string }>;
 }
 
 interface SafetyPolicy {
@@ -1548,4 +1567,141 @@ test('test fixtures: raw mkdtempSync is denied by default across the suite', () 
       `${entry.name} creates mkdtemp fixtures without the fixtureDir registry and is not on the per-test-cleaner allowlist; adopt fixtureDir() or clean per-test and join the list`,
     );
   }
+});
+
+// jscpd duplication gate. The committed .jscpd-baseline.json fingerprints the
+// legacy clones (generated from the v2 tree), so the gate fails only on
+// duplication the baseline has never seen — no branch-ref comparison, no
+// total-percentage threshold. These guards keep that contract honest: the
+// config must restrict formats and ignore the noisy trees (asserted on the
+// file AND on the binary's actual behavior — jscpd degrades an unknown
+// config key to defaults with one warning line), the pin must be exact
+// (ratchet flags are documented only in --help, so version drift silently
+// changes gate behavior), and the working tree must stay in sync with the
+// baseline.
+function jscpdRunner(): string {
+  return join(root, 'node_modules', 'jscpd', 'run-jscpd.js');
+}
+
+function lintDupRoots(): string[] {
+  const pkg = readJson(join(root, 'package.json')) as PackageJson;
+  const script = pkg.scripts['lint:dup'] ?? '';
+  assert.ok(script.startsWith('jscpd '), 'package.json must define lint:dup as a jscpd invocation');
+  return script.split(' ').slice(1);
+}
+
+test('jscpd scan config: formats exclude markdown, ignores pinned, no threshold', () => {
+  const config = readJson(join(root, '.jscpd.json')) as JscpdConfig;
+  assert.deepEqual(config.formats, ['typescript', 'javascript']);
+  assert.ok(
+    !Object.hasOwn(config, 'threshold'),
+    'total-percentage thresholds fail builds on legacy duplication and are the documented top reason teams disable copy/paste gates',
+  );
+  for (const pattern of ['**/dist/**', '**/*.d.mts', 'test/fixtures/**', 'test/huaweicloud-*/**']) {
+    assert.ok(config.ignore.includes(pattern), `.jscpd.json must keep ignore pattern ${pattern}`);
+  }
+  assert.ok(config.reporters.includes('console'), 'local lint:dup runs need the console reporter');
+});
+
+test('jscpd devDependency is exact-pinned and lint:dup roots exclude the skills trees', () => {
+  const pkg = readJson(join(root, 'package.json')) as PackageJson;
+  assert.match(
+    pkg.devDependencies.jscpd ?? '',
+    /^\d+\.\d+\.\d+$/,
+    'jscpd must be exact-pinned (no ^ or ~): the baseline ratchet flags are documented only in --help, version drift changes gate behavior',
+  );
+  const script = pkg.scripts['lint:dup'] ?? '';
+  assert.doesNotMatch(
+    script,
+    /skills/,
+    'both skills trees (generated plugins/huaweicloud-core/skills and hand-written root skills/) must stay outside the scan',
+  );
+  assert.ok(
+    script.includes('eslint.config.mjs'),
+    'eslint.config.mjs is hand-written JavaScript and belongs in the scan roots',
+  );
+});
+
+test('jscpd binary honors the config: ts twins clone, markdown stays excluded', () => {
+  const runner = jscpdRunner();
+  assert.ok(existsSync(runner), 'jscpd is not installed; run npm install');
+  const dir = fixtureDir('jscpd-config-honored-');
+  const tsTwin = [
+    'export function formatLabelParts(input: string): string {',
+    '  const trimmed = input.trim();',
+    '  const lowered = trimmed.toLowerCase();',
+    '  const parts = lowered.split(/[,\\s]+/).filter((part) => part.length > 0);',
+    '  const unique = [...new Set(parts)];',
+    '  const joined = unique.join("-");',
+    '  const wrapped = `[${joined}]`;',
+    '  return wrapped;',
+    '}',
+    '',
+  ].join('\n');
+  const mdTwin = [
+    '# Twin Document',
+    '',
+    ...Array.from({ length: 12 }, (_, i) => `Shared planning note line ${i + 1} kept identical across both files.`),
+    '',
+  ].join('\n');
+  writeFileSync(join(dir, 'ts-twin-a.ts'), tsTwin);
+  writeFileSync(join(dir, 'ts-twin-b.ts'), tsTwin);
+  // The markdown twins exist to be missed: if formats ever degrade (typo'd
+  // config key, jscpd upgrade renaming one), markdown enters the scan and
+  // this pair becomes a clone the assertion below rejects.
+  writeFileSync(join(dir, 'md-twin-a.md'), mdTwin);
+  writeFileSync(join(dir, 'md-twin-b.md'), mdTwin);
+  const outDir = join(dir, 'out');
+  const run = spawnSync(process.execPath, [runner, dir, '--reporters', 'json', '--output', outDir, '--no-colors'], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: 60_000,
+  });
+  assert.equal(run.status, 0, `jscpd fixture scan failed: ${run.stdout}\n${run.stderr}`);
+  const report = JSON.parse(readFileSync(join(outDir, 'jscpd-report.json'), 'utf8')) as JscpdReport;
+  assert.equal(
+    report.duplicates.length,
+    1,
+    `expected exactly the ts twin pair, got: ${report.duplicates.map((dup) => `${dup.format}:${dup.firstFile.name}`).join(', ')}`,
+  );
+  assert.equal(report.duplicates[0]?.format, 'typescript');
+  assert.match(report.duplicates[0]?.firstFile.name ?? '', /^ts-twin-/);
+  assert.match(report.duplicates[0]?.secondFile.name ?? '', /^ts-twin-/);
+});
+
+test('jscpd baseline is in sync: zero new clones against the committed fingerprints', () => {
+  const runner = jscpdRunner();
+  assert.ok(existsSync(runner), 'jscpd is not installed; run npm install');
+  const baselinePath = join(root, '.jscpd-baseline.json');
+  assert.ok(existsSync(baselinePath), '.jscpd-baseline.json must be committed with the gate');
+  const baseline = readJson(baselinePath) as JscpdBaseline;
+  assert.equal(typeof baseline.version, 'number');
+  assert.ok(
+    Object.keys(baseline.fingerprints).length > 0,
+    'baseline fingerprints must be non-empty (regenerate with --update-baseline)',
+  );
+  const run = spawnSync(
+    process.execPath,
+    [
+      runner,
+      ...lintDupRoots(),
+      '--reporters',
+      'silent',
+      '--baseline',
+      '.jscpd-baseline.json',
+      '--fail-on-new-clones',
+      '0',
+      '--fail-on-empty',
+      '--no-colors',
+    ],
+    { cwd: root, encoding: 'utf8', timeout: 120_000 },
+  );
+  assert.equal(
+    run.status,
+    0,
+    `new duplication (or a broken gate config) detected:\n${run.stdout}\n${run.stderr}\n` +
+      'run `npm run lint:dup -- --baseline .jscpd-baseline.json --fail-on-new-clones 0` for the clone list; ' +
+      'if the new duplication is intentional (moved-not-deleted, or deliberate test repetition), regenerate with ' +
+      '`npm run lint:dup -- --baseline .jscpd-baseline.json --update-baseline` and commit the file',
+  );
 });

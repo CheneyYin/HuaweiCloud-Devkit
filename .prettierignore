@@ -2,3 +2,4 @@ node_modules/
 dist/
 *.zst
 *.db
+.jscpd-baseline.json
