@@ -35,7 +35,8 @@ npm install
 # local checks
 npm test          # run all tests
 npm run validate  # structural validation
-npm run lint      # markdown lint
+npm run lint      # markdownlint + ESLint
+npm run lint:dup  # jscpd duplication scan (full report; CI gates new clones only)
 ```
 
 Requires Node.js >= 22.
@@ -77,7 +78,7 @@ Pull request titles must follow the same convention (enforced by CI).
 Every pull request runs automated checks. All must pass before merging:
 
 - **PR Lint** — conventional commit title
-- **CI** — markdownlint, `npm test`, `npm run validate`, `npm audit`, gitleaks secret scan
+- **CI** — markdownlint, `npm test`, `npm run validate`, jscpd new-duplication gate, `npm audit`, gitleaks secret scan
 - **CodeQL** — static security analysis
 
 Do not bypass, disable, or relax these checks. If a check fails, fix the underlying issue.
