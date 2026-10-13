@@ -102,9 +102,7 @@ function redactString(text: unknown): string {
 
 // Overload parameter names are documentation only; the implementation below
 // carries the real, used parameters.
-// eslint-disable-next-line no-unused-vars
 export function redactSecrets(value: string, policy?: Policy): string;
-// eslint-disable-next-line no-unused-vars
 export function redactSecrets(value: unknown, policy?: Policy): unknown;
 export function redactSecrets(value: unknown, policy: Policy = DEFAULT_POLICY): unknown {
   if (Array.isArray(value)) {

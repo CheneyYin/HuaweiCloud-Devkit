@@ -70,7 +70,6 @@ export default [
       'no-unused-vars': ['warn', { argsIgnorePattern: '^_', caughtErrors: 'none' }],
       'no-var': 'warn',
       'prefer-const': 'warn',
-      'no-undef': 'error',
       'no-empty': ['error', { allowEmptyCatch: true }],
 
       'n/no-missing-import': 'error',
@@ -81,9 +80,11 @@ export default [
   {
     files: ['**/*.ts'],
     rules: {
-      // TypeScript resolves types itself, and eslint-plugin-n does not resolve
-      // explicit ".ts" specifiers. Keep both out of the .ts path.
-      'no-undef': 'off',
+      // typescript-eslint's recommended set already turns no-undef off for TS
+      // sources, and eslint-plugin-n does not resolve explicit ".ts"
+      // specifiers. The base no-unused-vars stays off so it does not
+      // double-report next to the @typescript-eslint variant below.
+      'no-unused-vars': 'off',
       'n/no-missing-import': 'off',
       '@typescript-eslint/no-unused-vars': [
         'warn',
@@ -137,12 +138,6 @@ export default [
     rules: {
       'n/no-process-exit': 'off',
       'n/hashbang': 'off',
-    },
-  },
-  {
-    files: ['test/**/*.ts'],
-    rules: {
-      'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrors: 'none' }],
     },
   },
   {

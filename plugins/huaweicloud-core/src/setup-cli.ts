@@ -4481,7 +4481,13 @@ const PAYLOAD_TARGETS = [
     update: updateCodexDesktop,
     hint: 'MCP 工具在重启 Codex Desktop 会话后才生效。',
   },
-  { id: 'codearts', label: 'CodeArts', dir: codeartsPluginsDir, update: updateCodeArts, hint: 'MCP 工具在重启 CodeArts 会话后才生效。' },
+  {
+    id: 'codearts',
+    label: 'CodeArts',
+    dir: codeartsPluginsDir,
+    update: updateCodeArts,
+    hint: 'MCP 工具在重启 CodeArts 会话后才生效。',
+  },
   {
     id: 'codearts-work',
     label: 'CodeArts Work',
@@ -4496,7 +4502,13 @@ const PAYLOAD_TARGETS = [
     update: updateWorkBuddy,
     hint: 'MCP 工具在重启 WorkBuddy 会话后才生效。',
   },
-  { id: 'dsh', label: 'DSH', dir: dshPluginsDir, update: updateDsh, hint: 'Restart the DSH session for changes to take effect.' },
+  {
+    id: 'dsh',
+    label: 'DSH',
+    dir: dshPluginsDir,
+    update: updateDsh,
+    hint: 'Restart the DSH session for changes to take effect.',
+  },
   {
     id: 'officeace',
     label: 'OfficeAce',
@@ -4908,7 +4920,9 @@ async function cmdUpdate(): Promise<void> {
   // purge harmlessly.
   const markerDir = installMarkerDirForTarget(target);
   const willPlacePayload =
-    target === 'all' ? PAYLOAD_TARGETS.some((t) => mcpServerInstalled(t.dir())) : markerDir !== null && mcpServerInstalled(markerDir);
+    target === 'all'
+      ? PAYLOAD_TARGETS.some((t) => mcpServerInstalled(t.dir()))
+      : markerDir !== null && mcpServerInstalled(markerDir);
   if (willPlacePayload) {
     const purged = purgeStaleNativeSkills();
     if (purged > 0)

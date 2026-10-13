@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict';
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { delimiter, dirname, join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import test from 'node:test';
-
-const isWin = process.platform === 'win32';
 
 import {
   consumeApprovalToken,
@@ -19,6 +17,8 @@ import {
 import { clearRuntimeCredentials, setRuntimeCredentials } from '../plugins/huaweicloud-core/src/auth/credentials.ts';
 import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
 import { fixtureDir } from './fixture-dir.ts';
+
+const isWin = process.platform === 'win32';
 
 async function withTempAuthHome(fn) {
   const home = fixtureDir('huaweicloud-toolkit-auth-');

@@ -373,14 +373,18 @@ const execWithSessionSchema = z.looseObject({
   command: z.string().describe('The shell command to execute on the remote workspace'),
   workspace_id: workspaceId,
   username,
-  timeout_ms: numericArg.optional().describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.exec_with_session})`),
+  timeout_ms: numericArg
+    .optional()
+    .describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.exec_with_session})`),
 });
 
 const execOneShotSchema = z.looseObject({
   command: z.string().describe('The shell command to execute on the remote workspace'),
   workspace_id: workspaceId,
   username,
-  timeout_ms: numericArg.optional().describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.exec_one_shot})`),
+  timeout_ms: numericArg
+    .optional()
+    .describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.exec_one_shot})`),
 });
 
 const closeSessionSchema = z.looseObject({
@@ -393,7 +397,9 @@ const uploadFileSchema = z.looseObject({
   remote_path: z.string().describe('Target path in the sandbox, e.g. /workspace/<repo>/index.html.'),
   workspace_id: workspaceId,
   username,
-  timeout_ms: numericArg.optional().describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.upload_file})`),
+  timeout_ms: numericArg
+    .optional()
+    .describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.upload_file})`),
 });
 
 const uploadProjectSchema = z.looseObject({
@@ -411,7 +417,9 @@ const uploadProjectSchema = z.looseObject({
     .optional()
     .describe('Patterns to exclude from archive (default: .git, node_modules, __pycache__, .venv)'),
   extract: z.boolean().optional().describe('Extract tar.gz on sandbox after upload (default: true)'),
-  timeout_ms: numericArg.optional().describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.upload_project})`),
+  timeout_ms: numericArg
+    .optional()
+    .describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.upload_project})`),
 });
 
 const deployNginxSchema = z.looseObject({
@@ -433,7 +441,9 @@ const deployNginxSchema = z.looseObject({
     ),
   workspace_id: workspaceId,
   username,
-  timeout_ms: numericArg.optional().describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.deploy_nginx})`),
+  timeout_ms: numericArg
+    .optional()
+    .describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.deploy_nginx})`),
 });
 
 const deployCheckSchema = z.looseObject({
@@ -446,7 +456,9 @@ const deployCheckSchema = z.looseObject({
     .describe('Framework type from detect_framework. Set to cross-platform for QR code check.'),
   workspace_id: workspaceId,
   username,
-  timeout_ms: numericArg.optional().describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.deploy_check})`),
+  timeout_ms: numericArg
+    .optional()
+    .describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.deploy_check})`),
 });
 
 const checkUserSchema = z.looseObject({});
