@@ -1618,7 +1618,7 @@ test('jscpd devDependency is exact-pinned and lint:dup roots exclude the skills 
   assert.doesNotMatch(
     script,
     /skills/,
-    'the script must not name a skills tree as a scan root; the src/packs/*/skills/ markdown sources live inside the scanned src root and are excluded only by the formats restriction (pinned by the config and behavioral tests above)',
+    'the script must not mention a skills path at all (a root would scan a skills tree, an ignore glob would silently mask one); the src/packs/*/skills/ markdown sources live inside the scanned src root and are excluded only by the formats restriction (pinned by the config and behavioral tests in this suite)',
   );
   assert.ok(
     script.includes('eslint.config.mjs'),
