@@ -126,7 +126,9 @@ let pkgVersion = '0.0.0';
 try {
   const pkg = asRecord(JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8')));
   if (typeof pkg.version === 'string') pkgVersion = pkg.version;
-} catch {}
+} catch {
+  // missing or corrupt package.json keeps the 0.0.0 default — banner display only
+}
 
 const BANNER = `
 ╔══════════════════════════════════════════════╗
@@ -256,7 +258,9 @@ function readOfficeaceRegistryInstallDir(): string | null {
       const m = r.stdout.match(/InstallDir\s+REG_SZ\s+(.+)/);
       if (m) return m[1]!.trim();
     }
-  } catch {}
+  } catch {
+    // best-effort probe: reg query failure just means no registry install dir
+  }
   return null;
 }
 
@@ -365,7 +369,9 @@ function ensureOfficeaceMcpInSqlite(): 'db-missing' | 'ok' | 'owner-missing' | '
       try {
         existingArgs = JSON.parse(asText(existing.args_json || '[]'));
         existingEnv = JSON.parse(asText(existing.env_json || '[]'));
-      } catch {}
+      } catch {
+        // parse failure falls back to empty defaults — user args/env start blank
+      }
       const userArgs: unknown[] = Array.isArray(existingArgs) ? existingArgs.slice(1) : [];
       // Start from the user's env and add our required keys only when absent (user values win).
       const envMerged: unknown[] = Array.isArray(existingEnv) ? existingEnv.slice() : [];
@@ -424,7 +430,9 @@ function ensureOfficeaceMcpInSqlite(): 'db-missing' | 'ok' | 'owner-missing' | '
     if (db) {
       try {
         db.close();
-      } catch {}
+      } catch {
+        // best-effort close: the original write failure is what gets reported
+      }
     }
     console.log(`  \x1b[31mFailed to write MCP config: ${errorMessage(error)}\x1b[0m`);
     return 'error';
@@ -450,16 +458,22 @@ function removeOfficeaceMcpFromSqlite(): void {
       try {
         const parsed: unknown = row ? JSON.parse(asText(asRecord(row).args_json || '[]')) : [];
         if (Array.isArray(parsed) && parsed.length > 1) delta.argsExtra = parsed.slice(1);
-      } catch {}
+      } catch {
+        // parse failure means no args to back up — the delta keeps identity only
+      }
       if (Object.keys(delta).length > 0) saveAgentDelta('officeace', delta);
-    } catch {}
+    } catch {
+      // best-effort backup: a failed save must not block the connector delete
+    }
     // mcp_connector_tools may not exist on minimal installs — deleting it must
     // not abort deleting the connector row itself.
     try {
       db.prepare(
         "DELETE FROM mcp_connector_tools WHERE connector_id IN (SELECT id FROM mcp_connectors WHERE name = 'huaweicloud-devkit')",
       ).run();
-    } catch {}
+    } catch {
+      // table may be absent on minimal installs — the connector delete still proceeds
+    }
     const result2 = db.prepare("DELETE FROM mcp_connectors WHERE name = 'huaweicloud-devkit'").run();
     const changes: unknown = result2.changes;
     if ((typeof changes === 'number' || typeof changes === 'bigint') && changes > 0) {
@@ -470,7 +484,9 @@ function removeOfficeaceMcpFromSqlite(): void {
     if (db) {
       try {
         db.close();
-      } catch {}
+      } catch {
+        // best-effort close: the removal failure is what gets reported
+      }
     }
     console.log(`  \x1b[31mFailed to remove MCP config: ${errorMessage(error)}\x1b[0m`);
   }
@@ -683,7 +699,9 @@ function staleNativeSkillDirs(): string[] {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         if (entry.isDirectory() && owned.has(entry.name)) stale.push(join(dir, entry.name));
       }
-    } catch {}
+    } catch {
+      // unreadable dir cannot confirm stale copies — the other dirs still get scanned
+    }
   }
   return stale;
 }
@@ -710,7 +728,9 @@ function removeOwnedSkillsFrom(dir: string): number {
         if (removeIfExists(join(dir, entry.name))) removed++;
       }
     }
-  } catch {}
+  } catch {
+    // best-effort purge: an unreadable dir is skipped, removal continues elsewhere
+  }
   return removed;
 }
 
@@ -975,7 +995,9 @@ function readOfficeaceDevkitPacks(): string | null {
   } finally {
     try {
       db?.close();
-    } catch {}
+    } catch {
+      // best-effort close: the packs value is already resolved
+    }
   }
 }
 
@@ -1074,7 +1096,9 @@ function backupDeltaFromMcpServersFile(pluginDest: string, agentKey: string): vo
     const config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
     const delta = extractUserDelta(asRecord(config.mcpServers)['huaweicloud-devkit'], 'args');
     if (delta) saveAgentDelta(agentKey, delta);
-  } catch {}
+  } catch {
+    // missing or corrupt .mcp.json means no user delta to preserve
+  }
 }
 
 function removeOpenCodeConfig(): void {
@@ -1662,7 +1686,9 @@ function uninstallCodeArts(): void {
     let config: Record<string, unknown> = {};
     try {
       config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
-    } catch {}
+    } catch {
+      // corrupt config leaves the empty default — no recognizable entry to clean
+    }
     const servers = asRecord(config.mcpServers);
     if (servers['huaweicloud-devkit']) {
       const delta = extractUserDelta(servers['huaweicloud-devkit'], 'args');
@@ -1800,7 +1826,9 @@ function uninstallCodeArtsWork(): void {
     let config: Record<string, unknown> = {};
     try {
       config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
-    } catch {}
+    } catch {
+      // corrupt config leaves the empty default — no recognizable entry to clean
+    }
     const mcpMap = asRecord(config.mcp);
     if (mcpMap['huaweicloud-devkit']) {
       const delta = extractUserDelta(mcpMap['huaweicloud-devkit'], 'command');
@@ -2034,7 +2062,9 @@ function uninstallWorkBuddy(): void {
     let config: Record<string, unknown> = {};
     try {
       config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
-    } catch {}
+    } catch {
+      // corrupt config leaves the empty default — no recognizable entry to clean
+    }
     const servers = asRecord(config.mcpServers);
     if (servers['huaweicloud-devkit']) {
       const delta = extractUserDelta(servers['huaweicloud-devkit'], 'args');
@@ -2053,7 +2083,9 @@ function uninstallWorkBuddy(): void {
     let settings: Record<string, unknown> = {};
     try {
       settings = asRecord(JSON.parse(readFileSync(settingsPath, 'utf8')));
-    } catch {}
+    } catch {
+      // corrupt settings leave no hooks map — nothing to remove
+    }
     const hooksMap = asRecord(settings.hooks);
     if (hooksMap.PostToolUse) {
       const postToolUse: unknown[] = Array.isArray(hooksMap.PostToolUse) ? hooksMap.PostToolUse : [];
@@ -2113,7 +2145,9 @@ function workbuddyStatus(): void {
       const s = asRecord(JSON.parse(readFileSync(settingsPath, 'utf8')));
       const postToolUse: unknown = asRecord(s.hooks).PostToolUse;
       hookConfigured = Array.isArray(postToolUse) && postToolUse.some((e) => asRecord(e).matcher === '*');
-    } catch {}
+    } catch {
+      // corrupt settings count as hook not installed
+    }
   }
   const hookTrackerInstalled = existsSync(join(homedir(), '.codebuddy', 'hooks', 'telemetry-tracker.py'));
   console.log(
@@ -2171,7 +2205,9 @@ function uninstallAtomCode(): void {
     let config: Record<string, unknown> = {};
     try {
       config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
-    } catch {}
+    } catch {
+      // corrupt config leaves the empty default — no recognizable entry to clean
+    }
     const servers = asRecord(config.mcpServers);
     if (servers['huaweicloud-devkit']) {
       const delta = extractUserDelta(servers['huaweicloud-devkit'], 'args');
@@ -2362,12 +2398,16 @@ function commandAvailable(command: string, args: string[] = ['--version']): bool
   try {
     const r = spawnSync(command, args, { shell: false, windowsHide: true, stdio: 'pipe', timeout: 10000 });
     if (r.status === 0) return true;
-  } catch {}
+  } catch {
+    // spawn failure falls through — where.exe on win32, else not available
+  }
   if (process.platform === 'win32') {
     try {
       const w = spawnSync('where.exe', [command], { windowsHide: true, stdio: 'pipe', timeout: 10000 });
       return w.status === 0 && w.stdout.toString().trim().length > 0;
-    } catch {}
+    } catch {
+      // where.exe failure means the command is simply not available
+    }
   }
   return false;
 }
@@ -2472,7 +2512,9 @@ function uninstallDsh(): void {
         rmSync(skillsDir, { recursive: true, force: true });
         console.log(`  Removed empty skills directory: ${skillsDir}`);
       }
-    } catch {}
+    } catch {
+      // best-effort cleanup: an empty skills dir left behind is harmless
+    }
   }
   if (removeIfExists(dshPluginsDir())) {
     console.log('  Removed MCP server, safety policy, and hook plugin');
@@ -2586,7 +2628,9 @@ function uninstallOfficeAce(): void {
         rmSync(skillsDir, { recursive: true, force: true });
         console.log(`  Removed empty skills directory: ${skillsDir}`);
       }
-    } catch {}
+    } catch {
+      // best-effort cleanup: an empty skills dir left behind is harmless
+    }
   }
 
   if (removeIfExists(officeacePluginsDir())) {
@@ -2699,7 +2743,9 @@ function writeHermesMcpConfig(devkitPacks: string | null): boolean {
   if (existsSync(configPath)) {
     try {
       existing = readFileSync(configPath, 'utf8');
-    } catch {}
+    } catch {
+      // unreadable config is treated as absent — the block is written fresh
+    }
     if (existing.includes('mcp_servers:') && existing.includes('huaweicloud-devkit')) {
       // Preserve user's extra args (e.g. --hdkitservice-endpoint) when rewriting the block (issue #615).
       const argsMatch = existing.match(/^\s*huaweicloud-devkit\s*:[\s\S]*?^\s*args:\s*\[[^\]]*\]\s*$/m);
@@ -2717,7 +2763,9 @@ function writeHermesMcpConfig(devkitPacks: string | null): boolean {
       if (existsSync(configPath)) {
         try {
           existing = readFileSync(configPath, 'utf8');
-        } catch {}
+        } catch {
+          // unreadable re-read means the block becomes the whole file
+        }
       }
     }
   }
@@ -2805,7 +2853,9 @@ function ensureHermesHooksConfig(): boolean {
   if (existsSync(configPath)) {
     try {
       existing = readFileSync(configPath, 'utf8');
-    } catch {}
+    } catch {
+      // unreadable config is treated as absent — the hooks block is written fresh
+    }
     if (
       existing.includes('hooks:') &&
       existing.includes(`command: "${hookCommand}"`) &&
@@ -2820,7 +2870,9 @@ function ensureHermesHooksConfig(): boolean {
     if (existsSync(configPath)) {
       try {
         existing = readFileSync(configPath, 'utf8');
-      } catch {}
+      } catch {
+        // unreadable re-read means the block becomes the whole file
+      }
     }
   }
   mkdirSync(dirname(configPath), { recursive: true });
@@ -2861,7 +2913,9 @@ function ensureHermesHookAllowlist(): boolean {
       if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
         data = parsed;
       }
-    } catch {}
+    } catch {
+      // corrupt allowlist falls back to a fresh approvals list
+    }
   }
   const approvals: unknown[] = Array.isArray(data.approvals) ? data.approvals : [];
 
@@ -2983,7 +3037,9 @@ function removeHermesHookPlugin(): boolean {
     if (existsSync(parent) && readdirSync(parent).length === 0) {
       rmSync(parent, { recursive: true, force: true });
     }
-  } catch {}
+  } catch {
+    // best-effort cleanup: an empty parent dir left behind is harmless
+  }
   return true;
 }
 
@@ -3026,7 +3082,9 @@ function ensureHermesMcpSdk(): boolean {
       console.log('  MCP Python SDK: \x1b[32mAlready installed\x1b[0m');
       return true;
     }
-  } catch {}
+  } catch {
+    // probe failure just means SDK state unknown — the install attempt follows
+  }
   console.log('  Installing Hermes MCP Python SDK...');
   try {
     const pip = spawnSync(pythonBin, ['-m', 'pip', 'install', 'mcp', '--quiet'], { encoding: 'utf8', timeout: 60000 });
@@ -3151,7 +3209,9 @@ function uninstallHermes(): void {
           saveAgentDelta('hermes', { argsExtra: parsed.slice(1) });
         }
       }
-    } catch {}
+    } catch {
+      // best-effort backup: no delta means reinstall uses default args
+    }
   }
   removeHermesMcpConfigBlock();
   console.log('  MCP config removed');
@@ -3165,7 +3225,9 @@ function uninstallHermes(): void {
         rmSync(skillsDir, { recursive: true, force: true });
         console.log(`  Removed empty skills directory: ${skillsDir}`);
       }
-    } catch {}
+    } catch {
+      // best-effort cleanup: an empty skills dir left behind is harmless
+    }
   }
 
   // 5. Remove plugin directory (hook script files deleted last)
@@ -3860,7 +3922,9 @@ async function cmdUninstall(opts: { fromReinstall?: boolean } = {}): Promise<voi
         rmSync(vaultDir, { recursive: true, force: true });
         console.log(`  Removed empty directory: ${vaultDir}`);
       }
-    } catch {}
+    } catch {
+      // best-effort cleanup: an empty config dir left behind is harmless
+    }
     await promptGlobalCleanup();
   }
 
@@ -3900,7 +3964,9 @@ function removeKooCliWithMessage(): void {
       removeReceipt('hcloud');
       console.log('  Cleared the devkit hcloud install receipt.');
     }
-  } catch {}
+  } catch {
+    // best-effort receipt hygiene must never abort the uninstall
+  }
 }
 
 function removeObsConfigWithMessage(): void {
@@ -4229,7 +4295,9 @@ function writeDevkitPacksInOfficeace(next: string | null): PackWriteResult {
     let env: unknown = [];
     try {
       env = JSON.parse(asText(existing.env_json || '[]'));
-    } catch {}
+    } catch {
+      // parse failure falls back to an empty env list — no packs row means insert
+    }
     const rows: unknown[] = Array.isArray(env) ? env : [];
     const idx = rows.findIndex((e) => asRecord(e).key === 'DEVKIT_PACKS');
     const current = idx >= 0 ? asRecord(rows[idx]).value : null;
@@ -4255,7 +4323,9 @@ function writeDevkitPacksInOfficeace(next: string | null): PackWriteResult {
   } finally {
     try {
       db?.close();
-    } catch {}
+    } catch {
+      // best-effort close: the packs write result is already resolved
+    }
   }
 }
 
@@ -4589,7 +4659,9 @@ async function cmdDoctor(): Promise<void> {
     const hookConfigText = readFileSync(hookConfigPath, 'utf8');
     hookConfigUsesNode = hookConfigText.includes('huaweicloud-safety.mjs') && /\bnode\b/.test(hookConfigText);
     hookConfigUsesPython = /\bpython3?\b/.test(hookConfigText);
-  } catch {}
+  } catch {
+    // unreadable hooks.json leaves both flags false — the check reports its advice
+  }
   check(
     'Safety hook runtime (Node)',
     existsSync(hookNodePath) && hookConfigUsesNode && !hookConfigUsesPython,
@@ -4607,7 +4679,9 @@ async function cmdDoctor(): Promise<void> {
         mcpConfigured = true;
         mcpCfgTarget = 'OpenCode';
       }
-    } catch {}
+    } catch {
+      // corrupt OpenCode config skips this candidate — the probe continues
+    }
   }
   const mpPath = codexMarketplacePath();
   if (!mcpConfigured && existsSync(mpPath)) {
@@ -4620,7 +4694,9 @@ async function cmdDoctor(): Promise<void> {
         mcpConfigured = true;
         mcpCfgTarget = 'Codex Desktop';
       }
-    } catch {}
+    } catch {
+      // corrupt marketplace file skips this candidate — the probe continues
+    }
   }
   const codeartsCfg = codeartsMcpSettingsFile();
   if (!mcpConfigured && existsSync(codeartsCfg)) {
@@ -4630,7 +4706,9 @@ async function cmdDoctor(): Promise<void> {
         mcpConfigured = true;
         mcpCfgTarget = 'CodeArts';
       }
-    } catch {}
+    } catch {
+      // corrupt CodeArts config skips this candidate — the probe continues
+    }
   }
   const codeartsWorkCfg = codeartsWorkMcpSettingsFile();
   if (!mcpConfigured && existsSync(codeartsWorkCfg)) {
@@ -4640,7 +4718,9 @@ async function cmdDoctor(): Promise<void> {
         mcpConfigured = true;
         mcpCfgTarget = 'CodeArts Work';
       }
-    } catch {}
+    } catch {
+      // corrupt CodeArts Work config skips this candidate — the probe continues
+    }
   }
   const workbuddyCfg = workbuddyMcpConfigFile();
   if (!mcpConfigured && existsSync(workbuddyCfg)) {
@@ -4650,7 +4730,9 @@ async function cmdDoctor(): Promise<void> {
         mcpConfigured = true;
         mcpCfgTarget = 'WorkBuddy';
       }
-    } catch {}
+    } catch {
+      // corrupt WorkBuddy config skips this candidate — the probe continues
+    }
   }
   if (!mcpConfigured && dshPatchConfigured()) {
     mcpConfigured = true;
@@ -4666,7 +4748,9 @@ async function cmdDoctor(): Promise<void> {
           mcpConfigured = true;
           mcpCfgTarget = 'OfficeAce';
         }
-      } catch {}
+      } catch {
+        // corrupt capabilities file skips this candidate — the probe continues
+      }
     }
   }
   if (!mcpConfigured) {
@@ -4678,7 +4762,9 @@ async function cmdDoctor(): Promise<void> {
           mcpConfigured = true;
           mcpCfgTarget = 'Hermes Agent';
         }
-      } catch {}
+      } catch {
+        // unreadable Hermes config skips this candidate — the probe continues
+      }
     }
   }
   if (!mcpConfigured) {
@@ -4690,7 +4776,9 @@ async function cmdDoctor(): Promise<void> {
           mcpConfigured = true;
           mcpCfgTarget = 'AtomCode';
         }
-      } catch {}
+      } catch {
+        // corrupt AtomCode config skips this candidate — the probe continues
+      }
     }
   }
   if (!mcpConfigured) {
@@ -4704,7 +4792,9 @@ async function cmdDoctor(): Promise<void> {
           mcpConfigured = true;
           mcpCfgTarget = 'OpenClaw';
         }
-      } catch {}
+      } catch {
+        // corrupt OpenClaw config exhausts the candidates — the check reports its advice
+      }
     }
   }
   check(
@@ -5201,7 +5291,9 @@ async function cmdAuthInit(): Promise<void> {
         );
       }
     }
-  } catch {}
+  } catch {
+    // best-effort hint: unreadable KooCLI config skips the existing-profile notice
+  }
 
   let ak = process.env.HW_ACCESS_KEY || '';
   let sk = process.env.HW_SECRET_KEY || '';

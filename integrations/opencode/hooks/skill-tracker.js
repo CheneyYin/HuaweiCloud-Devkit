@@ -12,14 +12,18 @@ function debugLog(msg) {
   if (!DEBUG) return;
   try {
     appendFileSync(join(agentDir, 'plugin-debug.log'), `${new Date().toISOString()} ${msg}\n`);
-  } catch (_) {}
+  } catch (_) {
+    // best-effort: debug logging must never break the hook itself
+  }
 }
 
 function writeEvent(key, value, extra = {}) {
   const data = JSON.stringify({ key, value, ...extra }) + '\n';
   try {
     appendFileSync(join(agentDir, 'hook-events.jsonl'), data);
-  } catch (_) {}
+  } catch (_) {
+    // best-effort: telemetry must never break the tool call it observes
+  }
 }
 
 // ── CLI command classification ────────────────────────────────

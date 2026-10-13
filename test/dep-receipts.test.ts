@@ -258,7 +258,9 @@ test('lock: a live foreign holder is waited out, then taken over after it dies',
             process.kill(pid, 0);
             holder = pid;
             break;
-          } catch {}
+          } catch {
+            // pid not alive yet: keep polling for the live holder window
+          }
         }
       }
       await new Promise((r) => setTimeout(r, 10));
@@ -493,7 +495,9 @@ test(
             process.kill(holder.pid!, 0);
             sawLiveHolder = true;
             break;
-          } catch {}
+          } catch {
+            // holder not alive yet: keep polling for the live holder window
+          }
         }
         await new Promise((r) => setTimeout(r, 10));
       }

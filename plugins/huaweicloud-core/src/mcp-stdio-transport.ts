@@ -169,7 +169,9 @@ export class DevkitStdioTransport implements Transport {
     if (message.method === 'initialize') {
       try {
         await (this.options.initializeSideEffects ?? runInitializeSideEffects)(message.params);
-      } catch {}
+      } catch {
+        // best-effort: initialize side effects must not fail the handshake
+      }
     }
 
     if (!Object.hasOwn(message, 'id')) {

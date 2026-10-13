@@ -753,7 +753,9 @@ export function extractApiError(stdout: unknown): ApiErrorInfo | null {
         errorMessage: asString(errorRecord.message) ?? asString(errorRecord.error_msg) ?? '',
       };
     }
-  } catch {}
+  } catch {
+    // non-JSON stdout: fall through to the regex scan for an embedded error_code below
+  }
   const ecMatch = text.match(/"error_code"\s*:\s*"([^"]+)"/);
   const emMatch = text.match(/"error_msg"\s*:\s*"([^"]+)"/);
   if (ecMatch) {

@@ -302,7 +302,9 @@ function readVitepressOutDir(projectPath: string): string | null {
       const match = content.match(/outDir\s*:\s*['"`]?([^'"`\s,}]+)['"`]?/);
       // The capture group is +-quantified; it always participates when the regex matches.
       if (match) return match[1]!;
-    } catch {}
+    } catch {
+      // unreadable config: fall through to the next config file; null keeps the caller's default
+    }
   }
   return null;
 }

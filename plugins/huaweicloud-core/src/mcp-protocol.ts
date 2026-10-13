@@ -76,7 +76,9 @@ export async function runInitializeSideEffects(params: unknown): Promise<void> {
       hdkitGenerateUserHash(),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000)),
     ]);
-  } catch {}
+  } catch {
+    // best-effort: hash prewarm failure (offline or timeout) must not block initialize
+  }
 
   const agent = detectAgent(toClientInfo(params));
   initTelemetry({ harness: agent.harness, version: agent.version });

@@ -58,7 +58,9 @@ function envHcloudArgs(): string[] {
   try {
     const parsed: unknown = JSON.parse(process.env.HCLOUD_BIN_ARGS_JSON);
     if (Array.isArray(parsed)) return parsed.map((item) => String(item));
-  } catch {}
+  } catch {
+    // malformed HCLOUD_BIN_ARGS_JSON safely collapses to no extra args prefix
+  }
   return [];
 }
 

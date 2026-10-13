@@ -101,7 +101,9 @@ async function handleRemoteRequest(req: IncomingMessage, res: ServerResponse): P
     if (record.method === 'initialize') {
       try {
         await runInitializeSideEffects(record.params);
-      } catch {}
+      } catch {
+        // best-effort: initialize side effects must not fail the request
+      }
     }
   }
 

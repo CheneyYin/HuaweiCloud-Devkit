@@ -272,10 +272,14 @@ async function handleConnect(args: ToolArgs = {}, _opts: CallToolOptions = {}) {
     setWorkspaceId(devStageId);
     try {
       await execOneShot(devStageId, 'devbridge delete-all 2>/dev/null || true', 'root', 15000);
-    } catch {}
+    } catch {
+      // best-effort: a fresh sandbox may have no tunnels (or no devbridge) to delete
+    }
     try {
       await execWithSession(devStageId, 'export PATH=$HOME/.huawei/bin${PATH:+:$PATH}', 'root', 10000);
-    } catch {}
+    } catch {
+      // best-effort: the PATH export only aids later devbridge calls in this session
+    }
     await transferGitRepo(args, devStageId, connectResult);
   }
   return connectResult;
@@ -349,7 +353,9 @@ async function handleCredentials(args: ToolArgs = {}, _opts: CallToolOptions = {
         // Refresh with no key → drop any stale copy, same semantics as the creds file rewrite.
         await execOneShot(sandboxWsIdCred, `rm -f ${apiKeyFile}`, 'root', 15000);
       }
-    } catch {}
+    } catch {
+      // best-effort: the hdkitservice injection already succeeded; the /tmp files only supplement shell access
+    }
   }
   const result: Record<string, unknown> = {
     ...credResult,

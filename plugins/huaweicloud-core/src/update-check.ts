@@ -414,7 +414,9 @@ export function queryDistTags({
     const timer = setTimeout(() => {
       try {
         child.kill();
-      } catch {}
+      } catch {
+        // the child may have already exited; the timeout path resolves null regardless
+      }
       debugLog(`queryDistTags: timed out after ${timeoutMs}ms`);
       resolve(null);
     }, timeoutMs);

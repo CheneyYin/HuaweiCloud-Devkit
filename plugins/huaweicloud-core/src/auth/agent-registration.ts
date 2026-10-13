@@ -121,7 +121,9 @@ function readOfficeaceRegistryInstallDir(): string | null {
       const m = r.stdout.match(/InstallDir\s+REG_SZ\s+(.+)/);
       if (m) return m[1]!.trim();
     }
-  } catch {}
+  } catch {
+    // best-effort: a failed reg query falls through to the Program Files probing below
+  }
   return null;
 }
 
@@ -189,7 +191,9 @@ function officeaceRegistered(): boolean {
           db.close();
           hasMcp = Boolean(asRecord(row).enabled);
         }
-      } catch {}
+      } catch {
+        // unreadable or locked connector db leaves hasMcp false; the capabilities.json check below still decides
+      }
     }
   }
 

@@ -465,7 +465,9 @@ test('#607: dismiss + 查询失败 → 折叠为 check_failed（不落伪冷却�
   const { rmSync } = await import('node:fs');
   try {
     rmSync(f, { force: true });
-  } catch {}
+  } catch {
+    // 预清理上次残留的 skip 文件；失败无妨，下方仍断言其不存在
+  }
   // 模拟 dismiss 路径的处理：查询失败 → getUpdateDistTags null → judgeUpdate null
   const dt = await m.getUpdateDistTags('1.1.0', { doQuery: async () => null, sessionId: 'sess-607' });
   assert.equal(dt, null);

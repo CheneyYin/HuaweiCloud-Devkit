@@ -240,7 +240,9 @@ export async function installKooCli(opts: { tty: boolean }): Promise<boolean> {
 
       try {
         mkdirSync(binDir, { recursive: true });
-      } catch {}
+      } catch {
+        // best-effort mkdir: an unwritable target dir is reported by the mv failure handling below
+      }
       console.log('  Installing...');
       let mv = spawnSync('mv', [extracted, binPath], { stdio: 'inherit', timeout: 30000 });
       if (mv.status !== 0) {

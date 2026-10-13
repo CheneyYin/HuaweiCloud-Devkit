@@ -37,7 +37,9 @@ function makeDecoder(onMessage) {
         if (line) {
           try {
             onMessage(JSON.parse(line));
-          } catch {}
+          } catch {
+            // skip a non-JSON line so the decoder keeps draining stdout
+          }
         }
         continue;
       }
@@ -54,7 +56,9 @@ function makeDecoder(onMessage) {
       buffer = buffer.slice(sep + 4 + len);
       try {
         onMessage(JSON.parse(body));
-      } catch {}
+      } catch {
+        // skip a malformed frame so the decoder keeps draining stdout
+      }
     }
   };
 }
@@ -157,7 +161,9 @@ export async function probe({
         log('call done', call.name);
       }
     }
-  } catch {}
+  } catch {
+    // a mid-session RPC failure still writes the transcript; the verdict checks which responses arrived
+  }
 
   await new Promise((res) => {
     const timer = setTimeout(res, settleMs);

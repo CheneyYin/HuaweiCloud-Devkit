@@ -90,7 +90,7 @@ export default [
       'no-unused-vars': ['warn', { argsIgnorePattern: '^_', caughtErrors: 'none' }],
       'no-var': 'warn',
       'prefer-const': 'warn',
-      'no-empty': ['error', { allowEmptyCatch: true }],
+      'no-empty': ['error', { allowEmptyCatch: false }],
 
       'n/no-missing-import': 'error',
       'n/no-unsupported-features/es-syntax': 'off',

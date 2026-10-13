@@ -207,7 +207,9 @@ test('#607: callTool dismiss + doQuery 失败 → check_failed 且不写冷却',
   const f = updateCheck.resolveSkipFilePath('sess-607e');
   try {
     fs.rmSync(f, { force: true });
-  } catch {}
+  } catch {
+    // 预清理上次残留的 skip 文件；失败无妨，下方仍断言其不存在
+  }
 
   const r = (await callTool(
     'huaweicloud_check_update',

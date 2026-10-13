@@ -51,5 +51,7 @@ export function writeOfficeaceRootMarker(root: string): void {
   try {
     mkdirSync(dirname(markerPath()), { recursive: true });
     writeFileSync(markerPath(), JSON.stringify({ root, savedAt: new Date().toISOString() }, null, 2));
-  } catch {}
+  } catch {
+    // best-effort: a missing marker just means later runs re-probe for the OfficeAce root
+  }
 }

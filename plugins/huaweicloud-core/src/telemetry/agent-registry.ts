@@ -227,7 +227,9 @@ function detectCodeArtsVersion(): string | null {
       if (existsSync(p)) {
         return versionText(jsonField(JSON.parse(readFileSync(p, 'utf8')), 'version'));
       }
-    } catch {}
+    } catch {
+      // unreadable or corrupt package.json counts this candidate as absent; try the next base
+    }
   }
   for (let d = 'A'.charCodeAt(0); d <= 'Z'.charCodeAt(0); d++) {
     const drive = String.fromCharCode(d) + ':';
@@ -236,7 +238,9 @@ function detectCodeArtsVersion(): string | null {
       if (existsSync(p)) {
         return versionText(jsonField(JSON.parse(readFileSync(p, 'utf8')), 'version'));
       }
-    } catch {}
+    } catch {
+      // unreadable or corrupt package.json counts this drive as absent; try the next
+    }
   }
   return null;
 }
@@ -264,7 +268,9 @@ function detectDshVersion(): string | null {
       if (existsSync(p)) {
         return versionText(jsonField(JSON.parse(readFileSync(p, 'utf8')), 'version'));
       }
-    } catch {}
+    } catch {
+      // unreadable or corrupt package.json counts this candidate as absent; version stays unknown
+    }
   }
   return null;
 }
@@ -283,7 +289,9 @@ function detectHermesVersion(): string | null {
         const m = content.match(/__version__\s*=\s*['"]([^'"]+)['"]/);
         if (m) return m[1]!;
       }
-    } catch {}
+    } catch {
+      // unreadable or corrupt __init__.py counts this candidate as absent; version stays unknown
+    }
   }
   return null;
 }
@@ -299,11 +307,15 @@ function detectWorkBuddyVersion(): string | null {
         const v = versionText(jsonField(JSON.parse(readFileSync(manifest, 'utf8')), 'appVersion'));
         if (v) return `v${v}`;
       }
-    } catch {}
+    } catch {
+      // unreadable or corrupt manifest falls through to the plain version file
+    }
     const verFile = join(base, 'version');
     try {
       if (existsSync(verFile)) return readFileSync(verFile, 'utf8').trim() || null;
-    } catch {}
+    } catch {
+      // unreadable version file means version unknown; telemetry must never fail
+    }
     return null;
   }
 
@@ -330,7 +342,9 @@ function detectOfficeAceVersion(): string | null {
         const v = versionText(jsonField(JSON.parse(readFileSync(releaseFile, 'utf8')), 'version'));
         if (v) return `V${v}`;
       }
-    } catch {}
+    } catch {
+      // unreadable or corrupt release file means version unknown; telemetry must never fail
+    }
     return null;
   }
 

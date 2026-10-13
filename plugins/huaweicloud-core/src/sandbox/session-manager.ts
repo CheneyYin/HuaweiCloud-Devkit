@@ -515,7 +515,9 @@ function uploadLog(message: string): void {
   console.error(line.trimEnd());
   try {
     appendFileSync(UPLOAD_LOG_PATH, line);
-  } catch {}
+  } catch {
+    // best-effort by design: a failed log-file append must never fail the caller
+  }
 }
 
 function rotateUploadLog(maxBytes = 100 * 1024): void {
@@ -526,7 +528,9 @@ function rotateUploadLog(maxBytes = 100 * 1024): void {
         unlinkSync(UPLOAD_LOG_PATH);
       }
     }
-  } catch {}
+  } catch {
+    // best-effort: a failed rotation only leaves an oversized log file
+  }
 }
 
 function generateUploadToken(): string {
@@ -583,7 +587,9 @@ async function computeMd5(filePath: string): Promise<string> {
 function cleanupLocalArchive(archivePath: string): void {
   try {
     rmSync(dirname(archivePath), { recursive: true, force: true });
-  } catch {}
+  } catch {
+    // best-effort: a leftover temp archive dir is harmless
+  }
 }
 
 async function deployFileServer(
@@ -934,12 +940,16 @@ export async function uploadProjectWithSession(
         username,
         15000,
       );
-    } catch {}
+    } catch {
+      // best-effort: the upload already succeeded; the traverse-permission fixup only hardens later nginx serving
+    }
   }
 
   try {
     await cleanupFileServer(workspaceId, username);
-  } catch {}
+  } catch {
+    // best-effort: the next deploy's pidfile sweep kills a leftover file server
+  }
   cleanupLocalArchive(archivePath);
 
   return {
@@ -998,7 +1008,9 @@ export async function deployNginx(
         10000,
       );
       if (!String(portCheck.stdout || '').includes('IN_USE')) break;
-    } catch {}
+    } catch {
+      // a failed probe reads as in-use; conservatively try the next port
+    }
     if (offset === maxPortAttempts - 1) {
       throw new Error(
         `sandbox deploy nginx: all ports ${basePort}-${basePort + maxPortAttempts - 1} are in use. Free a port and try again.`,
@@ -1104,7 +1116,9 @@ fi`;
       10000,
     );
     tunnelActive = String(tunnelCheck.stdout || '').includes('ACTIVE');
-  } catch {}
+  } catch {
+    // a failed probe leaves tunnelActive false; the result then carries the incomplete-deployment warning
+  }
 
   return {
     ok: result.exitCode === 0,
@@ -1331,7 +1345,9 @@ export async function closeSession(workspaceId: string, username: string): Promi
   sessions.delete(key);
   try {
     session.close();
-  } catch {}
+  } catch {
+    // best-effort: the session is already deregistered; a failed close must not fail disconnect tracking
+  }
   trackSandboxDisconnect();
   return true;
 }
@@ -1341,7 +1357,9 @@ export async function closeAllSessions(): Promise<void> {
     sessions.delete(key);
     try {
       session.close();
-    } catch {}
+    } catch {
+      // best-effort: one stuck session must not block closing the rest
+    }
   }
 }
 

@@ -90,7 +90,9 @@ function invokeMcpTools(mcpServerPath: string, env: NodeJS.ProcessEnv, timeout =
                 resolve(responses);
               }
             }
-          } catch {}
+          } catch {
+            // skip a non-JSON stdout line; only the counted responses drive the handshake
+          }
         }
       }
     });
@@ -158,7 +160,9 @@ function invokeMcpToolCall(
                 resolve(responses);
               }
             }
-          } catch {}
+          } catch {
+            // skip a non-JSON stdout line; only the counted responses drive the handshake
+          }
         }
       }
     });

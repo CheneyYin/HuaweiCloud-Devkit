@@ -57,7 +57,9 @@ function ensurePrivateMode(path: string): void {
   if (process.platform === 'win32') return;
   try {
     chmodSync(path, 0o600);
-  } catch {}
+  } catch {
+    // best-effort chmod; the statSync check below warns when the mode did not stick
+  }
   try {
     const mode = statSync(path).mode & 0o777;
     if (mode !== 0o600) {
@@ -70,7 +72,9 @@ function ensurePrivateMode(path: string): void {
         `\x1b[33m       Or skip file storage entirely with HW_ACCESS_KEY/HW_SECRET_KEY environment variables.\x1b[0m`,
       );
     }
-  } catch {}
+  } catch {
+    // best-effort: if even stat fails there is no mode left to verify or warn about
+  }
 }
 
 function baseHome(): string {
