@@ -26,13 +26,14 @@ export function parseHcloudVersion(out: unknown): string | null {
   return match ? match[0] : null;
 }
 
+// String#split never returns an empty array, so the [0] indexes below are defined.
 export function compareVersion(a: unknown, b: unknown): number {
   const pa = (typeof a === 'string' ? a : '')
-    .split(/[-+]/)[0]
+    .split(/[-+]/)[0]!
     .split('.')
     .map((n) => Number.parseInt(n, 10) || 0);
   const pb = (typeof b === 'string' ? b : '')
-    .split(/[-+]/)[0]
+    .split(/[-+]/)[0]!
     .split('.')
     .map((n) => Number.parseInt(n, 10) || 0);
   for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {

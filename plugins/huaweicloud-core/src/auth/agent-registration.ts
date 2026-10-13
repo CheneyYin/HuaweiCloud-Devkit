@@ -119,7 +119,7 @@ function readOfficeaceRegistryInstallDir(): string | null {
     });
     if (r.status === 0) {
       const m = r.stdout.match(/InstallDir\s+REG_SZ\s+(.+)/);
-      if (m) return m[1].trim();
+      if (m) return m[1]!.trim();
     }
   } catch {}
   return null;

@@ -254,7 +254,7 @@ function readOfficeaceRegistryInstallDir(): string | null {
     });
     if (r.status === 0) {
       const m = r.stdout.match(/InstallDir\s+REG_SZ\s+(.+)/);
-      if (m) return m[1].trim();
+      if (m) return m[1]!.trim();
     }
   } catch {}
   return null;
@@ -534,7 +534,8 @@ function hasCliFlag(name: string): boolean {
 
 function checkNode(): void {
   const v = process.versions.node.split('.').map(Number);
-  if (v[0] < 22) {
+  // process.versions.node is always "major.minor.patch", so the major exists.
+  if (v[0]! < 22) {
     console.error(`\x1b[31mNode.js >= 22 required (current: ${process.version})\x1b[0m`);
     process.exit(1);
   }
@@ -952,7 +953,7 @@ function readDevkitPacksFromYaml(configPath: string): string | null {
   if (!existsSync(configPath)) return null;
   try {
     const match = readFileSync(configPath, 'utf8').match(/^\s*DEVKIT_PACKS:\s*['"]?([^'"\n]+?)['"]?\s*$/m);
-    return match ? match[1].trim() : null;
+    return match ? match[1]!.trim() : null;
   } catch {
     return null;
   }
@@ -1529,7 +1530,7 @@ function uninstallCodexDesktop(): void {
       if (skip && line.startsWith('[')) skip = false;
       if (!skip) out.push(line);
     }
-    while (out.length > 0 && out[out.length - 1].trim() === '') out.pop();
+    while (out.length > 0 && out[out.length - 1]!.trim() === '') out.pop();
     writeFileSync(configPath, out.join('\n') + (out.length > 0 ? '\n' : ''));
   }
 }
@@ -2703,7 +2704,7 @@ function writeHermesMcpConfig(devkitPacks: string | null): boolean {
       // Preserve user's extra args (e.g. --hdkitservice-endpoint) when rewriting the block (issue #615).
       const argsMatch = existing.match(/^\s*huaweicloud-devkit\s*:[\s\S]*?^\s*args:\s*\[[^\]]*\]\s*$/m);
       const extrasMatch = argsMatch ? argsMatch[0].match(/args:\s*\[".*?"(.*)\]/) : null;
-      const extras = extrasMatch && extrasMatch[1].trim() ? extrasMatch[1].replace(/,\s*$/, '') : '';
+      const extras = extrasMatch && extrasMatch[1]!.trim() ? extrasMatch[1]!.replace(/,\s*$/, '') : '';
       const packsLineOk =
         hermesPacksLine === null ? !/^\s*DEVKIT_PACKS:/m.test(existing) : existing.includes(hermesPacksLine);
       if (existing.includes(`args: ["${mcpPath}"${extras}]`) && packsLineOk) {
@@ -3142,7 +3143,7 @@ function uninstallHermes(): void {
       if (argsLine) {
         let parsed: unknown;
         try {
-          parsed = JSON.parse(`[${argsLine[1].replace(/'/g, '"')}]`);
+          parsed = JSON.parse(`[${argsLine[1]!.replace(/'/g, '"')}]`);
         } catch {
           parsed = null;
         }
@@ -3279,7 +3280,7 @@ function autoDetectTarget(): string {
     console.error('Use --target <agent> to specify.');
     process.exit(1);
   }
-  if (detected.length === 1) return detected[0];
+  if (detected.length === 1) return detected[0]!;
   return 'all';
 }
 
@@ -3334,7 +3335,8 @@ function promptSelectAgents(detected: string[]): Promise<string[] | null> {
           return;
         }
       }
-      resolve([...indices].map((i) => detected[i]));
+      // Every index was range-checked against detected.length when added.
+      resolve([...indices].map((i) => detected[i]!));
     });
   });
 }
@@ -4042,7 +4044,8 @@ async function cmdStatus(): Promise<void> {
   // Capture each section's output so results can be grouped by install state
   // (installed first) instead of the fixed agent order.
   const originalLog = console.log;
-  const results: Array<{ name: string; lines: string[]; state: string }> = [];
+  type InstallState = 'installed' | 'partial' | 'unknown' | 'not';
+  const results: Array<{ name: string; lines: string[]; state: InstallState }> = [];
   for (const section of sections) {
     if (!section.on(scope)) continue;
     const lines: string[] = [];
@@ -4059,7 +4062,7 @@ async function cmdStatus(): Promise<void> {
     results.push({ name: section.name, lines, state });
   }
 
-  const stateOrder = { installed: 0, partial: 1, unknown: 2, not: 3 } as Record<string, number>;
+  const stateOrder: Record<InstallState, number> = { installed: 0, partial: 1, unknown: 2, not: 3 };
   results.sort((a, b) => stateOrder[a.state] - stateOrder[b.state]);
 
   const namesIn = (state: string): string[] => results.filter((r) => r.state === state).map((r) => r.name);

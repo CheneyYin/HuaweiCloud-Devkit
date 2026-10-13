@@ -281,7 +281,7 @@ function detectHermesVersion(): string | null {
       if (existsSync(initFile)) {
         const content = readFileSync(initFile, 'utf8');
         const m = content.match(/__version__\s*=\s*['"]([^'"]+)['"]/);
-        if (m) return m[1];
+        if (m) return m[1]!;
       }
     } catch {}
   }

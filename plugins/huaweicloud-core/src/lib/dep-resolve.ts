@@ -49,7 +49,8 @@ function platformHome(env: NodeJS.ProcessEnv): string {
 function pathLookupName(resolution: DependencyResolution): string | null {
   const candidates = process.platform === 'win32' ? resolution.candidates.win32 : resolution.candidates.unix;
   if (candidates.length === 0) return null;
-  const raw = basename(candidates[0]);
+  // Length was just checked; index 0 is defined.
+  const raw = basename(candidates[0]!);
   return process.platform === 'win32' && raw.endsWith('.exe') ? raw.slice(0, -4) : raw;
 }
 

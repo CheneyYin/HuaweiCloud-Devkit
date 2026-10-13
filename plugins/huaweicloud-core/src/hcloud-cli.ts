@@ -78,13 +78,13 @@ export interface SgFinding {
 
 function preflightSecurityGroupCheck(normalizedArgs: string[]): SgFinding[] {
   const service = normalizedArgs[0];
-  const operation = normalizedArgs[1];
+  const operation = normalizedArgs[1] ?? '';
   if (service !== 'ECS' || !/CreateServers|RunInstances/i.test(operation)) return [];
 
   const sgIds: string[] = [];
   for (const arg of normalizedArgs) {
     const m = arg.match(/^(?:--security_group_id(?:\.\d+)?|--server\.security_groups(?:\.\d+)?\.id)=(.+)/);
-    if (m) sgIds.push(m[1]);
+    if (m) sgIds.push(m[1]!);
   }
   if (sgIds.length === 0) return [];
 
@@ -148,11 +148,12 @@ function applyPreflightFindings(classification: RiskDecision, sgFindings: SgFind
   if (!sgFindings || sgFindings.length === 0) return classification;
   const hasDeny = sgFindings.some((f) => f.severity === 'deny');
   if (hasDeny) {
+    // Non-empty was checked at the top of this function; index 0 is defined.
     return {
       ...classification,
       decision: 'deny',
       risk: 'public_exposure',
-      reason: sgFindings[0].message,
+      reason: sgFindings[0]!.message,
     };
   }
   return classification;
@@ -247,14 +248,16 @@ export function redactArgsWithObs(rawArgs: unknown): string[] {
   const arr = Array.isArray(rawArgs) ? rawArgs.map(String) : [];
   const out = [...arr];
   for (let i = 0; i < out.length; i += 1) {
-    if (out[i] === '-i' || out[i] === '-k' || out[i] === '-t') {
+    // The loop condition bounds i; out[i] is defined.
+    const arg = out[i]!;
+    if (arg === '-i' || arg === '-k' || arg === '-t') {
       if (i + 1 < out.length) out[i + 1] = '<redacted>';
       i += 1;
-    } else if (/^-i[A-Za-z0-9]/.test(out[i])) {
+    } else if (/^-i[A-Za-z0-9]/.test(arg)) {
       out[i] = '-i<redacted>';
-    } else if (/^-k[A-Za-z0-9]/.test(out[i])) {
+    } else if (/^-k[A-Za-z0-9]/.test(arg)) {
       out[i] = '-k<redacted>';
-    } else if (/^-t[A-Za-z0-9]/.test(out[i])) {
+    } else if (/^-t[A-Za-z0-9]/.test(arg)) {
       out[i] = '-t<redacted>';
     }
   }
@@ -323,7 +326,8 @@ export function resolveStsInjectArgs(rawArgs: unknown): string[] {
     if (expiry <= Date.now() + grace) return [];
   }
 
-  const isObs = flat[0].toUpperCase() === 'OBS';
+  // flat mirrors normalized, which returned early above when empty.
+  const isObs = flat[0]!.toUpperCase() === 'OBS';
   return isObs
     ? ['-i', creds.ak, '-k', creds.sk, '-t', creds.securityToken]
     : ['--cli-access-key=' + creds.ak, '--cli-secret-key=' + creds.sk, '--cli-security-token=' + creds.securityToken];
@@ -459,7 +463,8 @@ export async function runHcloud(args: unknown, options: HcloudRunOptions = {}): 
   const text = `${result.stderr || ''}\n${result.stdout || ''}`;
   const match = text.match(UNSUPPORTED_SERVICE_RE);
   if (match && !result.ok) {
-    return appendLangHint(result, match[1], metaDir);
+    // UNSUPPORTED_SERVICE_RE's capture group always participates on a match.
+    return appendLangHint(result, match[1]!, metaDir);
   }
   return result;
 }
@@ -716,7 +721,7 @@ function validateRequiredParams(args: string[]): { valid: boolean; missing: stri
   if (!required) return { valid: true, missing: [], hints: [] };
   const argsStr = args.join(' ');
   const missing = required.filter((param) => !argsStr.includes(param));
-  const hints = missing.map((param) => PARAM_VALUE_HINTS[param]).filter(Boolean);
+  const hints = missing.map((param) => PARAM_VALUE_HINTS[param]).filter((hint): hint is string => Boolean(hint));
   return { valid: missing.length === 0, missing, hints };
 }
 
@@ -752,7 +757,7 @@ export function extractApiError(stdout: unknown): ApiErrorInfo | null {
   const ecMatch = text.match(/"error_code"\s*:\s*"([^"]+)"/);
   const emMatch = text.match(/"error_msg"\s*:\s*"([^"]+)"/);
   if (ecMatch) {
-    return { errorCode: ecMatch[1], errorMessage: emMatch ? emMatch[1] : '' };
+    return { errorCode: ecMatch[1]!, errorMessage: emMatch ? emMatch[1]! : '' };
   }
   return null;
 }

@@ -378,8 +378,9 @@ function flushEvents(): void {
 
   const batch = eventQueue.splice(0, BATCH_SIZE);
   const keys = batch.map((e) => e.key).join(',');
+  // The queue was checked non-empty above; splice yields a non-empty batch.
   debugLog(
-    `FLUSH start events=${batch.length} harness=${batch[0].harness} agentVersion=${batch[0].agentVersion} keys=[${keys}]`,
+    `FLUSH start events=${batch.length} harness=${batch[0]!.harness} agentVersion=${batch[0]!.agentVersion} keys=[${keys}]`,
   );
 
   const endpoint = getEndpoint();

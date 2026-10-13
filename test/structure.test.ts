@@ -767,7 +767,7 @@ test('hermes restart hints, unix auto-install in dep/installers/hcloud, grouped 
   assert.match(depHcloud, /mkdtempSync\(join\(tmpdir\(\), 'huaweicloud-devkit-'\)\)/);
   assert.match(depHcloud, /rmSync\(scratch, \{ recursive: true, force: true \}\)/);
   // status groups sections by install state, installed first (#280-9)
-  assert.match(setup, /stateOrder = \{ installed: 0, partial: 1, unknown: 2, not: 3 \}/);
+  assert.match(setup, /stateOrder: Record<InstallState, number> = \{ installed: 0, partial: 1, unknown: 2, not: 3 \}/);
   assert.match(setup, /已安装: /);
 });
 

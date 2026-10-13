@@ -989,11 +989,12 @@ async function searchDocs(query: string, topic: string = 'all') {
         let description = '';
         let name = dir;
         if (frontmatter) {
-          const fm = frontmatter[1];
+          // All capture groups here always participate on a match, so every match[1] is a string.
+          const fm = frontmatter[1]!;
           const nameMatch = fm.match(/^name:\s*(.+)$/m);
-          if (nameMatch) name = nameMatch[1].trim();
+          if (nameMatch) name = nameMatch[1]!.trim();
           const descMatch = fm.match(/^description:\s*(.+)$/m);
-          if (descMatch) description = descMatch[1].trim();
+          if (descMatch) description = descMatch[1]!.trim();
         }
         if (topic !== 'all') {
           const topicLower = topic.toLowerCase();
@@ -1077,11 +1078,12 @@ async function retrieveSkill(name: string) {
   let version: string | number = 1,
     description = '';
   if (frontmatter) {
-    const fm = frontmatter[1];
+    // All capture groups here always participate on a match, so every match[1] is a string.
+    const fm = frontmatter[1]!;
     const vm = fm.match(/^version:\s*(.+)$/m);
-    if (vm) version = vm[1].trim();
+    if (vm) version = vm[1]!.trim();
     const dm = fm.match(/^description:\s*(.+)$/m);
-    if (dm) description = dm[1].trim();
+    if (dm) description = dm[1]!.trim();
   }
   return { ok: true, name: skillName, version, description, content, references };
 }

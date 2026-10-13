@@ -307,7 +307,8 @@ export function evaluateDeployPlan(plan: unknown, options: RiskRuleOptions = {})
 export function mergeRiskDecision(base: RiskDecision, risk: RiskEvaluation): RiskDecision {
   if (!risk || !risk.findings?.length) return base;
   if (risk.decision === 'deny') {
-    const topFinding = risk.findings[0];
+    // findings was checked non-empty at the top of this function.
+    const topFinding = risk.findings[0]!;
     return {
       ...base,
       decision: 'deny',

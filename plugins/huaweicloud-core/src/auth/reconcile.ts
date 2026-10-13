@@ -254,7 +254,7 @@ function parseS3ObsConfig(path: string): ObsConfig | null {
     const text = readFileSync(path, 'utf8');
     const get = (k: string): string => {
       const m = text.match(new RegExp(`^${k}=(.+)$`, 'm'));
-      return m ? m[1].trim() : '';
+      return m ? m[1]!.trim() : '';
     };
     return { ak: get('ak'), sk: get('sk'), region: inferRegion(text) };
   } catch {
@@ -264,7 +264,7 @@ function parseS3ObsConfig(path: string): ObsConfig | null {
 
 function inferRegion(text: string): string {
   const m = text.match(/endpoint=https:\/\/obs\.([^.]+)\./);
-  return m ? m[1] : '';
+  return m ? m[1]! : '';
 }
 
 export function exportStateForStatus(_jailed?: boolean) {

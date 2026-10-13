@@ -241,10 +241,11 @@ export function classifyHcloudArgs(args: unknown, options: ClassifyOptions = {})
     const hcloudSegments = findHcloudCommandSegments(unwrappedTokens.join(' '));
     if (hcloudSegments.length > 0) {
       const results = hcloudSegments.map((segment) => classifyHcloudArgs(segment, { ...options, _segmentDepth: 1 }));
+      // results mirrors hcloudSegments, checked non-empty above; index 0 is defined.
       return (
         results.find((result) => result.decision === 'deny') ||
         results.find((result) => ['write', 'execution', 'secret', 'credential'].includes(result.risk ?? '')) ||
-        results[0]
+        results[0]!
       );
     }
   }

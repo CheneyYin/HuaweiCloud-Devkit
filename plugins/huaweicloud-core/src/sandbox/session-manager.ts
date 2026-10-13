@@ -213,7 +213,8 @@ function firstExisting(...candidates: string[]): string {
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;
   }
-  return candidates[candidates.length - 1];
+  // Both call sites pass literal, non-empty candidate lists; the last entry is the fallback.
+  return candidates[candidates.length - 1]!;
 }
 
 // ws-exec's sources are TypeScript, but runtime entry points read the compiled
@@ -655,7 +656,7 @@ async function uploadViaTunnel(
         if (headerEnd > 0) {
           const headerBlock = resp.slice(0, headerEnd);
           const clMatch = headerBlock.match(/Content-Length:\s*(\d+)/i);
-          if (clMatch) contentLength = parseInt(clMatch[1], 10);
+          if (clMatch) contentLength = parseInt(clMatch[1]!, 10);
         }
       }
       if (contentLength >= 0 && headerEnd > 0) {
@@ -664,7 +665,7 @@ async function uploadViaTunnel(
           done(() => {
             const resp = respBuf.toString();
             const statusLine = resp.split('\r\n')[0] || '';
-            const statusCode = parseInt(statusLine.split(' ')[1], 10);
+            const statusCode = parseInt(statusLine.split(' ')[1]!, 10);
             const body = resp.slice(headerEnd + 4, headerEnd + 4 + contentLength);
             if (!statusCode || statusCode < 200 || statusCode >= 300) {
               uploadLog(`uploadViaTunnel: POST failed with HTTP ${statusCode}: ${body.slice(0, 200)}`);
@@ -685,7 +686,7 @@ async function uploadViaTunnel(
       done(() => {
         const resp = respBuf.toString();
         const statusLine = resp.split('\r\n')[0] || '';
-        const statusCode = parseInt(statusLine.split(' ')[1], 10);
+        const statusCode = parseInt(statusLine.split(' ')[1]!, 10);
         const he = resp.indexOf('\r\n\r\n');
         const body = he > 0 ? resp.slice(he + 4) : '';
         if (!statusCode || statusCode < 200 || statusCode >= 300) {
@@ -1277,7 +1278,7 @@ fi
   for (const line of lines) {
     const trimmed = line.trim();
     const m = trimmed.match(/^(\w+):(PASS|FAIL|SKIP)\b(.*)/);
-    if (m) checks[m[1]] = { status: m[2], detail: (m[3] || '').trim() };
+    if (m) checks[m[1]!] = { status: m[2]!, detail: (m[3] || '').trim() };
   }
   const scoreMatch = cleanStdout.match(/SCORE:(\d+)\/(\d+)/);
   const tunnelMatch = cleanStdout.match(TUNNEL_URL_PATTERN);
@@ -1313,7 +1314,7 @@ fi
     complete,
     checkType: isCrossPlatform ? 'cross-platform' : 'standard',
     checks,
-    score: scoreMatch ? { pass: parseInt(scoreMatch[1], 10), total: parseInt(scoreMatch[2], 10) } : null,
+    score: scoreMatch ? { pass: parseInt(scoreMatch[1]!, 10), total: parseInt(scoreMatch[2]!, 10) } : null,
     publicUrl: tunnelMatch ? tunnelMatch[1] : undefined,
     missingSteps: missing.length > 0 ? missing.join(', ') : undefined,
     parseWarning,
