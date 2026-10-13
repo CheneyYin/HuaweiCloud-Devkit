@@ -75,8 +75,14 @@ async function handleGatewayListTools() {
   }
 }
 
+// Byte-identical to String(value) for every value; the typeof guard is pure
+// narrowing so the type-aware string rules accept the call site.
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value : String(value);
+}
+
 async function handleGatewayCall(args: Record<string, unknown>) {
-  const tool = String(args.tool || '').trim();
+  const tool = asText(args.tool || '').trim();
   const rawToolArgs = args.toolArgs;
   if (!tool) return { ok: false, error: 'tool is required' };
   // Explicit, not silent coercion: the MCP boundary already rejects these

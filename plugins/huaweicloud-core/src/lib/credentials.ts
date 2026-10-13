@@ -63,10 +63,10 @@ export function readImportFile() {
     const data: unknown = JSON.parse(readFileSync(path, 'utf8'));
     const record = asRecord(data);
     return {
-      ak: String(record.ak || ''),
-      sk: String(record.sk || ''),
-      securityToken: String(record.securityToken || ''),
-      region: String(record.region || ''),
+      ak: typeof record.ak === 'string' ? record.ak : '',
+      sk: typeof record.sk === 'string' ? record.sk : '',
+      securityToken: typeof record.securityToken === 'string' ? record.securityToken : '',
+      region: typeof record.region === 'string' ? record.region : '',
     };
   } catch {
     // Malformed/undecodable import file is un-replayable — wipe it. A VALID

@@ -103,6 +103,10 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value : String(value);
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -120,7 +124,7 @@ const PACKAGE_ROOT = resolve(PLUGIN_ROOT, '..', '..');
 
 let pkgVersion = '0.0.0';
 try {
-  const pkg: { version?: unknown } = JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8'));
+  const pkg = asRecord(JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8')));
   if (typeof pkg.version === 'string') pkgVersion = pkg.version;
 } catch {}
 
@@ -352,7 +356,6 @@ function ensureOfficeaceMcpInSqlite(): 'db-missing' | 'ok' | 'owner-missing' | '
       .get();
     const existing = asRecord(existingRow);
 
-    const argsJson = JSON.stringify([mcpPath]);
     const envJson = JSON.stringify(env);
 
     if ('id' in existing) {
@@ -360,12 +363,12 @@ function ensureOfficeaceMcpInSqlite(): 'db-missing' | 'ok' | 'owner-missing' | '
       let existingArgs: unknown = [];
       let existingEnv: unknown = [];
       try {
-        existingArgs = JSON.parse(String(existing.args_json || '[]'));
-        existingEnv = JSON.parse(String(existing.env_json || '[]'));
+        existingArgs = JSON.parse(asText(existing.args_json || '[]'));
+        existingEnv = JSON.parse(asText(existing.env_json || '[]'));
       } catch {}
       const userArgs: unknown[] = Array.isArray(existingArgs) ? existingArgs.slice(1) : [];
       // Start from the user's env and add our required keys only when absent (user values win).
-      const envMerged: unknown[] = [...(Array.isArray(existingEnv) ? existingEnv : [])];
+      const envMerged: unknown[] = Array.isArray(existingEnv) ? existingEnv.slice() : [];
       for (const e of env) {
         if (e && e.key && !envMerged.some((x) => asRecord(x).key === e.key)) envMerged.push(e);
       }
@@ -404,10 +407,9 @@ function ensureOfficeaceMcpInSqlite(): 'db-missing' | 'ok' | 'owner-missing' | '
         db.close();
         return 'owner-missing';
       }
-      const insertArgsJson =
-        officeaceDelta && Array.isArray(officeaceDelta.argsExtra)
-          ? JSON.stringify([mcpPath, ...officeaceDelta.argsExtra])
-          : argsJson;
+      const argsExtra: unknown[] =
+        officeaceDelta && Array.isArray(officeaceDelta.argsExtra) ? officeaceDelta.argsExtra : [];
+      const insertArgsJson = JSON.stringify([mcpPath, ...argsExtra]);
       db.prepare(
         `INSERT INTO mcp_connectors (id, owner_user_id, type, name, normalized_name, transport, timeout_ms, command, args_json, env_json, enabled, status, created_at, updated_at, version, seeded)
          VALUES (?, ?, 'custom', 'huaweicloud-devkit', 'huaweicloud-devkit', 'stdio', 60000, 'node', ?, ?, 1, 'disconnected', ?, ?, 1, 0)`,
@@ -446,7 +448,7 @@ function removeOfficeaceMcpFromSqlite(): void {
       const ownerUserId = asRecord(row).owner_user_id;
       if (ownerUserId) delta.ownerUserId = ownerUserId;
       try {
-        const parsed: unknown = row ? JSON.parse(String(asRecord(row).args_json || '[]')) : [];
+        const parsed: unknown = row ? JSON.parse(asText(asRecord(row).args_json || '[]')) : [];
         if (Array.isArray(parsed) && parsed.length > 1) delta.argsExtra = parsed.slice(1);
       } catch {}
       if (Object.keys(delta).length > 0) saveAgentDelta('officeace', delta);
@@ -481,9 +483,7 @@ interface OfficeaceCapabilitiesConfig {
 }
 
 function toCapabilitiesConfig(value: unknown): OfficeaceCapabilitiesConfig {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? (value as OfficeaceCapabilitiesConfig)
-    : {};
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
 function writeCapabilitiesJson(config: OfficeaceCapabilitiesConfig): void {
@@ -744,7 +744,7 @@ function installRuntimeDeps(pluginsDir: string): void {
   let r = spawnSync('npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], spawnOpts);
   const isRetryable = (res: SpawnSyncReturns<unknown>): boolean => {
     if (res.status === 0) return false;
-    const stderr = String(res.stderr || '');
+    const stderr = asText(res.stderr || '');
     return spawnErrorCode(res) === 'EPERM' || spawnErrorCode(res) === 'EBUSY' || /EPERM|EBUSY/.test(stderr);
   };
   if (r.status !== 0 && isRetryable(r)) {
@@ -964,9 +964,9 @@ function readOfficeaceDevkitPacks(): string | null {
   try {
     db = openOfficeaceDb();
     const row: unknown = db.prepare("SELECT env_json FROM mcp_connectors WHERE name = 'huaweicloud-devkit'").get();
-    const parsed: unknown = JSON.parse(String(asRecord(row).env_json || '[]'));
+    const parsed: unknown = JSON.parse(asText(asRecord(row).env_json || '[]'));
     if (!Array.isArray(parsed)) return null;
-    const hit = parsed.find((e) => asRecord(e).key === 'DEVKIT_PACKS');
+    const hit: unknown = parsed.find((e) => asRecord(e).key === 'DEVKIT_PACKS');
     const value = hit ? asRecord(hit).value : null;
     return typeof value === 'string' ? value : null;
   } catch {
@@ -2251,14 +2251,14 @@ function removeManagedDshPatchBlock(content: unknown): string {
     `\\n?${escapeRegExp(DSH_MCP_PATCH_START)}[\\s\\S]*?${escapeRegExp(DSH_MCP_PATCH_END)}\\s*`,
     'g',
   );
-  return String(content || '')
+  return asText(content || '')
     .replace(pattern, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trimEnd();
 }
 
 function dshPatchHasOnlyCommentsOrEmptyList(content: unknown): boolean {
-  const meaningful = String(content || '')
+  const meaningful = asText(content || '')
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line && !line.startsWith('#'));
@@ -2412,7 +2412,7 @@ function tryInstallDshMcpClient(): boolean {
       console.log('  DSH MCP client package installed via dsh');
       return true;
     }
-    const err = `${r.stderr || ''}${r.stdout || ''}`.trim().split(/\r?\n/).slice(-2).join(' ');
+    const err = `${asText(r.stderr || '')}${asText(r.stdout || '')}`.trim().split(/\r?\n/).slice(-2).join(' ');
     console.log(`  \x1b[33m[WARN]\x1b[0m DSH MCP client auto-install failed${err ? `: ${err}` : ''}`);
   }
   if (commandAvailable('pnpm') && existsSync(join(dshProfileDir(), 'package.json'))) {
@@ -2858,7 +2858,7 @@ function ensureHermesHookAllowlist(): boolean {
     try {
       const parsed: unknown = JSON.parse(readFileSync(allowlistPath, 'utf8'));
       if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        data = parsed as HermesAllowlist;
+        data = parsed;
       }
     } catch {}
   }
@@ -3796,7 +3796,7 @@ async function cmdUninstall(opts: { fromReinstall?: boolean } = {}): Promise<voi
 
   if (target === 'opencode' || target === 'all') {
     console.log('[OpenCode]');
-    await uninstallOpenCode();
+    uninstallOpenCode();
   }
   if (target === 'codearts' || target === 'all') {
     console.log('\n[CodeArts]');
@@ -4225,7 +4225,7 @@ function writeDevkitPacksInOfficeace(next: string | null): PackWriteResult {
     }
     let env: unknown = [];
     try {
-      env = JSON.parse(String(existing.env_json || '[]'));
+      env = JSON.parse(asText(existing.env_json || '[]'));
     } catch {}
     const rows: unknown[] = Array.isArray(env) ? env : [];
     const idx = rows.findIndex((e) => asRecord(e).key === 'DEVKIT_PACKS');
@@ -5098,8 +5098,8 @@ async function readSecret(prompt: string): Promise<string> {
   });
 }
 
-// Narrow the parsed vault shape at this boundary. The cast keeps the same object
-// reference, so callers that pass it back to writeObsConfig/writeGlobalCredentials
+// Narrow the parsed vault shape at this boundary. The guard returns the same
+// object reference, so callers that pass it back to writeObsConfig/writeGlobalCredentials
 // behave exactly as before.
 interface StoredCredentials {
   ak?: unknown;
@@ -5109,7 +5109,7 @@ interface StoredCredentials {
 }
 
 function asStoredCredentials(value: unknown): StoredCredentials | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as StoredCredentials) : null;
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : null;
 }
 
 function configuredProfileName(): string {
@@ -5130,9 +5130,9 @@ function configureHcloud(credentials: { ak: unknown; sk: unknown; region?: unkno
     'configure',
     'set',
     `--cli-profile=${configuredProfileName()}`,
-    `--cli-access-key=${credentials.ak}`,
-    `--cli-secret-key=${credentials.sk}`,
-    `--cli-region=${credentials.region || ''}`,
+    `--cli-access-key=${asText(credentials.ak)}`,
+    `--cli-secret-key=${asText(credentials.sk)}`,
+    `--cli-region=${asText(credentials.region || '')}`,
   ];
   const r = spawnSync(hcloudBin, args, {
     shell: false,
@@ -5313,7 +5313,7 @@ async function cmdAuthReconcile(): Promise<void> {
     // runHcloudConfigure declares string params; the vault fields are guarded
     // truthy above, so String() is identity for real credential values.
     const region = typeof credentials.region === 'string' ? credentials.region : undefined;
-    const r = runHcloudConfigure(profile, String(credentials.ak), String(credentials.sk), region);
+    const r = runHcloudConfigure(profile, asText(credentials.ak), asText(credentials.sk), region);
     hcloudSynced = r.ok;
     console.log(`  KooCLI ${r.ok ? 'synced' : 'sync failed'}: profile=${profile} ${r.error || ''}`);
   }
@@ -5453,7 +5453,7 @@ function readInstalledVersion(pluginsDir: string): string | null {
   const p = join(pluginsDir, 'package.json');
   if (!existsSync(p)) return null;
   try {
-    const v: unknown = JSON.parse(readFileSync(p, 'utf8')).version;
+    const v: unknown = asRecord(JSON.parse(readFileSync(p, 'utf8'))).version;
     return typeof v === 'string' && v ? v : null;
   } catch {
     return null;

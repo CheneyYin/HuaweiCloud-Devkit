@@ -213,7 +213,7 @@ function firstExisting(...candidates: string[]): string {
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;
   }
-  return candidates[candidates.length - 1]!;
+  return candidates[candidates.length - 1];
 }
 
 // ws-exec's sources are TypeScript, but runtime entry points read the compiled
@@ -335,7 +335,7 @@ async function createTunnelSession(workspaceId: string, username: string, timeou
     mux.onError = (err) => {
       clearTimeout(timer);
       clearInterval(interval);
-      reject(err);
+      reject(err instanceof Error ? err : new Error(String(err)));
     };
   });
 

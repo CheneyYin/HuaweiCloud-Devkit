@@ -10,6 +10,10 @@ import tseslint from 'typescript-eslint';
 // globally by default, which would run TS-only rules (no-require-imports,
 // no-unused-vars) against the repo's .mjs files.
 const tsFiles = ['**/*.ts', '**/*.tsx', '**/*.mts', '**/*.cts'];
+// Type-aware rules (and projectService) run on src only: the test project
+// is enforced by tsc (test/tsconfig.json), so linting it type-aware would
+// re-pay the type-program cost for no extra gate.
+const srcFiles = ['plugins/huaweicloud-core/src/**/*.ts', 'plugins/huaweicloud-core/src/**/*.tsx'];
 
 export default [
   {
@@ -17,6 +21,22 @@ export default [
   },
   js.configs.recommended,
   ...tseslint.configs.recommended.map((config) => ({ ...config, files: config.files ?? tsFiles })),
+  ...tseslint.configs.recommendedTypeChecked.slice(2).map((config) => ({ ...config, files: srcFiles })),
+  {
+    files: srcFiles,
+    languageOptions: {
+      parserOptions: {
+        projectService: true,
+      },
+    },
+    rules: {
+      // Handlers (pack tools, CLI subcommands) are async by contract: they
+      // are dispatched through await and gain awaits as they evolve.
+      // Removing async to satisfy the rule would churn sync-throw
+      // semantics for zero safety gain.
+      '@typescript-eslint/require-await': 'off',
+    },
+  },
   nodePlugin.configs['flat/recommended'],
   prettier,
   {

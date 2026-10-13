@@ -133,7 +133,7 @@ export function createDevkitMcpServer({ sessionId, runtimePacks = false }: Devki
           const callOpts: CallToolOptions = runtimePacks
             ? { sessionId, onPacksChanged: () => syncDisclosure() }
             : { sessionId };
-          const result = await callTool(tool.name, args as Record<string, never>, callOpts);
+          const result = await callTool(tool.name, args, callOpts);
           const decorated = _decorateResult(sessionId, tool.name, result);
           return {
             content: [

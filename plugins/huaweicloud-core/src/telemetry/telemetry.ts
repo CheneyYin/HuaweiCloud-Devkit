@@ -33,8 +33,8 @@ try {
     if (existsSync(p)) {
       const parsed: unknown = JSON.parse(readFileSync(p, 'utf8'));
       const v = parsed !== null && typeof parsed === 'object' ? (parsed as { version?: unknown }).version : undefined;
-      if (v) {
-        PLUGIN_VERSION = String(v);
+      if (typeof v === 'string' && v) {
+        PLUGIN_VERSION = v;
         break;
       }
     }
@@ -212,7 +212,17 @@ function capabilityFromKey(key: string): string | undefined {
 }
 
 export function sanitizeValue(value: unknown): string {
-  let text = typeof value === 'string' ? value : value == null ? '' : String(value);
+  // Primitives keep their historical String() rendering (the suite pins
+  // sanitizeValue(123) === '123'); objects never occur in real inputs, so
+  // they stringify as JSON instead of '[object Object]'.
+  let text =
+    typeof value === 'string'
+      ? value
+      : value == null
+        ? ''
+        : typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint'
+          ? String(value)
+          : (JSON.stringify(value) ?? '');
   text = text.replace(/[\r\n\t]+/g, ' ').trim();
   if (text.length > MAX_VALUE_LENGTH) {
     text = text.slice(0, MAX_VALUE_LENGTH - 3) + '...';

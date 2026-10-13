@@ -187,8 +187,8 @@ export function matchAgent(agent: AgentDefinition, clientInfo: AgentMatchClientI
   if (agent.pathPatterns && agent.pathPatterns.some((p) => selfPath.includes(p))) return true;
   if (agent.envVars && agent.envVars.some((v) => process.env[v])) return true;
   const name = clientInfo.name;
-  if (!name) return false;
-  const lower = String(name).toLowerCase();
+  if (typeof name !== 'string' || !name) return false;
+  const lower = name.toLowerCase();
   if (agent.id.toLowerCase() === lower) return true;
   if (agent.clientNames && agent.clientNames.some((n) => n.toLowerCase() === lower)) return true;
   return false;
@@ -211,13 +211,21 @@ function jsonField(value: unknown, field: string): unknown {
     : undefined;
 }
 
+// Version-ish fields in product-written JSON (package.json, install-manifest,
+// release files): strings and numbers keep the historical truthy String()
+// coercion; any other shape counts as absent.
+function versionText(v: unknown): string | null {
+  if (typeof v === 'string' && v) return v;
+  if (typeof v === 'number' && v) return String(v);
+  return null;
+}
+
 function detectCodeArtsVersion(): string | null {
   for (const base of _codeartsSearchBases) {
     const p = join(base, 'resources', 'app', 'package.json');
     try {
       if (existsSync(p)) {
-        const v = jsonField(JSON.parse(readFileSync(p, 'utf8')), 'version');
-        return v ? String(v) : null;
+        return versionText(jsonField(JSON.parse(readFileSync(p, 'utf8')), 'version'));
       }
     } catch {}
   }
@@ -226,8 +234,7 @@ function detectCodeArtsVersion(): string | null {
     try {
       const p = join(drive, '/', 'Program Files', 'CodeArts Agent', 'resources', 'app', 'package.json');
       if (existsSync(p)) {
-        const v = jsonField(JSON.parse(readFileSync(p, 'utf8')), 'version');
-        return v ? String(v) : null;
+        return versionText(jsonField(JSON.parse(readFileSync(p, 'utf8')), 'version'));
       }
     } catch {}
   }
@@ -255,8 +262,7 @@ function detectDshVersion(): string | null {
   for (const p of candidates) {
     try {
       if (existsSync(p)) {
-        const v = jsonField(JSON.parse(readFileSync(p, 'utf8')), 'version');
-        return v ? String(v) : null;
+        return versionText(jsonField(JSON.parse(readFileSync(p, 'utf8')), 'version'));
       }
     } catch {}
   }
@@ -290,8 +296,8 @@ function detectWorkBuddyVersion(): string | null {
     const manifest = join(base, 'resources', 'install-manifest.json');
     try {
       if (existsSync(manifest)) {
-        const v = jsonField(JSON.parse(readFileSync(manifest, 'utf8')), 'appVersion');
-        if (v) return `v${String(v)}`;
+        const v = versionText(jsonField(JSON.parse(readFileSync(manifest, 'utf8')), 'appVersion'));
+        if (v) return `v${v}`;
       }
     } catch {}
     const verFile = join(base, 'version');
@@ -321,8 +327,8 @@ function detectOfficeAceVersion(): string | null {
     const releaseFile = join(base, '.office-claw-release.json');
     try {
       if (existsSync(releaseFile)) {
-        const v = jsonField(JSON.parse(readFileSync(releaseFile, 'utf8')), 'version');
-        if (v) return `V${String(v)}`;
+        const v = versionText(jsonField(JSON.parse(readFileSync(releaseFile, 'utf8')), 'version'));
+        if (v) return `V${v}`;
       }
     } catch {}
     return null;

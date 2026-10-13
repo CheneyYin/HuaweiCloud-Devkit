@@ -23,6 +23,12 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+// Byte-identical to String(value) for every value; the typeof guard is pure
+// narrowing so no-base-to-string accepts the truthy-narrowed call sites.
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value : String(value);
+}
+
 export async function runVersionCheck(options: ProbeHcloudOptions = {}) {
   const result = probeHcloud(options);
   return {
@@ -194,7 +200,7 @@ async function listRegions() {
   } catch {
     regions = [{ raw: String(result.stdout).substring(0, 1000) }];
   }
-  regions.sort((a, b) => String(a.id || '').localeCompare(String(b.id || '')));
+  regions.sort((a, b) => asText(a.id || '').localeCompare(asText(b.id || '')));
   return { ok: true, count: regions.length, regions };
 }
 

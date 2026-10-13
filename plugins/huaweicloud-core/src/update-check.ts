@@ -1,7 +1,12 @@
 // Version-update detection & auto-upgrade for huaweicloud-devkit (session-level).
 // Spec: docs/superpowers/specs/2026-09-07-version-upgrade-design.md (internal, not committed).
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, rmSync } from 'node:fs';
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams, type SpawnSyncOptions } from 'node:child_process';
+import {
+  spawn,
+  spawnSync,
+  type ChildProcessWithoutNullStreams,
+  type SpawnSyncOptionsWithStringEncoding,
+} from 'node:child_process';
 import { join, dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -68,12 +73,16 @@ interface BuildResultExtra {
 
 interface SpawnResultLike {
   status?: number | null;
-  stdout?: unknown;
-  stderr?: unknown;
+  stdout?: string;
+  stderr?: string;
   error?: { message?: string } | null;
 }
 
-type UpgradeSpawnFn = (_command: string, _args: readonly string[], _options: SpawnSyncOptions) => SpawnResultLike;
+type UpgradeSpawnFn = (
+  _command: string,
+  _args: readonly string[],
+  _options: SpawnSyncOptionsWithStringEncoding,
+) => SpawnResultLike;
 
 // One-property read with validation, for the JS boundary of thrown values:
 // only a non-empty `message` string is surfaced.
@@ -159,7 +168,7 @@ export function determineTarget(current: unknown, distTags: DistTags = {}): stri
 
 export function parseDistTagsOutput(stdout: unknown): DistTags | null {
   try {
-    const text = String(stdout || '').trim();
+    const text = (typeof stdout === 'string' ? stdout : '').trim();
     if (!text) return null; // 空输出视为 npm view 失败
     return toDistTags(JSON.parse(text));
   } catch {
@@ -232,20 +241,29 @@ const VERSION_MANIFEST_RELS = [
   'openclaw.plugin.json',
 ];
 
+// JSON boundary: non-object payloads (null, numbers) fold to null — the previous
+// inline property access threw and was caught, same observable result.
+function readJsonVersion(file: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const version = (parsed as Record<string, unknown>).version;
+    return typeof version === 'string' && version ? version : null;
+  } catch {
+    return null;
+  }
+}
+
 export function readInstalledVersion(): string | null {
   const pluginRoot = resolve(selfDir(), '..');
   const packageRoot = resolve(pluginRoot, '..', '..');
   for (const base of [pluginRoot, packageRoot]) {
-    try {
-      const pkg: { version?: unknown } = JSON.parse(readFileSync(join(base, 'package.json'), 'utf8'));
-      if (typeof pkg.version === 'string' && pkg.version) return pkg.version;
-    } catch {}
+    const version = readJsonVersion(join(base, 'package.json'));
+    if (version) return version;
   }
   for (const rel of VERSION_MANIFEST_RELS) {
-    try {
-      const manifest: { version?: unknown } = JSON.parse(readFileSync(join(pluginRoot, rel), 'utf8'));
-      if (typeof manifest.version === 'string' && manifest.version) return manifest.version;
-    } catch {}
+    const version = readJsonVersion(join(pluginRoot, rel));
+    if (version) return version;
   }
   return null;
 }
@@ -261,7 +279,7 @@ export function fallbackSkipFilePath(): string {
 
 // 会话化 skip 文件：remote 多会话按 sessionId 拆分，stdio/默认保持原文件(向后兼容)。
 function sanitizeSessionId(sessionId: unknown): string {
-  return String(sessionId || '').replace(/[^0-9a-zA-Z-]/g, '_');
+  return (typeof sessionId === 'string' ? sessionId : '').replace(/[^0-9a-zA-Z-]/g, '_');
 }
 
 // A1 定稿: 标准 agent 用插件目录副本(有 package.json); codex 等无副本时回退共享文件
@@ -505,7 +523,11 @@ export function applyUpdateHint(result: unknown, name: string, hint: UpdateHintL
   };
 }
 
-function defaultSpawn(command: string, args: readonly string[], options: SpawnSyncOptions): SpawnResultLike {
+function defaultSpawn(
+  command: string,
+  args: readonly string[],
+  options: SpawnSyncOptionsWithStringEncoding,
+): SpawnResultLike {
   return spawnSync(command, args, options);
 }
 

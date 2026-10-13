@@ -712,7 +712,7 @@ test('KooCLI sandbox blockers and privacy agreement live in their extracted modu
   // shared by doctor and the KooCLI installer; no leftover local copy in setup-cli)
   assert.match(codeartsSandbox, /function detectCodeartsSandbox\(\)/);
   assert.match(codeartsSandbox, /codearts-data', 'storage', 'permission', 'config\.json'/);
-  assert.match(codeartsSandbox, /config\.bash_mode/);
+  assert.match(codeartsSandbox, /\.\s*bash_mode/);
   // sandbox warning prompts user to install externally or disable sandbox
   assert.match(codeartsSandbox, /function printSandboxWarning\(/);
   assert.match(codeartsSandbox, /检测到码道沙箱模式/);

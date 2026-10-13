@@ -78,7 +78,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function toLastSync(value: unknown): LastSyncRecord {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as LastSyncRecord) : {};
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
 export function kooCliConfigPath(): string {
@@ -91,7 +91,7 @@ export function kooCliConfigPath(): string {
 export function fingerprint(ak?: unknown, sk?: unknown): string {
   if (!ak || !sk) return '';
   return createHash('sha256')
-    .update(`${String(ak)}${String(sk)}`)
+    .update(`${typeof ak === 'string' ? ak : ''}${typeof sk === 'string' ? sk : ''}`)
     .digest('hex')
     .slice(0, 8);
 }
@@ -113,7 +113,7 @@ export function readKooCliProfiles(): KooCliProfilesResult {
   if (!existsSync(configPath)) return { error: 'KooCLI config not found' };
   try {
     const raw = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
-    const current = String(raw.current || 'default');
+    const current = typeof raw.current === 'string' && raw.current ? raw.current : 'default';
     const profiles: unknown[] = Array.isArray(raw.profiles) ? raw.profiles : [];
     const mtimeMs = statSync(configPath).mtimeMs;
     // KooCLI 7.x stores AK/SK encrypted (authEncrypt=true): the on-disk values
@@ -130,11 +130,16 @@ export function readKooCliProfiles(): KooCliProfilesResult {
       profiles: profiles.map((p) => {
         const profile = asRecord(p);
         return encrypted
-          ? { name: String(profile.name || ''), fingerprint: '', accessKeyId: '', encrypted: true }
+          ? {
+              name: typeof profile.name === 'string' ? profile.name : '',
+              fingerprint: '',
+              accessKeyId: '',
+              encrypted: true,
+            }
           : {
-              name: String(profile.name || ''),
+              name: typeof profile.name === 'string' ? profile.name : '',
               fingerprint: fingerprint(profile.accessKeyId, profile.secretAccessKey),
-              accessKeyId: String(profile.accessKeyId || ''),
+              accessKeyId: typeof profile.accessKeyId === 'string' ? profile.accessKeyId : '',
               encrypted: false,
             };
       }),

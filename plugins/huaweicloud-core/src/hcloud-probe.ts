@@ -19,8 +19,8 @@ export interface HcloudCommand {
 
 export interface HcloudProbeResultLike {
   status?: number | null;
-  stdout?: unknown;
-  stderr?: unknown;
+  stdout?: string;
+  stderr?: string;
   error?: { code?: unknown; message?: unknown } | null;
 }
 
@@ -65,7 +65,9 @@ function envHcloudArgs(): string[] {
 export function resolveHcloudCommand(options: HcloudCommandOptions = {}): HcloudCommand {
   return {
     executable: options.executable || findHcloudBin() || 'hcloud',
-    argsPrefix: Array.isArray(options.executableArgs) ? options.executableArgs : envHcloudArgs(),
+    argsPrefix: Array.isArray(options.executableArgs)
+      ? options.executableArgs.map((item) => String(item))
+      : envHcloudArgs(),
   };
 }
 

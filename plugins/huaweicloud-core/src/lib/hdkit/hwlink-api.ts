@@ -150,6 +150,12 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+// Byte-identical to String(value) for every value; the typeof guard is pure
+// narrowing so no-base-to-string accepts the truthy-narrowed call sites.
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value : String(value);
+}
+
 export async function createConnection(
   envId: string,
   ak: string,
@@ -170,7 +176,7 @@ export async function createConnection(
     throw new Error(`Failed to create connection: ${JSON.stringify(data)}`);
   }
 
-  const connectionId = String(result.connection_id);
+  const connectionId = asText(result.connection_id);
   const maxAttempts = 60;
 
   for (let i = 0; i < maxAttempts; i++) {
@@ -189,7 +195,7 @@ export async function createConnection(
     const extensions = asRecord(connectionInfo.extensions);
     if (typeof connectionInfo.url === 'string' && connectionInfo.url && extensions.source != null) {
       const u = new URL(connectionInfo.url);
-      u.searchParams.set('source', String(extensions.source));
+      u.searchParams.set('source', asText(extensions.source));
       process.stderr.write(`\rConnection ${connectionId} established (${i}s).\n`);
       return {
         wsUrl: u.toString(),

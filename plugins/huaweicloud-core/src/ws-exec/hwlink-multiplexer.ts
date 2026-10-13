@@ -106,6 +106,12 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return typeof value === 'object' && value !== null && 'then' in value && typeof value.then === 'function';
 }
 
+// Byte-identical to String(value) for every value; the typeof guard is pure
+// narrowing so no-base-to-string accepts the truthy-narrowed call sites.
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value : String(value);
+}
+
 function eventDataToUint8Array(data: unknown): Promise<Uint8Array> {
   if (data instanceof Uint8Array) return Promise.resolve(data);
   if (Buffer.isBuffer(data)) {
@@ -129,7 +135,7 @@ function sendBinary(ws: WebSocketLike, data: Uint8Array): Promise<void> {
     const done = (err?: unknown): void => {
       if (settled) return;
       settled = true;
-      if (err) reject(err);
+      if (err) reject(err instanceof Error ? err : new Error(asText(err)));
       else resolve();
     };
 
@@ -212,7 +218,7 @@ class HwlinkWebSocketMultiplexer {
     if (typeof eventOrCode === 'number') {
       return {
         code: eventOrCode,
-        reason: Buffer.isBuffer(maybeReason) ? maybeReason.toString() : String(maybeReason || ''),
+        reason: Buffer.isBuffer(maybeReason) ? maybeReason.toString() : asText(maybeReason || ''),
       };
     }
 
@@ -222,7 +228,7 @@ class HwlinkWebSocketMultiplexer {
         : 0;
     const reason =
       eventOrCode && typeof eventOrCode === 'object' && 'reason' in eventOrCode && eventOrCode.reason
-        ? String(eventOrCode.reason)
+        ? asText(eventOrCode.reason)
         : '';
     return { code, reason };
   }
@@ -241,7 +247,9 @@ class HwlinkWebSocketMultiplexer {
   }
 
   sendFairly(ch: HwlinkChannel, data: Uint8Array): void {
-    this.queue.sendFairly(ch, data);
+    // Fire-and-forget by design: backpressure is absorbed inside the
+    // queue's own promise and the drain loop catches its own errors.
+    void this.queue.sendFairly(ch, data);
   }
 
   sendImmediately(data: Uint8Array): void {

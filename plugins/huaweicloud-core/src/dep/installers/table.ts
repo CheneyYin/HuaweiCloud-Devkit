@@ -47,11 +47,11 @@ export interface CliDepPresence {
 export interface CliDepInstaller {
   kind: 'cli';
   /** Presence probe; privacy_pending counts as present (terminal action). */
-  probe(): CliDepPresence;
+  probe(this: void): CliDepPresence;
   /** Download/extract/place. Downloads on non-TTY too — `dep install <id>` is the explicit CI path; only provisioning policy gates on tty. */
-  install(_opts: { tty: boolean }): Promise<boolean>;
+  install(this: void, _opts: { tty: boolean }): Promise<boolean>;
   /** The pinned manual commands printed when auto-install cannot run. */
-  manualInstructions(_log: Log): void;
+  manualInstructions(this: void, _log: Log): void;
   /** The no-receipt refusal's escape-hatch sentence. */
   escapeHatch: string;
   /**
@@ -61,7 +61,7 @@ export interface CliDepInstaller {
    * hcloudInstallLandingSites), and never delete an env-tier (user-override)
    * resolution. AGENTS.md's adding-a-dependency checklist repeats both.
    */
-  uninstall(_receipt: DepReceipt, _dir: string, _ctx: ResolvedUninstallContext): DepUninstallResult;
+  uninstall(this: void, _receipt: DepReceipt, _dir: string, _ctx: ResolvedUninstallContext): DepUninstallResult;
 }
 
 /**
@@ -74,12 +74,12 @@ export interface CliDepInstaller {
  */
 export interface ManagedChildDepInstaller {
   kind: 'managed-child';
-  install(): Promise<ManagedChildInstallResult>;
+  install(this: void): Promise<ManagedChildInstallResult>;
   /** The confirm-prompt suffix naming the concrete install tools. */
   confirmPromptSuffix: string;
   /** The no-receipt refusal's escape-hatch sentence. */
   escapeHatch: string;
-  uninstall(_receipt: DepReceipt, _dir: string, _ctx: ResolvedUninstallContext): DepUninstallResult;
+  uninstall(this: void, _receipt: DepReceipt, _dir: string, _ctx: ResolvedUninstallContext): DepUninstallResult;
 }
 
 export type DepInstaller = CliDepInstaller | ManagedChildDepInstaller;

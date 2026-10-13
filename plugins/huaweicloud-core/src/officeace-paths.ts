@@ -36,8 +36,12 @@ export function isUsableOfficeaceRoot(dir: string): boolean {
 
 export function readOfficeaceRootMarker(): string | null {
   try {
-    const marker: { root?: unknown } = JSON.parse(readFileSync(markerPath(), 'utf8'));
-    return typeof marker.root === 'string' && isUsableOfficeaceRoot(marker.root) ? marker.root : null;
+    const parsed: unknown = JSON.parse(readFileSync(markerPath(), 'utf8'));
+    const root =
+      parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) && 'root' in parsed
+        ? parsed.root
+        : undefined;
+    return typeof root === 'string' && isUsableOfficeaceRoot(root) ? root : null;
   } catch {
     return null;
   }

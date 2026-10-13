@@ -441,9 +441,15 @@ function splitSimpleCommand(command: unknown): string[] {
   );
 }
 
+// Byte-identical to String(value) for every value; the typeof guard is pure
+// narrowing so no-base-to-string accepts the truthy-narrowed call sites.
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value : String(value);
+}
+
 export function classifyTextCommand(command: unknown, options: ClassifyOptions = {}): RiskDecision {
   const policy = options.policy || DEFAULT_POLICY;
-  const text = String(command || '');
+  const text = asText(command || '');
 
   if (matchesAny(text, policy.credentialFilePatterns)) {
     return {

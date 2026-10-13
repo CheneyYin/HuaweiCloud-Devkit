@@ -53,8 +53,10 @@ try {
 
 if (transport === 'remote') {
   const { startRemoteServer } = await import('./mcp-server-remote.ts');
-  startRemoteServer({ port: remotePort, host: remoteHost }).catch((error) => {
-    process.stderr.write(`Failed to start MCP remote server: ${error.message}\n`);
+  startRemoteServer({ port: remotePort, host: remoteHost }).catch((error: unknown) => {
+    process.stderr.write(
+      `Failed to start MCP remote server: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
     process.exit(1);
   });
 } else {

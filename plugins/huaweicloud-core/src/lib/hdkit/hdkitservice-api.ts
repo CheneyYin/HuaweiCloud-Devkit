@@ -22,6 +22,12 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+// Byte-identical to String(value) for every value; the typeof guard is pure
+// narrowing so no-base-to-string accepts the truthy-narrowed call sites.
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value : String(value);
+}
+
 function getHdkitBaseUrl(): string {
   return process.env.HDKITSERVICE_ENDPOINT || 'https://devkit.huaweicloud.com/rest/developer/server/hdkitservice/';
 }
@@ -87,8 +93,8 @@ async function hdkitRequest(
   if (!resp.ok) {
     const rawCode = data.code;
     const code = typeof rawCode === 'string' && rawCode ? rawCode : `HTTP_${resp.status}`;
-    const trace = data.traceId ? ` [trace: ${String(data.traceId)}]` : '';
-    const err = new Error(`${code}: ${String(data.message || 'hdkitservice error')}${trace}`) as HdkitError;
+    const trace = data.traceId ? ` [trace: ${asText(data.traceId)}]` : '';
+    const err = new Error(`${code}: ${asText(data.message || 'hdkitservice error')}${trace}`) as HdkitError;
     err.code = code;
     err.status = resp.status;
     err.traceId = data.traceId;

@@ -80,6 +80,12 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+// Byte-identical to String(value) for every value; the typeof guard is pure
+// narrowing so no-base-to-string accepts the truthy-narrowed call sites.
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value : String(value);
+}
+
 // Unknown severities normalize to 'info' (rank 1). The shipped JSON only emits
 // deny/warn, so this branch is unreachable for valid catalogs.
 function toSeverity(value: unknown): Severity {
@@ -164,7 +170,7 @@ function evaluationContext(stage: string, input: unknown): EvaluationContext {
     return { text: command, command };
   }
   if (stage === 'artifact') {
-    const path = String(record.path || '');
+    const path = asText(record.path || '');
     const content = normalizeText(record.content || '');
     return { text: `${path}\n${content}`, path, content };
   }

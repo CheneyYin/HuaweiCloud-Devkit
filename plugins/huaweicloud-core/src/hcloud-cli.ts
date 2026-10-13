@@ -29,6 +29,11 @@ function asString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
+// Port fields arrive from the VPC API as JSON numbers or strings; both must stringify.
+function asPortText(value: unknown): string {
+  return typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+}
+
 // Boundary narrowing for credential-shaped values: only string fields survive,
 // so callers keep truthiness checks and string plumbing.
 interface CredentialLike {
@@ -109,8 +114,8 @@ function preflightSecurityGroupCheck(normalizedArgs: string[]): SgFinding[] {
         const record = asRecord(rule);
         const direction = asString(record.direction) ?? '';
         const remoteIp = asString(record.remote_ip_prefix) ?? asString(record.remote_address_group_id) ?? '';
-        const portMin = String(record.port_range_min || record.multiport || '');
-        const portMax = String(record.port_range_max || record.multiport || '');
+        const portMin = asPortText(record.port_range_min || record.multiport || '');
+        const portMax = asPortText(record.port_range_max || record.multiport || '');
         const protocol = (asString(record.protocol) ?? '').toLowerCase();
         if (direction !== 'ingress') continue;
         if (remoteIp !== '0.0.0.0/0' && remoteIp !== '::/0') continue;
@@ -216,7 +221,7 @@ export type UnsupportedCause = 'other' | 'lang-missing' | 'not-found' | 'unknown
 
 export function classifyUnsupported(service: unknown, metaDir?: string): UnsupportedCause {
   const { cn, en, cnPresent, enPresent } = readServiceCatalogs(metaDir);
-  const s = String(service || '').toUpperCase();
+  const s = (asString(service) ?? '').toUpperCase();
   if (!s) return 'other';
   if (cnPresent && enPresent) {
     if (cn.has(s) && !en.has(s)) return 'lang-missing';
@@ -589,10 +594,10 @@ function runHcloudOnce(plan: HcloudPlanWithArgs, options: HcloudRunOptions): Pro
       }, forceKillAfterMs + 500);
     }, timeoutMs);
 
-    child.stdout.on('data', (chunk) => {
+    child.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString('utf8');
     });
-    child.stderr.on('data', (chunk) => {
+    child.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString('utf8');
     });
     child.on('error', (error) => {
@@ -721,7 +726,7 @@ export interface ApiErrorInfo {
 }
 
 export function extractApiError(stdout: unknown): ApiErrorInfo | null {
-  let text = String(stdout || '');
+  let text = asString(stdout) ?? '';
   // Strip KooCLI multi-version prefix lines (e.g. "ListVpcs有多个版本,默认使用该API版本v3…")
   const bracketIdx = text.indexOf('{');
   if (bracketIdx > 0) text = text.substring(bracketIdx);
@@ -753,7 +758,7 @@ export function extractApiError(stdout: unknown): ApiErrorInfo | null {
 }
 
 export function redactOutput(output: unknown): string {
-  let text = String(output || '');
+  let text = asString(output) ?? '';
   const bracketIdx = text.indexOf('{');
   if (bracketIdx > 0) text = text.substring(bracketIdx);
   try {

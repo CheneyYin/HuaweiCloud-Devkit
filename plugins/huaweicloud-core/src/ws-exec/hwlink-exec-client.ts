@@ -106,11 +106,18 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+// Byte-identical to String(value) for every value; the typeof guard is pure
+// narrowing so no-base-to-string accepts the truthy-narrowed call sites.
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value : String(value);
+}
+
 function normalizeCommand(command: unknown): string {
-  if (!command || !String(command).trim()) {
+  const text = asText(command);
+  if (!command || !text.trim()) {
     throw new WebSocketExecError('missing command', 2);
   }
-  return String(command).trim();
+  return text.trim();
 }
 
 function normalizeTimeout(timeoutMs: number): number {
@@ -129,10 +136,11 @@ function normalizeSource(source: unknown): number {
 }
 
 function normalizeUrl(url: unknown): string {
-  if (!url || !String(url).trim()) {
+  const text = asText(url);
+  if (!url || !text.trim()) {
     throw new WebSocketExecError('hwlink url is required', 2);
   }
-  return String(url);
+  return text;
 }
 
 function createHwlinkTerminal(options: CreateHwlinkTerminalOptions = {}): HwlinkTerminalHandle {

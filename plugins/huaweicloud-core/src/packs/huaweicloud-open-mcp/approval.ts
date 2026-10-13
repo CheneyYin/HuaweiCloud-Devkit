@@ -72,6 +72,12 @@ function permanentGrantReason(): string {
   return `permanent-scope grants are an operator gesture, not an agent action: edit the policy file directly (${path}); it hot-reloads, so the change takes effect without a restart`;
 }
 
+// Interpolating unknown values through asText matches plain ${value} output
+// for every JSON value, the only kind MCP arguments can carry.
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value : String(value);
+}
+
 export function classify(tool: string, toolArgs: Record<string, unknown>): Ruling {
   if (READONLY_TOOLS.has(tool)) return { verdict: 'forward' };
 
@@ -161,7 +167,7 @@ export function classify(tool: string, toolArgs: Record<string, unknown>): Rulin
     // policy setting can widen that (the gateway itself has no secret
     // guard — probed 2026-10-10, an allowed KMS ShowSecretVersion rule
     // proceeded to catalog resolution).
-    const secretCheck = classifyTextCommand(`hcloud ${toolArgs.product} ${toolArgs.api}`);
+    const secretCheck = classifyTextCommand(`hcloud ${asText(toolArgs.product)} ${asText(toolArgs.api)}`);
     if (secretCheck.risk === 'secret') return { verdict: 'deny', reason: secretCheck.reason };
     return { verdict: 'forward' };
   }

@@ -92,9 +92,7 @@ export function readGlobalCredentials(): StoredCredentials | null {
   if (!existsSync(path)) return null;
   try {
     const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
-    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as StoredCredentials)
-      : null;
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -169,7 +167,7 @@ export interface StsExpiryInput {
 export function parseStsExpiry({ securityToken, expiresAtEnv = process.env.HW_STS_EXPIRES_AT }: StsExpiryInput = {}):
   number | null {
   if (expiresAtEnv) {
-    const v = String(expiresAtEnv).trim();
+    const v = typeof expiresAtEnv === 'string' ? expiresAtEnv.trim() : '';
     if (!v) return null;
     const asNum = Number(v);
     if (Number.isFinite(asNum) && asNum > 0) return asNum > 1e12 ? asNum : asNum * 1000;
@@ -181,7 +179,7 @@ export function parseStsExpiry({ securityToken, expiresAtEnv = process.env.HW_ST
   const token = String(securityToken).trim();
   if (!token) return null;
 
-  const payload: unknown = (() => {
+  const payload: unknown = ((): unknown => {
     try {
       if (token.includes('.')) {
         const parts = token.split('.');
@@ -215,11 +213,12 @@ function readWorkEnvironmentEntry(config: unknown): CodeArtsCredentials | null {
   const ak = environment.HW_ACCESS_KEY;
   const sk = environment.HW_SECRET_KEY;
   if (present(ak) && present(sk)) {
+    const region = environment.HW_REGION || environment.HUAWEICLOUD_REGION;
     return {
       ak,
       sk,
       securityToken: present(environment.HW_SECURITY_TOKEN) ? environment.HW_SECURITY_TOKEN : '',
-      region: String(environment.HW_REGION || environment.HUAWEICLOUD_REGION || ''),
+      region: typeof region === 'string' ? region : '',
     };
   }
   return null;
@@ -237,10 +236,10 @@ export function writeGlobalCredentials(credentials: WriteGlobalCredentialsInput 
   const path = globalCredentialsPath();
   mkdirSync(dirname(path), { recursive: true });
   const payload = {
-    ak: String(credentials.ak || ''),
-    sk: String(credentials.sk || ''),
-    securityToken: String(credentials.securityToken || ''),
-    region: String(credentials.region || ''),
+    ak: typeof credentials.ak === 'string' ? credentials.ak : '',
+    sk: typeof credentials.sk === 'string' ? credentials.sk : '',
+    securityToken: typeof credentials.securityToken === 'string' ? credentials.securityToken : '',
+    region: typeof credentials.region === 'string' ? credentials.region : '',
     ...(credentials.configuredBySession === undefined
       ? {}
       : { configuredBySession: Boolean(credentials.configuredBySession) }),
@@ -265,15 +264,18 @@ export interface WriteObsConfigInput {
 }
 
 export function writeObsConfig(credentials: WriteObsConfigInput = {}): { path: string; endpoint: string } {
-  const region = String(credentials.region || '');
-  const ak = String(credentials.ak || '');
-  const sk = String(credentials.sk || '');
-  const securityToken = String(credentials.securityToken || '');
+  const region = typeof credentials.region === 'string' ? credentials.region : '';
+  const ak = typeof credentials.ak === 'string' ? credentials.ak : '';
+  const sk = typeof credentials.sk === 'string' ? credentials.sk : '';
+  const securityToken = typeof credentials.securityToken === 'string' ? credentials.securityToken : '';
   if (!region || !ak || !sk) {
     throw new Error('region, ak, and sk are required to write OBS config');
   }
   const path = obsConfigPath();
-  const endpoint = String(credentials.endpoint || `https://obs.${region}.myhuaweicloud.com`);
+  const endpoint =
+    typeof credentials.endpoint === 'string' && credentials.endpoint
+      ? credentials.endpoint
+      : `https://obs.${region}.myhuaweicloud.com`;
   // Flat key=value format (no [default] section) as written by KooCLI 7.x `hcloud OBS config`.
   const content = `endpoint=${endpoint}\nak=${ak}\nsk=${sk}${securityToken ? `\ntoken=${securityToken}` : ''}\n`;
   writeFileSync(path, content, { encoding: 'utf8', mode: 0o600 });
@@ -431,11 +433,12 @@ export function readCodeArtsCredentials(): CodeArtsCredentials | null {
       const ak = env.HW_ACCESS_KEY;
       const sk = env.HW_SECRET_KEY;
       if (present(ak) && present(sk)) {
+        const region = env.HW_REGION || env.HUAWEICLOUD_REGION;
         return {
           ak,
           sk,
           securityToken: present(env.HW_SECURITY_TOKEN) ? env.HW_SECURITY_TOKEN : '',
-          region: String(env.HW_REGION || env.HUAWEICLOUD_REGION || ''),
+          region: typeof region === 'string' ? region : '',
         };
       }
     } catch {
@@ -469,10 +472,10 @@ let runtimeCredentials: ResolvedCredentials | null = null;
 
 export function setRuntimeCredentials(ak: unknown, sk: unknown, securityToken?: unknown, region?: unknown): void {
   runtimeCredentials = {
-    ak: String(ak ?? ''),
-    sk: String(sk ?? ''),
-    securityToken: String(securityToken || ''),
-    region: String(region || ''),
+    ak: typeof ak === 'string' ? ak : '',
+    sk: typeof sk === 'string' ? sk : '',
+    securityToken: typeof securityToken === 'string' ? securityToken : '',
+    region: typeof region === 'string' ? region : '',
   };
 }
 
@@ -506,7 +509,7 @@ export function readLastSync(): LastSyncRecord | null {
   if (!existsSync(path)) return null;
   try {
     const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
-    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as LastSyncRecord) : null;
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -522,8 +525,12 @@ export function writeLastSync(metadata: LastSyncMetadata = {}): void {
   mkdirSync(dirname(path), { recursive: true });
   const payload = {
     ts: Date.now(),
-    ...(metadata.kooCliProfile ? { kooCliProfile: String(metadata.kooCliProfile) } : {}),
-    ...(metadata.s1Fingerprint ? { s1Fingerprint: String(metadata.s1Fingerprint) } : {}),
+    ...(metadata.kooCliProfile
+      ? { kooCliProfile: typeof metadata.kooCliProfile === 'string' ? metadata.kooCliProfile : '' }
+      : {}),
+    ...(metadata.s1Fingerprint
+      ? { s1Fingerprint: typeof metadata.s1Fingerprint === 'string' ? metadata.s1Fingerprint : '' }
+      : {}),
   };
   writeFileSync(path, JSON.stringify(payload), { encoding: 'utf8', mode: 0o600 });
   ensurePrivateMode(path);
