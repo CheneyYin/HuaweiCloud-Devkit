@@ -7,7 +7,7 @@ import { classifyHcloudArgs, redactSecrets, assertAllowed, type ClassifyOptions 
 import { createApprovalToken } from './lib/approval-tokens.ts';
 import type { RiskDecision } from './risk-rule-engine.ts';
 import { getProxySettings } from './proxy/proxy-config.ts';
-import { findHcloudBin, resolveHcloudCommand } from './hcloud-probe.ts';
+import { resolveHcloudCommand } from './hcloud-probe.ts';
 import { parseStsExpiry, resolveCredentialsWithRuntime } from './auth/credentials.ts';
 
 // The CLI face's consent layer lives in src/lib/approval-tokens.ts; these
@@ -496,15 +496,18 @@ async function runtimeCurrentMismatchWarning(): Promise<string | null> {
   }
 }
 
-function discoverHcloudPath(): string | null {
-  return findHcloudBin();
-}
-
 function runHcloudOnce(plan: HcloudPlanWithArgs, options: HcloudRunOptions): Promise<HcloudRunResult> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const forceKillAfterMs = options.forceKillAfterMs ?? DEFAULT_FORCE_KILL_AFTER_MS;
-  const executable = options.executable || options.env?.HCLOUD_BIN || discoverHcloudPath() || 'hcloud';
-  const executableArgs = Array.isArray(options.executableArgs) ? options.executableArgs.map(String) : [];
+  // One resolution chain with the prober (hcloud-probe's resolveHcloudCommand
+  // over the shared lib/dep-resolve tier order): options.env is child
+  // environment, never an executable override, and HCLOUD_BIN_ARGS_JSON is
+  // honored here exactly as the prober honors it.
+  const { executable, argsPrefix } = resolveHcloudCommand({
+    executable: options.executable,
+    executableArgs: options.executableArgs,
+  });
+  const executableArgs = argsPrefix.map(String);
   const cwd = options.cwd || undefined;
   const stdin = options.stdin ?? 'y\n';
   const childOptions: HcloudRunOptions = { ...options };

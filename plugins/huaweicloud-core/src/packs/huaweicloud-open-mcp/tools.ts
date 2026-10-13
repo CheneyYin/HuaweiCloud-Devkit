@@ -11,9 +11,8 @@ import { callOpenMcpTool, listGatewayTools, openMcpSidecar, restartOpenMcpSideca
 // in-session. The six first-class discovery proxies were deleted in favor
 // of the single call face: classify() in approval.ts is now the only path
 // to the sidecar's tools/call, and gateway_call's served description
-// (mirrored byte-identically in src/tools.ts TOOL_DEFINITIONS_LITERALS;
-// structure.test.ts pins both the lockstep and the readonly-name content)
-// is the zero-cost name-discovery path at the tools/list layer. The
+// (owned here; src/tools.ts derives it from this array) is the zero-cost
+// name-discovery path at the tools/list layer. The
 // gateway is the authoritative validator of its own tool inputs; the zod
 // schema here only guards the boundary, and the sidecar normalizes
 // results to {ok, tool, ...}.

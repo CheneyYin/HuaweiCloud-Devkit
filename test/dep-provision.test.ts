@@ -1114,6 +1114,49 @@ test('doctor reports no pack dependencies for a core-only trim', () => {
   assert.doesNotMatch(res.stdout, /Pack .* uses .* soft dependency/);
 });
 
+test('doctor undici check counts the atomcode payload dir', () => {
+  const home = tempHome();
+  // Only the atomcode plugin dir carries undici; every other target's
+  // node_modules is absent, so the check passes only when atomcode is on
+  // the doctor's undici list (installAtomCode runs installRuntimeDeps).
+  mkdirSync(join(home, '.atomcode', 'huaweicloud-plugins', 'node_modules', 'undici'), { recursive: true });
+  const emptyPath = fixtureDir('dep-provision-path-');
+  const res = runSetupCli(['doctor'], home, { PATH: emptyPath, HUAWEICLOUD_HOME: home });
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /\[PASS\].*Runtime deps \(undici\) installed/);
+});
+
+test('doctor payload checks cover an openclaw-only install', () => {
+  const home = tempHome();
+  // installOpenClaw ships the full payload (server, safety, undici, the
+  // .mcp.json config, and the restart marker); an openclaw-only machine
+  // must read as installed by every doctor payload check.
+  const dest = join(home, '.agents', 'huaweicloud-plugins');
+  mkdirSync(join(dest, 'dist'), { recursive: true });
+  writeFileSync(join(dest, 'dist', 'mcp-server.js'), '// fake server\n', 'utf8');
+  mkdirSync(join(dest, 'safety'), { recursive: true });
+  writeFileSync(join(dest, 'safety', 'policy.json'), '{}\n', 'utf8');
+  mkdirSync(join(dest, 'node_modules', 'undici'), { recursive: true });
+  writeFileSync(join(dest, '.installed'), '2026-10-13T00:00:00Z\n', 'utf8');
+  writeFileSync(
+    join(dest, '.mcp.json'),
+    JSON.stringify({ mcpServers: { 'huaweicloud-devkit': { command: 'node', args: ['/fake/mcp-server.js'] } } }),
+    'utf8',
+  );
+  const emptyPath = fixtureDir('dep-provision-path-');
+  const res = runSetupCli(['doctor'], home, { PATH: emptyPath, HUAWEICLOUD_HOME: home });
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /\[PASS\].*MCP server installed/);
+  assert.match(res.stdout, /MCP server can start \(OpenClaw\)/);
+  assert.match(res.stdout, /\[PASS\].*Runtime deps \(undici\) installed/);
+  assert.match(res.stdout, /\[PASS\].*Safety policy installed/);
+  // The chain prints the target label only in its failure message; with
+  // openclaw the only configured MCP surface present, a PASS here proves
+  // the openclaw branch matched.
+  assert.match(res.stdout, /\[PASS\].*MCP configured/);
+  assert.match(res.stdout, /请重启 OpenClaw/);
+});
+
 // ---- the codex probe's fail-safe polarity at the uninstall safety gate ----
 
 // A codex stub on PATH: --version answers like a real codex CLI (so the

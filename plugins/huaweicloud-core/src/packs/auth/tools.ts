@@ -239,7 +239,7 @@ export const AUTH_TOOL_SCHEMAS: Readonly<Record<AuthToolName, LooseToolSchema>> 
   huaweicloud_auth_confirm: authConfirmSchema,
 };
 
-// Dispatch map for the callTool case labels in src/tools.ts. Typed over
+// Dispatch map merged into PACK_TOOL_HANDLERS in packs/registry.ts. Typed over
 // AuthToolName, so a tool added to AUTH_TOOLS without a handler entry
 // here — or the reverse — fails to compile instead of failing at runtime.
 export const AUTH_TOOL_HANDLERS: Readonly<Record<AuthToolName, PackToolDefinition['handler']>> = {

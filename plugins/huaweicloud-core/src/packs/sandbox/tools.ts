@@ -34,6 +34,18 @@ import type { CallToolOptions, ToolArgs } from '../../tools.ts';
 // (isGitAvailable/gitCloneToLocal/transferGitRepo) is sandbox-specific and
 // moved with the connect handler.
 
+// The single source for each tool's timeout default. The zod schema text
+// and the handler fallback must agree, and direct callTool callers bypass
+// SDK schema application, so the handler fallback stays — both read this.
+export const SANDBOX_TIMEOUT_MS = {
+  exec_with_session: 120000,
+  exec_one_shot: 120000,
+  upload_file: 120000,
+  upload_project: 120000,
+  deploy_nginx: 60000,
+  deploy_check: 30000,
+} as const;
+
 const execFilePromise = promisify(execFile);
 
 async function isGitAvailable() {
@@ -122,7 +134,7 @@ async function handleExecWithSession(args: ToolArgs = {}, _opts: CallToolOptions
     );
   }
   const sandboxUser2 = args.username || 'root';
-  const sandboxTimeout2 = args.timeout_ms || 120000;
+  const sandboxTimeout2 = args.timeout_ms || SANDBOX_TIMEOUT_MS.exec_with_session;
   const sandboxResult2 = await execWithSession(sandboxWsId2, args.command || '', sandboxUser2, sandboxTimeout2);
   return { stdout: sandboxResult2.stdout, exitCode: sandboxResult2.exitCode };
 }
@@ -136,7 +148,7 @@ async function handleExecOneShot(args: ToolArgs = {}, _opts: CallToolOptions = {
     );
   }
   const sandboxUser3 = args.username || 'root';
-  const sandboxTimeout3 = args.timeout_ms || 120000;
+  const sandboxTimeout3 = args.timeout_ms || SANDBOX_TIMEOUT_MS.exec_one_shot;
   const sandboxResult3 = await execOneShot(sandboxWsId3, args.command || '', sandboxUser3, sandboxTimeout3);
   return { stdout: sandboxResult3.stdout, exitCode: sandboxResult3.exitCode };
 }
@@ -166,7 +178,7 @@ async function handleUploadFile(args: ToolArgs = {}, _opts: CallToolOptions = {}
     );
   }
   const sandboxUser5 = args.username || 'root';
-  const sandboxTimeout5 = args.timeout_ms || 120000;
+  const sandboxTimeout5 = args.timeout_ms || SANDBOX_TIMEOUT_MS.upload_file;
   return await uploadFileWithSession(sandboxWsId5, args.local_path, args.remote_path, sandboxUser5, sandboxTimeout5);
 }
 
@@ -182,7 +194,7 @@ async function handleUploadProject(args: ToolArgs = {}, _opts: CallToolOptions =
     );
   }
   const sandboxUser6 = args.username || 'root';
-  const sandboxTimeout6 = args.timeout_ms || 120000;
+  const sandboxTimeout6 = args.timeout_ms || SANDBOX_TIMEOUT_MS.upload_project;
   return await uploadProjectWithSession(sandboxWsId6, args.local_dir, args.remote_dir, sandboxUser6, sandboxTimeout6, {
     exclude: args.exclude,
     extract: args.extract,
@@ -201,7 +213,7 @@ async function handleDeployNginx(args: ToolArgs = {}, _opts: CallToolOptions = {
     );
   }
   const sandboxUser7 = args.username || 'root';
-  const sandboxTimeout7 = args.timeout_ms || 60000;
+  const sandboxTimeout7 = args.timeout_ms || SANDBOX_TIMEOUT_MS.deploy_nginx;
   return await deployNginx(
     sandboxWsId7,
     {
@@ -230,7 +242,7 @@ async function handleDeployCheck(args: ToolArgs = {}, _opts: CallToolOptions = {
     );
   }
   const sandboxUser8 = args.username || 'root';
-  const sandboxTimeout8 = args.timeout_ms || 30000;
+  const sandboxTimeout8 = args.timeout_ms || SANDBOX_TIMEOUT_MS.deploy_check;
   return await deployCheck(
     sandboxWsId8,
     {
@@ -361,14 +373,14 @@ const execWithSessionSchema = z.looseObject({
   command: z.string().describe('The shell command to execute on the remote workspace'),
   workspace_id: workspaceId,
   username,
-  timeout_ms: numericArg.optional().describe('Execution timeout in milliseconds (default: 120000)'),
+  timeout_ms: numericArg.optional().describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.exec_with_session})`),
 });
 
 const execOneShotSchema = z.looseObject({
   command: z.string().describe('The shell command to execute on the remote workspace'),
   workspace_id: workspaceId,
   username,
-  timeout_ms: numericArg.optional().describe('Execution timeout in milliseconds (default: 120000)'),
+  timeout_ms: numericArg.optional().describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.exec_one_shot})`),
 });
 
 const closeSessionSchema = z.looseObject({
@@ -381,7 +393,7 @@ const uploadFileSchema = z.looseObject({
   remote_path: z.string().describe('Target path in the sandbox, e.g. /workspace/<repo>/index.html.'),
   workspace_id: workspaceId,
   username,
-  timeout_ms: numericArg.optional().describe('Execution timeout in milliseconds (default: 60000)'),
+  timeout_ms: numericArg.optional().describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.upload_file})`),
 });
 
 const uploadProjectSchema = z.looseObject({
@@ -399,7 +411,7 @@ const uploadProjectSchema = z.looseObject({
     .optional()
     .describe('Patterns to exclude from archive (default: .git, node_modules, __pycache__, .venv)'),
   extract: z.boolean().optional().describe('Extract tar.gz on sandbox after upload (default: true)'),
-  timeout_ms: numericArg.optional().describe('Execution timeout in milliseconds (default: 300000)'),
+  timeout_ms: numericArg.optional().describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.upload_project})`),
 });
 
 const deployNginxSchema = z.looseObject({
@@ -421,7 +433,7 @@ const deployNginxSchema = z.looseObject({
     ),
   workspace_id: workspaceId,
   username,
-  timeout_ms: numericArg.optional().describe('Execution timeout in milliseconds (default: 30000)'),
+  timeout_ms: numericArg.optional().describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.deploy_nginx})`),
 });
 
 const deployCheckSchema = z.looseObject({
@@ -434,7 +446,7 @@ const deployCheckSchema = z.looseObject({
     .describe('Framework type from detect_framework. Set to cross-platform for QR code check.'),
   workspace_id: workspaceId,
   username,
-  timeout_ms: numericArg.optional().describe('Execution timeout in milliseconds (default: 30000)'),
+  timeout_ms: numericArg.optional().describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.deploy_check})`),
 });
 
 const checkUserSchema = z.looseObject({});
@@ -501,7 +513,7 @@ export const SANDBOX_TOOLS = [
   {
     name: 'huaweicloud_sandbox_upload_project',
     description:
-      'Package a local project directory and upload it to a sandbox workspace via HTTP tunnel. Falls back to base64 chunking if tunnel fails. Creates a tar.gz archive, uploads it, and extracts it on the sandbox by default.',
+      'Package a local project directory and upload it to a sandbox workspace via HTTP tunnel. Creates a tar.gz archive, uploads it, and extracts it on the sandbox by default.',
     schema: uploadProjectSchema,
     handler: handleUploadProject,
   },
@@ -568,7 +580,7 @@ export const SANDBOX_TOOL_SCHEMAS: Readonly<Record<SandboxToolName, LooseToolSch
   huaweicloud_sandbox_credentials: credentialsSchema,
 };
 
-// Dispatch map for the callTool case labels in src/tools.ts. Typed over
+// Dispatch map merged into PACK_TOOL_HANDLERS in packs/registry.ts. Typed over
 // SandboxToolName, so a tool added to SANDBOX_TOOLS without a handler entry
 // here — or the reverse — fails to compile instead of failing at runtime.
 export const SANDBOX_TOOL_HANDLERS: Readonly<Record<SandboxToolName, PackToolDefinition['handler']>> = {

@@ -98,7 +98,7 @@ export const UPDATE_TOOL_SCHEMAS: Readonly<Record<UpdateToolName, LooseToolSchem
   huaweicloud_upgrade: upgradeSchema,
 };
 
-// Dispatch map for the callTool case labels in src/tools.ts. Typed over
+// Dispatch map merged into PACK_TOOL_HANDLERS in packs/registry.ts. Typed over
 // UpdateToolName, so a tool added to UPDATE_TOOLS without a handler entry
 // here — or the reverse — fails to compile instead of failing at runtime.
 export const UPDATE_TOOL_HANDLERS: Readonly<Record<UpdateToolName, PackToolDefinition['handler']>> = {

@@ -305,7 +305,7 @@ export const OBS_TOOL_SCHEMAS: Readonly<Record<ObsToolName, LooseToolSchema>> = 
   huaweicloud_obs_set_website_config: obsWebsiteConfigSchema,
 };
 
-// Dispatch map for the callTool case labels in src/tools.ts. Typed over
+// Dispatch map merged into PACK_TOOL_HANDLERS in packs/registry.ts. Typed over
 // ObsToolName, so a tool added to OBS_TOOLS without a handler entry
 // here — or the reverse — fails to compile instead of failing at runtime.
 export const OBS_TOOL_HANDLERS: Readonly<Record<ObsToolName, PackToolDefinition['handler']>> = {

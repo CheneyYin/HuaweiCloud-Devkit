@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+
+const isWin = process.platform === 'win32';
 
 import {
   backupGlobalCredentials,
@@ -188,7 +190,7 @@ test('auth sync writes OBS and reports all agent registration targets', () => {
 });
 
 test('agent registration detects OpenCode MCP config', () => {
-  withTempHome((home) => {
+  withAgentHome((home) => {
     const cfgDir = join(home, '.config', 'opencode');
     mkdirSync(cfgDir, { recursive: true });
     writeFileSync(
@@ -202,7 +204,7 @@ test('agent registration detects OpenCode MCP config', () => {
 });
 
 test('agent registration detects DSH cordis patch config', () => {
-  withTempHome((home) => {
+  withAgentHome((home) => {
     const profileDir = join(home, '.dsh', 'profiles', 'web');
     mkdirSync(profileDir, { recursive: true });
     writeFileSync(
@@ -219,6 +221,29 @@ test('agent registration detects DSH cordis patch config', () => {
     );
     const status = getAgentRegistrationStatuses('dsh');
     assert.equal(status.agents.dsh.configured, true);
+  });
+});
+
+test('agent registration ignores HUAWEICLOUD_HOME for agent-owned configs', () => {
+  withAgentHome(() => {
+    const devkitHome = mkdtempSync(join(tmpdir(), 'huaweicloud-devkit-home-'));
+    const cfgDir = join(devkitHome, '.config', 'opencode');
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(
+      join(cfgDir, 'opencode.json'),
+      JSON.stringify({ mcp: { 'huaweicloud-devkit': { enabled: true } } }),
+      'utf8',
+    );
+    const saved = process.env.HUAWEICLOUD_HOME;
+    try {
+      process.env.HUAWEICLOUD_HOME = devkitHome;
+      const status = getAgentRegistrationStatuses('opencode');
+      assert.equal(status.agents.opencode.configured, false);
+    } finally {
+      if (saved === undefined) delete process.env.HUAWEICLOUD_HOME;
+      else process.env.HUAWEICLOUD_HOME = saved;
+      rmSync(devkitHome, { recursive: true, force: true });
+    }
   });
 });
 
@@ -240,6 +265,115 @@ test('agent registration detects DSH_HOME cordis patch config', () => {
     } finally {
       if (previousDshHome === undefined) delete process.env.DSH_HOME;
       else process.env.DSH_HOME = previousDshHome;
+    }
+  });
+});
+
+test('agent registration reads codex plugin state from JSON, not the table substring', { skip: isWin }, () => {
+  withTempHome((home) => {
+    const binDir = join(home, 'fake-bin');
+    mkdirSync(binDir, { recursive: true });
+    const scriptPath = join(home, 'fake-codex.mjs');
+    writeFileSync(
+      scriptPath,
+      `
+const args = process.argv.slice(2);
+if (args[0] === 'plugin' && args[1] === 'list' && args.includes('--json')) {
+  console.log(process.env.FAKE_CODEX_LIST_JSON || '{"installed":[]}');
+}
+process.exit(0);
+`,
+      'utf8',
+    );
+    const commandPath = join(binDir, 'codex');
+    writeFileSync(commandPath, `#!/usr/bin/env sh\n"${process.execPath}" "${scriptPath}" "$@"\n`, 'utf8');
+    chmodSync(commandPath, 0o755);
+    const savedPath = process.env.PATH;
+    try {
+      process.env.PATH = `${binDir}${delimiter}${savedPath || ''}`;
+      // The legacy table format carries the source directory
+      // (plugins/huaweicloud-core) in its SOURCE column; the old substring
+      // check read that as "installed" even with no installed row.
+      process.env.FAKE_CODEX_LIST_JSON =
+        'NAME                SOURCE\nhuaweicloud-devkit  /repo/plugins/huaweicloud-core';
+      assert.equal(getAgentRegistrationStatuses('codex').agents.codex.configured, false);
+      process.env.FAKE_CODEX_LIST_JSON = JSON.stringify({ installed: [] });
+      assert.equal(getAgentRegistrationStatuses('codex').agents.codex.configured, false);
+      process.env.FAKE_CODEX_LIST_JSON = JSON.stringify({ installed: [{ name: 'huaweicloud-devkit' }] });
+      assert.equal(getAgentRegistrationStatuses('codex').agents.codex.configured, true);
+    } finally {
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+      delete process.env.FAKE_CODEX_LIST_JSON;
+    }
+  });
+});
+
+// Home isolation for probes that resolve through os.homedir() (codex-desktop
+// payload dir, hermes layout). os.homedir() reads $HOME at call time, so
+// pointing HOME at a temp dir keeps these process-private; USERPROFILE is
+// redirected alongside it for Windows runs.
+function withAgentHome(fn) {
+  const dir = mkdtempSync(join(tmpdir(), 'huaweicloud-agent-home-'));
+  const prevHome = process.env.HOME;
+  const prevProfile = process.env.USERPROFILE;
+  process.env.HOME = dir;
+  if (prevProfile !== undefined) process.env.USERPROFILE = dir;
+  try {
+    return fn(dir);
+  } finally {
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    if (prevProfile !== undefined) process.env.USERPROFILE = prevProfile;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('agent registration detects current-era codex-desktop install', () => {
+  withAgentHome((home) => {
+    const distDir = join(home, 'plugins', 'huaweicloud-devkit', 'dist');
+    mkdirSync(distDir, { recursive: true });
+    writeFileSync(join(distDir, 'mcp-server.js'), '// fake server\n', 'utf8');
+    const status = getAgentRegistrationStatuses('codex-desktop');
+    assert.equal(status.agents['codex-desktop'].configured, true);
+  });
+});
+
+test('agent registration still detects legacy codex-desktop config.toml', () => {
+  withAgentHome((home) => {
+    const codexDir = join(home, '.codex');
+    mkdirSync(codexDir, { recursive: true });
+    writeFileSync(join(codexDir, 'config.toml'), '[mcp_servers.huaweicloud-devkit]\ncommand = "node"\n', 'utf8');
+    const status = getAgentRegistrationStatuses('codex-desktop');
+    assert.equal(status.agents['codex-desktop'].configured, true);
+  });
+});
+
+test('agent registration detects hermes config under the installer layout', () => {
+  withAgentHome((home) => {
+    const hermesDir = join(home, '.hermes');
+    mkdirSync(hermesDir, { recursive: true });
+    writeFileSync(join(hermesDir, 'config.yaml'), 'mcp_servers:\n  huaweicloud-devkit:\n    command: node\n', 'utf8');
+    const status = getAgentRegistrationStatuses('hermes');
+    assert.equal(status.agents.hermes.configured, true);
+  });
+});
+
+test('agent registration reads hermes from the real home, not HUAWEICLOUD_HOME', () => {
+  withAgentHome((home) => {
+    const devkitOnly = mkdtempSync(join(tmpdir(), 'huaweicloud-devkit-only-'));
+    const hermesDir = join(home, '.hermes');
+    mkdirSync(hermesDir, { recursive: true });
+    writeFileSync(join(hermesDir, 'config.yaml'), 'mcp_servers:\n  huaweicloud-devkit:\n    command: node\n', 'utf8');
+    const saved = process.env.HUAWEICLOUD_HOME;
+    try {
+      process.env.HUAWEICLOUD_HOME = devkitOnly;
+      const status = getAgentRegistrationStatuses('hermes');
+      assert.equal(status.agents.hermes.configured, true);
+    } finally {
+      if (saved === undefined) delete process.env.HUAWEICLOUD_HOME;
+      else process.env.HUAWEICLOUD_HOME = saved;
+      rmSync(devkitOnly, { recursive: true, force: true });
     }
   });
 });

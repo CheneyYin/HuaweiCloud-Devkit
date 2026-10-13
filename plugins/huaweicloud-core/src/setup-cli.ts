@@ -68,7 +68,8 @@ import {
   requiredDependencies,
   type DependencyId,
 } from './lib/dependency-model.ts';
-import { lookupOnPath, resolveDependencyCommand } from './lib/dep-resolve.ts';
+import { resolveDependencyCommand } from './lib/dep-resolve.ts';
+import { codexPluginProbe, getCodexPluginName, getMarketplaceName, type CodexPluginProbe } from './codex-probe.ts';
 
 // node:sqlite is a runtime-only builtin loaded through createRequire; only the
 // DatabaseSync surface this module calls is modeled (see auth/agent-registration.ts).
@@ -1025,6 +1026,10 @@ function updateOpenCodeConfig(pluginDir: string): void {
 
 // Read-merge-write for pluginDir/.mcp.json (OpenClaw, Codex Desktop).
 // Preserves user extra args/env; restores a prior uninstall's backup on fresh install (issue #615).
+// The fourth mcpServers-style writer, kept separate from ensureMcpServersConfig
+// because its target is the devkit-owned file inside the plugin dir, not an
+// agent-owned config: an unparseable file is rewritten fresh (not skipped),
+// fresh entries carry no timeout field, and the delta restore is conditional.
 function writeMcpServersFile(pluginDest: string, mcpPath: string, agentKey: string): void {
   const configPath = join(pluginDest, '.mcp.json');
   let config: unknown;
@@ -1108,31 +1113,6 @@ function hasCodexCLI(): boolean {
   return false;
 }
 
-function getMarketplaceName(): string {
-  const marketplacePath = join(PACKAGE_ROOT, '.agents', 'plugins', 'marketplace.json');
-  try {
-    const manifest = asRecord(JSON.parse(readFileSync(marketplacePath, 'utf8')));
-    if (typeof manifest.name === 'string' && manifest.name) return manifest.name;
-  } catch {}
-  return 'huaweicloud-devkit';
-}
-
-function getCodexPluginName(): string {
-  const marketplacePath = join(PACKAGE_ROOT, '.agents', 'plugins', 'marketplace.json');
-  try {
-    const marketplace = asRecord(JSON.parse(readFileSync(marketplacePath, 'utf8')));
-    const plugins: unknown[] = Array.isArray(marketplace.plugins) ? marketplace.plugins : [];
-    const pluginName: unknown = asRecord(plugins[0]).name;
-    if (typeof pluginName === 'string' && pluginName) return pluginName;
-  } catch {}
-  const codexManifestPath = join(PLUGIN_ROOT, '.codex-plugin', 'plugin.json');
-  try {
-    const manifest = asRecord(JSON.parse(readFileSync(codexManifestPath, 'utf8')));
-    if (typeof manifest.name === 'string' && manifest.name) return manifest.name;
-  } catch {}
-  return 'huaweicloud-devkit';
-}
-
 function installCodex(): boolean {
   // --packs has no write path here: the codex CLI owns this target's MCP
   // config. Say so once and continue; the install itself is unaffected.
@@ -1203,50 +1183,6 @@ function uninstallCodex(): void {
       stdio: 'pipe',
     });
     console.log(`  ${r2.stdout ? r2.stdout.toString().trim() : r2.stderr.toString().trim()}`);
-  }
-}
-
-// The codex plugin probe as a discriminated result. A successfully parsed
-// `codex plugin list --json` (exit 0, valid JSON, an installed array — empty
-// or not) is the only authoritative negative signal; a spawn failure,
-// timeout, non-zero exit, or unparseable/shape-mismatched output is UNKNOWN,
-// not "not installed" — the uninstall safety gate must treat unknown the
-// same way unknown DEVKIT_PACKS ids are treated (contribute the full
-// surface, fail-safe), because a probe failure must never let
-// `dep uninstall` delete a binary a live codex installation still needs.
-// A PATH miss is the one definitive absence: hasCodexCLI() cannot front this
-// probe because its false covers BOTH "absent" and "present but failed to
-// answer" (a --version timeout or odd version string), and the latter must
-// read as unknown, not as a trusted negative.
-type CodexPluginProbe = { ok: true; installed: boolean } | { ok: false };
-
-function codexPluginProbe(): CodexPluginProbe {
-  if (lookupOnPath('codex', process.env) === null) return { ok: true, installed: false };
-  // Parse the structured output instead of substring-matching the table: the
-  // plugin's SOURCE path (…/plugins/huaweicloud-devkit) also contains the name,
-  // so a naive includes() reports "installed" even when the status column says
-  // "not installed".
-  const r = spawnSync('codex plugin list --json', [], {
-    shell: true,
-    windowsHide: true,
-    stdio: 'pipe',
-    timeout: 5000,
-  });
-  if (r.status !== 0) return { ok: false };
-  const out = r.stdout ? r.stdout.toString() : '';
-  const name = getCodexPluginName();
-  try {
-    const data = asRecord(JSON.parse(out));
-    if (!Array.isArray(data.installed)) return { ok: false };
-    return {
-      ok: true,
-      installed: data.installed.some((p) => {
-        const record = asRecord(p);
-        return record.name === name || (typeof record.pluginId === 'string' && record.pluginId.startsWith(`${name}@`));
-      }),
-    };
-  } catch {
-    return { ok: false };
   }
 }
 
@@ -1602,13 +1538,24 @@ function uninstallCodexDesktop(): void {
   }
 }
 
-function registerCodeartsMcp(configPath: string, agentKey = 'codearts'): void {
-  const mcpPath = join(codeartsPluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
-  const hcloudBin = findHcloudBin();
-  const env: Record<string, string> = { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local' };
-  if (hcloudBin) env.HCLOUD_BIN = hcloudBin.replace(/\\/g, '/');
+// One read-merge-write skeleton for the mcpServers-style agent configs
+// (CodeArts, WorkBuddy, AtomCode). User fields survive every write: the
+// merge functions in mcp-config-merge.ts own the entry semantics, the
+// issue #615 delta restore owns reinstall recovery, and applyPacksToEntry
+// owns the keptUserValue DEVKIT_PACKS contract. Family members kept
+// separate: opencode (command style, jsonc-tolerant), codearts-work
+// (environment naming + peer-env inheritance), and writeMcpServersFile
+// (the devkit-owned plugin-dir .mcp.json — see its comment).
+function ensureMcpServersConfig(options: {
+  configPath: string;
+  mcpPath: string;
+  agentKey: string;
+  label: string;
+  env: Record<string, string>;
+  enabledByDefault?: boolean;
+}): boolean {
+  const { configPath, mcpPath, agentKey, label, env } = options;
   let config: Record<string, unknown> = {};
-  let existing: unknown;
   if (existsSync(configPath)) {
     try {
       config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
@@ -1616,15 +1563,15 @@ function registerCodeartsMcp(configPath: string, agentKey = 'codearts'): void {
       console.log(
         `  \x1b[33m[WARN]\x1b[0m Could not parse ${configPath}. Skipping MCP config write; ensure "mcpServers.huaweicloud-devkit" points to ${mcpPath}.`,
       );
-      return;
+      return false;
     }
-    existing = asRecord(config.mcpServers)['huaweicloud-devkit'];
+    const existing: unknown = asRecord(config.mcpServers)['huaweicloud-devkit'];
     if (existing) {
       const { entry, changed } = mergeArgsStyle(existing, { mcpPath, env });
-      const packsChanged = applyPacksToEntry(entry, 'env', 'CodeArts');
+      const packsChanged = applyPacksToEntry(entry, 'env', label);
       if (!changed && !packsChanged) {
         console.log(`  MCP config unchanged: ${configPath}`);
-        return;
+        return false;
       }
       const servers = asRecord(config.mcpServers);
       servers['huaweicloud-devkit'] = entry;
@@ -1632,22 +1579,32 @@ function registerCodeartsMcp(configPath: string, agentKey = 'codearts'): void {
       mkdirSync(dirname(configPath), { recursive: true });
       writeMcpSettingsFile(configPath, config);
       console.log(`  MCP config merged (user fields preserved): ${configPath}`);
-      return;
+      return true;
     }
   }
   const servers: Record<string, unknown> = asRecord(config.mcpServers);
   config.mcpServers = servers;
   let entry = mergeArgsStyle(undefined, { mcpPath, env }).entry;
-  entry.enabled = true;
-  // Restore user fields saved by a previous uninstall (issue #615) before the
-  // packs write so a delta-carried DEVKIT_PACKS counts as the current value.
+  if (options.enabledByDefault) entry.enabled = true;
+  // Restore user fields saved by a previous uninstall (issue #615) before
+  // the packs write so a delta-carried DEVKIT_PACKS counts as the current
+  // value.
   const delta = takeAgentDelta(agentKey);
   if (delta) entry = asRecord(applyUserDelta(entry, delta, 'args'));
-  applyPacksToEntry(entry, 'env', 'CodeArts');
+  applyPacksToEntry(entry, 'env', label);
   servers['huaweicloud-devkit'] = entry;
   mkdirSync(dirname(configPath), { recursive: true });
   writeMcpSettingsFile(configPath, config);
   console.log(`  MCP config updated: ${configPath}`);
+  return true;
+}
+
+function registerCodeartsMcp(configPath: string, agentKey = 'codearts'): void {
+  const mcpPath = join(codeartsPluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
+  const env: Record<string, string> = { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local' };
+  const hcloudBin = findHcloudBin();
+  if (hcloudBin) env.HCLOUD_BIN = hcloudBin.replace(/\\/g, '/');
+  ensureMcpServersConfig({ configPath, mcpPath, agentKey, label: 'CodeArts', env, enabledByDefault: true });
 }
 
 async function installCodeArts(): Promise<void> {
@@ -1886,51 +1843,16 @@ function codeartsWorkStatus(): void {
 
 // Returns true when the config file was written, false when it was already correct.
 function ensureWorkbuddyMcpConfig(): boolean {
-  const configPath = workbuddyMcpConfigFile();
-  const mcpPath = join(workbuddyPluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
   const env: Record<string, string> = { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local' };
   const hcloudBin = findHcloudBin();
   if (hcloudBin) env.HCLOUD_BIN = hcloudBin.replace(/\\/g, '/');
-  let config: Record<string, unknown> = {};
-  if (existsSync(configPath)) {
-    try {
-      config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
-    } catch {
-      console.log(
-        `  \x1b[33m[WARN]\x1b[0m Could not parse ${configPath}. Skipping MCP config write; ensure "mcpServers.huaweicloud-devkit" points to ${mcpPath}.`,
-      );
-      return false;
-    }
-    const existing: unknown = asRecord(config.mcpServers)['huaweicloud-devkit'];
-    if (existing) {
-      const { entry, changed } = mergeArgsStyle(existing, { mcpPath, env });
-      const packsChanged = applyPacksToEntry(entry, 'env', 'WorkBuddy');
-      if (!changed && !packsChanged) {
-        console.log(`  MCP config unchanged: ${configPath}`);
-        return false;
-      }
-      const servers = asRecord(config.mcpServers);
-      servers['huaweicloud-devkit'] = entry;
-      config.mcpServers = servers;
-      mkdirSync(dirname(configPath), { recursive: true });
-      writeMcpSettingsFile(configPath, config);
-      console.log(`  MCP config merged (user fields preserved): ${configPath}`);
-      return true;
-    }
-  }
-  const servers: Record<string, unknown> = asRecord(config.mcpServers);
-  config.mcpServers = servers;
-  let entry = mergeArgsStyle(undefined, { mcpPath, env }).entry;
-  // Restore user fields saved by a previous uninstall (issue #615) before the
-  // packs write so a delta-carried DEVKIT_PACKS counts as the current value.
-  const delta = takeAgentDelta('workbuddy');
-  if (delta) entry = asRecord(applyUserDelta(entry, delta, 'args'));
-  applyPacksToEntry(entry, 'env', 'WorkBuddy');
-  servers['huaweicloud-devkit'] = entry;
-  mkdirSync(dirname(configPath), { recursive: true });
-  writeMcpSettingsFile(configPath, config);
-  console.log(`  MCP config updated: ${configPath}`);
-  return true;
+  return ensureMcpServersConfig({
+    configPath: workbuddyMcpConfigFile(),
+    mcpPath: join(workbuddyPluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/'),
+    agentKey: 'workbuddy',
+    label: 'WorkBuddy',
+    env,
+  });
 }
 
 // Resolve WorkBuddy's managed Python binary to run the hook tracker.
@@ -2203,51 +2125,16 @@ function workbuddyStatus(): void {
 }
 
 function ensureAtomcodeMcpConfig(): boolean {
-  const configPath = atomcodeMcpConfigFile();
-  const mcpPath = join(atomcodePluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');
   const env: Record<string, string> = { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local', AGENT_HARNESS: 'atomcode' };
   const hcloudBin = findHcloudBin();
   if (hcloudBin) env.HCLOUD_BIN = hcloudBin.replace(/\\/g, '/');
-  let config: Record<string, unknown> = {};
-  if (existsSync(configPath)) {
-    try {
-      config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
-    } catch {
-      console.log(
-        `  \x1b[33m[WARN]\x1b[0m Could not parse ${configPath}. Skipping MCP config write; ensure "mcpServers.huaweicloud-devkit" points to ${mcpPath}.`,
-      );
-      return false;
-    }
-    const existing: unknown = asRecord(config.mcpServers)['huaweicloud-devkit'];
-    if (existing) {
-      const { entry, changed } = mergeArgsStyle(existing, { mcpPath, env });
-      const packsChanged = applyPacksToEntry(entry, 'env', 'AtomCode');
-      if (!changed && !packsChanged) {
-        console.log(`  MCP config unchanged: ${configPath}`);
-        return false;
-      }
-      const servers = asRecord(config.mcpServers);
-      servers['huaweicloud-devkit'] = entry;
-      config.mcpServers = servers;
-      mkdirSync(dirname(configPath), { recursive: true });
-      writeMcpSettingsFile(configPath, config);
-      console.log(`  MCP config merged (user fields preserved): ${configPath}`);
-      return true;
-    }
-  }
-  const servers: Record<string, unknown> = asRecord(config.mcpServers);
-  config.mcpServers = servers;
-  let entry = mergeArgsStyle(undefined, { mcpPath, env }).entry;
-  // Restore user fields saved by a previous uninstall (issue #615) before the
-  // packs write so a delta-carried DEVKIT_PACKS counts as the current value.
-  const delta = takeAgentDelta('atomcode');
-  if (delta) entry = asRecord(applyUserDelta(entry, delta, 'args'));
-  applyPacksToEntry(entry, 'env', 'AtomCode');
-  servers['huaweicloud-devkit'] = entry;
-  mkdirSync(dirname(configPath), { recursive: true });
-  writeMcpSettingsFile(configPath, config);
-  console.log(`  MCP config updated: ${configPath}`);
-  return true;
+  return ensureMcpServersConfig({
+    configPath: atomcodeMcpConfigFile(),
+    mcpPath: join(atomcodePluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/'),
+    agentKey: 'atomcode',
+    label: 'AtomCode',
+    env,
+  });
 }
 
 async function installAtomCode(): Promise<void> {
@@ -3647,19 +3534,13 @@ async function checkForUpdate(): Promise<void> {
   }
 }
 
+// The .installed marker directory for a target. A lookup over
+// PAYLOAD_TARGETS, not a second hand list: codex (CLI-managed, no plugin
+// dir) and any unknown target are absent from the table, so they naturally
+// return null. writeInstallMarker and the single-target willPlacePayload
+// gate both consume this.
 function installMarkerDirForTarget(target: string): string | null {
-  if (target === 'codex') return null;
-  if (target === 'dsh') return dshPluginsDir();
-  if (target === 'codearts') return codeartsPluginsDir();
-  if (target === 'codearts-work') return codeartsWorkPluginsDir();
-  if (target === 'workbuddy') return workbuddyPluginsDir();
-  if (target === 'officeace') return officeacePluginsDir();
-  if (target === 'hermes') return hermesPluginsDir();
-  if (target === 'openclaw') return openclawPluginsDir();
-  if (target === 'atomcode') return atomcodePluginsDir();
-  if (target === 'codex-desktop') return codexDesktopPluginsDir();
-  if (target === 'opencode') return opencodePluginsDir();
-  return null;
+  return PAYLOAD_TARGETS.find((t) => t.id === target)?.dir() ?? null;
 }
 
 function writeInstallMarker(target: string): void {
@@ -4578,6 +4459,78 @@ async function provisionPackBinaries(): Promise<void> {
   });
 }
 
+// Every agent whose installer ships the server payload (dist + safety +
+// skills + undici + .installed marker) into a plugin dir. Doctor's payload
+// checks (MCP server, undici, safety policy, skills tree, restart markers),
+// the .installed marker directory (installMarkerDirForTarget), update's
+// willPlacePayload, and the update dispatch itself (one loop for the
+// single-target and all-targets modes) all derive from this one table, so
+// a target cannot appear in one check and miss another — the atomcode
+// undici miss and the openclaw-wide miss were both this drift class. Labels
+// follow the doctor spellings ('Hermes Agent', not AGENT_LABELS' 'Hermes');
+// hints are the per-target restart copy. codex is CLI-managed with no
+// plugin dir and stays an explicit branch in dispatchUpdateTarget.
+const PAYLOAD_TARGETS = [
+  {
+    id: 'opencode',
+    label: 'OpenCode',
+    dir: opencodePluginsDir,
+    update: updateOpenCode,
+    hint: 'MCP 工具在重启 OpenCode 会话后才生效。',
+  },
+  {
+    id: 'codex-desktop',
+    label: 'Codex Desktop',
+    dir: codexDesktopPluginsDir,
+    update: updateCodexDesktop,
+    hint: 'MCP 工具在重启 Codex Desktop 会话后才生效。',
+  },
+  { id: 'codearts', label: 'CodeArts', dir: codeartsPluginsDir, update: updateCodeArts, hint: 'MCP 工具在重启 CodeArts 会话后才生效。' },
+  {
+    id: 'codearts-work',
+    label: 'CodeArts Work',
+    dir: codeartsWorkPluginsDir,
+    update: updateCodeArtsWork,
+    hint: 'MCP 工具在重启 CodeArts Work 会话后才生效。',
+  },
+  {
+    id: 'workbuddy',
+    label: 'WorkBuddy',
+    dir: workbuddyPluginsDir,
+    update: updateWorkBuddy,
+    hint: 'MCP 工具在重启 WorkBuddy 会话后才生效。',
+  },
+  { id: 'dsh', label: 'DSH', dir: dshPluginsDir, update: updateDsh, hint: 'Restart the DSH session for changes to take effect.' },
+  {
+    id: 'officeace',
+    label: 'OfficeAce',
+    dir: officeacePluginsDir,
+    update: updateOfficeAce,
+    hint: '打开连接器 → 我的连接器 → huaweicloud-devkit → 连接 → 回到对话 → 输入框开启连接器',
+  },
+  {
+    id: 'hermes',
+    label: 'Hermes Agent',
+    dir: hermesPluginsDir,
+    update: updateHermes,
+    hint: 'Restart Hermes Agent for changes to take effect.',
+  },
+  {
+    id: 'openclaw',
+    label: 'OpenClaw',
+    dir: openclawPluginsDir,
+    update: updateOpenClaw,
+    hint: 'Restart OpenClaw for changes to take effect.',
+  },
+  {
+    id: 'atomcode',
+    label: 'AtomCode',
+    dir: atomcodePluginsDir,
+    update: updateAtomCode,
+    hint: 'Restart the AtomCode session for changes to take effect.',
+  },
+] as const;
+
 async function cmdDoctor(): Promise<void> {
   console.log(BANNER);
   console.log('HuaweiCloud DevKit Doctor\n');
@@ -4599,74 +4552,22 @@ async function cmdDoctor(): Promise<void> {
   // Node.js
   check('Node.js >= 22', Number(process.versions.node.split('.')[0]) >= 22, 'Run: nvm install 22 && nvm use 22');
 
-  // MCP server — check OpenCode, Codex Desktop, CodeArts, WorkBuddy, and DSH paths
-  const opencodePluginDir = opencodePluginsDir();
-  const codexPluginDir = codexDesktopPluginsDir();
-  const codeartsPluginDir = codeartsPluginsDir();
-  const codeartsWorkPluginDir = codeartsWorkPluginsDir();
-  const workbuddyPluginDir = workbuddyPluginsDir();
-  const dshPluginDir = dshPluginsDir();
-  const officeacePluginDir = officeacePluginsDir();
-  const hermesPluginDir = hermesPluginsDir();
-  const atomcodePluginDir = atomcodePluginsDir();
-  const mcpOk =
-    mcpServerInstalled(opencodePluginDir) ||
-    mcpServerInstalled(codexPluginDir) ||
-    mcpServerInstalled(codeartsPluginDir) ||
-    mcpServerInstalled(codeartsWorkPluginDir) ||
-    mcpServerInstalled(workbuddyPluginDir) ||
-    mcpServerInstalled(dshPluginDir) ||
-    mcpServerInstalled(officeacePluginDir) ||
-    mcpServerInstalled(hermesPluginDir) ||
-    mcpServerInstalled(atomcodePluginDir);
-  const mcpTarget = mcpServerInstalled(opencodePluginDir)
-    ? 'OpenCode'
-    : mcpServerInstalled(codexPluginDir)
-      ? 'Codex Desktop'
-      : mcpServerInstalled(codeartsPluginDir)
-        ? 'CodeArts'
-        : mcpServerInstalled(codeartsWorkPluginDir)
-          ? 'CodeArts Work'
-          : mcpServerInstalled(workbuddyPluginDir)
-            ? 'WorkBuddy'
-            : mcpServerInstalled(dshPluginDir)
-              ? 'DSH'
-              : mcpServerInstalled(officeacePluginDir)
-                ? 'OfficeAce'
-                : mcpServerInstalled(hermesPluginDir)
-                  ? 'Hermes Agent'
-                  : mcpServerInstalled(atomcodePluginDir)
-                    ? 'AtomCode'
-                    : '';
+  // MCP server — derived from PAYLOAD_TARGETS (one membership table for
+  // every payload check in this doctor run).
+  const payloadDirs = PAYLOAD_TARGETS.map((target) => target.dir());
+  const installedPayload = PAYLOAD_TARGETS.find((target) => mcpServerInstalled(target.dir()));
+  const mcpOk = installedPayload !== undefined;
+  const mcpTarget = installedPayload ? installedPayload.label : '';
   check('MCP server installed', mcpOk, 'Run: npx huaweicloud-devkit install');
 
   if (mcpOk) {
     check(`MCP server can start (${mcpTarget})`, true, '');
   }
 
-  const undiciPluginDirs = [
-    opencodePluginDir,
-    codexPluginDir,
-    codeartsPluginDir,
-    codeartsWorkPluginDir,
-    workbuddyPluginDir,
-    dshPluginDir,
-    officeacePluginDir,
-    hermesPluginDir,
-  ];
-  const undiciOk = undiciPluginDirs.some((d) => existsSync(join(d, 'node_modules', 'undici')));
+  const undiciOk = payloadDirs.some((d) => existsSync(join(d, 'node_modules', 'undici')));
   check('Runtime deps (undici) installed', undiciOk, 'Run: npx huaweicloud-devkit install');
 
-  const safetyOk =
-    existsSync(join(opencodePluginDir, 'safety', 'policy.json')) ||
-    existsSync(join(codexPluginDir, 'safety', 'policy.json')) ||
-    existsSync(join(codeartsPluginDir, 'safety', 'policy.json')) ||
-    existsSync(join(codeartsWorkPluginDir, 'safety', 'policy.json')) ||
-    existsSync(join(workbuddyPluginDir, 'safety', 'policy.json')) ||
-    existsSync(join(dshPluginDir, 'safety', 'policy.json')) ||
-    existsSync(join(officeacePluginDir, 'safety', 'policy.json')) ||
-    existsSync(join(hermesPluginDir, 'safety', 'policy.json')) ||
-    existsSync(join(atomcodePluginDir, 'safety', 'policy.json'));
+  const safetyOk = payloadDirs.some((d) => existsSync(join(d, 'safety', 'policy.json')));
   check('Safety policy installed', safetyOk, 'Run: npx huaweicloud-devkit install');
 
   const hookConfigPath = join(PLUGIN_ROOT, 'hooks', 'hooks.json');
@@ -4781,6 +4682,20 @@ async function cmdDoctor(): Promise<void> {
       } catch {}
     }
   }
+  if (!mcpConfigured) {
+    // OpenClaw's .mcp.json is written by the same writeMcpServersFile the
+    // codex-desktop flow uses (mcpServers key).
+    const openclawCfg = join(openclawPluginsDir(), '.mcp.json');
+    if (existsSync(openclawCfg)) {
+      try {
+        const cfg = asRecord(JSON.parse(readFileSync(openclawCfg, 'utf8')));
+        if (cfg.mcpServers && asRecord(cfg.mcpServers)['huaweicloud-devkit']) {
+          mcpConfigured = true;
+          mcpCfgTarget = 'OpenClaw';
+        }
+      } catch {}
+    }
+  }
   check(
     'MCP configured',
     mcpConfigured,
@@ -4853,21 +4768,10 @@ async function cmdDoctor(): Promise<void> {
   // Skills are server data disclosed over MCP: the health signal is the
   // tree sitting in an installed plugin dir, never agent-native dirs. The
   // tree check is decoupled from the bundled server (the Hermes clone flow
-  // --skip-mcp-server ships skills without dist), includes OpenClaw, and
-  // accepts the running package root when the DSH npm-in-profile patch is
-  // configured (that layout resolves skills from the package root).
-  const skillsTreeDirs = [
-    opencodePluginDir,
-    codexPluginDir,
-    codeartsPluginDir,
-    codeartsWorkPluginDir,
-    workbuddyPluginDir,
-    dshPluginDir,
-    officeacePluginDir,
-    hermesPluginDir,
-    atomcodePluginDir,
-    openclawPluginsDir(),
-  ];
+  // --skip-mcp-server ships skills without dist), and accepts the running
+  // package root when the DSH npm-in-profile patch is configured (that
+  // layout resolves skills from the package root).
+  const skillsTreeDirs = [...payloadDirs];
   if (dshPatchConfigured()) skillsTreeDirs.push(join(PLUGIN_ROOT, 'skills'));
   const skillsTreeOk = skillsTreeDirs.some((dir) => serverSkillCount(dir) >= 6);
   check('Skills tree (server data, MCP-disclosed)', skillsTreeOk, 'Run: npx huaweicloud-devkit install');
@@ -4983,22 +4887,12 @@ async function cmdDoctor(): Promise<void> {
     console.log('\n\x1b[32mAll checks passed.\x1b[0m You can now describe your Huawei Cloud task');
   }
 
-  // Detect "installed but not restarted" — check all supported agents
-  const installedMarkers = [
-    { path: join(opencodePluginsDir(), '.installed'), name: 'OpenCode' },
-    { path: join(codexDesktopPluginsDir(), '.installed'), name: 'Codex Desktop' },
-    { path: join(workbuddyPluginsDir(), '.installed'), name: 'WorkBuddy' },
-    { path: join(codeartsPluginsDir(), '.installed'), name: 'CodeArts' },
-    { path: join(codeartsWorkPluginsDir(), '.installed'), name: 'CodeArts Work' },
-    { path: join(dshPluginsDir(), '.installed'), name: 'DSH' },
-    { path: join(hermesPluginsDir(), '.installed'), name: 'Hermes Agent' },
-    { path: join(officeacePluginsDir(), '.installed'), name: 'OfficeAce' },
-    { path: join(atomcodePluginsDir(), '.installed'), name: 'AtomCode' },
-  ];
-  for (const marker of installedMarkers) {
-    if (existsSync(marker.path)) {
+  // Detect "installed but not restarted" — every payload target's marker,
+  // derived from the same table as the checks above.
+  for (const target of PAYLOAD_TARGETS) {
+    if (existsSync(join(target.dir(), '.installed'))) {
       console.log(`\n\x1b[1m\x1b[31m╔══════════════════════════════════════════╗`);
-      console.log(`\x1b[1m\x1b[31m║  请重启 ${marker.name}！MCP 工具尚未激活     ║`);
+      console.log(`\x1b[1m\x1b[31m║  请重启 ${target.label}！MCP 工具尚未激活     ║`);
       console.log(`\x1b[1m\x1b[31m║  关闭当前会话 → 重新打开即可             ║`);
       console.log(`\x1b[1m\x1b[31m╚══════════════════════════════════════════╝\x1b[0m`);
       break;
@@ -5018,20 +4912,7 @@ async function cmdUpdate(): Promise<void> {
   // purge harmlessly.
   const markerDir = installMarkerDirForTarget(target);
   const willPlacePayload =
-    target === 'all'
-      ? [
-          opencodePluginsDir(),
-          codexDesktopPluginsDir(),
-          codeartsPluginsDir(),
-          codeartsWorkPluginsDir(),
-          workbuddyPluginsDir(),
-          dshPluginsDir(),
-          officeacePluginsDir(),
-          hermesPluginsDir(),
-          openclawPluginsDir(),
-          atomcodePluginsDir(),
-        ].some((dir) => mcpServerInstalled(dir))
-      : markerDir !== null && mcpServerInstalled(markerDir);
+    target === 'all' ? PAYLOAD_TARGETS.some((t) => mcpServerInstalled(t.dir())) : markerDir !== null && mcpServerInstalled(markerDir);
   if (willPlacePayload) {
     const purged = purgeStaleNativeSkills();
     if (purged > 0)
@@ -5049,34 +4930,14 @@ async function cmdUpdate(): Promise<void> {
   }
 }
 
-// The per-target update dispatch. Returns true when the target actually
+// The per-target update dispatch, one loop over PAYLOAD_TARGETS for both
+// the single-target and all-targets modes. codex is the one genuine
+// variant — CLI-managed, no plugin dir — and keeps explicit branches:
+// single-target hard-fails on a missing CLI, all-targets probes plugin
+// state and silently skips. Returns true when at least one target actually
 // updated (drives the post-update provisioning pass); false on the
 // per-target "Not installed" early-returns.
 async function dispatchUpdateTarget(target: string): Promise<boolean> {
-  if (target === 'opencode') {
-    if (!mcpServerInstalled(opencodePluginsDir())) {
-      console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return false;
-    }
-    console.log('[OpenCode]');
-    await updateOpenCode();
-    console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
-    console.log(`\x1b[33mMCP 工具在重启 OpenCode 会话后才生效。\x1b[0m`);
-    return true;
-  }
-
-  if (target === 'codex-desktop') {
-    if (!mcpServerInstalled(codexDesktopPluginsDir())) {
-      console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return false;
-    }
-    console.log('[Codex Desktop]');
-    await updateCodexDesktop();
-    console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
-    console.log(`\x1b[33mMCP 工具在重启 Codex Desktop 会话后才生效。\x1b[0m`);
-    return true;
-  }
-
   if (target === 'codex') {
     if (!hasCodexCLI()) {
       console.log(`  \x1b[31mCodex CLI not found.\x1b[0m`);
@@ -5094,154 +4955,29 @@ async function dispatchUpdateTarget(target: string): Promise<boolean> {
     return true;
   }
 
-  if (target === 'codearts') {
-    if (!mcpServerInstalled(codeartsPluginsDir())) {
-      console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return false;
+  const all = target === 'all';
+  let updatedAny = false;
+  for (const row of PAYLOAD_TARGETS) {
+    if (!all && row.id !== target) continue;
+    if (!mcpServerInstalled(row.dir())) {
+      if (!all) {
+        console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
+        return false;
+      }
+      continue;
     }
-    console.log('[CodeArts]');
-    await updateCodeArts();
-    console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
-    console.log(`\x1b[33mMCP 工具在重启 CodeArts 会话后才生效。\x1b[0m`);
-    return true;
+    // Historical label layout: in all-targets mode every label except
+    // opencode's (the table's first row) prints with a leading blank line.
+    console.log(`${all && row.id !== 'opencode' ? '\n' : ''}[${row.label}]`);
+    await row.update();
+    updatedAny = true;
+    if (!all) {
+      console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
+      console.log(`\x1b[33m${row.hint}\x1b[0m`);
+      return true;
+    }
   }
-
-  if (target === 'codearts-work') {
-    if (!mcpServerInstalled(codeartsWorkPluginsDir())) {
-      console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return false;
-    }
-    console.log('[CodeArts Work]');
-    await updateCodeArtsWork();
-    console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
-    console.log(`\x1b[33mMCP 工具在重启 CodeArts Work 会话后才生效。\x1b[0m`);
-    return true;
-  }
-
-  if (target === 'workbuddy') {
-    if (!mcpServerInstalled(workbuddyPluginsDir())) {
-      console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return false;
-    }
-    console.log('[WorkBuddy]');
-    await updateWorkBuddy();
-    console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
-    console.log(`\x1b[33mMCP 工具在重启 WorkBuddy 会话后才生效。\x1b[0m`);
-    return true;
-  }
-
-  if (target === 'dsh') {
-    if (!mcpServerInstalled(dshPluginsDir())) {
-      console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return false;
-    }
-    console.log('[DSH]');
-    await updateDsh();
-    console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
-    console.log(`\x1b[33mRestart the DSH session for changes to take effect.\x1b[0m`);
-    return true;
-  }
-
-  if (target === 'officeace') {
-    if (!mcpServerInstalled(officeacePluginsDir())) {
-      console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return false;
-    }
-    console.log('[OfficeAce]');
-    await updateOfficeAce();
-    console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
-    console.log(`\x1b[33m打开连接器 → 我的连接器 → huaweicloud-devkit → 连接 → 回到对话 → 输入框开启连接器\x1b[0m`);
-    return true;
-  }
-
-  if (target === 'hermes') {
-    if (!mcpServerInstalled(hermesPluginsDir())) {
-      console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return false;
-    }
-    console.log('[Hermes Agent]');
-    await updateHermes();
-    console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
-    console.log(`\x1b[33mRestart Hermes Agent for changes to take effect.\x1b[0m`);
-    return true;
-  }
-
-  if (target === 'openclaw') {
-    if (!mcpServerInstalled(openclawPluginsDir())) {
-      console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return false;
-    }
-    console.log('[OpenClaw]');
-    await updateOpenClaw();
-    console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
-    console.log(`\x1b[33mRestart OpenClaw for changes to take effect.\x1b[0m`);
-    return true;
-  }
-
-  if (target === 'atomcode') {
-    if (!mcpServerInstalled(atomcodePluginsDir())) {
-      console.log('\x1b[33mNot installed. Use "install" command first.\x1b[0m');
-      return false;
-    }
-    console.log('[AtomCode]');
-    await updateAtomCode();
-    console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
-    console.log(`\x1b[33mRestart the AtomCode session for changes to take effect.\x1b[0m`);
-    return true;
-  }
-
-  if (target === 'all') {
-    let updatedAny = false;
-    if (mcpServerInstalled(opencodePluginsDir())) {
-      console.log('[OpenCode]');
-      await updateOpenCode();
-      updatedAny = true;
-    }
-    if (mcpServerInstalled(codexDesktopPluginsDir())) {
-      console.log('\n[Codex Desktop]');
-      await updateCodexDesktop();
-      updatedAny = true;
-    }
-    if (mcpServerInstalled(codeartsPluginsDir())) {
-      console.log('\n[CodeArts]');
-      await updateCodeArts();
-      updatedAny = true;
-    }
-    if (mcpServerInstalled(codeartsWorkPluginsDir())) {
-      console.log('\n[CodeArts Work]');
-      await updateCodeArtsWork();
-      updatedAny = true;
-    }
-    if (mcpServerInstalled(workbuddyPluginsDir())) {
-      console.log('\n[WorkBuddy]');
-      await updateWorkBuddy();
-      updatedAny = true;
-    }
-    if (mcpServerInstalled(dshPluginsDir())) {
-      console.log('\n[DSH]');
-      await updateDsh();
-      updatedAny = true;
-    }
-    if (mcpServerInstalled(officeacePluginsDir())) {
-      console.log('\n[OfficeAce]');
-      await updateOfficeAce();
-      updatedAny = true;
-    }
-    if (mcpServerInstalled(hermesPluginsDir())) {
-      console.log('\n[Hermes Agent]');
-      await updateHermes();
-      updatedAny = true;
-    }
-    if (mcpServerInstalled(openclawPluginsDir())) {
-      console.log('\n[OpenClaw]');
-      await updateOpenClaw();
-      updatedAny = true;
-    }
-    if (mcpServerInstalled(atomcodePluginsDir())) {
-      console.log('\n[AtomCode]');
-      await updateAtomCode();
-      updatedAny = true;
-    }
+  if (all) {
     if (codexStatus()) {
       console.log('\n[Codex]');
       installCodex();
@@ -5376,7 +5112,10 @@ function configureHcloud(credentials: { ak: unknown; sk: unknown; region?: unkno
   code: number | null;
   error: string;
 } {
-  const hcloudBin = findHcloudBin() || process.env.HCLOUD_BIN || 'hcloud';
+  // findHcloudBin already honors a valid HCLOUD_BIN through the guarded
+  // shared chain; a raw env fallback here would resurrect the stale-override
+  // divergence the chain exists to prevent.
+  const hcloudBin = findHcloudBin() || 'hcloud';
   const args = [
     'configure',
     'set',

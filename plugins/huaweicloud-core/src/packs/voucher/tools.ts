@@ -54,7 +54,7 @@ export const VOUCHER_TOOL_SCHEMAS: Readonly<Record<VoucherToolName, LooseToolSch
   huaweicloud_voucher_claim: voucherClaimSchema,
 };
 
-// Dispatch map for the callTool case labels in src/tools.ts. Typed over
+// Dispatch map merged into PACK_TOOL_HANDLERS in packs/registry.ts. Typed over
 // VoucherToolName, so a tool added to VOUCHER_TOOLS without a handler entry
 // here — or the reverse — fails to compile instead of failing at runtime.
 export const VOUCHER_TOOL_HANDLERS: Readonly<Record<VoucherToolName, PackToolDefinition['handler']>> = {

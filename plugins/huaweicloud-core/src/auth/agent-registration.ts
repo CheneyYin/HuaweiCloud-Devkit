@@ -4,6 +4,8 @@ import { homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
+import { codexPluginProbe } from '../codex-probe.ts';
+
 export const SUPPORTED_AGENT_TARGETS: string[] = [
   'opencode',
   'codex',
@@ -18,14 +20,13 @@ export const SUPPORTED_AGENT_TARGETS: string[] = [
   'atomcode',
 ];
 
-function baseHome(): string {
-  return process.env.HUAWEICLOUD_HOME || homedir();
-}
-
+// Agent-owned config paths resolve from the real home. HUAWEICLOUD_HOME
+// relocates only devkit-owned state (credentials.ts); the installer writes
+// agent configs under homedir(), so detection must read the same place.
 function opencodeConfigFile(): string {
-  const jsonc = join(baseHome(), '.config', 'opencode', 'opencode.jsonc');
+  const jsonc = join(homedir(), '.config', 'opencode', 'opencode.jsonc');
   if (existsSync(jsonc)) return jsonc;
-  return join(baseHome(), '.config', 'opencode', 'opencode.json');
+  return join(homedir(), '.config', 'opencode', 'opencode.json');
 }
 
 function readJsonSafe(path: string): unknown {
@@ -48,33 +49,28 @@ function opencodeRegistered(): boolean {
 }
 
 function codexDesktopRegistered(): boolean {
-  const path = join(baseHome(), '.codex', 'config.toml');
-  if (!existsSync(path)) return false;
+  // Current-era installs ship the server payload to
+  // ~/plugins/huaweicloud-devkit (codexDesktopPluginsDir in setup-cli);
+  // config.toml sections are pre-marketplace residue the uninstaller
+  // actively removes, kept only as a legacy fallback.
+  if (existsSync(join(homedir(), 'plugins', 'huaweicloud-devkit', 'dist', 'mcp-server.js'))) return true;
+  const legacyPath = join(homedir(), '.codex', 'config.toml');
+  if (!existsSync(legacyPath)) return false;
   try {
-    return readFileSync(path, 'utf8').includes('[mcp_servers.huaweicloud-devkit]');
+    return readFileSync(legacyPath, 'utf8').includes('[mcp_servers.huaweicloud-devkit]');
   } catch {
     return false;
   }
 }
 
 function codexCliRegistered(): boolean {
-  try {
-    const r = spawnSync('codex', ['plugin', 'list'], {
-      shell: false,
-      windowsHide: true,
-      stdio: 'pipe',
-      timeout: 10000,
-    });
-    const out = `${r.stdout || ''}${r.stderr || ''}`;
-    return out.includes('huaweicloud-core');
-  } catch {
-    return false;
-  }
+  const probe = codexPluginProbe();
+  return probe.ok && probe.installed;
 }
 
 function codeartsRegistered(): boolean {
   const paths = [
-    join(baseHome(), '.codeartsdoer', 'mcp', 'mcp_settings.json'),
+    join(homedir(), '.codeartsdoer', 'mcp', 'mcp_settings.json'),
     join(process.cwd(), '.codeartsdoer', 'mcp', 'mcp_settings.json'),
   ];
   return paths.some((path) => {
@@ -84,18 +80,18 @@ function codeartsRegistered(): boolean {
 }
 
 function codeartsWorkRegistered(): boolean {
-  const path = join(baseHome(), '.codeartswork', 'mcp', 'mcp_settings.json');
+  const path = join(homedir(), '.codeartswork', 'mcp', 'mcp_settings.json');
   const cfg = asRecord(readJsonSafe(path));
   return Boolean(asRecord(cfg.mcp)['huaweicloud-devkit']);
 }
 
 function workbuddyRegistered(): boolean {
-  const cfg = asRecord(readJsonSafe(join(baseHome(), '.workbuddy', 'mcp.json')));
+  const cfg = asRecord(readJsonSafe(join(homedir(), '.workbuddy', 'mcp.json')));
   return Boolean(asRecord(cfg.mcpServers)['huaweicloud-devkit']);
 }
 
 function dshRoot(): string {
-  return process.env.DSH_HOME || join(baseHome(), '.dsh');
+  return process.env.DSH_HOME || join(homedir(), '.dsh');
 }
 
 function dshRegistered(): boolean {
@@ -150,7 +146,7 @@ function officeaceCapabilitiesDir(): string | null {
 }
 
 function officeaceCapabilitiesDirSafe(): string {
-  return officeaceCapabilitiesDir() || join(baseHome(), '.office-claw');
+  return officeaceCapabilitiesDir() || join(homedir(), '.office-claw');
 }
 
 function officeaceSqlitePath(): string {
@@ -209,7 +205,7 @@ function officeaceRegistered(): boolean {
 }
 
 function atomcodeHome(): string {
-  return process.env.ATOMCODE_HOME || join(baseHome(), '.atomcode');
+  return process.env.ATOMCODE_HOME || join(homedir(), '.atomcode');
 }
 
 function atomcodeRegistered(): boolean {
@@ -226,19 +222,18 @@ function openclawMcpConfigured(cfg: unknown): boolean {
 }
 
 function openclawRegistered(): boolean {
-  const pluginCfg = readJsonSafe(join(baseHome(), '.agents', 'huaweicloud-plugins', '.mcp.json'));
+  const pluginCfg = readJsonSafe(join(homedir(), '.agents', 'huaweicloud-plugins', '.mcp.json'));
   if (openclawMcpConfigured(pluginCfg)) return true;
-  const nativeCfg = readJsonSafe(join(baseHome(), '.openclaw', 'openclaw.json'));
+  const nativeCfg = readJsonSafe(join(homedir(), '.openclaw', 'openclaw.json'));
   return openclawMcpConfigured(nativeCfg);
 }
 
 function hermesHome(): string {
+  // Mirrors the installer's hermesHomeDir: HERMES_HOME override, then
+  // ~/.hermes on every platform (docs/hermes-windows.md documents
+  // %USERPROFILE%\.hermes as the layout, not LOCALAPPDATA).
   if (process.env.HERMES_HOME) return process.env.HERMES_HOME;
-  // Hermes on Windows stores under LOCALAPPDATA, not ~/.hermes
-  if (process.platform === 'win32' && process.env.LOCALAPPDATA) {
-    return join(process.env.LOCALAPPDATA, 'hermes');
-  }
-  return join(baseHome(), '.hermes');
+  return join(homedir(), '.hermes');
 }
 
 function hermesRegistered(): boolean {

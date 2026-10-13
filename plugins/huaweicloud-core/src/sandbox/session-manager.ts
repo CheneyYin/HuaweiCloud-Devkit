@@ -1,4 +1,4 @@
-import { spawn, execFile } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createConnection as netConnect } from 'node:net';
 import {
@@ -61,6 +61,7 @@ interface HwlinkExecResult {
 }
 
 interface HwlinkTerminalSession {
+  state: 'opening' | 'ready' | 'closed';
   exec(_command: string, _options?: { timeoutMs?: number }): Promise<HwlinkExecResult>;
   close(): void;
 }
@@ -111,13 +112,6 @@ interface WsExecModule {
 interface TunnelSession {
   mux: HwlinkMultiplexer;
   close: () => void;
-}
-
-interface NodeExecResult {
-  error?: string;
-  data?: string;
-  exitCode: number;
-  [key: string]: unknown;
 }
 
 interface UploadTunnelResponse {
@@ -258,70 +252,53 @@ function setWorkspaceId(id: string | null): void {
   process.env.HW_WORKSPACE_ID = String(id);
 }
 
-function resolveEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env };
-  env.PATH = `${env.HOME || '/root'}/.huawei/bin:${env.PATH || ''}`;
-  return env;
-}
-
-async function runNodeExec(args: string[], timeoutMs = 30000): Promise<NodeExecResult> {
-  const env = resolveEnv();
-  return new Promise<NodeExecResult>((resolve) => {
-    const proc = spawn('node', args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    proc.stdout.on('data', (d: Buffer) => {
-      stdout += d.toString();
-    });
-    proc.stderr.on('data', (d: Buffer) => {
-      stderr += d.toString();
-    });
-
-    const timer = setTimeout(() => {
-      proc.kill();
-      resolve({ error: 'timed out', exitCode: 124 });
-    }, timeoutMs);
-
-    proc.on('close', (code) => {
-      clearTimeout(timer);
-      const out = stdout.trim();
-      if (out) {
-        try {
-          const parsed: unknown = JSON.parse(out);
-          resolve({ ...asRecord(parsed), exitCode: code || 0 });
-          return;
-        } catch {}
-      }
-      if (code && code !== 0 && !out) {
-        resolve({ error: stderr.trim() || `exit code ${code}`, exitCode: code });
-        return;
-      }
-      resolve({ data: out, exitCode: code || 0 });
-    });
-  });
-}
-
 const sessions = new Map<string, HwlinkTerminalSession>();
 
-async function getSession(workspaceId: string, username: string, timeoutMs?: number): Promise<HwlinkTerminalSession> {
-  const key = `${workspaceId}:${username}`;
-  const existing = sessions.get(key);
-  if (existing) return existing;
-
+// The side-effecting half of getSession: credentials, the hdkit connection
+// request, and the ws-exec spawn. Split out so the cache orchestration in
+// getSession is the only logic that reads and writes the sessions Map.
+async function connectTerminalSession(
+  workspaceId: string,
+  username: string,
+  timeoutMs?: number,
+): Promise<HwlinkTerminalSession> {
   const { ak, sk, securitytoken } = getCredentials();
   const { wsUrl, source } = await createConnection(workspaceId, ak, sk, securitytoken);
 
   const WebSocketImpl = await getWebSocketImpl(wsUrl);
 
   const wsExec = await loadWsExec();
-  const session = await wsExec.connectHwlinkTerminalSession({
+  return await wsExec.connectHwlinkTerminalSession({
     url: wsUrl,
     source,
     username,
     timeoutMs,
     WebSocketImpl,
   });
+}
 
+let sessionConnector = connectTerminalSession;
+
+// Test seam for the session cache: tests drive execWithSession (the real
+// interface) with only the side-effecting connector replaced.
+export function _setSessionConnectorForTests(
+  connector: ((_workspaceId: string, _username: string, _timeoutMs?: number) => Promise<HwlinkTerminalSession>) | null,
+): void {
+  sessionConnector = connector ?? connectTerminalSession;
+}
+
+async function getSession(workspaceId: string, username: string, timeoutMs?: number): Promise<HwlinkTerminalSession> {
+  const key = `${workspaceId}:${username}`;
+  const existing = sessions.get(key);
+  // A cached session whose transport died (state 'closed') would fail every
+  // exec with the closed-before-marker error until an explicit
+  // close_session; evict it and reconnect instead.
+  if (existing) {
+    if (existing.state !== 'closed') return existing;
+    sessions.delete(key);
+  }
+
+  const session = await sessionConnector(workspaceId, username, timeoutMs);
   sessions.set(key, session);
   return session;
 }
@@ -1367,4 +1344,4 @@ export async function closeAllSessions(): Promise<void> {
   }
 }
 
-export { getCurrentWorkspaceId, setWorkspaceId, runNodeExec };
+export { getCurrentWorkspaceId, setWorkspaceId };

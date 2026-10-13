@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { delimiter, join } from 'node:path';
 import test from 'node:test';
 
 import { resolveAndApplyProjectId } from '../plugins/huaweicloud-core/src/auth/project-id.ts';
 import { fixtureDir } from './fixture-dir.ts';
+
+const isWin = process.platform === 'win32';
 
 function fakeHcloudScript(source) {
   const dir = fixtureDir('huaweicloud-project-id-');
@@ -83,4 +85,41 @@ test('resolveAndApplyProjectId requires a region', () => {
   const result = resolveAndApplyProjectId({});
   assert.equal(result.ok, false);
   assert.match(result.reason, /region/);
+});
+
+test('a stale HCLOUD_BIN falls through to the PATH tier instead of failing', { skip: isWin }, () => {
+  const home = fixtureDir('huaweicloud-project-id-home-');
+  const binDir = join(home, 'bin');
+  mkdirSync(binDir, { recursive: true });
+  const fake = join(binDir, 'hcloud');
+  writeFileSync(
+    fake,
+    `#!/usr/bin/env node
+    if (process.argv[2] === 'IAM') {
+      console.log(JSON.stringify({ projects: [{ id: 'proj-path', name: 'cn-north-4' }] }));
+    }
+    process.exit(0);
+  `,
+    'utf8',
+  );
+  chmodSync(fake, 0o755);
+  // HOME redirected and the fake named `hcloud` on a prepended PATH so the
+  // candidate tier cannot answer with a machine's real install.
+  const savedPath = process.env.PATH;
+  const savedBin = process.env.HCLOUD_BIN;
+  const savedHome = process.env.HOME;
+  process.env.PATH = `${binDir}${delimiter}${savedPath || ''}`;
+  process.env.HCLOUD_BIN = join(binDir, 'stale-no-such-binary');
+  process.env.HOME = home;
+  try {
+    const result = resolveAndApplyProjectId({ region: 'cn-north-4' });
+    assert.equal(result.ok, true, result.reason || '');
+    assert.equal(result.projectId, 'proj-path');
+  } finally {
+    process.env.PATH = savedPath;
+    if (savedBin === undefined) delete process.env.HCLOUD_BIN;
+    else process.env.HCLOUD_BIN = savedBin;
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+  }
 });

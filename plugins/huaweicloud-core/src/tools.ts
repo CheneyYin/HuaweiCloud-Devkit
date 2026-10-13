@@ -26,6 +26,18 @@ import { closePackEnablement } from './lib/dependency-model.ts';
 // getRegionalAvailability, migrated verbatim — see services/regions.ts for
 // its guarantee scope).
 import { SERVICE_REGIONS } from './services/regions.ts';
+// The pack tool arrays own the pack tools' names and descriptions; this
+// directory derives its pack entries from the same arrays (registry.ts
+// already pulls every pack module into this import graph for the handler
+// maps, so these edges add no new runtime module).
+import { AUTH_TOOLS } from './packs/auth/tools.ts';
+import { OBS_TOOLS } from './packs/obs/tools.ts';
+import { VOUCHER_TOOLS } from './packs/voucher/tools.ts';
+import { DISCOVERY_TOOLS } from './packs/discovery/tools.ts';
+import { SANDBOX_TOOLS } from './packs/sandbox/tools.ts';
+import { UPDATE_TOOLS } from './packs/update/tools.ts';
+import { HUAWEICLOUD_OPEN_MCP_TOOLS } from './packs/huaweicloud-open-mcp/tools.ts';
+import { HUAWEICLOUD_CLI_TOOLS } from './packs/huaweicloud-cli/tools.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -47,43 +59,64 @@ export function listSkillDirs(root: string): string[] {
 }
 
 // ── Tool registry ──
-// TOOL_DEFINITIONS_LITERALS is the single source of truth for names and
-// descriptions. `as const` keeps the tool names literal so ToolName below is
-// derived from the registry itself. callTool dispatches on two paths, both
-// closed at compile time: pack tools (PACK_OF owners ≠ core) go through the
-// central PACK_TOOL_HANDLERS map (satisfies-checked in packs/registry.ts),
-// core tools through the switch below whose never-guard pins every core
-// name to a case. Input schemas live in tool-schemas.ts (zod, single
-// source of truth for validation and tools/list rendering); its
-// `satisfies Record<ToolName, ...>` check pins the schema map to exactly
+// TOOL_DEFINITIONS_LITERALS is the single source of truth for names; core
+// descriptions live here, pack descriptions are derived from the owning
+// packs' X_TOOLS arrays below. `as const` keeps the tool names literal so
+// ToolName below is derived from the registry itself. callTool dispatches on
+// two paths, both closed at compile time: pack tools (PACK_OF owners ≠ core)
+// go through the central PACK_TOOL_HANDLERS map (satisfies-checked in
+// packs/registry.ts), core tools through the switch below whose never-guard
+// pins every core name to a case. Input schemas live in tool-schemas.ts
+// (zod, single source of truth for validation and tools/list rendering);
+// its `satisfies Record<ToolName, ...>` check pins the schema map to exactly
 // these names.
+const packToolDescriptions = new Map<string, string>();
+for (const tools of [
+  AUTH_TOOLS,
+  OBS_TOOLS,
+  VOUCHER_TOOLS,
+  DISCOVERY_TOOLS,
+  SANDBOX_TOOLS,
+  UPDATE_TOOLS,
+  HUAWEICLOUD_OPEN_MCP_TOOLS,
+  HUAWEICLOUD_CLI_TOOLS,
+]) {
+  for (const tool of tools) packToolDescriptions.set(tool.name, tool.description);
+}
+
+// Fail-fast at module load: a literal name without a pack X_TOOLS entry
+// would otherwise serve `undefined` as the description through a type that
+// claims string.
+function packDescription(name: string): string {
+  const description = packToolDescriptions.get(name);
+  if (description === undefined) throw new Error(`pack tool ${name} has no X_TOOLS entry`);
+  return description;
+}
+
 const TOOL_DEFINITIONS_LITERALS = [
   {
     name: 'huaweicloud_check_cli',
-    description:
-      'Check whether Huawei Cloud KooCLI hcloud is installed and whether its version matches the plugin paired version. Returns redacted output.',
+    description: packDescription('huaweicloud_check_cli'),
   },
   {
     name: 'huaweicloud_plan_cli_command',
-    description: 'Classify and plan a Huawei Cloud hcloud command without executing it.',
+    description: packDescription('huaweicloud_plan_cli_command'),
   },
   {
     name: 'huaweicloud_run_readonly_command',
-    description: 'Run a read-only hcloud command through the toolkit safety policy and redact output.',
+    description: packDescription('huaweicloud_run_readonly_command'),
   },
   {
     name: 'huaweicloud_list_operations',
-    description:
-      'List KooCLI operations for a Huawei Cloud service by running local/read-only hcloud <Service> --help.',
+    description: packDescription('huaweicloud_list_operations'),
   },
   {
     name: 'huaweicloud_run_approved_command',
-    description:
-      'Run a write-capable hcloud command only after the exact command has been shown and explicitly approved by the user.',
+    description: packDescription('huaweicloud_run_approved_command'),
   },
   {
     name: 'huaweicloud_show_profile_redacted',
-    description: 'Inspect a KooCLI profile through hcloud configure show and return only redacted output.',
+    description: packDescription('huaweicloud_show_profile_redacted'),
   },
   {
     name: 'huaweicloud_hook_check_command',
@@ -119,8 +152,7 @@ const TOOL_DEFINITIONS_LITERALS = [
   },
   {
     name: 'huaweicloud_list_regions',
-    description:
-      'List available Huawei Cloud regions. Returns region IDs, display names, and endpoints. Use when the agent needs to discover available regions before creating resources.',
+    description: packDescription('huaweicloud_list_regions'),
   },
   {
     name: 'huaweicloud_get_regional_availability',
@@ -129,126 +161,103 @@ const TOOL_DEFINITIONS_LITERALS = [
   },
   {
     name: 'huaweicloud_search_marketplace',
-    description:
-      'Search the Huawei Cloud agent skill marketplace for available skills. Returns scored results with names, categories, and descriptions. Use when built-in skills are insufficient or the user asks what skills exist.',
+    description: packDescription('huaweicloud_search_marketplace'),
   },
   {
     name: 'huaweicloud_get_service_icon',
-    description:
-      'Find the official Huawei Cloud service logo from the Huawei Cloud Icons library (open.huaweicloud.com/openplatform/icons.html). Returns top 5 matches with CDN logo URLs, local paths, category, aliases, and product page links. Provide service (e.g. ecs, obs, modelarts, 对象存储) or category (e.g. 计算, 存储, 人工智能) to browse. Use when generating PPT, architecture diagrams (draw.io), or frontend pages that need official Huawei Cloud service logos.',
+    description: packDescription('huaweicloud_get_service_icon'),
   },
   {
     name: 'huaweicloud_detect_framework',
-    description:
-      'Scan a local project directory to identify the web framework (React/Vue/Angular/Next.js/Nuxt/VitePress/Docusaurus/Hugo/Hexo/Taro/uni-app), package manager, and monorepo tool. Returns framework type, build commands, output directory, and port. Use before deploying a web application to determine the correct build pipeline.',
+    description: packDescription('huaweicloud_detect_framework'),
   },
   {
     name: 'huaweicloud_setup_obs_config',
-    description:
-      'Synchronize KooCLI credentials to OBS config (~/.obsutilconfig). KooCLI and OBS use separate credential stores — hcloud commands work fine but OBS commands fail with "Please set ak, sk" unless this sync is done. Run this once to enable OBS operations; re-run after changing hcloud credentials.',
+    description: packDescription('huaweicloud_setup_obs_config'),
   },
   {
     name: 'huaweicloud_auth_status',
-    description:
-      'Check unified Huawei Cloud authentication status across the global credential vault, OBS, KooCLI, and all supported agent MCP registrations. Returns only redacted/status information, never credentials.',
+    description: packDescription('huaweicloud_auth_status'),
   },
   {
     name: 'huaweicloud_auth_sync',
-    description:
-      'Synchronize credentials from the global Huawei Cloud credential vault to OBS and report agent registration status. Does not write secrets into any agent config.',
+    description: packDescription('huaweicloud_auth_sync'),
   },
   {
     name: 'huaweicloud_auth_init',
-    description:
-      'Set or clear runtime Huawei Cloud credentials (AK/SK) for this MCP session. Runtime credentials take highest priority over environment variables and config files for all subsequent API calls. Use when switching accounts within the same Agent session — call with AK/SK to switch, or with clear=true to fall back to env/file credentials.',
+    description: packDescription('huaweicloud_auth_init'),
   },
   {
     name: 'huaweicloud_auth_switch',
-    description:
-      'Switch Huawei Cloud credentials within the current session. action=temporary keeps AK/SK in memory only (restart loses them; hcloud commands are unaffected and an A+C warning will be raised). action=persist writes S1 (single source of truth) with configuredBySession flag and propagates to S2 (KooCLI current profile) and S3 (OBS). action=clear resets runtime credentials. mode=import reads AK/SK from ~/.config/huaweicloud/creds-import.json then wipes it (SK never enters conversation). mode=memory passes AK/SK as tool arguments (SK is visible to model - prefer import). mode=mcp-config reads the injected mcp_settings environment.',
+    description: packDescription('huaweicloud_auth_switch'),
   },
   {
     name: 'huaweicloud_auth_confirm',
-    description:
-      'Confirm a pending credential reconciliation choice returned by auth_switch persist when S1 already holds a different account (R2). decision=s1 keeps S1 as source of truth and propagates it; decision=newImported propagates the newly imported account into S1 and mirrors.',
+    description: packDescription('huaweicloud_auth_confirm'),
   },
   {
     name: 'huaweicloud_sandbox_exec_with_session',
-    description:
-      'Execute a command on a workspace terminal with session reuse (state persists across calls). Shell state (cd, env vars, aliases) carries over between calls. Use for interactive work and command sequences that need shared state. NOT for long-running commands (>30s) — prefer exec_one_shot for those.',
+    description: packDescription('huaweicloud_sandbox_exec_with_session'),
   },
   {
     name: 'huaweicloud_sandbox_exec_one_shot',
-    description:
-      'Execute a command on a workspace terminal with a fresh connection per call (no session state carries over). Each invocation opens a new WebSocket connection, executes one command, then disconnects. Use for long-running build/deploy/install commands (>30s) that do not need shell state persistence between calls. More stable than session-based execution for heavy workloads.',
+    description: packDescription('huaweicloud_sandbox_exec_one_shot'),
   },
   {
     name: 'huaweicloud_sandbox_close_session',
-    description: 'Close the persistent terminal session for a workspace.',
+    description: packDescription('huaweicloud_sandbox_close_session'),
   },
   {
     name: 'huaweicloud_sandbox_upload_file',
-    description:
-      'Upload a local file into the sandbox workspace. Base64-encodes the file, writes it in small chunks through the terminal session (the exec channel is fragile for large single commands), then decodes and verifies the md5 checksum. Use this instead of embedding large file content directly in a command.',
+    description: packDescription('huaweicloud_sandbox_upload_file'),
   },
   {
     name: 'huaweicloud_sandbox_upload_project',
-    description:
-      'Package a local project directory and upload it to a sandbox workspace via HTTP tunnel. Falls back to base64 chunking if tunnel fails. Creates a tar.gz archive, uploads it, and extracts it on the sandbox by default.',
+    description: packDescription('huaweicloud_sandbox_upload_project'),
   },
   {
     name: 'huaweicloud_sandbox_deploy_nginx',
-    description:
-      'Deploy an nginx configuration on the sandbox and reload. Takes nginxType, port, project, outputDir from framework detection and writes the correct template (SPA try_files, SSR reverse proxy, or static). Also fixes directory traverse permissions on the project path. Use this instead of manually constructing nginx config — it handles permissions, template selection, and reload in one call. If the requested port is already in use, the actual port is auto-incremented and returned in "port" alongside a warning.',
+    description: packDescription('huaweicloud_sandbox_deploy_nginx'),
   },
   {
     name: 'huaweicloud_sandbox_deploy_check',
-    description:
-      'Run a deployment completeness check on the sandbox. Verifies nginx is serving, output directory exists, DevBridge tunnel is active and accessible, and QR code exists (cross-platform). Returns a score, nextStep, and (when the DevBridge tunnel is missing) an executable "remediation" command string. Call this at the end of a deployment workflow to confirm everything is working before reporting success.',
+    description: packDescription('huaweicloud_sandbox_deploy_check'),
   },
   {
     name: 'huaweicloud_sandbox_check_user',
-    description:
-      'Check if the current user has completed real-name verification and signed the required agreements. Returns 200 {realnameVerified, agreementSigned} when all good; throws 403 HDKIT_NOT_REALNAME / HDKIT_NOT_AGREEMENT / HDKIT_NOT_REALNAME_AND_AGREEMENT to indicate what is missing. Never signs anything itself.',
+    description: packDescription('huaweicloud_sandbox_check_user'),
   },
   {
     name: 'huaweicloud_sandbox_sign_agreement',
-    description:
-      "Sign all unsigned or outdated agreements for the current user. Required before huaweicloud_sandbox_connect if check-user returns agreementSigned=false. CRITICAL: only call after the user explicitly consents to signing — never sign agreements on the user's behalf without their explicit request.",
+    description: packDescription('huaweicloud_sandbox_sign_agreement'),
   },
   {
     name: 'huaweicloud_sandbox_connect',
-    description:
-      'Connect to a sandbox via hdkitservice. One user one instance - reuses existing sandbox if available, otherwise creates a new one. Returns session_id, dev_stage_id, connection_id, connection_address, and expiresAt (STS credential expiry).',
+    description: packDescription('huaweicloud_sandbox_connect'),
   },
   {
     name: 'huaweicloud_sandbox_credentials',
-    description:
-      'Configure temporary AK/SK for a sandbox via hdkitservice. Validates the current AK/SK against IAM before injecting (invalid SK is rejected here instead of failing later with APIGW.0301 during exec), then injects temporary credentials into the sandbox. Also injects an optional DevBridge API Key — required for devbridge 0.2.x tunnel exposure because 0.2.x removed AK/SK login. The API Key is a long-lived account-level credential, so it is stored in a separate file (/tmp/hw_api_key, 0600) from the temporary AK/SK (/tmp/hw_creds.sh). Source of truth: local HW_API_KEY env first, then the api_key param. The sandbox must be in RUNNING state.',
+    description: packDescription('huaweicloud_sandbox_credentials'),
   },
   {
     name: 'huaweicloud_voucher_status',
-    description:
-      '查询代金券领取状态。用户首次使用、开始会话或询问插件能力时，应主动调用本工具检查：未领取（claimed=false）则主动提示可领取一张代金券；已领取（claimed=true）则不提示、不打扰。',
+    description: packDescription('huaweicloud_voucher_status'),
   },
   {
     name: 'huaweicloud_voucher_claim',
-    description: '领取代金券（一人一次）。重复领取会返回已领取。',
+    description: packDescription('huaweicloud_voucher_claim'),
   },
   {
     name: 'huaweicloud_check_update',
-    description:
-      '检查 huaweicloud-devkit 插件是否有新版本。结果含 currentVersion / latestStable / latestNext / targetVersion / updateAvailable / dismissExpiresAt / result。支持 dismiss:true 记录用户拒绝（3 天冷却，新版本会重新提醒）。',
+    description: packDescription('huaweicloud_check_update'),
   },
   {
     name: 'huaweicloud_upgrade',
-    description:
-      '升级 huaweicloud-devkit 到最新版本。执行前必须先征得用户同意。version 仅支持 "latest"。完成后需重启会话生效。',
+    description: packDescription('huaweicloud_upgrade'),
   },
   {
     name: 'huaweicloud_obs_set_website_config',
-    description:
-      '配置 OBS 桶的静态网站托管。KooCLI OBS 不支持 SetBucketWebsite API，此工具内部实现 AWS4 签名调用 OBS REST API，屏蔽签名细节。支持 set（配置）、get（查询）、delete（删除）三种操作。操作前需确保桶已创建且已设置 public-read ACL。',
+    description: packDescription('huaweicloud_obs_set_website_config'),
   },
   {
     name: 'huaweicloud_list_packs',
@@ -267,18 +276,15 @@ const TOOL_DEFINITIONS_LITERALS = [
   },
   {
     name: 'huaweicloud_gateway_list_tools',
-    description:
-      "List the open-mcp gateway child's live tool surface (names, descriptions, input schemas) as its tools/list reports. Use it to check gateway capabilities and drift from the devkit projection before generic calls. Read-only; needs no credentials.",
+    description: packDescription('huaweicloud_gateway_list_tools'),
   },
   {
     name: 'huaweicloud_gateway_call',
-    description:
-      "Call one open-mcp gateway tool generically with tool and toolArgs — the single face for every gateway tool. Read-only discovery (no credentials): search_apis (query; optional limit/category) finds products by entity keywords when none is named; list_products (optional category/keyword) and get_product (product; optional include_sops) cover the product dimension (category, is_global — include_sops adds full SOP texts); list_apis (product; optional tag/search/limit/offset/include_sops) lists one product's API catalog with tag_groups; get_api (product, api; optional region) returns full API documentation — parameter types/enums, x-constraint preconditions, response schema, region endpoint — a must-read before any call; get_api_examples (product, api; optional region) returns official request examples. Discovery chain: search_apis → list_apis → get_api → get_api_examples. execute_api, manage_policy, query_data, and transform_data are delegated to the gateway's own policy engine: the first call forwards immediately, and when the engine refuses, its reason names the grant options — confirm with the user in conversation, grant with manage_policy add using an ephemeral scope (once/session/temporary), then retry the call. Permanent grants are an operator policy-file edit (hot-reload). Denied outright, no grant path: secret operations, file targets inside devkit state, non-canonical manage_policy action/scope spellings, permanent-scope add, ttl_seconds on add or remove, remove with scope, and tool names outside the devkit's static vocabulary.",
+    description: packDescription('huaweicloud_gateway_call'),
   },
   {
     name: 'huaweicloud_gateway_restart',
-    description:
-      'Recycle the open-mcp gateway child of this MCP server process, e.g. after upgrading the gateway on the host (npx huaweicloud-devkit dep install open-mcp-gateway) while the session was live. In-flight gateway calls are interrupted when the old child stops. No arguments. In-process lifecycle only; needs no credentials.',
+    description: packDescription('huaweicloud_gateway_restart'),
   },
 ] as const;
 
