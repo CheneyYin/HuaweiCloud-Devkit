@@ -80,6 +80,10 @@ interface JscpdReport {
   duplicates: Array<{ firstFile: { name: string }; secondFile: { name: string }; format: string }>;
 }
 
+interface PackageLock {
+  packages: Record<string, { resolved?: string }>;
+}
+
 interface SafetyPolicy {
   secretKeyNamePatterns: unknown[];
   writeOperationPrefixes: unknown[];
@@ -1705,4 +1709,27 @@ test('jscpd baseline is in sync: zero new clones against the committed fingerpri
       'test repetition), run `npm run format` first (fingerprints are whitespace-sensitive), then regenerate with ' +
       '`npm run lint:dup -- --baseline .jscpd-baseline.json --update-baseline` and commit the file',
   );
+});
+
+test('package-lock.json fetch origins are registry.npmjs.org only', () => {
+  // A developer-local npm registry (e.g. the Huawei mirror the README
+  // suggests) leaks into committed lockfiles: installs record the mirror's
+  // URLs in `resolved`, and every CI `npm ci` then fetches from whatever
+  // the lockfile names — silently, with nothing red. The jscpd install
+  // captured 9 mirror URLs that way; this guard turns any re-capture into
+  // a failing test instead of a latent third-party fetch dependency.
+  const lock = readJson(join(root, 'package-lock.json')) as PackageLock;
+  const resolved: Array<{ path: string; url: string }> = [];
+  for (const [path, entry] of Object.entries(lock.packages)) {
+    if (typeof entry.resolved === 'string') resolved.push({ path, url: entry.resolved });
+  }
+  assert.ok(resolved.length > 0, 'package-lock.json must record resolved URLs');
+  for (const { path, url } of resolved) {
+    assert.match(
+      url,
+      /^https:\/\/registry\.npmjs\.org\//,
+      `${path} resolves from ${url} — a mirror-configured npm captured its own origin into the lockfile; ` +
+        're-resolve with `npm install --package-lock-only --registry=https://registry.npmjs.org/ <pkg>` and commit',
+    );
+  }
 });
