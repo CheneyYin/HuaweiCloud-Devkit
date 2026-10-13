@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -12,9 +14,26 @@ const serverPath = join(srcDir, 'mcp-server.ts');
 // either application/json or text/event-stream are rejected 406.
 const DUAL_ACCEPT = 'application/json, text/event-stream';
 
-let server;
-let base;
-let startRemoteServer;
+type StartRemoteServer = typeof import('../plugins/huaweicloud-core/src/mcp-server-remote.ts').startRemoteServer;
+type StartedRemote = Awaited<ReturnType<StartRemoteServer>>;
+
+interface JsonRpcResult {
+  serverInfo: { name: string; version: string };
+  protocolVersion: string;
+  capabilities: unknown;
+  tools: { name: string }[];
+  isError: boolean;
+  content: { text: string }[];
+}
+
+interface JsonRpcResponse {
+  result: JsonRpcResult;
+  error: { code: number; message: string };
+}
+
+let server: Server | undefined;
+let base: string;
+let startRemoteServer: StartRemoteServer;
 
 test.before(async () => {
   const mod = await import(pathToFileURL(join(srcDir, 'mcp-server-remote.ts')).href);
@@ -26,11 +45,16 @@ test.before(async () => {
 
 test.after(async () => {
   if (server) {
-    await new Promise((resolve) => server.close(resolve));
+    await new Promise((resolve) => server!.close(resolve));
   }
 });
 
-async function rpc(method, params = {}, extraHeaders = {}, accept = DUAL_ACCEPT) {
+async function rpc(
+  method: string,
+  params: Record<string, unknown> = {},
+  extraHeaders: Record<string, string> = {},
+  accept: string = DUAL_ACCEPT,
+): Promise<{ status: number; contentType: string | null; body: JsonRpcResponse }> {
   const res = await fetch(`${base}/`, {
     method: 'POST',
     headers: {
@@ -169,7 +193,7 @@ test('exports DEFAULT_PORT 9528 to avoid IACMCPServer port 9527 conflict', async
 });
 
 test('startRemoteServer binds DEFAULT_PORT when no port passed', async () => {
-  let started;
+  let started: StartedRemote | undefined;
   try {
     started = await startRemoteServer({});
     assert.equal(started.port, 9528);
@@ -183,19 +207,19 @@ test('startRemoteServer binds DEFAULT_PORT when no port passed', async () => {
 test('startRemoteServer supports binding non-loopback host via host option', async () => {
   const started = await startRemoteServer({ port: 0, host: '0.0.0.0' });
   try {
-    assert.equal(started.server.address().address, '0.0.0.0');
+    assert.equal((started.server.address() as AddressInfo).address, '0.0.0.0');
   } finally {
     await started.close();
   }
 });
 
-function spawnRemote(flags) {
+function spawnRemote(flags: string[]) {
   const child = spawn(process.execPath, [serverPath, '--transport', 'remote', ...flags], {
     cwd: root,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';
-  const whenListening = new Promise((resolve, reject) => {
+  const whenListening = new Promise<{ host: string; port: number }>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`server did not report listening address:\n${output}`)), 10000);
     child.stdout.on('data', (chunk) => {
       output += chunk.toString();

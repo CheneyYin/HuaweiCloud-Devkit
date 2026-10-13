@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,7 +9,7 @@ import test from 'node:test';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const setupCli = join(root, 'bin', 'setup.cjs');
 
-function makeEnv(home) {
+function makeEnv(home: string): Record<string, string | undefined> {
   return {
     ...process.env,
     USERPROFILE: home,
@@ -20,7 +20,7 @@ function makeEnv(home) {
   };
 }
 
-function runCli(home, cwd, args) {
+function runCli(home: string, cwd: string, args: string[]): SpawnSyncReturns<string> {
   return spawnSync(process.execPath, [setupCli, ...args], {
     cwd,
     env: makeEnv(home),
@@ -29,8 +29,12 @@ function runCli(home, cwd, args) {
   });
 }
 
-function readJson(path) {
-  return JSON.parse(readFileSync(path, 'utf8'));
+interface OpencodeConfig {
+  mcp: Record<string, { command: string[] }>;
+}
+
+function readJson(path: string): OpencodeConfig {
+  return JSON.parse(readFileSync(path, 'utf8')) as OpencodeConfig;
 }
 
 test('install creates opencode config with normalized forward-slash paths', () => {

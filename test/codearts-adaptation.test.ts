@@ -19,8 +19,8 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const setupCli = join(root, 'bin', 'setup.cjs');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 
-function makeEnv(home, _cwd) {
-  const env = {
+function makeEnv(home: string, _cwd: string) {
+  const env: Record<string, string | undefined> = {
     ...process.env,
     USERPROFILE: home,
     HOME: home,
@@ -32,7 +32,7 @@ function makeEnv(home, _cwd) {
   return env;
 }
 
-function runCli(home, cwd, args) {
+function runCli(home: string, cwd: string, args: string[]) {
   return spawnSync(process.execPath, [setupCli, ...args], {
     cwd,
     env: makeEnv(home, cwd),
@@ -41,12 +41,12 @@ function runCli(home, cwd, args) {
   });
 }
 
-function countSkills(dir) {
+function countSkills(dir: string): number {
   if (!existsSync(dir)) return 0;
   return readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory() && d.name.startsWith('huawei')).length;
 }
 
-function mcpConfig(path) {
+function mcpConfig(path: string) {
   if (!existsSync(path)) return null;
   return JSON.parse(readFileSync(path, 'utf8'));
 }

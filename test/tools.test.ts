@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { callTool, TOOL_DEFINITIONS, listSkillDirs } from '../plugins/huaweicloud-core/src/tools.ts';
+import { callTool, TOOL_DEFINITIONS, listSkillDirs, type ToolArgs } from '../plugins/huaweicloud-core/src/tools.ts';
 import { runVersionCheck } from '../plugins/huaweicloud-core/src/packs/huaweicloud-cli/tools.ts';
 import { getToolSchema, TOOL_SCHEMAS } from '../plugins/huaweicloud-core/src/tool-schemas.ts';
 import {
@@ -12,7 +12,32 @@ import {
   setRuntimeCredentials,
 } from '../plugins/huaweicloud-core/src/auth/credentials.ts';
 import { getKooCliVersion } from '../plugins/huaweicloud-core/src/koocli-version.ts';
+import type { RiskFinding } from '../plugins/huaweicloud-core/src/risk-rule-engine.ts';
 import { fixtureDir } from './fixture-dir.ts';
+
+interface HookCheckResult {
+  ok: boolean;
+  decision: 'allow' | 'warn' | 'deny';
+  findings: RiskFinding[];
+}
+
+interface ServiceCatalogResult {
+  recommendedSkills: string[];
+}
+
+interface RetrieveSkillResult {
+  ok: boolean;
+  error?: string;
+  name?: string;
+  content?: string;
+  references: Array<{ filename: string; content: string }>;
+}
+
+interface AuthSwitchResult {
+  status: string;
+  scope?: string;
+  error?: string;
+}
 
 test('runVersionCheck uses hcloud version instead of --version', async () => {
   const dir = fixtureDir('huaweicloud-toolkit-version-');
@@ -30,10 +55,7 @@ test('runVersionCheck uses hcloud version instead of --version', async () => {
 });
 
 test('runVersionCheck returns installed:false and errorCode on ENOENT', async () => {
-  const result = await runVersionCheck({
-    executable: 'nonexistent-hcloud-xyz',
-    maxRetries: 0,
-  });
+  const result = await runVersionCheck({ executable: 'nonexistent-hcloud-xyz' });
   assert.equal(result.installed, false);
   assert.equal(result.errorCode, 'HCLOUD_NOT_FOUND');
   assert.match(result.nextStep, /HCLOUD_BIN/);
@@ -101,7 +123,7 @@ test('TOOL_DEFINITIONS includes all required tools including sandbox', () => {
     'huaweicloud_voucher_claim',
     'huaweicloud_list_packs',
     'huaweicloud_pack_info',
-  ];
+  ] as const;
   for (const name of required) {
     assert.ok(names.includes(name), `Missing tool: ${name}`);
   }
@@ -111,10 +133,10 @@ test('TOOL_DEFINITIONS includes all required tools including sandbox', () => {
 
 test('TOOL_DEFINITIONS expose cwd parameter on run tools', () => {
   const readonlySchema = getToolSchema('huaweicloud_run_readonly_command').toJSONSchema();
-  assert.ok(Object.hasOwn(readonlySchema.properties, 'cwd'), 'run_readonly_command should have cwd param');
+  assert.ok(Object.hasOwn(readonlySchema.properties!, 'cwd'), 'run_readonly_command should have cwd param');
 
   const approvedSchema = getToolSchema('huaweicloud_run_approved_command').toJSONSchema();
-  assert.ok(Object.hasOwn(approvedSchema.properties, 'cwd'), 'run_approved_command should have cwd param');
+  assert.ok(Object.hasOwn(approvedSchema.properties!, 'cwd'), 'run_approved_command should have cwd param');
 });
 
 test('TOOL_DEFINITIONS includes proactive hook check tools', () => {
@@ -135,10 +157,10 @@ test('TOOL_SCHEMAS keys exactly match TOOL_DEFINITIONS names (no orphans either 
 });
 
 test('huaweicloud_hook_check_command returns deny finding', async () => {
-  const result = await callTool('huaweicloud_hook_check_command', {
+  const result = (await callTool('huaweicloud_hook_check_command', {
     command:
       'hcloud VPC CreateSecurityGroupRule --security_group_rule.port_range_min=22 --security_group_rule.remote_ip_prefix=0.0.0.0/0',
-  });
+  })) as HookCheckResult;
   assert.equal(result.decision, 'deny');
   assert.equal(result.ok, false);
   assert.equal(result.findings[0].ruleId, 'hwc-network-public-admin-port');
@@ -188,7 +210,10 @@ test('huaweicloud_explain_error still appends support line when requestId is pre
 test('callTool rejects invalid numeric timeoutMs instead of silently ignoring it', async () => {
   await assert.rejects(
     () =>
-      callTool('huaweicloud_run_readonly_command', { args: ['ECS', 'ListServersDetails'], timeoutMs: 'not-a-number' }),
+      callTool('huaweicloud_run_readonly_command', {
+        args: ['ECS', 'ListServersDetails'],
+        timeoutMs: 'not-a-number',
+      } as unknown as ToolArgs),
     /positive number/,
   );
 });
@@ -201,44 +226,52 @@ test('callTool accepts maxRetries 0 and integer timeoutMs (no false rejection)',
 });
 
 test('huaweicloud_hook_check_artifacts detects broad IAM policy', async () => {
-  const result = await callTool('huaweicloud_hook_check_artifacts', {
+  const result = (await callTool('huaweicloud_hook_check_artifacts', {
     artifacts: [
       {
         path: 'policy.json',
         content: '{"Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}',
       },
     ],
-  });
+  })) as HookCheckResult;
   assert.equal(result.decision, 'deny');
   assert.equal(result.findings[0].ruleId, 'hwc-iam-admin-policy');
 });
 
 test('huaweicloud_hook_check_deploy_plan warns on sandbox without ttl', async () => {
-  const result = await callTool('huaweicloud_hook_check_deploy_plan', {
+  const result = (await callTool('huaweicloud_hook_check_deploy_plan', {
     plan: {
       environment: 'preview',
       resources: [{ service: 'FunctionGraph', action: 'CreateFunction' }],
     },
-  });
+  })) as HookCheckResult;
   assert.equal(result.decision, 'warn');
   assert.equal(result.ok, true);
   assert.equal(result.findings[0].ruleId, 'hwc-sandbox-missing-ttl');
 });
 
 test('service_catalog recommends sandbox first for static website deployment intent', async () => {
-  const en = await callTool('huaweicloud_service_catalog', { intent: 'deploy a static website' });
+  const en = (await callTool('huaweicloud_service_catalog', {
+    intent: 'deploy a static website',
+  })) as ServiceCatalogResult;
   assert.equal(en.recommendedSkills[0], 'huawei-sandbox');
   assert.ok(en.recommendedSkills.includes('huawei-obs'));
 
-  const zh = await callTool('huaweicloud_service_catalog', { intent: '部署静态网站到华为云' });
+  const zh = (await callTool('huaweicloud_service_catalog', {
+    intent: '部署静态网站到华为云',
+  })) as ServiceCatalogResult;
   assert.equal(zh.recommendedSkills[0], 'huawei-sandbox');
 
-  const webApp = await callTool('huaweicloud_service_catalog', { intent: 'host a web app for preview' });
+  const webApp = (await callTool('huaweicloud_service_catalog', {
+    intent: 'host a web app for preview',
+  })) as ServiceCatalogResult;
   assert.equal(webApp.recommendedSkills[0], 'huawei-sandbox');
 });
 
 test('service_catalog keeps storage routing for pure storage intent', async () => {
-  const result = await callTool('huaweicloud_service_catalog', { intent: 'store files in an obs bucket' });
+  const result = (await callTool('huaweicloud_service_catalog', {
+    intent: 'store files in an obs bucket',
+  })) as ServiceCatalogResult;
   assert.ok(result.recommendedSkills.includes('huawei-obs'));
   assert.notEqual(result.recommendedSkills[0], 'huawei-sandbox');
 });
@@ -270,17 +303,17 @@ test('listSkillDirs ignores files, subdirs without SKILL.md, and counts symlinke
 // filesystem access.
 test('retrieve_skill rejects traversal-shaped and non-skill names', async () => {
   for (const name of ['../src/packs/obs/skills/huawei-obs', '..%2f..', 'huawei ecs', 'HUAWAI-ECS', '/etc', '']) {
-    const result = await callTool('huaweicloud_retrieve_skill', { name });
+    const result = (await callTool('huaweicloud_retrieve_skill', { name })) as RetrieveSkillResult;
     assert.equal(result.ok, false, `name ${JSON.stringify(name)} must be rejected`);
-    assert.match(result.error, /Invalid skill name|Skill name is required/);
+    assert.match(result.error!, /Invalid skill name|Skill name is required/);
   }
 });
 
 test('retrieve_skill serves the full skill from the server-relative tree', async () => {
-  const result = await callTool('huaweicloud_retrieve_skill', { name: 'huawei-ecs' });
+  const result = (await callTool('huaweicloud_retrieve_skill', { name: 'huawei-ecs' })) as RetrieveSkillResult;
   assert.equal(result.ok, true, result.error);
   assert.equal(result.name, 'huawei-ecs');
-  assert.match(result.content, /^---\r?\nname: huawei-ecs/);
+  assert.match(result.content!, /^---\r?\nname: huawei-ecs/);
   assert.ok(result.references.length > 0, 'huawei-ecs ships reference files');
   assert.ok(result.references.some((ref) => ref.filename === 'create-instance.md'));
 });
@@ -293,16 +326,16 @@ test('auth_switch temporary sets runtime credentials for api path', async () => 
   delete process.env.HW_ACCESS_KEY;
   delete process.env.HW_SECRET_KEY;
   try {
-    const out = await callTool('huaweicloud_auth_switch', {
+    const out = (await callTool('huaweicloud_auth_switch', {
       mode: 'memory',
       action: 'temporary',
       ak: 'RUNTIME_AK',
       sk: 'RUNTIME_SK',
       region: 'cn-north-4',
-    });
+    })) as AuthSwitchResult;
     assert.equal(out.scope, 'temporary');
     const resolved = resolveCredentialsWithRuntime({});
-    assert.equal(resolved.ak, 'RUNTIME_AK');
+    assert.equal(resolved!.ak, 'RUNTIME_AK');
   } finally {
     clearRuntimeCredentials();
     if (prev.AK === undefined) delete process.env.HW_ACCESS_KEY;
@@ -318,7 +351,7 @@ test('auth_switch clear resets runtime', async () => {
   process.env.HUAWEICLOUD_HOME = isolatedHome;
   try {
     setRuntimeCredentials('A', 'B', undefined, 'cn-north-4');
-    const out = await callTool('huaweicloud_auth_switch', { action: 'clear' });
+    const out = (await callTool('huaweicloud_auth_switch', { action: 'clear' })) as AuthSwitchResult;
     assert.equal(out.status, 'cleared');
     let threw = false;
     try {
@@ -344,11 +377,11 @@ test('auth_switch persist(mode=import) rejects missing region and keeps import f
     const importFile = join(cfgDir, 'creds-import.json');
     writeFileSync(importFile, JSON.stringify({ ak: 'IMPORT_AK', sk: 'IMPORT_SK' }), 'utf8');
 
-    const out = await callTool('huaweicloud_auth_switch', { mode: 'import', action: 'persist' });
+    const out = (await callTool('huaweicloud_auth_switch', { mode: 'import', action: 'persist' })) as AuthSwitchResult;
 
     assert.equal(out.status, 'error');
     assert.equal(out.scope, 'invalid_region');
-    assert.match(out.error, /region/);
+    assert.match(out.error!, /region/);
     // S1 must not be written on a rejected persist.
     assert.equal(existsSync(join(cfgDir, 'credentials.json')), false);
     // Import file must survive for replay.
@@ -371,11 +404,14 @@ test('auth_switch temporary(mode=import) clears import file on success', async (
     const importFile = join(cfgDir, 'creds-import.json');
     writeFileSync(importFile, JSON.stringify({ ak: 'TMP_AK', sk: 'TMP_SK' }), 'utf8');
 
-    const out = await callTool('huaweicloud_auth_switch', { mode: 'import', action: 'temporary' });
+    const out = (await callTool('huaweicloud_auth_switch', {
+      mode: 'import',
+      action: 'temporary',
+    })) as AuthSwitchResult;
 
     assert.equal(out.scope, 'temporary');
     assert.equal(existsSync(importFile), false, 'import file should be cleared after successful temporary set');
-    assert.equal(resolveCredentialsWithRuntime({}).ak, 'TMP_AK');
+    assert.equal(resolveCredentialsWithRuntime({})!.ak, 'TMP_AK');
   } finally {
     if (prevHome === undefined) delete process.env.HUAWEICLOUD_HOME;
     else process.env.HUAWEICLOUD_HOME = prevHome;
@@ -398,7 +434,7 @@ test('auth_switch persist(mode=import) with STS token is rejected and clears imp
       'utf8',
     );
 
-    const out = await callTool('huaweicloud_auth_switch', { mode: 'import', action: 'persist' });
+    const out = (await callTool('huaweicloud_auth_switch', { mode: 'import', action: 'persist' })) as AuthSwitchResult;
 
     assert.equal(out.status, 'error');
     assert.equal(out.scope, 'rejected');

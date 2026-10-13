@@ -25,8 +25,8 @@ function makeHome() {
   return fixtureDir('devkit-mcp-cli-');
 }
 
-function makeEnv(home) {
-  const env = {
+function makeEnv(home: string) {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     USERPROFILE: home,
     HOME: home,
@@ -44,7 +44,7 @@ function makeEnv(home) {
   return env;
 }
 
-function run(target, home, cmd) {
+function run(target: string, home: string, cmd: string) {
   return spawnSync(process.execPath, [setupCli, cmd, '--target', target], {
     cwd: root,
     env: makeEnv(home),
@@ -53,7 +53,7 @@ function run(target, home, cmd) {
   });
 }
 
-function seedInstalled(home, { stalePath = false } = {}) {
+function seedInstalled(home: string, { stalePath = false }: { stalePath?: boolean } = {}) {
   const srcDir = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'src');
   mkdirSync(srcDir, { recursive: true });
   writeFileSync(join(srcDir, 'mcp-server.mjs'), '// seeded\n');
@@ -79,11 +79,11 @@ function seedInstalled(home, { stalePath = false } = {}) {
   return mcpPath;
 }
 
-function readMcpEntry(home) {
+function readMcpEntry(home: string) {
   return JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8')).mcp['huaweicloud-devkit'];
 }
 
-function backupFile(home) {
+function backupFile(home: string) {
   return join(home, '.config', 'huaweicloud', 'devkit-mcp-backup.json');
 }
 

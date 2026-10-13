@@ -7,14 +7,22 @@ import test from 'node:test';
 const hookPath = join(process.cwd(), 'plugins', 'huaweicloud-core', 'hooks', 'huaweicloud-safety.py');
 const pythonBin = process.platform === 'win32' ? 'python' : 'python3';
 
-function runHook(payload) {
+interface HookPayload {
+  hook_event_name?: string;
+  tool_name: string;
+  tool_input: { command: string };
+  session_id?: string;
+  cwd?: string;
+}
+
+function runHook(payload: HookPayload) {
   return spawnSync(pythonBin, [hookPath], {
     input: JSON.stringify(payload),
     encoding: 'utf8',
   });
 }
 
-function pythonUnavailable(result) {
+function pythonUnavailable(result: { error?: NodeJS.ErrnoException | null }): boolean {
   return result.error?.code === 'ENOENT';
 }
 
@@ -95,7 +103,7 @@ test('python hook allows safe commands under Hermes context', () => {
   assert.equal(result.stdout.trim(), '', 'safe commands should produce no output');
 });
 
-function runEvaluate(toolName, toolInput) {
+function runEvaluate(toolName: string, toolInput: { command: string }) {
   const probe = [
     'import importlib.util, json',
     `spec = importlib.util.spec_from_file_location("hws", ${JSON.stringify(hookPath)})`,

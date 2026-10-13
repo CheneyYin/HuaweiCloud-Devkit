@@ -5,8 +5,9 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
 import { SCHEMA_DRIFT_IGNORED_KEYS } from '../plugins/huaweicloud-core/src/tool-schemas.ts';
 import { createLinkedDevkitServers } from '../plugins/huaweicloud-core/src/mcp-protocol.ts';
+import type { PackId } from '../plugins/huaweicloud-core/src/lib/pack-types.ts';
 
-const PACK_IDS = [
+const PACK_IDS: readonly PackId[] = [
   'core',
   'huaweicloud-cli',
   'sandbox',
@@ -18,8 +19,39 @@ const PACK_IDS = [
   'huaweicloud-open-mcp',
 ];
 
+interface ListPacksPayload {
+  ok: boolean;
+  count: number;
+  packs: Array<{
+    id: PackId;
+    title: string;
+    description: string;
+    skills: string[];
+    tools: string[];
+    enabled: boolean;
+  }>;
+}
+
+interface PackInfoPayload {
+  ok: boolean;
+  pack: string;
+  skills: string[];
+  enabled: boolean;
+  tools: Array<{ name: string; description: string; schema: Record<string, unknown> }>;
+}
+
+interface ToolErrorPayload {
+  ok: boolean;
+  error: string;
+}
+
+interface ClientToolResult {
+  content: Array<{ type: string; text: string }>;
+  isError?: boolean;
+}
+
 test('huaweicloud_list_packs returns all 9 packs, sandbox carries exactly 11 tool names', async () => {
-  const result = await callTool('huaweicloud_list_packs', {});
+  const result = (await callTool('huaweicloud_list_packs', {})) as ListPacksPayload;
   assert.equal(result.ok, true);
   assert.equal(result.count, 9);
   assert.deepEqual(
@@ -33,15 +65,15 @@ test('huaweicloud_list_packs returns all 9 packs, sandbox carries exactly 11 too
     assert.ok(Array.isArray(pack.tools) && pack.tools.length > 0, `${pack.id} must list tools`);
   }
   const cliPack = result.packs.find((pack) => pack.id === 'huaweicloud-cli');
-  assert.equal(cliPack.skills.length, 20);
-  assert.ok(cliPack.skills.includes('huawei-ecs'));
+  assert.equal(cliPack!.skills.length, 20);
+  assert.ok(cliPack!.skills.includes('huawei-ecs'));
   const sandbox = result.packs.find((pack) => pack.id === 'sandbox');
-  assert.equal(sandbox.tools.length, 11);
-  assert.ok(sandbox.tools.includes('huaweicloud_sandbox_connect'));
+  assert.equal(sandbox!.tools.length, 11);
+  assert.ok(sandbox!.tools.includes('huaweicloud_sandbox_connect'));
 });
 
 test('huaweicloud_pack_info returns the 11 sandbox tools with name, description, and schema', async () => {
-  const result = await callTool('huaweicloud_pack_info', { pack: 'sandbox' });
+  const result = (await callTool('huaweicloud_pack_info', { pack: 'sandbox' })) as PackInfoPayload;
   assert.equal(result.ok, true);
   assert.equal(result.pack, 'sandbox');
   assert.deepEqual(result.skills, ['huawei-sandbox']);
@@ -58,7 +90,7 @@ test('huaweicloud_pack_info returns the 11 sandbox tools with name, description,
 });
 
 test('huaweicloud_pack_info bogus pack returns an error listing the valid pack ids', async () => {
-  const result = await callTool('huaweicloud_pack_info', { pack: 'bogus' });
+  const result = (await callTool('huaweicloud_pack_info', { pack: 'bogus' })) as ToolErrorPayload;
   assert.equal(result.ok, false);
   assert.match(result.error, /not found/);
   for (const id of PACK_IDS) {
@@ -67,7 +99,7 @@ test('huaweicloud_pack_info bogus pack returns an error listing the valid pack i
 });
 
 test('huaweicloud_pack_info without a pack id reports it as required', async () => {
-  const result = await callTool('huaweicloud_pack_info', {});
+  const result = (await callTool('huaweicloud_pack_info', {})) as ToolErrorPayload;
   assert.equal(result.ok, false);
   assert.match(result.error, /required/);
 });
@@ -81,10 +113,10 @@ test('retrieve_skill rejects traversal-shaped names at the MCP schema boundary',
   const client = new Client({ name: 'pack-meta-test', version: '0.0.0' });
   try {
     await client.connect(transport);
-    const result = await client.callTool({
+    const result = (await client.callTool({
       name: 'huaweicloud_retrieve_skill',
       arguments: { name: '../src/packs/obs/skills/huawei-obs' },
-    });
+    })) as ClientToolResult;
     assert.equal(result.isError, true, 'schema validation must reject the traversal name');
     assert.match(result.content[0].text, /-32602.*pattern|must match pattern/);
   } finally {
@@ -104,7 +136,7 @@ test('pack_info schema output matches the tools/list rendering after stripping i
     const listed = await client.listTools();
     let compared = 0;
     for (const packId of PACK_IDS) {
-      const info = await callTool('huaweicloud_pack_info', { pack: packId });
+      const info = (await callTool('huaweicloud_pack_info', { pack: packId })) as PackInfoPayload;
       assert.equal(info.ok, true, `pack_info failed for ${packId}`);
       for (const entry of info.tools) {
         const fromList = listed.tools.find((tool) => tool.name === entry.name);

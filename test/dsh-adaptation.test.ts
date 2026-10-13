@@ -19,7 +19,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const setupCli = join(root, 'bin', 'setup.cjs');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 
-function makeEnv(home, dshHome) {
+function makeEnv(home: string, dshHome: string) {
   return {
     ...process.env,
     USERPROFILE: home,
@@ -31,7 +31,7 @@ function makeEnv(home, dshHome) {
   };
 }
 
-function runCli(home, cwd, args, dshHome = join(home, '.dsh')) {
+function runCli(home: string, cwd: string, args: string[], dshHome: string = join(home, '.dsh')) {
   return spawnSync(process.execPath, [setupCli, ...args], {
     cwd,
     env: makeEnv(home, dshHome),
@@ -40,17 +40,17 @@ function runCli(home, cwd, args, dshHome = join(home, '.dsh')) {
   });
 }
 
-function countSkills(dir) {
+function countSkills(dir: string): number {
   if (!existsSync(dir)) return 0;
   return readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory() && d.name.startsWith('huawei')).length;
 }
 
-function readPatch(dshHome) {
+function readPatch(dshHome: string): string {
   const patchFile = join(dshHome, 'profiles', 'web', 'cordis.patch.yml');
   return existsSync(patchFile) ? readFileSync(patchFile, 'utf8') : '';
 }
 
-function countMcpRows(patch) {
+function countMcpRows(patch: string): number {
   return (patch.match(/id: (?:huaweicloud-devkit|mcp-huaweicloud)/g) || []).length;
 }
 

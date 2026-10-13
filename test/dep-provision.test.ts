@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
@@ -8,12 +8,14 @@ import test from 'node:test';
 
 import { DEPENDENCIES, DEPENDENCY_IDS } from '../plugins/huaweicloud-core/src/lib/dependency-model.ts';
 import { lookupOnPath, resolveDependencyCommand } from '../plugins/huaweicloud-core/src/lib/dep-resolve.ts';
+import type { PackId } from '../plugins/huaweicloud-core/src/lib/pack-types.ts';
 import { installerFor } from '../plugins/huaweicloud-core/src/dep/installers/table.ts';
 import { installGatewayTool } from '../plugins/huaweicloud-core/src/dep/installers/gateway.ts';
 import {
   provisionDependencies,
   uninstallDependency,
   uninstallPlacedDependency,
+  type DepUninstallTargets,
 } from '../plugins/huaweicloud-core/src/dep/provision.ts';
 import { readReceipt, writeReceipt, type DepReceipt } from '../plugins/huaweicloud-core/src/dep/receipts.ts';
 import { findHcloudBin } from '../plugins/huaweicloud-core/src/hcloud-probe.ts';
@@ -341,7 +343,7 @@ function gatewayReceiptWithTier(tier: 'uv' | 'pipx' | 'pip3'): DepReceipt {
   return { binary: 'open-mcp-gateway', provisioner: 'devkit', tier, installedAt: '2026-10-08T00:00:00.000Z' };
 }
 
-const noTargets = { enabledPacks: new Set(), carriers: [] };
+const noTargets: DepUninstallTargets = { enabledPacks: new Set<PackId>(), carriers: [] };
 
 test('uninstall: devbridge is refused, the host never manages it', () => {
   const result = uninstallDependency('devbridge', noTargets, { receiptsDir: fixtureDir('dep-') });
@@ -371,11 +373,11 @@ test('uninstall open-mcp-gateway without a receipt refuses and points at the man
 test('uninstall refuses while the effective pack union still requires the id', () => {
   const dir = fixtureDir('dep-uninstall-');
   writeReceipt(hcloudReceiptAt('/gone-anyway'), dir);
-  const targets = {
-    enabledPacks: new Set(['core', 'huaweicloud-cli', 'auth']),
+  const targets: DepUninstallTargets = {
+    enabledPacks: new Set<PackId>(['core', 'huaweicloud-cli', 'auth']),
     carriers: [
-      { label: 'OpenCode', packs: new Set(['core', 'huaweicloud-cli', 'auth']) },
-      { label: 'Codex CLI', packs: new Set(['core', 'voucher']) },
+      { label: 'OpenCode', packs: new Set<PackId>(['core', 'huaweicloud-cli', 'auth']) },
+      { label: 'Codex CLI', packs: new Set<PackId>(['core', 'voucher']) },
     ],
   };
   const result = uninstallDependency('hcloud', targets, { receiptsDir: dir });
@@ -586,9 +588,9 @@ test('the forced uninstall shape skips the pack-requirement gate the gated shape
   const dir = join(home, 'deps');
   writeReceipt(gatewayReceiptWithTier('uv'), dir);
   writeExecutable(join(home, '.local', 'bin', 'uv'));
-  const requiring = {
-    enabledPacks: new Set(['huaweicloud-open-mcp']),
-    carriers: [{ label: 'OpenCode', packs: new Set(['huaweicloud-open-mcp']) }],
+  const requiring: DepUninstallTargets = {
+    enabledPacks: new Set<PackId>(['huaweicloud-open-mcp']),
+    carriers: [{ label: 'OpenCode', packs: new Set<PackId>(['huaweicloud-open-mcp']) }],
   };
   const gated = uninstallDependency('open-mcp-gateway', requiring, {
     receiptsDir: dir,
@@ -849,7 +851,7 @@ function runSetupCli(
   args: string[],
   home: string,
   extra: Record<string, string | undefined> = {},
-): ReturnType<typeof spawnSync> {
+): SpawnSyncReturns<string> {
   return spawnSync(process.execPath, [setupCli, ...args], {
     cwd: fixtureDir('dep-provision-cwd-'),
     env: cliEnv(home, extra),
@@ -858,7 +860,7 @@ function runSetupCli(
   });
 }
 
-function runInstall(args: string[]): ReturnType<typeof spawnSync> {
+function runInstall(args: string[]): SpawnSyncReturns<string> {
   return runSetupCli(args, tempHome());
 }
 

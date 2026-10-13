@@ -7,14 +7,22 @@ import test from 'node:test';
 const hookPath = join(process.cwd(), 'integrations', 'hermes', 'hooks', 'huaweicloud-telemetry.py');
 const pythonBin = process.platform === 'win32' ? 'python' : 'python3';
 
-function _runHook(payload) {
+interface TelemetryHookPayload {
+  hook_event_name?: string;
+  tool_name: string;
+  tool_input: { command?: string; name?: string };
+  session_id?: string;
+  cwd?: string;
+}
+
+function _runHook(payload: TelemetryHookPayload) {
   return spawnSync(pythonBin, [hookPath], {
     input: JSON.stringify(payload),
     encoding: 'utf8',
   });
 }
 
-function pythonUnavailable(result) {
+function pythonUnavailable(result: { error?: NodeJS.ErrnoException | null }): boolean {
   return result.error?.code === 'ENOENT';
 }
 
@@ -25,7 +33,7 @@ const TMP_PLUGIN_DIR = join(process.cwd(), 'test', '.tmp-telemetry-plugin');
 const TMP_TELEMETRY_DIR = join(TMP_PLUGIN_DIR, 'telemetry');
 const TMP_EVENTS_PATH = join(TMP_TELEMETRY_DIR, 'hook-events.jsonl');
 
-function runHookWithTempDir(payload) {
+function runHookWithTempDir(payload: TelemetryHookPayload) {
   // Clean and recreate temp dir
   rmSync(TMP_PLUGIN_DIR, { recursive: true, force: true });
   mkdirSync(TMP_TELEMETRY_DIR, { recursive: true });

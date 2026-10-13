@@ -15,13 +15,13 @@ import test from 'node:test';
 // zero writes.
 
 const require = createRequire(import.meta.url);
-const { DatabaseSync } = require('node:sqlite');
+const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const setupCli = join(root, 'bin', 'setup.cjs');
 
-function makeEnv(home) {
-  const env = {
+function makeEnv(home: string) {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     USERPROFILE: home,
     HOME: home,
@@ -42,7 +42,7 @@ function makeEnv(home) {
   return env;
 }
 
-function runCli(home, args) {
+function runCli(home: string, args: string[]) {
   return spawnSync(process.execPath, [setupCli, ...args], {
     cwd: root,
     env: makeEnv(home),
@@ -51,24 +51,33 @@ function runCli(home, args) {
   });
 }
 
-function opencodeConfigPath(home) {
+function opencodeConfigPath(home: string) {
   return join(home, '.config', 'opencode', 'opencode.json');
 }
 
-function readEntry(home) {
-  return JSON.parse(readFileSync(opencodeConfigPath(home), 'utf8')).mcp['huaweicloud-devkit'];
+interface OpencodeMcpEntry {
+  command: string[];
+  type: string;
+  environment?: Record<string, string>;
 }
 
-function readPacks(home) {
+function readEntry(home: string): OpencodeMcpEntry {
+  const cfg = JSON.parse(readFileSync(opencodeConfigPath(home), 'utf8')) as {
+    mcp: Record<string, OpencodeMcpEntry>;
+  };
+  return cfg.mcp['huaweicloud-devkit'];
+}
+
+function readPacks(home: string) {
   return readEntry(home).environment?.DEVKIT_PACKS;
 }
 
 // Overwrite the OpenCode entry's DEVKIT_PACKS the way an operator would have
 // typed it — the state install refuses to change (keptUserValue) and the
 // packs command owns.
-function seedUserPacks(home, value) {
+function seedUserPacks(home: string, value: string) {
   const cfgPath = opencodeConfigPath(home);
-  const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
+  const cfg = JSON.parse(readFileSync(cfgPath, 'utf8')) as { mcp: Record<string, OpencodeMcpEntry> };
   const entry = cfg.mcp['huaweicloud-devkit'];
   entry.environment = { ...(entry.environment ?? {}), DEVKIT_PACKS: value };
   writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
@@ -412,7 +421,9 @@ test('officeace: enable rewrites the DEVKIT_PACKS env_json row surgically', () =
     assert.match(res.stdout, /Packs \(OfficeAce\): DEVKIT_PACKS "core" → "core,sandbox"/);
 
     const db2 = new DatabaseSync(join(dbDir, 'mcp-connectors.sqlite'));
-    const row = db2.prepare("SELECT env_json FROM mcp_connectors WHERE name = 'huaweicloud-devkit'").get();
+    const row = db2.prepare("SELECT env_json FROM mcp_connectors WHERE name = 'huaweicloud-devkit'").get() as {
+      env_json: string;
+    };
     db2.close();
     assert.deepEqual(JSON.parse(String(row.env_json)), [
       { key: 'HUAWEICLOUD_AGENT_TOOLKIT_MODE', value: 'local', sensitive: false },

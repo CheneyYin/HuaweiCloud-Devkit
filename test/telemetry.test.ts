@@ -6,7 +6,7 @@ import { detectAgentHarness } from '../plugins/huaweicloud-core/src/telemetry/ag
 
 const DETECTION_ENV_KEYS = ['AGENT_HARNESS', ...new Set(AGENTS.flatMap((agent) => agent.envVars || []))];
 
-function withNoAgentEnv(fn) {
+function withNoAgentEnv(fn: () => void) {
   const prev = Object.fromEntries(DETECTION_ENV_KEYS.map((key) => [key, process.env[key]]));
   for (const key of DETECTION_ENV_KEYS) delete process.env[key];
   try {
@@ -19,9 +19,11 @@ function withNoAgentEnv(fn) {
   }
 }
 
+type TelemetryModule = typeof import('../plugins/huaweicloud-core/src/telemetry/telemetry.ts');
+
 // 隔离 telemetry.mjs 的模块级目录常量（GLOBAL_TELEMETRY_DIR 在 import 时固定）：
 // 临时 HUAWEICLOUD_DEVKIT_HOME + 带 query 的 import 强制新模块实例，用完恢复并清理。
-async function withIsolatedTelemetry(fn) {
+async function withIsolatedTelemetry(fn: (telemetry: TelemetryModule) => unknown) {
   const fs = await import('node:fs');
   const os = await import('node:os');
   const path = await import('node:path');
@@ -75,7 +77,7 @@ test('detectAgentHarness classifies MCP client names to canonical harness', () =
   const nameBackedAgents = AGENTS.filter((a) => a.clientNames?.length);
   const idNameAgents = AGENTS.filter((a) => a.envVars?.length);
   const cases = [
-    ...nameBackedAgents.flatMap((a) => a.clientNames.map((n) => [n, a.id])),
+    ...nameBackedAgents.flatMap((a) => (a.clientNames ?? []).map((n) => [n, a.id])),
     ...idNameAgents.map((a) => [a.id, a.id]),
   ];
   withNoAgentEnv(() => {
@@ -89,13 +91,13 @@ test('detectAgentHarness prefers real host env over clientInfo.name', () => {
   const hostBackedAgents = AGENTS.filter((a) => a.envVars?.length);
   withNoAgentEnv(() => {
     for (const agent of hostBackedAgents) {
-      process.env[agent.envVars[0]] = 'simulated';
+      process.env[agent.envVars![0]] = 'simulated';
       assert.equal(
         detectAgentHarness({ name: 'unknown-mcp-client-probe' }),
         agent.id,
-        `env ${agent.envVars[0]} should win over name for ${agent.id}`,
+        `env ${agent.envVars![0]} should win over name for ${agent.id}`,
       );
-      delete process.env[agent.envVars[0]];
+      delete process.env[agent.envVars![0]];
     }
   });
 });

@@ -19,8 +19,8 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const setupCli = join(root, 'bin', 'setup.cjs');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 
-function makeEnv(home, extra = {}) {
-  const env = {
+function makeEnv(home: string, extra: Record<string, string | undefined> = {}) {
+  const env: Record<string, string | undefined> = {
     ...process.env,
     USERPROFILE: home,
     HOME: home,
@@ -38,7 +38,13 @@ function makeEnv(home, extra = {}) {
   return { ...env, ...extra };
 }
 
-function run(target, home, cwd, cmd, extraEnv = {}) {
+function run(
+  target: string,
+  home: string,
+  cwd: string,
+  cmd: string,
+  extraEnv: Record<string, string | undefined> = {},
+) {
   return spawnSync(process.execPath, [setupCli, cmd, '--target', target], {
     cwd,
     env: makeEnv(home, extraEnv),
@@ -47,7 +53,7 @@ function run(target, home, cwd, cmd, extraEnv = {}) {
   });
 }
 
-function runAuto(home, cwd, cmd, extraEnv = {}) {
+function runAuto(home: string, cwd: string, cmd: string, extraEnv: Record<string, string | undefined> = {}) {
   return spawnSync(process.execPath, [setupCli, cmd], {
     cwd,
     env: makeEnv(home, extraEnv),
@@ -56,7 +62,7 @@ function runAuto(home, cwd, cmd, extraEnv = {}) {
   });
 }
 
-function fakeCodexEnv(cwd, options = {}) {
+function fakeCodexEnv(cwd: string, options: { failPluginAdd?: boolean; listOutput?: string; listJson?: string } = {}) {
   const binDir = join(cwd, 'fake-bin');
   mkdirSync(binDir, { recursive: true });
   const logPath = join(cwd, 'codex.log');
@@ -104,28 +110,32 @@ process.exit(0);
   };
 }
 
-function countSkills(dir) {
+function countSkills(dir: string) {
   if (!existsSync(dir)) return 0;
   return readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory() && d.name.startsWith('huawei')).length;
 }
 
 // Skills are server data: they ship inside the plugin dir next to dist/ and
 // are disclosed over MCP, never copied into an agent's native skill dir.
-function pluginSkills(pluginsDir) {
+function pluginSkills(pluginsDir: string) {
   return countSkills(join(pluginsDir, 'skills'));
 }
 
 // MCP-only disclosure contract for one agent: native skill dir stays empty,
 // plugin dir carries the skills tree next to the server.
-function assertServerDataSkills(nativeSkillsDir, pluginsDir) {
+function assertServerDataSkills(nativeSkillsDir: string, pluginsDir: string) {
   assert.equal(countSkills(nativeSkillsDir), 0, 'native skill dir must stay empty (MCP-only disclosure)');
   assert.ok(pluginSkills(pluginsDir) >= 6, 'plugin dir must carry the skills tree');
 }
 
-function pluginVersion(pluginsDir) {
+function pluginVersion(pluginsDir: string) {
   const p = join(pluginsDir, 'package.json');
   if (!existsSync(p)) return null;
   return JSON.parse(readFileSync(p, 'utf8')).version;
+}
+
+interface HermesAllowlist {
+  approvals?: Array<{ event?: string; command?: string }>;
 }
 
 test('opencode install creates skills, MCP server, and safety policy', () => {
@@ -415,7 +425,7 @@ test('hermes install creates skills, MCP server, and safety policy', () => {
     assert.equal(pluginVersion(pd), pkg.version);
     const allowlistPath = join(home, '.hermes', 'shell-hooks-allowlist.json');
     assert.ok(existsSync(allowlistPath), 'shell hook allowlist must be written on install');
-    const allowlist = JSON.parse(readFileSync(allowlistPath, 'utf8'));
+    const allowlist = JSON.parse(readFileSync(allowlistPath, 'utf8')) as HermesAllowlist;
     const entry = (allowlist.approvals || []).find(
       (a) =>
         a &&
@@ -447,7 +457,7 @@ test('hermes uninstall removes installed files', () => {
     assert.ok(!existsSync(join(home, '.hermes', 'huaweicloud-plugins')));
     const allowlistPath = join(home, '.hermes', 'shell-hooks-allowlist.json');
     if (existsSync(allowlistPath)) {
-      const allowlist = JSON.parse(readFileSync(allowlistPath, 'utf8'));
+      const allowlist = JSON.parse(readFileSync(allowlistPath, 'utf8')) as HermesAllowlist;
       const remains = (allowlist.approvals || []).some((a) => {
         const cmd = typeof a === 'string' ? a : a?.command;
         return typeof cmd === 'string' && cmd.includes('huaweicloud-safety.py');
@@ -685,7 +695,13 @@ test('install auto-detect with multiple agents requires explicit target in non-i
   }
 });
 
-function runAutoPty(home, cwd, cmd, input, extraEnv = {}) {
+function runAutoPty(
+  home: string,
+  cwd: string,
+  cmd: string,
+  input: string,
+  extraEnv: Record<string, string | undefined> = {},
+) {
   seedProvisionedBinaries(home);
   return spawnSync('script', ['-qec', `${process.execPath} ${setupCli} ${cmd}`, '/dev/null'], {
     cwd,
@@ -696,7 +712,13 @@ function runAutoPty(home, cwd, cmd, input, extraEnv = {}) {
   });
 }
 
-function runAutoPtyStaged(home, cwd, cmd, stages, extraEnv = {}) {
+function runAutoPtyStaged(
+  home: string,
+  cwd: string,
+  cmd: string,
+  stages: Array<string | number>,
+  extraEnv: Record<string, string | undefined> = {},
+) {
   seedProvisionedBinaries(home);
   const env = makeEnv(home, extraEnv);
   const innerCmd = `${process.execPath} ${setupCli} ${cmd}`;
@@ -715,7 +737,7 @@ function runAutoPtyStaged(home, cwd, cmd, stages, extraEnv = {}) {
 // the privacy-agreement prompt with the test's input already exhausted. The
 // fakes make the provisioning loop resolve everything as present and skip —
 // the seam still runs end to end, just without network or prompts.
-function seedProvisionedBinaries(home) {
+function seedProvisionedBinaries(home: string) {
   const binDir = join(home, '.local', 'bin');
   mkdirSync(binDir, { recursive: true });
   const fakeHcloud = join(binDir, 'hcloud');

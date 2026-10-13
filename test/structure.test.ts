@@ -32,19 +32,69 @@ import { checkPackBoundaries } from '../scripts/lib/pack-boundaries.mjs';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const pluginRoot = join(root, 'plugins', 'huaweicloud-core');
 
-function readJson(path) {
+function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
 // Sources are TypeScript; a few call sites still pass legacy .mjs paths.
-function readSource(relativePath) {
+function readSource(relativePath: string): string {
   const full = join(pluginRoot, relativePath.replace(/\.mjs$/, '.ts'));
   assert.ok(existsSync(full), `source file not found: ${relativePath}`);
   return readFileSync(full, 'utf8');
 }
 
+interface PluginManifest {
+  name: string;
+  mcpServers?: string;
+  family?: string;
+  bundleFormat?: string;
+  interface?: { displayName?: string };
+}
+
+interface Marketplace {
+  name: string;
+  plugins: Array<{ name: string; source: { path: string } }>;
+}
+
+interface PackageJson {
+  kooCliVersion: string;
+  bin?: Record<string, string>;
+}
+
+interface SafetyPolicy {
+  secretKeyNamePatterns: unknown[];
+  writeOperationPrefixes: unknown[];
+  blockedSecretOperations: unknown[];
+  credentialFilePatterns: unknown[];
+}
+
+interface RiskRulesCatalog {
+  version: string;
+  rules: Array<{
+    id: string;
+    severity: string;
+    stages: string[];
+    match: { any?: unknown; all?: unknown };
+    message: string;
+    remediation: string;
+  }>;
+}
+
+interface McpConfig {
+  mcpServers?: Record<string, { args?: string[] }>;
+  mcp?: unknown;
+}
+
+interface HooksConfig {
+  hooks?: Record<string, Array<{ hooks?: Array<{ command?: string }> }>>;
+}
+
+interface IconsManifest {
+  icons: Array<{ id: string; name: unknown; logo: { source_url: string } }>;
+}
+
 test('Codex plugin manifest and marketplace are installable', () => {
-  const manifest = readJson(join(pluginRoot, '.codex-plugin', 'plugin.json'));
+  const manifest = readJson(join(pluginRoot, '.codex-plugin', 'plugin.json')) as PluginManifest;
   assert.equal(manifest.name, 'huaweicloud-devkit');
   // Skills are server data disclosed over MCP; the manifest must not declare
   // a native skills surface (same field-absence discipline as hooks).
@@ -52,14 +102,14 @@ test('Codex plugin manifest and marketplace are installable', () => {
   assert.equal(manifest.mcpServers, './.mcp.json');
   assert.ok(!Object.hasOwn(manifest, 'hooks'), 'Codex manifest keeps hooks out');
 
-  const marketplace = readJson(join(root, '.agents', 'plugins', 'marketplace.json'));
+  const marketplace = readJson(join(root, '.agents', 'plugins', 'marketplace.json')) as Marketplace;
   assert.equal(marketplace.name, 'huaweicloud-devkit');
   assert.equal(marketplace.plugins[0].name, 'huaweicloud-devkit');
   assert.equal(marketplace.plugins[0].source.path, './plugins/huaweicloud-core');
 });
 
 test('OpenClaw plugin manifest matches other agent manifests', () => {
-  const openclaw = readJson(join(pluginRoot, 'openclaw.plugin.json'));
+  const openclaw = readJson(join(pluginRoot, 'openclaw.plugin.json')) as PluginManifest;
   assert.equal(openclaw.name, 'huaweicloud-devkit');
   assert.equal(openclaw.family, 'bundle-plugin');
   assert.equal(openclaw.bundleFormat, 'codex');
@@ -74,7 +124,7 @@ test('OpenClaw plugin manifest matches other agent manifests', () => {
     join(pluginRoot, '.hermes-plugin', 'plugin.json'),
     join(pluginRoot, 'openclaw.plugin.json'),
   ];
-  const names = new Set(manifests.map((p) => readJson(p).name));
+  const names = new Set(manifests.map((p) => (readJson(p) as PluginManifest).name));
   assert.equal(names.size, 1, 'All plugin.json name fields must be identical');
 });
 
@@ -152,7 +202,7 @@ test('skills document KooCLI installation, operation discovery, region intent, a
   assert.ok(cliSkill.includes('huaweicloud-cli-mac-arm64.tar.gz'), 'macOS download URL');
 
   // Verify KooCLI version pairing: fixed downloads pin cli/<kooCliVersion>, no stale endpoint
-  const pkg = readJson(join(root, 'package.json'));
+  const pkg = readJson(join(root, 'package.json')) as PackageJson;
   const kooCliVersion = pkg.kooCliVersion;
   assert.match(kooCliVersion ?? '', /^\d+\.\d+\.\d+$/, 'package.json declares kooCliVersion');
   assert.ok(cliSkill.includes(`cli/${kooCliVersion}`), `cli-and-auth skill pins cli/${kooCliVersion} download URLs`);
@@ -170,7 +220,7 @@ test('huawei-openapi skill teaches only vocabulary-table tools and the real para
   const skill = readFileSync(join(pluginRoot, 'skills', 'huawei-openapi', 'SKILL.md'), 'utf8');
 
   const gatewayTools = [...GATEWAY_TOOL_VOCABULARY.readonly, ...GATEWAY_TOOL_VOCABULARY.routed];
-  const known = new Set(gatewayTools);
+  const known = new Set<string>(gatewayTools);
 
   // Positive direction first: every vocabulary name is TAUGHT, bare or
   // with the devkit prefix (round-10: '_' is a word character, so the
@@ -515,7 +565,7 @@ test('all plugin manifests are valid JSON', () => {
     join(pluginRoot, '.hermes-plugin', 'plugin.json'),
   ];
   for (const path of manifests) {
-    const data = readJson(path);
+    const data = readJson(path) as PluginManifest;
     assert.ok(data.name, `Manifest ${path} missing name`);
     assert.ok(data.interface, `Manifest ${path} missing interface`);
     // No manifest may declare a native skills surface: skills are server
@@ -525,7 +575,7 @@ test('all plugin manifests are valid JSON', () => {
 });
 
 test('safety policy.json is valid and has required fields', () => {
-  const policy = readJson(join(pluginRoot, 'safety', 'policy.json'));
+  const policy = readJson(join(pluginRoot, 'safety', 'policy.json')) as SafetyPolicy;
   assert.ok(Array.isArray(policy.secretKeyNamePatterns));
   assert.ok(policy.secretKeyNamePatterns.length >= 5);
   assert.ok(Array.isArray(policy.writeOperationPrefixes));
@@ -538,7 +588,7 @@ test('cloud risk rules are present and public-safe', () => {
   const rulesPath = join(pluginRoot, 'safety', 'rules', 'cloud-risk-rules.json');
   assert.ok(existsSync(rulesPath), 'Missing cloud-risk-rules.json');
 
-  const catalog = readJson(rulesPath);
+  const catalog = readJson(rulesPath) as RiskRulesCatalog;
   assert.equal(catalog.version, '0.1.0');
   assert.ok(Array.isArray(catalog.rules), 'rules must be an array');
   assert.ok(catalog.rules.length >= 9, 'Expected baseline cloud risk rules');
@@ -591,7 +641,7 @@ test('safety skill teaches proactive hook checks', () => {
 });
 
 test('.mcp.json is valid and references existing server script', () => {
-  const mcpConfig = readJson(join(pluginRoot, '.mcp.json'));
+  const mcpConfig = readJson(join(pluginRoot, '.mcp.json')) as McpConfig;
   assert.ok(mcpConfig.mcpServers || mcpConfig.mcp);
 });
 
@@ -729,7 +779,7 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
   // src/dep/ — including one a future dependency adds, at any depth — joins
   // the guard automatically, so the zod-free import graph cannot regress by
   // forgetting a list entry.
-  const depModules = readdirSync(join(pluginRoot, 'src', 'dep'), { recursive: true })
+  const depModules = (readdirSync(join(pluginRoot, 'src', 'dep'), { recursive: true }) as string[])
     .filter((name) => name.endsWith('.ts'))
     .sort((a, b) => a.localeCompare(b));
   assert.ok(depModules.length >= 5, `expected the dep module family, found: ${depModules.join(', ')}`);
@@ -1008,7 +1058,7 @@ test('official Huawei Cloud Icons library is integrated', () => {
 
   const snapshotPath = join(pluginRoot, 'src', 'data', 'icons-manifest.v1.json');
   assert.ok(existsSync(snapshotPath), 'Missing icons-manifest.v1.json snapshot');
-  const manifest = readJson(snapshotPath);
+  const manifest = readJson(snapshotPath) as IconsManifest;
   assert.ok(Array.isArray(manifest.icons), 'icons must be an array');
   assert.ok(manifest.icons.length >= 100, `Expected at least 100 icons, got ${manifest.icons.length}`);
 
@@ -1057,7 +1107,9 @@ test('update pack registers version-update tools; registry carries the central d
   // Behavioral lockstep: the pack tool list equals the PACK_OF ownership for
   // 'update'. Descriptions are derived from UPDATE_TOOLS in tools.ts itself,
   // so no byte-equality pin is needed here anymore.
-  const ownedByUpdate = Object.keys(PACK_OF).filter((tool) => PACK_OF[tool] === 'update');
+  const ownedByUpdate = (Object.keys(PACK_OF) as Array<keyof typeof PACK_OF>).filter(
+    (tool) => PACK_OF[tool] === 'update',
+  );
   assert.deepEqual(
     UPDATE_TOOLS.map((tool) => tool.name).sort((a, b) => a.localeCompare(b)),
     [...ownedByUpdate].sort((a, b) => a.localeCompare(b)),
@@ -1094,7 +1146,7 @@ test('seven packs register their tools; the central map dispatches them', () => 
     const exportName = id.toUpperCase().replaceAll('-', '_');
     assert.match(registry, new RegExp(`\\.\\.\\.${exportName}_TOOL_HANDLERS`));
     // Behavioral lockstep: the pack tool list equals the PACK_OF ownership.
-    const owned = Object.keys(PACK_OF).filter((tool) => PACK_OF[tool] === id);
+    const owned = (Object.keys(PACK_OF) as Array<keyof typeof PACK_OF>).filter((tool) => PACK_OF[tool] === id);
     assert.deepEqual(
       packTools.map((tool) => tool.name).sort((a, b) => a.localeCompare(b)),
       [...owned].sort((a, b) => a.localeCompare(b)),
@@ -1188,13 +1240,13 @@ test('doctor success message does not demand a restart', () => {
 });
 
 test('shipped runtime entry points point at built dist JavaScript', () => {
-  const pkg = readJson(join(root, 'package.json'));
+  const pkg = readJson(join(root, 'package.json')) as PackageJson;
   for (const [name, target] of Object.entries(pkg.bin ?? {})) {
     assert.doesNotMatch(target, /\.ts$/, `bin ${name} must not point at a TypeScript file`);
     assert.ok(!target.includes('/src/'), `bin ${name} must not reference src/`);
   }
 
-  const mcp = readJson(join(pluginRoot, '.mcp.json'));
+  const mcp = readJson(join(pluginRoot, '.mcp.json')) as McpConfig;
   for (const server of Object.values(mcp.mcpServers ?? {})) {
     for (const arg of server.args ?? []) {
       assert.doesNotMatch(arg, /\.ts$/, `.mcp.json arg ${arg} must not point at a TypeScript file`);
@@ -1202,7 +1254,7 @@ test('shipped runtime entry points point at built dist JavaScript', () => {
     }
   }
 
-  const hooks = readJson(join(pluginRoot, 'hooks', 'hooks.json'));
+  const hooks = readJson(join(pluginRoot, 'hooks', 'hooks.json')) as HooksConfig;
   for (const entries of Object.values(hooks.hooks ?? {})) {
     for (const entry of entries) {
       for (const hook of entry.hooks ?? []) {
@@ -1237,7 +1289,7 @@ test('shipped runtime entry points point at built dist JavaScript', () => {
 });
 
 test('plugin src tree is TypeScript only', () => {
-  const walk = (dir) =>
+  const walk = (dir: string): string[] =>
     readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
       entry.isDirectory() ? walk(join(dir, entry.name)) : [join(dir, entry.name)],
     );
@@ -1255,7 +1307,7 @@ test('pack registry partitions the tool registry and claims every skill director
   // skills/ directory is claimed exactly once.
   const allToolNames = TOOL_DEFINITIONS.map((tool) => tool.name).sort((a, b) => a.localeCompare(b));
   const packTools = PACKS.flatMap((pack) => pack.tools);
-  const toolClaims = new Set();
+  const toolClaims = new Set<string>();
   for (const tool of packTools) {
     assert.ok(!toolClaims.has(tool), `tool ${tool} is claimed by more than one pack`);
     toolClaims.add(tool);
@@ -1269,7 +1321,7 @@ test('pack registry partitions the tool registry and claims every skill director
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort((a, b) => a.localeCompare(b));
-  const skillClaims = new Set();
+  const skillClaims = new Set<string>();
   for (const pack of PACKS) {
     for (const skill of pack.skills) {
       assert.ok(!skillClaims.has(skill), `skill ${skill} is claimed by more than one pack (${pack.id})`);
@@ -1345,7 +1397,7 @@ test('dependency model: pack edges are legal, core owns none, hcloud attributed 
     Object.keys(PACK_DEPENDENCIES).sort((a, b) => a.localeCompare(b)),
     [...PACK_IDS].sort((a, b) => a.localeCompare(b)),
   );
-  const used = new Set();
+  const used = new Set<string>();
   for (const [packId, deps] of Object.entries(PACK_DEPENDENCIES)) {
     for (const dep of deps) {
       assert.ok(

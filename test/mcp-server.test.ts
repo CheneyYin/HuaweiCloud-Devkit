@@ -9,7 +9,25 @@ import test from 'node:test';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const serverPath = join(root, 'plugins', 'huaweicloud-core', 'src', 'mcp-server.ts');
 
-function frame(message) {
+interface ToolDescriptor {
+  name: string;
+  inputSchema: { properties: Record<string, unknown> };
+}
+
+interface JsonRpcResult {
+  serverInfo: { name: string; version: string };
+  tools: ToolDescriptor[];
+  isError: boolean;
+  content: { text: string }[];
+}
+
+interface JsonRpcResponse {
+  id: number | string | null;
+  result: JsonRpcResult;
+  error: { code: number; message: string };
+}
+
+function frame(message: unknown) {
   const json = JSON.stringify(message);
   return `Content-Length: ${Buffer.byteLength(json, 'utf8')}\r\n\r\n${json}`;
 }
@@ -20,8 +38,8 @@ function createClient(server = serverPath) {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   let buffer = Buffer.alloc(0);
-  const pending = new Map();
-  const frames = [];
+  const pending = new Map<number | string | null, (payload: JsonRpcResponse) => void>();
+  const frames: JsonRpcResponse[] = [];
 
   child.stdout.on('data', (chunk) => {
     buffer = Buffer.concat([buffer, chunk]);
@@ -35,7 +53,7 @@ function createClient(server = serverPath) {
       const bodyStart = headerEnd + 4;
       const bodyEnd = bodyStart + length;
       if (buffer.length < bodyEnd) return;
-      const payload = JSON.parse(buffer.subarray(bodyStart, bodyEnd).toString('utf8'));
+      const payload: JsonRpcResponse = JSON.parse(buffer.subarray(bodyStart, bodyEnd).toString('utf8'));
       buffer = buffer.subarray(bodyEnd);
       frames.push(payload);
       pending.get(payload.id)?.(payload);
@@ -43,7 +61,7 @@ function createClient(server = serverPath) {
   });
 
   return {
-    raw(data) {
+    raw(data: string) {
       child.stdin.write(data);
     },
     frames() {
@@ -52,10 +70,10 @@ function createClient(server = serverPath) {
     isAlive() {
       return child.exitCode === null;
     },
-    request(method, params = {}) {
+    request(method: string, params: Record<string, unknown> = {}) {
       const id = Math.floor(Math.random() * 1_000_000);
       child.stdin.write(frame({ jsonrpc: '2.0', id, method, params }));
-      return new Promise((resolve, reject) => {
+      return new Promise<JsonRpcResponse>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${method}`)), 2000);
         pending.set(id, (payload) => {
           clearTimeout(timer);
@@ -64,7 +82,7 @@ function createClient(server = serverPath) {
         });
       });
     },
-    requestInChunks(method, params = {}, bodyBytesInFirstChunk = 1) {
+    requestInChunks(method: string, params: Record<string, unknown> = {}, bodyBytesInFirstChunk: number = 1) {
       const id = Math.floor(Math.random() * 1_000_000);
       const payload = frame({ jsonrpc: '2.0', id, method, params });
       const bodyStart = payload.indexOf('\r\n\r\n') + 4;
@@ -73,7 +91,7 @@ function createClient(server = serverPath) {
       const second = payload.slice(splitAt);
       child.stdin.write(first);
       setTimeout(() => child.stdin.write(second), 50);
-      return new Promise((resolve, reject) => {
+      return new Promise<JsonRpcResponse>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error(`Timed out waiting for split ${method}`)), 2000);
         pending.set(id, (message) => {
           clearTimeout(timer);
@@ -110,7 +128,7 @@ test('MCP server initializes, lists tools, and plans CLI commands', async () => 
     assert.ok(toolNames.has('huaweicloud_sandbox_connect'));
 
     const runReadonly = listed.result.tools.find((tool) => tool.name === 'huaweicloud_run_readonly_command');
-    assert.ok(Object.hasOwn(runReadonly.inputSchema.properties, 'timeoutMs'));
+    assert.ok(Object.hasOwn(runReadonly!.inputSchema.properties, 'timeoutMs'));
 
     const planned = await client.request('tools/call', {
       name: 'huaweicloud_plan_cli_command',

@@ -14,8 +14,8 @@ import {
 test('loadPolicy fails closed on a malformed policy file', () => {
   const dir = mkdtempSync(join(tmpdir(), 'hwc-policy-'));
   try {
-    const write = (content) => writeFileSync(join(dir, 'policy.json'), content);
-    const expectThrow = (content, fragment) => {
+    const write = (content: string) => writeFileSync(join(dir, 'policy.json'), content);
+    const expectThrow = (content: string, fragment: string) => {
       write(content);
       assert.throws(() => loadPolicy(join(dir, 'policy.json')), /TypeError/, fragment);
     };
@@ -51,7 +51,11 @@ test('redactSecrets removes credential-shaped values recursively', () => {
       secretAccessKey: 'example-secret-key',
       normal: 'visible',
     },
-  });
+  }) as {
+    profile: string;
+    access_key: string;
+    nested: { secretAccessKey: string; normal: string };
+  };
   assert.equal(redacted.profile, 'dev');
   assert.equal(redacted.access_key, '<redacted>');
   assert.equal(redacted.nested.secretAccessKey, '<redacted>');
@@ -63,7 +67,7 @@ test('redactSecrets redacts adminPass and password fields', () => {
     '--server.adminPass': 'MySecret123!',
     password: 'hunter2',
     normal_field: 'keep',
-  });
+  }) as { '--server.adminPass': string; password: string; normal_field: string };
   assert.equal(redacted['--server.adminPass'], '<redacted>');
   assert.equal(redacted.password, '<redacted>');
   assert.equal(redacted.normal_field, 'keep');
@@ -73,7 +77,7 @@ test('redactSecrets handles array values', () => {
   const redacted = redactSecrets([
     { name: 'prod', secret_key: 'sk-xxx' },
     { name: 'dev', normal: 'value' },
-  ]);
+  ]) as { name: string; secret_key: string; normal: string }[];
   assert.equal(redacted[0].secret_key, '<redacted>');
   assert.equal(redacted[1].normal, 'value');
 });
@@ -118,7 +122,7 @@ test('redactSecrets redacts admin-pass / admin_pass / adminPass variants (#726 D
     adminPass: 'v1',
     'admin-pass': 'v2',
     admin_pass: 'v3',
-  });
+  }) as { adminPass: string; 'admin-pass': string; admin_pass: string };
   assert.equal(obj.adminPass, '<redacted>');
   assert.equal(obj['admin-pass'], '<redacted>');
   assert.equal(obj.admin_pass, '<redacted>');
@@ -132,7 +136,7 @@ test('redactSecrets masks opaque blob keys (user_data / metadata / private_key) 
     '--server.user_data=echo TOKEN=abc123 >> /etc/x',
     '--server.metadata.db_password=secret123',
     '--keypair.private_key=-----BEGIN RSA PRIVATE KEY-----',
-  ]);
+  ]) as string[];
   for (const arg of redacted) {
     assert.doesNotMatch(arg, /SECRET|TOKEN|abc123|secret123|RSA|PRIVATE/);
   }
@@ -145,7 +149,7 @@ test('redactSecrets masks opaque blob keys (user_data / metadata / private_key) 
 test('classifyTextCommand blocks direct credential file reads', () => {
   const result = classifyTextCommand('Get-Content ~/.hcloud/config.json');
   assert.equal(result.decision, 'deny');
-  assert.match(result.reason, /credential|profile|secret/i);
+  assert.match(result.reason ?? '', /credential|profile|secret/i);
 });
 
 test('classifyTextCommand blocks env var dumps with HUAWEICLOUD prefix', () => {
@@ -157,13 +161,13 @@ test('classifyTextCommand blocks env var dumps with HUAWEICLOUD prefix', () => {
 test('classifyHcloudArgs blocks secret value reads', () => {
   const result = classifyHcloudArgs(['CSMS', 'ShowSecretVersion', '--secret_name', 'prod/db']);
   assert.equal(result.decision, 'deny');
-  assert.match(result.reason, /secret value/i);
+  assert.match(result.reason ?? '', /secret value/i);
 });
 
 test('classifyHcloudArgs blocks unapproved writes', () => {
   const result = classifyHcloudArgs(['ECS', 'NovaCreateServers', '--body', '{}']);
   assert.equal(result.decision, 'deny');
-  assert.match(result.reason, /write operation/i);
+  assert.match(result.reason ?? '', /write operation/i);
 });
 
 test('classifyHcloudArgs blocks Apply* operations as writes (#644)', () => {
@@ -353,14 +357,14 @@ test('classifyTextCommand blocks approved public admin port exposure', () => {
   );
   assert.equal(result.decision, 'deny');
   assert.equal(result.blockedByRiskRule, true);
-  assert.equal(result.findings[0].ruleId, 'hwc-network-public-admin-port');
+  assert.equal(result.findings?.[0].ruleId, 'hwc-network-public-admin-port');
 });
 
 test('classifyTextCommand applies shared risk rules to non-hcloud commands', () => {
   const result = classifyTextCommand('echo ZWNobyBoaQ== | base64 -d | bash');
   assert.equal(result.decision, 'deny');
   assert.equal(result.blockedByRiskRule, true);
-  assert.equal(result.findings[0].ruleId, 'hwc-command-encoded-shell-exec');
+  assert.equal(result.findings?.[0].ruleId, 'hwc-command-encoded-shell-exec');
 });
 
 test('classifyTextCommand carries warnings for high-cost shapes', () => {
@@ -369,7 +373,7 @@ test('classifyTextCommand carries warnings for high-cost shapes', () => {
     { allowWrites: true },
   );
   assert.equal(result.decision, 'allow');
-  assert.ok(result.warnings.some((finding) => finding.ruleId === 'hwc-cost-unbounded-scale'));
+  assert.ok(result.warnings?.some((finding) => finding.ruleId === 'hwc-cost-unbounded-scale'));
 });
 
 test('existing credential and secret blocks still win before risk-rule warnings', () => {

@@ -11,7 +11,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const pluginRoot = join(root, 'plugins', 'huaweicloud-core');
 const packsDir = join(pluginRoot, 'src', 'packs');
 
-function walkFiles(dir) {
+function walkFiles(dir: string): string[] {
   const out = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);

@@ -78,12 +78,13 @@ export default [
     },
   },
   {
-    files: ['**/*.ts'],
+    files: tsFiles,
     rules: {
       // typescript-eslint's recommended set already turns no-undef off for TS
       // sources, and eslint-plugin-n does not resolve explicit ".ts"
       // specifiers. The base no-unused-vars stays off so it does not
-      // double-report next to the @typescript-eslint variant below.
+      // double-report next to the @typescript-eslint variant below — and so
+      // it does not false-positive on .d.mts declaration signatures.
       'no-unused-vars': 'off',
       'n/no-missing-import': 'off',
       '@typescript-eslint/no-unused-vars': [

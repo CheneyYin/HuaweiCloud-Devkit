@@ -422,7 +422,7 @@ mod.withDepLock(() => {
     const deadPid = dead.pid;
     await new Promise<void>((resolve) => dead.on('exit', resolve));
     mkdirSync(dir, { recursive: true });
-    seedLock(dir, deadPid);
+    seedLock(dir, deadPid!);
     const sentinel = join(dir, 'go');
     const fastTimings = join(dir, 'fast.json');
     const slowTimings = join(dir, 'slow.json');
