@@ -1614,7 +1614,7 @@ test('jscpd devDependency is exact-pinned and lint:dup roots exclude the skills 
   assert.doesNotMatch(
     script,
     /skills/,
-    'both skills trees (generated plugins/huaweicloud-core/skills and hand-written root skills/) must stay outside the scan',
+    'the script must not name a skills tree as a scan root; the src/packs/*/skills/ markdown sources live inside the scanned src root and are excluded only by the formats restriction (pinned by the config and behavioral tests above)',
   );
   assert.ok(
     script.includes('eslint.config.mjs'),
@@ -1701,7 +1701,8 @@ test('jscpd baseline is in sync: zero new clones against the committed fingerpri
     0,
     `new duplication (or a broken gate config) detected:\n${run.stdout}\n${run.stderr}\n` +
       'run `npm run lint:dup -- --baseline .jscpd-baseline.json --fail-on-new-clones 0` for the clone list; ' +
-      'if the new duplication is intentional (moved-not-deleted, or deliberate test repetition), regenerate with ' +
+      'if the new duplication is intentional (moved-not-deleted, edits inside a baselined region, or deliberate ' +
+      'test repetition), run `npm run format` first (fingerprints are whitespace-sensitive), then regenerate with ' +
       '`npm run lint:dup -- --baseline .jscpd-baseline.json --update-baseline` and commit the file',
   );
 });
