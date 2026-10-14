@@ -2,7 +2,14 @@ import { McpServer, type RegisteredTool } from '@modelcontextprotocol/sdk/server
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { CallToolResult, JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 
-import { TOOL_DEFINITIONS, callTool, type CallToolOptions, type ToolDefinition, type ToolName } from './tools.ts';
+import {
+  TOOL_DEFINITIONS,
+  callTool,
+  verifySkillTree,
+  type CallToolOptions,
+  type ToolDefinition,
+  type ToolName,
+} from './tools.ts';
 import { PACK_OF } from './packs/registry.ts';
 import { resolveEnabledPacks } from './packs/enable.ts';
 import { getToolSchema, assertConstructedSchemas } from './tool-schemas.ts';
@@ -110,6 +117,11 @@ export function normalizeToolCallParams(message: JSONRPCMessage): JSONRPCMessage
 
 export function createDevkitMcpServer({ sessionId, runtimePacks = false }: DevkitServerOptions = {}): McpServer {
   assertConstructedSchemas();
+  // Refuse to start on a missing/partial skills tree: list_packs is
+  // registry-driven and would otherwise advertise skills retrieve_skill
+  // cannot serve. stdio and the stateless remote both boot through here,
+  // and the remote re-verifies per request (one readdir — cheap).
+  verifySkillTree();
   // Enablement resolves inside syncDisclosure: stdio resolves once at boot
   // (fail-fast exit on a bogus DEVKIT_PACKS), the stateless remote re-reads
   // env on every request, so both transports share one code path with no

@@ -637,6 +637,16 @@ function copyServerPayload(pluginDest: string, opts: { skipDist?: boolean } = {}
   copyDir(join(PLUGIN_ROOT, 'safety'), join(pluginDest, 'safety'));
   console.log(`  Safety Policy -> ${join(pluginDest, 'safety')}`);
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
+  // A missing source tree must abort, not silently skip: copyDir's
+  // existsSync guard would no-op the copy while this function still prints
+  // a success line, and the installed server would then advertise skills it
+  // cannot serve. Same loudness as a missing dist/.
+  if (!existsSync(skillsSrc)) {
+    throw new Error(
+      `skills tree missing at ${skillsSrc} — the payload cannot ship without it. ` +
+        'From a git checkout run: npm run build; from a broken install run: npx huaweicloud-devkit install',
+    );
+  }
   copyDir(skillsSrc, join(pluginDest, 'skills'));
   // The plugin dir is wholly devkit-owned: prune retired skill names so a
   // departed directory can never keep serving stale, ungated content through
@@ -733,14 +743,20 @@ function removeOwnedSkillsFrom(dir: string): number {
 
 // Skills status reads the server-data tree inside the plugin dir, mirroring
 // where copyServerPayload places it.
-function serverSkillCount(pluginDir: string): number {
+function serverSkillDirNames(pluginDir: string): string[] {
   const dir = join(pluginDir, 'skills');
-  if (!existsSync(dir)) return 0;
+  if (!existsSync(dir)) return [];
   try {
-    return readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).length;
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
   } catch {
-    return 0;
+    return [];
   }
+}
+
+function serverSkillCount(pluginDir: string): number {
+  return serverSkillDirNames(pluginDir).length;
 }
 
 function installRuntimeDeps(pluginsDir: string): void {
@@ -4871,8 +4887,22 @@ async function cmdDoctor(): Promise<void> {
   // layout resolves skills from the package root).
   const skillsTreeDirs = [...payloadDirs];
   if (dshPatchConfigured()) skillsTreeDirs.push(join(PLUGIN_ROOT, 'skills'));
-  const skillsTreeOk = skillsTreeDirs.some((dir) => serverSkillCount(dir) >= 6);
-  check('Skills tree (server data, MCP-disclosed)', skillsTreeOk, 'Run: npx huaweicloud-devkit install');
+  // Roster-exact, not a count floor: a partial tree (say, only the six
+  // meta-skills after a botched generation) must FAIL, not satisfy a
+  // legacy >= 6 threshold. The expected roster is the package's own tree —
+  // the same ownership manifest pruneStale and the native purges use.
+  const expectedSkills = devkitOwnedSkillNames();
+  const skillsTreeOk =
+    expectedSkills.size > 0 &&
+    skillsTreeDirs.some((dir) => {
+      const present = new Set(serverSkillDirNames(dir));
+      return [...expectedSkills].every((name) => present.has(name));
+    });
+  check(
+    'Skills tree (server data, MCP-disclosed)',
+    skillsTreeOk,
+    'Run: npx huaweicloud-devkit install (from a git checkout: npm run build first)',
+  );
 
   // Stale native copies from pre-MCP installs shadow-disclose outdated skill
   // content through the agent's own loader; they also bypass pack gating.

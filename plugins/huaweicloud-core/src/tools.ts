@@ -58,6 +58,22 @@ export function listSkillDirs(root: string): string[] {
   }
 }
 
+// Boot-time cross-check between the registry's skill claims and the
+// generated tree. A server that advertises skills retrieve_skill cannot
+// serve (registry-driven list_packs beside an empty or partial tree) is
+// worse than one that refuses to start, so the factory calls this before
+// registering anything — mirroring the loudness of a missing dist/.
+export function verifySkillTree(): void {
+  const present = new Set(listSkillDirs(SKILLS_ROOT));
+  const missing = [...SKILL_OWNER.keys()].filter((skill) => !present.has(skill));
+  if (missing.length > 0) {
+    throw new Error(
+      `skills tree incomplete at ${SKILLS_ROOT}: missing ${missing.join(', ')} — ` +
+        'from a git checkout run: npm run build; from an install run: npx huaweicloud-devkit install',
+    );
+  }
+}
+
 // ── Tool registry ──
 // TOOL_DEFINITIONS_LITERALS is the single source of truth for names; core
 // descriptions live here, pack descriptions are derived from the owning

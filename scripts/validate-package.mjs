@@ -70,9 +70,11 @@ if (dshPatch) {
   );
 }
 
-const skills = readdirSync(join(pluginRoot, 'skills')).filter((name) =>
-  existsSync(join(pluginRoot, 'skills', name, 'SKILL.md')),
-);
+// One guided failure when the generated tree is absent, not a raw ENOENT
+// stack from the readdirSync below (from a raw checkout: npm run build).
+const skillsDir = join(pluginRoot, 'skills');
+assert.ok(existsSync(skillsDir), `Missing generated skills tree: ${skillsDir} — run: npm run build`);
+const skills = readdirSync(skillsDir).filter((name) => existsSync(join(skillsDir, name, 'SKILL.md')));
 assert.ok(skills.length >= 5, 'Expected compact meta-skills');
 
 for (const name of skills) {

@@ -43,7 +43,13 @@ if (fs.existsSync(bundledPatch)) {
 const skillsSrc = path.join(packageRoot, 'plugins', 'huaweicloud-core', 'skills');
 const skillsDest = path.join(dshHome, 'skills');
 
-if (fs.existsSync(skillsSrc) && fs.existsSync(skillsDest)) {
+// A missing source tree is a broken package (the server fail-fasts on it at
+// boot); warn loudly instead of silently skipping the purge.
+if (!fs.existsSync(skillsSrc)) {
+  console.error(
+    'HuaweiCloud DevKit: skills tree missing from the package — the MCP server will refuse to start. Reinstall the huaweicloud-devkit package.',
+  );
+} else if (fs.existsSync(skillsDest)) {
   const owned = new Set(
     fs
       .readdirSync(skillsSrc, { withFileTypes: true })

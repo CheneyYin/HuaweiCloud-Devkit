@@ -33,6 +33,13 @@ import { fixtureDir } from './fixture-dir.ts';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const pluginRoot = join(root, 'plugins', 'huaweicloud-core');
 
+// The tree-reading guards below require the generated skills tree. One loud
+// precondition instead of a dozen raw ENOENT stack traces when it is absent.
+assert.ok(
+  existsSync(join(pluginRoot, 'skills')),
+  'generated skills tree missing under plugins/huaweicloud-core/ — run: npm run build',
+);
+
 function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
@@ -705,8 +712,12 @@ test('setup-cli.ts supports the codearts target end to end', () => {
   assert.match(setup, /function installMarkerDirForTarget\(target: string\)/);
   assert.match(setup, /function writeInstallMarker\(target: string\)/);
   // doctor checks the skills tree inside installed plugin dirs, and native
-  // skill dirs only for stale-copy detection
-  assert.match(setup, /serverSkillCount\(dir\) >= 6/);
+  // skill dirs only for stale-copy detection. The tree check is
+  // roster-exact (every shipped skill present in some payload dir), not a
+  // count floor — a partial tree must fail.
+  assert.match(setup, /const expectedSkills = devkitOwnedSkillNames\(\);/);
+  assert.match(setup, /\[...expectedSkills\]\.every\(\(name\) => present\.has\(name\)\)/);
+  assert.doesNotMatch(setup, /serverSkillCount\(dir\) >= 6/, 'count-floor doctor check must be gone');
   assert.match(setup, /staleNativeSkillDirs\(\)\.length/);
   // help text documents the target
   assert.match(

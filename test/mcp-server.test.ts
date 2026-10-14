@@ -282,6 +282,9 @@ test('MCP server reports version from plugin package.json in installed layout', 
     const pluginRoot = join(dir, 'huaweicloud-plugins');
     cpSync(join(root, 'plugins', 'huaweicloud-core', 'dist'), join(pluginRoot, 'dist'), { recursive: true });
     cpSync(join(root, 'plugins', 'huaweicloud-core', 'safety'), join(pluginRoot, 'safety'), { recursive: true });
+    // The server fail-fasts on a missing skills tree (verifySkillTree), so
+    // a bootable fixture models the full payload a real install ships.
+    cpSync(join(root, 'plugins', 'huaweicloud-core', 'skills'), join(pluginRoot, 'skills'), { recursive: true });
     writeFileSync(
       join(pluginRoot, 'package.json'),
       JSON.stringify({ name: 'huaweicloud-plugins', version: '9.9.9-test' }),
@@ -311,6 +314,9 @@ test('MCP server reports version from plugin manifest in Codex cache layout (#57
     mkdirSync(codexRoot, { recursive: true });
     cpSync(join(root, 'plugins', 'huaweicloud-core', 'dist'), join(codexRoot, 'dist'), { recursive: true });
     cpSync(join(root, 'plugins', 'huaweicloud-core', 'safety'), join(codexRoot, 'safety'), { recursive: true });
+    // The server fail-fasts on a missing skills tree (verifySkillTree), so
+    // a bootable fixture models the full payload a real install ships.
+    cpSync(join(root, 'plugins', 'huaweicloud-core', 'skills'), join(codexRoot, 'skills'), { recursive: true });
     mkdirSync(join(codexRoot, '.codex-plugin'), { recursive: true });
     writeFileSync(
       join(codexRoot, '.codex-plugin', 'plugin.json'),
