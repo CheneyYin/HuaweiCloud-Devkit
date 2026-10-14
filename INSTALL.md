@@ -25,11 +25,21 @@ hcloud configure init  # 配置 AK/SK 和区域
 
 ## 安装插件 (OpenCode)
 
+从仓库检出安装（先构建产物 `dist/` 与 `skills/`，二者均不随 git 提交）：
+
 ```powershell
-.\scripts\install-opencode-local.ps1
+npm install
+npm run build
+node .\bin\setup.cjs install --target opencode
 ```
 
-将 `integrations/opencode/opencode.json` 中的 MCP 配置合并到你的 OpenCode 配置中。
+或直接使用已发布的安装器：
+
+```powershell
+npx --yes huaweicloud-devkit install --target opencode
+```
+
+安装器将 `integrations/opencode/opencode.json` 中的 MCP 配置合并到你的 OpenCode 配置中。
 
 ## 安装插件 (DeepSeek Harness)
 
