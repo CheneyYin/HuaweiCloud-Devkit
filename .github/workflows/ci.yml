@@ -94,16 +94,8 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
-        if: matrix.os != 'windows-latest'
       - run: npm test
-        if: matrix.os != 'windows-latest'
-      - if: matrix.os == 'windows-latest'
-        run: echo "Skipped - better-sqlite3 native compile not supported on Windows CI"
-      # validate reads the generated skills/ tree, which only npm test's
-      # pretest build produces; the Windows leg installs no deps and never
-      # builds, so the tree-agnostic package checks run on the ubuntu legs.
       - run: npm run validate
-        if: matrix.os != 'windows-latest'
 
   integration:
     needs: [test]

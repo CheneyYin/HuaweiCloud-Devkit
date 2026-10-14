@@ -89,8 +89,9 @@ renameSync(stagingDir, distDir);
 // The skills tree is a build artifact beside dist/: sources live in
 // src/packs/*/skills/** (all 30 skills are pack-owned), output lands in
 // skills/ with the roster manifest. sync-skills applies the same staging
-// discipline used for dist above (render into skills.new/, swap on success),
-// so a failed skills generation never leaves a half-written tree behind.
+// discipline used for dist above (render into a unique skills.new-* dir,
+// swap on success), so a failed skills generation never leaves a
+// half-written tree behind.
 const { writeSkillsTree } = await import('./sync-skills.mjs');
 const skillsOut = writeSkillsTree();
 

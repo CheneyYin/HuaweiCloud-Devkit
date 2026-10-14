@@ -6,7 +6,7 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
@@ -178,7 +178,10 @@ export async function probe({
 }
 
 // CLI mode: node scripts/mcp-probe.mjs <out.json> [--framing nl] [--call name=json]...
-const invokedDirectly = process.argv[1] && import.meta.url === new URL('file://' + process.argv[1]).href;
+// pathToFileURL, not `new URL('file://' + argv[1])`: the string form never
+// matches import.meta.url on Windows (backslash, drive-letter paths), which
+// would silently turn this CLI mode into a no-op there.
+const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (invokedDirectly) {
   const args = process.argv.slice(2);
   const out = args[0] ?? '/tmp/opencode/probe-transcript.json';

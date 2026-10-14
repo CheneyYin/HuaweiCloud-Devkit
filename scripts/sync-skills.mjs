@@ -17,15 +17,14 @@
 // carries the six meta-skills, the other packs carry their service skills,
 // and the whole skills/ tree is generated. Non-markdown payloads
 // (agents/*.yaml manifests) copy verbatim: the marker is an HTML comment,
-// legal in markdown and invalid YAML, and generated-ness is detected from
-// SKILL.md alone.
+// legal in markdown and invalid YAML — only .md files carry markers.
 //
 // Writing follows the staging discipline build-plugin.mjs applies to dist/:
-// render everything into skills.new/, write the roster manifest, and swap
-// only on success — a crashed run can never leave a half-written tree where
-// a complete one stood. The swap replaces the whole tree, so stray
-// hand-created directories under skills/ are wiped exactly like stale files;
-// the tree is wholly derived, same as dist/.
+// render everything into a unique skills.new-* staging dir, write the roster
+// manifest, and swap only on success — a crashed run can never leave a
+// half-written tree where a complete one stood. The swap replaces the whole
+// tree, so stray hand-created directories under skills/ are wiped exactly
+// like stale files; the tree is wholly derived, same as dist/.
 //
 // CRLF is normalized to LF before comparison; the injected marker line itself
 // is stripped from the generated side so content compares byte-level.
@@ -93,10 +92,9 @@ function discoverPackSkills(sourceRoot = packsDir) {
 function renderGenerated(packId, skillName, relativeFile, content) {
   const normalized = content.replace(/\r\n/g, '\n');
   // Non-markdown payloads (agents/*.yaml) copy verbatim: the marker is an
-  // HTML comment, legal in markdown and invalid YAML. Generated-ness is
-  // detected from SKILL.md alone (isGeneratedSkillDir), so omitting the
-  // marker here loses no signal, and the --check byte comparison still
-  // covers these files (stripMarkerLine is the identity without a marker).
+  // HTML comment, legal in markdown and invalid YAML. --check compares
+  // these files byte-level against the pack sources (stripMarkerLine is
+  // the identity without a marker), so omitting the marker loses nothing.
   if (!relativeFile.endsWith('.md')) return normalized;
   const marker = markerFor(packId, skillName);
   const frontmatter = /^---\n[\s\S]*?\n---\n/.exec(normalized);
@@ -148,21 +146,9 @@ function markerLineOf(content) {
   return normalized.split('\n').find((line) => line.startsWith(MARKER_PREFIX) && line.endsWith(MARKER_SUFFIX)) ?? null;
 }
 
-// A skills/ directory is generated iff its SKILL.md carries the marker.
-function isGeneratedSkillDir(skillDir) {
-  const skillMd = join(skillDir, 'SKILL.md');
-  if (!existsSync(skillMd)) return false;
-  return readFileSync(skillMd, 'utf8').includes(MARKER_PREFIX);
-}
-
-const generatedSkillDirs = () =>
-  listDirs(skillsDir)
-    .map((name) => ({ name, dir: join(skillsDir, name) }))
-    .filter(({ dir }) => isGeneratedSkillDir(dir));
-
 // The roster manifest travels with the generated tree (prettier-clean JSON):
-// consumers (pack verification, install-side roster checks) read it instead
-// of re-deriving the expectation from src/packs. Invisible to every skill
+// consumers (doctor's roster check, pack verification) read it instead of
+// re-deriving the expectation from src/packs. Invisible to every skill
 // reader — not a directory, no SKILL.md, no huawei* prefix.
 function manifestJson(skillNames) {
   // Code-unit ordering, not localeCompare: the manifest is a byte-compared
@@ -175,13 +161,13 @@ function manifestJson(skillNames) {
 // Full regeneration with the staging discipline build-plugin.mjs applies to
 // dist/: render every source into a unique skills.new-* staging dir, write
 // the manifest, swap only on success. The rm+rename pair leaves the same
-// two-statement missing window the dist swap accepts; C2's fail-loud seams
+// two-statement missing window the dist swap accepts; the fail-loud seams
 // cover it. Replacing the whole tree (not incremental writes) is what makes
 // stale files, stale skill dirs, and stray hand-created dirs vanish in one
 // pass. A unique staging dir (mkdtemp) keeps two entry points — npm run
-// build and npm run skills:sync — from clobbering each other's staging; the
-// loser's renameSync fails ENOTEMPTY after the winner published, which is a
-// clean error rather than a corrupted tree.
+// build and npm run skills:sync — from clobbering each other's staging:
+// concurrent runs either fail cleanly at the rename or last-writer-wins
+// with a complete tree; a partial tree never publishes.
 export function writeSkillsTree({ packsDir: sourceRoot = packsDir } = {}) {
   const packSkills = discoverPackSkills(sourceRoot);
   if (packSkills.length === 0) {
@@ -190,6 +176,10 @@ export function writeSkillsTree({ packsDir: sourceRoot = packsDir } = {}) {
     );
   }
   const stagingSkillsDir = mkdtempSync(join(pluginRoot, 'skills.new-'));
+  // Once the live tree is removed, the staging dir is the only complete
+  // copy: a failed rename must preserve it for recovery instead of deleting
+  // it (rmSync would leave neither a tree nor a fallback).
+  let liveTreeRemoved = false;
   try {
     let files = 0;
     for (const { packId, skillName, sourceDir } of packSkills) {
@@ -204,10 +194,19 @@ export function writeSkillsTree({ packsDir: sourceRoot = packsDir } = {}) {
     }
     writeFileSync(join(stagingSkillsDir, MANIFEST_NAME), manifestJson(packSkills.map(({ skillName }) => skillName)));
     rmSync(skillsDir, { recursive: true, force: true });
+    liveTreeRemoved = true;
     renameSync(stagingSkillsDir, skillsDir);
     return { skills: packSkills.length, files };
   } catch (error) {
-    rmSync(stagingSkillsDir, { recursive: true, force: true });
+    if (liveTreeRemoved) {
+      // stderr only: npm pack --json parses stdout and the build chain runs
+      // as the prepack hook.
+      console.error(
+        `skills tree swap failed; the rendered copy is preserved at ${stagingSkillsDir} — rename it to skills/ manually or re-run npm run build`,
+      );
+    } else {
+      rmSync(stagingSkillsDir, { recursive: true, force: true });
+    }
     throw error;
   }
 }
@@ -251,10 +250,14 @@ function run({ write }) {
     }
   }
 
-  // Generated skill dirs without a pack source are stale.
-  for (const { name } of generatedSkillDirs()) {
-    if (expectedTargets.has(name)) continue;
-    failures.push(`stale generated skill with no pack source: skills/${name} — run: npm run build`);
+  // Stray skill dirs — marker or not — must fail here: the boot guard
+  // (verifySkillTree) rejects any tree dir the registry does not claim, so
+  // --check must hold the same predicate or `npm run validate` can pass on
+  // a tree the server refuses to start.
+  for (const name of listDirs(skillsDir)) {
+    if (!expectedTargets.has(name)) {
+      failures.push(`stray skill dir with no pack source: skills/${name} — run: npm run build`);
+    }
   }
 
   // The manifest must be present and current (it ships with the tree).

@@ -73,6 +73,15 @@ for (const skill of manifest.skills) {
 const sourceSkill = [...paths].find((p) => /^plugins\/huaweicloud-core\/src\/packs\/[^/]+\/skills\//.test(p));
 assert.ok(!sourceSkill, `Tarball must not ship authoritative skill sources (found ${sourceSkill})`);
 
+// Runtime state and host bytecode must never ship. `files` disables npm's
+// .gitignore handling, so gitignored artifacts under the whitelisted plugin
+// dir pack unless negated explicitly — a shipped first-use-stamp suppresses
+// the plugin:first_use telemetry event for every consumer of the tarball.
+const runtimeState = [...paths].find(
+  (p) => /^plugins\/huaweicloud-core\/telemetry\//.test(p) || p.includes('__pycache__') || p.endsWith('.pyc'),
+);
+assert.ok(!runtimeState, `Tarball must not ship runtime state or bytecode caches (found ${runtimeState})`);
+
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 const dshPatch = pkg.dsh?.bundle?.patch;
 if (dshPatch) {

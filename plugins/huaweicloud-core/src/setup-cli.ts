@@ -56,6 +56,7 @@ import { queryDistTagsFetch, determineTarget, semverCompare } from './update-che
 import { getKooCliVersion, compareVersion, kooCliDownloadBase } from './koocli-version.ts';
 import { findHcloudBin, hcloudProbeNextStep, probeHcloud } from './hcloud-probe.ts';
 import { asText } from './lib/as-text.ts';
+import { parseSkillManifest } from './lib/skill-manifest.ts';
 import { PACK_IDS, type PackId } from './lib/pack-types.ts';
 import {
   DEPENDENCIES,
@@ -677,20 +678,14 @@ function devkitOwnedSkillNames(): Set<string> {
 
 // The expected skill roster, read from the shipped .manifest.json file rather
 // than from the candidate directory listing. Doctor must not compare a
-// directory against itself (the DSH layout resolves skills from the very
-// PLUGIN_ROOT/skills tree it would enumerate), so the roster of record is the
-// file the build wrote beside the tree. An absent or unreadable manifest
-// yields [] and the caller fails loud.
+// directory against itself, so the roster of record is the file the build
+// wrote beside the tree; parsing lives in src/lib/skill-manifest.ts (pure,
+// unit-tested). An absent or unreadable manifest yields [] and the caller
+// fails loud.
 function shippedSkillRoster(): string[] {
   const manifestPath = join(PLUGIN_ROOT, 'skills', '.manifest.json');
   if (!existsSync(manifestPath)) return [];
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'));
-    const skills = (parsed as { skills?: unknown } | null)?.skills;
-    return Array.isArray(skills) ? skills.filter((name): name is string => typeof name === 'string') : [];
-  } catch {
-    return [];
-  }
+  return parseSkillManifest(readFileSync(manifestPath, 'utf8'));
 }
 
 // Agent-native skill directories that older devkit versions copied skills
@@ -4904,18 +4899,24 @@ async function cmdDoctor(): Promise<void> {
   // package root when the DSH npm-in-profile patch is configured (that
   // layout resolves skills from the package root).
   const skillsTreeDirs = [...payloadDirs];
-  if (dshPatchConfigured()) skillsTreeDirs.push(join(PLUGIN_ROOT, 'skills'));
-  // Roster-exact against the shipped manifest, not a count floor and not the
-  // candidate's own listing: a partial tree (say, only the six meta-skills
-  // after a botched generation, or a deleted skill dir after install) must
-  // FAIL. The manifest is a file, so the DSH layout — whose candidate IS the
-  // package's skills/ dir — cannot validate a directory against itself.
+  // serverSkillDirNames() appends 'skills' to its argument, so the DSH
+  // package-root candidate is PLUGIN_ROOT itself — pushing the skills
+  // subdir would probe PLUGIN_ROOT/skills/skills, which never exists (the
+  // pre-fix shape: the fallback was inert and a DSH-only healthy install
+  // false-FAILED here).
+  if (dshPatchConfigured()) skillsTreeDirs.push(PLUGIN_ROOT);
+  // Set equality against the shipped manifest, not a count floor and not a
+  // one-direction subset: verifySkillTree (boot) rejects both missing and
+  // unclaimed skills, so doctor must fail any payload the server would
+  // refuse to start — an extra directory is as disqualifying as a missing
+  // one. The expected roster is a file the build wrote beside the tree, so
+  // a candidate listing can never trivially validate itself.
   const expectedSkills = shippedSkillRoster();
   const skillsTreeOk =
     expectedSkills.length > 0 &&
     skillsTreeDirs.some((dir) => {
       const present = new Set(serverSkillDirNames(dir));
-      return expectedSkills.every((name) => present.has(name));
+      return present.size === expectedSkills.length && expectedSkills.every((name) => present.has(name));
     });
   check(
     'Skills tree (server data, MCP-disclosed)',
