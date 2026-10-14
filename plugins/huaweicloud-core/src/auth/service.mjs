@@ -1,11 +1,10 @@
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 
 import { getAgentRegistrationStatuses } from './agent-registration.mjs';
 import { resolveAndApplyProjectId } from './project-id.mjs';
 import {
   globalCredentialsPath,
+  isCodeArtsContext,
   isPlaceholder,
   obsConfigPath,
   parseStsExpiry,
@@ -15,6 +14,7 @@ import {
   writeLastSync,
   writeObsConfig,
 } from './credentials.mjs';
+import { buildOnboardingSteps, errorFromTable } from './guidance.mjs';
 import {
   fingerprint,
   exportStateForStatus,
@@ -22,15 +22,7 @@ import {
   resolveManagedProfile,
   runHcloudConfigure,
 } from './reconcile.mjs';
-import { hcloudProbeNextStep, probeHcloud } from '../hcloud-probe.mjs';
-
-function isCodeArtsHome() {
-  return (
-    existsSync(join(process.cwd(), '.codeartsdoer')) ||
-    existsSync(join(homedir(), '.codeartsdoer')) ||
-    existsSync(join(homedir(), '.codeartswork'))
-  );
-}
+import { hcloudProbeNextStep, hcloudProbeRaw, probeHcloud } from '../hcloud-probe.mjs';
 
 function envHasRealTriplet() {
   return (
@@ -57,7 +49,9 @@ export function computeOnboarding({ credentials, reconciled } = {}) {
   const envRealAk = !isPlaceholder(process.env.HW_ACCESS_KEY) && Boolean(process.env.HW_ACCESS_KEY);
   const envRealSk = !isPlaceholder(process.env.HW_SECRET_KEY) && Boolean(process.env.HW_SECRET_KEY);
   const envHasCreds = envRealAk && envRealSk;
-  const codeArts = isCodeArtsHome();
+  // Same context detector the resolveCredentials failure path uses (#900): the
+  // codearts flag must select the identical builder variant on both paths.
+  const codeArts = isCodeArtsContext();
   const accountHint = s1Has ? fingerprint(creds.ak, creds.sk) : null;
 
   let scenario;
@@ -133,32 +127,12 @@ export function computeOnboarding({ credentials, reconciled } = {}) {
     scenario = 4;
     reason = 'import-injected';
     message = '检测到配置中已有有效账号,可导入为正式凭证。';
-    steps = [
-      {
-        order: 1,
-        action: 'switch-persist',
-        args: { mode: codeArts ? 'mcp-config' : 'import', action: 'persist' },
-        label: '导入该账号',
-      },
-    ];
+    steps = buildOnboardingSteps(4, { codearts: codeArts });
   } else {
     scenario = 3;
     reason = 's1-missing';
     message = '未配置华为云凭证,需要完成登录后才能使用云能力。';
-    steps = [
-      { order: 1, action: 'obtain-aksk', target: 'console', label: '获取 AK/SK(华为云控制台)' },
-      ...(codeArts
-        ? [
-            {
-              order: 2,
-              action: 'write-import',
-              target: join(homedir(), '.config', 'huaweicloud', 'creds-import.json'),
-              label: '把 AK/SK 写入 creds-import.json',
-            },
-            { order: 3, action: 'auth_switch', args: { mode: 'import', action: 'persist' }, label: '执行导入完成配置' },
-          ]
-        : [{ order: 2, action: 'auth-init', args: {}, label: '运行 npx huaweicloud-devkit auth init' }]),
-    ];
+    steps = buildOnboardingSteps(3, { codearts: codeArts });
   }
 
   return { needsSetup: true, scenario, reason, message, steps, accountHint };
@@ -215,6 +189,7 @@ export function getAuthStatus(target = 'all') {
     kooCliInstalled: hcloud.installed,
     kooCliStatus: hcloud.status,
     kooCliNextStep: hcloudProbeNextStep(hcloud),
+    kooCliRaw: hcloudProbeRaw(hcloud),
     reconciled,
     onboarding,
     agents: getAgentRegistrationStatuses(target).agents,
@@ -224,17 +199,28 @@ export function getAuthStatus(target = 'all') {
 export function syncAuth(target = 'all') {
   const credentials = readGlobalCredentials();
   if (!credentials?.ak || !credentials?.sk) {
+    // #900: unified error shape from the shared ERROR_TABLE.
+    const e = errorFromTable('HDKIT_CRED_MISSING');
     return {
       ok: false,
-      error: 'Global credentials are not configured.',
-      nextStep: 'Run "npx huaweicloud-devkit auth init" first.',
+      error: e.messageZh,
+      code: e.code,
+      messageZh: e.messageZh,
+      action: e.action,
+      nextStep: e.nextStep,
     };
   }
   if (hasRuntimeCredentials()) {
+    // R10: runtime credentials suppress auto-sync. The codename stays in code
+    // comments only, never in user-facing strings (#900).
+    const e = errorFromTable('HDKIT_SYNC_SKIPPED_RUNTIME');
     return {
       ok: false,
-      error: 'Runtime credentials are active; auto-sync suppressed (R10).',
-      nextStep: 'Run huaweicloud_auth_switch action=clear or action=persist first.',
+      error: e.messageZh,
+      code: e.code,
+      messageZh: e.messageZh,
+      action: e.action,
+      nextStep: e.nextStep,
     };
   }
 
@@ -264,25 +250,47 @@ export function syncAuth(target = 'all') {
 
   const hcloud = probeHcloud();
   if (!hcloud.ok) {
+    // #900: three probe states share the table code; the detail distinguishes.
+    const detail =
+      hcloud.status === 'sandbox_home_failure'
+        ? '无法解析用户主目录'
+        : hcloud.status === 'privacy_pending'
+          ? '隐私协议待同意'
+          : '';
+    const e = errorFromTable('HDKIT_KOOCLI_NOT_READY', detail);
     return {
       ok: false,
-      error:
-        hcloud.status === 'sandbox_home_failure'
-          ? 'KooCLI detected but cannot resolve the user home directory in this agent sandbox.'
-          : hcloud.status === 'privacy_pending'
-            ? 'KooCLI privacy agreement is pending.'
-            : 'KooCLI not ready.',
+      error: e.messageZh,
+      code: e.code,
+      messageZh: e.messageZh,
+      action: e.action,
+      // #900 issue comment: nextStep is the executable table action; the
+      // verbose English guidance survives only in the `raw` side-channel.
       nextStep: hcloudProbeNextStep(hcloud),
+      raw: hcloudProbeRaw(hcloud),
       obs: { configured: true, path: obs.path, endpoint: obs.endpoint },
     };
   }
 
   const { ok, error } = runHcloudConfigure(profile, credentials.ak, credentials.sk, credentials.region);
   if (!ok) {
+    // #900: `hcloud configure set` failures are usually a missing/invalid
+    // project_id for the target region; anything else keeps the raw (already
+    // redacted) stderr as the detail argument.
+    const detail = String(error || '').trim();
+    const projectIdCause = /project[_\s-]?id/i.test(detail);
+    const e = projectIdCause
+      ? errorFromTable('HDKIT_PROJECT_ID_MISSING', detail)
+      : errorFromTable('HDKIT_KOOCLI_NOT_READY', detail || 'KooCLI 配置同步失败');
     return {
       ok: false,
-      error: error || 'KooCLI config sync failed',
-      nextStep: 'Run "npx huaweicloud-devkit auth init" in a real terminal to refresh the KooCLI config.',
+      error: e.messageZh,
+      code: e.code,
+      messageZh: e.messageZh,
+      action: e.action,
+      nextStep: projectIdCause
+        ? e.nextStep
+        : 'Run "npx huaweicloud-devkit auth init" in a real terminal to refresh the KooCLI config.',
       obs: { configured: true, path: obs.path, endpoint: obs.endpoint },
     };
   }
