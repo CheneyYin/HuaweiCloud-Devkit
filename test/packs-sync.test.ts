@@ -23,10 +23,12 @@ function walkFiles(dir: string): string[] {
 
 // Zero-drift gate over the skill dual-source layout: the pack-owned skills
 // under src/packs/<id>/skills/ are authoritative, plugins/huaweicloud-core/
-// skills/<name>/ is the generated tree agents read. scripts/sync-skills.mjs
-// --check re-derives the expectation and fails on any byte drift (after
-// CRLF normalization and marker-line stripping). The same check runs as the
-// prepack tail so a dirty tree cannot ship.
+// skills/<name>/ is the generated tree agents read (a build artifact,
+// gitignored like dist/). scripts/sync-skills.mjs --check re-derives the
+// expectation and fails on any byte drift (after CRLF normalization and
+// marker-line stripping). The same check runs as the prepack tail after the
+// build step: it verifies the freshly generated tree matches the sources,
+// catching a source edit that postdates the build or a generator regression.
 test('pack skill sources and the generated skills/ tree are in sync', () => {
   const run = spawnSync(process.execPath, [join(root, 'scripts', 'sync-skills.mjs'), '--check'], {
     encoding: 'utf8',

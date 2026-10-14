@@ -50,6 +50,22 @@ for (const asset of [
   assert.ok(paths.has(asset), `Tarball is missing built asset ${asset}`);
 }
 
+// The skills tree ships as a generated artifact: gitignored, produced by
+// prepack's build step. npm pack includes on-disk files under the
+// whitelisted plugin dir (the same mechanism that ships the gitignored
+// dist/), so the tree must be present at pack time — and the manifest it
+// carries is the roster the tarball has to match, file by file.
+const manifestEntry = 'plugins/huaweicloud-core/skills/.manifest.json';
+assert.ok(paths.has(manifestEntry), 'Tarball is missing the skills manifest (did prepack run the build?)');
+const manifest = JSON.parse(readFileSync(join(root, manifestEntry), 'utf8'));
+assert.ok(Array.isArray(manifest.skills) && manifest.skills.length > 0, 'skills manifest is malformed');
+for (const skill of manifest.skills) {
+  assert.ok(
+    paths.has(`plugins/huaweicloud-core/skills/${skill}/SKILL.md`),
+    `Tarball is missing skill ${skill} declared by the manifest`,
+  );
+}
+
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 const dshPatch = pkg.dsh?.bundle?.patch;
 if (dshPatch) {
