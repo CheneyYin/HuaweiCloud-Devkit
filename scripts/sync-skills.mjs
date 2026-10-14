@@ -36,10 +36,15 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+// The stray-dir scan must see exactly what the boot guard sees, so both use
+// the one SKILL.md-aware listing (Node >= 22.18 type stripping carries the
+// .ts import here — the same floor the test suite already requires).
+import { listSkillDirs } from '../plugins/huaweicloud-core/src/lib/skill-tree.ts';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const pluginRoot = join(repoRoot, 'plugins', 'huaweicloud-core');
@@ -159,27 +164,45 @@ function manifestJson(skillNames) {
 }
 
 // Full regeneration with the staging discipline build-plugin.mjs applies to
-// dist/: render every source into a unique skills.new-* staging dir, write
-// the manifest, swap only on success. The rm+rename pair leaves the same
-// two-statement missing window the dist swap accepts; the fail-loud seams
-// cover it. Replacing the whole tree (not incremental writes) is what makes
-// stale files, stale skill dirs, and stray hand-created dirs vanish in one
-// pass. A unique staging dir (mkdtemp) keeps two entry points — npm run
-// build and npm run skills:sync — from clobbering each other's staging:
-// concurrent runs either fail cleanly at the rename or last-writer-wins
-// with a complete tree; a partial tree never publishes.
-export function writeSkillsTree({ packsDir: sourceRoot = packsDir } = {}) {
+// dist/: render every source into a unique skills.new-* staging dir beside
+// the target, write the manifest, swap only on success. The rm+rename pair
+// leaves the same two-statement missing window the dist swap accepts; the
+// fail-loud seams cover it. Replacing the whole tree (not incremental
+// writes) is what makes stale files, stale skill dirs, and stray
+// hand-created dirs vanish in one pass. A unique staging dir (mkdtemp)
+// keeps two entry points — npm run build and npm run skills:sync — from
+// clobbering each other's staging: concurrent runs either fail cleanly at
+// the rename or last-writer-wins with a complete tree; a partial tree never
+// publishes.
+export function writeSkillsTree({ packsDir: sourceRoot = packsDir, outDir = skillsDir } = {}) {
   const packSkills = discoverPackSkills(sourceRoot);
   if (packSkills.length === 0) {
     throw new Error(
       `no pack skill sources found under ${relative(repoRoot, sourceRoot)} — refusing to replace the skills tree`,
     );
   }
-  const stagingSkillsDir = mkdtempSync(join(pluginRoot, 'skills.new-'));
-  // Once the live tree is removed, the staging dir is the only complete
-  // copy: a failed rename must preserve it for recovery instead of deleting
-  // it (rmSync would leave neither a tree nor a fallback).
-  let liveTreeRemoved = false;
+  const stagingParent = dirname(outDir);
+  // Sweep stale staging dirs in the target's parent: preserved recovery
+  // copies and crash leftovers. One hour of untouched mtime means no live
+  // writer can own the dir — an in-flight render updates its staging dir's
+  // mtime with every file it creates, and the concurrent-writer window is
+  // seconds, not hours.
+  const staleBefore = Date.now() - 60 * 60 * 1000;
+  for (const entry of readdirSync(stagingParent, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith('skills.new-')) continue;
+    const stale = join(stagingParent, entry.name);
+    try {
+      if (statSync(stale).mtimeMs < staleBefore) rmSync(stale, { recursive: true, force: true });
+    } catch {
+      // an unreadable staging dir is not worth failing the build over
+    }
+  }
+  const stagingSkillsDir = mkdtempSync(join(stagingParent, 'skills.new-'));
+  // Once rendering completes, the staging dir is the only guaranteed
+  // complete copy: the swap may have already damaged the live tree when it
+  // fails (rmSync can throw midway on a locked file, not just renameSync),
+  // so a post-render failure must preserve the staging dir for recovery.
+  let renderComplete = false;
   try {
     let files = 0;
     for (const { packId, skillName, sourceDir } of packSkills) {
@@ -193,16 +216,19 @@ export function writeSkillsTree({ packsDir: sourceRoot = packsDir } = {}) {
       }
     }
     writeFileSync(join(stagingSkillsDir, MANIFEST_NAME), manifestJson(packSkills.map(({ skillName }) => skillName)));
-    rmSync(skillsDir, { recursive: true, force: true });
-    liveTreeRemoved = true;
-    renameSync(stagingSkillsDir, skillsDir);
+    renderComplete = true;
+    rmSync(outDir, { recursive: true, force: true });
+    renameSync(stagingSkillsDir, outDir);
     return { skills: packSkills.length, files };
   } catch (error) {
-    if (liveTreeRemoved) {
+    if (renderComplete) {
       // stderr only: npm pack --json parses stdout and the build chain runs
-      // as the prepack hook.
+      // as the prepack hook. The hint covers both interleavings honestly:
+      // re-running the build is always safe (it sweeps stale staging dirs);
+      // a manual rename is only correct when the target is truly absent.
       console.error(
-        `skills tree swap failed; the rendered copy is preserved at ${stagingSkillsDir} — rename it to skills/ manually or re-run npm run build`,
+        `skills tree swap failed; the rendered copy is preserved at ${stagingSkillsDir} — ` +
+          `re-run npm run build, or if ${outDir} is absent rename the preserved dir into place`,
       );
     } else {
       rmSync(stagingSkillsDir, { recursive: true, force: true });
@@ -211,17 +237,21 @@ export function writeSkillsTree({ packsDir: sourceRoot = packsDir } = {}) {
   }
 }
 
-function run({ write }) {
+// Check mode re-derives the expectation from the pack sources and compares
+// byte-level (marker-stripped, CRLF-normalized), plus the manifest equality
+// and the stray scan. Roots are injectable so the committed tests can drive
+// check mode against fixture trees without touching the real ones.
+function run({ write = false, packsDir: sourceRoot = packsDir, outDir: treeDir = skillsDir } = {}) {
   if (write) {
-    const { skills, files } = writeSkillsTree();
+    const { skills, files } = writeSkillsTree({ packsDir: sourceRoot, outDir: treeDir });
     return { failures: [], packSkills: skills, files };
   }
   const failures = [];
-  const packSkills = discoverPackSkills();
+  const packSkills = discoverPackSkills(sourceRoot);
   const expectedTargets = new Set(packSkills.map(({ skillName }) => skillName));
 
   for (const { packId, skillName, sourceDir } of packSkills) {
-    const targetDir = join(skillsDir, skillName);
+    const targetDir = join(treeDir, skillName);
     for (const file of walkFiles(sourceDir)) {
       const sourcePath = join(sourceDir, file);
       const targetPath = join(targetDir, file);
@@ -251,17 +281,20 @@ function run({ write }) {
   }
 
   // Stray skill dirs — marker or not — must fail here: the boot guard
-  // (verifySkillTree) rejects any tree dir the registry does not claim, so
-  // --check must hold the same predicate or `npm run validate` can pass on
-  // a tree the server refuses to start.
-  for (const name of listDirs(skillsDir)) {
+  // (verifySkillTree) rejects any tree entry it can list and the registry
+  // does not claim, so this scan uses the same shared listing
+  // (src/lib/skill-tree.ts). A dir without a SKILL.md is invisible to both
+  // — parity, not an accident.
+  for (const name of listSkillDirs(treeDir)) {
     if (!expectedTargets.has(name)) {
-      failures.push(`stray skill dir with no pack source: skills/${name} — run: npm run build`);
+      failures.push(
+        `stray skill dir with no pack source: ${relative(repoRoot, join(treeDir, name))} — run: npm run build`,
+      );
     }
   }
 
   // The manifest must be present and current (it ships with the tree).
-  const manifestPath = join(skillsDir, MANIFEST_NAME);
+  const manifestPath = join(treeDir, MANIFEST_NAME);
   if (!existsSync(manifestPath)) {
     failures.push(`missing skills manifest: ${relative(repoRoot, manifestPath)} — run: npm run build`);
   } else if (readFileSync(manifestPath, 'utf8') !== manifestJson(expectedTargets)) {
@@ -299,5 +332,6 @@ if (invokedDirectly) {
 
 // The round-trip pair is exported for the packs-sync test: --write output
 // must pass --check without a prettier pass in between. writeSkillsTree is
-// consumed by build-plugin.mjs (the skills tree is a build artifact).
-export { renderGenerated, stripMarkerLine };
+// consumed by build-plugin.mjs (the skills tree is a build artifact); run is
+// the check-mode seam the fixture tests drive.
+export { renderGenerated, stripMarkerLine, run };

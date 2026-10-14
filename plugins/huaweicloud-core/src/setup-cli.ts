@@ -57,6 +57,7 @@ import { getKooCliVersion, compareVersion, kooCliDownloadBase } from './koocli-v
 import { findHcloudBin, hcloudProbeNextStep, probeHcloud } from './hcloud-probe.ts';
 import { asText } from './lib/as-text.ts';
 import { parseSkillManifest } from './lib/skill-manifest.ts';
+import { listSkillDirs } from './lib/skill-tree.ts';
 import { PACK_IDS, type PackId } from './lib/pack-types.ts';
 import {
   DEPENDENCIES,
@@ -755,17 +756,12 @@ function removeOwnedSkillsFrom(dir: string): number {
 }
 
 // Skills status reads the server-data tree inside the plugin dir, mirroring
-// where copyServerPayload places it.
+// where copyServerPayload places it. The listing is the shared SKILL.md-
+// aware one (src/lib/skill-tree.ts) — the same membership the boot guard
+// uses, so a hollow claimed dir (name present, SKILL.md missing) counts as
+// missing here exactly as it does at boot.
 function serverSkillDirNames(pluginDir: string): string[] {
-  const dir = join(pluginDir, 'skills');
-  if (!existsSync(dir)) return [];
-  try {
-    return readdirSync(dir, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name);
-  } catch {
-    return [];
-  }
+  return listSkillDirs(join(pluginDir, 'skills'));
 }
 
 function serverSkillCount(pluginDir: string): number {
@@ -4906,11 +4902,12 @@ async function cmdDoctor(): Promise<void> {
   // false-FAILED here).
   if (dshPatchConfigured()) skillsTreeDirs.push(PLUGIN_ROOT);
   // Set equality against the shipped manifest, not a count floor and not a
-  // one-direction subset: verifySkillTree (boot) rejects both missing and
-  // unclaimed skills, so doctor must fail any payload the server would
-  // refuse to start — an extra directory is as disqualifying as a missing
-  // one. The expected roster is a file the build wrote beside the tree, so
-  // a candidate listing can never trivially validate itself.
+  // one-direction subset: verifySkillTree (boot) rejects missing, hollow
+  // (name present, SKILL.md absent), and unclaimed entries, so doctor must
+  // fail any payload the server would refuse to start — doctor's listing
+  // is the same shared predicate the boot guard uses. The expected roster
+  // is a file the build wrote beside the tree, so a candidate listing can
+  // never trivially validate itself.
   const expectedSkills = shippedSkillRoster();
   const skillsTreeOk =
     expectedSkills.length > 0 &&

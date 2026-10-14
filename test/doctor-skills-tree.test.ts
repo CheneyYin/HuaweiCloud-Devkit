@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -19,14 +19,19 @@ const allSkills = [...new Set(PACKS.flatMap((pack) => pack.skills))];
 // the shipped manifest); one guided precondition instead of raw failures.
 assert.ok(existsSync(distSetup) && existsSync(realTree), 'dist/ and skills/ missing — run: npm run build');
 
-// A minimal fake-HOME env for doctor: unlike the installer tests there is no
-// Windows profile mirroring to do — doctor only resolves paths from HOME and
-// DSH_HOME — so this stays deliberately narrower than agent-install's
-// makeEnv and must not converge back onto it (the jscpd gate).
+// A minimal fake-HOME env for doctor. Payload candidates resolve through
+// os.homedir(), which reads USERPROFILE on Windows and HOME on POSIX — both
+// must be redirected or the negative tests pass vacuously on Windows (the
+// payload lands where doctor never looks). HERMES_HOME is the
+// highest-priority override for the hermes payload dir and must be cleared
+// or an ambient value leaks a real install into the candidates.
 function doctorEnv(home: string, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     HOME: home,
+    USERPROFILE: home,
+    HOMEDRIVE: home.slice(0, 2),
+    HOMEPATH: home.slice(2),
     // keep OfficeAce detection hermetic in automated environments (#654)
     HUAWEICLOUD_DEVKIT_SKIP_OFFICEACE_DETECT: '1',
     ...extra,
@@ -34,6 +39,7 @@ function doctorEnv(home: string, extra: Record<string, string> = {}): NodeJS.Pro
   delete env.ATOMCODE_HOME;
   delete env.HUAWEICLOUD_HOME;
   delete env.OFFICE_CLAW_CONFIG_ROOT;
+  delete env.HERMES_HOME;
   if (!('DSH_HOME' in extra)) delete env.DSH_HOME;
   return env;
 }
@@ -106,3 +112,35 @@ test('doctor: a payload missing a claimed skill fails the skills tree check', ()
   const stdout = runDoctor(home);
   assert.ok(stdout.includes('[FAIL] Skills tree'), `expected the missing skill to fail, got:\n${stdout}`);
 });
+
+// A hollow claimed dir (name present, SKILL.md absent — the interrupted-copy
+// / AV-quarantine shape) is a missing skill to the boot guard's listing, so
+// doctor must reject it too: doctor's listing is the same shared predicate.
+test('doctor: a payload with a hollow claimed dir fails the skills tree check', () => {
+  const home = fixtureDir('hwc-doctor-hollow-');
+  const payloadSkills = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'skills');
+  mkdirSync(payloadSkills, { recursive: true });
+  writePayloadTree(payloadSkills, allSkills);
+  rmSync(join(payloadSkills, 'huawei-ecs', 'SKILL.md'));
+  const stdout = runDoctor(home);
+  assert.ok(stdout.includes('[FAIL] Skills tree'), `expected the hollow dir to fail, got:\n${stdout}`);
+});
+
+// A symlinked stray dir with a SKILL.md is listable by the boot guard (which
+// counts symlinks) and would be served ungated — doctor must see it too.
+test(
+  'doctor: a payload with a symlinked stray skill dir fails the skills tree check',
+  { skip: process.platform === 'win32' },
+  () => {
+    const home = fixtureDir('hwc-doctor-link-');
+    const payloadSkills = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'skills');
+    const external = join(home, 'external', 'huawei-not-claimed');
+    mkdirSync(payloadSkills, { recursive: true });
+    mkdirSync(external, { recursive: true });
+    writeFileSync(join(external, 'SKILL.md'), '---\nname: huawei-not-claimed\n---\n', 'utf8');
+    writePayloadTree(payloadSkills, allSkills);
+    symlinkSync(external, join(payloadSkills, 'huawei-not-claimed'));
+    const stdout = runDoctor(home);
+    assert.ok(stdout.includes('[FAIL] Skills tree'), `expected the symlinked stray to fail, got:\n${stdout}`);
+  },
+);

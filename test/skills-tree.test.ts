@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -7,7 +7,7 @@ import test from 'node:test';
 import { verifySkillTree } from '../plugins/huaweicloud-core/src/tools.ts';
 import { PACKS } from '../plugins/huaweicloud-core/src/packs/registry.ts';
 import { parseSkillManifest } from '../plugins/huaweicloud-core/src/lib/skill-manifest.ts';
-import { writeSkillsTree } from '../scripts/sync-skills.mjs';
+import { run, writeSkillsTree } from '../scripts/sync-skills.mjs';
 import { fixtureDir } from './fixture-dir.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -27,6 +27,13 @@ function makeTree(dir: string, names: string[]): void {
     mkdirSync(join(dir, name), { recursive: true });
     writeFileSync(join(dir, name, 'SKILL.md'), `---\nname: ${name}\n---\n`, 'utf8');
   }
+}
+
+// A one-pack fixture source tree for driving check mode / regeneration
+// against fixtures instead of the real ones.
+function makePackSources(packs: string, skill: string): void {
+  mkdirSync(join(packs, 'p', 'skills', skill), { recursive: true });
+  writeFileSync(join(packs, 'p', 'skills', skill, 'SKILL.md'), `---\nname: ${skill}\n---\n`, 'utf8');
 }
 
 // Fail-loud is the changeset's load-bearing behavior: a tree that does not
@@ -57,6 +64,55 @@ test('verifySkillTree refuses an unclaimed skill directory (ungated-serve hole)'
   );
 });
 
+// The stray-dir scan must use the same listing the boot guard uses. The
+// clean-tree positive control comes from a fixture regeneration, so the
+// manifest is byte-correct before the stray entries are added.
+test(
+  'run reports stray skill dirs the sources do not claim (dir and symlink)',
+  { skip: process.platform === 'win32' },
+  () => {
+    const sources = fixtureDir('hwc-run-src-');
+    makePackSources(sources, 's1');
+    const treeParent = fixtureDir('hwc-run-tree-');
+    const tree = join(treeParent, 'skills');
+    writeSkillsTree({ packsDir: sources, outDir: tree });
+    const clean = run({ packsDir: sources, outDir: tree });
+    assert.deepEqual(clean.failures, []);
+
+    mkdirSync(join(tree, 'stray-skill'), { recursive: true });
+    writeFileSync(join(tree, 'stray-skill', 'SKILL.md'), '---\nname: stray-skill\n---\n', 'utf8');
+    const external = join(treeParent, 'external', 'stray-link');
+    mkdirSync(external, { recursive: true });
+    writeFileSync(join(external, 'SKILL.md'), '---\nname: stray-link\n---\n', 'utf8');
+    symlinkSync(external, join(tree, 'stray-link'));
+
+    const { failures } = run({ packsDir: sources, outDir: tree });
+    assert.ok(
+      failures.some((f) => f.includes('stray skill dir') && f.includes('stray-skill')),
+      `expected the stray dir to fail, got: ${failures.join('; ')}`,
+    );
+    assert.ok(
+      failures.some((f) => f.includes('stray skill dir') && f.includes('stray-link')),
+      `expected the symlinked stray to fail, got: ${failures.join('; ')}`,
+    );
+  },
+);
+
+// Parity in the other direction: a dir without a SKILL.md is invisible to
+// the boot guard's listing, so check mode must not flag it either.
+test('run ignores a stray dir without SKILL.md (boot-guard parity)', () => {
+  const sources = fixtureDir('hwc-run-src2-');
+  makePackSources(sources, 's1');
+  const tree = join(fixtureDir('hwc-run-tree2-'), 'skills');
+  writeSkillsTree({ packsDir: sources, outDir: tree });
+  mkdirSync(join(tree, 'empty-stray'), { recursive: true });
+  const { failures } = run({ packsDir: sources, outDir: tree });
+  assert.ok(
+    failures.every((f) => !f.includes('empty-stray')),
+    `an SKILL.md-less dir must not be flagged, got: ${failures.join('; ')}`,
+  );
+});
+
 test('writeSkillsTree refuses an empty source root and leaves the real tree intact', () => {
   const empty = fixtureDir('hwc-skills-empty-');
   assert.throws(() => writeSkillsTree({ packsDir: empty }), /no pack skill sources found/);
@@ -69,29 +125,30 @@ test('writeSkillsTree refuses an empty source root and leaves the real tree inta
 
 // A render failure after staging began must clean the staging dir (the live
 // tree is still intact, so the staging copy is disposable). chmod is the
-// portable-enough way to make a source read fail; Windows chmod is a no-op,
-// so the test skips there.
+// portable-enough way to make a source read fail; it is a no-op on Windows
+// and does not block reads for root, so both are skipped.
 test(
   'writeSkillsTree cleans up its staging dir when rendering fails mid-way',
-  { skip: process.platform === 'win32' },
+  {
+    skip: process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0),
+  },
   () => {
-    const packs = fixtureDir('hwc-skills-renderfail-');
-    const pack = join(packs, 'p', 'skills');
-    mkdirSync(join(pack, 's1'), { recursive: true });
-    mkdirSync(join(pack, 's2'), { recursive: true });
-    writeFileSync(join(pack, 's1', 'SKILL.md'), '---\nname: s1\n---\n', 'utf8');
-    writeFileSync(join(pack, 's2', 'SKILL.md'), '---\nname: s2\n---\n', 'utf8');
-    chmodSync(join(pack, 's2', 'SKILL.md'), 0o000);
+    const sources = fixtureDir('hwc-skills-renderfail-');
+    makePackSources(sources, 's1');
+    const skillMd = join(sources, 'p', 'skills', 's1', 'SKILL.md');
+    chmodSync(skillMd, 0o000);
+    const treeParent = fixtureDir('hwc-skills-renderfail-tree-');
+    const tree = join(treeParent, 'skills');
     try {
-      assert.throws(() => writeSkillsTree({ packsDir: packs }), /(EACCES|permission)/i);
+      assert.throws(() => writeSkillsTree({ packsDir: sources, outDir: tree }), /(EACCES|permission)/i);
       assert.ok(
-        !readdirSync(pluginRoot).some((name) => name.startsWith('skills.new-')),
+        !readdirSync(treeParent).some((name) => name.startsWith('skills.new-')),
         'no staging dir may remain after a failed render',
       );
-      assert.ok(existsSync(join(realTree, '.manifest.json')), 'the live tree must be untouched by a failed render');
+      assert.ok(!existsSync(tree), 'the live tree must be untouched by a failed render');
     } finally {
       // restore readability so the exit-time fixture cleanup can unlink it
-      chmodSync(join(pack, 's2', 'SKILL.md'), 0o644);
+      chmodSync(skillMd, 0o644);
     }
   },
 );

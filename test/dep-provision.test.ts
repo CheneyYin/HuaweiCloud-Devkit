@@ -702,7 +702,7 @@ test('installers: every installable dependency has a kind-matching installer, sa
   }
 });
 
-test('installers: a successful gateway install records its tier in a receipt', async () => {
+test('installers: a successful gateway install records its tier in a receipt', { skip: isWin }, async () => {
   const home = tempHome();
   const savedHome = process.env.HOME;
   const savedReceiptHome = process.env.HUAWEICLOUD_HOME;

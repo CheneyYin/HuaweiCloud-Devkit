@@ -47,16 +47,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // the MCP tools (list_packs / pack_info / retrieve_skill / search_docs).
 const SKILLS_ROOT = join(__dirname, '..', 'skills');
 
-export function listSkillDirs(root: string): string[] {
-  if (!existsSync(root)) return [];
-  try {
-    return readdirSync(root, { withFileTypes: true })
-      .filter((d) => (d.isDirectory() || d.isSymbolicLink()) && existsSync(join(root, d.name, 'SKILL.md')))
-      .map((d) => d.name);
-  } catch {
-    return [];
-  }
-}
+// The skill-dir listing lives in src/lib/skill-tree.ts so the boot guard,
+// the installer's doctor check, and the build-time --check stray scan share
+// one membership predicate (dir-or-symlink with a SKILL.md). Re-exported
+// here for the existing importers (tests, retrieve_skill, search_docs).
+import { listSkillDirs } from './lib/skill-tree.ts';
+export { listSkillDirs };
 
 // Boot-time cross-check between the registry's skill claims and the
 // generated tree. A server that advertises skills retrieve_skill cannot

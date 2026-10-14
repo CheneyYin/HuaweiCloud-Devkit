@@ -714,9 +714,13 @@ test('setup-cli.ts supports the codearts target end to end', () => {
   // doctor checks the skills tree inside installed plugin dirs, and native
   // skill dirs only for stale-copy detection. The tree check is set
   // equality against the shipped manifest (both directions — an extra dir
-  // is as disqualifying as a missing one, matching the boot guard), and
-  // the DSH package-root candidate is PLUGIN_ROOT itself because
+  // is as disqualifying as a missing one), and doctor's listing is the
+  // shared SKILL.md-aware predicate from src/lib/skill-tree.ts — the same
+  // membership the boot guard uses, so hollow claimed dirs count as
+  // missing. The DSH package-root candidate is PLUGIN_ROOT itself because
   // serverSkillDirNames() appends 'skills'.
+  assert.match(setup, /import \{ listSkillDirs \} from '\.\/lib\/skill-tree\.ts';/);
+  assert.match(setup, /return listSkillDirs\(join\(pluginDir, 'skills'\)\);/);
   assert.match(setup, /const expectedSkills = shippedSkillRoster\(\);/);
   assert.match(setup, /present\.size === expectedSkills\.length/);
   assert.match(setup, /expectedSkills\.every\(\(name\) => present\.has\(name\)\)/);
@@ -737,8 +741,14 @@ test('tools.ts resolves skills from the server-relative tree only', () => {
   assert.match(tools, /const SKILLS_ROOT = join\(__dirname, '\.\.', 'skills'\);/);
   assert.doesNotMatch(tools, /function opencodeSkillsDir\(\)/, 'native dir probe must be gone');
   assert.doesNotMatch(tools, /findSkillsRoot/, 'multi-root fallback must be gone');
-  assert.match(tools, /export function listSkillDirs/);
-  assert.match(tools, /existsSync\(join\(root, d\.name, 'SKILL\.md'\)\)/);
+  // The listing itself lives in the shared zod-free module so the boot
+  // guard, doctor, and the --check stray scan hold one membership
+  // predicate; tools.ts re-exports it for its existing importers.
+  assert.match(tools, /import \{ listSkillDirs \} from '\.\/lib\/skill-tree\.ts';/);
+  assert.match(tools, /export \{ listSkillDirs \};/);
+  const listing = readSource(join('src', 'lib', 'skill-tree.ts'));
+  assert.match(listing, /d\.isDirectory\(\) \|\| d\.isSymbolicLink\(\)/);
+  assert.match(listing, /existsSync\(join\(root, d\.name, 'SKILL\.md'\)\)/);
 });
 
 test('KooCLI sandbox blockers and privacy agreement live in their extracted modules', () => {

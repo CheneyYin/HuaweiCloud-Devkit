@@ -276,27 +276,34 @@ test('service_catalog keeps storage routing for pure storage intent', async () =
   assert.notEqual(result.recommendedSkills[0], 'huawei-sandbox');
 });
 
-test('listSkillDirs ignores files, subdirs without SKILL.md, and counts symlinked skill dirs', () => {
-  const base = fixtureDir('huaweicloud-list-skills-');
-  try {
-    const root = join(base, 'root');
-    const external = join(base, 'external');
-    mkdirSync(root, { recursive: true });
-    mkdirSync(join(external, 'huawei-vpc'), { recursive: true });
-    writeFileSync(join(external, 'huawei-vpc', 'SKILL.md'), '---\nname: huawei-vpc\n---\n', 'utf8');
-    symlinkSync(join(external, 'huawei-vpc'), join(root, 'huawei-vpc'));
-    mkdirSync(join(root, 'no-skill'));
-    writeFileSync(join(root, 'stray.md'), 'x');
+// Symlink creation needs privileges on Windows (the repo's other symlink
+// tests skip there for the same reason); GitHub-hosted runners happen to be
+// elevated, but the suite must not depend on that.
+test(
+  'listSkillDirs ignores files, subdirs without SKILL.md, and counts symlinked skill dirs',
+  { skip: process.platform === 'win32' },
+  () => {
+    const base = fixtureDir('huaweicloud-list-skills-');
+    try {
+      const root = join(base, 'root');
+      const external = join(base, 'external');
+      mkdirSync(root, { recursive: true });
+      mkdirSync(join(external, 'huawei-vpc'), { recursive: true });
+      writeFileSync(join(external, 'huawei-vpc', 'SKILL.md'), '---\nname: huawei-vpc\n---\n', 'utf8');
+      symlinkSync(join(external, 'huawei-vpc'), join(root, 'huawei-vpc'));
+      mkdirSync(join(root, 'no-skill'));
+      writeFileSync(join(root, 'stray.md'), 'x');
 
-    assert.deepEqual(
-      listSkillDirs(root).sort((a, b) => a.localeCompare(b)),
-      ['huawei-vpc'],
-    );
-    assert.deepEqual(listSkillDirs(join(base, 'missing')), []);
-  } finally {
-    rmSync(base, { recursive: true, force: true });
-  }
-});
+      assert.deepEqual(
+        listSkillDirs(root).sort((a, b) => a.localeCompare(b)),
+        ['huawei-vpc'],
+      );
+      assert.deepEqual(listSkillDirs(join(base, 'missing')), []);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  },
+);
 
 // retrieve_skill is the sole skill-loading surface, so its name boundary is
 // security-relevant: traversal-shaped names must be rejected before any

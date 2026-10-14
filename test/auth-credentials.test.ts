@@ -60,17 +60,28 @@ function withCodeArtsProject(fn: (projectDir: string) => void): void {
 // true everywhere for the write window, and readCodeArtsCredentials() then
 // resolves the injected S4 credentials in unrelated tests (cred-reconcile-e2e
 // "clear", hcloud-cli "no STS injection"). os.homedir() reads $HOME at call
-// time, so pointing HOME at a temp dir keeps the marker process-private while
-// the join(homedir(), ...) reads below keep exercising the real lookup paths.
+// time on POSIX and $USERPROFILE on Windows, so BOTH must be redirected or
+// the isolation is a no-op on Windows (every sibling spawned-CLI test mirrors
+// the same trio).
 function withCodeArtsHome(fn: (home: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), 'huaweicloud-codearts-home-'));
-  const prevHome = process.env.HOME;
+  const saved = {
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    HOMEDRIVE: process.env.HOMEDRIVE,
+    HOMEPATH: process.env.HOMEPATH,
+  };
   process.env.HOME = dir;
+  process.env.USERPROFILE = dir;
+  process.env.HOMEDRIVE = dir.slice(0, 2);
+  process.env.HOMEPATH = dir.slice(2);
   try {
     return fn(dir);
   } finally {
-    if (prevHome === undefined) delete process.env.HOME;
-    else process.env.HOME = prevHome;
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     rmSync(dir, { recursive: true, force: true });
   }
 }

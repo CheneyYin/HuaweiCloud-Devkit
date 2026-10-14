@@ -12,6 +12,7 @@
     "plugins/huaweicloud-core",
     "!plugins/huaweicloud-core/src/packs/*/skills",
     "!plugins/huaweicloud-core/skills.new-*",
+    "!plugins/huaweicloud-core/dist.new",
     "!plugins/huaweicloud-core/telemetry",
     "!**/__pycache__",
     "integrations/hermes",
