@@ -3,6 +3,8 @@ name: huaweicloud-safety
 description: Huawei Cloud safety policy for agents. Use when handling credentials, secrets, IAM, public exposure, billing, destructive actions, scaling, write operations, hooks, command approval, output redaction, or risk review.
 ---
 
+<!-- generated from src/packs/core/skills/huaweicloud-safety - do not edit -->
+
 # Huawei Cloud Safety
 
 **STOP - Do not answer from general knowledge.** Follow the procedure below.

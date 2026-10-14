@@ -1,3 +1,5 @@
+<!-- generated from src/packs/core/skills/huaweicloud-core - do not edit -->
+
 # Issue Reporting Procedure
 
 Use when the user reports an issue with a previous routing decision.

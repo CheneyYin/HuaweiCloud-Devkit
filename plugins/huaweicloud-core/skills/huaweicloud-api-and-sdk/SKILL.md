@@ -3,6 +3,8 @@ name: huaweicloud-api-and-sdk
 description: Huawei Cloud API and SDK guidance for application development. Use when writing code that calls Huawei Cloud services, choosing SDKs, building API requests, handling project_id, endpoint, auth, pagination, retries, error codes, or request IDs.
 ---
 
+<!-- generated from src/packs/core/skills/huaweicloud-api-and-sdk - do not edit -->
+
 # Huawei Cloud API And SDK
 
 **STOP - Do not answer from general knowledge.** Follow the procedure below.

@@ -3,6 +3,8 @@ name: huaweicloud-capability-discovery
 description: Discover Huawei Cloud capabilities for an agent task. Use when the user asks what Huawei Cloud service, Skill, CLI command, API, SDK, or document should be used, or when a request is scenario-shaped and needs capability selection before implementation.
 ---
 
+<!-- generated from src/packs/core/skills/huaweicloud-capability-discovery - do not edit -->
+
 # Huawei Cloud Capability Discovery
 
 **STOP - Do not answer from general knowledge.** Follow the procedure below.

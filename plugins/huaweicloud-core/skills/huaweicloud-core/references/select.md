@@ -1,3 +1,5 @@
+<!-- generated from src/packs/core/skills/huaweicloud-core - do not edit -->
+
 # Service Selection Procedure
 
 Use when the user asks which service to use or compares services.

@@ -115,9 +115,11 @@ function toolsFor(id: PackId): ToolName[] {
 }
 
 // skills are claims over the plugin skills/ directories; the pack tests fail
-// when one is claimed twice, left unclaimed, or removed. Core claims the six
-// hand-written meta-skills; the huaweicloud-cli pack claims the twenty service
-// skills whose authoritative sources live in src/packs/huaweicloud-cli/skills/.
+// when one is claimed twice, left unclaimed, or removed. Every skill's
+// authoritative source lives in its owning pack's skills/ dir — the six
+// meta-skills in src/packs/core/skills/, the twenty service skills in
+// src/packs/huaweicloud-cli/skills/ — generated into the runtime tree by
+// scripts/sync-skills.mjs.
 export const PACKS: readonly Pack[] = [
   {
     id: 'core',

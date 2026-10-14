@@ -3,6 +3,8 @@ name: huaweicloud-cli-and-auth
 description: Safe Huawei Cloud KooCLI usage and authentication guidance. Use when working with hcloud, KooCLI, profiles, AK/SK, regions, projects, endpoints, CLI output, credential errors, or local Huawei Cloud account context.
 ---
 
+<!-- generated from src/packs/core/skills/huaweicloud-cli-and-auth - do not edit -->
+
 # Huawei Cloud CLI And Auth
 
 **STOP - Do not answer from general knowledge.** Follow the procedure below.

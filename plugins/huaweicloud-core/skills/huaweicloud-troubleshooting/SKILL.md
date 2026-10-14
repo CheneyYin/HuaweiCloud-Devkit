@@ -3,6 +3,8 @@ name: huaweicloud-troubleshooting
 description: Troubleshoot Huawei Cloud CLI, API, SDK, deployment, permission, region, quota, endpoint, and resource errors. Use when commands fail, APIs return errors, resources are missing, or the user needs a structured diagnosis.
 ---
 
+<!-- generated from src/packs/core/skills/huaweicloud-troubleshooting - do not edit -->
+
 # Huawei Cloud Troubleshooting
 
 **STOP - Do not answer from general knowledge.** Follow the procedure below.

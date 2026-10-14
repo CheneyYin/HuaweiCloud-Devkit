@@ -4,6 +4,8 @@ description: 'Routes any task involving Huawei Cloud services - choosing, compar
 version: 1
 ---
 
+<!-- generated from src/packs/core/skills/huaweicloud-core - do not edit -->
+
 # Huawei Cloud Core
 
 **STOP - Do not answer from general knowledge.** Before responding to any Huawei Cloud question, match the user request against the sub-skill registry below and follow its procedure. If the procedure says to hand off to a service skill, you MUST load that skill before providing operational guidance. Never skip the routing step.

@@ -12,9 +12,13 @@
 // drift, printing the authoritative path and the fix command
 // (`npm run skills:sync`).
 //
-// Meta-skills and core service skills are still hand-written directly under
-// skills/ and are not touched: a skills/ directory counts as generated only
-// when its SKILL.md carries the marker line.
+// Every skill — meta and service alike — is pack-owned: src/packs/core/
+// carries the six meta-skills, the other packs carry their service skills,
+// and the whole skills/ tree is generated. A skills/ directory counts as
+// generated when its SKILL.md carries the marker line. Non-markdown
+// payloads (agents/*.yaml manifests) copy verbatim: the marker is an HTML
+// comment, legal in markdown and invalid YAML, and generated-ness is
+// detected from SKILL.md alone.
 //
 // CRLF is normalized to LF before comparison; the injected marker line itself
 // is stripped from the generated side so content compares byte-level.
@@ -69,8 +73,14 @@ function discoverPackSkills() {
 // stripMarkerLine tolerates both shapes, so --write output passes --check
 // with or without a format pass (strip∘render is the identity).
 function renderGenerated(packId, skillName, relativeFile, content) {
-  const marker = markerFor(packId, skillName);
   const normalized = content.replace(/\r\n/g, '\n');
+  // Non-markdown payloads (agents/*.yaml) copy verbatim: the marker is an
+  // HTML comment, legal in markdown and invalid YAML. Generated-ness is
+  // detected from SKILL.md alone (isGeneratedSkillDir), so omitting the
+  // marker here loses no signal, and the --check byte comparison still
+  // covers these files (stripMarkerLine is the identity without a marker).
+  if (!relativeFile.endsWith('.md')) return normalized;
+  const marker = markerFor(packId, skillName);
   const frontmatter = /^---\n[\s\S]*?\n---\n/.exec(normalized);
   if (frontmatter && relativeFile === 'SKILL.md') {
     const cut = frontmatter[0].length;
@@ -152,7 +162,8 @@ function run({ write }) {
         );
       } else {
         const rawTarget = readFileSync(targetPath, 'utf8');
-        const expectedMarker = markerFor(packId, skillName);
+        // Non-markdown payloads carry no marker (see renderGenerated).
+        const expectedMarker = file.endsWith('.md') ? markerFor(packId, skillName) : null;
         const actualMarker = markerLineOf(rawTarget);
         if (actualMarker !== expectedMarker) {
           failures.push(

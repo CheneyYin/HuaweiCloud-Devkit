@@ -70,9 +70,16 @@ test('renderGenerated and stripMarkerLine are inverses for every pack skill sour
         // the raw insertion failed format:check, so every sync-without-format
         // re-broke CI — the blank-after-frontmatter shape is now emitted
         // directly and pinned here instead of relying on the operator's
-        // format pass).
+        // format pass). Non-markdown payloads (agents/*.yaml) copy verbatim:
+        // the marker is an HTML comment, legal in markdown and invalid YAML.
         const frontmatter = /^---\n[\s\S]*?\n---\n/.exec(rendered);
-        if (frontmatter && relativeFile === 'SKILL.md') {
+        if (!relativeFile.endsWith('.md')) {
+          assert.equal(
+            rendered,
+            source.replace(/\r\n/g, '\n'),
+            `${packId}/${skillName}/${relativeFile} must copy verbatim (non-markdown payload)`,
+          );
+        } else if (frontmatter && relativeFile === 'SKILL.md') {
           assert.ok(
             rendered.startsWith(`${frontmatter[0]}\n<!--`),
             `${packId}/${skillName}/SKILL.md must carry one blank line between frontmatter and the marker`,
@@ -87,7 +94,7 @@ test('renderGenerated and stripMarkerLine are inverses for every pack skill sour
       }
     }
   }
-  // 23 skills across 4 packs ship 49 files today; the floor only guards
+  // 30 skills across 6 packs ship 64 files today; the floor only guards
   // against accidentally skipping whole packs, not the exact count.
-  assert.ok(checked >= 45, `expected to check every pack skill file, got ${checked}`);
+  assert.ok(checked >= 60, `expected to check every pack skill file, got ${checked}`);
 });
