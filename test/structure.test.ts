@@ -713,10 +713,11 @@ test('setup-cli.ts supports the codearts target end to end', () => {
   assert.match(setup, /function writeInstallMarker\(target: string\)/);
   // doctor checks the skills tree inside installed plugin dirs, and native
   // skill dirs only for stale-copy detection. The tree check is
-  // roster-exact (every shipped skill present in some payload dir), not a
-  // count floor — a partial tree must fail.
-  assert.match(setup, /const expectedSkills = devkitOwnedSkillNames\(\);/);
-  assert.match(setup, /\[...expectedSkills\]\.every\(\(name\) => present\.has\(name\)\)/);
+  // roster-exact against the shipped manifest (a file, so the DSH candidate
+  // cannot be validated against its own listing), not a count floor — a
+  // partial tree must fail.
+  assert.match(setup, /const expectedSkills = shippedSkillRoster\(\);/);
+  assert.match(setup, /expectedSkills\.every\(\(name\) => present\.has\(name\)\)/);
   assert.doesNotMatch(setup, /serverSkillCount\(dir\) >= 6/, 'count-floor doctor check must be gone');
   assert.match(setup, /staleNativeSkillDirs\(\)\.length/);
   // help text documents the target

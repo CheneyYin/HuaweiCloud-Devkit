@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -9,6 +9,10 @@ import { PACKS, PACK_TOOL_HANDLERS } from '../plugins/huaweicloud-core/src/packs
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const pluginRoot = join(root, 'plugins', 'huaweicloud-core');
+
+// The skills-claim tests below read the generated tree (a build artifact);
+// one guided precondition instead of a raw ENOENT on a fresh checkout.
+assert.ok(existsSync(join(pluginRoot, 'skills')), 'generated skills tree missing — run: npm run build');
 
 test('no tool name appears in two pack tool lists', () => {
   const owner = new Map<string, string>();

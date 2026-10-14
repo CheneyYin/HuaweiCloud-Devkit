@@ -675,6 +675,24 @@ function devkitOwnedSkillNames(): Set<string> {
   }
 }
 
+// The expected skill roster, read from the shipped .manifest.json file rather
+// than from the candidate directory listing. Doctor must not compare a
+// directory against itself (the DSH layout resolves skills from the very
+// PLUGIN_ROOT/skills tree it would enumerate), so the roster of record is the
+// file the build wrote beside the tree. An absent or unreadable manifest
+// yields [] and the caller fails loud.
+function shippedSkillRoster(): string[] {
+  const manifestPath = join(PLUGIN_ROOT, 'skills', '.manifest.json');
+  if (!existsSync(manifestPath)) return [];
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    const skills = (parsed as { skills?: unknown } | null)?.skills;
+    return Array.isArray(skills) ? skills.filter((name): name is string => typeof name === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
 // Agent-native skill directories that older devkit versions copied skills
 // into. The codex-desktop plugin dir's skills/ is deliberately absent: that
 // is server data, not a native dir.
@@ -4887,16 +4905,17 @@ async function cmdDoctor(): Promise<void> {
   // layout resolves skills from the package root).
   const skillsTreeDirs = [...payloadDirs];
   if (dshPatchConfigured()) skillsTreeDirs.push(join(PLUGIN_ROOT, 'skills'));
-  // Roster-exact, not a count floor: a partial tree (say, only the six
-  // meta-skills after a botched generation) must FAIL, not satisfy a
-  // legacy >= 6 threshold. The expected roster is the package's own tree —
-  // the same ownership manifest pruneStale and the native purges use.
-  const expectedSkills = devkitOwnedSkillNames();
+  // Roster-exact against the shipped manifest, not a count floor and not the
+  // candidate's own listing: a partial tree (say, only the six meta-skills
+  // after a botched generation, or a deleted skill dir after install) must
+  // FAIL. The manifest is a file, so the DSH layout — whose candidate IS the
+  // package's skills/ dir — cannot validate a directory against itself.
+  const expectedSkills = shippedSkillRoster();
   const skillsTreeOk =
-    expectedSkills.size > 0 &&
+    expectedSkills.length > 0 &&
     skillsTreeDirs.some((dir) => {
       const present = new Set(serverSkillDirNames(dir));
-      return [...expectedSkills].every((name) => present.has(name));
+      return expectedSkills.every((name) => present.has(name));
     });
   check(
     'Skills tree (server data, MCP-disclosed)',

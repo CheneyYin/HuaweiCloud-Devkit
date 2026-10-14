@@ -63,12 +63,20 @@ export function listSkillDirs(root: string): string[] {
 // serve (registry-driven list_packs beside an empty or partial tree) is
 // worse than one that refuses to start, so the factory calls this before
 // registering anything — mirroring the loudness of a missing dist/.
-export function verifySkillTree(): void {
-  const present = new Set(listSkillDirs(SKILLS_ROOT));
+// The tree must EQUAL the registry roster, not merely contain it: an
+// unclaimed directory is served ungated (SKILL_OWNER.get returns undefined,
+// so retrieve_skill skips the pack-enablement gate), so extras are as
+// dangerous as gaps. The root is injectable for tests.
+export function verifySkillTree(root: string = SKILLS_ROOT): void {
+  const present = new Set(listSkillDirs(root));
   const missing = [...SKILL_OWNER.keys()].filter((skill) => !present.has(skill));
-  if (missing.length > 0) {
+  const unclaimed = [...present].filter((skill) => !SKILL_OWNER.has(skill));
+  if (missing.length > 0 || unclaimed.length > 0) {
+    const parts: string[] = [];
+    if (missing.length > 0) parts.push(`missing ${missing.join(', ')}`);
+    if (unclaimed.length > 0) parts.push(`unclaimed ${unclaimed.join(', ')}`);
     throw new Error(
-      `skills tree incomplete at ${SKILLS_ROOT}: missing ${missing.join(', ')} — ` +
+      `skills tree invalid at ${root}: ${parts.join('; ')} — ` +
         'from a git checkout run: npm run build; from an install run: npx huaweicloud-devkit install',
     );
   }

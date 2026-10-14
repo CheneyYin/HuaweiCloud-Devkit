@@ -66,6 +66,13 @@ for (const skill of manifest.skills) {
   );
 }
 
+// The authoritative sources under src/packs/*/skills are excluded from the
+// tarball (the generated tree is the only copy that ships, keeping the
+// artifact from carrying every skill twice). Pin the negation: a files-array
+// typo or an npm glob-behavior change would silently re-ship them.
+const sourceSkill = [...paths].find((p) => /^plugins\/huaweicloud-core\/src\/packs\/[^/]+\/skills\//.test(p));
+assert.ok(!sourceSkill, `Tarball must not ship authoritative skill sources (found ${sourceSkill})`);
+
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 const dshPatch = pkg.dsh?.bundle?.patch;
 if (dshPatch) {

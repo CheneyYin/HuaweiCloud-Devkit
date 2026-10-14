@@ -29,15 +29,23 @@
 //
 // CRLF is normalized to LF before comparison; the injected marker line itself
 // is stripped from the generated side so content compares byte-level.
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const pluginRoot = join(repoRoot, 'plugins', 'huaweicloud-core');
 const packsDir = join(pluginRoot, 'src', 'packs');
 const skillsDir = join(pluginRoot, 'skills');
-const stagingSkillsDir = join(pluginRoot, 'skills.new');
 
 const MARKER_PREFIX = '<!-- generated from ';
 const MARKER_SUFFIX = ' - do not edit -->';
@@ -65,10 +73,11 @@ function walkFiles(dir, base = dir) {
 }
 
 // Every directory under src/packs/<id>/skills/ is a pack-owned skill source.
-function discoverPackSkills() {
+// The root is injectable so tests can point at an empty/fixture tree.
+function discoverPackSkills(sourceRoot = packsDir) {
   const out = [];
-  for (const packId of listDirs(packsDir)) {
-    const packSkillsDir = join(packsDir, packId, 'skills');
+  for (const packId of listDirs(sourceRoot)) {
+    const packSkillsDir = join(sourceRoot, packId, 'skills');
     for (const skillName of listDirs(packSkillsDir)) {
       out.push({ packId, skillName, sourceDir: join(packSkillsDir, skillName) });
     }
@@ -156,37 +165,51 @@ const generatedSkillDirs = () =>
 // of re-deriving the expectation from src/packs. Invisible to every skill
 // reader — not a directory, no SKILL.md, no huawei* prefix.
 function manifestJson(skillNames) {
-  const roster = [...skillNames].sort((a, b) => a.localeCompare(b));
+  // Code-unit ordering, not localeCompare: the manifest is a byte-compared
+  // build artifact shipped verbatim, so its bytes must not depend on the
+  // host's locale/ICU data.
+  const roster = [...skillNames].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   return `${JSON.stringify({ generatedBy: 'scripts/sync-skills.mjs', skills: roster }, null, 2)}\n`;
 }
 
 // Full regeneration with the staging discipline build-plugin.mjs applies to
-// dist/: render every source into skills.new/, write the manifest, swap only
-// on success. The rm+rename pair leaves the same two-statement missing
-// window the dist swap accepts; C2's fail-loud seams cover it. Replacing the
-// whole tree (not incremental writes) is what makes stale files, stale skill
-// dirs, and stray hand-created dirs vanish in one pass.
-export function writeSkillsTree() {
-  const packSkills = discoverPackSkills();
+// dist/: render every source into a unique skills.new-* staging dir, write
+// the manifest, swap only on success. The rm+rename pair leaves the same
+// two-statement missing window the dist swap accepts; C2's fail-loud seams
+// cover it. Replacing the whole tree (not incremental writes) is what makes
+// stale files, stale skill dirs, and stray hand-created dirs vanish in one
+// pass. A unique staging dir (mkdtemp) keeps two entry points — npm run
+// build and npm run skills:sync — from clobbering each other's staging; the
+// loser's renameSync fails ENOTEMPTY after the winner published, which is a
+// clean error rather than a corrupted tree.
+export function writeSkillsTree({ packsDir: sourceRoot = packsDir } = {}) {
+  const packSkills = discoverPackSkills(sourceRoot);
   if (packSkills.length === 0) {
-    throw new Error('no pack skill sources found under src/packs/*/skills/ — refusing to replace the skills tree');
+    throw new Error(
+      `no pack skill sources found under ${relative(repoRoot, sourceRoot)} — refusing to replace the skills tree`,
+    );
   }
-  rmSync(stagingSkillsDir, { recursive: true, force: true });
-  let files = 0;
-  for (const { packId, skillName, sourceDir } of packSkills) {
-    const targetDir = join(stagingSkillsDir, skillName);
-    for (const file of walkFiles(sourceDir)) {
-      const sourceContent = readFileSync(join(sourceDir, file), 'utf8').replace(/\r\n/g, '\n');
-      const targetPath = join(targetDir, file);
-      mkdirSync(dirname(targetPath), { recursive: true });
-      writeFileSync(targetPath, renderGenerated(packId, skillName, file, sourceContent));
-      files += 1;
+  const stagingSkillsDir = mkdtempSync(join(pluginRoot, 'skills.new-'));
+  try {
+    let files = 0;
+    for (const { packId, skillName, sourceDir } of packSkills) {
+      const targetDir = join(stagingSkillsDir, skillName);
+      for (const file of walkFiles(sourceDir)) {
+        const sourceContent = readFileSync(join(sourceDir, file), 'utf8').replace(/\r\n/g, '\n');
+        const targetPath = join(targetDir, file);
+        mkdirSync(dirname(targetPath), { recursive: true });
+        writeFileSync(targetPath, renderGenerated(packId, skillName, file, sourceContent));
+        files += 1;
+      }
     }
+    writeFileSync(join(stagingSkillsDir, MANIFEST_NAME), manifestJson(packSkills.map(({ skillName }) => skillName)));
+    rmSync(skillsDir, { recursive: true, force: true });
+    renameSync(stagingSkillsDir, skillsDir);
+    return { skills: packSkills.length, files };
+  } catch (error) {
+    rmSync(stagingSkillsDir, { recursive: true, force: true });
+    throw error;
   }
-  writeFileSync(join(stagingSkillsDir, MANIFEST_NAME), manifestJson(packSkills.map(({ skillName }) => skillName)));
-  rmSync(skillsDir, { recursive: true, force: true });
-  renameSync(stagingSkillsDir, skillsDir);
-  return { skills: packSkills.length, files };
 }
 
 function run({ write }) {
@@ -245,7 +268,10 @@ function run({ write }) {
   return { failures, packSkills: packSkills.length };
 }
 
-const invokedDirectly = process.argv[1] && import.meta.url === new URL('file://' + process.argv[1]).href;
+// pathToFileURL, not `new URL('file://' + argv[1])`: the string form never
+// matches import.meta.url on Windows (backslash, drive-letter paths), which
+// silently turned the --check/--write CLI into a no-op there.
+const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (invokedDirectly) {
   const args = new Set(process.argv.slice(2));
   const write = args.has('--write');

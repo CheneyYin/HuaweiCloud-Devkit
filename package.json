@@ -11,6 +11,7 @@
     ".agents",
     "plugins/huaweicloud-core",
     "!plugins/huaweicloud-core/src/packs/*/skills",
+    "!plugins/huaweicloud-core/skills.new-*",
     "integrations/hermes",
     "integrations/opencode",
     "integrations/dsh",

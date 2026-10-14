@@ -26,9 +26,9 @@ function walkFiles(dir: string): string[] {
 // skills/<name>/ is the generated tree agents read (a build artifact,
 // gitignored like dist/). scripts/sync-skills.mjs --check re-derives the
 // expectation and fails on any byte drift (after CRLF normalization and
-// marker-line stripping). The same check runs as the prepack tail after the
-// build step: it verifies the freshly generated tree matches the sources,
-// catching a source edit that postdates the build or a generator regression.
+// marker-line stripping). The prepack tail runs the check after the build,
+// so there it only guards generator determinism; the source-drift gate is
+// `npm run validate`, whose chain does not build first.
 test('pack skill sources and the generated skills/ tree are in sync', () => {
   const run = spawnSync(process.execPath, [join(root, 'scripts', 'sync-skills.mjs'), '--check'], {
     encoding: 'utf8',

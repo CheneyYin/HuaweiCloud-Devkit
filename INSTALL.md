@@ -101,7 +101,7 @@ npm run validate
 预期输出：
 
 - 测试全部通过
-- "Validated HuaweiCloud DevKit with 29 skills."
+- "Validated HuaweiCloud DevKit with 30 skills."
 
 ## 开发环境
 
@@ -123,8 +123,8 @@ huaweicloud-devkit/
 │   ├── .mcp.json                       # MCP 服务器配置
 │   ├── hooks/                          # 安全钩子
 │   ├── safety/policy.json              # 安全策略
-│   ├── skills/                         # 11 个技能
-│   └── src/                            # MCP 服务器源码
+│   ├── skills/                         # 生成产物（30 个技能 + .manifest.json），由 npm run build 再生，不随 git 提交
+│   └── src/                            # MCP 服务器源码（技能权威源在 src/packs/<id>/skills/）
 ├── integrations/opencode/              # OpenCode 集成
 ├── scripts/                            # 安装与校验脚本
 ├── test/                               # 测试套件

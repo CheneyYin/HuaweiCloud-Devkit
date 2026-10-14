@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -8,6 +8,14 @@ import test from 'node:test';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const serverPath = join(root, 'plugins', 'huaweicloud-core', 'src', 'mcp-server.ts');
+
+// The version-layout fixtures below copy the generated skills tree (the
+// server fail-fasts without it), so the whole file needs it present. One
+// guided precondition instead of a raw ENOENT on a fresh checkout.
+assert.ok(
+  existsSync(join(root, 'plugins', 'huaweicloud-core', 'skills')),
+  'generated skills tree missing — run: npm run build',
+);
 
 interface ToolDescriptor {
   name: string;
