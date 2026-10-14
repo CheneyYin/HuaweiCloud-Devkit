@@ -4,6 +4,7 @@ npm-debug.log*
 coverage/
 dist/
 dist.new/
+plugins/huaweicloud-core/skills.new/
 __pycache__/
 *.pyc
 .env
