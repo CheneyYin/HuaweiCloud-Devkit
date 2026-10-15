@@ -54,8 +54,10 @@ function runDoctor(home: string, extra: Record<string, string> = {}): string {
   // installs); only a crash or timeout aborts the test.
   assert.ok(run.status === 0 || run.status === 1, `doctor crashed: ${run.stderr}`);
   // Strip ANSI so [PASS]/[FAIL] assertions see the plain markers (check()
-  // wraps them in color escapes).
-  return (run.stdout ?? '').replace(/\x1b\[[0-9;]*m/g, '');
+  // wraps them in color escapes). The escape is built from fromCharCode —
+  // same idiom as dep-provision's stripAnsi — because eslint's
+  // no-control-regex (rightly) flags control characters in regex literals.
+  return (run.stdout ?? '').replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '');
 }
 
 // An installed payload's skills/ dir, as copyServerPayload would have laid

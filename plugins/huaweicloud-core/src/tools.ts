@@ -22,6 +22,10 @@ import {
 } from './packs/enable.ts';
 import { PACK_IDS, type PackId } from './lib/pack-types.ts';
 import { closePackEnablement } from './lib/dependency-model.ts';
+// The skill-dir listing lives in the shared zod-free module so the boot
+// guard, the installer's doctor check, and the build-time --check stray scan
+// hold one membership predicate (dir-or-symlink with a SKILL.md).
+import { listSkillDirs } from './lib/skill-tree.ts';
 // Service region descriptor (the old inline `known` table in
 // getRegionalAvailability, migrated verbatim — see services/regions.ts for
 // its guarantee scope).
@@ -47,11 +51,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // the MCP tools (list_packs / pack_info / retrieve_skill / search_docs).
 const SKILLS_ROOT = join(__dirname, '..', 'skills');
 
-// The skill-dir listing lives in src/lib/skill-tree.ts so the boot guard,
-// the installer's doctor check, and the build-time --check stray scan share
-// one membership predicate (dir-or-symlink with a SKILL.md). Re-exported
-// here for the existing importers (tests, retrieve_skill, search_docs).
-import { listSkillDirs } from './lib/skill-tree.ts';
+// Re-exported for the existing importers (tests, retrieve_skill,
+// search_docs); the predicate itself lives in src/lib/skill-tree.ts.
 export { listSkillDirs };
 
 // Boot-time cross-check between the registry's skill claims and the

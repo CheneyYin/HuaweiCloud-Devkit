@@ -41,9 +41,11 @@ import {
 } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+
 // The stray-dir scan must see exactly what the boot guard sees, so both use
-// the one SKILL.md-aware listing (Node >= 22.18 type stripping carries the
-// .ts import here — the same floor the test suite already requires).
+// the one SKILL.md-aware listing. Type stripping carries the .ts import on
+// the floor the whole build chain requires (engines: >= 22.18 — build,
+// validate, and prepack all run this script).
 import { listSkillDirs } from '../plugins/huaweicloud-core/src/lib/skill-tree.ts';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -183,10 +185,13 @@ export function writeSkillsTree({ packsDir: sourceRoot = packsDir, outDir = skil
   }
   const stagingParent = dirname(outDir);
   // Sweep stale staging dirs in the target's parent: preserved recovery
-  // copies and crash leftovers. One hour of untouched mtime means no live
-  // writer can own the dir — an in-flight render updates its staging dir's
-  // mtime with every file it creates, and the concurrent-writer window is
-  // seconds, not hours.
+  // copies and crash leftovers. Freshness is the discriminator, and the
+  // safety margin is structural: only DIRECT children of the staging dir
+  // (each skill dir's creation, the manifest write) update its own mtime —
+  // files inside skill subdirs do not — and those direct-child touches
+  // bracket the whole render, so no legitimate writer goes an hour between
+  // its last direct-child touch and its swap. A just-preserved recovery
+  // copy is likewise fresh and survives a prompt re-run.
   const staleBefore = Date.now() - 60 * 60 * 1000;
   for (const entry of readdirSync(stagingParent, { withFileTypes: true })) {
     if (!entry.isDirectory() || !entry.name.startsWith('skills.new-')) continue;

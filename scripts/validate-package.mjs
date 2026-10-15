@@ -3,6 +3,11 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// The guard-side skill listing (dir-or-symlink with a SKILL.md) — the same
+// predicate the boot guard, doctor, and sync-skills --check use, so this
+// gate cannot accept a tree the server would reject (or vice versa).
+import { listSkillDirs } from '../plugins/huaweicloud-core/src/lib/skill-tree.ts';
+
 const root = fileURLToPath(new URL('..', import.meta.url));
 const pluginRoot = join(root, 'plugins', 'huaweicloud-core');
 
@@ -74,7 +79,7 @@ if (dshPatch) {
 // stack from the readdirSync below (from a raw checkout: npm run build).
 const skillsDir = join(pluginRoot, 'skills');
 assert.ok(existsSync(skillsDir), `Missing generated skills tree: ${skillsDir} — run: npm run build`);
-const skills = readdirSync(skillsDir).filter((name) => existsSync(join(skillsDir, name, 'SKILL.md')));
+const skills = listSkillDirs(skillsDir);
 assert.ok(skills.length >= 5, 'Expected compact meta-skills');
 
 for (const name of skills) {

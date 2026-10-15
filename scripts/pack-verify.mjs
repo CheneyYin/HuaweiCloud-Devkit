@@ -5,6 +5,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// Same parser doctor reads (src/lib/skill-manifest.ts, pure and zod-free);
+// the loud shape assert below is pack verification's own addition.
+import { parseSkillManifest } from '../plugins/huaweicloud-core/src/lib/skill-manifest.ts';
+
 const root = fileURLToPath(new URL('..', import.meta.url));
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
@@ -17,11 +21,13 @@ const runNpm = (args, options) =>
 // — the files-array negations could silently break and only a developer's
 // dirty worktree would notice. Stage probe files that match the excluded
 // patterns before packing and clean them up afterwards. Probe names are not
-// real stamp names, so live telemetry state is never touched.
+// real stamp names, so live telemetry state is never touched. dist.new is
+// deliberately NOT probed: prepack's build removes it before npm collects
+// the file list, so a probe there is dead by construction — see the
+// runtime-state assertion below.
 const probeFiles = [
   join(root, 'plugins', 'huaweicloud-core', 'telemetry', 'pack-verify-probe'),
   join(root, 'plugins', 'huaweicloud-core', 'hooks', '__pycache__', 'pack-verify-probe.pyc'),
-  join(root, 'plugins', 'huaweicloud-core', 'dist.new', 'pack-verify-probe.js'),
   join(root, 'plugins', 'huaweicloud-core', 'skills.new-probe', 'SKILL.md'),
 ];
 const createdProbes = probeFiles.filter((probe) => !existsSync(probe));
@@ -73,15 +79,14 @@ try {
   // whitelisted plugin dir (the same mechanism that ships the gitignored
   // dist/), so the tree must be present at pack time — and the manifest it
   // carries is the roster the tarball has to match, file by file. Parsed
-  // here inline, deliberately not through the shared parseSkillManifest
-  // (src/lib/skill-manifest.ts): pack verification wants a loud assert on
-  // malformed input, not a silent [] roster, and the .mjs script layer does
-  // not import the TS graph.
+  // through the shared parseSkillManifest (the same parser doctor reads);
+  // the loud shape assert on top is pack verification's own — a malformed
+  // or empty roster must fail here, not silently ship.
   const manifestEntry = 'plugins/huaweicloud-core/skills/.manifest.json';
   assert.ok(paths.has(manifestEntry), 'Tarball is missing the skills manifest (did prepack run the build?)');
-  const manifest = JSON.parse(readFileSync(join(root, manifestEntry), 'utf8'));
-  assert.ok(Array.isArray(manifest.skills) && manifest.skills.length > 0, 'skills manifest is malformed');
-  for (const skill of manifest.skills) {
+  const manifestSkills = parseSkillManifest(readFileSync(join(root, manifestEntry), 'utf8'));
+  assert.ok(manifestSkills.length > 0, 'skills manifest is malformed');
+  for (const skill of manifestSkills) {
     assert.ok(
       paths.has(`plugins/huaweicloud-core/skills/${skill}/SKILL.md`),
       `Tarball is missing skill ${skill} declared by the manifest`,
@@ -95,16 +100,19 @@ try {
   const sourceSkill = [...paths].find((p) => /^plugins\/huaweicloud-core\/src\/packs\/[^/]+\/skills\//.test(p));
   assert.ok(!sourceSkill, `Tarball must not ship authoritative skill sources (found ${sourceSkill})`);
 
-  // Runtime state, host bytecode, and build staging dirs must never ship.
+  // Runtime state, host bytecode, and skills staging dirs must never ship.
   // `files` disables npm's .gitignore handling, so gitignored artifacts under
   // the whitelisted plugin dir pack unless negated explicitly — a shipped
   // first-use-stamp suppresses the plugin:first_use telemetry event for every
   // consumer of the tarball. The staged probes make this assertion live even
-  // on a fresh CI checkout.
+  // on a fresh CI checkout. dist.new is structurally excluded rather than
+  // asserted: prepack's build always removes it before npm collects the file
+  // list, so no listing can ever contain it; the `!.../dist.new` files entry
+  // remains only as defense for a hypothetical `npm pack --ignore-scripts`
+  // of a crashed worktree.
   const runtimeState = [...paths].find(
     (p) =>
       /^plugins\/huaweicloud-core\/telemetry\//.test(p) ||
-      /^plugins\/huaweicloud-core\/dist\.new\//.test(p) ||
       /^plugins\/huaweicloud-core\/skills\.new-/.test(p) ||
       p.includes('__pycache__') ||
       p.endsWith('.pyc'),

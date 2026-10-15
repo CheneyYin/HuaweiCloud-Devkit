@@ -662,7 +662,10 @@ function copyServerPayload(pluginDest: string, opts: { skipDist?: boolean } = {}
 // Devkit-owned skill names. The shipped skills/ tree is the ownership
 // manifest: a name is deletable only when the current tree still ships it,
 // so a user-authored skill that merely shares the huawei* prefix survives
-// every cleanup.
+// every cleanup. Deliberately RAW directories (not the guard-side
+// dir-or-symlink-with-SKILL.md listing in src/lib/skill-tree.ts): purge
+// ownership wants the inclusive reading — a hollow claimed dir still owns
+// its native copies.
 function devkitOwnedSkillNames(): Set<string> {
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   if (!existsSync(skillsSrc)) return new Set();

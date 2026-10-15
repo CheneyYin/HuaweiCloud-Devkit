@@ -1,11 +1,15 @@
-// The one listing of a skills tree. The boot guard (verifySkillTree), the
-// installer's doctor check, and the build-time --check stray scan must all
-// agree on what counts as a skill directory, or one of them accepts a tree
-// the others reject: hollow claimed dirs (name present, SKILL.md missing)
-// and symlinked dirs were exactly that divergence. Membership is dir-or-
-// symlink carrying a SKILL.md. Zod-free so every consumer graph — the
-// bundled server, the zod-free installer, and the .mjs build scripts —
-// can import it (Node >= 22.18 type stripping for the .mjs side).
+// The guard-side listing of a skills tree: the boot guard
+// (verifySkillTree), the installer's doctor check, the build-time --check
+// stray scan, and validate-package's skill gate all consume this one
+// membership predicate, or one of them accepts a tree the others reject —
+// hollow claimed dirs (name present, SKILL.md missing) and symlinked dirs
+// were exactly that divergence. Membership is dir-or-symlink carrying a
+// SKILL.md. Two deliberate divergences remain, both ownership-shaped, not
+// guard-shaped: devkitOwnedSkillNames (setup-cli) and dsh-postinstall list
+// RAW directories for what the devkit owns and may purge from native skill
+// dirs — a hollow claimed dir still owns its native copies. Zod-free so
+// every consumer graph — the bundled server, the zod-free installer, and
+// the .mjs build scripts (Node >= 22.18 type stripping) — can import it.
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 

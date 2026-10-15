@@ -40,6 +40,10 @@ test(
     const realRmSync = actual.rmSync;
     const realRenameSync = actual.renameSync;
     let failOn: 'rm' | 'rename' = 'rm';
+    // namedExports, not the newer options.exports: the repo's Node 22.18
+    // floor predates options.exports (Node 24 already deprecation-warns
+    // namedExports) — migrate when the floor moves past the version where
+    // exports exists.
     t.mock.module('node:fs', {
       namedExports: {
         existsSync: actual.existsSync,
@@ -51,6 +55,12 @@ test(
         writeFileSync: actual.writeFileSync,
         rmSync: (path: Parameters<typeof realRmSync>[0], options: Parameters<typeof realRmSync>[1]) => {
           if (failOn === 'rm' && String(path) === rmFixture.tree) {
+            // Delete one child for real before throwing, so the fixture
+            // models an rmSync failing midway over a partially deleted tree
+            // (the Windows locked-file shape), not merely one refusing to
+            // start — the preserve guarantee is what is under test, and it
+            // must hold either way.
+            realRmSync(join(rmFixture.tree, 'old'), { recursive: true, force: true });
             throw new Error('mock EBUSY on the live tree');
           }
           return realRmSync(path, options);

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -122,11 +122,13 @@ test('writeSkillsTree refuses an empty source root and leaves the real tree inta
   );
   assert.ok(existsSync(join(realTree, '.manifest.json')), 'the shipped manifest must survive a refused regeneration');
 });
-
 // A render failure after staging began must clean the staging dir (the live
 // tree is still intact, so the staging copy is disposable). chmod is the
 // portable-enough way to make a source read fail; it is a no-op on Windows
-// and does not block reads for root, so both are skipped.
+// and does not block reads for root, so both are skipped. The pre-created
+// live tree at the target is the guard: a regression that removes the
+// target before or during the render (instead of after it completes) would
+// destroy it and fail the survival assertion.
 test(
   'writeSkillsTree cleans up its staging dir when rendering fails mid-way',
   {
@@ -139,13 +141,15 @@ test(
     chmodSync(skillMd, 0o000);
     const treeParent = fixtureDir('hwc-skills-renderfail-tree-');
     const tree = join(treeParent, 'skills');
+    mkdirSync(join(tree, 'old'), { recursive: true });
+    writeFileSync(join(tree, 'old', 'SKILL.md'), '---\nname: old\n---\n', 'utf8');
     try {
       assert.throws(() => writeSkillsTree({ packsDir: sources, outDir: tree }), /(EACCES|permission)/i);
       assert.ok(
         !readdirSync(treeParent).some((name) => name.startsWith('skills.new-')),
         'no staging dir may remain after a failed render',
       );
-      assert.ok(!existsSync(tree), 'the live tree must be untouched by a failed render');
+      assert.ok(existsSync(join(tree, 'old', 'SKILL.md')), 'the live tree must survive a failed render');
     } finally {
       // restore readability so the exit-time fixture cleanup can unlink it
       chmodSync(skillMd, 0o644);
@@ -153,6 +157,30 @@ test(
   },
 );
 
+// The sweep: preserved recovery copies and crash leftovers are garbage, but
+// an in-flight writer's staging dir never is. Freshness is the discriminator
+// — backdate one dir past the threshold, keep another fresh, and assert the
+// regeneration sweeps only the stale one.
+test('writeSkillsTree sweeps stale staging dirs and spares fresh ones', () => {
+  const sources = fixtureDir('hwc-sweep-src-');
+  makePackSources(sources, 's1');
+  const treeParent = fixtureDir('hwc-sweep-');
+  const tree = join(treeParent, 'skills');
+  const stale = join(treeParent, 'skills.new-stale');
+  const fresh = join(treeParent, 'skills.new-fresh');
+  mkdirSync(join(stale, 's1'), { recursive: true });
+  writeFileSync(join(stale, 's1', 'SKILL.md'), '---\nname: s1\n---\n', 'utf8');
+  mkdirSync(fresh, { recursive: true });
+  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+  utimesSync(stale, twoHoursAgo, twoHoursAgo);
+  writeSkillsTree({ packsDir: sources, outDir: tree });
+  assert.ok(!existsSync(stale), 'a staging dir untouched for over an hour must be swept');
+  assert.ok(
+    existsSync(fresh),
+    'a fresh staging dir must be spared — a concurrent writer or a just-preserved recovery copy',
+  );
+  assert.ok(existsSync(join(tree, '.manifest.json')), 'the regeneration completed');
+});
 test('parseSkillManifest extracts, dedupes, and filters the roster', () => {
   assert.deepEqual(parseSkillManifest('{"skills":["b","a","b",42,"a"]}'), ['b', 'a']);
   assert.deepEqual(parseSkillManifest('{"skills":[]}'), []);
