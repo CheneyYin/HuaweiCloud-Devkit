@@ -5,7 +5,7 @@
 // same file can never drift on its state machine: the shape-broken boundary
 // (parsable JSON, non-array names) is classified identically everywhere.
 // Zod-free so every consumer graph can import it.
-import { existsSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 
 export const NATIVE_RECEIPT_NAME = '.huaweicloud-devkit-native.json';
@@ -81,25 +81,50 @@ export function readNativeReceipt(dir: string): NativeReceiptRead {
   return { kind: 'ok', receipt };
 }
 
+// The payload tree a recorded marketplace package root serves from — the
+// shared liveness probe: uninstall's attribution gate and doctor's
+// freshness check ask the same question of the same untrusted root, so
+// one expression owns the answer (two hand copies would drift apart and
+// flip live maintainers to dead or dead to live at only one site).
+// Pure path shape; callers probe with existsSync.
+export function marketplacePayloadTree(packageRoot: string): string {
+  return join(packageRoot, 'plugins', 'huaweicloud-core', 'skills');
+}
+
+// Reclaim crashed writers' tmp files, age-gated: a live concurrent
+// writer's in-flight tmp (microseconds old) must never be swept — its
+// rename would then ENOENT and its receipt write would be lost, which can
+// demote a managed dir to residue treatment. Only files old enough to be
+// crash residue go; a fresh crashed tmp waits for a later sweep.
+const TMP_SWEEP_AGE_MS = 60_000;
+
+export function sweepReceiptTmpFiles(dir: string): void {
+  try {
+    const cutoff = Date.now() - TMP_SWEEP_AGE_MS;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.startsWith(`${NATIVE_RECEIPT_NAME}.`) || !entry.name.endsWith('.tmp')) {
+        continue;
+      }
+      const full = join(dir, entry.name);
+      try {
+        if (statSync(full).mtimeMs < cutoff) rmSync(full, { force: true });
+      } catch {
+        // unreadable entry: skipped, the sweep continues
+      }
+    }
+  } catch {
+    // best-effort: an unreadable dir cannot be swept
+  }
+}
+
 export function writeNativeReceipt(dir: string, receipt: NativeReceipt): void {
   // Pid-suffixed temp: the setup CLI and dsh-postinstall are uncoordinated
   // writers on the same dir, and a shared .tmp path let one writer's rename
   // publish or lose the other's roster. renameSync publishes atomically, so
   // a crash can never leave a half-written receipt observable as "no
   // receipt" (which would demote a managed dir to residue treatment).
+  sweepReceiptTmpFiles(dir);
   const finalPath = nativeReceiptPath(dir);
-  // The writer owns the dir: reclaim crashed predecessors' tmp files (any
-  // pid's) in the same pass, so litter never accumulates across
-  // installs/updates — no other actor sweeps them.
-  try {
-    for (const entry of readdirSync(dir)) {
-      if (entry.startsWith(`${NATIVE_RECEIPT_NAME}.`) && entry.endsWith('.tmp')) {
-        rmSync(join(dir, entry), { force: true });
-      }
-    }
-  } catch {
-    // best-effort: an unreadable dir cannot be swept, the write proceeds
-  }
   const tmp = `${finalPath}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(receipt, null, 2) + '\n');
   renameSync(tmp, finalPath);

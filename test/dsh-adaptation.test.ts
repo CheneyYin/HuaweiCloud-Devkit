@@ -355,6 +355,12 @@ test('dsh bundle postinstall syncs core skills natively and purges non-core', ()
     // The fixture stages only 2 of the 6 core dirs: the manifest claims the
     // other 4 and the postinstall must warn, not crash the npm install.
     assert.match(res.stderr, /claimed by the manifest but missing from the package tree: huaweicloud-/);
+    // A broken package must not be promised availability in the same
+    // output — the hint is gated on package health.
+    assert.ok(
+      !res.stdout.includes('MCP server will be available'),
+      'the availability hint must not follow a refuse-to-start diagnosis',
+    );
 
     assert.ok(existsSync(join(nativeDir, 'huaweicloud-core')), 'core skill synced natively');
     assert.ok(existsSync(join(nativeDir, 'huaweicloud-safety')), 'core skill synced natively');
@@ -423,6 +429,10 @@ test('dsh bundle postinstall warns and exits 0 when dist is missing from the pac
       existsSync(join(nativeDir, 'huawei-preexisting')),
       'the native dir is left untouched when the package is broken',
     );
+    assert.ok(
+      !res.stdout.includes('MCP server will be available'),
+      'the availability hint must not follow a refuse-to-start diagnosis',
+    );
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(stage, { recursive: true, force: true });
@@ -452,7 +462,12 @@ test('dsh bundle postinstall warns and exits 0 when the native dir cannot be cre
     const realSkills = join(root, 'plugins', 'huaweicloud-core', 'skills');
     mkdirSync(stagedSkills, { recursive: true });
     copyFileSync(join(realSkills, '.manifest.json'), join(stagedSkills, '.manifest.json'));
-    for (const name of ['huaweicloud-core', 'huaweicloud-safety']) {
+    // A COMPLETE core tree: the package is healthy, so a destination-side
+    // failure still leaves the availability hint on — the hint follows
+    // package health, not the disclosure layer's success.
+    const core = parseCoreSkillNames(readFileSync(join(realSkills, '.manifest.json'), 'utf8'));
+    assert.ok(core, 'manifest core roster must parse');
+    for (const name of core) {
       mkdirSync(join(stagedSkills, name), { recursive: true });
       copyFileSync(join(realSkills, name, 'SKILL.md'), join(stagedSkills, name, 'SKILL.md'));
     }
@@ -470,6 +485,11 @@ test('dsh bundle postinstall warns and exits 0 when the native dir cannot be cre
     assert.equal(res.status, 0, `postinstall must not fail the npm install: ${res.stderr}`);
     assert.match(res.stdout, /rewrote DSH patch MCP path/);
     assert.match(res.stderr, /native core skills not synced .* MCP disclosure remains authoritative/);
+    assert.match(
+      res.stdout,
+      /MCP server will be available after DSH restart/,
+      'a healthy package keeps the availability hint despite the destination failure',
+    );
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(stage, { recursive: true, force: true });

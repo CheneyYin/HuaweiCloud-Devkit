@@ -62,6 +62,8 @@ import {
   nativeReceiptPath,
   readNativeReceipt,
   writeNativeReceipt,
+  sweepReceiptTmpFiles,
+  marketplacePayloadTree,
   isCoreNameShape,
   NATIVE_RECEIPT_NAME,
 } from './lib/native-receipt.ts';
@@ -903,25 +905,21 @@ function syncNativeSkillsForTarget(target: string): void {
 // may be user content in the huaweiicloud- namespace, which must survive).
 function removeOwnedSkillsFrom(dir: string): number {
   if (!existsSync(dir)) return 0;
-  try {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isFile() && entry.name.startsWith(`${NATIVE_RECEIPT_NAME}.`) && entry.name.endsWith('.tmp')) {
-        removeIfExists(join(dir, entry.name));
-      }
-    }
-  } catch {
-    // best-effort sweep: an unreadable dir cannot confirm tmp residue
-  }
+  // Crash residue is never maintainer-owned content: the sweep runs before
+  // any attribution return, age-gated so a concurrent live writer's
+  // in-flight tmp is never taken.
+  sweepReceiptTmpFiles(dir);
   const owned = devkitOwnedSkillNames();
   const receipt = readNativeReceipt(dir);
   if (receipt?.kind === 'ok' && receipt.receipt.layout === 'package-root') {
-    // Liveness: the marketplace postinstall is the only writer of this
-    // layout, and it died with the package when npm removed it. A root
-    // that no longer carries the payload tree (or was never recorded)
-    // cannot protect anything — fall through to normal removal.
+    // Liveness: the marketplace postinstall is the writer of this layout,
+    // and it died with the package when npm removed it. A root that no
+    // longer carries the payload tree (or was never recorded) cannot
+    // protect anything — fall through to normal removal. Multiple DSH
+    // profiles share ~/.dsh/skills with per-profile roots (last writer
+    // wins): the probe sees only the recorded root, a known limitation.
     const live =
-      receipt.receipt.packageRoot !== undefined &&
-      existsSync(join(receipt.receipt.packageRoot, 'plugins', 'huaweicloud-core', 'skills'));
+      receipt.receipt.packageRoot !== undefined && existsSync(marketplacePayloadTree(receipt.receipt.packageRoot));
     if (live) {
       console.log(
         `  \x1b[33m[WARN]\x1b[0m native core skills in ${dir} belong to the DSH profile's huaweicloud-devkit package` +
@@ -5224,9 +5222,12 @@ async function cmdDoctor(): Promise<void> {
         // receipt together with the package root it serves from. A detector
         // built on patch-file markers would not fire for real marketplace
         // installs: the bundled cordis.patch.yml DSH consumes never carries
-        // the CLI-managed block's markers.
+        // the CLI-managed block's markers. The row guard matches the
+        // writer: only the dsh row's dir can legitimately carry this
+        // layout, so a hand-copied receipt elsewhere earns nothing.
         const packageRoot =
           receipt?.kind === 'ok' &&
+          row.id === 'dsh' &&
           receipt.receipt.layout === 'package-root' &&
           typeof receipt.receipt.packageRoot === 'string'
             ? receipt.receipt.packageRoot
@@ -5285,7 +5286,7 @@ async function cmdDoctor(): Promise<void> {
           // shared receipt module (the single entry point for the untrusted
           // field), so every echo here is already forgery-safe.
           const shownRoot = packageRoot;
-          const tree = join(packageRoot, 'plugins', 'huaweicloud-core', 'skills');
+          const tree = marketplacePayloadTree(packageRoot);
           payloadTree = existsSync(tree) ? tree : null;
           fixHint = 'upgrade the huaweicloud-devkit package inside the DSH profile';
           if (payloadTree === null) {

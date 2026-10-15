@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- fix(review): close the sixth-round gaps — the postinstall's destination-failure catch returns the real package health (the availability hint never follows a refuse-to-start diagnosis), receipt tmp sweeps are age-gated through one shared sweepReceiptTmpFiles (a concurrent live writer's in-flight tmp is never taken), the marketplace liveness probe is single-sourced as marketplacePayloadTree, doctor honors a package-root receipt only on the dsh row, and the availability hint plus the attribution-path tmp sweep are test-pinned in both directions
+
 - feat(skills): native disclosure for the six core meta-skills — the core routing skills ship as full native copies into the native skill dirs of the eight directory-based agents (receipt-gated convergence, manifest packOf ownership, PAYLOAD_TARGETS-driven sync, DSH postinstall parity); the 24 service skills stay MCP-only so DEVKIT_PACKS gating holds
 - feat(doctor): native core-skill freshness checks — per-target content equality against the installed payload, orphan and foreign-dir detection, warn-only diagnostics
 - fix(review): harden the native surface after adversarial review — DSH postinstall warn-and-continue on destination failures, doctor survives a missing skills tree and recognizes the DSH package-root layout (no false orphans, payload-manifest roster), receipts are shape-validated and atomically written with corrupt-torn writes treated as managed, uninstall consumes the receipt before destroying it (retired names go), and nativeSkillDirs derives from PAYLOAD_TARGETS instead of a hand list

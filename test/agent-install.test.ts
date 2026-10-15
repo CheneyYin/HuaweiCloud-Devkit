@@ -8,6 +8,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -531,12 +532,19 @@ test('uninstall leaves live-marketplace-owned native copies and removes dead-mai
       packageRoot: liveRoot,
     };
     writeFileSync(join(nativeDir, '.huaweicloud-devkit-native.json'), JSON.stringify(liveReceipt));
+    // Aged crash residue alongside the live receipt: swept before the
+    // attribution return, while the maintainer's copies survive.
+    const agedTmp = join(nativeDir, '.huaweicloud-devkit-native.json.424242.tmp');
+    writeFileSync(agedTmp, 'torn');
+    const stale = new Date(Date.now() - 120_000);
+    utimesSync(agedTmp, stale, stale);
     const live = run('workbuddy', home, cwd, 'uninstall');
     assert.match(live.stdout, /Uninstall complete/);
     assert.match(live.stdout, /belong to the DSH profile's huaweicloud-devkit package/);
     assert.match(live.stdout, /staged-profile-pkg/);
     assert.ok(existsSync(join(nativeDir, 'huaweicloud-core')), 'live-marketplace copies must survive');
     assert.ok(existsSync(join(nativeDir, '.huaweicloud-devkit-native.json')), 'the receipt survives with them');
+    assert.ok(!existsSync(agedTmp), 'aged crash residue is swept even on the attribution path');
 
     // Dead maintainer: the recorded root is gone — residue, not disclosure.
     writeFileSync(join(nativeDir, '.huaweicloud-devkit-native.json'), JSON.stringify(liveReceipt));
@@ -587,21 +595,22 @@ test('uninstall --target dsh honors a live marketplace receipt', () => {
   }
 });
 
-// Crashed receipt writes leave pid-suffixed tmp files nothing else
-// reclaims; uninstall sweeps them so the native dir holds nothing devkit.
+// Crashed receipt writes leave pid-suffixed tmp files no other actor
+// reclaims; uninstall sweeps the aged ones (an in-flight concurrent
+// writer's young tmp is left alone) so the native dir holds nothing devkit.
 test('uninstall sweeps orphaned receipt tmp files', () => {
   const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
   const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
   try {
     assert.equal(run('workbuddy', home, cwd, 'install').status, 0);
     const nativeDir = join(home, '.workbuddy', 'skills');
-    writeFileSync(join(nativeDir, '.huaweicloud-devkit-native.json.424242.tmp'), 'torn');
+    const agedTmp = join(nativeDir, '.huaweicloud-devkit-native.json.424242.tmp');
+    writeFileSync(agedTmp, 'torn');
+    const stale = new Date(Date.now() - 120_000);
+    utimesSync(agedTmp, stale, stale);
     const res = run('workbuddy', home, cwd, 'uninstall');
     assert.match(res.stdout, /Uninstall complete/);
-    assert.ok(
-      !existsSync(join(nativeDir, '.huaweicloud-devkit-native.json.424242.tmp')),
-      'the orphaned tmp file is swept',
-    );
+    assert.ok(!existsSync(agedTmp), 'the aged tmp file is swept');
     assert.deepEqual(readdirSync(nativeDir), [], 'nothing devkit-owned remains in the dir');
   } finally {
     rmSync(home, { recursive: true, force: true });

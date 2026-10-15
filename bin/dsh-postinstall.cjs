@@ -182,9 +182,10 @@ async function syncNativeSkills() {
     console.error(
       `HuaweiCloud DevKit: native core skills not synced to ${skillsDest}: ${error && error.message ? error.message : error} — MCP disclosure remains authoritative; re-run install`,
     );
-    // Destination-side failure: the package and its server are healthy,
-    // only the disclosure layer failed.
-    return true;
+    // Destination-side failure: only the disclosure layer failed — package
+    // health (and the trailing availability hint) follows the package, not
+    // the destination.
+    return packageHealthy;
   }
 }
 

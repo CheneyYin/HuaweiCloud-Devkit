@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
@@ -104,13 +104,24 @@ test('writeNativeReceipt: atomic rename leaves no temp file behind', () => {
   });
 });
 
-// The writer owns the dir: a crashed predecessor's pid-suffixed tmp is
-// reclaimed by the next write, so litter never accumulates.
-test('writeNativeReceipt sweeps crashed predecessors tmp files', () => {
+// The writer reclaims crash residue, age-gated: only tmp files old enough
+// to be crash residue go — a concurrent live writer's in-flight tmp
+// (microseconds old) must survive, or its rename would ENOENT and its
+// receipt write would be lost.
+test('writeNativeReceipt sweeps only aged tmp files', () => {
   const dir = fixtureDir('hwc-receipt-write2-');
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, `${NATIVE_RECEIPT_NAME}.424242.tmp`), 'torn');
-  writeFileSync(join(dir, `${NATIVE_RECEIPT_NAME}.999999.tmp`), 'torn');
+  const old = join(dir, `${NATIVE_RECEIPT_NAME}.424242.tmp`);
+  const young = join(dir, `${NATIVE_RECEIPT_NAME}.999999.tmp`);
+  writeFileSync(old, 'torn');
+  writeFileSync(young, 'in-flight');
+  const stale = new Date(Date.now() - 120_000);
+  utimesSync(old, stale, stale);
+  writeNativeReceipt(dir, { names: ['huaweicloud-core'] });
+  assert.ok(!existsSync(old), 'an aged tmp is reclaimed');
+  assert.ok(existsSync(young), 'a young (possibly in-flight) tmp is never swept');
+  // The next write after the grace window reclaims it too.
+  utimesSync(young, stale, stale);
   writeNativeReceipt(dir, { names: ['huaweicloud-core'] });
   assert.deepEqual(readdirSync(dir), [NATIVE_RECEIPT_NAME], 'only the receipt remains');
 });
