@@ -61,6 +61,9 @@ const libUrl = (name) =>
   require('node:url').pathToFileURL(path.join(packageRoot, 'plugins', 'huaweicloud-core', 'dist', 'lib', name)).href;
 
 async function syncNativeSkills() {
+  // Returns whether the package (and its MCP server) is healthy: the
+  // trailing availability hint must never follow a 'will refuse to start'
+  // diagnosis in the same output.
   let shared;
   try {
     shared = {
@@ -74,17 +77,17 @@ async function syncNativeSkills() {
       );
     } else {
       console.error(
-        `HuaweiCloud DevKit: could not load the shared dist libs (${error && error.code ? error.code : 'unknown error'}) — the native skill sync is skipped. Reinstall the huaweicloud-devkit package.`,
+        `HuaweiCloud DevKit: could not load the shared dist libs (${error && (error.code || error.message) ? error.code || error.message : 'unknown error'}) — the native skill sync is skipped. Reinstall the huaweicloud-devkit package.`,
       );
     }
-    return;
+    return false;
   }
 
   if (!fs.existsSync(skillsSrc) || !fs.existsSync(manifestPath)) {
     console.error(
       'HuaweiCloud DevKit: skills tree or manifest pack info missing from the package — the MCP server will refuse to start. Reinstall the huaweicloud-devkit package.',
     );
-    return;
+    return false;
   }
   let coreNames = null;
   try {
@@ -96,7 +99,7 @@ async function syncNativeSkills() {
     console.error(
       'HuaweiCloud DevKit: skills tree or manifest pack info missing from the package — the MCP server will refuse to start. Reinstall the huaweicloud-devkit package.',
     );
-    return;
+    return false;
   }
   let owned = null;
   try {
@@ -113,14 +116,17 @@ async function syncNativeSkills() {
     console.error(
       'HuaweiCloud DevKit: skills tree unreadable in the package — the MCP server will refuse to start. Reinstall the huaweicloud-devkit package.',
     );
-    return;
+    return false;
   }
   // A manifest may claim core skills a partial/broken tree does not ship;
   // cpSync would throw on them and fail the whole npm install. Place what
   // exists, warn loudly about the rest — the receipt records only what was
-  // actually placed.
+  // actually placed. The server's boot guard refuses a tree missing
+  // claimed skills, so a partial tree is a broken package for the trailing
+  // availability hint even when some core skills place.
   const placeable = [...coreNames].filter((name) => owned.has(name));
   const missing = [...coreNames].filter((name) => !owned.has(name));
+  const packageHealthy = missing.length === 0;
   if (missing.length > 0) {
     console.error(
       `HuaweiCloud DevKit: core skill(s) claimed by the manifest but missing from the package tree: ${missing.join(', ')} — the MCP server will refuse to start. Reinstall the huaweicloud-devkit package.`,
@@ -128,7 +134,7 @@ async function syncNativeSkills() {
   }
   if (placeable.length === 0) {
     console.error('HuaweiCloud DevKit: no core skills placeable — skipping the native sync.');
-    return;
+    return false;
   }
   // Receipt via the shared module: remembered names are read with the same
   // shape validation and corrupt classification the setup CLI applies, and
@@ -171,14 +177,26 @@ async function syncNativeSkills() {
     console.log(
       `HuaweiCloud DevKit: refreshed ${placeable.length} core skill cop${placeable.length === 1 ? 'y' : 'ies'} in ${skillsDest}`,
     );
+    return packageHealthy;
   } catch (error) {
     console.error(
       `HuaweiCloud DevKit: native core skills not synced to ${skillsDest}: ${error && error.message ? error.message : error} — MCP disclosure remains authoritative; re-run install`,
     );
+    // Destination-side failure: the package and its server are healthy,
+    // only the disclosure layer failed.
+    return true;
   }
 }
 
 syncNativeSkills()
+  .then((packageHealthy) => {
+    // A broken package already printed 'the MCP server will refuse to
+    // start'; promising availability in the same breath is the one
+    // contradiction this hint must never form.
+    if (packageHealthy) {
+      console.log('MCP server will be available after DSH restart.');
+    }
+  })
   .catch((error) => {
     // The sync is disclosure: an unexpected failure warns and leaves the
     // npm install green (the guarded block above owns the known classes).
@@ -187,7 +205,6 @@ syncNativeSkills()
     );
   })
   .finally(() => {
-    console.log('MCP server will be available after DSH restart.');
     console.log('\n\u001b[1m\u001b[36m  首次使用请配置环境：\u001b[0m');
     console.log('  1. 安装 KooCLI：npx huaweicloud-devkit install-hcloud');
     console.log('  2. 配置凭证：  npx huaweicloud-devkit auth init');

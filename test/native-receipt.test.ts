@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import {
@@ -72,6 +73,24 @@ test('readNativeReceipt: layout and packageRoot pass through with type validatio
   const relative = readNativeReceipt(dir);
   assert.ok(relative?.kind === 'ok');
   assert.equal(relative.receipt.packageRoot, undefined, 'a relative packageRoot is dropped');
+  // Control characters are stripped at READ time — the single entry point
+  // every echo (doctor, uninstall) inherits — so a forged ESC sequence can
+  // never render fake [PASS]/[FAIL] terminal lines from any consumer.
+  writeFileSync(
+    nativeReceiptPath(dir),
+    JSON.stringify({
+      names: ['huaweicloud-core'],
+      layout: 'package-root',
+      packageRoot: `/pkg${String.fromCharCode(27)}[32m[FAKE-PASS]${String.fromCharCode(27)}[0m`,
+    }),
+  );
+  const injected = readNativeReceipt(dir);
+  assert.ok(injected?.kind === 'ok');
+  assert.ok(injected.receipt.packageRoot, 'an absolute root survives');
+  assert.ok(
+    !injected.receipt.packageRoot.includes(String.fromCharCode(27)),
+    'control characters are stripped from the packageRoot on read',
+  );
 });
 
 test('writeNativeReceipt: atomic rename leaves no temp file behind', () => {
@@ -83,4 +102,15 @@ test('writeNativeReceipt: atomic rename leaves no temp file behind', () => {
     names: ['huaweicloud-core'],
     layout: 'plugin-dir',
   });
+});
+
+// The writer owns the dir: a crashed predecessor's pid-suffixed tmp is
+// reclaimed by the next write, so litter never accumulates.
+test('writeNativeReceipt sweeps crashed predecessors tmp files', () => {
+  const dir = fixtureDir('hwc-receipt-write2-');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${NATIVE_RECEIPT_NAME}.424242.tmp`), 'torn');
+  writeFileSync(join(dir, `${NATIVE_RECEIPT_NAME}.999999.tmp`), 'torn');
+  writeNativeReceipt(dir, { names: ['huaweicloud-core'] });
+  assert.deepEqual(readdirSync(dir), [NATIVE_RECEIPT_NAME], 'only the receipt remains');
 });

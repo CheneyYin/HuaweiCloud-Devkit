@@ -284,42 +284,73 @@ test('doctor: freshness roster comes from the payload manifest, not the CLI', ()
   assert.ok(!stdout.includes('Native core skills'), `unexpected native warning under skew:\n${stdout}`);
 });
 
-// Layout-less receipts (written before the layout field existed) cannot
-// distinguish a healthy marketplace install from a removed plugin dir.
-// Doctor must hedge — naming both possible owners — instead of prescribing
-// the layout-converting `install --target` as the only fix. A corrupt
-// receipt erases the layout knowledge entirely: the orphan branch stays
-// silent (the corrupt-receipt warning already carries the remediation),
-// never claiming a marketplace server is missing.
-test('doctor: layout-less receipts hedge and corrupt receipts stay silent in the orphan branch', () => {
+// Receipts whose maintainer this run cannot resolve — layout-less (written
+// before the layout field existed) or a marketplace receipt whose root was
+// dropped as malformed — get the hedge: the marketplace is named as a
+// possible owner, scoped to the DSH row (the postinstall only ever writes
+// ~/.dsh/skills; for every other row a layout-less receipt can only be a
+// plugin-dir install and the precise remediation is correct). A corrupt
+// receipt suppresses the orphan branch entirely — the corrupt-receipt
+// warning carries the remediation, and for the DSH dir that warning names
+// both remediations.
+test('doctor: unresolved-layout receipts hedge on the dsh row only; corrupt receipts stay silent', () => {
   const core = parseCoreSkillNames(readFileSync(join(realTree, '.manifest.json'), 'utf8'));
   assert.ok(core, 'manifest core roster must parse');
+  const sortedNames = [...core].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
-  const home = fixtureDir('hwc-doctor-native-v1-');
-  const dshHome = fixtureDir('hwc-doctor-native-v1root-');
-  const nativeDir = join(dshHome, 'skills');
-  for (const name of core) {
-    cpSync(join(realTree, name), join(nativeDir, name), { recursive: true });
-  }
-  const v1Receipt = `${JSON.stringify({ names: [...core].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)) }, null, 2)}\n`;
-  writeFileSync(join(nativeDir, '.huaweicloud-devkit-native.json'), v1Receipt);
-  const v1Out = runDoctor(home, { DSH_HOME: dshHome });
-  assert.ok(v1Out.includes('no recorded layout'), `layout-less receipt must hedge:\n${v1Out}`);
+  const mkNative = (fixture: string, receiptBody: string): string => {
+    const h = fixtureDir(fixture);
+    const dshHome = fixtureDir(`${fixture}-root-`);
+    const nativeDir = join(dshHome, 'skills');
+    for (const name of core) {
+      cpSync(join(realTree, name), join(nativeDir, name), { recursive: true });
+    }
+    writeFileSync(join(nativeDir, '.huaweicloud-devkit-native.json'), receiptBody);
+    return runDoctor(h, { DSH_HOME: dshHome });
+  };
+
+  const v1Out = mkNative('hwc-doctor-native-v1-', `${JSON.stringify({ names: sortedNames }, null, 2)}\n`);
+  assert.ok(v1Out.includes('no resolvable layout'), `layout-less receipt must hedge:\n${v1Out}`);
   assert.ok(v1Out.includes('DSH profile'), `the hedge must name the marketplace owner:\n${v1Out}`);
   assert.ok(
     !v1Out.includes('present without an installed MCP server — re-run'),
     `the layout-converting remediation must not be the sole advice:\n${v1Out}`,
   );
 
-  const home2 = fixtureDir('hwc-doctor-native-cx-');
-  const dshHome2 = fixtureDir('hwc-doctor-native-cxroot-');
-  const nativeDir2 = join(dshHome2, 'skills');
+  // A marketplace receipt whose packageRoot was dropped (relative here)
+  // must hedge at least as strongly as the layout-less one.
+  const rootlessOut = mkNative(
+    'hwc-doctor-native-rootless-',
+    JSON.stringify({ names: sortedNames, layout: 'package-root', packageRoot: 'relative/pkg' }),
+  );
+  assert.ok(rootlessOut.includes('no resolvable layout'), `rootless marketplace receipt must hedge:\n${rootlessOut}`);
+
+  // A non-DSH row with a layout-less receipt: only the CLI ever wrote
+  // there — the precise orphan message is correct, the DSH hedge is wrong.
+  const home2 = fixtureDir('hwc-doctor-native-v1oc-');
+  const ocNative = join(home2, '.config', 'opencode', 'skills');
   for (const name of core) {
-    cpSync(join(realTree, name), join(nativeDir2, name), { recursive: true });
+    cpSync(join(realTree, name), join(ocNative, name), { recursive: true });
   }
-  writeFileSync(join(nativeDir2, '.huaweicloud-devkit-native.json'), '{"names": [torn');
-  const corruptOut = runDoctor(home2, { DSH_HOME: dshHome2 });
+  writeFileSync(
+    join(ocNative, '.huaweicloud-devkit-native.json'),
+    `${JSON.stringify({ names: sortedNames }, null, 2)}\n`,
+  );
+  const ocOut = runDoctor(home2);
+  assert.ok(
+    ocOut.includes(
+      'Native core skills (OpenCode) present without an installed MCP server — re-run: npx huaweicloud-devkit install --target opencode',
+    ),
+    `the non-DSH row keeps the precise remediation:\n${ocOut}`,
+  );
+  assert.ok(!ocOut.includes('DSH profile'), `the DSH hedge must not fire for an OpenCode dir:\n${ocOut}`);
+
+  const corruptOut = mkNative('hwc-doctor-native-cx-', '{"names": [torn');
   assert.ok(corruptOut.includes('unreadable native receipt'), `corrupt warning expected:\n${corruptOut}`);
+  assert.ok(
+    corruptOut.includes("re-run the DSH profile's package install or npx huaweicloud-devkit install"),
+    `the corrupt warning on the DSH dir must name both remediations:\n${corruptOut}`,
+  );
   assert.ok(
     !corruptOut.includes('present without an installed MCP server'),
     `a corrupt receipt must not orphan a marketplace install it cannot see:\n${corruptOut}`,

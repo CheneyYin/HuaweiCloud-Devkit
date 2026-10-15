@@ -889,24 +889,49 @@ function syncNativeSkillsForTarget(target: string): void {
 // are the only record of retired core skills (names the current tree no
 // longer ships), so consuming it must precede destroying it — and the
 // receipt file goes last, whenever the dir exists at all (even a missing
-// skills tree must not leave an ownership claim behind). A corrupt receipt
-// cannot yield remembered names; its possible retired-name leftovers are
-// listed in a warning instead of deleted (they may be user content in the
-// huaweiicloud- namespace, which must survive).
+// skills tree must not leave an ownership claim behind). A receipt that
+// records the DSH marketplace layout names another maintainer and protects
+// the copies ONLY while that maintainer is verifiably alive (the recorded
+// package root still carries a payload tree — doctor's own liveness
+// probe); npm removes the profile package without running any devkit
+// script, and a dead maintainer's copies are residue, not disclosure.
+// Crashed receipt writes leave pid-suffixed tmp files no other actor
+// reclaims — they are unambiguously devkit crash residue (never
+// maintainer-owned content) and go first, before any attribution return.
+// A corrupt receipt cannot yield remembered names; its possible
+// retired-name leftovers are listed in a warning instead of deleted (they
+// may be user content in the huaweiicloud- namespace, which must survive).
 function removeOwnedSkillsFrom(dir: string): number {
   if (!existsSync(dir)) return 0;
+  try {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.startsWith(`${NATIVE_RECEIPT_NAME}.`) && entry.name.endsWith('.tmp')) {
+        removeIfExists(join(dir, entry.name));
+      }
+    }
+  } catch {
+    // best-effort sweep: an unreadable dir cannot confirm tmp residue
+  }
   const owned = devkitOwnedSkillNames();
   const receipt = readNativeReceipt(dir);
-  // A receipt that records the DSH marketplace layout names another
-  // maintainer: the profile package's postinstall placed these copies and
-  // still serves them, so this uninstall leaves them (and the receipt)
-  // alone and says how to remove them for real.
   if (receipt?.kind === 'ok' && receipt.receipt.layout === 'package-root') {
+    // Liveness: the marketplace postinstall is the only writer of this
+    // layout, and it died with the package when npm removed it. A root
+    // that no longer carries the payload tree (or was never recorded)
+    // cannot protect anything — fall through to normal removal.
+    const live =
+      receipt.receipt.packageRoot !== undefined &&
+      existsSync(join(receipt.receipt.packageRoot, 'plugins', 'huaweicloud-core', 'skills'));
+    if (live) {
+      console.log(
+        `  \x1b[33m[WARN]\x1b[0m native core skills in ${dir} belong to the DSH profile's huaweicloud-devkit package` +
+          `${receipt.receipt.packageRoot ? ` (${receipt.receipt.packageRoot})` : ''} — remove or upgrade the package there; nothing removed here`,
+      );
+      return 0;
+    }
     console.log(
-      `  \x1b[33m[WARN]\x1b[0m native core skills in ${dir} belong to the DSH profile's huaweicloud-devkit package` +
-        `${receipt.receipt.packageRoot ? ` (${receipt.receipt.packageRoot})` : ''} — remove or upgrade the package there; nothing removed here`,
+      `  \x1b[33m[WARN]\x1b[0m native core skills in ${dir} were marketplace-owned, but the recorded package maintainer is gone — removing them`,
     );
-    return 0;
   }
   const remembered =
     receipt?.kind === 'ok' && nativeSyncDirs().has(dir) ? new Set(receipt.receipt.names) : new Set<string>();
@@ -927,13 +952,6 @@ function removeOwnedSkillsFrom(dir: string): number {
       }
     }
     removeIfExists(nativeReceiptPath(dir));
-    // Crashed receipt writes leave pid-suffixed tmp files nothing else
-    // reclaims — they go with the receipt, so an emptied dir can go too.
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isFile() && entry.name.startsWith(`${NATIVE_RECEIPT_NAME}.`) && entry.name.endsWith('.tmp')) {
-        removeIfExists(join(dir, entry.name));
-      }
-    }
   } catch {
     // best-effort purge: an unreadable dir is skipped, removal continues elsewhere
   }
@@ -5161,9 +5179,17 @@ async function cmdDoctor(): Promise<void> {
       const receipt = readNativeReceipt(dir);
       if (receipt?.kind === 'corrupt') {
         warn++;
-        console.log(
-          `  \x1b[33m[WARN]\x1b[0m unreadable native receipt in ${dir} — re-run: npx huaweicloud-devkit install`,
-        );
+        // For the DSH native dir the plain `install` remediation is the
+        // layout-converting one (it would layer a plugin-dir install over a
+        // possibly-live marketplace package): the profile's package install
+        // rewrites the receipt too, so both remediations are named. Every
+        // other dir was only ever written by this CLI.
+        const dshHint =
+          `  \x1b[33m[WARN]\x1b[0m unreadable native receipt in ${dir} — ` +
+          (dir === dshSkillsDir()
+            ? "re-run the DSH profile's package install or npx huaweicloud-devkit install (either rewrites it)"
+            : 're-run: npx huaweicloud-devkit install');
+        console.log(dshHint);
       }
       const remembered = receipt?.kind === 'ok' ? new Set(receipt.receipt.names) : new Set<string>();
       const managedHere = syncDirs.has(dir) && receipt !== null;
@@ -5220,17 +5246,21 @@ async function cmdDoctor(): Promise<void> {
         if (!installed) {
           // A corrupt receipt erases the layout knowledge this branch needs:
           // the marketplace would be false-orphaned and the remediation
-          // would layer a second install. The corrupt-receipt warning above
-          // already carries the honest remediation, so this branch speaks
-          // only for readable receipts. A layout-less receipt (written
-          // before the layout field existed) cannot distinguish a healthy
-          // marketplace install from a removed plugin dir, so its
-          // remediation names both paths instead of prescribing the
-          // layout-converting one.
-          if (receipt?.kind === 'ok' && receipt.receipt.layout === undefined) {
+          // would layer a second install — the corrupt-receipt warning in
+          // the scan above carries the remediation, so this branch speaks
+          // only for readable receipts. The hedge fires when the receipt
+          // names a maintainer this run cannot resolve: a layout-less
+          // receipt (written before the layout field existed) or a
+          // marketplace receipt whose root was dropped as malformed —
+          // less layout knowledge must never earn a MORE confident
+          // prescription. The marketplace half of the hedge is scoped to
+          // the dsh row: the postinstall only ever writes ~/.dsh/skills,
+          // so for every other row a layout-less receipt can only be a
+          // plugin-dir install and the precise remediation is correct.
+          if (receipt?.kind === 'ok' && row.id === 'dsh' && receipt.receipt.layout !== 'plugin-dir') {
             warn++;
             console.log(
-              `  \x1b[33m[WARN]\x1b[0m Native core skills (${row.label}) present without a plugin-dir MCP server and no recorded layout — the marketplace install (DSH profile package) is also a possible owner; if it is stale, re-run the DSH profile's package install or npx huaweicloud-devkit install --target ${row.id}`,
+              `  \x1b[33m[WARN]\x1b[0m Native core skills (${row.label}) present without a plugin-dir MCP server and no resolvable layout — the marketplace install (DSH profile package) is also a possible owner; if it is stale, re-run the DSH profile's package install or npx huaweicloud-devkit install --target ${row.id}`,
             );
           } else if (receipt?.kind === 'ok') {
             warn++;
@@ -5251,17 +5281,10 @@ async function cmdDoctor(): Promise<void> {
         let payloadTree: string | null;
         let fixHint: string;
         if (packageRoot !== null) {
-          // The recorded root is untrusted input echoed into terminal
-          // output — control characters could forge [PASS]/[FAIL] lines —
-          // so it is stripped before printing. The class is built from
-          // fromCharCode (same idiom as the tests' stripAnsi) because
-          // eslint's no-control-regex rightly flags control characters in
-          // regex literals.
-          const controlChars = new RegExp(
-            `[${String.fromCharCode(0)}-${String.fromCharCode(31)}${String.fromCharCode(127)}]`,
-            'g',
-          );
-          const shownRoot = packageRoot.replace(controlChars, '');
+          // packageRoot is control-character-stripped at READ time in the
+          // shared receipt module (the single entry point for the untrusted
+          // field), so every echo here is already forgery-safe.
+          const shownRoot = packageRoot;
           const tree = join(packageRoot, 'plugins', 'huaweicloud-core', 'skills');
           payloadTree = existsSync(tree) ? tree : null;
           fixHint = 'upgrade the huaweicloud-devkit package inside the DSH profile';

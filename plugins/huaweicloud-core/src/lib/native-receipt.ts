@@ -1,11 +1,11 @@
 // The native-disclosure receipt: the ownership memory for the core
 // meta-skill copies an agent's native skill dir carries. One module, two
 // consumers — the setup CLI (source import) and bin/dsh-postinstall.cjs
-// (require of the compiled dist copy) — so the two writers of the same
-// file can never drift on its state machine: the shape-broken boundary
+// (dynamic import of the compiled dist copy) — so the two writers of the
+// same file can never drift on its state machine: the shape-broken boundary
 // (parsable JSON, non-array names) is classified identically everywhere.
 // Zod-free so every consumer graph can import it.
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 
 export const NATIVE_RECEIPT_NAME = '.huaweicloud-devkit-native.json';
@@ -40,6 +40,19 @@ export function isCoreNameShape(name: string): boolean {
   return CORE_NAME_SHAPE.test(name);
 }
 
+// Control characters are stripped from packageRoot at READ time, the single
+// point where the untrusted field enters every consumer: the value steers
+// doctor's comparator, liveness probes, and terminal echoes, and an ESC
+// sequence in it could forge [PASS]/[FAIL] lines in output. Built from
+// fromCharCode because eslint's no-control-regex rightly flags control
+// characters in regex literals. A real path containing control characters
+// is not a path this devkit will follow — it degrades to the dead-maintainer
+// handling, never to a redirected comparison.
+const CONTROL_CHARS = new RegExp(
+  `[${String.fromCharCode(0)}-${String.fromCharCode(31)}${String.fromCharCode(127)}]`,
+  'g',
+);
+
 export function readNativeReceipt(dir: string): NativeReceiptRead {
   const receiptPath = nativeReceiptPath(dir);
   if (!existsSync(receiptPath)) return null;
@@ -59,10 +72,11 @@ export function readNativeReceipt(dir: string): NativeReceiptRead {
   if (parsed.layout === 'plugin-dir' || parsed.layout === 'package-root') receipt.layout = parsed.layout;
   // An absolute path only: packageRoot steers doctor's comparator and is
   // echoed into its output, so a relative or otherwise malformed value is
-  // dropped rather than trusted (a dropped value degrades to the honest
-  // layout-agnostic warnings, never to a redirected comparison).
+  // dropped rather than trusted. A dropped root degrades the receipt to a
+  // root-less marketplace claim — consumers treat that as unverifiable
+  // ownership (the hedged warnings), never as a redirected comparison.
   if (typeof parsed.packageRoot === 'string' && parsed.packageRoot.length > 0 && isAbsolute(parsed.packageRoot)) {
-    receipt.packageRoot = parsed.packageRoot;
+    receipt.packageRoot = parsed.packageRoot.replace(CONTROL_CHARS, '');
   }
   return { kind: 'ok', receipt };
 }
@@ -74,6 +88,18 @@ export function writeNativeReceipt(dir: string, receipt: NativeReceipt): void {
   // a crash can never leave a half-written receipt observable as "no
   // receipt" (which would demote a managed dir to residue treatment).
   const finalPath = nativeReceiptPath(dir);
+  // The writer owns the dir: reclaim crashed predecessors' tmp files (any
+  // pid's) in the same pass, so litter never accumulates across
+  // installs/updates — no other actor sweeps them.
+  try {
+    for (const entry of readdirSync(dir)) {
+      if (entry.startsWith(`${NATIVE_RECEIPT_NAME}.`) && entry.endsWith('.tmp')) {
+        rmSync(join(dir, entry), { force: true });
+      }
+    }
+  } catch {
+    // best-effort: an unreadable dir cannot be swept, the write proceeds
+  }
   const tmp = `${finalPath}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(receipt, null, 2) + '\n');
   renameSync(tmp, finalPath);

@@ -504,30 +504,83 @@ test('update restores divergent and missing native core copies', () => {
   }
 });
 
-// Uninstall honors the receipt's maintainer attribution: a package-root
-// receipt names the DSH profile's package as the owner of the native
-// copies, so uninstall leaves them (and the receipt) for it and says how
-// to remove them for real.
-test('uninstall leaves marketplace-owned native copies in place', () => {
+// Uninstall honors the receipt's maintainer attribution — while the
+// maintainer is verifiably alive. A package-root receipt whose recorded
+// package root still carries a payload tree names the DSH profile's
+// package as the owner: the copies and receipt stay, with the
+// package-removal hint. A dead maintainer (npm removed the profile
+// package; nothing devkit-side runs on npm uninstall) protects nothing —
+// the copies are residue and go. The DSH-target variant drives the real
+// uninstallDsh path with DSH_HOME faked.
+test('uninstall leaves live-marketplace-owned native copies and removes dead-maintainer ones', () => {
   const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
   const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
   try {
     assert.equal(run('workbuddy', home, cwd, 'install').status, 0);
     const nativeDir = join(home, '.workbuddy', 'skills');
+    // A live maintainer: a staged package tree at the recorded root.
+    const liveRoot = join(home, 'staged-profile-pkg');
+    const liveSkills = join(liveRoot, 'plugins', 'huaweicloud-core', 'skills');
+    for (const name of coreRoster) {
+      mkdirSync(join(liveSkills, name), { recursive: true });
+      writeFileSync(join(liveSkills, name, 'SKILL.md'), '---\nname: stub\n---\n', 'utf8');
+    }
+    const liveReceipt = {
+      names: [...coreRoster].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+      layout: 'package-root',
+      packageRoot: liveRoot,
+    };
+    writeFileSync(join(nativeDir, '.huaweicloud-devkit-native.json'), JSON.stringify(liveReceipt));
+    const live = run('workbuddy', home, cwd, 'uninstall');
+    assert.match(live.stdout, /Uninstall complete/);
+    assert.match(live.stdout, /belong to the DSH profile's huaweicloud-devkit package/);
+    assert.match(live.stdout, /staged-profile-pkg/);
+    assert.ok(existsSync(join(nativeDir, 'huaweicloud-core')), 'live-marketplace copies must survive');
+    assert.ok(existsSync(join(nativeDir, '.huaweicloud-devkit-native.json')), 'the receipt survives with them');
+
+    // Dead maintainer: the recorded root is gone — residue, not disclosure.
+    writeFileSync(join(nativeDir, '.huaweicloud-devkit-native.json'), JSON.stringify(liveReceipt));
+    rmSync(liveRoot, { recursive: true, force: true });
+    const dead = run('workbuddy', home, cwd, 'uninstall');
+    assert.match(dead.stdout, /recorded package maintainer is gone — removing them/);
+    assert.ok(!existsSync(join(nativeDir, 'huaweicloud-core')), 'dead-maintainer copies must go');
+    assert.ok(!existsSync(join(nativeDir, '.huaweicloud-devkit-native.json')), 'the receipt goes with them');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+// The DSH-target variant: the real uninstallDsh path with a marketplace
+// receipt on ~/.dsh/skills (DSH_HOME faked) — live maintainer keeps the
+// native dir, plugin-dir cleanup proceeds regardless.
+test('uninstall --target dsh honors a live marketplace receipt', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
+  try {
+    const dshHome = join(home, '.dsh');
+    const nativeDir = join(dshHome, 'skills');
+    const liveRoot = join(home, 'staged-profile-pkg');
+    const liveSkills = join(liveRoot, 'plugins', 'huaweicloud-core', 'skills');
+    for (const name of coreRoster) {
+      mkdirSync(join(nativeDir, name), { recursive: true });
+      writeFileSync(join(nativeDir, name, 'SKILL.md'), '---\nname: stub\n---\n', 'utf8');
+      mkdirSync(join(liveSkills, name), { recursive: true });
+      writeFileSync(join(liveSkills, name, 'SKILL.md'), '---\nname: stub\n---\n', 'utf8');
+    }
     writeFileSync(
       join(nativeDir, '.huaweicloud-devkit-native.json'),
       JSON.stringify({
         names: [...coreRoster].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
         layout: 'package-root',
-        packageRoot: '/fake/profile/pkg',
+        packageRoot: liveRoot,
       }),
     );
-    const res = run('workbuddy', home, cwd, 'uninstall');
+    const res = run('dsh', home, cwd, 'uninstall');
     assert.match(res.stdout, /Uninstall complete/);
     assert.match(res.stdout, /belong to the DSH profile's huaweicloud-devkit package/);
-    assert.match(res.stdout, /\/fake\/profile\/pkg/);
-    assert.ok(existsSync(join(nativeDir, 'huaweicloud-core')), 'marketplace-owned copies must survive');
-    assert.ok(existsSync(join(nativeDir, '.huaweicloud-devkit-native.json')), 'the receipt survives with them');
+    assert.ok(existsSync(join(nativeDir, 'huaweicloud-core')), 'the marketplace dir is left for its maintainer');
+    assert.ok(existsSync(join(nativeDir, '.huaweicloud-devkit-native.json')), 'the receipt stays with the copies');
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
