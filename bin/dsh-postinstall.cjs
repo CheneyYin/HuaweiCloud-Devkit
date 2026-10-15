@@ -91,44 +91,65 @@ if (coreNames === null) {
     console.error('HuaweiCloud DevKit: no core skills placeable — skipping the native sync.');
   } else {
     // Receipt: the names a previous devkit run placed here. Untrusted
-    // input — an unreadable or malformed file reads as "no receipt", which
-    // only makes the cleanup more conservative about what it may delete.
+    // input — remembered names earn delete rights only when they look like
+    // core skill names (huaweicloud-*), so a tampered file cannot aim the
+    // cleanup at user content. A present-but-unparsable receipt is a torn
+    // write: warn and treat its remembered names as unreadable.
     const receiptPath = path.join(skillsDest, '.huaweicloud-devkit-native.json');
     let remembered = new Set();
+    let receiptCorrupt = false;
     if (fs.existsSync(receiptPath)) {
       try {
         const names = JSON.parse(fs.readFileSync(receiptPath, 'utf8')).names;
-        if (Array.isArray(names)) remembered = new Set(names.filter((n) => typeof n === 'string'));
+        if (!Array.isArray(names)) throw new TypeError('receipt shape');
+        remembered = new Set(names.filter((n) => typeof n === 'string' && /^huaweicloud-[a-z0-9-]*$/.test(n)));
       } catch {
-        // treat as no receipt
+        receiptCorrupt = true;
       }
     }
-    fs.mkdirSync(skillsDest, { recursive: true });
-    let purged = 0;
-    for (const name of placeable) {
-      fs.rmSync(path.join(skillsDest, name), { recursive: true, force: true });
-      fs.cpSync(path.join(skillsSrc, name), path.join(skillsDest, name), { recursive: true });
+    if (receiptCorrupt) {
+      console.error(`HuaweiCloud DevKit: unreadable native receipt in ${skillsDest} — this run rewrites it.`);
     }
-    for (const entry of fs.readdirSync(skillsDest, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const claimed = owned.has(entry.name) || remembered.has(entry.name);
-      if (claimed && !coreNames.has(entry.name)) {
-        fs.rmSync(path.join(skillsDest, entry.name), { recursive: true, force: true });
-        purged++;
+    // The native layer is disclosure; the MCP server remains the functional
+    // path. A destination-side failure (locked dir, permissions, disk full)
+    // must warn and leave the npm install green, mirroring the setup CLI's
+    // syncNativeCoreSkills contract — never fail the whole profile install.
+    try {
+      fs.mkdirSync(skillsDest, { recursive: true });
+      let purged = 0;
+      for (const name of placeable) {
+        fs.rmSync(path.join(skillsDest, name), { recursive: true, force: true });
+        fs.cpSync(path.join(skillsSrc, name), path.join(skillsDest, name), { recursive: true });
       }
-    }
-    fs.writeFileSync(
-      receiptPath,
-      JSON.stringify({ names: [...placeable].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)) }, null, 2) + '\n',
-    );
-    if (purged > 0) {
+      for (const entry of fs.readdirSync(skillsDest, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const claimed = owned.has(entry.name) || remembered.has(entry.name);
+        if (claimed && !coreNames.has(entry.name)) {
+          fs.rmSync(path.join(skillsDest, entry.name), { recursive: true, force: true });
+          purged++;
+        }
+      }
+      // Temp-then-rename: a crash-torn receipt write must never be observed
+      // as "no receipt", which would demote the managed dir to residue.
+      const receiptTmp = `${receiptPath}.tmp`;
+      fs.writeFileSync(
+        receiptTmp,
+        JSON.stringify({ names: [...placeable].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)) }, null, 2) + '\n',
+      );
+      fs.renameSync(receiptTmp, receiptPath);
+      if (purged > 0) {
+        console.log(
+          `HuaweiCloud DevKit: cleaned ${purged} stale native skill cop${purged === 1 ? 'y' : 'ies'} (non-core skills are MCP-disclosed)`,
+        );
+      }
       console.log(
-        `HuaweiCloud DevKit: cleaned ${purged} stale native skill cop${purged === 1 ? 'y' : 'ies'} (non-core skills are MCP-disclosed)`,
+        `HuaweiCloud DevKit: refreshed ${placeable.length} core skill cop${placeable.length === 1 ? 'y' : 'ies'} in ${skillsDest}`,
+      );
+    } catch (error) {
+      console.error(
+        `HuaweiCloud DevKit: native core skills not synced to ${skillsDest}: ${error && error.message ? error.message : error} — MCP disclosure remains authoritative; re-run install`,
       );
     }
-    console.log(
-      `HuaweiCloud DevKit: refreshed ${placeable.length} core skill cop${placeable.length === 1 ? 'y' : 'ies'} in ${skillsDest}`,
-    );
   }
 }
 

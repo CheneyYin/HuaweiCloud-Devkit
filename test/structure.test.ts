@@ -726,7 +726,6 @@ test('setup-cli.ts supports the codearts target end to end', () => {
   // membership the boot guard uses, so hollow claimed dirs count as
   // missing. The DSH package-root candidate is PLUGIN_ROOT itself because
   // serverSkillDirNames() appends 'skills'.
-  assert.match(setup, /import \{ listSkillDirs \} from '\.\/lib\/skill-tree\.ts';/);
   assert.match(setup, /return listSkillDirs\(join\(pluginDir, 'skills'\)\);/);
   assert.match(setup, /const expectedSkills = shippedSkillRoster\(\);/);
   assert.match(setup, /present\.size === expectedSkills\.length/);
@@ -739,7 +738,11 @@ test('setup-cli.ts supports the codearts target end to end', () => {
   assert.match(setup, /function tryCoreSkillNames\(\)/);
   assert.match(setup, /const corePack = tryCoreSkillNames\(\);/);
   assert.match(setup, /managedHere && corePack\.has\(entry\.name\)/);
-  assert.match(setup, /function skillTreeEquals\(a: string, b: string\)/);
+  // The byte-equality comparator lives in the shared zod-free lib (doctor
+  // and the install tests import the same one), not as a setup-cli local.
+  assert.match(setup, /import \{ listSkillDirs, skillTreeEquals \} from '\.\/lib\/skill-tree\.ts';/);
+  const skillTreeSrc = readSource(join('src', 'lib', 'skill-tree.ts'));
+  assert.match(skillTreeSrc, /export function skillTreeEquals\(a: string, b: string\): boolean/);
   // help text documents the target
   assert.match(
     setup,
@@ -748,22 +751,18 @@ test('setup-cli.ts supports the codearts target end to end', () => {
   assert.match(setup, /install --target codearts/);
 });
 
-// The native-disclosure wiring must stay table-driven and covered: every dir
-// a PAYLOAD_TARGETS row syncs must appear in nativeSkillDirs() (the cleanup
-// and doctor scan list), and the two deliberately MCP-only rows must keep
-// absent nativeSkills fields.
-test('PAYLOAD_TARGETS native-skill dirs stay covered by the scan list', () => {
+// The native-disclosure wiring must stay table-driven: the cleanup/doctor
+// scan list derives from the PAYLOAD_TARGETS nativeSkills rows (no second
+// hand-maintained dir list), officeace stays the one explicit foreign
+// detector, and the two deliberately MCP-only rows keep absent nativeSkills
+// fields.
+test('nativeSkillDirs derives from PAYLOAD_TARGETS plus the officeace exception', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
   const listBody = setup.match(/function nativeSkillDirs\(\): string\[\] \{([\s\S]*?)\n\}/)?.[1] ?? '';
-  const listed = new Set([...listBody.matchAll(/(\w+SkillsDir\(\))/g)].map((m) => m[1]!));
-  assert.ok(listed.size >= 10, `nativeSkillDirs lists the ten known dirs (found ${listed.size})`);
-  const rows = setup.match(/nativeSkills: \(\) => \[[^\]]*\]/g) ?? [];
-  assert.ok(rows.length >= 8, `eight directory-based targets declare nativeSkills (found ${rows.length})`);
-  for (const row of rows) {
-    for (const dir of [...row.matchAll(/(\w+SkillsDir\(\))/g)].map((m) => m[1]!)) {
-      assert.ok(listed.has(dir), `row dir ${dir} missing from nativeSkillDirs() scan list`);
-    }
-  }
+  assert.ok(listBody.length > 0, 'nativeSkillDirs must exist');
+  assert.match(listBody, /PAYLOAD_TARGETS\.flatMap/, 'the scan list derives from the table');
+  assert.match(listBody, /officeaceSkillsDir\(\)/, 'officeace stays the explicit foreign detector');
+  assert.doesNotMatch(listBody, /opencodeSkillsDir\(\)/, 'no hand-listed row dirs remain');
   const officeaceRow = setup.match(/\{\s*id: 'officeace',[\s\S]*?\n {2}\},/)?.[0] ?? '';
   assert.ok(officeaceRow.length > 0, 'officeace row found');
   assert.doesNotMatch(officeaceRow, /nativeSkills/, 'officeace stays MCP-only natively');

@@ -4,6 +4,7 @@
 
 - feat(skills): native disclosure for the six core meta-skills — the core routing skills ship as full native copies into the native skill dirs of the eight directory-based agents (receipt-gated convergence, manifest packOf ownership, PAYLOAD_TARGETS-driven sync, DSH postinstall parity); the 24 service skills stay MCP-only so DEVKIT_PACKS gating holds
 - feat(doctor): native core-skill freshness checks — per-target content equality against the installed payload, orphan and foreign-dir detection, warn-only diagnostics
+- fix(review): harden the native surface after adversarial review — DSH postinstall warn-and-continue on destination failures, doctor survives a missing skills tree and recognizes the DSH package-root layout (no false orphans, payload-manifest roster), receipts are shape-validated and atomically written with corrupt-torn writes treated as managed, uninstall consumes the receipt before destroying it (retired names go), and nativeSkillDirs derives from PAYLOAD_TARGETS instead of a hand list
 
 ## 1.1.7 (2026-09-24)
 

@@ -15,7 +15,11 @@ import test from 'node:test';
 
 import { verifySkillTree } from '../plugins/huaweicloud-core/src/tools.ts';
 import { PACKS } from '../plugins/huaweicloud-core/src/packs/registry.ts';
-import { parseSkillManifest, parseSkillPackMap } from '../plugins/huaweicloud-core/src/lib/skill-manifest.ts';
+import {
+  parseSkillManifest,
+  parseSkillPackMap,
+  parseCoreSkillNames,
+} from '../plugins/huaweicloud-core/src/lib/skill-manifest.ts';
 import { run, writeSkillsTree } from '../scripts/sync-skills.mjs';
 import { fixtureDir } from './fixture-dir.ts';
 
@@ -208,6 +212,20 @@ test('parseSkillPackMap returns the map, or null when unusable', () => {
   assert.equal(parseSkillPackMap('{"packOf":["a"]}'), null, 'array shape');
   assert.equal(parseSkillPackMap('{"packOf":{"a":1}}'), null, 'non-string pack id');
   assert.equal(parseSkillPackMap('not json'), null);
+});
+
+// The shared core-roster derivation: same fail-loud rule as the pack map.
+test('parseCoreSkillNames returns the core set, or null when unusable', () => {
+  const core = parseCoreSkillNames('{"packOf":{"a":"core","b":"obs","c":"core"}}');
+  assert.ok(core);
+  assert.deepEqual(
+    [...core].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    ['a', 'c'],
+  );
+  assert.equal(parseCoreSkillNames('{"packOf":{"b":"obs"}}'), null, 'no core entries');
+  assert.equal(parseCoreSkillNames('{"packOf":{}}'), null, 'empty map');
+  assert.equal(parseCoreSkillNames('{"skills":["a"]}'), null, 'no packOf key');
+  assert.equal(parseCoreSkillNames('not json'), null);
 });
 
 // The manifest's pack claims must agree with the registry: the installer

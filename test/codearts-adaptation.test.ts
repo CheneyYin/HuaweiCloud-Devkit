@@ -15,14 +15,17 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
+import { parseCoreSkillNames } from '../plugins/huaweicloud-core/src/lib/skill-manifest.ts';
+
 const root = fileURLToPath(new URL('..', import.meta.url));
 const setupCli = join(root, 'bin', 'setup.cjs');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-// Core meta-skill count from the shipped manifest's packOf map — the same
-// derivation the CLI performs for the native disclosure.
-const coreSkillCount = Object.values(
-  JSON.parse(readFileSync(join(root, 'plugins', 'huaweicloud-core', 'skills', '.manifest.json'), 'utf8')).packOf,
-).filter((p) => p === 'core').length;
+// Core meta-skill count from the shipped manifest — the same parser the
+// CLI uses for the native disclosure.
+const coreSkillCount = (
+  parseCoreSkillNames(readFileSync(join(root, 'plugins', 'huaweicloud-core', 'skills', '.manifest.json'), 'utf8')) ??
+  new Set()
+).size;
 
 function makeEnv(home: string, _cwd: string) {
   const env: Record<string, string | undefined> = {

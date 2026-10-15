@@ -15,6 +15,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
+import { parseCoreSkillNames } from '../plugins/huaweicloud-core/src/lib/skill-manifest.ts';
+
 const root = fileURLToPath(new URL('..', import.meta.url));
 const setupCli = join(root, 'bin', 'setup.cjs');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
@@ -66,13 +68,13 @@ test('dsh install copies skills, MCP server, safety policy, and patch row', () =
 
     assert.ok(countSkills(join(dshHome, 'huaweicloud-plugins', 'skills')) >= 6, 'DSH skills tree in plugin dir');
     // Plugin-dir layout: the core meta-skills are ALSO natively disclosed.
-    const nativeManifest = JSON.parse(
+    const nativeCore = parseCoreSkillNames(
       readFileSync(join(root, 'plugins', 'huaweicloud-core', 'skills', '.manifest.json'), 'utf8'),
     );
-    const nativeCore = Object.keys(nativeManifest.packOf).filter((n) => nativeManifest.packOf[n] === 'core');
+    assert.ok(nativeCore, 'manifest core roster must parse');
     assert.equal(
       countSkills(join(dshHome, 'skills')),
-      nativeCore.length,
+      nativeCore.size,
       'native DSH skills dir carries the core meta-skills',
     );
     assert.ok(existsSync(join(dshHome, 'skills', '.huaweicloud-devkit-native.json')));
@@ -318,12 +320,22 @@ test('dsh bundle postinstall syncs core skills natively and purges non-core', ()
     }
 
     // Pre-existing residue in the native dir: a stale service copy (owned,
-    // non-core) and a user skill sharing the prefix.
+    // non-core), a user skill sharing the prefix, and a forged receipt
+    // claiming a retired core name (valid shape: deletable) plus a
+    // user-content name (invalid shape: must never earn delete rights).
     const nativeDir = join(dshHome, 'skills');
     mkdirSync(join(nativeDir, 'huawei-ecs'), { recursive: true });
     writeFileSync(join(nativeDir, 'huawei-ecs', 'SKILL.md'), '---\nname: huawei-ecs\n---\nstale\n');
     mkdirSync(join(nativeDir, 'huawei-my-runbook'), { recursive: true });
     writeFileSync(join(nativeDir, 'huawei-my-runbook', 'SKILL.md'), '---\nname: huawei-my-runbook\n---\nuser\n');
+    mkdirSync(join(nativeDir, 'huaweicloud-retired-x'), { recursive: true });
+    writeFileSync(join(nativeDir, 'huaweicloud-retired-x', 'SKILL.md'), '---\nname: x\n---\nretired\n');
+    mkdirSync(join(nativeDir, 'steal-me'), { recursive: true });
+    writeFileSync(join(nativeDir, 'steal-me', 'SKILL.md'), '---\nname: steal-me\n---\nuser\n');
+    writeFileSync(
+      join(nativeDir, '.huaweicloud-devkit-native.json'),
+      JSON.stringify({ names: ['huaweicloud-retired-x', 'steal-me'] }),
+    );
 
     const res = spawnSync(process.execPath, [join(stage, 'bin', 'dsh-postinstall.cjs')], {
       cwd: profileDir,
@@ -342,12 +354,67 @@ test('dsh bundle postinstall syncs core skills natively and purges non-core', ()
     assert.ok(existsSync(join(nativeDir, 'huaweicloud-safety')), 'core skill synced natively');
     assert.ok(!existsSync(join(nativeDir, 'huawei-ecs')), 'owned non-core name stays MCP-only (stale copy purged)');
     assert.ok(existsSync(join(nativeDir, 'huawei-my-runbook')), 'user skill sharing the prefix survives');
+    assert.ok(
+      !existsSync(join(nativeDir, 'huaweicloud-retired-x')),
+      'a receipt-remembered retired core name is deletable',
+    );
+    assert.ok(
+      existsSync(join(nativeDir, 'steal-me')),
+      'a receipt name outside the core-skill shape must never earn delete rights',
+    );
     assert.ok(existsSync(join(nativeDir, '.huaweicloud-devkit-native.json')));
+    assert.equal(
+      JSON.parse(readFileSync(join(nativeDir, '.huaweicloud-devkit-native.json'), 'utf8')).names.length,
+      2,
+      'receipt rewritten to the actually-placed roster',
+    );
     assert.equal(
       readFileSync(join(nativeDir, 'huaweicloud-core', 'SKILL.md'), 'utf8'),
       readFileSync(join(stagedSkills, 'huaweicloud-core', 'SKILL.md'), 'utf8'),
       'native copy is byte-equal to the package tree',
     );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(stage, { recursive: true, force: true });
+  }
+});
+
+// Destination-side failure (locked/occupied skills dir) must warn and leave
+// the npm install green — the same warn-and-continue contract the setup
+// CLI's syncNativeCoreSkills carries.
+test('dsh bundle postinstall warns and exits 0 when the native dir cannot be created', () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-home-'));
+  const stage = mkdtempSync(join(tmpdir(), 'dsh-pkg-'));
+  try {
+    const dshHome = join(home, '.dsh');
+    const profileDir = join(dshHome, 'profiles', 'web');
+    mkdirSync(profileDir, { recursive: true });
+
+    mkdirSync(join(stage, 'bin'), { recursive: true });
+    copyFileSync(join(root, 'bin', 'dsh-postinstall.cjs'), join(stage, 'bin', 'dsh-postinstall.cjs'));
+    copyFileSync(join(root, 'cordis.patch.yml'), join(stage, 'cordis.patch.yml'));
+    const stagedSkills = join(stage, 'plugins', 'huaweicloud-core', 'skills');
+    const realSkills = join(root, 'plugins', 'huaweicloud-core', 'skills');
+    mkdirSync(stagedSkills, { recursive: true });
+    copyFileSync(join(realSkills, '.manifest.json'), join(stagedSkills, '.manifest.json'));
+    for (const name of ['huaweicloud-core', 'huaweicloud-safety']) {
+      mkdirSync(join(stagedSkills, name), { recursive: true });
+      copyFileSync(join(realSkills, name, 'SKILL.md'), join(stagedSkills, name, 'SKILL.md'));
+    }
+
+    // The native skills dir path is occupied by a regular file.
+    mkdirSync(join(dshHome), { recursive: true });
+    writeFileSync(join(dshHome, 'skills'), 'occupied by a file');
+
+    const res = spawnSync(process.execPath, [join(stage, 'bin', 'dsh-postinstall.cjs')], {
+      cwd: profileDir,
+      env: makeEnv(home, dshHome),
+      encoding: 'utf8',
+      timeout: 60000,
+    });
+    assert.equal(res.status, 0, `postinstall must not fail the npm install: ${res.stderr}`);
+    assert.match(res.stdout, /rewrote DSH patch MCP path/);
+    assert.match(res.stderr, /native core skills not synced .* MCP disclosure remains authoritative/);
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(stage, { recursive: true, force: true });

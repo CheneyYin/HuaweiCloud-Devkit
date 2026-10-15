@@ -15,6 +15,9 @@ import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
+import { parseCoreSkillNames } from '../plugins/huaweicloud-core/src/lib/skill-manifest.ts';
+import { skillTreeEquals } from '../plugins/huaweicloud-core/src/lib/skill-tree.ts';
+
 const root = fileURLToPath(new URL('..', import.meta.url));
 const setupCli = join(root, 'bin', 'setup.cjs');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
@@ -117,36 +120,15 @@ function countSkills(dir: string) {
 
 // Skills are server data for the full tree; the six core meta-skills are
 // ALSO disclosed natively (system-prompt visibility). The core roster is
-// derived from the shipped manifest's packOf map — the same source the CLI
-// reads.
-const coreRoster = new Set(
-  Object.entries(
-    JSON.parse(readFileSync(join(root, 'plugins', 'huaweicloud-core', 'skills', '.manifest.json'), 'utf8')).packOf,
-  )
-    .filter(([, pack]) => pack === 'core')
-    .map(([name]) => name),
+// derived from the shipped manifest — the same parser the CLI reads.
+const parsedCoreRoster = parseCoreSkillNames(
+  readFileSync(join(root, 'plugins', 'huaweicloud-core', 'skills', '.manifest.json'), 'utf8'),
 );
+assert.ok(parsedCoreRoster, 'manifest core roster must parse');
+const coreRoster: Set<string> = parsedCoreRoster;
 
 function pluginSkills(pluginsDir: string) {
   return countSkills(join(pluginsDir, 'skills'));
-}
-
-function walkRelative(dir: string, base = ''): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const rel = base ? `${base}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) out.push(...walkRelative(join(dir, entry.name), rel));
-    else out.push(rel);
-  }
-  return out.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-}
-
-function dirContentsEqual(a: string, b: string): boolean {
-  if (!existsSync(a) || !existsSync(b)) return false;
-  const fa = walkRelative(a);
-  const fb = walkRelative(b);
-  if (fa.length !== fb.length || fa.some((f, i) => f !== fb[i])) return false;
-  return fa.every((rel) => readFileSync(join(a, rel)).equals(readFileSync(join(b, rel))));
 }
 
 // Native core disclosure contract for one agent: the native skill dir
@@ -169,7 +151,7 @@ function assertNativeCoreDisclosure(nativeSkillsDir: string, pluginsDir: string)
   for (const name of coreRoster) {
     assert.ok(present.has(name), `core skill ${name} must be natively disclosed in ${nativeSkillsDir}`);
     assert.ok(
-      dirContentsEqual(join(nativeSkillsDir, name), join(pluginsDir, 'skills', name)),
+      skillTreeEquals(join(nativeSkillsDir, name), join(pluginsDir, 'skills', name)),
       `native copy of ${name} must equal the payload tree`,
     );
   }
@@ -301,7 +283,7 @@ test('install reconciles native skill dirs: residue purged, core refreshed, user
     assert.ok(!existsSync(join(otherDir, 'huawei-ecs')), 'residue on a non-installed agent must be purged');
     const pd = join(home, '.config', 'opencode', 'huaweicloud-plugins');
     assert.ok(
-      dirContentsEqual(join(nativeDir, 'huaweicloud-core'), join(pd, 'skills', 'huaweicloud-core')),
+      skillTreeEquals(join(nativeDir, 'huaweicloud-core'), join(pd, 'skills', 'huaweicloud-core')),
       'stale core copy must be refreshed byte-equal to the payload',
     );
     assert.ok(
@@ -355,6 +337,92 @@ test('install warns and continues when the native skill dir cannot be created', 
     assert.equal(res.status, 0, res.stderr);
     assert.match(res.stdout, /native core skills not synced/);
     assert.ok(existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js')));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+// A torn receipt write must not demote a managed dir to residue treatment:
+// the file's existence still proves devkit placement, so another agent's
+// install keeps the core copies and warns instead of deleting them.
+test('corrupt receipt keeps managed core copies and warns', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
+  try {
+    assert.equal(run('workbuddy', home, cwd, 'install').status, 0);
+    const workbuddyNative = join(home, '.workbuddy', 'skills');
+    writeFileSync(join(workbuddyNative, '.huaweicloud-devkit-native.json'), '{"names": [torn');
+    const res = run('opencode', home, cwd, 'install');
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.stdout, /unreadable native receipt .*\.workbuddy.*rewrites it/);
+    assert.ok(
+      existsSync(join(workbuddyNative, 'huaweicloud-core')),
+      'a torn receipt must not cost a managed agent its core copies',
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+// officeace's dir is never a sync target: owned names there are residue no
+// matter what receipt a wholesale hand-copy carried in.
+test('forged receipt cannot exempt owned names in the officeace dir', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
+  try {
+    const officeaceDir = join(home, '.office-claw', 'skills');
+    mkdirSync(join(officeaceDir, 'huawei-ecs'), { recursive: true });
+    writeFileSync(join(officeaceDir, 'huawei-ecs', 'SKILL.md'), '---\nname: huawei-ecs\n---\n', 'utf8');
+    writeFileSync(join(officeaceDir, '.huaweicloud-devkit-native.json'), '{"names":["huawei-ecs"]}');
+    const res = run('opencode', home, cwd, 'install');
+    assert.equal(res.status, 0, res.stderr);
+    assert.ok(!existsSync(join(officeaceDir, 'huawei-ecs')), 'officeace stays MCP-only natively, receipt or not');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+// Uninstall consumes the receipt before destroying it: a retired core name
+// living only in the receipt must go with the install, not survive as
+// permanently unidentifiable shadow-disclosure.
+test('uninstall removes receipt-remembered retired names', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
+  try {
+    assert.equal(run('opencode', home, cwd, 'install').status, 0);
+    const nativeDir = join(home, '.config', 'opencode', 'skills');
+    const receiptPath = join(nativeDir, '.huaweicloud-devkit-native.json');
+    const receipt = JSON.parse(readFileSync(receiptPath, 'utf8')) as { names: string[] };
+    mkdirSync(join(nativeDir, 'huaweicloud-retired-example'), { recursive: true });
+    writeFileSync(join(nativeDir, 'huaweicloud-retired-example', 'SKILL.md'), '---\nname: x\n---\n', 'utf8');
+    writeFileSync(receiptPath, JSON.stringify({ names: [...receipt.names, 'huaweicloud-retired-example'] }));
+    const res = run('opencode', home, cwd, 'uninstall');
+    assert.match(res.stdout, /Uninstall complete/);
+    assert.ok(!existsSync(join(nativeDir, 'huaweicloud-retired-example')), 'retired name must not survive uninstall');
+    assert.ok(!existsSync(receiptPath), 'receipt removed');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+// The update dispatch drives the same native sync as install: a divergent
+// copy and a deleted one must both converge back to the payload.
+test('update restores divergent and missing native core copies', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
+  try {
+    assert.equal(run('opencode', home, cwd, 'install').status, 0);
+    const nativeDir = join(home, '.config', 'opencode', 'skills');
+    writeFileSync(join(nativeDir, 'huaweicloud-core', 'SKILL.md'), 'stale\n', 'utf8');
+    rmSync(join(nativeDir, 'huaweicloud-safety'), { recursive: true, force: true });
+    const res = run('opencode', home, cwd, 'update');
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.stdout, /Update complete/);
+    assertNativeCoreDisclosure(nativeDir, join(home, '.config', 'opencode', 'huaweicloud-plugins'));
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });

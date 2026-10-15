@@ -37,3 +37,19 @@ export function parseSkillPackMap(content: string): Record<string, string> | nul
     return null;
   }
 }
+
+// The core-pack skill names a manifest discloses for native placement —
+// the single derivation every consumer (installer, doctor, tests) shares.
+// Null on any unusable input so callers fail loud (install/update) or warn
+// (doctor) instead of silently deriving an empty core set, which would
+// invert the native cleanup into deleting the copies it owns.
+export function parseCoreSkillNames(content: string): Set<string> | null {
+  const packOf = parseSkillPackMap(content);
+  if (packOf === null) return null;
+  const core = new Set(
+    Object.entries(packOf)
+      .filter(([, pack]) => pack === 'core')
+      .map(([name]) => name),
+  );
+  return core.size > 0 ? core : null;
+}

@@ -10,7 +10,7 @@
 // dirs — a hollow claimed dir still owns its native copies. Zod-free so
 // every consumer graph — the bundled server, the zod-free installer, and
 // the .mjs build scripts (Node >= 22.18 type stripping) — can import it.
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export function listSkillDirs(root: string): string[] {
@@ -21,5 +21,25 @@ export function listSkillDirs(root: string): string[] {
       .map((d) => d.name);
   } catch {
     return [];
+  }
+}
+
+// Recursive byte equality between two skill dirs — doctor's native-copy
+// freshness check compares an agent's native core copies against the
+// payload that target actually runs; the install tests assert the same
+// equality after a sync. False on any read failure: doctor reports
+// divergence rather than passing a tree it could not fully read.
+export function skillTreeEquals(a: string, b: string): boolean {
+  try {
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+        entry.isDirectory() ? walk(join(dir, entry.name)).map((f) => join(entry.name, f)) : [entry.name],
+      );
+    const fa = walk(a).sort((x, y) => (x < y ? -1 : x > y ? 1 : 0));
+    const fb = walk(b).sort((x, y) => (x < y ? -1 : x > y ? 1 : 0));
+    if (fa.length !== fb.length || fa.some((f, i) => f !== fb[i])) return false;
+    return fa.every((rel) => readFileSync(join(a, rel)).equals(readFileSync(join(b, rel))));
+  } catch {
+    return false;
   }
 }

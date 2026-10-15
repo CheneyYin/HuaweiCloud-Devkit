@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
+import { parseCoreSkillNames } from '../plugins/huaweicloud-core/src/lib/skill-manifest.ts';
+
 const root = fileURLToPath(new URL('..', import.meta.url));
 const setupCli = join(root, 'bin', 'setup.cjs');
 
@@ -101,19 +103,19 @@ test('handles platform-specific home directory resolution', () => {
       'skills tree (server data) created under correct home',
     );
     // Core meta-skills are natively disclosed under the same home; every
-    // non-core skill stays MCP-only in the plugin dir.
+    // non-core skill stays MCP-only in the plugin dir. The roster comes
+    // from the same manifest parser the CLI reads.
     const nativeDir = join(home, '.config', 'opencode', 'skills');
     assert.ok(existsSync(nativeDir), 'native skill dir created for core disclosure');
     const nativeOwned = readdirSync(nativeDir, { withFileTypes: true })
       .filter((d) => d.isDirectory() && d.name.startsWith('huawei'))
       .map((d) => d.name)
       .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-    const manifest = JSON.parse(
-      readFileSync(join(root, 'plugins', 'huaweicloud-core', 'skills', '.manifest.json'), 'utf8'),
-    );
-    const expectedCore = Object.keys(manifest.packOf)
-      .filter((name) => manifest.packOf[name] === 'core')
-      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const expectedCore = [
+      ...(parseCoreSkillNames(
+        readFileSync(join(root, 'plugins', 'huaweicloud-core', 'skills', '.manifest.json'), 'utf8'),
+      ) ?? new Set()),
+    ].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
     assert.deepEqual(nativeOwned, expectedCore, 'native dir carries exactly the core meta-skills');
   } finally {
     rmSync(home, { recursive: true, force: true });
