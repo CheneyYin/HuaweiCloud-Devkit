@@ -549,9 +549,12 @@ function hasCliFlag(name: string): boolean {
 
 function checkNode(): void {
   const v = process.versions.node.split('.').map(Number);
-  // process.versions.node is always "major.minor.patch", so the major exists.
-  if (v[0]! < 22) {
-    console.error(`\x1b[31mNode.js >= 22 required (current: ${process.version})\x1b[0m`);
+  // process.versions.node is always "major.minor.patch", so the major and
+  // minor exist. 22.18 is the type-stripping floor the whole build chain
+  // runs on (engines: >= 22.18) — the installer must not wave through a
+  // Node the same contract declares unsupported.
+  if (v[0]! < 22 || (v[0]! === 22 && v[1]! < 18)) {
+    console.error(`\x1b[31mNode.js >= 22.18 required (current: ${process.version})\x1b[0m`);
     process.exit(1);
   }
   console.log(`  Node.js ${process.version} \x1b[32mOK\x1b[0m`);
@@ -4655,8 +4658,11 @@ async function cmdDoctor(): Promise<void> {
     }
   }
 
-  // Node.js
-  check('Node.js >= 22', Number(process.versions.node.split('.')[0]) >= 22, 'Run: nvm install 22 && nvm use 22');
+  // Node.js — the same 22.18 floor engines declares (the build chain's
+  // type-stripping requirement); a 22.0-22.17 Node must FAIL, not PASS.
+  const nodeParts = process.versions.node.split('.').map(Number);
+  const nodeOk = nodeParts[0]! > 22 || (nodeParts[0]! === 22 && nodeParts[1]! >= 18);
+  check('Node.js >= 22.18', nodeOk, 'Run: nvm install 22.18 && nvm use 22.18');
 
   // MCP server — derived from PAYLOAD_TARGETS (one membership table for
   // every payload check in this doctor run).

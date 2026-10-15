@@ -39,7 +39,7 @@ npm run lint      # markdownlint + ESLint
 npm run lint:dup  # jscpd duplication scan (full report; CI gates new clones only)
 ```
 
-Requires Node.js >= 22.
+Requires Node.js >= 22.18.
 
 ## Code of Conduct
 

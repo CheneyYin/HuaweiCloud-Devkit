@@ -81,8 +81,11 @@ function createClient(server = serverPath) {
     request(method: string, params: Record<string, unknown> = {}) {
       const id = Math.floor(Math.random() * 1_000_000);
       child.stdin.write(frame({ jsonrpc: '2.0', id, method, params }));
+      // The server cold-boots through type stripping (~1.5s observed) plus
+      // tool registration; 10s leaves real margin for loaded CI runners
+      // (2s produced load-dependent initialize timeouts).
       return new Promise<JsonRpcResponse>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${method}`)), 2000);
+        const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${method}`)), 10_000);
         pending.set(id, (payload) => {
           clearTimeout(timer);
           pending.delete(id);

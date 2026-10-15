@@ -43,6 +43,18 @@ try {
   const { filename, files } = packed[0];
   const paths = new Set(files.map((f) => f.path.replace(/^package\//, '')));
 
+  // Probe liveness: every probe must still exist on disk after npm collected
+  // the file list. A probe that vanished mid-pack (a prepack step deleting
+  // it — the sweep taking a >1h-old leftover, a build removing a staging
+  // name) means its exclusion was never exercised THIS run; asserting
+  // absence against a listing that cannot contain the probe would be
+  // vacuous, the exact dead-by-construction class this mechanism exists to
+  // kill. This check catches that mechanically, no reachability analysis
+  // required.
+  for (const probe of probeFiles) {
+    assert.ok(existsSync(probe), `probe vanished before file collection — its exclusion was not exercised: ${probe}`);
+  }
+
   const requiredFiles = [
     'package.json',
     'bin/setup.cjs',
@@ -207,6 +219,9 @@ try {
 
   console.log(`Verified pack of ${filename}: ${files.length} files, install OK.`);
 } finally {
-  for (const probe of createdProbes) rmSync(probe, { force: true });
+  // All probe files are ours by naming (pack-verify-probe*), including
+  // litter from a crashed previous run; dirs are removed only when this
+  // run created them (a pre-existing dir may hold live state).
+  for (const probe of probeFiles) rmSync(probe, { force: true });
   for (const dir of createdProbeDirs) rmSync(dir, { recursive: true, force: true });
 }

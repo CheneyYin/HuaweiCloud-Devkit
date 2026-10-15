@@ -28,6 +28,7 @@ import { SANDBOX_TOOLS } from '../plugins/huaweicloud-core/src/packs/sandbox/too
 import { HUAWEICLOUD_OPEN_MCP_TOOLS } from '../plugins/huaweicloud-core/src/packs/huaweicloud-open-mcp/tools.ts';
 import { HUAWEICLOUD_CLI_TOOLS } from '../plugins/huaweicloud-core/src/packs/huaweicloud-cli/tools.ts';
 import { checkPackBoundaries } from '../scripts/lib/pack-boundaries.mjs';
+import { listSkillDirs } from '../plugins/huaweicloud-core/src/lib/skill-tree.ts';
 import { fixtureDir } from './fixture-dir.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -186,7 +187,7 @@ test('Hermes MCP Catalog manifest is present and valid', () => {
 
 test('plugin skills are compact meta-skills instead of service encyclopedia entries', () => {
   const skillsDir = join(pluginRoot, 'skills');
-  const skillNames = readdirSync(skillsDir).filter((name) => existsSync(join(skillsDir, name, 'SKILL.md')));
+  const skillNames = listSkillDirs(skillsDir);
   const requiredMetaSkills = [
     'huaweicloud-api-and-sdk',
     'huaweicloud-capability-discovery',
@@ -390,14 +391,12 @@ test('the served gateway_call description teaches the readonly discovery surface
 
 function listSkillDirsAll(): string[] {
   const skillsDir = join(pluginRoot, 'skills');
-  return readdirSync(skillsDir)
-    .filter((name) => existsSync(join(skillsDir, name, 'SKILL.md')))
-    .map((name) => join(skillsDir, name));
+  return listSkillDirs(skillsDir).map((name) => join(skillsDir, name));
 }
 
 test('skill SKILL.md files meet minimum content quality bar', () => {
   const skillsDir = join(pluginRoot, 'skills');
-  const skillNames = readdirSync(skillsDir).filter((name) => existsSync(join(skillsDir, name, 'SKILL.md')));
+  const skillNames = listSkillDirs(skillsDir);
 
   const exceptions = new Set([
     'huaweicloud-api-and-sdk',
@@ -437,7 +436,7 @@ test('huawei-deployment skill uses verified KooCLI service and operation names',
 
 test('skills with references have non-empty reference files', () => {
   const skillsDir = join(pluginRoot, 'skills');
-  const skillNames = readdirSync(skillsDir).filter((name) => existsSync(join(skillsDir, name, 'SKILL.md')));
+  const skillNames = listSkillDirs(skillsDir);
 
   for (const name of skillNames) {
     const refDir = join(skillsDir, name, 'references');
