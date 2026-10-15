@@ -76,6 +76,11 @@ jobs:
       - run: npm test
       - run: npm run validate
 
+  # OS coverage: Linux x64/arm + Windows. macOS is deliberately absent: the
+  # PTY-driven interactive install tests require util-linux `script` syntax
+  # (they skip off-Linux via the ptySkip guard), and no maintainer verifies
+  # on macOS today. Adding a macOS leg means porting the PTY helper
+  # (runAutoPty in test/agent-install.test.ts) to BSD script syntax first.
   test:
     needs: [lint]
     strategy:

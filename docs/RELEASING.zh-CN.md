@@ -77,7 +77,8 @@ SemVer 排序规则：同数字下，稳定版大于任何预发布版。
 
 ## 4. 预发布流程（当前，手动）
 
-在 release-please 上线（第 6 节）之前，预发布采用手动方式。
+预发布采用手动方式是设计使然——Release 工作流只管理稳定版的发布 PR
+（见第 6 节）。
 
 **前提**：版本号升级决策。发预发布就是承诺一个未来的稳定版号：
 `1.1.0-next.0` 即承诺 stable 会是 `1.1.0`。
@@ -151,6 +152,18 @@ SemVer 排序规则：同数字下，稳定版大于任何预发布版。
 
 ### 阶段 1 —— 用 release-please 自动化稳定版发布
 
+> **实际落地形态：** 本阶段以 `release.yml` + 自研脚本运行——
+> `scripts/bump-version.mjs`（按 conventional commits 和 tag 计算版本提案）、
+> `scripts/create-release-pr.mjs`（开启发布 PR，更新 `package.json`、根
+> `plugin.json`、五个插件清单、`openclaw.plugin.json` 和
+> `docs/CHANGELOG.md`）。仓库根目录的 release-please 配置文件属于这套
+> 实现：`.release-please-manifest.json` 是脚本记录"已发布版本"的状态文件
+> （googleapis 的 release-please action 本身**并未**使用）。发布工作流是
+> `npm-publish.yml`（不是 `publish.yml`）；`pack` CI job 已上线；退役的
+> 手动发布工作流已删除；`cd-production.yml` 不存在。下面的设计是原始
+> 计划，凡提到 release-please 机制处，读作"Release 工作流 +
+> `scripts/bump-version.mjs`"。
+
 - 新增 `release-please-config.json`，配置 `release-type: node` 和
   `extra-files` 覆盖全部四个插件清单（在发布路径上替代 `sync-version.mjs`）。
 - 新增 `.release-please-manifest.json`，初始化为当前基线版本。
@@ -168,10 +181,10 @@ SemVer 排序规则：同数字下，稳定版大于任何预发布版。
 
 ```
 feat/fix 提交 → PR → 合并到 main
-  → release-please 开启/更新发布 PR（版本号 + changelog）
+  → Release 工作流开启/更新发布 PR（版本号 + changelog）
   → 维护者合并该 PR
   → 自动打 git tag vX.Y.Z + 创建 GitHub Release（此时 npm 未变）
-  → 维护者在 Actions 里对 vX.Y.Z tag 手动触发 Publish（dist-tag=latest）
+  → 维护者在 Actions 里对 vX.Y.Z tag 手动触发 Publish npm（dist-tag=latest）
   → npm-publish environment 审批（审批人 + tag 白名单 v*）
   → npm publish → latest
 ```
@@ -180,18 +193,15 @@ feat/fix 提交 → PR → 合并到 main
 检查 tarball 必备文件清单 + 在临时目录真实安装验证），发布前 Publish 工作流
 再跑一遍同样的验证，保证"发到 npm 的字节 = 验证过的字节"。
 
-**版本号由团队决定（标题覆盖规则）。** release-please 计算的版本号只是提案，
-出现在发布 PR 的标题里（如 `chore: release 1.0.2`）。合并前维护者可以修改
-PR 标题来强制指定版本号，合并后即按标题中的版本发布：
-
-```
-提案: chore: release 1.0.2
-团队决定发 1.1.0 → 标题改为 chore: release 1.1.0 → 合并
-团队决定发 2.0.0 → 标题改为 chore: release 2.0.0 → 合并
-```
+**版本号由团队决定（发布 PR 改稿规则）。** `scripts/bump-version.mjs`
+计算的版本号只是提案，落在发布 PR 的文件改动里。合并前维护者可以直接
+修改 PR 中被提升的版本字段来强制指定版本号，合并后即按该版本发布。
+（自研流程里 PR 标题只是装饰——被提升的文件才是版本的唯一依据；
+release-please 的"改标题"快捷方式在这里不适用。）
 
 多类 commit 混在时（fix + feat + feat!），提案取最高优先级
-（feat! > feat > fix）；如果团队判断实际影响低于提案，用标题覆盖降级即可。
+（feat! > feat > fix）；如果团队判断实际影响低于提案，改发布 PR 的版本
+提升降级即可。
 
 ### 阶段 2 —— `next` 频道（预发布）
 
@@ -211,14 +221,16 @@ PR 标题来强制指定版本号，合并后即按标题中的版本发布：
 ## 7. 铁律（不可协商）
 
 1. 任何人不得手工修改 `package.json` 的 version 字段。版本号只来自
-   release-please 发布 PR：默认接受提案，需要调整时通过修改 PR 标题指定
+   Release 工作流开启的发布 PR（`scripts/create-release-pr.mjs`）：
+   默认接受提案，需要调整时在合并前修改 PR 中的版本提升
    （过渡期暂按第 4 节步骤）。
 2. 预发布必须宣告它所测试的未来稳定版号。
 3. `latest` 永不接收预发布；`next` 永不接收稳定版。
 4. 每次发布——稳定版或预发布——必须先通过 `npm test` 和 `npm run validate`。
-5. 四个插件清单（codex、claude、cursor、workbuddy）与 `package.json` 版本号
-   保持一致。
+5. 七个带版本号的清单（根 `plugin.json`、codex / claude / cursor /
+   workbuddy / hermes 五个插件清单、`openclaw.plugin.json`）与
+   `package.json` 版本号保持一致——`npm run validate` 强制校验该一致性。
 6. 仓库中的 `package.json` 永远反映最新**稳定版**；预发布版本号只存在于
    发布过程中的瞬时状态。
-7. **npm 发布只允许通过 `publish.yml` 从 `v*` tag 手动触发**，且必须经过
+7. **npm 发布只允许通过 `npm-publish.yml` 从 `v*` tag 手动触发**，且必须经过
    `npm-publish` environment 审批；禁止任何其他自动发布路径。
