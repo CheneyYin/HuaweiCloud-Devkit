@@ -306,10 +306,16 @@ test('dsh bundle postinstall syncs core skills natively and purges non-core', ()
     const profileDir = join(dshHome, 'profiles', 'web');
     mkdirSync(profileDir, { recursive: true });
 
-    // A minimal package layout: bin/ + patch + a skills tree with manifest.
+    // A minimal package layout: bin/ + patch + the compiled shared libs the
+    // postinstall requires + a skills tree with manifest.
     mkdirSync(join(stage, 'bin'), { recursive: true });
     copyFileSync(join(root, 'bin', 'dsh-postinstall.cjs'), join(stage, 'bin', 'dsh-postinstall.cjs'));
     copyFileSync(join(root, 'cordis.patch.yml'), join(stage, 'cordis.patch.yml'));
+    const stagedLib = join(stage, 'plugins', 'huaweicloud-core', 'dist', 'lib');
+    mkdirSync(stagedLib, { recursive: true });
+    for (const lib of ['native-receipt.js', 'skill-manifest.js']) {
+      copyFileSync(join(root, 'plugins', 'huaweicloud-core', 'dist', 'lib', lib), join(stagedLib, lib));
+    }
     const stagedSkills = join(stage, 'plugins', 'huaweicloud-core', 'skills');
     const realSkills = join(root, 'plugins', 'huaweicloud-core', 'skills');
     mkdirSync(stagedSkills, { recursive: true });
@@ -363,15 +369,59 @@ test('dsh bundle postinstall syncs core skills natively and purges non-core', ()
       'a receipt name outside the core-skill shape must never earn delete rights',
     );
     assert.ok(existsSync(join(nativeDir, '.huaweicloud-devkit-native.json')));
-    assert.equal(
-      JSON.parse(readFileSync(join(nativeDir, '.huaweicloud-devkit-native.json'), 'utf8')).names.length,
-      2,
-      'receipt rewritten to the actually-placed roster',
-    );
+    const receipt = JSON.parse(readFileSync(join(nativeDir, '.huaweicloud-devkit-native.json'), 'utf8'));
+    assert.equal(receipt.names.length, 2, 'receipt rewritten to the actually-placed roster');
+    assert.equal(receipt.layout, 'package-root', 'the marketplace receipt records its layout');
+    assert.equal(receipt.packageRoot, stage, 'the marketplace receipt records the package root');
     assert.equal(
       readFileSync(join(nativeDir, 'huaweicloud-core', 'SKILL.md'), 'utf8'),
       readFileSync(join(stagedSkills, 'huaweicloud-core', 'SKILL.md'), 'utf8'),
       'native copy is byte-equal to the package tree',
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(stage, { recursive: true, force: true });
+  }
+});
+
+// A staged package without dist/ is broken (the server cannot start), but
+// the postinstall must still not fail the npm install: warn on stderr,
+// skip the native sync, leave the destination untouched.
+test('dsh bundle postinstall warns and exits 0 when dist is missing from the package', () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-home-'));
+  const stage = mkdtempSync(join(tmpdir(), 'dsh-pkg-'));
+  try {
+    const dshHome = join(home, '.dsh');
+    const profileDir = join(dshHome, 'profiles', 'web');
+    mkdirSync(profileDir, { recursive: true });
+
+    mkdirSync(join(stage, 'bin'), { recursive: true });
+    copyFileSync(join(root, 'bin', 'dsh-postinstall.cjs'), join(stage, 'bin', 'dsh-postinstall.cjs'));
+    copyFileSync(join(root, 'cordis.patch.yml'), join(stage, 'cordis.patch.yml'));
+    const stagedSkills = join(stage, 'plugins', 'huaweicloud-core', 'skills');
+    const realSkills = join(root, 'plugins', 'huaweicloud-core', 'skills');
+    mkdirSync(stagedSkills, { recursive: true });
+    copyFileSync(join(realSkills, '.manifest.json'), join(stagedSkills, '.manifest.json'));
+    mkdirSync(join(stagedSkills, 'huaweicloud-core'), { recursive: true });
+    copyFileSync(join(realSkills, 'huaweicloud-core', 'SKILL.md'), join(stagedSkills, 'huaweicloud-core', 'SKILL.md'));
+
+    const nativeDir = join(dshHome, 'skills');
+    mkdirSync(join(nativeDir, 'huawei-preexisting'), { recursive: true });
+    writeFileSync(join(nativeDir, 'huawei-preexisting', 'SKILL.md'), '---\nname: x\n---\n', 'utf8');
+
+    const res = spawnSync(process.execPath, [join(stage, 'bin', 'dsh-postinstall.cjs')], {
+      cwd: profileDir,
+      env: makeEnv(home, dshHome),
+      encoding: 'utf8',
+      timeout: 60000,
+    });
+    assert.equal(res.status, 0, `postinstall must not fail the npm install: ${res.stderr}`);
+    assert.match(res.stdout, /rewrote DSH patch MCP path/);
+    assert.match(res.stderr, /dist\/ missing or unreadable/);
+    assert.ok(!existsSync(join(nativeDir, '.huaweicloud-devkit-native.json')), 'no receipt written');
+    assert.ok(
+      existsSync(join(nativeDir, 'huawei-preexisting')),
+      'the native dir is left untouched when the package is broken',
     );
   } finally {
     rmSync(home, { recursive: true, force: true });
@@ -393,6 +443,11 @@ test('dsh bundle postinstall warns and exits 0 when the native dir cannot be cre
     mkdirSync(join(stage, 'bin'), { recursive: true });
     copyFileSync(join(root, 'bin', 'dsh-postinstall.cjs'), join(stage, 'bin', 'dsh-postinstall.cjs'));
     copyFileSync(join(root, 'cordis.patch.yml'), join(stage, 'cordis.patch.yml'));
+    const stagedLib = join(stage, 'plugins', 'huaweicloud-core', 'dist', 'lib');
+    mkdirSync(stagedLib, { recursive: true });
+    for (const lib of ['native-receipt.js', 'skill-manifest.js']) {
+      copyFileSync(join(root, 'plugins', 'huaweicloud-core', 'dist', 'lib', lib), join(stagedLib, lib));
+    }
     const stagedSkills = join(stage, 'plugins', 'huaweicloud-core', 'skills');
     const realSkills = join(root, 'plugins', 'huaweicloud-core', 'skills');
     mkdirSync(stagedSkills, { recursive: true });

@@ -213,48 +213,61 @@ test('doctor: owned names in officeace native dir warn as stale', () => {
 
 // --- Native core-skill disclosure checks (layout, skew, robustness) ---
 
-// The DSH npm-in-profile layout: no plugin dir, payload served from the
-// package root, native copies + receipt maintained by postinstall. Doctor
-// must treat the patch configuration as installed-ness — a healthy
-// marketplace install raises no orphan and no drift warning.
-test('doctor: DSH package-root layout raises no native warnings', () => {
+// The DSH marketplace layout, as the postinstall really leaves it: no
+// plugin dir, no CLI-written profile patch (the bundled patch DSH consumes
+// never carries the CLI-managed block's markers), a receipt recording the
+// package-root layout, and native copies the profile's postinstall placed.
+// The staged package's core skill differs by one byte from the doctor CLI's
+// own tree — the discriminating case: a comparator that reads the doctor's
+// tree instead of the recorded package root would report divergence on a
+// healthy install. Tampering a native copy must flip to the divergence
+// warning with the marketplace remediation (update --target would refuse:
+// there is no plugin dir to update).
+test('doctor: DSH marketplace layout compares against the profile package, not the doctor CLI', () => {
   const home = fixtureDir('hwc-doctor-native-dsh-');
   const dshHome = fixtureDir('hwc-doctor-native-dshroot-');
-  const profileDir = join(dshHome, 'profiles', 'web');
-  mkdirSync(profileDir, { recursive: true });
-  writeFileSync(
-    join(profileDir, 'cordis.patch.yml'),
-    [
-      'id: huaweicloud-devkit',
-      "require: '@deepseek-ai/dsh-mcp-client'",
-      'serverName: huaweicloud',
-      'id: huaweicloud-hook',
-      '',
-    ].join('\n'),
-    'utf8',
-  );
-  const core = parseCoreSkillNames(readFileSync(join(realTree, '.manifest.json'), 'utf8'));
-  assert.ok(core, 'manifest core roster must parse');
+  const pkg = fixtureDir('hwc-doctor-native-dshpkg-');
+  const pkgSkills = join(pkg, 'plugins', 'huaweicloud-core', 'skills');
+  cpSync(realTree, pkgSkills, { recursive: true });
+  const doctored = `${readFileSync(join(pkgSkills, 'huaweicloud-core', 'SKILL.md'), 'utf8')}\n<!-- one byte older -->\n`;
+  writeFileSync(join(pkgSkills, 'huaweicloud-core', 'SKILL.md'), doctored, 'utf8');
+  const core = parseCoreSkillNames(readFileSync(join(pkgSkills, '.manifest.json'), 'utf8'));
+  assert.ok(core, 'staged manifest core roster must parse');
   const nativeDir = join(dshHome, 'skills');
   for (const name of core) {
-    cpSync(join(realTree, name), join(nativeDir, name), { recursive: true });
+    cpSync(join(pkgSkills, name), join(nativeDir, name), { recursive: true });
   }
   writeFileSync(
     join(nativeDir, '.huaweicloud-devkit-native.json'),
-    JSON.stringify({ names: [...core].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)) }, null, 2) + '\n',
+    `${JSON.stringify(
+      { names: [...core].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)), layout: 'package-root', packageRoot: pkg },
+      null,
+      2,
+    )}\n`,
   );
-  const stdout = runDoctor(home, { DSH_HOME: dshHome });
+  const healthy = runDoctor(home, { DSH_HOME: dshHome });
   assert.ok(
-    !stdout.includes('Native core skills'),
-    `marketplace layout must not raise native warnings, got:\n${stdout}`,
+    !healthy.includes('Native core skills') && !healthy.includes('stale native skill cop'),
+    `a healthy marketplace install must raise no native warnings, got:\n${healthy}`,
   );
-  assert.ok(!stdout.includes('stale native skill cop'), `unexpected stale warning:\n${stdout}`);
+
+  writeFileSync(join(nativeDir, 'huaweicloud-safety', 'SKILL.md'), 'tampered\n', 'utf8');
+  const tampered = runDoctor(home, { DSH_HOME: dshHome });
+  assert.ok(
+    tampered.includes('huaweicloud-safety diverges from the installed payload'),
+    `missing divergence warn:\n${tampered}`,
+  );
+  assert.ok(
+    tampered.includes('upgrade the huaweicloud-devkit package inside the DSH profile'),
+    `the marketplace remediation must name the package upgrade, not update --target:\n${tampered}`,
+  );
 });
 
 // Version skew: the payload's own manifest is the freshness roster, so a
 // doctor CLI whose manifest knows a core skill the installed payload never
-// claimed does not demand it per-agent — the payload's tree governs what
-// its own disclosure should carry.
+// claimed does not demand it per-agent. The native copy is removed too —
+// with the copy present, a regressed roster (the CLI's own) would also stay
+// silent, and the test would pass with the fix deleted.
 test('doctor: freshness roster comes from the payload manifest, not the CLI', () => {
   const home = fixtureDir('hwc-doctor-native-skew-');
   runInstall(home);
@@ -266,18 +279,47 @@ test('doctor: freshness roster comes from the payload manifest, not the CLI', ()
     join(home, '.config', 'opencode', 'huaweicloud-plugins', 'skills', '.manifest.json'),
     JSON.stringify(payloadManifest, null, 2),
   );
+  rmSync(join(home, '.config', 'opencode', 'skills', 'huaweicloud-safety'), { recursive: true, force: true });
   const stdout = runDoctor(home);
   assert.ok(!stdout.includes('Native core skills'), `unexpected native warning under skew:\n${stdout}`);
 });
 
-// A torn receipt write is visible: doctor warns instead of silently
-// demoting the dir to residue treatment.
-test('doctor: an unreadable native receipt warns', () => {
+// A torn or shape-broken receipt is visible: doctor warns instead of
+// silently demoting the dir to residue treatment. The boundary is the
+// shared module's — both broken shapes classify as corrupt.
+test('doctor: unreadable native receipts warn, torn and shape-broken alike', () => {
   const home = fixtureDir('hwc-doctor-native-corrupt-');
   runInstall(home);
-  writeFileSync(join(home, '.config', 'opencode', 'skills', '.huaweicloud-devkit-native.json'), '{"names": [torn');
+  const receiptPath = join(home, '.config', 'opencode', 'skills', '.huaweicloud-devkit-native.json');
+  for (const shape of ['{"names": [torn', '{"names": null}']) {
+    writeFileSync(receiptPath, shape);
+    const stdout = runDoctor(home);
+    assert.ok(stdout.includes('unreadable native receipt'), `missing corrupt-receipt warn for ${shape}:\n${stdout}`);
+  }
+});
+
+// An installed payload whose plugin dir has dist/ but no skills/ (the
+// interrupted-copyServerPayload crash shape): the global skills-tree check
+// is a some() across candidates, so a healthy target masks the broken one —
+// the per-target freshness pass must name it instead of silently skipping.
+test('doctor: an installed payload without a skills tree warns per target', () => {
+  const home = fixtureDir('hwc-doctor-native-brokenpayload-');
+  runInstall(home);
+  const wbPlugins = join(home, '.workbuddy', 'huaweicloud-plugins');
+  const wbNative = join(home, '.workbuddy', 'skills');
+  mkdirSync(join(wbPlugins, 'dist'), { recursive: true });
+  writeFileSync(join(wbPlugins, 'dist', 'mcp-server.js'), 'x', 'utf8');
+  const core = parseCoreSkillNames(readFileSync(join(realTree, '.manifest.json'), 'utf8'));
+  assert.ok(core, 'manifest core roster must parse');
+  for (const name of core) {
+    cpSync(join(realTree, name), join(wbNative, name), { recursive: true });
+  }
+  writeFileSync(
+    join(wbNative, '.huaweicloud-devkit-native.json'),
+    `${JSON.stringify({ names: [...core].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)) }, null, 2)}\n`,
+  );
   const stdout = runDoctor(home);
-  assert.ok(stdout.includes('unreadable native receipt'), `missing corrupt-receipt warn:\n${stdout}`);
+  assert.ok(stdout.includes('the installed payload has no skills tree'), `missing broken-payload warn:\n${stdout}`);
 });
 
 // A package without a skills tree: the skills-tree check FAILs and the

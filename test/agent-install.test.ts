@@ -162,12 +162,13 @@ function assertNativeCoreDisclosure(nativeSkillsDir: string, pluginsDir: string)
   }
   const receiptPath = join(nativeSkillsDir, '.huaweicloud-devkit-native.json');
   assert.ok(existsSync(receiptPath), `native receipt must exist in ${nativeSkillsDir}`);
-  const receipt = JSON.parse(readFileSync(receiptPath, 'utf8')) as { names: string[] };
+  const receipt = JSON.parse(readFileSync(receiptPath, 'utf8')) as { names: string[]; layout?: string };
   assert.deepEqual(
     [...new Set(receipt.names)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
     [...coreRoster].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
     'receipt records exactly the core roster',
   );
+  assert.equal(receipt.layout, 'plugin-dir', 'the CLI sync records the plugin-dir layout');
   assert.ok(pluginSkills(pluginsDir) >= 6, 'plugin dir must carry the skills tree');
 }
 
@@ -345,7 +346,9 @@ test('install warns and continues when the native skill dir cannot be created', 
 
 // A torn receipt write must not demote a managed dir to residue treatment:
 // the file's existence still proves devkit placement, so another agent's
-// install keeps the core copies and warns instead of deleting them.
+// install keeps the core copies and warns instead of deleting them. The
+// corrupt boundary is unified with the postinstall's: shape-broken names
+// (parsable JSON, non-array) are corrupt too, not "healthy with no names".
 test('corrupt receipt keeps managed core copies and warns', () => {
   const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
   const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
@@ -359,6 +362,78 @@ test('corrupt receipt keeps managed core copies and warns', () => {
     assert.ok(
       existsSync(join(workbuddyNative, 'huaweicloud-core')),
       'a torn receipt must not cost a managed agent its core copies',
+    );
+
+    writeFileSync(join(workbuddyNative, '.huaweicloud-devkit-native.json'), '{"names": null}');
+    const shapeBroken = run('opencode', home, cwd, 'install');
+    assert.equal(shapeBroken.status, 0, shapeBroken.stderr);
+    assert.match(
+      shapeBroken.stdout,
+      /unreadable native receipt .*\.workbuddy/,
+      'a shape-broken receipt is corrupt, not ok-empty',
+    );
+    assert.ok(existsSync(join(workbuddyNative, 'huaweicloud-core')), 'core copies kept');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+// Receipt-remembered names carry delete rights only in a dir a sync row
+// owns. In a foreign dir (officeace), a forged receipt must not be able to
+// aim the cleanup at user content — including content in the devkit's own
+// huaweicloud- namespace, which the shape filter alone would admit.
+test('forged receipt cannot delete user content in the officeace dir', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
+  try {
+    const officeaceDir = join(home, '.office-claw', 'skills');
+    mkdirSync(join(officeaceDir, 'huawei-ecs'), { recursive: true });
+    writeFileSync(join(officeaceDir, 'huawei-ecs', 'SKILL.md'), '---\nname: huawei-ecs\n---\n', 'utf8');
+    mkdirSync(join(officeaceDir, 'huaweicloud-user-notes'), { recursive: true });
+    writeFileSync(join(officeaceDir, 'huaweicloud-user-notes', 'SKILL.md'), '---\nname: x\n---\nuser\n', 'utf8');
+    writeFileSync(
+      join(officeaceDir, '.huaweicloud-devkit-native.json'),
+      JSON.stringify({ names: ['huawei-ecs', 'huaweicloud-user-notes'] }),
+    );
+    const res = run('opencode', home, cwd, 'install');
+    assert.equal(res.status, 0, res.stderr);
+    assert.ok(!existsSync(join(officeaceDir, 'huawei-ecs')), 'owned residue in a foreign dir still goes');
+    assert.ok(
+      existsSync(join(officeaceDir, 'huaweicloud-user-notes')),
+      'receipt-remembered names must not earn delete rights in a foreign dir',
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+// A corrupt receipt at uninstall cannot yield remembered names; the
+// possible retired-name leftovers are warned (and left in place — they may
+// be user content), and the receipt file itself still goes.
+test('uninstall warns about possible leftovers when the receipt is corrupt', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
+  try {
+    assert.equal(run('workbuddy', home, cwd, 'install').status, 0);
+    const workbuddyNative = join(home, '.workbuddy', 'skills');
+    mkdirSync(join(workbuddyNative, 'huaweicloud-retired-x'), { recursive: true });
+    writeFileSync(join(workbuddyNative, 'huaweicloud-retired-x', 'SKILL.md'), '---\nname: x\n---\n', 'utf8');
+    writeFileSync(join(workbuddyNative, '.huaweicloud-devkit-native.json'), '{"names": [torn');
+    const res = run('workbuddy', home, cwd, 'uninstall');
+    assert.match(res.stdout, /Uninstall complete/);
+    assert.match(
+      res.stdout,
+      /unreadable native receipt .*possible devkit leftover\(s\) left in place: huaweicloud-retired-x/,
+    );
+    assert.ok(
+      existsSync(join(workbuddyNative, 'huaweicloud-retired-x')),
+      'an unidentifiable name is never auto-deleted',
+    );
+    assert.ok(
+      !existsSync(join(workbuddyNative, '.huaweicloud-devkit-native.json')),
+      'the corrupt receipt is still removed',
     );
   } finally {
     rmSync(home, { recursive: true, force: true });

@@ -5,7 +5,6 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -59,6 +58,7 @@ import { findHcloudBin, hcloudProbeNextStep, probeHcloud } from './hcloud-probe.
 import { asText } from './lib/as-text.ts';
 import { parseSkillManifest, parseCoreSkillNames } from './lib/skill-manifest.ts';
 import { listSkillDirs, skillTreeEquals } from './lib/skill-tree.ts';
+import { nativeReceiptPath, readNativeReceipt, writeNativeReceipt } from './lib/native-receipt.ts';
 import { PACK_IDS, type PackId } from './lib/pack-types.ts';
 import {
   DEPENDENCIES,
@@ -711,44 +711,12 @@ function nativeSkillDirs(): string[] {
   ];
 }
 
-const NATIVE_RECEIPT_NAME = '.huaweicloud-devkit-native.json';
-
-function nativeReceiptPath(dir: string): string {
-  return join(dir, NATIVE_RECEIPT_NAME);
-}
-
-// Receipt read outcome. 'ok' carries the remembered names, shape-validated:
-// receipts only ever contained core skill names (huaweicloud-*), so only
-// that shape earns delete rights — anything else in a tampered file is
-// ignored, never deleted. 'corrupt' marks a present-but-unparsable receipt:
-// the file's existence still proves devkit placement (a torn write), so the
-// dir keeps managed treatment while a re-run rewrites it. null means no
-// receipt file: pre-MCP residue or a hand-placed copy.
-type NativeReceiptRead = { kind: 'ok'; names: Set<string> } | { kind: 'corrupt' } | null;
-
-function validReceiptNames(names: unknown): Set<string> {
-  if (!Array.isArray(names)) return new Set();
-  return new Set(names.filter((n): n is string => typeof n === 'string' && /^huaweicloud-[a-z0-9-]*$/.test(n)));
-}
-
-function readNativeReceipt(dir: string): NativeReceiptRead {
-  const receiptPath = nativeReceiptPath(dir);
-  if (!existsSync(receiptPath)) return null;
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(receiptPath, 'utf8'));
-    return { kind: 'ok', names: validReceiptNames((parsed as { names?: unknown } | null)?.names) };
-  } catch {
-    return { kind: 'corrupt' };
-  }
-}
-
-// Receipt writes are temp-then-rename so a crash-torn write can never be
-// observed as "no receipt": that would silently demote a managed dir to
-// residue treatment and delete another agent's core copies.
-function writeNativeReceipt(dir: string, names: string[]): void {
-  const tmp = `${nativeReceiptPath(dir)}.tmp`;
-  writeFileSync(tmp, JSON.stringify({ names }, null, 2) + '\n');
-  renameSync(tmp, nativeReceiptPath(dir));
+// The dirs a PAYLOAD_TARGETS sync row owns — the managed set for receipt
+// semantics (remembered names carry delete rights only here) and doctor's
+// stale-scan exemption. Deliberately narrower than nativeSkillDirs():
+// officeace's dir is scanned as a foreign surface, never managed.
+function nativeSyncDirs(): Set<string> {
+  return new Set(PAYLOAD_TARGETS.flatMap((t) => (t.nativeSkills ? t.nativeSkills() : [])));
 }
 
 // The core-pack skill names that may be disclosed natively, derived from the
@@ -808,7 +776,7 @@ function syncNativeCoreSkills(dir: string): void {
       `  \x1b[33m[WARN]\x1b[0m unreadable native receipt in ${dir} — this sync rewrites it; if it repeats, re-run install`,
     );
   }
-  const remembered = receipt?.kind === 'ok' ? receipt.names : new Set<string>();
+  const remembered = receipt?.kind === 'ok' ? new Set(receipt.receipt.names) : new Set<string>();
   const skillsSrc = join(PLUGIN_ROOT, 'skills');
   // A manifest may claim core skills a partial tree does not ship; copyDir
   // would silently skip them while the receipt still claimed all names.
@@ -840,10 +808,10 @@ function syncNativeCoreSkills(dir: string): void {
         removeIfExists(join(dir, entry.name));
       }
     }
-    writeNativeReceipt(
-      dir,
-      [...placeable].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
-    );
+    writeNativeReceipt(dir, {
+      names: [...placeable].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+      layout: 'plugin-dir',
+    });
     console.log(`  Core skills (native disclosure) -> ${dir}`);
   } catch (error) {
     console.log(
@@ -862,12 +830,14 @@ function syncNativeCoreSkills(dir: string): void {
 // that target's next update — refreshes them. Deleting an installed agent's
 // disclosure because a different agent was installed this run would trade a
 // short staleness window (doctor flags it) for a silent capability loss.
-// officeace's dir is never a sync row, so owned names there are always
-// residue no matter what receipt a hand-copy carried in.
+// Receipt-remembered names earn delete rights only in a managed dir; in a
+// foreign dir (officeace, a hand-copied tree) a receipt is not devkit's
+// ownership memory, so owned names there are residue no matter what a
+// hand-carried receipt claims.
 function cleanupNativeDirs(): number {
   const core = coreSkillNames();
   const owned = devkitOwnedSkillNames();
-  const syncDirs = new Set(PAYLOAD_TARGETS.flatMap((t) => (t.nativeSkills ? t.nativeSkills() : [])));
+  const syncDirs = nativeSyncDirs();
   let removed = 0;
   for (const dir of nativeSkillDirs()) {
     if (!existsSync(dir)) continue;
@@ -877,13 +847,13 @@ function cleanupNativeDirs(): number {
         `  \x1b[33m[WARN]\x1b[0m unreadable native receipt in ${dir} — core copies kept; re-running install rewrites it`,
       );
     }
-    const remembered = receipt?.kind === 'ok' ? receipt.names : new Set<string>();
+    const remembered = receipt?.kind === 'ok' ? new Set(receipt.receipt.names) : new Set<string>();
     const managed = syncDirs.has(dir) && receipt !== null;
     try {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
         const keep = managed && core.has(entry.name);
-        if (!keep && (owned.has(entry.name) || remembered.has(entry.name))) {
+        if (!keep && (owned.has(entry.name) || (managed && remembered.has(entry.name)))) {
           if (removeIfExists(join(dir, entry.name))) removed++;
         }
       }
@@ -907,18 +877,33 @@ function syncNativeSkillsForTarget(target: string): void {
 
 // Remove devkit-owned skill names from one agent-native dir (uninstall path).
 // Same ownership precision as the cleanup: user skills sharing the huawei*
-// prefix survive. The receipt is read FIRST — its remembered names are the
-// only record of retired core skills (names the current tree no longer
-// ships), so consuming it must precede destroying it — and the receipt file
-// goes last, whenever the dir exists at all (even a missing skills tree
-// must not leave an ownership claim behind).
+// prefix survive, and receipt-remembered names carry delete rights only in
+// a dir a sync row owns (a receipt in a foreign dir is not devkit's
+// ownership memory there). The receipt is read FIRST — its remembered names
+// are the only record of retired core skills (names the current tree no
+// longer ships), so consuming it must precede destroying it — and the
+// receipt file goes last, whenever the dir exists at all (even a missing
+// skills tree must not leave an ownership claim behind). A corrupt receipt
+// cannot yield remembered names; its possible retired-name leftovers are
+// listed in a warning instead of deleted (they may be user content in the
+// huaweiicloud- namespace, which must survive).
 function removeOwnedSkillsFrom(dir: string): number {
   if (!existsSync(dir)) return 0;
   const owned = devkitOwnedSkillNames();
   const receipt = readNativeReceipt(dir);
-  const remembered = receipt?.kind === 'ok' ? receipt.names : new Set<string>();
+  const remembered =
+    receipt?.kind === 'ok' && nativeSyncDirs().has(dir) ? new Set(receipt.receipt.names) : new Set<string>();
   let removed = 0;
   try {
+    if (receipt?.kind === 'corrupt') {
+      const leftovers = readdirSync(dir, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && /^huaweicloud-[a-z0-9-]*$/.test(e.name) && !owned.has(e.name))
+        .map((e) => e.name);
+      console.log(
+        `  \x1b[33m[WARN]\x1b[0m unreadable native receipt in ${dir}` +
+          `${leftovers.length > 0 ? ` — possible devkit leftover(s) left in place: ${leftovers.join(', ')}` : ''}`,
+      );
+    }
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (entry.isDirectory() && (owned.has(entry.name) || remembered.has(entry.name))) {
         if (removeIfExists(join(dir, entry.name))) removed++;
@@ -4752,14 +4737,6 @@ type PayloadTarget = {
   // codex-desktop's plugin-dir skills/ IS server data, and officeace's
   // native surface is the capabilities.json registration 4a030c0 removed.
   nativeSkills?: () => string[];
-  // True when the target serves its payload from the npm package root
-  // instead of the plugin dir (the DSH npm-in-profile layout: postinstall
-  // rewrites cordis.patch.yml to the absolute package path). Doctor uses it
-  // so a healthy marketplace install is not false-orphaned by the
-  // plugin-dir probe, and compares native freshness against the
-  // package-root tree — mirroring the skills-tree candidates'
-  // dshPatchConfigured() handling.
-  packageRootLayout?: () => boolean;
 };
 
 const PAYLOAD_TARGETS: readonly PayloadTarget[] = [
@@ -4811,7 +4788,6 @@ const PAYLOAD_TARGETS: readonly PayloadTarget[] = [
     update: updateDsh,
     hint: 'Restart the DSH session for changes to take effect.',
     nativeSkills: () => [dshSkillsDir()],
-    packageRootLayout: dshPatchConfigured,
   },
   {
     id: 'officeace',
@@ -5154,7 +5130,7 @@ async function cmdDoctor(): Promise<void> {
     );
   } else {
     const owned = devkitOwnedSkillNames();
-    const syncDirs = new Set(PAYLOAD_TARGETS.flatMap((t) => (t.nativeSkills ? t.nativeSkills() : [])));
+    const syncDirs = nativeSyncDirs();
     let staleNative = 0;
     for (const dir of nativeSkillDirs()) {
       if (!existsSync(dir)) continue;
@@ -5165,7 +5141,7 @@ async function cmdDoctor(): Promise<void> {
           `  \x1b[33m[WARN]\x1b[0m unreadable native receipt in ${dir} — re-run: npx huaweicloud-devkit install`,
         );
       }
-      const remembered = receipt?.kind === 'ok' ? receipt.names : new Set<string>();
+      const remembered = receipt?.kind === 'ok' ? new Set(receipt.receipt.names) : new Set<string>();
       const managedHere = syncDirs.has(dir) && receipt !== null;
       try {
         for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -5191,15 +5167,21 @@ async function cmdDoctor(): Promise<void> {
     }
     for (const row of PAYLOAD_TARGETS) {
       if (!row.nativeSkills) continue;
-      // The DSH npm-in-profile layout serves its payload from the package
-      // root (postinstall rewrote cordis.patch.yml to point there); the
-      // plugin-dir probe alone would false-orphan a healthy marketplace
-      // install — the same layout-blindness class the skills-tree
-      // candidates handle through dshPatchConfigured().
-      const packageRoot = row.packageRootLayout?.() ?? false;
-      const installed = mcpServerInstalled(row.dir()) || packageRoot;
       for (const dir of row.nativeSkills()) {
         const receipt = readNativeReceipt(dir);
+        // The marketplace layout (DSH npm-in-profile): the postinstall —
+        // the only actor that runs in that layout — records it in the
+        // receipt together with the package root it serves from. A detector
+        // built on patch-file markers would not fire for real marketplace
+        // installs: the bundled cordis.patch.yml DSH consumes never carries
+        // the CLI-managed block's markers.
+        const packageRoot =
+          receipt?.kind === 'ok' &&
+          receipt.receipt.layout === 'package-root' &&
+          typeof receipt.receipt.packageRoot === 'string'
+            ? receipt.receipt.packageRoot
+            : null;
+        const installed = mcpServerInstalled(row.dir()) || packageRoot !== null;
         if (!existsSync(dir)) {
           // Absent without a receipt stays silent: the codearts project dir
           // only exists for the tree the install ran in.
@@ -5222,17 +5204,39 @@ async function cmdDoctor(): Promise<void> {
         }
         // The honest comparator is the payload the target actually runs —
         // never this CLI's tree, or `npx huaweicloud-devkit@latest doctor`
-        // would false-report drift on an older healthy payload. The DSH
-        // package-root layout compares against the doctor package's tree
-        // (the same approximation the skills-tree candidates make); a
-        // plugin-dir payload without a skills tree is broken, and the
-        // skills-tree FAIL above owns it, so freshness is skipped.
-        const payloadTree = packageRoot
-          ? join(PLUGIN_ROOT, 'skills')
-          : existsSync(join(row.dir(), 'skills'))
-            ? join(row.dir(), 'skills')
-            : null;
-        if (payloadTree === null) continue;
+        // would false-report drift on an older healthy payload. The
+        // marketplace layout resolves its payload from the recorded package
+        // root; the plugin-dir layout reads the installed plugin dir. A
+        // remediation is only honest if the command it names can run on
+        // that layout, so the marketplace points at the package upgrade
+        // (update --target would refuse: no plugin dir to update).
+        let payloadTree: string | null;
+        let fixHint: string;
+        if (packageRoot !== null) {
+          const tree = join(packageRoot, 'plugins', 'huaweicloud-core', 'skills');
+          payloadTree = existsSync(tree) ? tree : null;
+          fixHint = 'upgrade the huaweicloud-devkit package inside the DSH profile';
+          if (payloadTree === null) {
+            warn++;
+            console.log(
+              `  \x1b[33m[WARN]\x1b[0m Native core skills (${row.label}): the recorded package root ${packageRoot} no longer carries a skills tree — reinstall the huaweicloud-devkit package in the DSH profile`,
+            );
+            continue;
+          }
+        } else if (existsSync(join(row.dir(), 'skills'))) {
+          payloadTree = join(row.dir(), 'skills');
+          fixHint = `re-run: npx huaweicloud-devkit update --target ${row.id}`;
+        } else {
+          // Installed (dist present) but no skills tree: the payload is
+          // broken. The global skills-tree check is a some() across every
+          // candidate dir, so a healthy target can mask this one — name it
+          // here instead of silently skipping freshness.
+          warn++;
+          console.log(
+            `  \x1b[33m[WARN]\x1b[0m Native core skills (${row.label}): the installed payload has no skills tree — re-run: npx huaweicloud-devkit install --target ${row.id}`,
+          );
+          continue;
+        }
         // The checked roster comes from the payload's own manifest, so a
         // newer doctor CLI never demands a core skill the installed payload
         // never shipped; only an unreadable payload manifest falls back to
@@ -5242,15 +5246,13 @@ async function cmdDoctor(): Promise<void> {
           const nativeCopy = join(dir, name);
           if (!existsSync(nativeCopy)) {
             warn++;
-            console.log(
-              `  \x1b[33m[WARN]\x1b[0m Native core skills (${row.label}): ${name} missing — re-run: npx huaweicloud-devkit update --target ${row.id}`,
-            );
+            console.log(`  \x1b[33m[WARN]\x1b[0m Native core skills (${row.label}): ${name} missing — ${fixHint}`);
             continue;
           }
           if (!skillTreeEquals(nativeCopy, join(payloadTree, name))) {
             warn++;
             console.log(
-              `  \x1b[33m[WARN]\x1b[0m Native core skills (${row.label}): ${name} diverges from the installed payload — re-run: npx huaweicloud-devkit update --target ${row.id}`,
+              `  \x1b[33m[WARN]\x1b[0m Native core skills (${row.label}): ${name} diverges from the installed payload — ${fixHint}`,
             );
           }
         }
