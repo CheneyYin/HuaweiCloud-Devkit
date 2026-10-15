@@ -6,8 +6,10 @@
 // Chain verified per target: npm pack → tarball install → bin/setup.cjs
 // install → agent config written by the installer → the configured MCP server
 // answers tools/list over stdio. OfficeAce has no real app on a plain Linux
-// box; its step must fail with the documented "database not found" message
-// instead of crashing elsewhere.
+// box; its install must degrade gracefully there — the documented
+// "database not found" hint, payload landed, exit 0 (registration retries on
+// a later update once OfficeAce has been launched; the hard-fail path is
+// owner-missing, reachable only with a real connector DB).
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -106,19 +108,21 @@ const installed = join(prefix, 'node_modules', 'huaweicloud-devkit');
 const bin = join(installed, 'bin', 'setup.cjs');
 if (!existsSync(bin)) {
   console.error(`[smoke] installed bin missing: ${bin}`);
+  rmSync(prefix, { recursive: true, force: true });
+  rmSync(tarball, { force: true });
   process.exit(1);
 }
 
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-const versionRun = run(process.execPath, [bin, 'version'], {
-  env: { HOME: mkdtempSync(join(tmpdir(), 'hwc-smoke-home-')) },
-});
+const versionHome = mkdtempSync(join(tmpdir(), 'hwc-smoke-home-'));
+const versionRun = run(process.execPath, [bin, 'version'], { env: { HOME: versionHome } });
 record(
   'package',
   'installed bin version',
   versionRun.status === 0 && versionRun.stdout.includes(pkg.version),
   String(versionRun.stdout).split('\n')[0],
 );
+rmSync(versionHome, { recursive: true, force: true });
 
 // ---- 2. per-target install → status → configured server roundtrip ----
 for (const target of SUPPORTED_AGENT_TARGETS) {
@@ -127,75 +131,80 @@ for (const target of SUPPORTED_AGENT_TARGETS) {
   // codearts resolves its PROJECT-level install dir from process.cwd(); give
   // every install a throwaway cwd so nothing lands in the repo checkout.
   const installCwd = mkdtempSync(join(tmpdir(), `hwc-smoke-cwd-${target}-`));
-  const env = { HOME: home };
-  if (target === 'officeace') {
-    const fakeRoot = join(home, '.office-claw');
-    mkdirSync(fakeRoot, { recursive: true });
-    writeFileSync(join(fakeRoot, 'capabilities.json'), '{}');
-    env.OFFICE_CLAW_CONFIG_ROOT = fakeRoot;
-  }
+  // Cleanup rides finally so every exit path (failed install, codex early
+  // continue) leaves TMPDIR as it found it — a red run's post-mortem is the
+  // recorded FAIL detail, not a leaked sandbox.
+  try {
+    const env = { HOME: home };
+    if (target === 'officeace') {
+      const fakeRoot = join(home, '.office-claw');
+      mkdirSync(fakeRoot, { recursive: true });
+      writeFileSync(join(fakeRoot, 'capabilities.json'), '{}');
+      env.OFFICE_CLAW_CONFIG_ROOT = fakeRoot;
+    }
 
-  const install = run(process.execPath, [bin, 'install', '--target', target], { env, cwd: installCwd });
-  if (target === 'officeace') {
-    const documented = /OfficeAce database not found|OfficeAce MCP connector registration failed/.test(install.stdout);
-    record(
-      target,
-      'install reaches the documented OfficeAce failure',
-      install.status !== 0 && documented,
-      'no real OfficeAce on this host',
-    );
-  } else {
-    record(target, 'install exits 0', install.status === 0, firstErrorLine(install));
-    if (install.status !== 0) continue;
+    const install = run(process.execPath, [bin, 'install', '--target', target], { env, cwd: installCwd });
+    if (target === 'officeace') {
+      // The plain-Linux contract: no connector DB, so the install degrades
+      // gracefully — the documented hint prints, the payload still lands,
+      // and exit stays 0. (The old check demanded a non-zero exit, which
+      // only ever held on a machine with a real OfficeAce DB hitting the
+      // owner-missing throw; on Linux it could never pass.)
+      const documented = /OfficeAce database not found/.test(install.stdout);
+      const payloadLanded = existsSync(join(home, '.office-claw', 'huaweicloud-plugins', 'dist', 'mcp-server.js'));
+      record(
+        target,
+        'install degrades gracefully with the documented OfficeAce hint',
+        install.status === 0 && documented && payloadLanded,
+        'no real OfficeAce on this host',
+      );
+    } else {
+      record(target, 'install exits 0', install.status === 0, firstErrorLine(install));
+      if (install.status !== 0) continue;
 
-    // Non-TTY smoke stays network-free by contract, so the provisioning seam
-    // must run end-to-end: the header is the stable marker that it did.
-    const provisionHeader = (install.stdout.match(/Provisioning pack binaries \(enabled packs: \d+\)/) || [])[0];
-    record(
-      target,
-      'install provisions pack binaries',
-      Boolean(provisionHeader),
-      provisionHeader || 'provisioning section missing from install output',
-    );
+      // Non-TTY smoke stays network-free by contract, so the provisioning seam
+      // must run end-to-end: the header is the stable marker that it did.
+      const provisionHeader = (install.stdout.match(/Provisioning pack binaries \(enabled packs: \d+\)/) || [])[0];
+      record(
+        target,
+        'install provisions pack binaries',
+        Boolean(provisionHeader),
+        provisionHeader || 'provisioning section missing from install output',
+      );
 
-    // codex-desktop has no status section (pre-existing gap: install target
-    // exists, cmdStatus does not cover it). Its proof is the copied
-    // marketplace server below.
-    if (target !== 'codex-desktop') {
       const status = run(process.execPath, [bin, 'status', '--target', target], { env, cwd: installCwd });
       const expected = target === 'codex' ? /Plugin:.*Installed/ : /MCP Server:.*Installed/;
       record(target, 'status reports the target installed', expected.test(status.stdout), firstErrorLine(status));
-    }
 
-    if (target === 'codex') {
-      // Codex manages the server through its marketplace; the consumer
-      // contract is the registration in config.toml, not a direct path.
-      const toml = readFileSync(join(home, '.codex', 'config.toml'), 'utf8');
-      const registered = /plugins\."huaweicloud-devkit@/.test(toml);
-      record(target, 'codex config.toml registers the plugin', registered, 'marketplace-managed server');
-      rmSync(home, { recursive: true, force: true });
-      rmSync(installCwd, { recursive: true, force: true });
-      continue;
-    }
+      if (target === 'codex') {
+        // Codex manages the server through its marketplace; the consumer
+        // contract is the registration in config.toml, not a direct path.
+        const toml = readFileSync(join(home, '.codex', 'config.toml'), 'utf8');
+        const registered = /plugins\."huaweicloud-devkit@/.test(toml);
+        record(target, 'codex config.toml registers the plugin', registered, 'marketplace-managed server');
+        continue;
+      }
 
-    const servers = findConfiguredServerPaths(home);
-    if (servers.length === 0) {
-      const copied = findCopiedServer(home);
-      record(target, 'no agent-config reference; copied plugin server runs', copied.ok, copied.detail);
-    } else {
-      for (const server of servers) {
-        const roundtrip = mcpRoundtrip(server);
-        record(
-          target,
-          `configured server answers tools/list (${shortHome(server, home)})`,
-          roundtrip.ok,
-          roundtrip.detail,
-        );
+      const servers = findConfiguredServerPaths(home);
+      if (servers.length === 0) {
+        const copied = findCopiedServer(home);
+        record(target, 'no agent-config reference; copied plugin server runs', copied.ok, copied.detail);
+      } else {
+        for (const server of servers) {
+          const roundtrip = mcpRoundtrip(server);
+          record(
+            target,
+            `configured server answers tools/list (${shortHome(server, home)})`,
+            roundtrip.ok,
+            roundtrip.detail,
+          );
+        }
       }
     }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(installCwd, { recursive: true, force: true });
   }
-  rmSync(home, { recursive: true, force: true });
-  rmSync(installCwd, { recursive: true, force: true });
 }
 
 // ---- 3. hook from an installed plugin copy ----

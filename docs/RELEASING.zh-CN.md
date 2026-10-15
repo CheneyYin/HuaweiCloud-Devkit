@@ -99,20 +99,28 @@ SemVer 排序规则：同数字下，稳定版大于任何预发布版。
    ```
 
 4. 跑测试：`npm test`。
-5. 发布到 `next` 标签：
+5. 跑发布前 agent 冒烟（打包 tarball 后逐个 agent target 安装、`status`、
+   以及每个已配置 server 的真实 MCP roundtrip；codex target 需要本机 PATH
+   上有 `codex` CLI，各 target 的依赖安装需要 npm registry 访问）：
+
+   ```powershell
+   npm run smoke:agents
+   ```
+
+6. 发布到 `next` 标签：
 
    ```powershell
    npm publish --tag next
    ```
 
-6. 把 `package.json` 复原为稳定版本号，只提交与版本无关的改动
+7. 把 `package.json` 复原为稳定版本号，只提交与版本无关的改动
    （仓库绝不能与已发布内容脱节）：
 
    ```powershell
    npm version <上一个稳定版号> --no-git-tag-version
    ```
 
-7. 公告 `1.1.0-next.N` 及其变更清单；按版本号归档测试反馈。
+8. 公告 `1.1.0-next.N` 及其变更清单；按版本号归档测试反馈。
 
 后续迭代依次使用 `1.1.0-next.1`、`1.1.0-next.2`……
 

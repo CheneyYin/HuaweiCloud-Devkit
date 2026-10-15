@@ -907,6 +907,26 @@ test('opencode config root is XDG-aware through one shared resolver', () => {
   );
 });
 
+// Every supported target must have a cmdStatus section row — codex-desktop
+// shipped for months as "install target exists, cmdStatus does not cover
+// it" (the release smoke had to skip its status check), which is exactly
+// the drift this invariant makes impossible for the next target.
+test('cmdStatus covers every supported agent target', () => {
+  const setup = readSource(join('src', 'setup-cli.ts'));
+  const sectionsBody =
+    setup.match(
+      /const sections: Array<\{ name: string; run: \(\) => void; on: \(_target: string\) => boolean \}> = \[([\s\S]*?)\n {2}\];/,
+    )?.[1] ?? '';
+  assert.ok(sectionsBody.length > 0, 'cmdStatus sections array found');
+  for (const id of SUPPORTED_AGENT_TARGETS) {
+    assert.match(
+      sectionsBody,
+      new RegExp(`target === '${id}' \\|\\| target === 'all'`),
+      `status must cover the ${id} target`,
+    );
+  }
+});
+
 test('tools.ts resolves skills from the server-relative tree only', () => {
   const tools = readSource(join('src', 'tools.ts'));
   // SKILLS_ROOT is server data next to dist/ — no agent-native dir probing

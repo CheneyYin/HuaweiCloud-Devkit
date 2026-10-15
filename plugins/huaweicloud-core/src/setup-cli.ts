@@ -1943,8 +1943,13 @@ function uninstallCodeArts(): void {
   }
 }
 
-function codeartsStatus(): void {
-  const pluginDir = codeartsPluginsDir();
+// The payload triple every directory-based status section reports: server
+// bundle, safety policy, skills tree. Extracted from the per-agent status
+// functions (this file's most-repeated block — seven copies when this
+// comment was written) so a new target joins by calling it instead of
+// copying it. dshStatus and hermesStatus keep inline variants because their
+// hook lines interleave with the triple.
+function payloadStatusLines(pluginDir: string): void {
   console.log(
     `  MCP Server: ${mcpServerInstalled(pluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
   );
@@ -1955,6 +1960,10 @@ function codeartsStatus(): void {
   console.log(
     `  Skills: ${skillCount > 0 ? `\x1b[32m${skillCount} installed\x1b[0m` : '\x1b[31mNot installed\x1b[0m'}`,
   );
+}
+
+function codeartsStatus(): void {
+  payloadStatusLines(codeartsPluginsDir());
   if (existsSync(codeartsMcpSettingsFile())) {
     try {
       const config = asRecord(JSON.parse(readFileSync(codeartsMcpSettingsFile(), 'utf8')));
@@ -2084,17 +2093,7 @@ function uninstallCodeArtsWork(): void {
 }
 
 function codeartsWorkStatus(): void {
-  const pluginDir = codeartsWorkPluginsDir();
-  console.log(
-    `  MCP Server: ${mcpServerInstalled(pluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
-  );
-  console.log(
-    `  Safety Policy: ${existsSync(join(pluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
-  );
-  const skillCount = serverSkillCount(pluginDir);
-  console.log(
-    `  Skills: ${skillCount > 0 ? `\x1b[32m${skillCount} installed\x1b[0m` : '\x1b[31mNot installed\x1b[0m'}`,
-  );
+  payloadStatusLines(codeartsWorkPluginsDir());
   if (existsSync(codeartsWorkMcpSettingsFile())) {
     try {
       const config = asRecord(JSON.parse(readFileSync(codeartsWorkMcpSettingsFile(), 'utf8')));
@@ -2357,17 +2356,7 @@ function uninstallWorkBuddy(): void {
 }
 
 function workbuddyStatus(): void {
-  const pluginDir = workbuddyPluginsDir();
-  console.log(
-    `  MCP Server: ${mcpServerInstalled(pluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
-  );
-  console.log(
-    `  Safety Policy: ${existsSync(join(pluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
-  );
-  const skillCount = serverSkillCount(pluginDir);
-  console.log(
-    `  Skills: ${skillCount > 0 ? `\x1b[32m${skillCount} installed\x1b[0m` : '\x1b[31mNot installed\x1b[0m'}`,
-  );
+  payloadStatusLines(workbuddyPluginsDir());
   const configPath = workbuddyMcpConfigFile();
   if (existsSync(configPath)) {
     try {
@@ -2463,17 +2452,7 @@ function uninstallAtomCode(): void {
 }
 
 function atomcodeStatus(): void {
-  const pluginDir = atomcodePluginsDir();
-  console.log(
-    `  MCP Server: ${mcpServerInstalled(pluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
-  );
-  console.log(
-    `  Safety Policy: ${existsSync(join(pluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
-  );
-  const skillCount = serverSkillCount(pluginDir);
-  console.log(
-    `  Skills: ${skillCount > 0 ? `\x1b[32m${skillCount} installed\x1b[0m` : '\x1b[31mNot installed\x1b[0m'}`,
-  );
+  payloadStatusLines(atomcodePluginsDir());
   const configPath = atomcodeMcpConfigFile();
   if (existsSync(configPath)) {
     try {
@@ -2882,17 +2861,7 @@ function uninstallOfficeAce(): void {
 }
 
 function officeaceStatus(): void {
-  const pluginDir = officeacePluginsDir();
-  console.log(
-    `  MCP Server: ${mcpServerInstalled(pluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
-  );
-  console.log(
-    `  Safety Policy: ${existsSync(join(pluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
-  );
-  const skillCount = serverSkillCount(pluginDir);
-  console.log(
-    `  Skills: ${skillCount > 0 ? `\x1b[32m${skillCount} installed\x1b[0m` : '\x1b[31mNot installed\x1b[0m'}`,
-  );
+  payloadStatusLines(officeacePluginsDir());
   const dbPath = officeaceSqlitePath();
   if (existsSync(dbPath)) {
     try {
@@ -3521,17 +3490,7 @@ function hermesStatus(): void {
 }
 
 function opencodeStatus(): void {
-  const pluginDir = opencodePluginsDir();
-  console.log(
-    `  MCP Server: ${mcpServerInstalled(pluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
-  );
-  console.log(
-    `  Safety Policy: ${existsSync(join(pluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
-  );
-  const skillCount = serverSkillCount(pluginDir);
-  console.log(
-    `  Skills: ${skillCount > 0 ? `\x1b[32m${skillCount} installed\x1b[0m` : '\x1b[31mNot installed\x1b[0m'}`,
-  );
+  payloadStatusLines(opencodePluginsDir());
   const configPath = opencodeConfigFile();
   if (existsSync(configPath)) {
     try {
@@ -4311,17 +4270,7 @@ async function promptGlobalCleanup(): Promise<void> {
 }
 
 function openclawStatus(): void {
-  const cdPluginDir = openclawPluginsDir();
-  console.log(
-    `  MCP Server: ${mcpServerInstalled(cdPluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
-  );
-  console.log(
-    `  Safety Policy: ${existsSync(join(cdPluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
-  );
-  const cdSkillCount = serverSkillCount(cdPluginDir);
-  console.log(
-    `  Skills: ${cdSkillCount > 0 ? `\x1b[32m${cdSkillCount} installed\x1b[0m` : '\x1b[31mNot installed\x1b[0m'}`,
-  );
+  payloadStatusLines(openclawPluginsDir());
 }
 
 function codexSectionStatus(): void {
@@ -4329,6 +4278,29 @@ function codexSectionStatus(): void {
     console.log('  \x1b[33mCodex CLI not found.\x1b[0m');
   } else {
     console.log(`  Plugin: ${codexStatus() ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`);
+  }
+}
+
+// Codex Desktop serves the payload from its own plugin dir plus a
+// marketplace registration under ~/.agents/plugins/marketplace.json —
+// status reports both surfaces (previously the one target cmdStatus did
+// not cover at all; the release smoke had to skip its status check).
+function codexDesktopStatus(): void {
+  payloadStatusLines(codexDesktopPluginsDir());
+  const mpPath = codexMarketplacePath();
+  if (existsSync(mpPath)) {
+    try {
+      const marketplace = asRecord(JSON.parse(readFileSync(mpPath, 'utf8')));
+      const plugins: unknown[] = Array.isArray(marketplace.plugins) ? marketplace.plugins : [];
+      // Entry name mirrors the literal ensureCodexMarketplaceEntry writes
+      // and removeCodexMarketplaceEntry filters on.
+      const registered = plugins.some((p) => asRecord(p).name === 'huaweicloud-devkit');
+      console.log(`  Marketplace: ${registered ? '\x1b[32mRegistered\x1b[0m' : '\x1b[31mNot registered\x1b[0m'}`);
+    } catch {
+      console.log(`  Marketplace: \x1b[31mInvalid\x1b[0m`);
+    }
+  } else {
+    console.log(`  Marketplace: \x1b[31mNot registered\x1b[0m`);
   }
 }
 
@@ -4348,6 +4320,7 @@ async function cmdStatus(): Promise<void> {
     { name: 'OpenClaw', run: openclawStatus, on: (target) => target === 'openclaw' || target === 'all' },
     { name: 'AtomCode', run: atomcodeStatus, on: (target) => target === 'atomcode' || target === 'all' },
     { name: 'Codex', run: codexSectionStatus, on: (target) => target === 'codex' || target === 'all' },
+    { name: 'Codex Desktop', run: codexDesktopStatus, on: (target) => target === 'codex-desktop' || target === 'all' },
   ];
 
   // Capture each section's output so results can be grouped by install state

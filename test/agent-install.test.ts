@@ -751,6 +751,13 @@ test('codex-desktop install creates skills, MCP server, and safety policy', () =
     assert.ok(existsSync(join(pd, 'dist', 'tools.js')));
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
     assert.equal(pluginVersion(pd), pkg.version);
+    // The status section this target lacked for months: both surfaces it
+    // owns (plugin dir payload + marketplace registration) must report in.
+    const status = run('codex-desktop', home, cwd, 'status');
+    assert.equal(status.status, 0, status.stderr);
+    assert.match(status.stdout, /\[Codex Desktop\]/);
+    assert.match(status.stdout, /MCP Server:.*Installed/);
+    assert.match(status.stdout, /Marketplace:.*Registered/);
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
