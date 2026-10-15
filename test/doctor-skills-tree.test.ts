@@ -284,6 +284,48 @@ test('doctor: freshness roster comes from the payload manifest, not the CLI', ()
   assert.ok(!stdout.includes('Native core skills'), `unexpected native warning under skew:\n${stdout}`);
 });
 
+// Layout-less receipts (written before the layout field existed) cannot
+// distinguish a healthy marketplace install from a removed plugin dir.
+// Doctor must hedge — naming both possible owners — instead of prescribing
+// the layout-converting `install --target` as the only fix. A corrupt
+// receipt erases the layout knowledge entirely: the orphan branch stays
+// silent (the corrupt-receipt warning already carries the remediation),
+// never claiming a marketplace server is missing.
+test('doctor: layout-less receipts hedge and corrupt receipts stay silent in the orphan branch', () => {
+  const core = parseCoreSkillNames(readFileSync(join(realTree, '.manifest.json'), 'utf8'));
+  assert.ok(core, 'manifest core roster must parse');
+
+  const home = fixtureDir('hwc-doctor-native-v1-');
+  const dshHome = fixtureDir('hwc-doctor-native-v1root-');
+  const nativeDir = join(dshHome, 'skills');
+  for (const name of core) {
+    cpSync(join(realTree, name), join(nativeDir, name), { recursive: true });
+  }
+  const v1Receipt = `${JSON.stringify({ names: [...core].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)) }, null, 2)}\n`;
+  writeFileSync(join(nativeDir, '.huaweicloud-devkit-native.json'), v1Receipt);
+  const v1Out = runDoctor(home, { DSH_HOME: dshHome });
+  assert.ok(v1Out.includes('no recorded layout'), `layout-less receipt must hedge:\n${v1Out}`);
+  assert.ok(v1Out.includes('DSH profile'), `the hedge must name the marketplace owner:\n${v1Out}`);
+  assert.ok(
+    !v1Out.includes('present without an installed MCP server — re-run'),
+    `the layout-converting remediation must not be the sole advice:\n${v1Out}`,
+  );
+
+  const home2 = fixtureDir('hwc-doctor-native-cx-');
+  const dshHome2 = fixtureDir('hwc-doctor-native-cxroot-');
+  const nativeDir2 = join(dshHome2, 'skills');
+  for (const name of core) {
+    cpSync(join(realTree, name), join(nativeDir2, name), { recursive: true });
+  }
+  writeFileSync(join(nativeDir2, '.huaweicloud-devkit-native.json'), '{"names": [torn');
+  const corruptOut = runDoctor(home2, { DSH_HOME: dshHome2 });
+  assert.ok(corruptOut.includes('unreadable native receipt'), `corrupt warning expected:\n${corruptOut}`);
+  assert.ok(
+    !corruptOut.includes('present without an installed MCP server'),
+    `a corrupt receipt must not orphan a marketplace install it cannot see:\n${corruptOut}`,
+  );
+});
+
 // A torn or shape-broken receipt is visible: doctor warns instead of
 // silently demoting the dir to residue treatment. The boundary is the
 // shared module's — both broken shapes classify as corrupt.

@@ -504,6 +504,58 @@ test('update restores divergent and missing native core copies', () => {
   }
 });
 
+// Uninstall honors the receipt's maintainer attribution: a package-root
+// receipt names the DSH profile's package as the owner of the native
+// copies, so uninstall leaves them (and the receipt) for it and says how
+// to remove them for real.
+test('uninstall leaves marketplace-owned native copies in place', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
+  try {
+    assert.equal(run('workbuddy', home, cwd, 'install').status, 0);
+    const nativeDir = join(home, '.workbuddy', 'skills');
+    writeFileSync(
+      join(nativeDir, '.huaweicloud-devkit-native.json'),
+      JSON.stringify({
+        names: [...coreRoster].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+        layout: 'package-root',
+        packageRoot: '/fake/profile/pkg',
+      }),
+    );
+    const res = run('workbuddy', home, cwd, 'uninstall');
+    assert.match(res.stdout, /Uninstall complete/);
+    assert.match(res.stdout, /belong to the DSH profile's huaweicloud-devkit package/);
+    assert.match(res.stdout, /\/fake\/profile\/pkg/);
+    assert.ok(existsSync(join(nativeDir, 'huaweicloud-core')), 'marketplace-owned copies must survive');
+    assert.ok(existsSync(join(nativeDir, '.huaweicloud-devkit-native.json')), 'the receipt survives with them');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+// Crashed receipt writes leave pid-suffixed tmp files nothing else
+// reclaims; uninstall sweeps them so the native dir holds nothing devkit.
+test('uninstall sweeps orphaned receipt tmp files', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
+  try {
+    assert.equal(run('workbuddy', home, cwd, 'install').status, 0);
+    const nativeDir = join(home, '.workbuddy', 'skills');
+    writeFileSync(join(nativeDir, '.huaweicloud-devkit-native.json.424242.tmp'), 'torn');
+    const res = run('workbuddy', home, cwd, 'uninstall');
+    assert.match(res.stdout, /Uninstall complete/);
+    assert.ok(
+      !existsSync(join(nativeDir, '.huaweicloud-devkit-native.json.424242.tmp')),
+      'the orphaned tmp file is swept',
+    );
+    assert.deepEqual(readdirSync(nativeDir), [], 'nothing devkit-owned remains in the dir');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test('workbuddy install creates skills, MCP server, and safety policy', () => {
   const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
   const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));

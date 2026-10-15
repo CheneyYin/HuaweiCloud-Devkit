@@ -63,6 +63,15 @@ test('readNativeReceipt: layout and packageRoot pass through with type validatio
   assert.ok(wrongTypes?.kind === 'ok');
   assert.equal(wrongTypes.receipt.layout, undefined);
   assert.equal(wrongTypes.receipt.packageRoot, undefined);
+  // A relative packageRoot would steer doctor's comparator from an
+  // attacker-controlled base: dropped, never trusted.
+  writeFileSync(
+    nativeReceiptPath(dir),
+    JSON.stringify({ names: ['huaweicloud-core'], layout: 'package-root', packageRoot: 'relative/pkg' }),
+  );
+  const relative = readNativeReceipt(dir);
+  assert.ok(relative?.kind === 'ok');
+  assert.equal(relative.receipt.packageRoot, undefined, 'a relative packageRoot is dropped');
 });
 
 test('writeNativeReceipt: atomic rename leaves no temp file behind', () => {

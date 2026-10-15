@@ -58,6 +58,7 @@ try {
   const requiredFiles = [
     'package.json',
     'bin/setup.cjs',
+    'bin/dsh-postinstall.cjs',
     '.agents/plugins/marketplace.json',
     'integrations/opencode/opencode.json',
     'plugins/huaweicloud-core/.mcp.json',
@@ -66,6 +67,8 @@ try {
     'plugins/huaweicloud-core/.cursor-plugin/plugin.json',
     'plugins/huaweicloud-core/.workbuddy-plugin/plugin.json',
     'plugins/huaweicloud-core/hooks/hooks.json',
+    'plugins/huaweicloud-core/dist/lib/native-receipt.js',
+    'plugins/huaweicloud-core/dist/lib/skill-manifest.js',
     'plugins/huaweicloud-core/hooks/huaweicloud-safety.py',
     'plugins/huaweicloud-core/safety/policy.json',
     'plugins/huaweicloud-core/safety/rules/cloud-risk-rules.json',

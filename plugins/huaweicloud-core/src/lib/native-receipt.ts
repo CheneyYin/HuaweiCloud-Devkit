@@ -6,7 +6,7 @@
 // (parsable JSON, non-array names) is classified identically everywhere.
 // Zod-free so every consumer graph can import it.
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 export const NATIVE_RECEIPT_NAME = '.huaweicloud-devkit-native.json';
 
@@ -31,8 +31,14 @@ export type NativeReceiptRead = { kind: 'ok'; receipt: NativeReceipt } | { kind:
 
 // Receipts only ever contained core skill names (huaweicloud-*), so only
 // that shape earns delete rights; anything else in a tampered file is
-// ignored, never deleted.
+// ignored, never deleted. Exported because the shape is part of the
+// receipt contract: consumers that list possible leftovers (uninstall's
+// corrupt-receipt warning) must not re-derive it and drift.
 const CORE_NAME_SHAPE = /^huaweicloud-[a-z0-9-]*$/;
+
+export function isCoreNameShape(name: string): boolean {
+  return CORE_NAME_SHAPE.test(name);
+}
 
 export function readNativeReceipt(dir: string): NativeReceiptRead {
   const receiptPath = nativeReceiptPath(dir);
@@ -51,7 +57,11 @@ export function readNativeReceipt(dir: string): NativeReceiptRead {
     names: parsed.names.filter((n): n is string => typeof n === 'string' && CORE_NAME_SHAPE.test(n)),
   };
   if (parsed.layout === 'plugin-dir' || parsed.layout === 'package-root') receipt.layout = parsed.layout;
-  if (typeof parsed.packageRoot === 'string' && parsed.packageRoot.length > 0) {
+  // An absolute path only: packageRoot steers doctor's comparator and is
+  // echoed into its output, so a relative or otherwise malformed value is
+  // dropped rather than trusted (a dropped value degrades to the honest
+  // layout-agnostic warnings, never to a redirected comparison).
+  if (typeof parsed.packageRoot === 'string' && parsed.packageRoot.length > 0 && isAbsolute(parsed.packageRoot)) {
     receipt.packageRoot = parsed.packageRoot;
   }
   return { kind: 'ok', receipt };

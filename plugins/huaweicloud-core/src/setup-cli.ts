@@ -58,7 +58,13 @@ import { findHcloudBin, hcloudProbeNextStep, probeHcloud } from './hcloud-probe.
 import { asText } from './lib/as-text.ts';
 import { parseSkillManifest, parseCoreSkillNames } from './lib/skill-manifest.ts';
 import { listSkillDirs, skillTreeEquals } from './lib/skill-tree.ts';
-import { nativeReceiptPath, readNativeReceipt, writeNativeReceipt } from './lib/native-receipt.ts';
+import {
+  nativeReceiptPath,
+  readNativeReceipt,
+  writeNativeReceipt,
+  isCoreNameShape,
+  NATIVE_RECEIPT_NAME,
+} from './lib/native-receipt.ts';
 import { PACK_IDS, type PackId } from './lib/pack-types.ts';
 import {
   DEPENDENCIES,
@@ -844,7 +850,7 @@ function cleanupNativeDirs(): number {
     const receipt = readNativeReceipt(dir);
     if (receipt?.kind === 'corrupt') {
       console.log(
-        `  \x1b[33m[WARN]\x1b[0m unreadable native receipt in ${dir} — core copies kept; re-running install rewrites it`,
+        `  \x1b[33m[WARN]\x1b[0m unreadable native receipt in ${dir} — core copies kept; the next install or update for this agent rewrites it`,
       );
     }
     const remembered = receipt?.kind === 'ok' ? new Set(receipt.receipt.names) : new Set<string>();
@@ -891,13 +897,24 @@ function removeOwnedSkillsFrom(dir: string): number {
   if (!existsSync(dir)) return 0;
   const owned = devkitOwnedSkillNames();
   const receipt = readNativeReceipt(dir);
+  // A receipt that records the DSH marketplace layout names another
+  // maintainer: the profile package's postinstall placed these copies and
+  // still serves them, so this uninstall leaves them (and the receipt)
+  // alone and says how to remove them for real.
+  if (receipt?.kind === 'ok' && receipt.receipt.layout === 'package-root') {
+    console.log(
+      `  \x1b[33m[WARN]\x1b[0m native core skills in ${dir} belong to the DSH profile's huaweicloud-devkit package` +
+        `${receipt.receipt.packageRoot ? ` (${receipt.receipt.packageRoot})` : ''} — remove or upgrade the package there; nothing removed here`,
+    );
+    return 0;
+  }
   const remembered =
     receipt?.kind === 'ok' && nativeSyncDirs().has(dir) ? new Set(receipt.receipt.names) : new Set<string>();
   let removed = 0;
   try {
     if (receipt?.kind === 'corrupt') {
       const leftovers = readdirSync(dir, { withFileTypes: true })
-        .filter((e) => e.isDirectory() && /^huaweicloud-[a-z0-9-]*$/.test(e.name) && !owned.has(e.name))
+        .filter((e) => e.isDirectory() && isCoreNameShape(e.name) && !owned.has(e.name))
         .map((e) => e.name);
       console.log(
         `  \x1b[33m[WARN]\x1b[0m unreadable native receipt in ${dir}` +
@@ -910,6 +927,13 @@ function removeOwnedSkillsFrom(dir: string): number {
       }
     }
     removeIfExists(nativeReceiptPath(dir));
+    // Crashed receipt writes leave pid-suffixed tmp files nothing else
+    // reclaims — they go with the receipt, so an emptied dir can go too.
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.startsWith(`${NATIVE_RECEIPT_NAME}.`) && entry.name.endsWith('.tmp')) {
+        removeIfExists(join(dir, entry.name));
+      }
+    }
   } catch {
     // best-effort purge: an unreadable dir is skipped, removal continues elsewhere
   }
@@ -5194,7 +5218,21 @@ async function cmdDoctor(): Promise<void> {
           continue;
         }
         if (!installed) {
-          if (receipt !== null) {
+          // A corrupt receipt erases the layout knowledge this branch needs:
+          // the marketplace would be false-orphaned and the remediation
+          // would layer a second install. The corrupt-receipt warning above
+          // already carries the honest remediation, so this branch speaks
+          // only for readable receipts. A layout-less receipt (written
+          // before the layout field existed) cannot distinguish a healthy
+          // marketplace install from a removed plugin dir, so its
+          // remediation names both paths instead of prescribing the
+          // layout-converting one.
+          if (receipt?.kind === 'ok' && receipt.receipt.layout === undefined) {
+            warn++;
+            console.log(
+              `  \x1b[33m[WARN]\x1b[0m Native core skills (${row.label}) present without a plugin-dir MCP server and no recorded layout — the marketplace install (DSH profile package) is also a possible owner; if it is stale, re-run the DSH profile's package install or npx huaweicloud-devkit install --target ${row.id}`,
+            );
+          } else if (receipt?.kind === 'ok') {
             warn++;
             console.log(
               `  \x1b[33m[WARN]\x1b[0m Native core skills (${row.label}) present without an installed MCP server — re-run: npx huaweicloud-devkit install --target ${row.id}`,
@@ -5213,13 +5251,24 @@ async function cmdDoctor(): Promise<void> {
         let payloadTree: string | null;
         let fixHint: string;
         if (packageRoot !== null) {
+          // The recorded root is untrusted input echoed into terminal
+          // output — control characters could forge [PASS]/[FAIL] lines —
+          // so it is stripped before printing. The class is built from
+          // fromCharCode (same idiom as the tests' stripAnsi) because
+          // eslint's no-control-regex rightly flags control characters in
+          // regex literals.
+          const controlChars = new RegExp(
+            `[${String.fromCharCode(0)}-${String.fromCharCode(31)}${String.fromCharCode(127)}]`,
+            'g',
+          );
+          const shownRoot = packageRoot.replace(controlChars, '');
           const tree = join(packageRoot, 'plugins', 'huaweicloud-core', 'skills');
           payloadTree = existsSync(tree) ? tree : null;
           fixHint = 'upgrade the huaweicloud-devkit package inside the DSH profile';
           if (payloadTree === null) {
             warn++;
             console.log(
-              `  \x1b[33m[WARN]\x1b[0m Native core skills (${row.label}): the recorded package root ${packageRoot} no longer carries a skills tree — reinstall the huaweicloud-devkit package in the DSH profile`,
+              `  \x1b[33m[WARN]\x1b[0m Native core skills (${row.label}): the recorded package root ${shownRoot} no longer carries a skills tree — reinstall the huaweicloud-devkit package in the DSH profile`,
             );
             continue;
           }
