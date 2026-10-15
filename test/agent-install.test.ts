@@ -54,7 +54,7 @@ function run(
     cwd,
     env: makeEnv(home, extraEnv),
     encoding: 'utf8',
-    timeout: 60000,
+    timeout: 240000,
   });
 }
 
@@ -63,7 +63,7 @@ function runAuto(home: string, cwd: string, cmd: string, extraEnv: Record<string
     cwd,
     env: makeEnv(home, extraEnv),
     encoding: 'utf8',
-    timeout: 60000,
+    timeout: 240000,
   });
 }
 

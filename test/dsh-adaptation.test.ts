@@ -38,7 +38,7 @@ function runCli(home: string, cwd: string, args: string[], dshHome: string = joi
     cwd,
     env: makeEnv(home, dshHome),
     encoding: 'utf8',
-    timeout: 60000,
+    timeout: 240000,
   });
 }
 

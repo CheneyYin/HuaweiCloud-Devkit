@@ -45,7 +45,11 @@ export const AGENTS: AgentDefinition[] = [
   },
   {
     id: 'opencode',
-    pathPatterns: ['/.config/opencode/'],
+    // The payload path marker, not ~/.config/opencode: opencode resolves its
+    // config root from XDG_CONFIG_HOME, and the installer follows
+    // (xdgConfigHome), so under a non-default root the server path has no
+    // /.config/ segment — but every layout keeps the opencode plugin dir.
+    pathPatterns: ['/opencode/huaweicloud-plugins/'],
     envVars: ['OPENCODE_SESSION_ID', 'OPENCODE_CONFIG_PATH'],
     version: null,
   },

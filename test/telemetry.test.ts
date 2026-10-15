@@ -102,6 +102,29 @@ test('detectAgentHarness prefers real host env over clientInfo.name', () => {
   });
 });
 
+// The registry's path patterns are matched against the spawned server's own
+// module path. opencode resolves its config root from XDG_CONFIG_HOME (and
+// the installer follows, xdgConfigHome), so the opencode marker must survive
+// a non-default root — the plugin dir segment, not the ~/.config prefix.
+test('opencode path pattern matches payload paths under any XDG root', () => {
+  const opencode = AGENTS.find((a) => a.id === 'opencode');
+  assert.ok(opencode?.pathPatterns?.length, 'opencode must carry path patterns');
+  const marker = opencode.pathPatterns![0]!;
+  for (const serverPath of [
+    '/home/u/.config/opencode/huaweicloud-plugins/dist/mcp-server.js',
+    '/home/u/xdg/opencode/huaweicloud-plugins/dist/mcp-server.js',
+    '/home/u/.config/opencode/huaweicloud-plugins/src/mcp-server.mjs',
+  ]) {
+    assert.ok(serverPath.includes(marker), `marker ${marker} must match ${serverPath}`);
+  }
+  // No other agent's payload path may collide with the opencode marker.
+  for (const agent of AGENTS.filter((a) => a.id !== 'opencode')) {
+    for (const pattern of agent.pathPatterns ?? []) {
+      assert.notEqual(pattern, marker, `agent ${agent.id} must not share the opencode payload-dir marker`);
+    }
+  }
+});
+
 test('generateOrRecoverInstallId returns consistent string', async () => {
   await withIsolatedTelemetry(async ({ generateOrRecoverInstallId }) => {
     const id1 = generateOrRecoverInstallId();

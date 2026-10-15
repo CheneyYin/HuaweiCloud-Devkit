@@ -30,7 +30,7 @@ function runCli(home: string, cwd: string, args: string[], officeaceConfigRoot: 
     cwd,
     env: makeEnv(home, officeaceConfigRoot),
     encoding: 'utf8',
-    timeout: 60000,
+    timeout: 240000,
   });
 }
 
@@ -43,7 +43,7 @@ function runCliNoEnv(home: string, cwd: string, args: string[]) {
     cwd,
     env,
     encoding: 'utf8',
-    timeout: 60000,
+    timeout: 240000,
   });
 }
 

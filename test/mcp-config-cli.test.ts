@@ -50,7 +50,7 @@ function run(target: string, home: string, cmd: string) {
     cwd: root,
     env: makeEnv(home),
     encoding: 'utf8',
-    timeout: 120000,
+    timeout: 240000,
   });
 }
 

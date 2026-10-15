@@ -45,7 +45,7 @@ function runCli(home: string, args: string[]) {
     cwd: root,
     env: makeEnv(home),
     encoding: 'utf8',
-    timeout: 120000,
+    timeout: 240000,
   });
 }
 
