@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import type { SpawnSyncReturns } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
@@ -46,12 +46,14 @@ const INSTALL_TIMEOUT_MS = 400_000;
 // best-effort — both are harmless to the assertions here.
 const AGENT_TIMEOUT_MS = 300_000;
 
-// Env for a sandboxed agent run. Both HOME (the devkit installer resolves
-// agent config dirs from os.homedir() only — it is XDG-blind) and the XDG
-// ladder (opencode resolves config from XDG_CONFIG_HOME) must point onto the
-// SAME sandbox tree or the two sides silently diverge: install green, agent
-// blind. CODEX_HOME must stay directly under HOME because
-// uninstallCodexDesktop() rewrites homedir()/.codex/config.toml.
+// Env for a sandboxed agent run. HOME must point at the sandbox (the
+// installer resolves most agent dirs from os.homedir()), and the XDG ladder
+// (opencode resolves config from XDG_CONFIG_HOME; the installer's configRoot
+// follows the same variable via xdgConfigHome) must point onto the SAME
+// sandbox tree — pinning XDG_CONFIG_HOME to HOME/.config keeps installer and
+// agent on one root and exercises the installer's XDG path for real.
+// CODEX_HOME must stay directly under HOME because uninstallCodexDesktop()
+// rewrites homedir()/.codex/config.toml.
 function sandboxEnv(home: string, extra: Record<string, string | undefined> = {}): NodeJS.ProcessEnv {
   mkdirSync(join(home, '.codex'), { recursive: true });
   const env: Record<string, string | undefined> = {
@@ -161,6 +163,8 @@ function parseJsonOut(label: string, out: string): unknown {
 // sandbox leak writing into the developer's real agent configs. Snapshot
 // before, assert byte-equality after — the check runs inside the test, so
 // the worst failure mode is a red test, not a manual post-run inspection.
+// Ambient XDG_CONFIG_HOME (when absolute) redirects the installer's opencode
+// root, so its real location is watched too.
 function realHomeSnapshot(): Array<[string, string | null]> {
   const home = process.env.HOME;
   assert.ok(home, 'HOME must be set for the real-HOME canary');
@@ -170,6 +174,10 @@ function realHomeSnapshot(): Array<[string, string | null]> {
     join(home, '.codex', 'config.toml'),
     join(home, '.agents', 'plugins', 'marketplace.json'),
   ];
+  const ambientXdg = process.env.XDG_CONFIG_HOME;
+  if (ambientXdg && isAbsolute(ambientXdg)) {
+    watched.push(join(ambientXdg, 'opencode', 'opencode.json'), join(ambientXdg, 'opencode', 'opencode.jsonc'));
+  }
   return watched.map((p) => [p, existsSync(p) ? readFileSync(p, 'utf8') : null]);
 }
 
@@ -191,9 +199,10 @@ function coreRoster(): Set<string> {
 
 // Native skill names the agent discloses from the sandbox config dir
 // (prefix + location filter keeps foreign skill sources out of the set).
-function disclosedSkillNames(debugSkillJson: unknown, home: string): Set<string> {
+// The native root derives from the XDG root the sandbox env actually set —
+// the same value the installer's configRoot reads (xdgConfigHome).
+function disclosedSkillNames(debugSkillJson: unknown, nativeRoot: string): Set<string> {
   const skills = Array.isArray(debugSkillJson) ? debugSkillJson : [];
-  const nativeRoot = join(home, '.config', 'opencode', 'skills');
   return new Set(
     skills
       .map((s) => obj(s))
@@ -283,8 +292,11 @@ test('real opencode: install -> agent view -> uninstall', { skip: agentSkip(open
 
     const skillsRun = runAgent('opencode', ['debug', 'skill'], env, cwd);
     assertSpawnOk(skillsRun, 'opencode debug skill');
+    // The native root derives from the XDG root the sandbox env set — the
+    // same value the installer's configRoot honored during install.
+    const nativeRoot = join(String(env.XDG_CONFIG_HOME), 'opencode', 'skills');
     assert.deepEqual(
-      disclosedSkillNames(parseJsonOut('opencode debug skill', skillsRun.stdout ?? ''), home),
+      disclosedSkillNames(parseJsonOut('opencode debug skill', skillsRun.stdout ?? ''), nativeRoot),
       coreRoster(),
       'the agent must disclose exactly the core meta-skill roster from the sandbox skills dir',
     );
@@ -376,8 +388,13 @@ test('real codex: install -> agent view -> uninstall', { skip: agentSkip(codexPr
     assert.equal(r.status, 0, `uninstall --target codex failed:\n${r.stdout}\n${r.stderr}`);
     assert.deepEqual(installedDevkitNames(), [], 'plugin list must be back to no devkit');
     assert.ok(!marketplaceHasDevkit(), 'marketplace list must be back to no devkit');
-    // plugin remove leaves the marketplace cache dir behind by design —
-    // do not assert cache removal.
+    // `codex plugin remove` strips the version subtrees but leaves the
+    // marketplace-keyed cache shell; uninstallCodex removes it — the
+    // uninstall-completeness contract this layer owns.
+    assert.ok(
+      !existsSync(join(home, '.codex', 'plugins', 'cache', getMarketplaceName())),
+      'the marketplace-keyed plugin cache dir must be removed on uninstall',
+    );
     assertRealHomeUnchanged(canary);
   });
 });

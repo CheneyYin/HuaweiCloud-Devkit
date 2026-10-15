@@ -12,7 +12,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const setupCli = join(root, 'bin', 'setup.cjs');
 
 function makeEnv(home: string): Record<string, string | undefined> {
-  return {
+  const env: Record<string, string | undefined> = {
     ...process.env,
     USERPROFILE: home,
     HOME: home,
@@ -20,14 +20,29 @@ function makeEnv(home: string): Record<string, string | undefined> {
     HOMEPATH: home.slice(2),
     HUAWEICLOUD_HOME: home,
   };
+  // The installer honors XDG_CONFIG_HOME for opencode (xdgConfigHome); an
+  // ambient value on a dev machine would redirect fake-HOME installs into
+  // the real XDG root. Per-test extra env (runCli) can still set it.
+  delete env.XDG_CONFIG_HOME;
+  return env;
 }
 
-function runCli(home: string, cwd: string, args: string[]): SpawnSyncReturns<string> {
+function runCli(
+  home: string,
+  cwd: string,
+  args: string[],
+  extraEnv: Record<string, string | undefined> = {},
+): SpawnSyncReturns<string> {
   return spawnSync(process.execPath, [setupCli, ...args], {
     cwd,
-    env: makeEnv(home),
+    env: { ...makeEnv(home), ...extraEnv },
     encoding: 'utf8',
-    timeout: 60000,
+    // install commands are network-bound: every fake-HOME install fetches
+    // undici from the npm registry into a cold cache ($HOME/.npm), which
+    // measured 79s on a high-latency registry day — 60s killed the install
+    // mid-flight (status null). Other commands return in seconds; the
+    // timeout is only an upper bound for them.
+    timeout: 240000,
   });
 }
 
@@ -118,6 +133,50 @@ test('handles platform-specific home directory resolution', () => {
       ) ?? new Set()),
     ].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
     assert.deepEqual(nativeOwned, expectedCore, 'native dir carries exactly the core meta-skills');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('opencode install follows an absolute XDG_CONFIG_HOME', () => {
+  const home = mkdtempSync(join(tmpdir(), 'cp-xdg-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'cp-proj-'));
+  try {
+    const xdgRoot = join(home, 'xdg-config');
+    const res = runCli(home, cwd, ['install', '--target', 'opencode'], { XDG_CONFIG_HOME: xdgRoot });
+    assert.equal(res.status, 0, `stderr: ${res.stderr}`);
+    // Everything lands under the XDG root opencode actually reads.
+    assert.ok(existsSync(join(xdgRoot, 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js')));
+    assert.ok(existsSync(join(xdgRoot, 'opencode', 'skills')), 'native skills under the XDG root');
+    const config = readJson(join(xdgRoot, 'opencode', 'opencode.json'));
+    assert.ok(config.mcp['huaweicloud-devkit'], 'mcp entry written under the XDG root');
+    // The legacy default root stays untouched.
+    assert.ok(!existsSync(join(home, '.config', 'opencode')), 'legacy ~/.config/opencode must not be created');
+    // status reads the same root (detection alignment).
+    const status = runCli(home, cwd, ['status', '--target', 'opencode'], { XDG_CONFIG_HOME: xdgRoot });
+    assert.equal(status.status, 0, `stderr: ${status.stderr}`);
+    assert.match(status.stdout, /MCP Server:.*Installed/);
+    // Uninstall cleans the XDG root side.
+    assert.equal(runCli(home, cwd, ['uninstall', '--target', 'opencode'], { XDG_CONFIG_HOME: xdgRoot }).status, 0);
+    assert.ok(!existsSync(join(xdgRoot, 'opencode', 'huaweicloud-plugins')));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('relative XDG_CONFIG_HOME values are ignored (spec: absolute only)', () => {
+  const home = mkdtempSync(join(tmpdir(), 'cp-xdgrel-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'cp-proj-'));
+  try {
+    const res = runCli(home, cwd, ['install', '--target', 'opencode'], { XDG_CONFIG_HOME: 'relative-xdg' });
+    assert.equal(res.status, 0, `stderr: ${res.stderr}`);
+    assert.ok(
+      existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js')),
+      'falls back to the default ~/.config root',
+    );
+    assert.ok(!existsSync(join(cwd, 'relative-xdg')), 'no relative dir materialized');
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });

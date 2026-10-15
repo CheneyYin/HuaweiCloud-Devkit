@@ -10,13 +10,17 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const setupCli = join(root, 'bin', 'setup.cjs');
 
 function makeEnv(home: string, _cwd: string): NodeJS.ProcessEnv {
-  return {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     USERPROFILE: home,
     HOME: home,
     HOMEDRIVE: home.slice(0, 2),
     HOMEPATH: home.slice(2),
   };
+  // XDG_CONFIG_HOME redirects the opencode config root (xdgConfigHome); an
+  // ambient value would leak installs into the real XDG root.
+  delete env.XDG_CONFIG_HOME;
+  return env;
 }
 
 function runCli(home: string, cwd: string, args: string[]) {

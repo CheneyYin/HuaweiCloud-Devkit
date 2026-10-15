@@ -19,7 +19,7 @@ import { createRequire } from 'node:module';
 
 import { getAuthStatus, syncAuth } from './auth/service.ts';
 import { resolveAndApplyProjectId } from './auth/project-id.ts';
-import { SUPPORTED_AGENT_TARGETS } from './auth/agent-registration.ts';
+import { SUPPORTED_AGENT_TARGETS, xdgConfigHome } from './auth/agent-registration.ts';
 import { fingerprint, readKooCliProfiles, resolveManagedProfile } from './auth/reconcile.ts';
 import { redactSecrets } from './safety-policy.ts';
 import {
@@ -145,9 +145,12 @@ const BANNER = `
 ╚══════════════════════════════════════════════╝
 `;
 
+// Every opencode surface (payload dir, skills, commands, config file,
+// status/doctor probes) derives from this root. It follows XDG_CONFIG_HOME
+// so the installer writes where opencode reads — the shared resolution and
+// its rationale live in xdgConfigHome() (auth/agent-registration.ts).
 function configRoot(target = 'opencode'): string {
-  const home = homedir();
-  return join(home, '.config', target);
+  return join(xdgConfigHome(), target);
 }
 
 function opencodeSkillsDir(): string {
@@ -1432,6 +1435,16 @@ function uninstallCodex(): void {
       stdio: 'pipe',
     });
     console.log(`  ${r2.stdout ? r2.stdout.toString().trim() : r2.stderr.toString().trim()}`);
+    // `codex plugin remove` strips the version subtrees but leaves the
+    // marketplace-keyed cache dir behind (live-verified on codex-cli
+    // 0.162.1: only the empty shell survives the CLI's own cleanup); the
+    // registration was ours, so its cache shell is ours to remove. CODEX_HOME
+    // mirrors the CLI's own home resolution so the cleanup follows whatever
+    // root the spawned `codex plugin` commands above actually used.
+    const cacheDir = join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'plugins', 'cache', name);
+    if (removeIfExists(cacheDir)) {
+      console.log(`  Codex plugin cache cleaned: ${name}`);
+    }
   }
 }
 
@@ -3534,7 +3547,7 @@ function opencodeStatus(): void {
 
 function detectAgents(): string[] {
   const checks: Array<[string, () => boolean]> = [
-    ['opencode', () => existsSync(join(homedir(), '.config', 'opencode'))],
+    ['opencode', () => existsSync(configRoot('opencode'))],
     ['codex-desktop', () => existsSync(join(homedir(), '.codex'))],
     ['codearts', () => existsSync(join(homedir(), '.codeartsdoer'))],
     ['codearts-work', () => existsSync(join(homedir(), '.codeartswork'))],

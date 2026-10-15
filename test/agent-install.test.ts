@@ -33,7 +33,8 @@ function makeEnv(home: string, extra: Record<string, string | undefined> = {}) {
     HERMES_HOME: join(home, '.hermes'),
   };
   // Clear agent home overrides so installs land in the temp home, not the real one.
-  for (const key of ['ATOMCODE_HOME', 'DSH_HOME', 'HUAWEICLOUD_HOME', 'OFFICE_CLAW_CONFIG_ROOT']) {
+  // XDG_CONFIG_HOME redirects the opencode config root (xdgConfigHome).
+  for (const key of ['ATOMCODE_HOME', 'DSH_HOME', 'HUAWEICLOUD_HOME', 'OFFICE_CLAW_CONFIG_ROOT', 'XDG_CONFIG_HOME']) {
     delete env[key];
   }
   // OfficeAce detection probes the real Windows registry / Program Files, which

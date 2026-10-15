@@ -41,6 +41,10 @@ function doctorEnv(home: string, extra: Record<string, string> = {}): NodeJS.Pro
   delete env.HUAWEICLOUD_HOME;
   delete env.OFFICE_CLAW_CONFIG_ROOT;
   delete env.HERMES_HOME;
+  // XDG_CONFIG_HOME redirects the opencode config root (xdgConfigHome); an
+  // ambient value would leak doctor's fresh-install probes into the real
+  // XDG root (if a test ever needs it set, use the DSH_HOME guard pattern).
+  delete env.XDG_CONFIG_HOME;
   if (!('DSH_HOME' in extra)) delete env.DSH_HOME;
   return env;
 }

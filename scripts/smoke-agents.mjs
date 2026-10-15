@@ -30,7 +30,18 @@ const run = (command, args, opts = {}) =>
 
 function cleanEnv(extra = {}) {
   const env = { ...process.env, ...extra };
-  for (const key of ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'all_proxy', 'ALL_PROXY']) {
+  // XDG_CONFIG_HOME redirects the installer's opencode config root
+  // (xdgConfigHome); an ambient value would push fake-HOME installs into
+  // the real XDG root.
+  for (const key of [
+    'http_proxy',
+    'https_proxy',
+    'HTTP_PROXY',
+    'HTTPS_PROXY',
+    'all_proxy',
+    'ALL_PROXY',
+    'XDG_CONFIG_HOME',
+  ]) {
     delete env[key];
   }
   return env;

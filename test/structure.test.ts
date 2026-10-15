@@ -867,6 +867,46 @@ test('nativeSkillDirs derives from PAYLOAD_TARGETS plus the officeace exception'
   assert.doesNotMatch(codexDesktopRow, /nativeSkills/, 'codex-desktop stays without native skill copies');
 });
 
+// opencode reads its config from XDG_CONFIG_HOME (default ~/.config). The
+// installer's write root, the registration read, and the agent-presence
+// probe must all derive from ONE shared resolver — three independent
+// derivations is how "install green, agent blind" under a non-default
+// XDG_CONFIG_HOME happened (each seam fixed separately drifted back).
+test('opencode config root is XDG-aware through one shared resolver', () => {
+  const setup = readSource(join('src', 'setup-cli.ts'));
+  const registration = readSource(join('src', 'auth', 'agent-registration.ts'));
+  assert.match(
+    registration,
+    /export function xdgConfigHome\(\): string/,
+    'the shared XDG root resolver must live in agent-registration.ts',
+  );
+  // The resolver honors absolute XDG_CONFIG_HOME only (spec: relative ignored).
+  const resolverBody = registration.match(/export function xdgConfigHome\(\): string \{[\s\S]*?\n\}/)?.[0] ?? '';
+  assert.ok(resolverBody.length > 0, 'xdgConfigHome body found');
+  assert.match(resolverBody, /isAbsolute/);
+  // Registration detection reads the shared root, not its own derivation.
+  const registrationConfigFile =
+    registration.match(/function opencodeConfigFile\(\): string \{[\s\S]*?\n\}/)?.[0] ?? '';
+  assert.ok(registrationConfigFile.length > 0, 'agent-registration opencodeConfigFile found');
+  assert.match(registrationConfigFile, /xdgConfigHome\(\)/);
+  assert.doesNotMatch(registrationConfigFile, /homedir\(\)/, 'detection must not re-derive the default root');
+  // The installer's configRoot delegates instead of re-deriving ~/.config.
+  const configRootBody = setup.match(/function configRoot\(target = 'opencode'\): string \{[\s\S]*?\n\}/)?.[0] ?? '';
+  assert.ok(configRootBody.length > 0, 'configRoot body found');
+  assert.match(configRootBody, /xdgConfigHome\(\)/);
+  assert.doesNotMatch(
+    configRootBody,
+    /homedir\(\)|'\.config'/,
+    'configRoot must not re-derive the default root inline',
+  );
+  // Agent-presence detection probes the same root the installer writes.
+  assert.match(
+    setup,
+    /\['opencode', \(\) => existsSync\(configRoot\('opencode'\)\)\]/,
+    'detectAgents must probe the shared opencode config root',
+  );
+});
+
 test('tools.ts resolves skills from the server-relative tree only', () => {
   const tools = readSource(join('src', 'tools.ts'));
   // SKILLS_ROOT is server data next to dist/ — no agent-native dir probing

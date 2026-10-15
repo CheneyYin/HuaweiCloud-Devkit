@@ -36,7 +36,14 @@ function makeEnv(home: string) {
     HUAWEICLOUD_DEVKIT_SKIP_OFFICEACE_DETECT: '1',
   };
   // Clear agent home overrides so installs land in the temp home, not the real one.
-  for (const key of ['ATOMCODE_HOME', 'HUAWEICLOUD_HOME', 'OFFICE_CLAW_CONFIG_ROOT', 'DEVKIT_PACKS']) {
+  // XDG_CONFIG_HOME redirects the opencode config root (xdgConfigHome).
+  for (const key of [
+    'ATOMCODE_HOME',
+    'HUAWEICLOUD_HOME',
+    'OFFICE_CLAW_CONFIG_ROOT',
+    'DEVKIT_PACKS',
+    'XDG_CONFIG_HOME',
+  ]) {
     delete env[key];
   }
   return env;
