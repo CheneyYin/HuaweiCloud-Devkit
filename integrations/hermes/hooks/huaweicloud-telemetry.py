@@ -183,10 +183,11 @@ def main():
     tool_input = data.get("tool_input", {})
 
     # ── Category 1: Bash/terminal tool with hcloud commands ──
-    # Devkit skills are server data disclosed over MCP (never installed
-    # natively), so skill-retrieval telemetry rides trackSkillRetrieve
-    # inside huaweicloud_retrieve_skill; only the CLI classifier and MCP
-    # invocations are tracked here.
+    # Devkit service skills are server data disclosed over MCP (never
+    # installed natively), so their retrieval telemetry rides
+    # trackSkillRetrieve inside huaweicloud_retrieve_skill; the six core
+    # meta-skills are native copies (no telemetry for those loads). Only
+    # the CLI classifier and MCP invocations are tracked here.
     if tool_name in ("Bash", "terminal", "bash", "pwsh"):
         command = command_text(tool_input)
         if command and HCLOUD_RE.search(command):

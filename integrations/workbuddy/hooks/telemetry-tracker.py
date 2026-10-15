@@ -13,9 +13,11 @@ Data flow:
   → MCP Server telemetry.mjs :: ingestHookEvents() → eventQueue → HTTP POST
 
 Classification mirrors the trimmed OpenCode skill-tracker.js: only the hcloud
-CLI classifier and MCP tool invocations. Devkit skills are server data
-disclosed over MCP (never installed natively), so skill-retrieval telemetry
-rides trackSkillRetrieve inside huaweicloud_retrieve_skill.
+CLI classifier and MCP tool invocations. Service skills are server data
+disclosed over MCP and never installed natively, so skill-retrieval telemetry
+rides trackSkillRetrieve inside huaweicloud_retrieve_skill. The six core
+meta-skills are installed as native copies (system-prompt disclosure); those
+loads produce no telemetry by design.
 """
 
 import json

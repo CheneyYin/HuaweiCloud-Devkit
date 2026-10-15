@@ -734,11 +734,12 @@ test('setup-cli.ts supports the codearts target end to end', () => {
   assert.match(setup, /skillsTreeDirs\.push\(PLUGIN_ROOT\)/);
   assert.doesNotMatch(setup, /serverSkillCount\(dir\) >= 6/, 'count-floor doctor check must be gone');
   // doctor's native-dir check is the receipt-gated one: core names warn only
-  // outside a devkit-managed dir, and a manifest without pack info warns
+  // outside a dir a sync row manages, and a manifest without pack info warns
   // instead of crashing the diagnostic run.
   assert.match(setup, /function tryCoreSkillNames\(\)/);
   assert.match(setup, /const corePack = tryCoreSkillNames\(\);/);
-  assert.match(setup, /receipt !== null && corePack\.has\(entry\.name\)/);
+  assert.match(setup, /managedHere && corePack\.has\(entry\.name\)/);
+  assert.match(setup, /function skillTreeEquals\(a: string, b: string\)/);
   // help text documents the target
   assert.match(
     setup,

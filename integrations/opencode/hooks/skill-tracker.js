@@ -59,10 +59,11 @@ function classifyHcloud(text) {
 // ── Shared hooks ──────────────────────────────────────────────
 //
 // Only the bash hcloud classifier lives here: direct shell invocations have
-// no MCP-side telemetry path. Skill-load telemetry used to ride the native
-// skill branches below, but devkit skills are no longer installed natively —
-// they are server data disclosed over MCP, and their retrieval is tracked by
-// trackSkillRetrieve inside huaweicloud_retrieve_skill.
+// no MCP-side telemetry path. Service skills are server data disclosed over
+// MCP and never installed natively, so their retrieval telemetry rides
+// trackSkillRetrieve inside huaweicloud_retrieve_skill. The six core
+// meta-skills are additionally installed as native copies (system-prompt
+// disclosure), and those native loads produce no telemetry by design.
 
 function getHooks() {
   return {

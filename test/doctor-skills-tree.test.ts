@@ -60,6 +60,17 @@ function runDoctor(home: string, extra: Record<string, string> = {}): string {
   return (run.stdout ?? '').replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '');
 }
 
+// A real install into the fake home, so the native freshness checks see an
+// installed payload with receipt-managed native copies.
+function runInstall(home: string): void {
+  const run = spawnSync(process.execPath, [setupCli, 'install', '--target', 'opencode'], {
+    encoding: 'utf8',
+    env: doctorEnv(home),
+    timeout: 180_000,
+  });
+  assert.ok(run.status === 0, `install failed: ${run.stderr}\n${run.stdout}`);
+}
+
 // An installed payload's skills/ dir, as copyServerPayload would have laid
 // it out: one directory per skill, each with a SKILL.md.
 function writePayloadTree(payloadSkills: string, names: string[]): void {
@@ -146,3 +157,55 @@ test(
     assert.ok(stdout.includes('[FAIL] Skills tree'), `expected the symlinked stray to fail, got:\n${stdout}`);
   },
 );
+
+// --- Native core-skill disclosure checks ---
+
+// A healthy install carries receipt-managed native copies equal to its
+// payload: no native warning may appear.
+test('doctor: healthy install raises no native core-skill warnings', () => {
+  const home = fixtureDir('hwc-doctor-native-ok-');
+  runInstall(home);
+  const stdout = runDoctor(home);
+  assert.ok(!stdout.includes('Native core skills'), `unexpected native warning:\n${stdout}`);
+  assert.ok(!stdout.includes('stale native skill cop'), `unexpected stale warning:\n${stdout}`);
+});
+
+// Divergence and missing are the two drift shapes the freshness check
+// exists for: an edited native copy and a deleted one both warn with the
+// per-skill name and the remediation.
+test('doctor: divergent and missing native core copies warn', () => {
+  const home = fixtureDir('hwc-doctor-native-drift-');
+  runInstall(home);
+  const nativeDir = join(home, '.config', 'opencode', 'skills');
+  writeFileSync(join(nativeDir, 'huaweicloud-core', 'SKILL.md'), 'stale\n', 'utf8');
+  rmSync(join(nativeDir, 'huaweicloud-safety'), { recursive: true, force: true });
+  const stdout = runDoctor(home);
+  assert.ok(
+    stdout.includes('huaweicloud-core diverges from the installed payload'),
+    `missing divergence warn:\n${stdout}`,
+  );
+  assert.ok(stdout.includes('huaweicloud-safety missing'), `missing-copy warn:\n${stdout}`);
+});
+
+// Receipt-managed native copies with no installed server behind them are
+// orphaned disclosure: content pointing at MCP tools nothing serves.
+test('doctor: native copies without an installed server warn as orphans', () => {
+  const home = fixtureDir('hwc-doctor-native-orphan-');
+  runInstall(home);
+  rmSync(join(home, '.config', 'opencode', 'huaweicloud-plugins'), { recursive: true, force: true });
+  const stdout = runDoctor(home);
+  assert.ok(stdout.includes('without an installed MCP server'), `missing orphan warn:\n${stdout}`);
+});
+
+// officeace's dir is never a sync target: owned names there are foreign no
+// matter what receipt a hand-crafted one claims, and warn as stale.
+test('doctor: owned names in officeace native dir warn as stale', () => {
+  const home = fixtureDir('hwc-doctor-native-officeace-');
+  runInstall(home);
+  const officeaceDir = join(home, '.office-claw', 'skills');
+  mkdirSync(join(officeaceDir, 'huawei-ecs'), { recursive: true });
+  writeFileSync(join(officeaceDir, 'huawei-ecs', 'SKILL.md'), '---\nname: huawei-ecs\n---\n', 'utf8');
+  writeFileSync(join(officeaceDir, '.huaweicloud-devkit-native.json'), '{"names":["huawei-ecs"]}');
+  const stdout = runDoctor(home);
+  assert.ok(stdout.includes('stale native skill cop'), `missing officeace stale warn:\n${stdout}`);
+});

@@ -48,8 +48,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // The skills tree is server data, not an agent-native artifact: it ships next
 // to dist/ (esbuild preserves import.meta.url, so the bundled mcp-server.js
-// resolves this relative to its own location) and is disclosed only through
-// the MCP tools (list_packs / pack_info / retrieve_skill / search_docs).
+// resolves this relative to its own location) and is disclosed through the
+// MCP tools (list_packs / pack_info / retrieve_skill / search_docs). The
+// installer additionally places the six core meta-skills as native copies in
+// directory-loading agents (setup-cli's PAYLOAD_TARGETS sync) — that
+// placement lives in setup-cli, and this module never probes agent-native
+// dirs.
 const SKILLS_ROOT = join(__dirname, '..', 'skills');
 
 // Re-exported for the existing test importers (test/tools.test.ts); the
@@ -171,7 +175,7 @@ const TOOL_DEFINITIONS_LITERALS = [
   {
     name: 'huaweicloud_retrieve_skill',
     description:
-      "Retrieve one Huawei Cloud skill by exact name (e.g. huawei-ecs, huawei-vpc, huawei-obs, huawei-sandbox). Returns the full SKILL.md content plus its reference files. This is the only way to load devkit skills: they are server data, not installed in the agent's own skill directory. Find candidate names first via huaweicloud_service_catalog, huaweicloud_search_docs, or huaweicloud_list_packs.",
+      "Retrieve one Huawei Cloud skill by exact name (e.g. huawei-ecs, huawei-vpc, huawei-obs, huawei-sandbox). Returns the full SKILL.md content plus its reference files. Service skills are server data and load only through this tool — they are never installed into an agent's own skill directory. The six core meta-skills (huaweicloud-*) are additionally disclosed as native skill copies on directory-loading agents; this tool serves them identically everywhere, so it stays the portable load path. Find candidate names first via huaweicloud_service_catalog, huaweicloud_search_docs, or huaweicloud_list_packs.",
   },
   {
     name: 'huaweicloud_list_regions',

@@ -4805,6 +4805,24 @@ const PAYLOAD_TARGETS: readonly PayloadTarget[] = [
   },
 ];
 
+// Recursive byte equality between two skill dirs — doctor's native-copy
+// freshness check compares an agent's native core copies against the
+// payload that target actually runs.
+function skillTreeEquals(a: string, b: string): boolean {
+  try {
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+        entry.isDirectory() ? walk(join(dir, entry.name)).map((f) => join(entry.name, f)) : [entry.name],
+      );
+    const fa = walk(a).sort((x, y) => (x < y ? -1 : x > y ? 1 : 0));
+    const fb = walk(b).sort((x, y) => (x < y ? -1 : x > y ? 1 : 0));
+    if (fa.length !== fb.length || fa.some((f, i) => f !== fb[i])) return false;
+    return fa.every((rel) => readFileSync(join(a, rel)).equals(readFileSync(join(b, rel))));
+  } catch {
+    return false;
+  }
+}
+
 async function cmdDoctor(): Promise<void> {
   console.log(BANNER);
   console.log('HuaweiCloud DevKit Doctor\n');
@@ -5095,10 +5113,11 @@ async function cmdDoctor(): Promise<void> {
     'Run: npx huaweicloud-devkit install (from a git checkout: npm run build first)',
   );
 
-  // Native disclosure: the core meta-skills may sit natively in a dir this
-  // devkit manages (receipt present, per PAYLOAD_TARGETS sync); any other
-  // owned name — and any owned name in a dir without a receipt — is residue
-  // from a pre-MCP install, a hand-placed copy, or drift, and warns.
+  // Native disclosure: the core meta-skills may sit natively only in a dir a
+  // PAYLOAD_TARGETS sync row manages (receipt present); any other owned
+  // name — residue, a hand-placed copy, or a foreign dir like officeace's —
+  // warns. Installed targets additionally get freshness: the native copies
+  // must equal the payload the target actually runs.
   const corePack = tryCoreSkillNames();
   if (corePack === null) {
     warn++;
@@ -5107,14 +5126,15 @@ async function cmdDoctor(): Promise<void> {
     );
   } else {
     const owned = devkitOwnedSkillNames();
+    const syncDirs = new Set(PAYLOAD_TARGETS.flatMap((t) => (t.nativeSkills ? t.nativeSkills() : [])));
     let staleNative = 0;
     for (const dir of nativeSkillDirs()) {
       if (!existsSync(dir)) continue;
-      const receipt = readNativeReceipt(dir);
+      const managedHere = syncDirs.has(dir) && readNativeReceipt(dir) !== null;
       try {
         for (const entry of readdirSync(dir, { withFileTypes: true })) {
           if (!entry.isDirectory() || !owned.has(entry.name)) continue;
-          if (receipt !== null && corePack.has(entry.name)) continue;
+          if (managedHere && corePack.has(entry.name)) continue;
           staleNative++;
         }
       } catch {
@@ -5126,6 +5146,57 @@ async function cmdDoctor(): Promise<void> {
       console.log(
         `  \x1b[33m[WARN]\x1b[0m ${staleNative} stale native skill cop${staleNative === 1 ? 'y' : 'ies'} from an older or hand-made install — re-run: npx huaweicloud-devkit install`,
       );
+    }
+    for (const row of PAYLOAD_TARGETS) {
+      if (!row.nativeSkills) continue;
+      const installed = mcpServerInstalled(row.dir());
+      for (const dir of row.nativeSkills()) {
+        const receipt = readNativeReceipt(dir);
+        if (!existsSync(dir)) {
+          // Absent without a receipt stays silent: the codearts project dir
+          // only exists for the tree the install ran in.
+          if (receipt !== null) {
+            warn++;
+            console.log(
+              `  \x1b[33m[WARN]\x1b[0m Native core skills (${row.label}): receipt present but the dir is gone — re-run: npx huaweicloud-devkit install --target ${row.id}`,
+            );
+          }
+          continue;
+        }
+        if (!installed) {
+          if (receipt !== null) {
+            warn++;
+            console.log(
+              `  \x1b[33m[WARN]\x1b[0m Native core skills (${row.label}) present without an installed MCP server — re-run: npx huaweicloud-devkit install --target ${row.id}`,
+            );
+          }
+          continue;
+        }
+        // The honest comparator is the payload the target runs — its own
+        // plugin dir, with PLUGIN_ROOT/skills as the DSH package-root
+        // fallback (mirroring the server-tree candidates above) — never
+        // this CLI's tree, or `npx huaweicloud-devkit@latest doctor` would
+        // false-report drift on an older healthy payload.
+        const payloadTree = existsSync(join(row.dir(), 'skills'))
+          ? join(row.dir(), 'skills')
+          : join(PLUGIN_ROOT, 'skills');
+        for (const name of corePack) {
+          const nativeCopy = join(dir, name);
+          if (!existsSync(nativeCopy)) {
+            warn++;
+            console.log(
+              `  \x1b[33m[WARN]\x1b[0m Native core skills (${row.label}): ${name} missing — re-run: npx huaweicloud-devkit update --target ${row.id}`,
+            );
+            continue;
+          }
+          if (!skillTreeEquals(nativeCopy, join(payloadTree, name))) {
+            warn++;
+            console.log(
+              `  \x1b[33m[WARN]\x1b[0m Native core skills (${row.label}): ${name} diverges from the installed payload — re-run: npx huaweicloud-devkit update --target ${row.id}`,
+            );
+          }
+        }
+      }
     }
   }
 

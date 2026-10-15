@@ -88,10 +88,12 @@ export function apply(ctx) {
 
   // ── Layer 1: tools/pre-execute waterfall ──────────────────────
   // Only the hcloud CLI classifier lives here: direct shell invocations
-  // have no MCP-side telemetry path. Devkit skills are server data
-  // disclosed over MCP (never installed natively for DSH), so their
+  // have no MCP-side telemetry path. Service skills are server data
+  // disclosed over MCP and never installed natively for DSH, so their
   // retrieval telemetry rides trackSkillRetrieve inside
-  // huaweicloud_retrieve_skill.
+  // huaweicloud_retrieve_skill. The six core meta-skills are installed as
+  // native copies (system-prompt disclosure); those loads produce no
+  // telemetry by design.
   ctx.on('tools/pre-execute', async (exec, next) => {
     try {
       debugLog(`pre-execute tool=${exec.name}`);

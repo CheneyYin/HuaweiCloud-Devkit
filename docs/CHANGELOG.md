@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- feat(skills): native disclosure for the six core meta-skills — the core routing skills ship as full native copies into the native skill dirs of the eight directory-based agents (receipt-gated convergence, manifest packOf ownership, PAYLOAD_TARGETS-driven sync, DSH postinstall parity); the 24 service skills stay MCP-only so DEVKIT_PACKS gating holds
+- feat(doctor): native core-skill freshness checks — per-target content equality against the installed payload, orphan and foreign-dir detection, warn-only diagnostics
+
 ## 1.1.7 (2026-09-24)
 
 - chore: merge dev into main for 1.1.7 release (#812)
