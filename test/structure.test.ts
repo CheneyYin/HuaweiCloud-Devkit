@@ -592,15 +592,23 @@ test('all plugin manifests are valid JSON', () => {
     join(pluginRoot, '.cursor-plugin', 'plugin.json'),
     join(pluginRoot, '.workbuddy-plugin', 'plugin.json'),
     join(pluginRoot, '.hermes-plugin', 'plugin.json'),
+    // bundleFormat codex: the same manifest-declared surface class the codex
+    // ban protects. Native core disclosure goes through directory loading,
+    // never through a manifest skills field.
+    join(pluginRoot, 'openclaw.plugin.json'),
   ];
   for (const path of manifests) {
     const data = readJson(path) as PluginManifest;
     assert.ok(data.name, `Manifest ${path} missing name`);
+    if (path.endsWith('openclaw.plugin.json')) continue;
     assert.ok(data.interface, `Manifest ${path} missing interface`);
     // No manifest may declare a native skills surface: skills are server
-    // data disclosed over MCP only.
+    // data disclosed over MCP only (the core meta-skills' native copies are
+    // placed by the installer, not declared here).
     assert.ok(!Object.hasOwn(data, 'skills'), `Manifest ${path} must not declare skills`);
   }
+  const openclaw = readJson(join(pluginRoot, 'openclaw.plugin.json')) as PluginManifest;
+  assert.ok(!Object.hasOwn(openclaw, 'skills'), 'openclaw.plugin.json must not declare skills');
 });
 
 test('safety policy.json is valid and has required fields', () => {
@@ -725,13 +733,42 @@ test('setup-cli.ts supports the codearts target end to end', () => {
   assert.match(setup, /expectedSkills\.every\(\(name\) => present\.has\(name\)\)/);
   assert.match(setup, /skillsTreeDirs\.push\(PLUGIN_ROOT\)/);
   assert.doesNotMatch(setup, /serverSkillCount\(dir\) >= 6/, 'count-floor doctor check must be gone');
-  assert.match(setup, /staleNativeSkillDirs\(\)\.length/);
+  // doctor's native-dir check is the receipt-gated one: core names warn only
+  // outside a devkit-managed dir, and a manifest without pack info warns
+  // instead of crashing the diagnostic run.
+  assert.match(setup, /function tryCoreSkillNames\(\)/);
+  assert.match(setup, /const corePack = tryCoreSkillNames\(\);/);
+  assert.match(setup, /receipt !== null && corePack\.has\(entry\.name\)/);
   // help text documents the target
   assert.match(
     setup,
     /--target <opencode\|codex\|codearts\|codearts-work\|workbuddy\|dsh\|officeace\|hermes\|openclaw\|atomcode\|all>/,
   );
   assert.match(setup, /install --target codearts/);
+});
+
+// The native-disclosure wiring must stay table-driven and covered: every dir
+// a PAYLOAD_TARGETS row syncs must appear in nativeSkillDirs() (the cleanup
+// and doctor scan list), and the two deliberately MCP-only rows must keep
+// absent nativeSkills fields.
+test('PAYLOAD_TARGETS native-skill dirs stay covered by the scan list', () => {
+  const setup = readSource(join('src', 'setup-cli.ts'));
+  const listBody = setup.match(/function nativeSkillDirs\(\): string\[\] \{([\s\S]*?)\n\}/)?.[1] ?? '';
+  const listed = new Set([...listBody.matchAll(/(\w+SkillsDir\(\))/g)].map((m) => m[1]!));
+  assert.ok(listed.size >= 10, `nativeSkillDirs lists the ten known dirs (found ${listed.size})`);
+  const rows = setup.match(/nativeSkills: \(\) => \[[^\]]*\]/g) ?? [];
+  assert.ok(rows.length >= 8, `eight directory-based targets declare nativeSkills (found ${rows.length})`);
+  for (const row of rows) {
+    for (const dir of [...row.matchAll(/(\w+SkillsDir\(\))/g)].map((m) => m[1]!)) {
+      assert.ok(listed.has(dir), `row dir ${dir} missing from nativeSkillDirs() scan list`);
+    }
+  }
+  const officeaceRow = setup.match(/\{\s*id: 'officeace',[\s\S]*?\n {2}\},/)?.[0] ?? '';
+  assert.ok(officeaceRow.length > 0, 'officeace row found');
+  assert.doesNotMatch(officeaceRow, /nativeSkills/, 'officeace stays MCP-only natively');
+  const codexDesktopRow = setup.match(/\{\s*id: 'codex-desktop',[\s\S]*?\n {2}\},/)?.[0] ?? '';
+  assert.ok(codexDesktopRow.length > 0, 'codex-desktop row found');
+  assert.doesNotMatch(codexDesktopRow, /nativeSkills/, 'codex-desktop stays MCP-only natively');
 });
 
 test('tools.ts resolves skills from the server-relative tree only', () => {
@@ -885,7 +922,15 @@ test('setup-cli.ts supports the dsh target end to end', () => {
   assert.match(setup, /function dshStatus\(\)/);
   // install ships the server payload and registers MCP through cordis.patch.yml
   assert.match(setup, /copyServerPayload\(pluginDest\)/);
-  assert.doesNotMatch(setup, /copyDir\(skillsSrc, dshSkillsDir\(\)\)/, 'DSH skills stay server data');
+  // No wholesale native copy ever returns: only core-pack names sync natively
+  // (syncNativeCoreSkills), so DSH's dir can never carry service skills.
+  assert.match(setup, /function syncNativeCoreSkills\(dir: string\)/);
+  assert.doesNotMatch(
+    setup,
+    /copyDir\(skillsSrc, (?:dsh|opencode|hermes|workbuddy|atomcode|openclaw|codearts|codeartsWork)SkillsDir\(\)\)/,
+    'no wholesale native copy; only core-pack names sync natively',
+  );
+  assert.match(setup, /nativeSkills: \(\) => \[dshSkillsDir\(\)\]/, 'DSH row declares its native dir');
   assert.match(setup, /ensureDshMcpPatch\(\)/);
   assert.match(setup, /tryInstallDshMcpClient\(\)/);
   // DSH MCP patch uses dsh-mcp-client with stdio local server mode
@@ -1034,7 +1079,7 @@ test('PAYLOAD_TARGETS is the single id→dir map for payload targets', () => {
   // Every non-codex supported target has a table row: doctor's payload
   // checks, the marker dir, willPlacePayload, and the update dispatch all
   // follow the table, so a missing row silently drops a target everywhere.
-  const table = setup.match(/const PAYLOAD_TARGETS = \[[\s\S]*?\] as const;/);
+  const table = setup.match(/const PAYLOAD_TARGETS: readonly PayloadTarget\[\] = \[[\s\S]*?\n\];/);
   assert.ok(table, 'PAYLOAD_TARGETS table must exist');
   for (const id of SUPPORTED_AGENT_TARGETS) {
     if (id === 'codex') continue;

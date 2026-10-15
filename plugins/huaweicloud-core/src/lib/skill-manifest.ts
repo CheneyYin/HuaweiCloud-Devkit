@@ -16,3 +16,24 @@ export function parseSkillManifest(content: string): string[] {
     return [];
   }
 }
+
+// The per-skill pack claims (skill name -> pack id). Distinct from the roster
+// parser on purpose: callers of this map fail loud on a manifest without
+// usable pack info (the native-skill sync must not silently derive an empty
+// core set, which would invert the narrowed purge into deleting the very
+// copies it owns), so absence and malformation return null instead of [].
+export function parseSkillPackMap(content: string): Record<string, string> | null {
+  try {
+    const parsed: unknown = JSON.parse(content);
+    const packOf = (parsed as { packOf?: unknown } | null)?.packOf;
+    if (packOf === null || typeof packOf !== 'object' || Array.isArray(packOf)) return null;
+    const map: Record<string, string> = {};
+    for (const [name, pack] of Object.entries(packOf)) {
+      if (typeof pack !== 'string') return null;
+      map[name] = pack;
+    }
+    return map;
+  } catch {
+    return null;
+  }
+}

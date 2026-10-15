@@ -115,16 +115,77 @@ function countSkills(dir: string) {
   return readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory() && d.name.startsWith('huawei')).length;
 }
 
-// Skills are server data: they ship inside the plugin dir next to dist/ and
-// are disclosed over MCP, never copied into an agent's native skill dir.
+// Skills are server data for the full tree; the six core meta-skills are
+// ALSO disclosed natively (system-prompt visibility). The core roster is
+// derived from the shipped manifest's packOf map — the same source the CLI
+// reads.
+const coreRoster = new Set(
+  Object.entries(
+    JSON.parse(readFileSync(join(root, 'plugins', 'huaweicloud-core', 'skills', '.manifest.json'), 'utf8')).packOf,
+  )
+    .filter(([, pack]) => pack === 'core')
+    .map(([name]) => name),
+);
+
 function pluginSkills(pluginsDir: string) {
   return countSkills(join(pluginsDir, 'skills'));
 }
 
-// MCP-only disclosure contract for one agent: native skill dir stays empty,
-// plugin dir carries the skills tree next to the server.
-function assertServerDataSkills(nativeSkillsDir: string, pluginsDir: string) {
-  assert.equal(countSkills(nativeSkillsDir), 0, 'native skill dir must stay empty (MCP-only disclosure)');
+function walkRelative(dir: string, base = ''): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const rel = base ? `${base}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) out.push(...walkRelative(join(dir, entry.name), rel));
+    else out.push(rel);
+  }
+  return out.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+function dirContentsEqual(a: string, b: string): boolean {
+  if (!existsSync(a) || !existsSync(b)) return false;
+  const fa = walkRelative(a);
+  const fb = walkRelative(b);
+  if (fa.length !== fb.length || fa.some((f, i) => f !== fb[i])) return false;
+  return fa.every((rel) => readFileSync(join(a, rel)).equals(readFileSync(join(b, rel))));
+}
+
+// Native core disclosure contract for one agent: the native skill dir
+// carries exactly the core-pack meta-skills (set membership, byte-equal to
+// the payload the same run placed), a receipt records them, user skills
+// survive, and no non-core owned name leaks in. The plugin dir still
+// carries the full tree next to the server.
+function assertNativeCoreDisclosure(nativeSkillsDir: string, pluginsDir: string) {
+  const owned = new Set(
+    readdirSync(join(pluginsDir, 'skills'), { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name),
+  );
+  const entries = existsSync(nativeSkillsDir)
+    ? readdirSync(nativeSkillsDir, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name)
+    : [];
+  const present = new Set(entries);
+  for (const name of coreRoster) {
+    assert.ok(present.has(name), `core skill ${name} must be natively disclosed in ${nativeSkillsDir}`);
+    assert.ok(
+      dirContentsEqual(join(nativeSkillsDir, name), join(pluginsDir, 'skills', name)),
+      `native copy of ${name} must equal the payload tree`,
+    );
+  }
+  for (const name of entries) {
+    if (owned.has(name)) {
+      assert.ok(coreRoster.has(name), `non-core owned skill ${name} must not be native in ${nativeSkillsDir}`);
+    }
+  }
+  const receiptPath = join(nativeSkillsDir, '.huaweicloud-devkit-native.json');
+  assert.ok(existsSync(receiptPath), `native receipt must exist in ${nativeSkillsDir}`);
+  const receipt = JSON.parse(readFileSync(receiptPath, 'utf8')) as { names: string[] };
+  assert.deepEqual(
+    [...new Set(receipt.names)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    [...coreRoster].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    'receipt records exactly the core roster',
+  );
   assert.ok(pluginSkills(pluginsDir) >= 6, 'plugin dir must carry the skills tree');
 }
 
@@ -152,7 +213,7 @@ test('opencode install creates skills, MCP server, and safety policy', () => {
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
     assert.ok(existsSync(join(pd, '.installed')));
     assert.equal(pluginVersion(pd), pkg.version);
-    assertServerDataSkills(join(home, '.config', 'opencode', 'skills'), pd);
+    assertNativeCoreDisclosure(join(home, '.config', 'opencode', 'skills'), pd);
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
@@ -181,6 +242,10 @@ test('opencode uninstall removes installed files', () => {
     const res = run('opencode', home, cwd, 'uninstall');
     assert.match(res.stdout, /Uninstall complete/);
     assert.equal(countSkills(join(home, '.config', 'opencode', 'skills')), 0);
+    assert.ok(
+      !existsSync(join(home, '.config', 'opencode', 'skills', '.huaweicloud-devkit-native.json')),
+      'native receipt removed on uninstall',
+    );
     assert.ok(!existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins')));
   } finally {
     rmSync(home, { recursive: true, force: true });
@@ -194,7 +259,7 @@ test('opencode install is idempotent', () => {
   try {
     assert.equal(run('opencode', home, cwd, 'install').status, 0);
     assert.equal(run('opencode', home, cwd, 'install').status, 0);
-    assertServerDataSkills(
+    assertNativeCoreDisclosure(
       join(home, '.config', 'opencode', 'skills'),
       join(home, '.config', 'opencode', 'huaweicloud-plugins'),
     );
@@ -204,28 +269,92 @@ test('opencode install is idempotent', () => {
   }
 });
 
-// Pre-MCP installs copied skills into native dirs; an install run must purge
-// exactly those (ownership-precise), never a user skill sharing the prefix.
-test('install purges stale native skill copies and preserves user skills', () => {
+// Native-dir reconciliation on install: pre-MCP residue (owned names
+// without a receipt) is purged, a stale core copy is refreshed in place
+// (remove-then-copy, so files a newer tree retired disappear), user skills
+// survive, and residue on a non-installed agent's dir is cleaned too.
+test('install reconciles native skill dirs: residue purged, core refreshed, user skills preserved', () => {
   const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
   const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
   try {
     const nativeDir = join(home, '.config', 'opencode', 'skills');
     mkdirSync(join(nativeDir, 'huawei-ecs'), { recursive: true });
     writeFileSync(join(nativeDir, 'huawei-ecs', 'SKILL.md'), '---\nname: huawei-ecs\n---\nstale\n');
+    mkdirSync(join(nativeDir, 'huaweicloud-core', 'references'), { recursive: true });
+    writeFileSync(join(nativeDir, 'huaweicloud-core', 'SKILL.md'), '---\nname: huaweicloud-core\n---\nstale\n');
+    writeFileSync(join(nativeDir, 'huaweicloud-core', 'references', 'retired-by-newer-tree.md'), 'orphan\n');
     mkdirSync(join(nativeDir, 'huawei-my-own-runbook'), { recursive: true });
     writeFileSync(
       join(nativeDir, 'huawei-my-own-runbook', 'SKILL.md'),
       '---\nname: huawei-my-own-runbook\n---\nuser\n',
     );
+    // Residue on an agent this run does not install: owned names there are
+    // stale regardless (no receipt, no replacement coming this run).
+    const otherDir = join(home, '.workbuddy', 'skills');
+    mkdirSync(join(otherDir, 'huawei-ecs'), { recursive: true });
+    writeFileSync(join(otherDir, 'huawei-ecs', 'SKILL.md'), '---\nname: huawei-ecs\n---\nstale\n');
+
     const res = run('opencode', home, cwd, 'install');
     assert.equal(res.status, 0, res.stderr);
-    assert.ok(!existsSync(join(nativeDir, 'huawei-ecs')), 'stale devkit-owned copy must be purged');
+    assert.ok(!existsSync(join(nativeDir, 'huawei-ecs')), 'non-core owned copy must be purged');
     assert.ok(existsSync(join(nativeDir, 'huawei-my-own-runbook')), 'user skill sharing the prefix must survive');
+    assert.ok(!existsSync(join(otherDir, 'huawei-ecs')), 'residue on a non-installed agent must be purged');
+    const pd = join(home, '.config', 'opencode', 'huaweicloud-plugins');
     assert.ok(
-      pluginSkills(join(home, '.config', 'opencode', 'huaweicloud-plugins')) >= 6,
-      'plugin dir must carry the skills tree',
+      dirContentsEqual(join(nativeDir, 'huaweicloud-core'), join(pd, 'skills', 'huaweicloud-core')),
+      'stale core copy must be refreshed byte-equal to the payload',
     );
+    assert.ok(
+      !existsSync(join(nativeDir, 'huaweicloud-core', 'references', 'retired-by-newer-tree.md')),
+      'a file the newer tree retired must not survive the refresh',
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+// A devkit-managed native dir (receipt present) keeps its core copies when a
+// different agent is installed this run: deleting an installed agent's
+// disclosure for a staleness window doctor already flags would be a silent
+// capability loss.
+test('install for one target keeps another managed agent core copies', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
+  try {
+    assert.equal(run('workbuddy', home, cwd, 'install').status, 0);
+    const workbuddyNative = join(home, '.workbuddy', 'skills');
+    assert.ok(existsSync(join(workbuddyNative, '.huaweicloud-devkit-native.json')));
+    const res = run('opencode', home, cwd, 'install');
+    assert.equal(res.status, 0, res.stderr);
+    assert.ok(
+      existsSync(join(workbuddyNative, 'huaweicloud-core')),
+      'managed core copies of a non-installed-this-run agent must survive',
+    );
+    assertNativeCoreDisclosure(
+      join(home, '.config', 'opencode', 'skills'),
+      join(home, '.config', 'opencode', 'huaweicloud-plugins'),
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+// The native sync is disclosure, not payload: an unwritable native dir must
+// warn and let the install complete (the MCP server remains the functional
+// path), not fail the step.
+test('install warns and continues when the native skill dir cannot be created', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
+  try {
+    const nativeDir = join(home, '.config', 'opencode', 'skills');
+    mkdirSync(join(home, '.config', 'opencode'), { recursive: true });
+    writeFileSync(nativeDir, 'occupied by a file');
+    const res = run('opencode', home, cwd, 'install');
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.stdout, /native core skills not synced/);
+    assert.ok(existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js')));
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
@@ -241,7 +370,7 @@ test('workbuddy install creates skills, MCP server, and safety policy', () => {
     assert.match(res.stdout, /\[WorkBuddy\]/);
     assert.match(res.stdout, /Installation complete/);
     const pd = join(home, '.workbuddy', 'huaweicloud-plugins');
-    assertServerDataSkills(join(home, '.workbuddy', 'skills'), pd);
+    assertNativeCoreDisclosure(join(home, '.workbuddy', 'skills'), pd);
     assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
     assert.ok(existsSync(join(pd, 'dist', 'tools.js')));
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
@@ -313,7 +442,7 @@ test('workbuddy install is idempotent', () => {
   try {
     assert.equal(run('workbuddy', home, cwd, 'install').status, 0);
     assert.equal(run('workbuddy', home, cwd, 'install').status, 0);
-    assertServerDataSkills(join(home, '.workbuddy', 'skills'), join(home, '.workbuddy', 'huaweicloud-plugins'));
+    assertNativeCoreDisclosure(join(home, '.workbuddy', 'skills'), join(home, '.workbuddy', 'huaweicloud-plugins'));
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
@@ -383,7 +512,7 @@ test('openclaw install creates skills, MCP server, and safety policy in .agents'
     assert.match(res.stdout, /\[OpenClaw\]/);
     assert.match(res.stdout, /Installation complete/);
     const pd = join(home, '.agents', 'huaweicloud-plugins');
-    assertServerDataSkills(join(home, '.agents', 'skills'), pd);
+    assertNativeCoreDisclosure(join(home, '.agents', 'skills'), pd);
     assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
     assert.ok(existsSync(join(pd, 'dist', 'tools.js')));
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
@@ -419,7 +548,7 @@ test('hermes install creates skills, MCP server, and safety policy', () => {
     assert.match(res.stdout, /\[Hermes Agent\]/);
     assert.match(res.stdout, /Installation complete/);
     const pd = join(home, '.hermes', 'huaweicloud-plugins');
-    assertServerDataSkills(join(home, '.hermes', 'skills'), pd);
+    assertNativeCoreDisclosure(join(home, '.hermes', 'skills'), pd);
     assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
     assert.equal(pluginVersion(pd), pkg.version);
@@ -483,7 +612,7 @@ test('atomcode install creates skills, MCP server, and safety policy', () => {
     assert.match(res.stdout, /\[AtomCode\]/);
     assert.match(res.stdout, /Installation complete/);
     const pd = join(home, '.atomcode', 'huaweicloud-plugins');
-    assertServerDataSkills(join(home, '.atomcode', 'skills'), pd);
+    assertNativeCoreDisclosure(join(home, '.atomcode', 'skills'), pd);
     assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
     assert.ok(existsSync(join(pd, 'dist', 'tools.js')));
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
@@ -532,7 +661,7 @@ test('atomcode install is idempotent', () => {
   try {
     assert.equal(run('atomcode', home, cwd, 'install').status, 0);
     assert.equal(run('atomcode', home, cwd, 'install').status, 0);
-    assertServerDataSkills(join(home, '.atomcode', 'skills'), join(home, '.atomcode', 'huaweicloud-plugins'));
+    assertNativeCoreDisclosure(join(home, '.atomcode', 'skills'), join(home, '.atomcode', 'huaweicloud-plugins'));
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
@@ -855,7 +984,7 @@ test('install auto-detect single agent installs only that agent', () => {
     const res = runAuto(home, cwd, 'install');
     assert.equal(res.status, 0, res.stderr);
     assert.match(res.stdout, /Installing HuaweiCloud DevKit for opencode/);
-    assertServerDataSkills(
+    assertNativeCoreDisclosure(
       join(home, '.config', 'opencode', 'skills'),
       join(home, '.config', 'opencode', 'huaweicloud-plugins'),
     );

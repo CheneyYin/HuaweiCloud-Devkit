@@ -154,15 +154,20 @@ function markerLineOf(content) {
 }
 
 // The roster manifest travels with the generated tree (prettier-clean JSON):
-// consumers (doctor's roster check, pack verification) read it instead of
-// re-deriving the expectation from src/packs. Invisible to every skill
-// reader — not a directory, no SKILL.md, no huawei* prefix.
-function manifestJson(skillNames) {
+// consumers (doctor's roster check, pack verification, the native-skill sync)
+// read it instead of re-deriving the expectation from src/packs. Invisible
+// to every skill reader — not a directory, no SKILL.md, no huawei* prefix.
+// packOf is the per-skill pack claim: the installer derives "which names may
+// go native" from it (core-pack skills only) without importing the
+// zod-dependent registry, and dsh-postinstall.cjs reads the same JSON.
+function manifestJson(packSkills) {
   // Code-unit ordering, not localeCompare: the manifest is a byte-compared
   // build artifact shipped verbatim, so its bytes must not depend on the
   // host's locale/ICU data.
-  const roster = [...skillNames].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  return `${JSON.stringify({ generatedBy: 'scripts/sync-skills.mjs', skills: roster }, null, 2)}\n`;
+  const roster = packSkills.map(({ skillName }) => skillName).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const packOf = {};
+  for (const name of roster) packOf[name] = packSkills.find(({ skillName }) => skillName === name).packId;
+  return `${JSON.stringify({ generatedBy: 'scripts/sync-skills.mjs', skills: roster, packOf }, null, 2)}\n`;
 }
 
 // Full regeneration with the staging discipline build-plugin.mjs applies to
@@ -220,7 +225,7 @@ export function writeSkillsTree({ packsDir: sourceRoot = packsDir, outDir = skil
         files += 1;
       }
     }
-    writeFileSync(join(stagingSkillsDir, MANIFEST_NAME), manifestJson(packSkills.map(({ skillName }) => skillName)));
+    writeFileSync(join(stagingSkillsDir, MANIFEST_NAME), manifestJson(packSkills));
     renderComplete = true;
     rmSync(outDir, { recursive: true, force: true });
     renameSync(stagingSkillsDir, outDir);
@@ -302,7 +307,7 @@ function run({ write = false, packsDir: sourceRoot = packsDir, outDir: treeDir =
   const manifestPath = join(treeDir, MANIFEST_NAME);
   if (!existsSync(manifestPath)) {
     failures.push(`missing skills manifest: ${relative(repoRoot, manifestPath)} — run: npm run build`);
-  } else if (readFileSync(manifestPath, 'utf8') !== manifestJson(expectedTargets)) {
+  } else if (readFileSync(manifestPath, 'utf8') !== manifestJson(packSkills)) {
     failures.push(`stale skills manifest: ${relative(repoRoot, manifestPath)} — run: npm run build`);
   }
 

@@ -1,12 +1,21 @@
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, readdirSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import test from 'node:test';
 
 import { verifySkillTree } from '../plugins/huaweicloud-core/src/tools.ts';
 import { PACKS } from '../plugins/huaweicloud-core/src/packs/registry.ts';
-import { parseSkillManifest } from '../plugins/huaweicloud-core/src/lib/skill-manifest.ts';
+import { parseSkillManifest, parseSkillPackMap } from '../plugins/huaweicloud-core/src/lib/skill-manifest.ts';
 import { run, writeSkillsTree } from '../scripts/sync-skills.mjs';
 import { fixtureDir } from './fixture-dir.ts';
 
@@ -187,4 +196,33 @@ test('parseSkillManifest extracts, dedupes, and filters the roster', () => {
   assert.deepEqual(parseSkillManifest('{"generatedBy":"x"}'), []);
   assert.deepEqual(parseSkillManifest('not json'), []);
   assert.deepEqual(parseSkillManifest('{"skills":"nope"}'), []);
+});
+
+// The pack map is the fail-loud surface: absence and malformation must read
+// as null (unusable), never as an empty-but-valid map, or the native-skill
+// sync would silently derive an empty core set and invert its own cleanup.
+test('parseSkillPackMap returns the map, or null when unusable', () => {
+  assert.deepEqual(parseSkillPackMap('{"packOf":{"a":"core","b":"obs"}}'), { a: 'core', b: 'obs' });
+  assert.deepEqual(parseSkillPackMap('{"packOf":{}}'), {});
+  assert.equal(parseSkillPackMap('{"skills":["a"]}'), null, 'no packOf key');
+  assert.equal(parseSkillPackMap('{"packOf":["a"]}'), null, 'array shape');
+  assert.equal(parseSkillPackMap('{"packOf":{"a":1}}'), null, 'non-string pack id');
+  assert.equal(parseSkillPackMap('not json'), null);
+});
+
+// The manifest's pack claims must agree with the registry: the installer
+// derives the native core set from the manifest, so a drift between the two
+// would disclose the wrong names natively.
+test('manifest packOf agrees with the registry pack claims', () => {
+  const packOf = parseSkillPackMap(readFileSync(join(realTree, '.manifest.json'), 'utf8'));
+  assert.ok(packOf, 'generated manifest carries a usable packOf map');
+  const claimed = new Set(PACKS.flatMap((pack) => pack.skills));
+  for (const pack of PACKS) {
+    for (const skill of pack.skills) {
+      assert.equal(packOf[skill], pack.id, `${skill} claims pack ${pack.id} in the registry`);
+    }
+  }
+  for (const name of Object.keys(packOf)) {
+    assert.ok(claimed.has(name), `manifest packOf entry ${name} is claimed by no pack`);
+  }
 });

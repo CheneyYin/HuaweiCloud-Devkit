@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -100,7 +100,21 @@ test('handles platform-specific home directory resolution', () => {
       existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins', 'skills')),
       'skills tree (server data) created under correct home',
     );
-    assert.ok(!existsSync(join(home, '.config', 'opencode', 'skills')), 'native skill dir must not be created');
+    // Core meta-skills are natively disclosed under the same home; every
+    // non-core skill stays MCP-only in the plugin dir.
+    const nativeDir = join(home, '.config', 'opencode', 'skills');
+    assert.ok(existsSync(nativeDir), 'native skill dir created for core disclosure');
+    const nativeOwned = readdirSync(nativeDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && d.name.startsWith('huawei'))
+      .map((d) => d.name)
+      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const manifest = JSON.parse(
+      readFileSync(join(root, 'plugins', 'huaweicloud-core', 'skills', '.manifest.json'), 'utf8'),
+    );
+    const expectedCore = Object.keys(manifest.packOf)
+      .filter((name) => manifest.packOf[name] === 'core')
+      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    assert.deepEqual(nativeOwned, expectedCore, 'native dir carries exactly the core meta-skills');
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });

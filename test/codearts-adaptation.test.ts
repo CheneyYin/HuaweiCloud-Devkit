@@ -18,6 +18,11 @@ import test from 'node:test';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const setupCli = join(root, 'bin', 'setup.cjs');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+// Core meta-skill count from the shipped manifest's packOf map — the same
+// derivation the CLI performs for the native disclosure.
+const coreSkillCount = Object.values(
+  JSON.parse(readFileSync(join(root, 'plugins', 'huaweicloud-core', 'skills', '.manifest.json'), 'utf8')).packOf,
+).filter((p) => p === 'core').length;
 
 function makeEnv(home: string, _cwd: string) {
   const env: Record<string, string | undefined> = {
@@ -60,10 +65,20 @@ test('codearts install copies skills, MCP server, and safety policy', () => {
     assert.match(res.stdout, /\[CodeArts\]/);
     assert.match(res.stdout, /Installation complete!/);
 
-    // Skills are server data: native user/project skill dirs stay empty and
-    // the tree ships inside the plugin dir next to the server.
-    assert.equal(countSkills(join(home, '.codeartsdoer', 'skills')), 0, 'user skills dir stays empty');
-    assert.equal(countSkills(join(cwd, '.codeartsdoer', 'skills')), 0, 'project skills dir stays empty');
+    // Full tree is server data in the plugin dir; the core meta-skills are
+    // additionally disclosed natively in the user and project skill dirs.
+    assert.equal(
+      countSkills(join(home, '.codeartsdoer', 'skills')),
+      coreSkillCount,
+      'user skills dir carries the core meta-skills',
+    );
+    assert.equal(
+      countSkills(join(cwd, '.codeartsdoer', 'skills')),
+      coreSkillCount,
+      'project skills dir carries the core meta-skills',
+    );
+    assert.ok(existsSync(join(home, '.codeartsdoer', 'skills', '.huaweicloud-devkit-native.json')));
+    assert.ok(existsSync(join(cwd, '.codeartsdoer', 'skills', '.huaweicloud-devkit-native.json')));
 
     const pluginDir = join(home, '.codeartsdoer', 'huaweicloud-plugins');
     assert.ok(countSkills(join(pluginDir, 'skills')) >= 6, 'plugin dir carries the skills tree');
@@ -221,7 +236,11 @@ test('codearts-work install copies skills, MCP server, and safety policy', () =>
     const res = runCli(home, cwd, ['install', '--target', 'codearts-work']);
     assert.equal(res.status, 0, res.stderr);
 
-    assert.equal(countSkills(join(home, '.codeartswork', 'skills')), 0, 'native skills dir stays empty');
+    assert.equal(
+      countSkills(join(home, '.codeartswork', 'skills')),
+      coreSkillCount,
+      'native skills dir carries the core meta-skills',
+    );
 
     const pluginDir = join(home, '.codeartswork', 'huaweicloud-plugins');
     assert.ok(countSkills(join(pluginDir, 'skills')) >= 6, 'plugin dir carries the skills tree');

@@ -56,7 +56,7 @@ import { queryDistTagsFetch, determineTarget, semverCompare } from './update-che
 import { getKooCliVersion, compareVersion, kooCliDownloadBase } from './koocli-version.ts';
 import { findHcloudBin, hcloudProbeNextStep, probeHcloud } from './hcloud-probe.ts';
 import { asText } from './lib/as-text.ts';
-import { parseSkillManifest } from './lib/skill-manifest.ts';
+import { parseSkillManifest, parseSkillPackMap } from './lib/skill-manifest.ts';
 import { listSkillDirs } from './lib/skill-tree.ts';
 import { PACK_IDS, type PackId } from './lib/pack-types.ts';
 import {
@@ -630,10 +630,11 @@ function copyDir(src: string, dest: string): void {
 
 // The payload every per-agent plugin dir must carry: the MCP server (dist/),
 // the safety policy, and the skills tree. Skills are server data disclosed
-// only through the MCP tools (list_packs / pack_info / retrieve_skill /
-// search_docs) — they are never copied into an agent's native skill
-// directory, so every install and update path must place them next to the
-// server it deploys.
+// through the MCP tools (list_packs / pack_info / retrieve_skill /
+// search_docs); the core meta-skills are ADDITIONALLY disclosed natively by
+// syncNativeCoreSkills, so every install and update path must place the tree
+// next to the server it deploys (the native sync rides the same
+// PAYLOAD_TARGETS table from the dispatch layer).
 function copyServerPayload(pluginDest: string, opts: { skipDist?: boolean } = {}): void {
   if (!opts.skipDist) {
     copyDir(join(PLUGIN_ROOT, 'dist'), join(pluginDest, 'dist'));
@@ -695,9 +696,11 @@ function shippedSkillRoster(): string[] {
   return parseSkillManifest(readFileSync(manifestPath, 'utf8'));
 }
 
-// Agent-native skill directories that older devkit versions copied skills
-// into. The codex-desktop plugin dir's skills/ is deliberately absent: that
-// is server data, not a native dir.
+// Agent-native skill directories: the surfaces agents load into their own
+// system prompt. The core meta-skills are disclosed here (refreshed by
+// syncNativeCoreSkills through PAYLOAD_TARGETS); every non-core skill stays
+// MCP-only so DEVKIT_PACKS gating keeps hold. The codex-desktop plugin dir's
+// skills/ is deliberately absent: that is server data, not a native dir.
 function nativeSkillDirs(): string[] {
   return [
     opencodeSkillsDir(),
@@ -713,38 +716,169 @@ function nativeSkillDirs(): string[] {
   ];
 }
 
-// Stale native copies from pre-MCP installs: they shadow-disclose outdated
-// skill content through the agent's own skill loading, bypassing pack
-// enablement and the server's disclosure tools.
-function staleNativeSkillDirs(): string[] {
+const NATIVE_RECEIPT_NAME = '.huaweicloud-devkit-native.json';
+
+function nativeReceiptPath(dir: string): string {
+  return join(dir, NATIVE_RECEIPT_NAME);
+}
+
+// Receipt over the names this devkit placed in one agent-native dir. The
+// ownership memory for the native surface: cleanup can tell a devkit-managed
+// core copy (receipt present) from pre-MCP residue or a hand-copied dir
+// (receipt absent), and a renamed or retired core skill stays deletable
+// because its old name is remembered here rather than re-derived from a
+// tree that no longer ships it.
+function readNativeReceipt(dir: string): { names: string[] } | null {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(nativeReceiptPath(dir), 'utf8'));
+    const names = (parsed as { names?: unknown } | null)?.names;
+    return Array.isArray(names) ? { names: names.filter((n): n is string => typeof n === 'string') } : null;
+  } catch {
+    return null;
+  }
+}
+
+// The core-pack skill names that may be disclosed natively, derived from the
+// shipped manifest's packOf map — the same file doctor treats as the roster
+// of record — because this module must not import the zod-dependent packs
+// registry. The null variant exists for doctor (a broken manifest must warn,
+// not crash the diagnostic run); the throwing variant guards install/update.
+// The loudness is load-bearing: an empty core set derived silently would
+// invert the narrowed cleanup into deleting the very copies the sync owns.
+function tryCoreSkillNames(): Set<string> | null {
+  const skillsSrc = join(PLUGIN_ROOT, 'skills');
+  const manifestPath = join(skillsSrc, '.manifest.json');
+  if (!existsSync(skillsSrc)) {
+    throw new Error(
+      `skills tree missing at ${skillsSrc} — the payload cannot ship without it. ` +
+        'From a git checkout run: npm run build; from a broken install run: npx huaweicloud-devkit install',
+    );
+  }
+  if (!existsSync(manifestPath)) return null;
+  const packOf = parseSkillPackMap(readFileSync(manifestPath, 'utf8'));
+  if (packOf === null) return null;
+  const core = new Set(
+    Object.entries(packOf)
+      .filter(([, pack]) => pack === 'core')
+      .map(([name]) => name),
+  );
+  return core.size > 0 ? core : null;
+}
+
+function coreSkillNames(): Set<string> {
+  const core = tryCoreSkillNames();
+  if (core === null) {
+    throw new Error(
+      `skills manifest at ${join(PLUGIN_ROOT, 'skills', '.manifest.json')} lacks usable pack info ` +
+        '(missing file, unparsable, or no core-pack entries) — the native core-skill sync refuses to guess. ' +
+        'From a git checkout run: npm run build; from a broken install run: npx huaweicloud-devkit install',
+    );
+  }
+  return core;
+}
+
+// Place the core-pack skills into one agent-native dir and converge it:
+// remove-then-copy per name (an overlay copy would keep files a newer tree
+// retired), delete owned-but-not-core names and receipt names the current
+// core set no longer claims, keep user skills, rewrite the receipt. Warn and
+// continue on write failure — the native layer is disclosure, the MCP server
+// remains the functional path, and doctor re-checks the result.
+function syncNativeCoreSkills(dir: string): boolean {
+  const core = coreSkillNames();
   const owned = devkitOwnedSkillNames();
-  if (owned.size === 0) return [];
-  const stale: string[] = [];
+  const remembered = new Set(readNativeReceipt(dir)?.names ?? []);
+  const skillsSrc = join(PLUGIN_ROOT, 'skills');
+  // A manifest may claim core skills a partial tree does not ship; copyDir
+  // would silently skip them while the receipt still claimed all names.
+  // Place what exists, warn loudly about the rest, and record only what was
+  // actually placed.
+  const placeable = [...core].filter((name) => existsSync(join(skillsSrc, name)));
+  const missing = [...core].filter((name) => !existsSync(join(skillsSrc, name)));
+  if (missing.length > 0) {
+    console.log(
+      `  \x1b[33m[WARN]\x1b[0m core skill(s) claimed by the manifest but missing from the tree: ${missing.join(', ')} — from a git checkout run: npm run build`,
+    );
+  }
+  if (placeable.length === 0) {
+    console.log(
+      `  \x1b[33m[WARN]\x1b[0m no core skills placeable into ${dir} — MCP disclosure remains authoritative; re-run install`,
+    );
+    return false;
+  }
+  try {
+    mkdirSync(dir, { recursive: true });
+    for (const name of placeable) {
+      rmSync(join(dir, name), { recursive: true, force: true });
+      copyDir(join(skillsSrc, name), join(dir, name));
+    }
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const devkitClaimed = owned.has(entry.name) || remembered.has(entry.name);
+      if (devkitClaimed && !core.has(entry.name)) {
+        removeIfExists(join(dir, entry.name));
+      }
+    }
+    writeFileSync(
+      nativeReceiptPath(dir),
+      JSON.stringify({ names: [...placeable].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)) }, null, 2) + '\n',
+    );
+    console.log(`  Core skills (native disclosure) -> ${dir}`);
+    return true;
+  } catch (error) {
+    console.log(
+      `  \x1b[33m[WARN]\x1b[0m native core skills not synced to ${dir}: ${errorMessage(error)} — ` +
+        'MCP disclosure remains authoritative; re-run install',
+    );
+    return false;
+  }
+}
+
+// Reconcile every agent-native dir before install/update steps run. A dir
+// without a receipt is residue (pre-MCP copies or hand-placed): every owned
+// name in it goes. A dir with a receipt is devkit-managed: names the receipt
+// no longer justifies (renamed or retired core skills, stray service
+// copies) go, and the core names stay until this run's sync — or that
+// target's next update — refreshes them. Deleting an installed agent's
+// disclosure because a different agent was installed this run would trade a
+// short staleness window (doctor flags it) for a silent capability loss.
+function cleanupNativeDirs(): number {
+  const core = coreSkillNames();
+  const owned = devkitOwnedSkillNames();
+  let removed = 0;
   for (const dir of nativeSkillDirs()) {
     if (!existsSync(dir)) continue;
+    const receipt = readNativeReceipt(dir);
+    const remembered = new Set(receipt?.names ?? []);
     try {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        if (entry.isDirectory() && owned.has(entry.name)) stale.push(join(dir, entry.name));
+        if (!entry.isDirectory()) continue;
+        const keep = receipt !== null && core.has(entry.name);
+        if (!keep && (owned.has(entry.name) || remembered.has(entry.name))) {
+          if (removeIfExists(join(dir, entry.name))) removed++;
+        }
       }
     } catch {
       // unreadable dir cannot confirm stale copies — the other dirs still get scanned
     }
   }
-  return stale;
-}
-
-function purgeStaleNativeSkills(): number {
-  const stale = staleNativeSkillDirs();
-  let removed = 0;
-  for (const path of stale) {
-    if (removeIfExists(path)) removed++;
-  }
   return removed;
 }
 
+// The native-disclosure seam: the install step table and the update
+// dispatch both route through PAYLOAD_TARGETS, so a target that places
+// payload refreshes its native core skills here — a target that does not
+// never touches them, and a future row cannot appear in one path and miss
+// the other.
+function syncNativeSkillsForTarget(target: string): void {
+  const row = PAYLOAD_TARGETS.find((t) => t.id === target);
+  if (!row?.nativeSkills) return;
+  for (const dir of row.nativeSkills()) syncNativeCoreSkills(dir);
+}
+
 // Remove devkit-owned skill names from one agent-native dir (uninstall path).
-// Same ownership precision as the purge: user skills sharing the huawei*
-// prefix survive.
+// Same ownership precision as the cleanup: user skills sharing the huawei*
+// prefix survive. The receipt goes too — an uninstalled devkit leaves no
+// ownership claim behind.
 function removeOwnedSkillsFrom(dir: string): number {
   const owned = devkitOwnedSkillNames();
   if (owned.size === 0 || !existsSync(dir)) return 0;
@@ -755,6 +889,7 @@ function removeOwnedSkillsFrom(dir: string): number {
         if (removeIfExists(join(dir, entry.name))) removed++;
       }
     }
+    removeIfExists(nativeReceiptPath(dir));
   } catch {
     // best-effort purge: an unreadable dir is skipped, removal continues elsewhere
   }
@@ -1496,8 +1631,8 @@ async function installCodexDesktop(): Promise<void> {
   // Clean up old install locations from pre-marketplace era. Neither
   // ~/.agents/skills nor ~/.agents/commands is removed wholesale: OpenClaw
   // installs share both, and user-authored content must survive —
-  // devkit-owned skill names are purged precisely by
-  // purgeStaleNativeSkills() at the command level.
+  // devkit-owned skill names are reconciled precisely by
+  // cleanupNativeDirs() at the command level.
   const oldPluginsDir = join(homedir(), '.agents', 'huaweicloud-plugins');
   if (existsSync(oldPluginsDir)) {
     removeIfExists(oldPluginsDir);
@@ -3663,13 +3798,14 @@ async function cmdInstall(): Promise<void> {
 
   checkNode();
   await checkForUpdate();
-  // Pre-MCP installs copied skills into agent-native skill dirs; those stale
-  // copies shadow-disclose outdated content, so every install run purges them
-  // (ownership-precise: only names the shipped tree still carries).
-  const purged = purgeStaleNativeSkills();
+  // Reconcile the native dirs before any step runs: residue from pre-MCP
+  // installs (no receipt) and retired names go; receipt-managed core copies
+  // stay for their own target's sync below. Also the fail-loud gate on the
+  // manifest's pack info — before any file is copied.
+  const purged = cleanupNativeDirs();
   if (purged > 0)
     console.log(
-      `  Cleaned ${purged} stale native skill cop${purged === 1 ? 'y' : 'ies'} (skills are now MCP-disclosed)`,
+      `  Cleaned ${purged} stale native skill cop${purged === 1 ? 'y' : 'ies'} (pre-MCP residue or retired names)`,
     );
   const installFailures: string[] = [];
 
@@ -3691,6 +3827,7 @@ async function cmdInstall(): Promise<void> {
         installFailures.push(stepTarget);
         return false;
       }
+      syncNativeSkillsForTarget(stepTarget);
       writeInstallMarker(stepTarget);
       return true;
     } catch (error) {
@@ -4560,20 +4697,36 @@ async function provisionPackBinaries(): Promise<void> {
 // skills + undici + .installed marker) into a plugin dir. Doctor's payload
 // checks (MCP server, undici, safety policy, skills tree, restart markers),
 // the .installed marker directory (installMarkerDirForTarget), update's
-// willPlacePayload, and the update dispatch itself (one loop for the
-// single-target and all-targets modes) all derive from this one table, so
-// a target cannot appear in one check and miss another — the atomcode
-// undici miss and the openclaw-wide miss were both this drift class. Labels
-// follow the doctor spellings ('Hermes Agent', not AGENT_LABELS' 'Hermes');
-// hints are the per-target restart copy. codex is CLI-managed with no
-// plugin dir and stays an explicit branch in dispatchUpdateTarget.
-const PAYLOAD_TARGETS = [
+// willPlacePayload, the update dispatch itself (one loop for the
+// single-target and all-targets modes), and the native core-skill sync all
+// derive from this one table, so a target cannot appear in one check and
+// miss another — the atomcode undici miss and the openclaw-wide miss were
+// both this drift class. Labels follow the doctor spellings ('Hermes
+// Agent', not AGENT_LABELS' 'Hermes'); hints are the per-target restart
+// copy. codex is CLI-managed with no plugin dir and stays an explicit
+// branch in dispatchUpdateTarget.
+type PayloadTarget = {
+  id: string;
+  label: string;
+  dir: () => string;
+  update: () => Promise<void>;
+  hint: string;
+  // Agent-native skill dirs this target's install/update refreshes with the
+  // core meta-skills (system-prompt disclosure; non-core skills stay
+  // MCP-only so DEVKIT_PACKS gating holds). Absent = MCP-only disclosure:
+  // codex-desktop's plugin-dir skills/ IS server data, and officeace's
+  // native surface is the capabilities.json registration 4a030c0 removed.
+  nativeSkills?: () => string[];
+};
+
+const PAYLOAD_TARGETS: readonly PayloadTarget[] = [
   {
     id: 'opencode',
     label: 'OpenCode',
     dir: opencodePluginsDir,
     update: updateOpenCode,
     hint: 'MCP 工具在重启 OpenCode 会话后才生效。',
+    nativeSkills: () => [opencodeSkillsDir()],
   },
   {
     id: 'codex-desktop',
@@ -4588,6 +4741,9 @@ const PAYLOAD_TARGETS = [
     dir: codeartsPluginsDir,
     update: updateCodeArts,
     hint: 'MCP 工具在重启 CodeArts 会话后才生效。',
+    // Mirrors registerCodeartsMcp: user level plus the project dir of the
+    // tree the install runs in.
+    nativeSkills: () => [codeartsSkillsDir(), codeartsProjectSkillsDir()],
   },
   {
     id: 'codearts-work',
@@ -4595,6 +4751,7 @@ const PAYLOAD_TARGETS = [
     dir: codeartsWorkPluginsDir,
     update: updateCodeArtsWork,
     hint: 'MCP 工具在重启 CodeArts Work 会话后才生效。',
+    nativeSkills: () => [codeartsWorkSkillsDir()],
   },
   {
     id: 'workbuddy',
@@ -4602,6 +4759,7 @@ const PAYLOAD_TARGETS = [
     dir: workbuddyPluginsDir,
     update: updateWorkBuddy,
     hint: 'MCP 工具在重启 WorkBuddy 会话后才生效。',
+    nativeSkills: () => [workbuddySkillsDir()],
   },
   {
     id: 'dsh',
@@ -4609,6 +4767,7 @@ const PAYLOAD_TARGETS = [
     dir: dshPluginsDir,
     update: updateDsh,
     hint: 'Restart the DSH session for changes to take effect.',
+    nativeSkills: () => [dshSkillsDir()],
   },
   {
     id: 'officeace',
@@ -4623,6 +4782,7 @@ const PAYLOAD_TARGETS = [
     dir: hermesPluginsDir,
     update: updateHermes,
     hint: 'Restart Hermes Agent for changes to take effect.',
+    nativeSkills: () => [hermesSkillsDir()],
   },
   {
     id: 'openclaw',
@@ -4630,6 +4790,10 @@ const PAYLOAD_TARGETS = [
     dir: openclawPluginsDir,
     update: updateOpenClaw,
     hint: 'Restart OpenClaw for changes to take effect.',
+    // ~/.agents/skills is shared with opencode's loader; Phase 0 measured
+    // opencode deduplicating by name across both dirs, so the overlap
+    // costs no duplicate disclosure.
+    nativeSkills: () => [openclawSkillsDir()],
   },
   {
     id: 'atomcode',
@@ -4637,8 +4801,9 @@ const PAYLOAD_TARGETS = [
     dir: atomcodePluginsDir,
     update: updateAtomCode,
     hint: 'Restart the AtomCode session for changes to take effect.',
+    nativeSkills: () => [atomcodeSkillsDir()],
   },
-] as const;
+];
 
 async function cmdDoctor(): Promise<void> {
   console.log(BANNER);
@@ -4930,14 +5095,38 @@ async function cmdDoctor(): Promise<void> {
     'Run: npx huaweicloud-devkit install (from a git checkout: npm run build first)',
   );
 
-  // Stale native copies from pre-MCP installs shadow-disclose outdated skill
-  // content through the agent's own loader; they also bypass pack gating.
-  const staleNative = staleNativeSkillDirs().length;
-  if (staleNative > 0) {
+  // Native disclosure: the core meta-skills may sit natively in a dir this
+  // devkit manages (receipt present, per PAYLOAD_TARGETS sync); any other
+  // owned name — and any owned name in a dir without a receipt — is residue
+  // from a pre-MCP install, a hand-placed copy, or drift, and warns.
+  const corePack = tryCoreSkillNames();
+  if (corePack === null) {
     warn++;
     console.log(
-      `  \x1b[33m[WARN]\x1b[0m ${staleNative} stale native skill cop${staleNative === 1 ? 'y' : 'ies'} from an older install — re-run: npx huaweicloud-devkit install`,
+      '  \x1b[33m[WARN]\x1b[0m skills manifest lacks usable pack info — re-run: npx huaweicloud-devkit install',
     );
+  } else {
+    const owned = devkitOwnedSkillNames();
+    let staleNative = 0;
+    for (const dir of nativeSkillDirs()) {
+      if (!existsSync(dir)) continue;
+      const receipt = readNativeReceipt(dir);
+      try {
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          if (!entry.isDirectory() || !owned.has(entry.name)) continue;
+          if (receipt !== null && corePack.has(entry.name)) continue;
+          staleNative++;
+        }
+      } catch {
+        // unreadable dir cannot confirm stale copies
+      }
+    }
+    if (staleNative > 0) {
+      warn++;
+      console.log(
+        `  \x1b[33m[WARN]\x1b[0m ${staleNative} stale native skill cop${staleNative === 1 ? 'y' : 'ies'} from an older or hand-made install — re-run: npx huaweicloud-devkit install`,
+      );
+    }
   }
 
   // Pack status — DEVKIT_PACKS is read from each installed target's MCP
@@ -5059,21 +5248,21 @@ async function cmdUpdate(): Promise<void> {
   resolvePacksFlag(); // fail fast on bogus --packs before any file is copied
   const target = parseTarget();
   await checkForUpdate();
-  // Purge stale native copies only when this run will actually place the new
+  // Reconcile the native dirs only when this run will actually place the new
   // payload somewhere. A target whose server is absent gets "Not installed"
   // below; purging its (only) skill copies first would destroy them with no
   // replacement. codex has no native skill dir, so its null marker skips the
-  // purge harmlessly.
+  // cleanup harmlessly.
   const markerDir = installMarkerDirForTarget(target);
   const willPlacePayload =
     target === 'all'
       ? PAYLOAD_TARGETS.some((t) => mcpServerInstalled(t.dir()))
       : markerDir !== null && mcpServerInstalled(markerDir);
   if (willPlacePayload) {
-    const purged = purgeStaleNativeSkills();
+    const purged = cleanupNativeDirs();
     if (purged > 0)
       console.log(
-        `  Cleaned ${purged} stale native skill cop${purged === 1 ? 'y' : 'ies'} (skills are now MCP-disclosed)`,
+        `  Cleaned ${purged} stale native skill cop${purged === 1 ? 'y' : 'ies'} (pre-MCP residue or retired names)`,
       );
   }
 
@@ -5126,6 +5315,7 @@ async function dispatchUpdateTarget(target: string): Promise<boolean> {
     // opencode's (the table's first row) prints with a leading blank line.
     console.log(`${all && row.id !== 'opencode' ? '\n' : ''}[${row.label}]`);
     await row.update();
+    syncNativeSkillsForTarget(row.id);
     updatedAny = true;
     if (!all) {
       console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
