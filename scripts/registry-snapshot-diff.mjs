@@ -74,7 +74,7 @@ const INTENTIONAL_DRIFTS = [
   {
     tool: 'huaweicloud_retrieve_skill',
     reason:
-      'name declares the skill-name pattern the legacy literal left untyped: MCP is the sole skill-loading surface, so traversal-shaped names are rejected at the schema boundary',
+      'name declares the skill-name pattern the legacy literal left untyped: retrieve_skill is the server-side skill loader, so traversal-shaped names are rejected at the schema boundary',
     match: (tool, key, legacy, rendered) =>
       legacy &&
       typeof legacy === 'object' &&

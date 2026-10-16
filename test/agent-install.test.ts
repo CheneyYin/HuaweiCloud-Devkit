@@ -119,9 +119,11 @@ function countSkills(dir: string) {
   return readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory() && d.name.startsWith('huawei')).length;
 }
 
-// Skills are server data for the full tree; the six core meta-skills are
-// ALSO disclosed natively (system-prompt visibility). The core roster is
-// derived from the shipped manifest — the same parser the CLI reads.
+// Skills are server data for the full tree (MCP catalog; stdio list_skills
+// additionally discloses skillRoot for direct reads); the six core
+// meta-skills are ALSO disclosed natively (system-prompt visibility). The
+// core roster is derived from the shipped manifest — the same parser the
+// CLI reads.
 const parsedCoreRoster = parseCoreSkillNames(
   readFileSync(join(root, 'plugins', 'huaweicloud-core', 'skills', '.manifest.json'), 'utf8'),
 );
@@ -454,7 +456,10 @@ test('forged receipt cannot exempt owned names in the officeace dir', () => {
     writeFileSync(join(officeaceDir, '.huaweicloud-devkit-native.json'), '{"names":["huawei-ecs"]}');
     const res = run('opencode', home, cwd, 'install');
     assert.equal(res.status, 0, res.stderr);
-    assert.ok(!existsSync(join(officeaceDir, 'huawei-ecs')), 'officeace stays MCP-only natively, receipt or not');
+    assert.ok(
+      !existsSync(join(officeaceDir, 'huawei-ecs')),
+      'officeace stays without native skill copies, receipt or not',
+    );
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });

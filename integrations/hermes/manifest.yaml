@@ -6,7 +6,9 @@ description: >
   (ECS, OBS, VPC, RDS, CCE, ModelArts, and more) ship as server data and are
   disclosed through the MCP tools (huaweicloud_list_packs,
   huaweicloud_list_skills, huaweicloud_retrieve_skill) instead of
-  ~/.hermes/skills/ copies.
+  ~/.hermes/skills/ copies; the stdio list_skills payload additionally
+  carries skillRoot (the tree's location) so the agent can read the files
+  directly with its own tools.
 
 source: https://github.com/huaweicloud/huaweicloud-devkit
 
@@ -42,7 +44,9 @@ post_install: |
   Skills are MCP-disclosed: ask the agent to call huaweicloud_list_packs,
   browse the skill catalog with huaweicloud_list_skills, or route a task with
   huaweicloud_service_catalog and load the recommended
-  skill with huaweicloud_retrieve_skill. The six core meta-skills
+  skill with huaweicloud_retrieve_skill; the list_skills payload also
+  carries skillRoot (the skills tree's location) so the agent can read the
+  files directly with its own tools. The six core meta-skills
   (huaweicloud-*) are additionally installed as native copies in
   ~/.hermes/skills for system-prompt visibility.
 

@@ -640,11 +640,12 @@ function copyDir(src: string, dest: string): void {
 // The payload every per-agent plugin dir must carry: the MCP server (dist/),
 // the safety policy, and the skills tree. Skills are server data disclosed
 // through the MCP tools (list_packs / pack_info / list_skills /
-// retrieve_skill / search_docs); the core meta-skills are ADDITIONALLY
-// disclosed natively by
-// syncNativeCoreSkills, so every install and update path must place the tree
-// next to the server it deploys (the native sync rides the same
-// PAYLOAD_TARGETS table from the dispatch layer).
+// retrieve_skill / search_docs) — list_skills also carries the tree's
+// location (skillRoot, stdio sessions only) for direct reads; the core
+// meta-skills are ADDITIONALLY disclosed natively by syncNativeCoreSkills,
+// so every install and update path must place the tree next to the server
+// it deploys (the native sync rides the same PAYLOAD_TARGETS table from
+// the dispatch layer).
 function copyServerPayload(pluginDest: string, opts: { skipDist?: boolean } = {}): void {
   if (!opts.skipDist) {
     copyDir(join(PLUGIN_ROOT, 'dist'), join(pluginDest, 'dist'));
@@ -669,7 +670,7 @@ function copyServerPayload(pluginDest: string, opts: { skipDist?: boolean } = {}
   // retrieve_skill/search_docs (unclaimed dirs bypass pack enablement).
   const stale = pruneStale(join(pluginDest, 'skills'), skillsSrc);
   console.log(
-    `  Skills (server data, MCP-disclosed) -> ${join(pluginDest, 'skills')}${stale > 0 ? ` (removed ${stale} stale)` : ''}`,
+    `  Skills (server data; MCP catalog + stdio skillRoot) -> ${join(pluginDest, 'skills')}${stale > 0 ? ` (removed ${stale} stale)` : ''}`,
   );
 }
 
@@ -2819,7 +2820,7 @@ async function installOfficeAce(): Promise<void> {
     );
   }
   // Prior versions registered native skill entries here; clean them so the
-  // capabilities registry carries no pointer at the (now MCP-only) skills.
+  // capabilities registry carries no pointer at the (server-data) skills.
   removeOfficeaceSkillCapabilities();
   // Persist the resolved root so a later uninstall/update (new process, no
   // OFFICE_CLAW_CONFIG_ROOT env) still targets the same directory (#559).
@@ -4776,10 +4777,13 @@ type PayloadTarget = {
   update: () => Promise<void>;
   hint: string;
   // Agent-native skill dirs this target's install/update refreshes with the
-  // core meta-skills (system-prompt disclosure; non-core skills stay
-  // MCP-only so DEVKIT_PACKS gating holds). Absent = MCP-only disclosure:
-  // codex-desktop's plugin-dir skills/ IS server data, and officeace's
-  // native surface is the capabilities.json registration 4a030c0 removed.
+  // core meta-skills (system-prompt disclosure; non-core skills stay off
+  // the native surface so DEVKIT_PACKS gating holds — their disclosure is
+  // the MCP catalog plus, on stdio sessions, list_skills' skillRoot
+  // location for direct reads, both disclosure-level). Absent = no native
+  // copies: codex-desktop's plugin-dir skills/ IS server data, and
+  // officeace's native surface is the capabilities.json registration
+  // 4a030c0 removed.
   nativeSkills?: () => string[];
 };
 
@@ -5154,7 +5158,7 @@ async function cmdDoctor(): Promise<void> {
       return present.size === expectedSkills.length && expectedSkills.every((name) => present.has(name));
     });
   check(
-    'Skills tree (server data, MCP-disclosed)',
+    'Skills tree (server data; MCP catalog + stdio skillRoot)',
     skillsTreeOk,
     'Run: npx huaweicloud-devkit install (from a git checkout: npm run build first)',
   );

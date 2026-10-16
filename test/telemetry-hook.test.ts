@@ -97,7 +97,9 @@ test('telemetry hook captures hcloud write commands', () => {
 
 // Devkit skills are server data disclosed over MCP: skill-view events carry
 // no devkit signal anymore, so the hook must not classify them at all
-// (retrieval telemetry rides trackSkillRetrieve in huaweicloud_retrieve_skill).
+// (retrieval telemetry rides trackSkillRetrieve in huaweicloud_retrieve_skill;
+// direct reads via the stdio skillRoot disclosure are observable only as
+// catalog calls, never as which skill file was consumed).
 test('telemetry hook does not classify skill tool loading', () => {
   for (const name of ['huawei-ecs', 'some-other-skill']) {
     const result = runHookWithTempDir({

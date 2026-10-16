@@ -48,6 +48,7 @@ interface ListSkillsPayload {
   ok: boolean;
   count: number;
   skills: Array<{ name: string; pack: string }>;
+  skillRoot?: string;
   error?: string;
 }
 
@@ -238,9 +239,13 @@ test('without DEVKIT_PACKS every skill and pack is available again', async () =>
 test(
   'list_skills follows DEVKIT_PACKS: trimmed packs are omitted from the catalog',
   withDevkitPacks('core,huaweicloud-cli', async () => {
-    const result = (await callTool('huaweicloud_list_skills', {})) as ListSkillsPayload;
+    // Seam opts mark the stdio surface so the tree-location disclosure is
+    // exercised under trimming too: gating is disclosure-level, so skillRoot
+    // stays present while the trimmed packs' entries stay absent.
+    const result = (await callTool('huaweicloud_list_skills', {}, { onPacksChanged: () => {} })) as ListSkillsPayload;
     assert.equal(result.ok, true);
     assert.ok(result.count > 0, 'huaweicloud-cli carries the twenty service skills');
+    assert.ok(result.skillRoot, 'the tree location stays disclosed under trimming (disclosure-level gating)');
     for (const entry of result.skills) {
       assert.equal(entry.pack, 'huaweicloud-cli', 'only the enabled non-core pack may appear');
     }

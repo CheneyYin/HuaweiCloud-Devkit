@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 
@@ -44,6 +46,7 @@ interface ListSkillsPayload {
   ok: boolean;
   count: number;
   skills: Array<{ name: string; description: string; pack: PackId; version: string | number; references: string[] }>;
+  skillRoot?: string;
 }
 
 interface ToolErrorPayload {
@@ -122,7 +125,10 @@ test('huaweicloud_pack_info without a pack id reports it as required', async () 
 // the exact shape the old single-line regex truncated, and a parse that
 // regressed to first-line-only would still pass a mere "non-empty" check.
 test('huaweicloud_list_skills catalogs the enabled non-core skills with parsed descriptions', async () => {
-  const result = (await callTool('huaweicloud_list_skills', {})) as ListSkillsPayload;
+  // The seam opts mark the stdio surface: only sessions that carry
+  // packs_configure state get skillRoot (the same discrimination listPacks
+  // applies to the toggle tool's inventory).
+  const result = (await callTool('huaweicloud_list_skills', {}, { onPacksChanged: () => {} })) as ListSkillsPayload;
   assert.equal(result.ok, true);
   assert.equal(result.count, result.skills.length);
   assert.ok(result.count >= 20, 'the five skill-owning packs carry at least 20 skills');
@@ -149,6 +155,51 @@ test('huaweicloud_list_skills catalogs the enabled non-core skills with parsed d
     'hc-activity.md',
     'troubleshooting.md',
   ]);
+  assert.ok(isAbsolute(result.skillRoot ?? ''), 'stdio sessions disclose the tree location as an absolute path');
+  assert.ok(
+    existsSync(join(result.skillRoot ?? '', 'huawei-ecs', 'SKILL.md')),
+    'skillRoot must locate the catalogued tree',
+  );
+});
+
+test('huaweicloud_list_skills withholds skillRoot on surfaces without session state', async () => {
+  // Direct callTool with no opts mirrors the stateless remote's call shape
+  // (no onPacksChanged seam): the key itself is withheld — absence is the
+  // guard, not a null value — so the list_skills payload on the
+  // unauthenticated CORS-* remote never carries the server host's install
+  // path.
+  const result = (await callTool('huaweicloud_list_skills', {})) as ListSkillsPayload;
+  assert.equal(result.ok, true);
+  assert.equal('skillRoot' in result, false, 'skillRoot must be absent without the stdio seam');
+});
+
+test('huaweicloud_list_skills discloses skillRoot through the real stdio wiring', async () => {
+  // End-to-end on the disclosing side, mirroring the remote-face test: a
+  // live stdio session constructs the server with runtimePacks, so the
+  // registerOne callOpts seam (mcp-protocol) — not a hand-injected opts —
+  // must deliver the field. A per-tool rewiring of that construction would
+  // otherwise keep every seam-level test green while real sessions lose
+  // skillRoot.
+  const { server, transport } = await createLinkedDevkitServers({ runtimePacks: true });
+  const client = new Client({ name: 'pack-meta-test', version: '0.0.0' });
+  try {
+    await client.connect(transport);
+    const result = (await client.callTool({
+      name: 'huaweicloud_list_skills',
+      arguments: {},
+    })) as ClientToolResult;
+    assert.equal(result.isError, false);
+    const payload = JSON.parse(result.content[0].text) as { ok: boolean; skillRoot?: string };
+    assert.equal(payload.ok, true);
+    assert.ok(isAbsolute(payload.skillRoot ?? ''), 'the stdio wiring must deliver an absolute skillRoot');
+    assert.ok(
+      existsSync(join(payload.skillRoot ?? '', 'huawei-ecs', 'SKILL.md')),
+      'skillRoot must locate the catalogued tree',
+    );
+  } finally {
+    await client.close();
+    await server.close();
+  }
 });
 
 test('huaweicloud_list_skills pack filter returns exactly the pack\u2019s skills', async () => {
@@ -190,8 +241,8 @@ test('huaweicloud_list_skills core filter explains the meta-skill exclusion inst
   assert.match(result.error, /huaweicloud_retrieve_skill/, 'the error must name the portable load path');
 });
 
-// The skill-name pattern is the MCP boundary guard for the sole skill-loading
-// surface: traversal-shaped names must be rejected by schema validation
+// The skill-name pattern is the MCP boundary guard for the server-side
+// skill loader: traversal-shaped names must be rejected by schema validation
 // before the handler ever touches the filesystem. Pinning it at the SDK layer
 // (not just the handler re-check) is what keeps tool-schemas.ts honest.
 test('retrieve_skill rejects traversal-shaped names at the MCP schema boundary', async () => {

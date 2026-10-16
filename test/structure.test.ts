@@ -501,6 +501,74 @@ test('web/static-site deployment intent offers target options with sandbox first
   assert.match(discovery, /do NOT default to OBS/);
 });
 
+test('core meta-skills teach the skillRoot direct-read path alongside retrieve_skill', () => {
+  // The dual-path contract: list_skills discloses the tree's location on
+  // stdio sessions, and both routing skills must teach the direct read as
+  // an alternative to the portable loader. The references/ assertion is
+  // co-occurrence-anchored (same line as skillRoot) so it pins the teaching
+  // line, not the pre-existing step-2 "Read references/{sub-skill-id}.md".
+  // New SKILL.md copy must keep avoiding see/load followed by a backticked
+  // non-skill identifier — the cross-reference guard resolves those against
+  // the skills tree.
+  const core = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-core', 'SKILL.md'), 'utf8');
+  assert.match(core, /skillRoot/, 'huaweicloud-core must teach the skillRoot direct-read path');
+  assert.match(
+    core,
+    /skillRoot[^\n]*references\//,
+    'the direct-read line must name the references directory beside skillRoot',
+  );
+
+  const discovery = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-capability-discovery', 'SKILL.md'), 'utf8');
+  assert.match(discovery, /skillRoot/, 'huaweicloud-capability-discovery must teach the skillRoot direct-read path');
+  assert.match(
+    discovery,
+    /skillRoot[^\n]*references\//,
+    'the discovery teaching line must name the references directory beside skillRoot',
+  );
+});
+
+test('retrieve_skill reference cap stays in sync between code and description', () => {
+  // The description teaches "each reference body capped at 4000 characters";
+  // this pins the taught number to the truncation constant so neither can
+  // drift silently (the repo's own description-literal pinning pattern).
+  const tools = readSource(join('src', 'tools.ts'));
+  const cap = tools.match(/\.substring\(0, (\d+)\) \}\)/)?.[1];
+  assert.ok(cap, 'the reference truncation constant must be found');
+  assert.match(
+    tools,
+    new RegExp(`capped at ${cap} characters`),
+    'the retrieve_skill description must teach the actual reference cap',
+  );
+});
+
+test('telemetry hooks never classify skill-tool loads', () => {
+  // Doctrine guard: the telemetry hooks shed skill-load classification
+  // deliberately (native loads produce no telemetry by design, and the
+  // huawei* prefix match misattributes user skills). Two review rounds
+  // caught drift in this family one file at a time; this sweep pins every
+  // hook-events.jsonl emitter together — the five platform hooks plus the
+  // plugin-dir safety hook — so a bad merge cannot quietly re-add the
+  // branch anywhere.
+  const integrations = join(root, 'integrations');
+  const hookFiles = [
+    join(integrations, 'opencode', 'hooks', 'skill-tracker.js'),
+    join(integrations, 'workbuddy', 'hooks', 'telemetry-tracker.py'),
+    join(integrations, 'hermes', 'hooks', 'huaweicloud-telemetry.py'),
+    join(integrations, 'atomcode', 'hooks', 'huaweicloud-telemetry.js'),
+    join(integrations, 'dsh', 'hook-plugin.mjs'),
+    join(pluginRoot, 'hooks', 'huaweicloud-safety.py'),
+  ];
+  for (const file of hookFiles) {
+    assert.ok(existsSync(file), `hook file ${file} must exist`);
+    const body = readFileSync(file, 'utf8');
+    assert.doesNotMatch(
+      body,
+      /skill:retrieve|isHuaweiCloudSkill|extractSkillName/,
+      `${file} must not classify skill-tool loads (server data doctrine)`,
+    );
+  }
+});
+
 test('devbridge uses the valid `list` command, not the non-existent `ls`', () => {
   const sandbox = readFileSync(
     join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'SKILL.md'),
@@ -631,8 +699,8 @@ test('all plugin manifests are valid JSON', () => {
     if (path.endsWith('openclaw.plugin.json')) continue;
     assert.ok(data.interface, `Manifest ${path} missing interface`);
     // No manifest may declare a native skills surface: skills are server
-    // data disclosed over MCP only (the core meta-skills' native copies are
-    // placed by the installer, not declared here).
+    // data disclosed through the MCP tools (the core meta-skills' native
+    // copies are placed by the installer, not declared here).
     assert.ok(!Object.hasOwn(data, 'skills'), `Manifest ${path} must not declare skills`);
   }
   const openclaw = readJson(join(pluginRoot, 'openclaw.plugin.json')) as PluginManifest;
@@ -782,8 +850,8 @@ test('setup-cli.ts supports the codearts target end to end', () => {
 // The native-disclosure wiring must stay table-driven: the cleanup/doctor
 // scan list derives from the PAYLOAD_TARGETS nativeSkills rows (no second
 // hand-maintained dir list), officeace stays the one explicit foreign
-// detector, and the two deliberately MCP-only rows keep absent nativeSkills
-// fields.
+// detector, and the two deliberately native-copy-free rows keep absent
+// nativeSkills fields.
 test('nativeSkillDirs derives from PAYLOAD_TARGETS plus the officeace exception', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
   const listBody = setup.match(/function nativeSkillDirs\(\): string\[\] \{([\s\S]*?)\n\}/)?.[1] ?? '';
@@ -793,10 +861,10 @@ test('nativeSkillDirs derives from PAYLOAD_TARGETS plus the officeace exception'
   assert.doesNotMatch(listBody, /opencodeSkillsDir\(\)/, 'no hand-listed row dirs remain');
   const officeaceRow = setup.match(/\{\s*id: 'officeace',[\s\S]*?\n {2}\},/)?.[0] ?? '';
   assert.ok(officeaceRow.length > 0, 'officeace row found');
-  assert.doesNotMatch(officeaceRow, /nativeSkills/, 'officeace stays MCP-only natively');
+  assert.doesNotMatch(officeaceRow, /nativeSkills/, 'officeace stays without native skill copies');
   const codexDesktopRow = setup.match(/\{\s*id: 'codex-desktop',[\s\S]*?\n {2}\},/)?.[0] ?? '';
   assert.ok(codexDesktopRow.length > 0, 'codex-desktop row found');
-  assert.doesNotMatch(codexDesktopRow, /nativeSkills/, 'codex-desktop stays MCP-only natively');
+  assert.doesNotMatch(codexDesktopRow, /nativeSkills/, 'codex-desktop stays without native skill copies');
 });
 
 test('tools.ts resolves skills from the server-relative tree only', () => {

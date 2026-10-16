@@ -308,7 +308,7 @@ test(
   },
 );
 
-// retrieve_skill is the sole skill-loading surface, so its name boundary is
+// retrieve_skill is the server-side skill loader, so its name boundary is
 // security-relevant: traversal-shaped names must be rejected before any
 // filesystem access.
 test('retrieve_skill rejects traversal-shaped and non-skill names', async () => {

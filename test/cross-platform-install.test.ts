@@ -103,8 +103,9 @@ test('handles platform-specific home directory resolution', () => {
       'skills tree (server data) created under correct home',
     );
     // Core meta-skills are natively disclosed under the same home; every
-    // non-core skill stays MCP-only in the plugin dir. The roster comes
-    // from the same manifest parser the CLI reads.
+    // non-core skill stays off the native surface (MCP catalog, plus the
+    // stdio skillRoot location disclosure). The roster comes from the same
+    // manifest parser the CLI reads.
     const nativeDir = join(home, '.config', 'opencode', 'skills');
     assert.ok(existsSync(nativeDir), 'native skill dir created for core disclosure');
     const nativeOwned = readdirSync(nativeDir, { withFileTypes: true })

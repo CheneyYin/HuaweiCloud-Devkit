@@ -364,7 +364,10 @@ test('dsh bundle postinstall syncs core skills natively and purges non-core', ()
 
     assert.ok(existsSync(join(nativeDir, 'huaweicloud-core')), 'core skill synced natively');
     assert.ok(existsSync(join(nativeDir, 'huaweicloud-safety')), 'core skill synced natively');
-    assert.ok(!existsSync(join(nativeDir, 'huawei-ecs')), 'owned non-core name stays MCP-only (stale copy purged)');
+    assert.ok(
+      !existsSync(join(nativeDir, 'huawei-ecs')),
+      'owned non-core name stays off the native surface (stale copy purged)',
+    );
     assert.ok(existsSync(join(nativeDir, 'huawei-my-runbook')), 'user skill sharing the prefix survives');
     assert.ok(
       !existsSync(join(nativeDir, 'huaweicloud-retired-x')),

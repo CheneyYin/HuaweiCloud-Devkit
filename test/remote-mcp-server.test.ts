@@ -101,6 +101,23 @@ test('remote MCP server returns 202 for notifications/initialized', async () => 
   assert.equal(res.status, 202);
 });
 
+test('remote list_skills omits skillRoot (no host path on the unauthenticated face)', async () => {
+  // The stateless remote builds servers without the onPacksChanged seam, so
+  // listSkills withholds skillRoot: the list_skills payload on the CORS-*
+  // unauthenticated face must not carry the server host's install path, and
+  // remote callers cannot reach that filesystem anyway — retrieve_skill is
+  // their load path.
+  const called = await rpc('tools/call', {
+    name: 'huaweicloud_list_skills',
+    arguments: {},
+  });
+  assert.equal(called.status, 200);
+  assert.equal(called.body.result.isError, false);
+  const payload = JSON.parse(called.body.result.content[0].text) as { ok: boolean; skillRoot?: string };
+  assert.equal(payload.ok, true);
+  assert.equal('skillRoot' in payload, false, 'the stateless remote must not publish the server host install path');
+});
+
 test('remote MCP server returns 400 for invalid JSON body', async () => {
   const res = await fetch(`${base}/`, {
     method: 'POST',

@@ -68,8 +68,10 @@ test('codearts install copies skills, MCP server, and safety policy', () => {
     assert.match(res.stdout, /\[CodeArts\]/);
     assert.match(res.stdout, /Installation complete!/);
 
-    // Full tree is server data in the plugin dir; the core meta-skills are
-    // additionally disclosed natively in the user and project skill dirs.
+    // Full tree is server data in the plugin dir (MCP catalog; stdio
+    // list_skills additionally discloses skillRoot for direct reads); the
+    // core meta-skills are additionally disclosed natively in the user and
+    // project skill dirs.
     assert.equal(
       countSkills(join(home, '.codeartsdoer', 'skills')),
       coreSkillCount,
