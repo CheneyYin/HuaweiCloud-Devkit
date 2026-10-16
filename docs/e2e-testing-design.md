@@ -122,9 +122,10 @@ are never copied. Local config: gitignored `test/e2e/.env`.
   hardcoded (search-market.ts) with an in-memory cache only — no env seam.
   Covering it needs a product seam (an `HUAWEICLOUD_MARKETPLACE_INDEX`-style
   override); until one lands, this tool has no E2E case.
-- **LLM cost/latency**: single case 1–4 min, attempts cap 2, ~15 cases per
-  full run. Failures attach every recording to the JSON report for offline
-  triage.
+- **LLM cost/latency**: a single case takes 1 to 4 min with an attempts cap
+  of 2. A full run covers all 28 cases and measures about 40 min wall clock
+  (first-attempt passes). Failures attach every recording to the JSON report
+  for offline triage.
 
 ## Division of labor: this suite vs the nightly real-cloud harness
 

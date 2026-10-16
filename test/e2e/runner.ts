@@ -547,6 +547,12 @@ async function selfcheck(bin: string, kooCliVersion: string): Promise<boolean> {
           jsonrpc: '2.0',
           id: 7,
           method: 'tools/call',
+          params: { name: 'huaweicloud_list_skills', arguments: {} },
+        },
+        {
+          jsonrpc: '2.0',
+          id: 8,
+          method: 'tools/call',
           params: {
             name: 'huaweicloud_sandbox_exec_one_shot',
             // >8172-byte command: the client chunks terminal input at 8172
@@ -571,7 +577,10 @@ async function selfcheck(bin: string, kooCliVersion: string): Promise<boolean> {
         child.stdout.on('data', (chunk: Buffer) => {
           stdout += chunk.toString('utf8');
           // The last request's response is on the wire — close like a client.
-          if (!closed && stdout.includes('"id":7')) {
+          // The slow exec rides LAST on purpose: when its response arrives,
+          // every faster request before it has already answered, so closing
+          // here cannot kill an in-flight response.
+          if (!closed && stdout.includes('"id":8')) {
             closed = true;
             clearTimeout(timer);
             child.stdin.end();
@@ -680,11 +689,34 @@ async function selfcheck(bin: string, kooCliVersion: string): Promise<boolean> {
       } else {
         out(`[selfcheck] HTTP fake recorded GET /voucher/status (x${voucherHits.length})`);
       }
+      // The v2 tool × trace seam leg: list_skills through the live wire and
+      // the callTool wrapper. No 28-case live run calls this tool, and the
+      // unit suite only exercises it with tracing off — this is the one
+      // gate that proves the newest core tool lands in the trace like every
+      // other dispatch.
+      const skills = toolPayload(7);
+      if (!skills || skills.ok !== true || typeof skills.count !== 'number' || skills.count < 1) {
+        out(`[selfcheck] FAIL list_skills returned no catalog: ${JSON.stringify(skills).slice(0, 200)}`);
+        ok = false;
+      } else if (typeof skills.skillRoot !== 'string') {
+        out(
+          `[selfcheck] FAIL list_skills withheld skillRoot on a stdio session: ${JSON.stringify(skills).slice(0, 200)}`,
+        );
+        ok = false;
+      } else {
+        out(`[selfcheck] list_skills returned ${skills.count} entries with skillRoot`);
+      }
+      if (!trace.toolCalls.some((c) => c.name === 'huaweicloud_list_skills' && c.ok)) {
+        out(`[selfcheck] FAIL trace has no list_skills toolCall: ${tracedNames.join(' | ') || '(none)'}`);
+        ok = false;
+      } else {
+        out('[selfcheck] list_skills traced through the callTool wrapper');
+      }
       // The ws-exec leg: sandbox connect + a >8172-byte one-shot exec through
       // the PRODUCT's own client stack (session-manager → hwlink API → ws
       // multiplexer → fake) — subprotocol echo, nonce handshake, chunk
       // reassembly, and marker completion all in one LLM-less proof.
-      const exec = toolPayload(7);
+      const exec = toolPayload(8);
       const execStdout = typeof exec?.stdout === 'string' ? exec.stdout : '';
       if (!execStdout.includes('A'.repeat(1000))) {
         out(
