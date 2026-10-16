@@ -12,14 +12,14 @@ driven by a real, unmocked code agent (opencode headless, real LLM). The
 agent layer is never mocked; the Huawei Cloud boundary is fully fake but
 recording. Assertion surfaces:
 
-| Channel | Seam | Owner |
-| --- | --- | --- |
-| hcloud argv | `HCLOUD_BIN` + `HCLOUD_BIN_ARGS_JSON` + `HCLOUD_FAKE_LOG` (+ `HCLOUD_FAKE_SCRIPT`, `HCLOUD_FAKE_VERSION`) | env contract (long-standing) |
-| HTTP (hdkitservice / IAM / hwlink) | `HDKITSERVICE_ENDPOINT`, `HW_IAM_ENDPOINT`, `HWLINK_ENDPOINT` → local `HttpFake` | env contract (long-standing) |
-| gateway sidecar | `OPENMCP_BIN` (+ fixture knob `FAKE_POLICY`, recording `OPENMCP_FAKE_LOG`) | env contract (long-standing) |
-| tool-call trace | `HUAWEICLOUD_DEVKIT_TRACE` (see below) | new contract, frozen |
-| disclosure events | same trace file, recorded at the stdio transport's outbound wire face | new contract, frozen |
-| file artifacts | HOME-relative paths under the throwaway home | installer layout (pinned by cross-platform-install.test.ts) |
+| Channel                            | Seam                                                                                                      | Owner                                                       |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| hcloud argv                        | `HCLOUD_BIN` + `HCLOUD_BIN_ARGS_JSON` + `HCLOUD_FAKE_LOG` (+ `HCLOUD_FAKE_SCRIPT`, `HCLOUD_FAKE_VERSION`) | env contract (long-standing)                                |
+| HTTP (hdkitservice / IAM / hwlink) | `HDKITSERVICE_ENDPOINT`, `HW_IAM_ENDPOINT`, `HWLINK_ENDPOINT` → local `HttpFake`                          | env contract (long-standing)                                |
+| gateway sidecar                    | `OPENMCP_BIN` (+ fixture knob `FAKE_POLICY`, recording `OPENMCP_FAKE_LOG`)                                | env contract (long-standing)                                |
+| tool-call trace                    | `HUAWEICLOUD_DEVKIT_TRACE` (see below)                                                                    | new contract, frozen                                        |
+| disclosure events                  | same trace file, recorded at the stdio transport's outbound wire face                                     | new contract, frozen                                        |
+| file artifacts                     | HOME-relative paths under the throwaway home                                                              | installer layout (pinned by cross-platform-install.test.ts) |
 
 ## Coupling classification (test → devkit dependency health)
 
@@ -126,3 +126,13 @@ group and killed tree-wide on timeout; a startup sweep removes stale
 `hwc-e2e-*` temp dirs older than a day (signal-death self-healing).
 `selfcheck` subcommand proves the full chain (tarball → install → MCP server
 → callTool → fakes) without the LLM.
+
+Nightly (`.github/workflows/e2e-nightly.yml`): the only required repository
+setting is the `E2E_TEST_MODEL_APIKEY` secret. Provider/model/baseURL default
+to the committed values in the workflow (mirroring `test/e2e/.env`'s
+non-secret model config — maas / modelarts / glm-5.2 at the time of writing)
+and stay overridable via the `E2E_TEST_*` vars; the preflight step fails fast
+on a missing secret. opencode is pinned to the version the suite was verified
+against (an upgrade is an explicit suite event). Local runs read the
+gitignored `test/e2e/.env` instead; the report records agent/model/version
+per run so drift between the two sources is visible, not silent.
