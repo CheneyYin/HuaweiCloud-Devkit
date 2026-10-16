@@ -35,7 +35,9 @@ function makeEnv(home: string, extra: Record<string, string | undefined> = {}) {
   };
   // Clear agent home overrides so installs land in the temp home, not the real one.
   // XDG_CONFIG_HOME redirects the opencode config root (xdgConfigHome);
-  // CODEX_HOME keys the uninstaller's marketplace-cache cleanup (uninstallCodex).
+  // CODEX_HOME keys the uninstaller's marketplace-cache cleanup (uninstallCodex);
+  // CLAUDE_CONFIG_DIR redirects the option-3 generic MCP config (configureGenericMCP
+  // resolves it first when writing .claude.json).
   for (const key of [
     'ATOMCODE_HOME',
     'DSH_HOME',
@@ -43,6 +45,7 @@ function makeEnv(home: string, extra: Record<string, string | undefined> = {}) {
     'OFFICE_CLAW_CONFIG_ROOT',
     'XDG_CONFIG_HOME',
     'CODEX_HOME',
+    'CLAUDE_CONFIG_DIR',
   ]) {
     delete env[key];
   }

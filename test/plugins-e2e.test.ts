@@ -16,15 +16,27 @@ function makeEnv(home: string, _cwd: string): NodeJS.ProcessEnv {
     HOME: home,
     HOMEDRIVE: home.slice(0, 2),
     HOMEPATH: home.slice(2),
+    // The update-warmup child (npm view) outlives the killed MCP server and
+    // writes into the fake HOME's cold .npm — racing the test's rmSync
+    // teardown into ENOTEMPTY flakes. The skip switch kills the warmup.
+    HUAWEICLOUD_DEVKIT_SKIP_UPDATE: '1',
   };
-  // XDG_CONFIG_HOME redirects the opencode config root (xdgConfigHome);
-  // CODEX_HOME keys the uninstaller's codex cache cleanup. HUAWEICLOUD_HOME
-  // relocates devkit-owned state — every fresh install's takeAgentDelta
-  // reads the pending MCP-config backup there, and an ambient export would
-  // consume (and eventually delete) the real user's pending delta.
-  delete env.XDG_CONFIG_HOME;
-  delete env.CODEX_HOME;
-  delete env.HUAWEICLOUD_HOME;
+  // cleanupNativeDirs() runs inside every install and reconciles EVERY
+  // target's native dir (not just the installed one), each resolved from
+  // its own ambient override — the full clear list applies. HUAWEICLOUD_HOME
+  // additionally keys takeAgentDelta's pending-backup reads.
+  for (const key of [
+    'XDG_CONFIG_HOME',
+    'CODEX_HOME',
+    'HERMES_HOME',
+    'DSH_HOME',
+    'ATOMCODE_HOME',
+    'OFFICE_CLAW_CONFIG_ROOT',
+    'HUAWEICLOUD_HOME',
+    'DEVKIT_PACKS',
+  ]) {
+    delete env[key];
+  }
   return env;
 }
 

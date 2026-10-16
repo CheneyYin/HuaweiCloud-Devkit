@@ -15,7 +15,7 @@ const setupCli = join(root, 'bin', 'setup.cjs');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 
 function makeEnv(home: string, officeaceConfigRoot: string): Record<string, string | undefined> {
-  return {
+  const env: Record<string, string | undefined> = {
     ...process.env,
     USERPROFILE: home,
     HOME: home,
@@ -28,6 +28,13 @@ function makeEnv(home: string, officeaceConfigRoot: string): Record<string, stri
     // those writes into real state.
     HUAWEICLOUD_HOME: home,
   };
+  // cleanupNativeDirs() runs inside every install and reconciles EVERY
+  // target's native dir (not just officeace), each resolved from its own
+  // ambient override — clear the ones this file does not pin.
+  for (const key of ['XDG_CONFIG_HOME', 'CODEX_HOME', 'HERMES_HOME', 'DSH_HOME', 'ATOMCODE_HOME']) {
+    delete env[key];
+  }
+  return env;
 }
 
 function runCli(home: string, cwd: string, args: string[], officeaceConfigRoot: string = join(home, '.office-claw')) {

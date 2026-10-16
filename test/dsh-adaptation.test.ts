@@ -22,7 +22,7 @@ const setupCli = join(root, 'bin', 'setup.cjs');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 
 function makeEnv(home: string, dshHome: string) {
-  return {
+  const env: Record<string, string | undefined> = {
     ...process.env,
     USERPROFILE: home,
     HOME: home,
@@ -31,6 +31,20 @@ function makeEnv(home: string, dshHome: string) {
     DSH_HOME: dshHome,
     HUAWEICLOUD_DEVKIT_SKIP_DSH_PLUGIN_INSTALL: '1',
   };
+  // cleanupNativeDirs() runs inside every install and reconciles EVERY
+  // target's native dir (not just dsh), each resolved from its own ambient
+  // override — clear the ones this file does not pin.
+  for (const key of [
+    'XDG_CONFIG_HOME',
+    'CODEX_HOME',
+    'HERMES_HOME',
+    'ATOMCODE_HOME',
+    'OFFICE_CLAW_CONFIG_ROOT',
+    'HUAWEICLOUD_HOME',
+  ]) {
+    delete env[key];
+  }
+  return env;
 }
 
 function runCli(home: string, cwd: string, args: string[], dshHome: string = join(home, '.dsh')) {

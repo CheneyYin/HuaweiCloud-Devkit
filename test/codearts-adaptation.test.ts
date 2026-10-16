@@ -36,6 +36,19 @@ function makeEnv(home: string, _cwd: string) {
     HOMEPATH: home.slice(2),
     HUAWEICLOUD_HOME: home,
   };
+  // cleanupNativeDirs() runs inside every install and reconciles EVERY
+  // target's native dir (not just codearts), each resolved from its own
+  // ambient override — clear the ones this file does not pin.
+  for (const key of [
+    'XDG_CONFIG_HOME',
+    'CODEX_HOME',
+    'HERMES_HOME',
+    'DSH_HOME',
+    'ATOMCODE_HOME',
+    'OFFICE_CLAW_CONFIG_ROOT',
+  ]) {
+    delete env[key];
+  }
   delete env.HCLOUD_BIN;
   return env;
 }

@@ -19,6 +19,10 @@ function makeEnv(home: string): Record<string, string | undefined> {
     HOMEDRIVE: home.slice(0, 2),
     HOMEPATH: home.slice(2),
     HUAWEICLOUD_HOME: home,
+    // `uninstall --target all` dispatches uninstallOfficeAce, which probes
+    // the real Windows registry / Program Files without this skip (#654) —
+    // on a dev machine with a real OfficeAce it would uninstall it.
+    HUAWEICLOUD_DEVKIT_SKIP_OFFICEACE_DETECT: '1',
   };
   // The installer honors XDG_CONFIG_HOME for opencode (xdgConfigHome) and
   // CODEX_HOME for the codex cache cleanup (uninstallCodex). This suite also
