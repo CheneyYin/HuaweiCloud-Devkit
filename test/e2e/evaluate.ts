@@ -9,6 +9,7 @@ import type {
   ToolCallMatcher,
 } from './types.ts';
 import type { HttpRecording } from './http-fake.ts';
+import type { WsConnectionRecording } from './ws-fake/hwlink-server.ts';
 
 // Pure evaluation over collected recordings. Verdicts gate only on
 // devkit-observable outbound artifacts (fake-boundary recordings, the
@@ -41,6 +42,7 @@ export interface Recordings {
   disclosures: TraceDisclosure[];
   http: HttpRecording[];
   gateway: GatewayRecording[];
+  ws: WsConnectionRecording[];
   files: Record<string, string | null>;
   finalText: string | null;
 }
@@ -288,6 +290,32 @@ export function evaluateCase(caseDef: E2eCase, recordings: Recordings): CaseVerd
             : `stopped at step ${seq.matched + 1}/${exp.steps.length} (${seq.describe(seq.matched)}). Channel trace: ${seq.channelTrace || '(empty)'}`,
         };
       }
+      case 'ws': {
+        const allCommands = recordings.ws.flatMap((conn) => conn.commands);
+        const hits = allCommands.filter((cmd) => cmd.intent === exp.intent);
+        return {
+          expectation: exp,
+          pass: inRange(hits.length, exp.times),
+          evidence: hits.length
+            ? `${hits.length} command(s) with intent ${exp.intent}`
+            : `0 command(s) with intent ${exp.intent}, expected ${describeRange(exp.times)}. All commands: ${
+                allCommands
+                  .map((c) => c.intent)
+                  .slice(0, 12)
+                  .join(' | ') || '(none)'
+              }`,
+        };
+      }
+      case 'wsConnections': {
+        const count = recordings.ws.length;
+        return {
+          expectation: exp,
+          pass: inRange(count, exp.times),
+          evidence: `${count} ws connection(s) (closes: ${
+            recordings.ws.map((c) => c.close ?? 'open').join(',') || '(none)'
+          })`,
+        };
+      }
       case 'file': {
         const content = recordings.files[exp.path];
         const exists = content !== null && content !== undefined;
@@ -329,7 +357,8 @@ export function evaluateCase(caseDef: E2eCase, recordings: Recordings): CaseVerd
     recordings.toolCalls.length > 0 ||
     recordings.hcloud.length > 0 ||
     recordings.http.length > 0 ||
-    recordings.gateway.length > 0;
+    recordings.gateway.length > 0 ||
+    recordings.ws.some((conn) => conn.commands.length > 0);
 
   return {
     caseId: caseDef.id,

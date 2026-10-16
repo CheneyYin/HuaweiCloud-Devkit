@@ -15,6 +15,7 @@ function recordings(partial: Partial<Recordings>): Recordings {
     disclosures: [],
     http: [],
     gateway: [],
+    ws: [],
     files: {},
     finalText: null,
     ...partial,

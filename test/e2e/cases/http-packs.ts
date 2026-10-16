@@ -1,4 +1,4 @@
-import type { E2eCase } from '../types.ts';
+import type { CaseFixtures, E2eCase, Expectation } from '../types.ts';
 
 // Fake credentials for the HTTP-boundary packs. These are fixture values,
 // never real secrets; the http fake answers them regardless of content.
@@ -239,5 +239,110 @@ export const sandboxCases: E2eCase[] = [
     ],
     softExpect: [{ kind: 'agentSays', text: { any: ['注入', 'inject', 'credential', '凭证'] } }],
     budget: { timeoutMs: 300_000, attempts: 2 },
+  },
+];
+
+// ws-exec pair over the local hwlink fake. Connection-count arithmetic is
+// the mechanism proof: connect runs one one-shot (devbridge cleanup, its own
+// connection) plus the CACHED export-PATH session (a second connection) —
+// so two exec_with_session calls that REUSE the session leave the count at
+// 2, while a close_session in between forces a cache miss and a third.
+const WS_DEV_STAGE = 'ds-e2e-ws-001';
+
+// Shared expectation fragments for the ws trio (dedup, not abstraction):
+// every case gates the connect POST and the zero-unknown drift guard.
+const CONNECT_POST: Expectation = { kind: 'http', method: 'POST', path: '/connect', times: { min: 1, max: 2 } };
+const ZERO_UNKNOWN: Expectation = { kind: 'ws', intent: 'unknown', times: { min: 0, max: 0 } };
+
+function wsSandboxFixtures(): CaseFixtures {
+  return {
+    ws: true,
+    home: {
+      '.config/huaweicloud/credentials.json': S1_SEED,
+    },
+    http: {
+      responses: [
+        { path: '/check-user', method: 'GET', status: 200, body: { realnameVerified: true, agreementSigned: true } },
+        {
+          path: '/connect',
+          method: 'POST',
+          status: 200,
+          body: { session_id: 'sess-e2e-ws-001', dev_stage_id: WS_DEV_STAGE },
+        },
+        {
+          path: `/open-api-public/v1/devenvs/${WS_DEV_STAGE}/connections`,
+          method: 'POST',
+          status: 200,
+          body: { error_code: '0000', result: { connection_id: 'conn-e2e-ws-1' } },
+        },
+        {
+          path: `/open-api-public/v1/devenvs/${WS_DEV_STAGE}/connections/conn-e2e-ws-1`,
+          method: 'GET',
+          status: 200,
+          body: { result: { connection_info: { url: '{wsUrl}', extensions: { source: 778899 } } } },
+        },
+      ],
+    },
+  };
+}
+
+export const wsSandboxCases: E2eCase[] = [
+  {
+    id: 'sandbox-exec-one-shot-ws',
+    pack: 'sandbox',
+    prompt:
+      '连接华为云沙箱(不需要配置 git 仓库),然后用 huaweicloud_sandbox_exec_one_shot 在沙箱里执行命令 echo e2e-one-shot-output,把命令输出告诉我。',
+    fixtures: wsSandboxFixtures(),
+    expect: [
+      CONNECT_POST,
+      // one-shot exec rides its own fresh ws connection (on top of
+      // connect's two), so the count is loose here — the precise pair is
+      // the reuse/close cases below.
+      { kind: 'wsConnections', times: { min: 2, max: 4 } },
+      { kind: 'ws', intent: 'echo', times: { min: 1, max: 1 } },
+      // Fake-drift gate: every command the product sent must be one the
+      // fake recognized — a script edit turns this red, never silent.
+      ZERO_UNKNOWN,
+    ],
+    softExpect: [{ kind: 'agentSays', text: { any: ['e2e-one-shot-output', '输出'] } }],
+    budget: { timeoutMs: 360_000, attempts: 2 },
+  },
+  {
+    id: 'sandbox-exec-session-reuse',
+    pack: 'sandbox',
+    prompt:
+      '连接华为云沙箱(不需要配置 git 仓库),然后用 huaweicloud_sandbox_exec_with_session 在同一个会话里依次执行两条命令:先 echo e2e-first,再 echo e2e-second,把两次输出都告诉我。不要断开会话。',
+    fixtures: wsSandboxFixtures(),
+    expect: [
+      CONNECT_POST,
+      // Session-cache reuse IS the mechanism: connect's two connections
+      // (one-shot cleanup + cached session) plus ZERO more for the second
+      // exec. A reuse regression makes this 3+.
+      { kind: 'wsConnections', times: { min: 2, max: 2 } },
+      { kind: 'ws', intent: 'echo', times: { min: 2, max: 2 } },
+      ZERO_UNKNOWN,
+    ],
+    softExpect: [{ kind: 'agentSays', text: { any: ['e2e-first', 'e2e-second'] } }],
+    budget: { timeoutMs: 360_000, attempts: 2 },
+  },
+  {
+    id: 'sandbox-exec-session-close-reconnect',
+    pack: 'sandbox',
+    prompt:
+      '连接华为云沙箱(不需要配置 git 仓库),用 huaweicloud_sandbox_exec_with_session 执行 echo e2e-before-close,然后调用 huaweicloud_sandbox_close_session 关闭会话,再用 huaweicloud_sandbox_exec_with_session 执行 echo e2e-after-close,把两次输出都告诉我。',
+    fixtures: wsSandboxFixtures(),
+    expect: [
+      CONNECT_POST,
+      { kind: 'toolCall', name: 'huaweicloud_sandbox_close_session', ok: true },
+      // The close→reconnect delta vs the reuse case: the post-close exec
+      // is a cache miss, so a THIRD connection appears. close_session
+      // itself is client-only teardown — the connection count is what
+      // makes it observable.
+      { kind: 'wsConnections', times: { min: 3, max: 3 } },
+      { kind: 'ws', intent: 'echo', times: { min: 2, max: 2 } },
+      ZERO_UNKNOWN,
+    ],
+    softExpect: [{ kind: 'agentSays', text: { any: ['e2e-before-close', 'e2e-after-close'] } }],
+    budget: { timeoutMs: 360_000, attempts: 2 },
   },
 ];

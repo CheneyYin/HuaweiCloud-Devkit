@@ -55,9 +55,20 @@ export type Expectation =
   | ({ kind: 'disclosure' } & DisclosureMatcher)
   | ({ kind: 'http' } & HttpExpectation)
   | ({ kind: 'gateway' } & GatewayExpectation)
+  | ({ kind: 'ws' } & WsCommandMatcher)
+  | { kind: 'wsConnections'; times?: Range }
   | ({ kind: 'file' } & FileExpectation)
   | ({ kind: 'sequence' } & SequenceExpectation)
   | { kind: 'agentSays'; text: AgentSaysMatcher };
+
+// ws-exec boundary expectation over WsFake recordings: commands with a
+// recognized intent (the zero-unknown gate: intent 'unknown' with
+// times {0,0} catches fake/product script drift as a red, not a silent
+// degrade).
+export interface WsCommandMatcher {
+  intent: string;
+  times?: Range;
+}
 
 // Ordered-subsequence expectation within ONE recording channel (the
 // channels carry no cross-comparable timestamps, so cross-channel ordering
@@ -124,6 +135,11 @@ export interface CaseFixtures {
   // — the install env keeps the default posture. The dist-tags script
   // rides fixtures.http like any other response.
   updateCheck?: boolean;
+  // Start the local hwlink ws-exec fake for this case: the literal token
+  // {wsUrl} in http script bodies is replaced with its ws:// URL at
+  // assembly time (the hwlink GET-poll script returns it as
+  // connection_info.url; the product appends ?source=<int32> itself).
+  ws?: boolean;
   // Files written into the throwaway home BEFORE install (relative path →
   // content): S1 vault seeding, KooCLI profile config, etc.
   home?: Record<string, string>;

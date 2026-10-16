@@ -23,12 +23,13 @@ import {
   type TraceToolCall,
 } from './evaluate.ts';
 import { HttpFake } from './http-fake.ts';
+import { WsFake } from './ws-fake/hwlink-server.ts';
 import type { E2eCase, Expectation } from './types.ts';
 import { opencodeDriver } from './drivers/opencode.ts';
 import type { AgentDriver } from './drivers/types.ts';
 import { cliCases } from './cases/cli.ts';
 import { coreCases } from './cases/core.ts';
-import { authCases, sandboxCases, voucherCases } from './cases/http-packs.ts';
+import { authCases, sandboxCases, voucherCases, wsSandboxCases } from './cases/http-packs.ts';
 import { openMcpCases } from './cases/open-mcp.ts';
 import { discoveryCases, obsCases } from './cases/local-packs.ts';
 import { updateCases } from './cases/update.ts';
@@ -45,6 +46,7 @@ const ALL_CASES: E2eCase[] = [
   ...authCases,
   ...voucherCases,
   ...sandboxCases,
+  ...wsSandboxCases,
   ...openMcpCases,
   ...obsCases,
   ...discoveryCases,
@@ -89,6 +91,7 @@ interface AttemptReport {
   hcloudCalls: string[];
   httpCalls: string[];
   gatewayCalls: string[];
+  wsCalls: string[];
   stdout: string;
   stderr: string;
   verdict: CaseVerdict;
@@ -309,6 +312,7 @@ async function runCase(
     disclosures: [],
     http: [],
     gateway: [],
+    ws: [],
     files: {},
     finalText: null,
   };
@@ -331,8 +335,22 @@ async function runCase(
     }
     const home = mkdtempSync(join(tmpdir(), `${TEMP_PREFIX}home-`));
     const workdir = mkdtempSync(join(tmpdir(), `${TEMP_PREFIX}work-`));
-    const httpFake = new HttpFake(caseDef.fixtures.http ?? { responses: [] });
+    const wsFake = caseDef.fixtures.ws ? new WsFake() : null;
+    let httpFake: HttpFake | null = null;
     try {
+      // Ws fake first: its ephemeral port resolves the literal {wsUrl}
+      // token inside the http script (the hwlink GET-poll returns it as
+      // connection_info.url) before the http fake is constructed —
+      // JSON round-trip so the token resolves wherever it appears
+      // (renderPrompt precedent: one token, no templating language).
+      await wsFake?.start();
+      const httpScript =
+        wsFake && caseDef.fixtures.http
+          ? (JSON.parse(JSON.stringify(caseDef.fixtures.http).replaceAll('{wsUrl}', wsFake.wsUrl)) as NonNullable<
+              E2eCase['fixtures']['http']
+            >)
+          : (caseDef.fixtures.http ?? { responses: [] });
+      httpFake = new HttpFake(httpScript);
       await httpFake.start();
       seedHome(home, caseDef.fixtures);
       seedWorkdir(workdir, caseDef.fixtures);
@@ -381,6 +399,12 @@ async function runCase(
         ...readTrace(home),
         http: [...httpFake.recordings],
         gateway: readGatewayLog(home),
+        ws: wsFake
+          ? wsFake.connections.map((conn) => ({
+              ...conn,
+              commands: conn.commands.map((cmd) => ({ ...cmd })),
+            }))
+          : [],
         files: collectFiles(caseDef, home),
         finalText: run.finalText,
       };
@@ -393,13 +417,18 @@ async function runCase(
         hcloudCalls: recordings.hcloud.map((c) => c.argv.join(' ')),
         httpCalls: recordings.http.map((h) => `${h.method} ${h.path}`),
         gatewayCalls: recordings.gateway.map((g) => `${g.method}${g.tool ? `:${g.tool}` : ''}`),
+        wsCalls: recordings.ws.map(
+          (conn) =>
+            `conn(source=${conn.source ?? 'n/a'}): ${conn.commands.map((c) => c.intent).join(',') || '(no commands)'}`,
+        ),
         stdout: run.stdout.slice(0, 8000),
         stderr: run.stderr.slice(0, 4000),
         verdict,
       });
       if (verdict.pass) break;
     } finally {
-      await httpFake.stop();
+      await httpFake?.stop();
+      await wsFake?.stop();
       rmSync(home, { recursive: true, force: true });
       rmSync(workdir, { recursive: true, force: true });
     }
@@ -418,194 +447,270 @@ async function runCase(
 // plan_cli_command, then asserts the fake recorded the version probe.
 async function selfcheck(bin: string, kooCliVersion: string): Promise<boolean> {
   const home = mkdtempSync(join(tmpdir(), `${TEMP_PREFIX}selfcheck-`));
-  const httpFake = new HttpFake({
-    responses: [
-      { path: '/voucher/status', method: 'GET', status: 200, body: { claimed: true, voucherId: 'vou-selfcheck-001' } },
-    ],
-  });
+  const wsFake = new WsFake();
   try {
-    await httpFake.start();
-    // S1 vault seed: voucher_status reads credentials via hdkitRequest,
-    // which throws without them — the same precondition the live case has.
-    mkdirSync(join(home, '.config', 'huaweicloud'), { recursive: true });
-    writeFileSync(
-      join(home, '.config', 'huaweicloud', 'credentials.json'),
-      JSON.stringify({ ak: 'SELFCHECK_AK', sk: 'SELFCHECK_SK', securityToken: '', region: 'cn-north-4' }, null, 2),
-      'utf8',
-    );
-    const env = buildCaseEnv({
-      processEnv: process.env,
-      home,
-      seamVars: seamVars(home, null, kooCliVersion, httpFake, {}, installPathShim(home)),
-    });
-    runInstall(bin, home, home, env);
-    const server = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js');
-    if (!existsSync(server)) {
-      out(`[selfcheck] FAIL installed server missing: ${server}`);
-      return false;
-    }
-    const requests = [
-      {
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'initialize',
-        params: {
-          protocolVersion: '2024-11-05',
-          capabilities: {},
-          clientInfo: { name: 'e2e-selfcheck', version: '0' },
+    // Ws fake first: its ephemeral port resolves {wsUrl} in the hwlink
+    // GET-poll script (connection_info.url), same token flow as a case.
+    await wsFake.start();
+    const hwlinkScript = JSON.stringify({
+      responses: [
+        {
+          path: '/voucher/status',
+          method: 'GET',
+          status: 200,
+          body: { claimed: true, voucherId: 'vou-selfcheck-001' },
         },
-      },
-      { jsonrpc: '2.0', method: 'notifications/initialized' },
-      { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
-      {
-        jsonrpc: '2.0',
-        id: 3,
-        method: 'tools/call',
-        params: { name: 'huaweicloud_check_cli', arguments: {} },
-      },
-      {
-        jsonrpc: '2.0',
-        id: 4,
-        method: 'tools/call',
-        params: {
-          name: 'huaweicloud_plan_cli_command',
-          arguments: { args: ['VPC', 'ListSecurityGroups', '--cli-region=cn-north-4'] },
+        { path: '/check-user', method: 'GET', status: 200, body: { realnameVerified: true, agreementSigned: true } },
+        {
+          path: '/connect',
+          method: 'POST',
+          status: 200,
+          body: { session_id: 'sess-sc-001', dev_stage_id: 'ds-selfcheck-001' },
         },
-      },
-      {
-        jsonrpc: '2.0',
-        id: 5,
-        method: 'tools/call',
-        params: { name: 'huaweicloud_voucher_status', arguments: {} },
-      },
-    ];
-    // Drive the server like a real client: keep stdin OPEN until the last
-    // (slow, HTTP-bound) response arrives, then close. spawnSync would end
-    // stdin with the input, and the transport's stdin-close semantics
-    // process.exit(0) before the voucher HTTP roundtrip completes.
-    const res = await new Promise<{ stdout: string; stderr: string }>((resolveRun) => {
-      const child = spawn(process.execPath, [server], { env, stdio: ['pipe', 'pipe', 'pipe'] });
-      let stdout = '';
-      let stderr = '';
-      let closed = false;
-      const timer = setTimeout(() => {
-        if (!closed) child.stdin.end();
-      }, 55_000);
-      child.stdout.on('data', (chunk: Buffer) => {
-        stdout += chunk.toString('utf8');
-        // The last request's response is on the wire — close like a client.
-        if (!closed && stdout.includes('"id":5')) {
-          closed = true;
+        {
+          path: '/open-api-public/v1/devenvs/ds-selfcheck-001/connections',
+          method: 'POST',
+          status: 200,
+          body: { error_code: '0000', result: { connection_id: 'conn-sc-1' } },
+        },
+        {
+          path: '/open-api-public/v1/devenvs/ds-selfcheck-001/connections/conn-sc-1',
+          method: 'GET',
+          status: 200,
+          body: { result: { connection_info: { url: '{wsUrl}', extensions: { source: 424242 } } } },
+        },
+      ],
+    }).replaceAll('{wsUrl}', wsFake.wsUrl);
+    const httpFake = new HttpFake(JSON.parse(hwlinkScript));
+    try {
+      await httpFake.start();
+      // S1 vault seed: voucher_status reads credentials via hdkitRequest,
+      // which throws without them — the same precondition the live case has.
+      mkdirSync(join(home, '.config', 'huaweicloud'), { recursive: true });
+      writeFileSync(
+        join(home, '.config', 'huaweicloud', 'credentials.json'),
+        JSON.stringify({ ak: 'SELFCHECK_AK', sk: 'SELFCHECK_SK', securityToken: '', region: 'cn-north-4' }, null, 2),
+        'utf8',
+      );
+      const env = buildCaseEnv({
+        processEnv: process.env,
+        home,
+        seamVars: seamVars(home, null, kooCliVersion, httpFake, {}, installPathShim(home)),
+      });
+      runInstall(bin, home, home, env);
+      const server = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js');
+      if (!existsSync(server)) {
+        out(`[selfcheck] FAIL installed server missing: ${server}`);
+        return false;
+      }
+      const requests = [
+        {
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2024-11-05',
+            capabilities: {},
+            clientInfo: { name: 'e2e-selfcheck', version: '0' },
+          },
+        },
+        { jsonrpc: '2.0', method: 'notifications/initialized' },
+        { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
+        {
+          jsonrpc: '2.0',
+          id: 3,
+          method: 'tools/call',
+          params: { name: 'huaweicloud_check_cli', arguments: {} },
+        },
+        {
+          jsonrpc: '2.0',
+          id: 4,
+          method: 'tools/call',
+          params: {
+            name: 'huaweicloud_plan_cli_command',
+            arguments: { args: ['VPC', 'ListSecurityGroups', '--cli-region=cn-north-4'] },
+          },
+        },
+        {
+          jsonrpc: '2.0',
+          id: 5,
+          method: 'tools/call',
+          params: { name: 'huaweicloud_voucher_status', arguments: {} },
+        },
+        {
+          jsonrpc: '2.0',
+          id: 6,
+          method: 'tools/call',
+          params: { name: 'huaweicloud_sandbox_connect', arguments: {} },
+        },
+        {
+          jsonrpc: '2.0',
+          id: 7,
+          method: 'tools/call',
+          params: {
+            name: 'huaweicloud_sandbox_exec_one_shot',
+            // >8172-byte command: the client chunks terminal input at 8172
+            // bytes, so this leg proves the fake's per-connection byte-stream
+            // reassembly (a line-oriented fake fails here).
+            arguments: { workspace_id: 'ds-selfcheck-001', command: `echo ${'A'.repeat(100_000)}` },
+          },
+        },
+      ];
+      // Drive the server like a real client: keep stdin OPEN until the last
+      // (slow, HTTP-bound) response arrives, then close. spawnSync would end
+      // stdin with the input, and the transport's stdin-close semantics
+      // process.exit(0) before the voucher HTTP roundtrip completes.
+      const res = await new Promise<{ stdout: string; stderr: string }>((resolveRun) => {
+        const child = spawn(process.execPath, [server], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+        let stdout = '';
+        let stderr = '';
+        let closed = false;
+        const timer = setTimeout(() => {
+          if (!closed) child.stdin.end();
+        }, 55_000);
+        child.stdout.on('data', (chunk: Buffer) => {
+          stdout += chunk.toString('utf8');
+          // The last request's response is on the wire — close like a client.
+          if (!closed && stdout.includes('"id":7')) {
+            closed = true;
+            clearTimeout(timer);
+            child.stdin.end();
+          }
+        });
+        child.stderr.on('data', (chunk: Buffer) => {
+          stderr += chunk.toString('utf8');
+        });
+        child.on('close', () => {
           clearTimeout(timer);
-          child.stdin.end();
+          resolveRun({ stdout, stderr });
+        });
+        child.on('error', (error) => {
+          stderr += String(error);
+          resolveRun({ stdout, stderr });
+        });
+        for (const request of requests) child.stdin.write(`${JSON.stringify(request)}\n`);
+      });
+      const responses = new Map<number, unknown>();
+      for (const line of String(res.stdout).split('\n')) {
+        if (!line.trim().startsWith('{')) continue;
+        try {
+          const parsed = JSON.parse(line) as { id?: number };
+          if (typeof parsed.id === 'number') responses.set(parsed.id, parsed);
+        } catch {
+          // framing noise
         }
-      });
-      child.stderr.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString('utf8');
-      });
-      child.on('close', () => {
-        clearTimeout(timer);
-        resolveRun({ stdout, stderr });
-      });
-      child.on('error', (error) => {
-        stderr += String(error);
-        resolveRun({ stdout, stderr });
-      });
-      for (const request of requests) child.stdin.write(`${JSON.stringify(request)}\n`);
-    });
-    const responses = new Map<number, unknown>();
-    for (const line of String(res.stdout).split('\n')) {
-      if (!line.trim().startsWith('{')) continue;
-      try {
-        const parsed = JSON.parse(line) as { id?: number };
-        if (typeof parsed.id === 'number') responses.set(parsed.id, parsed);
-      } catch {
-        // framing noise
       }
-    }
-    const toolPayload = (id: number): Record<string, unknown> | null => {
-      const resp = responses.get(id) as { result?: { content?: { type: string; text?: string }[] } } | undefined;
-      const text = resp?.result?.content?.find((c) => c.type === 'text')?.text;
-      if (!text) return null;
-      try {
-        return JSON.parse(text) as Record<string, unknown>;
-      } catch {
-        return null;
+      const toolPayload = (id: number): Record<string, unknown> | null => {
+        const resp = responses.get(id) as { result?: { content?: { type: string; text?: string }[] } } | undefined;
+        const text = resp?.result?.content?.find((c) => c.type === 'text')?.text;
+        if (!text) return null;
+        try {
+          return JSON.parse(text) as Record<string, unknown>;
+        } catch {
+          return null;
+        }
+      };
+      let ok = true;
+      const listResponse = responses.get(2) as { result?: { tools?: { name?: unknown }[] } } | undefined;
+      const toolCount = listResponse?.result?.tools?.length ?? 0;
+      if (toolCount < 40) {
+        out(`[selfcheck] FAIL tools/list returned only ${toolCount} tools`);
+        ok = false;
+      } else {
+        out(`[selfcheck] tools/list: ${toolCount} tools`);
       }
-    };
-    let ok = true;
-    const listResponse = responses.get(2) as { result?: { tools?: { name?: unknown }[] } } | undefined;
-    const toolCount = listResponse?.result?.tools?.length ?? 0;
-    if (toolCount < 40) {
-      out(`[selfcheck] FAIL tools/list returned only ${toolCount} tools`);
-      ok = false;
-    } else {
-      out(`[selfcheck] tools/list: ${toolCount} tools`);
+      const check = toolPayload(3);
+      if (!check || check.installed !== true) {
+        out(
+          `[selfcheck] FAIL check_cli did not report the fake hcloud as installed: ${JSON.stringify(check).slice(0, 200)}`,
+        );
+        ok = false;
+      } else {
+        out(`[selfcheck] check_cli sees the fake hcloud (version ${String(check.installedVersion)})`);
+      }
+      const plan = toolPayload(4);
+      if (!plan || !('approvalToken' in plan)) {
+        out(`[selfcheck] FAIL plan_cli_command returned no approvalToken: ${JSON.stringify(plan).slice(0, 200)}`);
+        ok = false;
+      } else {
+        out('[selfcheck] plan_cli_command minted an approval token');
+      }
+      const calls = readHcloudLog(home).map((c) => c.argv.join(' '));
+      if (!calls.some((c) => c === 'version')) {
+        out(`[selfcheck] FAIL fake hcloud log has no version probe: ${calls.join(' | ') || '(empty)'}`);
+        ok = false;
+      } else {
+        out(`[selfcheck] fake hcloud recorded: ${calls.join(' | ')}`);
+      }
+      const trace = readTrace(home);
+      const tracedNames = trace.toolCalls.map((c) => `${c.name}(ok=${c.ok})`);
+      if (!trace.toolCalls.some((c) => c.name === 'huaweicloud_check_cli' && c.ok)) {
+        out(`[selfcheck] FAIL trace has no successful check_cli toolCall: ${tracedNames.join(' | ') || '(none)'}`);
+        ok = false;
+      } else {
+        out(`[selfcheck] trace toolCalls: ${tracedNames.join(' | ')}`);
+      }
+      const toolsListEvents = trace.disclosures.filter((d) => d.event === 'toolsList');
+      if (toolsListEvents.length === 0 || toolsListEvents[0]?.toolCount !== toolCount) {
+        out(
+          `[selfcheck] FAIL trace toolsList disclosure disagrees with the wire count: ${JSON.stringify(toolsListEvents)}`,
+        );
+        ok = false;
+      } else {
+        out(`[selfcheck] trace disclosure toolsList=${toolsListEvents[0]?.toolCount} (x${toolsListEvents.length})`);
+      }
+      // The HTTP fake leg: voucher_status over the seeded vault must answer
+      // through the scripted local endpoint (the user-hash prewarm's 404 on
+      // the same fake is expected boot noise, not a failure).
+      const voucher = toolPayload(5);
+      if (!voucher || voucher.claimed !== true) {
+        out(`[selfcheck] FAIL voucher_status did not report claimed=true: ${JSON.stringify(voucher).slice(0, 200)}`);
+        ok = false;
+      } else {
+        out('[selfcheck] voucher_status answered through the local HTTP fake');
+      }
+      const voucherHits = httpFake.recordings.filter((r) => r.method === 'GET' && r.path === '/voucher/status');
+      if (voucherHits.length === 0) {
+        out(
+          `[selfcheck] FAIL HTTP fake has no GET /voucher/status recording: ${
+            httpFake.recordings.map((r) => `${r.method} ${r.path}`).join(' | ') || '(empty)'
+          }`,
+        );
+        ok = false;
+      } else {
+        out(`[selfcheck] HTTP fake recorded GET /voucher/status (x${voucherHits.length})`);
+      }
+      // The ws-exec leg: sandbox connect + a >8172-byte one-shot exec through
+      // the PRODUCT's own client stack (session-manager → hwlink API → ws
+      // multiplexer → fake) — subprotocol echo, nonce handshake, chunk
+      // reassembly, and marker completion all in one LLM-less proof.
+      const exec = toolPayload(7);
+      const execStdout = typeof exec?.stdout === 'string' ? exec.stdout : '';
+      if (!execStdout.includes('A'.repeat(1000))) {
+        out(
+          `[selfcheck] FAIL exec_one_shot did not return the reassembled echo output (got ${execStdout.length} chars): ${JSON.stringify(exec).slice(0, 200)}`,
+        );
+        ok = false;
+      } else {
+        out(`[selfcheck] exec_one_shot returned ${execStdout.length} chars of reassembled output`);
+      }
+      const wsCommands = wsFake.connections.flatMap((conn) => conn.commands.map((cmd) => cmd.intent));
+      if (!wsCommands.includes('echo')) {
+        out(`[selfcheck] FAIL ws fake recorded no echo intent: ${wsCommands.join(' | ') || '(none)'}`);
+        ok = false;
+      } else {
+        out(`[selfcheck] ws fake recorded: ${wsCommands.join(' | ')}`);
+      }
+      if (wsCommands.includes('unknown')) {
+        out(`[selfcheck] FAIL ws fake recorded unknown intents — script drift: ${wsCommands.join(' | ')}`);
+        ok = false;
+      }
+      return ok;
+    } finally {
+      await httpFake.stop();
     }
-    const check = toolPayload(3);
-    if (!check || check.installed !== true) {
-      out(
-        `[selfcheck] FAIL check_cli did not report the fake hcloud as installed: ${JSON.stringify(check).slice(0, 200)}`,
-      );
-      ok = false;
-    } else {
-      out(`[selfcheck] check_cli sees the fake hcloud (version ${String(check.installedVersion)})`);
-    }
-    const plan = toolPayload(4);
-    if (!plan || !('approvalToken' in plan)) {
-      out(`[selfcheck] FAIL plan_cli_command returned no approvalToken: ${JSON.stringify(plan).slice(0, 200)}`);
-      ok = false;
-    } else {
-      out('[selfcheck] plan_cli_command minted an approval token');
-    }
-    const calls = readHcloudLog(home).map((c) => c.argv.join(' '));
-    if (!calls.some((c) => c === 'version')) {
-      out(`[selfcheck] FAIL fake hcloud log has no version probe: ${calls.join(' | ') || '(empty)'}`);
-      ok = false;
-    } else {
-      out(`[selfcheck] fake hcloud recorded: ${calls.join(' | ')}`);
-    }
-    const trace = readTrace(home);
-    const tracedNames = trace.toolCalls.map((c) => `${c.name}(ok=${c.ok})`);
-    if (!trace.toolCalls.some((c) => c.name === 'huaweicloud_check_cli' && c.ok)) {
-      out(`[selfcheck] FAIL trace has no successful check_cli toolCall: ${tracedNames.join(' | ') || '(none)'}`);
-      ok = false;
-    } else {
-      out(`[selfcheck] trace toolCalls: ${tracedNames.join(' | ')}`);
-    }
-    const toolsListEvents = trace.disclosures.filter((d) => d.event === 'toolsList');
-    if (toolsListEvents.length === 0 || toolsListEvents[0]?.toolCount !== toolCount) {
-      out(
-        `[selfcheck] FAIL trace toolsList disclosure disagrees with the wire count: ${JSON.stringify(toolsListEvents)}`,
-      );
-      ok = false;
-    } else {
-      out(`[selfcheck] trace disclosure toolsList=${toolsListEvents[0]?.toolCount} (x${toolsListEvents.length})`);
-    }
-    // The HTTP fake leg: voucher_status over the seeded vault must answer
-    // through the scripted local endpoint (the user-hash prewarm's 404 on
-    // the same fake is expected boot noise, not a failure).
-    const voucher = toolPayload(5);
-    if (!voucher || voucher.claimed !== true) {
-      out(`[selfcheck] FAIL voucher_status did not report claimed=true: ${JSON.stringify(voucher).slice(0, 200)}`);
-      ok = false;
-    } else {
-      out('[selfcheck] voucher_status answered through the local HTTP fake');
-    }
-    const voucherHits = httpFake.recordings.filter((r) => r.method === 'GET' && r.path === '/voucher/status');
-    if (voucherHits.length === 0) {
-      out(
-        `[selfcheck] FAIL HTTP fake has no GET /voucher/status recording: ${
-          httpFake.recordings.map((r) => `${r.method} ${r.path}`).join(' | ') || '(empty)'
-        }`,
-      );
-      ok = false;
-    } else {
-      out(`[selfcheck] HTTP fake recorded GET /voucher/status (x${voucherHits.length})`);
-    }
-    return ok;
   } finally {
-    await httpFake.stop();
+    await wsFake.stop();
     rmSync(home, { recursive: true, force: true });
   }
 }
