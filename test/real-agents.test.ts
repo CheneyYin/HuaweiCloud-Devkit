@@ -14,7 +14,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import type { SpawnSyncReturns } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, type Stats } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -82,7 +82,8 @@ function sandboxEnv(home: string, extra: Record<string, string | undefined> = {}
   };
   // Ambient overrides on a devkit developer's machine would redirect the
   // spawned server / installer into real global state (or send real
-  // credentials); clear them.
+  // credentials); proxies too, so the closed-port pins below fail fast
+  // instead of detouring through a corporate proxy.
   for (const key of [
     'ATOMCODE_HOME',
     'DSH_HOME',
@@ -96,6 +97,12 @@ function sandboxEnv(home: string, extra: Record<string, string | undefined> = {}
     'HW_ACCESS_KEY',
     'HW_SECRET_KEY',
     'HW_SECURITY_TOKEN',
+    'http_proxy',
+    'https_proxy',
+    'HTTP_PROXY',
+    'HTTPS_PROXY',
+    'all_proxy',
+    'ALL_PROXY',
   ]) {
     delete env[key];
   }
@@ -186,12 +193,29 @@ function dirSnapshot(dir: string): string | null {
   const entries: string[] = [];
   const walk = (d: string, prefix: string) => {
     for (const entry of readdirSync(d, { withFileTypes: true })) {
+      // Runtime-mutable state is not installer-authored payload: the
+      // developer's own live session appends to telemetry/ (skill-tracker
+      // hook) and any concurrent server spawn clears .installed — watching
+      // them makes the canary fire on normal session activity, not leaks.
+      if (entry.name === 'telemetry' || entry.name === '.installed') continue;
       const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) {
-        walk(join(d, entry.name), rel);
-      } else {
-        entries.push(`${rel}:${statSync(join(d, entry.name)).size}`);
+      // statSync (not lstat semantics): a symlinked subdir must be followed
+      // and recursed, or a leak routed through it is invisible. An entry
+      // vanishing between readdir and stat (concurrent host activity on
+      // the real HOME) must not crash the canary itself — record a
+      // tombstone instead; anything other than ENOENT stays fatal.
+      let st: Stats;
+      try {
+        st = statSync(join(d, entry.name));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          entries.push(`${rel}:<vanished>`);
+          continue;
+        }
+        throw error;
       }
+      if (st.isDirectory()) walk(join(d, entry.name), rel);
+      else entries.push(`${rel}:${st.size}`);
     }
   };
   walk(dir, '');

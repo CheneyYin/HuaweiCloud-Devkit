@@ -25,7 +25,7 @@ const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const run = (command, args, opts = {}) =>
   spawnSync(command, args, {
     encoding: 'utf8',
-    timeout: 180_000,
+    timeout: 240_000,
     ...opts,
     env: cleanEnv(opts.env),
   });
@@ -144,7 +144,14 @@ for (const target of SUPPORTED_AGENT_TARGETS) {
       env.OFFICE_CLAW_CONFIG_ROOT = fakeRoot;
     }
 
-    const install = run(process.execPath, [bin, 'install', '--target', target], { env, cwd: installCwd });
+    const install = run(process.execPath, [bin, 'install', '--target', target], {
+      env,
+      cwd: installCwd,
+      // The installer's internal undici npm ladder is 120s x up to 3
+      // attempts plus sleeps (~368s worst case); the outer bound must
+      // exceed it or the smoke kills the install first.
+      timeout: 400_000,
+    });
     if (target === 'officeace') {
       // The plain-Linux contract: no connector DB, so the install degrades
       // gracefully — the documented hint prints, the payload still lands,

@@ -73,7 +73,8 @@ function runInstall(home: string): void {
   const run = spawnSync(process.execPath, [setupCli, 'install', '--target', 'opencode'], {
     encoding: 'utf8',
     env: doctorEnv(home),
-    timeout: 180_000,
+    // Install-bearing: cold fake-HOME undici fetch needs the 240s class.
+    timeout: 240_000,
   });
   assert.ok(run.status === 0, `install failed: ${run.stderr}\n${run.stdout}`);
 }

@@ -836,15 +836,29 @@ test('dep status with nothing installed requires no binaries', () => {
 // ---- install/update wiring through the real installer ----
 
 function cliEnv(home: string, extra: Record<string, string | undefined> = {}): Record<string, string | undefined> {
-  return {
+  const env: Record<string, string | undefined> = {
     ...process.env,
     HOME: home,
     USERPROFILE: home,
     HOMEDRIVE: home.slice(0, 2),
     HOMEPATH: home.slice(2),
     HUAWEICLOUD_DEVKIT_SKIP_OFFICEACE_DETECT: '1',
-    ...extra,
   };
+  // These tests reach `install --target opencode` (the XDG-aware config
+  // root) and uninstall flows (uninstallCodex's CODEX_HOME-keyed cache
+  // cleanup) with the ambient PATH; ambient home overrides would
+  // write/delete real state on a dev machine.
+  for (const key of [
+    'ATOMCODE_HOME',
+    'DSH_HOME',
+    'HUAWEICLOUD_HOME',
+    'OFFICE_CLAW_CONFIG_ROOT',
+    'XDG_CONFIG_HOME',
+    'CODEX_HOME',
+  ]) {
+    delete env[key];
+  }
+  return { ...env, ...extra };
 }
 
 function runSetupCli(
@@ -856,7 +870,8 @@ function runSetupCli(
     cwd: fixtureDir('dep-provision-cwd-'),
     env: cliEnv(home, extra),
     encoding: 'utf8',
-    timeout: 120000,
+    // Install-bearing: cold fake-HOME undici fetch needs the 240s class.
+    timeout: 240000,
   });
 }
 

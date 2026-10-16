@@ -1543,7 +1543,10 @@ function codexMarketplacePath(): string {
 
 function ensureCodexMarketplaceEntry(): void {
   const mpPath = codexMarketplacePath();
-  const pluginName = 'huaweicloud-devkit';
+  // The canonical plugin name: status (codexDesktopStatus), install, and
+  // uninstall all derive from the same reader, so a marketplace.json rename
+  // moves all three together.
+  const pluginName = getCodexPluginName();
   const entry = {
     name: pluginName,
     source: { source: 'local', path: './plugins/huaweicloud-devkit' },
@@ -1608,7 +1611,7 @@ function removeCodexMarketplaceEntry(): void {
   if (!marketplace.plugins) return;
   const plugins: unknown[] = Array.isArray(marketplace.plugins) ? marketplace.plugins : [];
   const before = plugins.length;
-  const filtered = plugins.filter((p) => asRecord(p).name !== 'huaweicloud-devkit');
+  const filtered = plugins.filter((p) => asRecord(p).name !== getCodexPluginName());
   if (filtered.length === before) return;
   marketplace.plugins = filtered;
   writeFileSync(mpPath, JSON.stringify(marketplace, null, 2) + '\n');
@@ -4297,10 +4300,9 @@ function codexDesktopStatus(): void {
     try {
       const marketplace = asRecord(JSON.parse(readFileSync(mpPath, 'utf8')));
       const plugins: unknown[] = Array.isArray(marketplace.plugins) ? marketplace.plugins : [];
-      // The canonical plugin name (getCodexPluginName) — the same value
+      // The canonical plugin name — the same derived value
       // ensureCodexMarketplaceEntry writes and removeCodexMarketplaceEntry
-      // filters on (both carry the literal; this reader keeps the status
-      // check rename-safe).
+      // filters on (all three ride getCodexPluginName).
       const registered = plugins.some((p) => asRecord(p).name === getCodexPluginName());
       console.log(`  Marketplace: ${registered ? '\x1b[32mRegistered\x1b[0m' : '\x1b[31mNot registered\x1b[0m'}`);
     } catch {

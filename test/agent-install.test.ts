@@ -16,6 +16,7 @@ import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
+import { getMarketplaceName } from '../plugins/huaweicloud-core/src/codex-probe.ts';
 import { parseCoreSkillNames } from '../plugins/huaweicloud-core/src/lib/skill-manifest.ts';
 import { skillTreeEquals } from '../plugins/huaweicloud-core/src/lib/skill-tree.ts';
 
@@ -75,7 +76,10 @@ function runAuto(home: string, cwd: string, cmd: string, extraEnv: Record<string
   });
 }
 
-function fakeCodexEnv(cwd: string, options: { failPluginAdd?: boolean; listOutput?: string; listJson?: string } = {}) {
+function fakeCodexEnv(
+  cwd: string,
+  options: { failPluginAdd?: boolean; failMarketplaceRemove?: boolean; listOutput?: string; listJson?: string } = {},
+) {
   const binDir = join(cwd, 'fake-bin');
   mkdirSync(binDir, { recursive: true });
   const logPath = join(cwd, 'codex.log');
@@ -102,6 +106,15 @@ if (process.env.FAKE_CODEX_FAIL_PLUGIN_ADD === '1' && args[0] === 'plugin' && ar
   console.error('fake plugin add failed');
   process.exit(1);
 }
+if (
+  process.env.FAKE_CODEX_FAIL_MARKETPLACE_REMOVE === '1' &&
+  args[0] === 'plugin' &&
+  args[1] === 'marketplace' &&
+  args[2] === 'remove'
+) {
+  console.error('fake marketplace remove failed');
+  process.exit(1);
+}
 process.exit(0);
 `,
     'utf8',
@@ -117,6 +130,7 @@ process.exit(0);
     PATH: `${binDir}${delimiter}${process.env.PATH || ''}`,
     FAKE_CODEX_LOG: logPath,
     ...(options.failPluginAdd ? { FAKE_CODEX_FAIL_PLUGIN_ADD: '1' } : {}),
+    ...(options.failMarketplaceRemove ? { FAKE_CODEX_FAIL_MARKETPLACE_REMOVE: '1' } : {}),
     ...(options.listOutput ? { FAKE_CODEX_LIST_OUTPUT: options.listOutput } : {}),
     ...(options.listJson ? { FAKE_CODEX_LIST_JSON: options.listJson } : {}),
     logPath,
@@ -1102,6 +1116,29 @@ test('codex uninstall removes current and legacy plugin ids', () => {
     const log = readFileSync(env.logPath, 'utf8');
     assert.match(log, /"plugin","remove","huaweicloud-devkit@huaweicloud-devkit"/);
     assert.match(log, /"plugin","remove","huaweicloud-core@huaweicloud-devkit"/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('codex uninstall keeps the plugin cache when marketplace remove fails', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
+  try {
+    assert.equal(run('codex', home, cwd, 'install', fakeCodexEnv(cwd)).status, 0);
+    // Seed the marketplace-keyed cache shell `codex plugin remove` leaves
+    // behind (live-verified on codex-cli 0.162.1).
+    const cacheDir = join(home, '.codex', 'plugins', 'cache', getMarketplaceName());
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(join(cacheDir, 'marker'), 'x');
+
+    const res = run('codex', home, cwd, 'uninstall', fakeCodexEnv(cwd, { failMarketplaceRemove: true }));
+    assert.equal(res.status, 0, res.stderr);
+    // The safety gate: a failed `codex plugin marketplace remove` leaves the
+    // registration potentially live, so its cache must survive the uninstall
+    // (deleting it would break a still-registered plugin).
+    assert.ok(existsSync(join(cacheDir, 'marker')), 'failed marketplace remove must keep the plugin cache');
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
