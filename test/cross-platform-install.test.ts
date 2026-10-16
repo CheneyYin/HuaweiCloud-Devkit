@@ -21,11 +21,20 @@ function makeEnv(home: string): Record<string, string | undefined> {
     HUAWEICLOUD_HOME: home,
   };
   // The installer honors XDG_CONFIG_HOME for opencode (xdgConfigHome) and
-  // CODEX_HOME for the codex cache cleanup (uninstallCodex); ambient values
-  // on a dev machine would redirect fake-HOME installs/uninstalls into real
-  // state. Per-test extra env (runCli) can still set them.
-  delete env.XDG_CONFIG_HOME;
-  delete env.CODEX_HOME;
+  // CODEX_HOME for the codex cache cleanup (uninstallCodex). This suite also
+  // runs `uninstall --target all`, which dispatches every per-target
+  // uninstall (hermes/dsh/atomcode/officeace) — each keyed on its own
+  // ambient home override — so the full standard clear list applies.
+  for (const key of [
+    'XDG_CONFIG_HOME',
+    'CODEX_HOME',
+    'HERMES_HOME',
+    'DSH_HOME',
+    'ATOMCODE_HOME',
+    'OFFICE_CLAW_CONFIG_ROOT',
+  ]) {
+    delete env[key];
+  }
   return env;
 }
 
