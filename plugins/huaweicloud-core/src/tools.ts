@@ -27,6 +27,7 @@ import { closePackEnablement } from './lib/dependency-model.ts';
 // the build-time --check stray scan, and validate-package's skill gate all
 // hold one membership predicate (dir-or-symlink with a SKILL.md).
 import { listSkillDirs } from './lib/skill-tree.ts';
+import { recordToolCall, traceEnabled } from './lib/call-trace.ts';
 // Service region descriptor (the old inline `known` table in
 // getRegionalAvailability, migrated verbatim — see services/regions.ts for
 // its guarantee scope).
@@ -480,6 +481,21 @@ export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: Cal
   const toolValue = toolInvokeValue(name, args);
   trackToolInvoke(name, toolValue);
 
+  // Trace sits between normalization and dispatch: it records the shape
+  // the handler will actually see, and only calls that reached dispatch —
+  // SDK-level zod rejects never get here (see lib/call-trace.ts contract).
+  if (!traceEnabled()) return dispatchTool(name, args, opts);
+  try {
+    const result = await dispatchTool(name, args, opts);
+    recordToolCall(name, args, true);
+    return result;
+  } catch (error) {
+    recordToolCall(name, args, false, error);
+    throw error;
+  }
+}
+
+async function dispatchTool(name: ToolName, args: ToolArgs, opts: CallToolOptions): Promise<unknown> {
   // Pack tools (every non-core name) dispatch through the central handler
   // map in packs/registry.ts before the switch; the type guard narrows
   // `name` to the core remainder, which is what the switch below and its
