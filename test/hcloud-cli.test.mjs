@@ -192,6 +192,48 @@ console.log(content);
   assert.match(result.stdout, /works/);
 });
 
+test('921 A: exit code 0 but output carries a KooCLI parameter error → ok:false with PARAM_ERROR', async () => {
+  const script = fakeHcloudScript(`
+console.log('[ERROR]: unknown parameter: --delete_ip');
+process.exit(0);
+`);
+  const result = await runHcloud(['ECS', 'ListServersDetails', '--delete_ip=true'], {
+    executable: process.execPath,
+    executableArgs: [script],
+    maxRetries: 0,
+  });
+  assert.equal(result.ok, false, 'a parameter error with exit 0 must NOT be reported as success');
+  assert.equal(result.errorCode, 'PARAM_ERROR');
+  assert.match(result.errorMessage, /unknown parameter/);
+});
+
+test('921 A: non-zero exit code with "successfully" in a failed output → ok:false (old broad regex false positive)', async () => {
+  const script = fakeHcloudScript(`
+console.log('upload successfully, but rollback completed');
+console.error('ERROR: create failed after upload');
+process.exit(1);
+`);
+  const result = await runHcloud(['ECS', 'ListServersDetails'], {
+    executable: process.execPath,
+    executableArgs: [script],
+    maxRetries: 0,
+  });
+  assert.equal(result.ok, false, 'a failed output mentioning "successfully" must not be reported as success');
+});
+
+test('921 A: OBS non-zero exit with a clean success output stays ok:true (narrowed heuristic, #57)', async () => {
+  const script = fakeHcloudScript(`
+console.log('Upload successfully, 3 files, 1.2 KB');
+process.exit(1);
+`);
+  const result = await runHcloud(['OBS', 'ls', 'obs://test-bucket'], {
+    executable: process.execPath,
+    executableArgs: [script],
+    maxRetries: 0,
+  });
+  assert.equal(result.ok, true, 'obsutil-style commands return non-zero on success (#57) — kept for OBS only');
+});
+
 test('runHcloud captures stderr and returns failed status', async () => {
   const script = fakeHcloudScript(`
 console.error('something went wrong');

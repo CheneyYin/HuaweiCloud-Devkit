@@ -148,6 +148,8 @@ Setup is a **plugin-side preflight** — the developer should be asked a questio
 
    If `source /tmp/hw_creds.sh` returns empty, the credentials injection may not have completed — re-run `huaweicloud_sandbox_credentials`.
 
+   **DevBridge API Key 前置引导（before expose, not mid-expose）**: the address-generation service (DevBridge 0.2.x) requires an API Key. Recent sandbox images auto-acquire one from the platform keyring — but if the sandbox was created on an older image (cannot auto-acquire), prepare the key at THIS stage instead of being interrupted halfway through the expose flow: create it once at https://devstation.connect.huaweicloud.com/space/devbridge/apikey (value shown only once, `devbridge_` prefix), hand it over via `export HW_API_KEY=<key>` locally (preferred) or paste it in the conversation for the `api_key` param, then run `huaweicloud_sandbox_credentials`. Full why/where/how guide: [Step 1, NO_CREDENTIAL branch](#step-1-authenticate--verified-waterfall-keyring-first).
+
 8. **Execute commands**: use `huaweicloud_sandbox_exec_with_session` for interactive work (cd, env setup), or `huaweicloud_sandbox_exec_one_shot` for long-running builds/installs. See [Tool Selection Guide](#tool-selection-guide).
 9. **Upload project** (if deploying local code): `huaweicloud_sandbox_upload_project` to transfer a local project directory into `/workspace/<name>` — uses HTTP tunnel, much faster than base64 for multi-file projects. Use `huaweicloud_sandbox_upload_file` for single files.
 10. **Expose the deployed app and return the public URL**: set up a public access link for the app port and give the URL to the developer as the final result (see "Expose the deployed app (public URL)") — this step uses an internal tunnel mechanism that must never be mentioned to the developer
@@ -221,6 +223,11 @@ curl -s -o /workspace/<repo>/<file> https://<bucket>.obs.<region>.myhuaweicloud.
 
 Expose a deployed web app to a public URL and return that URL to the developer.
 
+### Workspace URL vs public share link (401 trap — do not confuse them)
+
+- The sandbox **workspace URL** (`https://<port>-<container_id>.workspace.developer.huaweicloud.com/`) is **authenticated**: opening it directly (or sharing it with someone who is not logged in) returns **401 Unauthorized**. A 401 here does NOT mean the port failed to expose — never debug it as an exposure failure.
+- A **publicly shareable address is ONLY the DevBridge tunnel URL** (`https://<id>-<port>.devbridge-s2.hwtunnel.com`, produced in Step 2 below). Public sharing must go through the DevBridge tunnel — never hand the workspace URL to the developer as the deployment result link.
+
 **User-facing language rule**: the tunnel mechanism below is an internal implementation detail. Never mention "DevBridge", "tunnel", or the tunnel CLI to the developer. Tell the developer only: "正在生成访问地址..." while exposing, then hand over the final URL.
 
 ### Step 0: Ensure DevBridge CLI 0.2.x (install or upgrade in place)
@@ -250,6 +257,23 @@ if ! bash /tmp/devbridge-install.sh -s -u "https://gitcode.com/CloudDeveloperDep
   bash /tmp/devbridge-install.sh -s   # fallback: GitHub (baked-in URL)
 fi
 export PATH="$HOME/.huawei/bin:$PATH"   # PREPEND (session shells do not re-source ~/.bashrc)
+
+# Layer 3 (both installer paths failed): direct GitHub release tar.gz.
+# Asset naming is fixed: devbridge_linux_arm64_<version>-release.tar.gz (the sandbox
+# is Linux aarch64). If DB_TARGET is empty the installer download itself failed —
+# resolve the latest tag from the GitHub releases API first.
+if ! command -v devbridge >/dev/null 2>&1; then
+  [ -z "$DB_TARGET" ] && DB_TARGET=$(curl -fsSL --http1.1 --retry 2 --max-time 60 \
+    https://api.github.com/repos/huaweicloud/devspace-devbridge/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)
+  mkdir -p "$HOME/.huawei/bin"
+  curl -fsSL --http1.1 --retry 3 --retry-all-errors --max-time 180 \
+    "https://github.com/huaweicloud/devspace-devbridge/releases/download/${DB_TARGET}/devbridge_linux_arm64_${DB_TARGET}.tar.gz" \
+    -o /tmp/devbridge.tar.gz \
+    && rm -rf /tmp/devbridge-pkg && mkdir -p /tmp/devbridge-pkg \
+    && tar -xzf /tmp/devbridge.tar.gz -C /tmp/devbridge-pkg \
+    && install -m 0755 /tmp/devbridge-pkg/devbridge "$HOME/.huawei/bin/devbridge"
+  export PATH="$HOME/.huawei/bin:$PATH"
+fi
 devbridge version                     # must print 0.2.x-release
 
 # Remove the stale image-installed binary so only ONE version remains.
@@ -326,7 +350,8 @@ sleep 2
 devbridge delete-all 2>/dev/null || true
 
 # 1. Start tunnel
-nohup devbridge host -p <port> -e 8 > /tmp/host.log 2>&1 &
+if command -v setsid > /dev/null 2>&1; then setsid nohup devbridge host -p <port> -e 72 > /tmp/host.log 2>&1 < /dev/null & else nohup devbridge host -p <port> -e 72 > /tmp/host.log 2>&1 < /dev/null & fi
+disown 2>/dev/null || true
 sleep 10 && cat /tmp/host.log
 
 # 2. Extract tunnel URL and health-check before returning
@@ -338,7 +363,8 @@ else
   echo "WARN: Tunnel URL unreachable (HTTP $HTTP_CODE). Rebuilding tunnel..."
   pkill -f "devbridge host" && sleep 2
   devbridge delete-all 2>/dev/null || true
-  nohup devbridge host -p <port> -e 8 > /tmp/host.log 2>&1 &
+  if command -v setsid > /dev/null 2>&1; then setsid nohup devbridge host -p <port> -e 72 > /tmp/host.log 2>&1 < /dev/null & else nohup devbridge host -p <port> -e 72 > /tmp/host.log 2>&1 < /dev/null & fi
+  disown 2>/dev/null || true
   sleep 10
   TUNNEL_URL=$(grep -oP 'Tunnel URL: \K.*' /tmp/host.log)
   HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$TUNNEL_URL" 2>/dev/null || echo "000")
@@ -358,13 +384,15 @@ devbridge list
 # Step B: Remove all stale tunnels
 devbridge delete-all
 # Step C: Retry tunnel creation
-nohup devbridge host -p <port> -e 8 > /tmp/host.log 2>&1 &
+if command -v setsid > /dev/null 2>&1; then setsid nohup devbridge host -p <port> -e 72 > /tmp/host.log 2>&1 < /dev/null & else nohup devbridge host -p <port> -e 72 > /tmp/host.log 2>&1 < /dev/null & fi
+disown 2>/dev/null || true
 sleep 10 && cat /tmp/host.log
 ```
 
 This eliminates the most common deployment failure — historical tunnels from previous sessions accumulating past the max=10 quota.
 
 - The public URL has the form `https://<id>-<port>.devbridge-s2.hwtunnel.com` (from the `Tunnel URL:` line; 8-char lowercase base32 id). The pre-migration bridge domain `cn-north-4-bridge.myhuaweicloud.com` is dead — treat any URL on it as broken and never hand one to the developer.
+- **Start the host so it survives the exec session**: `setsid nohup ... < /dev/null & disown` (all three: setsid detaches the process group, `< /dev/null` drops the controlling tty, disown removes it from the shell's job table). On images without `setsid`, fall back to a bare `nohup ... &` launch (`if command -v setsid ...; else nohup ... ; fi`) and guard `disown` with `2>/dev/null || true` — a missing `setsid` must not leave the host unstarted. A bare `nohup ... &` (when `setsid` IS available) is reaped when the one-shot session ends — the tunnel dies right after a green in-session health check (the "200 but tunnel not found" trap). If the independent re-verify fails or answers 200 with a "tunnel not found" body, the URL is NOT persistent — always tell the developer 隧道将在会话结束后失效，请勿分享. `-e 72` sets the tunnel lifetime in **hours** — surface it to the developer with the URL ("链接有效期 72 小时").
 - **Return this URL to the developer as the deployment result link.** Keep the host process running (do not close the session before handing over the URL).
 - Tunnel `description` (`-d`) accepts only Chinese characters, letters, and digits (0-64). Symbols such as `-`/`_`/spaces are rejected (`Invalid tunnel description`).
 - Official docs: https://huaweicloud.github.io/devspace-devbridge/

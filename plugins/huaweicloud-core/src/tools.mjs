@@ -53,7 +53,7 @@ import {
 } from './auth/credentials.mjs';
 import { trackToolInvoke, trackSkillRetrieve, clearUserHash } from './telemetry/telemetry.mjs';
 import { fetchWithProxy } from './proxy/proxy-agent.mjs';
-import { fingerprint, runHcloudConfigure, resolveManagedProfile } from './auth/reconcile.mjs';
+import { fingerprint, runHcloudConfigure, runHcloudProfileDelete, resolveManagedProfile } from './auth/reconcile.mjs';
 import {
   getCachedUpdateInfo,
   getUpdateDistTags,
@@ -1090,7 +1090,20 @@ function persistCredentials(ak, sk, securityToken, region) {
   if (!profile) {
     hcloud = { ok: false, reason: 'KooCLI current profile unresolved' };
   } else {
+    // #920: `configure set` refuses an empty --cli-security-token, so a stale
+    // token already in the profile survives the write and poisons every hcloud
+    // call with APIGW.0301 — while the tool still reports "synchronized". When
+    // persisting WITHOUT a token, walk the documented manual bypass
+    // (delete the profile, then re-configure) so the on-disk profile truly
+    // matches the incoming credentials. The delete is best-effort: a missing
+    // profile ("nothing to clean") must not fail the persist.
+    let profileReset = false;
+    if (!String(securityToken || '')) {
+      const deleted = runHcloudProfileDelete(profile);
+      profileReset = deleted.ok || /not (exist|found)/i.test(deleted.error || '');
+    }
     hcloud = runHcloudConfigure(profile, ak, sk, region);
+    hcloud.profileReset = profileReset;
   }
   if (hcloud.ok) {
     writeLastSync({ kooCliProfile: profile, s1Fingerprint: fingerprint(ak, sk) });
@@ -1101,7 +1114,7 @@ function persistCredentials(ak, sk, securityToken, region) {
     backedUp: Boolean(before),
     obs: obs.ok ? { configured: true } : { configured: false, error: obs.error },
     hcloud,
-    note: 'S1 written with configuredBySession (R9), which now takes priority over env-injected credentials; S2(current profile) and S3 synced. Note: running `auth init` later clears the configuredBySession flag and env credentials regain priority.',
+    note: 'S1 written with configuredBySession (R9), which now takes priority over env-injected credentials; S2(current profile) and S3 synced. Persisting without a security token resets the target profile first (delete + recreate) so a stale token cannot survive the write (#920). Note: running `auth init` later clears the configuredBySession flag and env credentials regain priority.',
   };
 }
 
@@ -2264,6 +2277,8 @@ function explainError({ service = 'unknown', errorCode = '', message = '', reque
   const SERVICE_ALIASES = {
     functiongraph: 'FSS',
     fgs: 'FSS',
+    ecs: 'Ecs',
+    ECS: 'Ecs',
   };
   const patternKey = SERVICE_ALIASES[svc] || service;
 
@@ -2290,6 +2305,10 @@ function explainError({ service = 'unknown', errorCode = '', message = '', reque
     },
     VPC: {
       'VPC.0301': 'Bandwidth name is required for PER type EIPs, even though --help marks it optional.',
+    },
+    Ecs: {
+      'Ecs.0707':
+        'The flavor + image-type combination does not exist ("the product does not exist") — the error does not say which side is wrong, so check BOTH (#922): (1) the flavor is abandoned/sellout in this region/AZ (check os_extra_specs.cond:operation:status and cond:operation:az; see the huawei-ecs skill references/flavors.md for the AZ-vs-global-status conflict rule); (2) the image TYPE is incompatible with the flavor — market-type images fail with KunPeng flavors (kc1/kc2 etc.). Fix: switch the image to a gold-type image or switch to a compatible general-purpose flavor (verified: kc2.small.2 + market Ubuntu → Ecs.0707; s6.medium.2 + gold Ubuntu works), re-listing with hcloud ECS ListFlavors / hcloud IMS ListImages --__imagetype=gold first.',
     },
     APIGW: {
       'APIGW.0301':

@@ -24,6 +24,18 @@ The toolkit assumes coding agents can accidentally expose secrets or perform exp
 
 The default write path is planning: `huaweicloud_plan_cli_command` returns a command for review. The optional execution path is `huaweicloud_run_approved_command`, which requires an exact command string already shown to the user plus explicit approval. This is an agent workflow guardrail, not a substitute for IAM least privilege or human review.
 
+## Design Decision: session-level approval pass-through (rejected, #921 B)
+
+**Request**: after a user approves a multi-resource deployment manifest, skip the per-command approval gate for every command inside the approved list (session-level pass-through), or auto-renew approval tokens; only stop for commands that deviate from the list. Motivation: a 4-resource ECS deployment needs 10+ `plan → approve → run` round trips, and an expired token forces a full re-plan.
+
+**Decision**: rejected for the enforcement layer — the wrapper keeps one token per command, one-shot consumption, and the 5-minute TTL. Reasons:
+
+1. **The MCP/CLI wrapper is the last enforcement layer** of the 3-layer safety model (skills teach → hooks block → wrappers enforce). If it silently executes any command carrying a "blessed" token, a plan/run desync, an args hash collision, or a stale list no longer matching session state would execute unreviewed — exactly the "骗过校验" false-success class this toolkit exists to prevent.
+2. **The friction is already addressed at the skill layer without weakening the wrapper**: `huaweicloud-iac` Stage 6 (Provisioning Rules) collects ONE manifest-level approval from the user, then executes each resource via `plan → approve → run` without re-asking list-level consent — the tokens are machine-generated per command, so the user's cost is one approval per deployment, not per command.
+3. **Deviation-stop is already the contract**: `runApprovedCommand` rejects args whose hash differs from the planned args (`CONFIRM_TOKEN_*` JSON states, see `docs/plan-run-approval-contract.md`), so an off-manifest command stops the run today.
+
+If token TTL friction is measured again in the field, the acceptable follow-up is a TTL extension scoped to explicitly declared multi-command manifests at the skill layer (re-planning the whole list on expiry), not a wrapper-level pass-through.
+
 ## Non-Goals
 
 This is not a hard security boundary. Users still need IAM least privilege, audit logs, secure local credential storage, and review of generated commands or code.

@@ -44,6 +44,7 @@ const ENV_KEYS = [
   'HCLOUD_BIN',
   'HCLOUD_BIN_ARGS_JSON',
   'HCLOUD_FAKE_LOG',
+  'HCLOUD_FAKE_DELETE_ERROR',
   'CODEARTS_PROJECT_DIR',
 ];
 
@@ -580,5 +581,101 @@ test('23 scanState reports manualModified when KooCLI config is newer than .last
     const inc = scan.inconsistencies.find((i) => i.store === 'S2-current');
     assert.ok(inc, 'expected an S2-current inconsistency after manual KooCLI edit');
     assert.equal(inc.manualModified, true);
+  });
+});
+
+test('24 persist without a security token resets the profile (delete + recreate) so a stale token cannot survive (#920)', async () => {
+  await withTempHome(async (dir) => {
+    const log = join(dir, 'hcloud.log');
+    setFakeHcloud(log);
+    const ak = 'E2E24_AK';
+    const sk = 'E2E24_SK';
+    const region = 'cn-north-4';
+    writeFakeKooCli('deploy', [{ name: 'deploy', accessKeyId: ak, secretAccessKey: sk, region }]);
+
+    const out = await callTool('huaweicloud_auth_switch', { mode: 'memory', action: 'persist', ak, sk, region });
+    assert.equal(out.status, 'ok');
+    assert.equal(out.hcloud.profileReset, true, 'persist without a token must walk the delete/recreate path');
+
+    const calls = readFileSync(log, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    const deleteIdx = calls.findIndex((c) => c[0] === 'configure' && c[1] === 'delete');
+    const setIdx = calls.findIndex((c) => c[0] === 'configure' && c[1] === 'set');
+    assert.ok(deleteIdx !== -1, 'configure delete must run (stale-token cleanup, #920)');
+    assert.ok(setIdx !== -1, 'configure set must run after the delete (re-create)');
+    assert.ok(deleteIdx < setIdx, 'the profile delete must precede the re-create');
+    assert.ok(
+      calls[deleteIdx].some((a) => String(a).startsWith('--cli-profile=')),
+      'the delete must target the managed profile',
+    );
+
+    // The recreated profile keeps the credential stores consistent.
+    const scan = scanState();
+    assert.equal(scan.inconsistencies.length, 0);
+  });
+});
+
+test('24b persist still succeeds when the profile to reset does not exist (delete is best-effort, #920)', async () => {
+  await withTempHome(async (dir) => {
+    setFakeHcloud(join(dir, 'hcloud.log'));
+    const ak = 'E2E24B_AK';
+    const sk = 'E2E24B_SK';
+    writeFakeKooCli('deploy', [{ name: 'deploy', accessKeyId: ak, secretAccessKey: sk, region: 'cn-north-4' }]);
+    // Simulate a KooCLI that reports "profile does not exist" on delete.
+    process.env.HCLOUD_FAKE_DELETE_ERROR = '1';
+
+    const out = await callTool('huaweicloud_auth_switch', {
+      mode: 'memory',
+      action: 'persist',
+      ak,
+      sk,
+      region: 'cn-north-4',
+    });
+    assert.equal(out.status, 'ok');
+    assert.equal(out.hcloud.ok, true, 'a missing profile on delete must not fail the persist');
+  });
+});
+
+test('25 initial scenario: a preset profile with a stale/expired securityToken is reset by persist (#920)', async () => {
+  await withTempHome(async (dir) => {
+    const log = join(dir, 'hcloud.log');
+    setFakeHcloud(log);
+    const ak = 'E2E25_AK';
+    const sk = 'E2E25_SK';
+    const region = 'cn-north-4';
+    // Initial scenario: the preset profile already carries a stale/expired
+    // securityToken. `configure set` refuses empty values, so the token can
+    // never be overwritten in place — only the delete/recreate path removes it.
+    writeFakeKooCli('deploy', [
+      { name: 'deploy', accessKeyId: ak, secretAccessKey: sk, region, securityToken: 'E2E25_STALE_TOKEN' },
+    ]);
+
+    const out = await callTool('huaweicloud_auth_switch', { mode: 'memory', action: 'persist', ak, sk, region });
+    assert.equal(out.status, 'ok');
+    assert.equal(
+      out.hcloud.profileReset,
+      true,
+      'persist must walk the delete/recreate path when the preset profile carries a stale token',
+    );
+
+    const calls = readFileSync(log, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    const deleteIdx = calls.findIndex((c) => c[0] === 'configure' && c[1] === 'delete');
+    const setIdx = calls.findIndex((c) => c[0] === 'configure' && c[1] === 'set');
+    assert.ok(deleteIdx !== -1, 'configure delete must run to drop the stale token');
+    assert.ok(setIdx !== -1, 'configure set must run after the delete (re-create)');
+    assert.ok(deleteIdx < setIdx, 'the delete must precede the re-create');
+    assert.ok(
+      calls[setIdx].every((a) => !String(a).startsWith('--cli-security-token=')),
+      'the re-create must not pass a security token (no new token at rest)',
+    );
+
+    // The recreated profile keeps the credential stores consistent.
+    const scan = scanState();
+    assert.equal(scan.inconsistencies.length, 0);
   });
 });

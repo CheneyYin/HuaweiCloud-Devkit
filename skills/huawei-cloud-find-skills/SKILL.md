@@ -22,7 +22,7 @@ This skill enables users to:
 - **Search Skills**: Find skills by keyword, category, or both (matched against name, description, and triggers)
 - **Browse Categories**: Explore available skill categories
 - **View Skill Details**: Fetch full SKILL.md content from GitHub for specific skills
-- **Install Skills**: Guide users through skill installation via `npx skills add` (GitCode default), `npx clawhub install`, or fallback GitHub method
+- **Install Skills**: Guide users through skill installation via HTTP download (default), `npx clawhub install`, or fallback GitHub method. The `npx skills add` GitCode path is deprecated (实测失效) — see Step 3.
 
 **Architecture**: GitCode API v5 (`index.json` + `cn-en-map.json`) → HTTP GET (base64 decode) → In-memory search → GitHub raw fetch for details → Install
 
@@ -129,7 +129,7 @@ The agent can fetch this URL using `curl` or its web-fetch tool, then present th
 
 ### Step 3: Install Skill
 
-> **MANDATORY**: Use one of the commands below. Option A is the default; Options B/C are fallbacks. Option A requires NO git — it downloads the repo ZIP over HTTP and copies the skill folder.
+> **MANDATORY**: Use one of the commands below. Option A is the default; Option B is a fallback; Option C is deprecated (实测失效 per 2026-10 activity reports) — if attempted and it fails, use its git clone bypass. Option A requires NO git — it downloads the repo ZIP over HTTP and copies the skill folder.
 
 ```bash
 # Option A: HTTP download (default, no git required)
@@ -147,8 +147,17 @@ SKILL_SRC=$(find /tmp/hw-skills-net -type d -name "<skill-name>" 2>/dev/null | h
 # Option B: npx clawhub install (OpenClaw ecosystem)
 npx clawhub install <skill-name> -y
 
-# Option C: npx skills add via GitCode (requires git on PATH)
-npx skills add https://gitcode.com/huaweicloud/huaweicloud-skills.git#master --skill <skill-name> -y
+# Option C (DEPRECATED — 实测失效, do NOT rely on it): npx skills add via GitCode.
+# Every 2026-10 activity-experience report hit the same failure:
+#   "Downloaded URL is not a valid SKILL.md file or supported archive"
+# (the skills CLI cannot consume GitCode repos). Only kept here as a last resort;
+# when it fails, do NOT retry — fall back to the git clone bypass below.
+# npx skills add https://gitcode.com/huaweicloud/huaweicloud-skills.git#master --skill <skill-name> -y
+
+# Option C bypass (实测可用): git clone + local-path install
+git clone --depth 1 https://gitcode.com/huaweicloud/huaweicloud-skills.git /tmp/hw-skills-git \
+  || git clone --depth 1 https://github.com/huaweicloud/huaweicloud-skills.git /tmp/hw-skills-git
+cp -r "/tmp/hw-skills-git/skills/<category>/<service>/<skill-name>" "<skills-dir>/<skill-name>"
 ```
 
 **If all installation attempts fail** (`SKILL_SRC_NOT_FOUND`, download unreachable, `npx` errors), do NOT install git as a workaround. Download `https://github.com/huaweicloud/huaweicloud-skills/archive/refs/heads/master.zip` manually, extract it, copy the skill's folder into the agent skills directory, and tell the user how the skill was installed. <skills-dir> resolves per agent: Claude Code `~/.claude/skills`, OpenCode `~/.config/opencode/skills`, Cursor `~/.cursor/skills`.

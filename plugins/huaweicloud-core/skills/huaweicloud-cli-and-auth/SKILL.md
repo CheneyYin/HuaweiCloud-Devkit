@@ -13,11 +13,11 @@ Use KooCLI `hcloud` for local inspection and reviewed operations. Never ask the 
 
 Official guide: `https://support.huaweicloud.com/qs-hcli/hcli_02_003.html`.
 
-> **Version pairing**: this plugin is paired with **KooCLI v7.2.12** (`kooCliVersion` in `package.json`). Prefer the pinned download below. The one-liner script `hcloud_install.sh` always installs the `latest` version and cannot be pinned — if you use it, `check_cli`/`doctor` will warn when the installed version does not match v7.2.12.
+> **Version pairing**: this plugin is paired with **KooCLI v7.3.12** (`kooCliVersion` in `package.json`). Prefer the pinned download below. The one-liner script `hcloud_install.sh` always installs the `latest` version and cannot be pinned — if you use it, `check_cli`/`doctor` will warn when the installed version does not match v7.3.12.
 
 ### Windows
 
-1. Download and unzip: `https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/7.2.12/huaweicloud-cli-windows-amd64.zip`
+1. Download and unzip: `https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/7.3.12/huaweicloud-cli-windows-amd64.zip`
 2. Extract to `%USERPROFILE%\hcloud`, add to user `PATH`
 3. Verify: `hcloud version`
 
@@ -27,10 +27,10 @@ Fixed download (recommended):
 
 ```bash
 # amd64
-curl -LO "https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/7.2.12/huaweicloud-cli-linux-amd64.tar.gz"
+curl -LO "https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/7.3.12/huaweicloud-cli-linux-amd64.tar.gz"
 tar -zxvf huaweicloud-cli-linux-amd64.tar.gz
 # arm64
-curl -LO "https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/7.2.12/huaweicloud-cli-linux-arm64.tar.gz"
+curl -LO "https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/7.3.12/huaweicloud-cli-linux-arm64.tar.gz"
 tar -zxvf huaweicloud-cli-linux-arm64.tar.gz
 ```
 
@@ -49,10 +49,10 @@ Fixed download (recommended):
 
 ```bash
 # amd64
-curl -LO "https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/7.2.12/huaweicloud-cli-mac-amd64.tar.gz"
+curl -LO "https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/7.3.12/huaweicloud-cli-mac-amd64.tar.gz"
 tar -zxvf huaweicloud-cli-mac-amd64.tar.gz
 # arm64 (Apple Silicon)
-curl -LO "https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/7.2.12/huaweicloud-cli-mac-arm64.tar.gz"
+curl -LO "https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/7.3.12/huaweicloud-cli-mac-arm64.tar.gz"
 tar -zxvf huaweicloud-cli-mac-arm64.tar.gz
 ```
 

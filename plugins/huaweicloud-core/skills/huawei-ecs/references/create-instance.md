@@ -39,8 +39,22 @@ If no VPC/subnet exists: load `huawei-vpc` skill → create VPC → create subne
 **MCP 环境下必须用"本地生成 + 导入"流程**——`NovaCreateKeypair` 返回的 `private_key` 会被 MCP 脱敏管道替换为 `<redacted>`，而私钥仅此一次机会，读不到即作废：
 
 ```bash
-# 1. 本地生成
-ssh-keygen -t rsa -b 2048 -f ./<name> -N '""'
+# 1. 本地生成 — bash / Git Bash / WSL（无 passphrase）
+ssh-keygen -t rsa -b 2048 -f ./<name> -N ''
+```
+
+```powershell
+# 1. 本地生成 — Windows PowerShell（无 passphrase，实测验证的写法）
+# ⚠️ 引号陷阱：-N '""' 会把字面量 "" 设为私钥 passphrase（实测确认），后续 SSH 症状极具误导性：
+#    ECS 已 ACTIVE、22 端口可达、服务端日志显示 "accepts key"，签名后仍 Permission denied ——
+#    服务端接受了密钥却拒绝，排查路径反直觉。本地剥掉 passphrase（ssh-keygen -p）立即恢复，服务器侧零改动。
+# 正确写法：--% 停止解析符 + -N ""（PowerShell 会丢弃空字符串参数，-N '' 直接报
+# "option requires an argument -- N"；--% 让该行剩余部分按 cmd 规则原样传递，"" 由 CRT 解析为空串）。
+# 注意：--% 之后到行尾全部原样传递 —— 该行不能再跟任何其他命令或注释。
+ssh-keygen --% -t rsa -b 2048 -f .\<name> -N ""
+```
+
+```bash
 # 2. 导入公钥
 hcloud ECS NovaCreateKeypair --keypair.name=<name> --keypair.public_key=<本地 .pub 文件内容>
 # 3. 使用私钥文件 ./<name> 连接实例

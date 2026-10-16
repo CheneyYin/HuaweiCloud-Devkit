@@ -155,6 +155,33 @@ test('huaweicloud_explain_error maps APIGW.0301 to credential/project_id guidanc
   assert.match(text, /project_id/);
 });
 
+test('huaweicloud_explain_error maps Ecs.0707 to flavor/image-type combination troubleshooting (#922)', async () => {
+  // Regression input from the 1024 activity report: kc2.small.2 + market-type
+  // Ubuntu image → Ecs.0707 "the product does not exist", with no hint which
+  // side (flavor vs image type) is wrong.
+  const result = await callTool('huaweicloud_explain_error', {
+    service: 'ECS',
+    errorCode: 'Ecs.0707',
+    message: 'the product does not exist',
+  });
+  const text = JSON.stringify(result);
+  assert.match(text, /flavor \+ image-type combination/);
+  assert.match(text, /gold/, 'must point at gold-type images');
+  assert.match(text, /market/, 'must name the market-type incompatibility');
+  assert.match(text, /ListFlavors/, 'must direct at re-listing flavors');
+  assert.match(text, /cond:operation/, 'must point at the AZ/status spec fields');
+});
+
+test('huaweicloud_explain_error maps Ecs.0707 with the lowercase service alias too (#922)', async () => {
+  const result = await callTool('huaweicloud_explain_error', {
+    service: 'ecs',
+    errorCode: 'Ecs.0707',
+    message: 'the product does not exist',
+  });
+  const text = JSON.stringify(result);
+  assert.match(text, /flavor \+ image-type combination/);
+});
+
 test('huaweicloud_explain_error fallback teaches context capture and error-center lookup (#648)', async () => {
   // Regression input from issue #648 EXP-E08: ECS Ecs.0103 with minimal context
   // fell into the generic fallback and produced only a "collect info" line.

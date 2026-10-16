@@ -10,13 +10,13 @@ version: 1
 
 ## KooCLI Installation
 
-This plugin is paired with **KooCLI v7.2.12**. Install the pinned version:
+This plugin is paired with **KooCLI v7.3.12**. Install the pinned version:
 
 | OS                   | Command                                                                                                                                                                 |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Windows (PowerShell) | See https://support.huaweicloud.com/qs-hcli/hcli_02_003.html for MSI download                                                                                           |
-| Linux                | curl -LO "https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/7.2.12/huaweicloud-cli-linux-amd64.tar.gz" && tar -zxvf huaweicloud-cli-linux-amd64.tar.gz |
-| macOS                | curl -LO "https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/7.2.12/huaweicloud-cli-mac-amd64.tar.gz" && tar -zxvf huaweicloud-cli-mac-amd64.tar.gz     |
+| Linux                | curl -LO "https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/7.3.12/huaweicloud-cli-linux-amd64.tar.gz" && tar -zxvf huaweicloud-cli-linux-amd64.tar.gz |
+| macOS                | curl -LO "https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/7.3.12/huaweicloud-cli-mac-amd64.tar.gz" && tar -zxvf huaweicloud-cli-mac-amd64.tar.gz     |
 
 > See `huaweicloud-cli-and-auth` skill for arm64 variants and the one-liner (latest) option.
 

@@ -229,3 +229,29 @@ export function runHcloudConfigure(profile, ak, sk, region) {
     ),
   };
 }
+
+// Delete a KooCLI profile (best-effort). Used by the auth persist path (#920):
+// `configure set` REFUSES an empty --cli-security-token, so a stale/expired
+// token already in the profile can never be overwritten — it poisons every
+// hcloud call with APIGW.0301. The documented manual bypass is
+// `hcloud configure delete --cli-profile=<profile>` followed by a re-configure;
+// this helper makes that path a runtime step instead of user knowledge.
+// A missing profile reports a non-zero status, which callers treat as
+// "nothing to clean" — never as an error.
+export function runHcloudProfileDelete(profile) {
+  const { executable, argsPrefix } = resolveHcloudCommand();
+  const r = spawnSync(executable, [...argsPrefix, 'configure', 'delete', `--cli-profile=${profile}`], {
+    shell: false,
+    windowsHide: true,
+    stdio: 'pipe',
+    timeout: 30000,
+  });
+  return {
+    ok: r.status === 0,
+    error: redactSecrets(
+      String(r.stderr || '')
+        .trim()
+        .slice(0, 240),
+    ),
+  };
+}

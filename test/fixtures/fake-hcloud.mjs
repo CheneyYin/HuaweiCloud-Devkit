@@ -8,6 +8,13 @@ if (process.argv[2] === 'configure') {
   const dir = dirname(resolve(log));
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   appendFileSync(log, JSON.stringify(process.argv.slice(2)) + '\n');
+  // #920 test hook: simulate a KooCLI that reports "profile does not exist"
+  // on `configure delete` (nothing to clean) so tests can prove the persist
+  // path treats a missing profile as best-effort, not an error.
+  if (process.argv[3] === 'delete' && process.env.HCLOUD_FAKE_DELETE_ERROR === '1') {
+    console.error('[USE_ERROR]: profile does not exist');
+    process.exit(2);
+  }
   process.exit(0);
 }
 if (process.argv[2] === 'version') {
