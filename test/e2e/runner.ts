@@ -600,6 +600,24 @@ async function selfcheck(bin: string, kooCliVersion: string): Promise<boolean> {
   }
 }
 
+// Report retention: every run writes one JSON; without a prune the local
+// .e2e-results/ dir grows without bound (D1). Keep the newest 20.
+const REPORT_RETENTION = 20;
+
+function pruneReports(reportDir: string): void {
+  const reports = readdirSync(reportDir)
+    .filter((name) => name.startsWith('report-') && name.endsWith('.json'))
+    .map((name) => ({ name, mtime: statSync(join(reportDir, name)).mtimeMs }))
+    .sort((a, b) => b.mtime - a.mtime);
+  for (const stale of reports.slice(REPORT_RETENTION)) {
+    try {
+      rmSync(join(reportDir, stale.name), { force: true });
+    } catch {
+      // best-effort: pruning must never fail a run
+    }
+  }
+}
+
 async function main(): Promise<void> {
   loadDotEnv();
   if (process.env.E2E_ENABLE !== '1') {
@@ -651,6 +669,7 @@ async function main(): Promise<void> {
   const bin = join(prefix, 'node_modules', 'huaweicloud-devkit', 'bin', 'setup.cjs');
   const reportDir = join(root, '.e2e-results');
   mkdirSync(reportDir, { recursive: true });
+  pruneReports(reportDir);
   const report: Record<string, unknown> = {
     startedAt: new Date().toISOString(),
     agent: {

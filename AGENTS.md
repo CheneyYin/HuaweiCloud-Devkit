@@ -15,6 +15,9 @@ npm run format:check     # Prettier check (no write)
 npm run validate         # structural validation + README beta badge sync check
 npm run badge:sync       # rewrite README beta badge to the next stable version
 npm run smoke:agents     # pre-release smoke: pack → install tarball → per-agent install + MCP roundtrip
+npm run test:e2e         # agent-level E2E (real opencode + LLM): gated by E2E_ENABLE=1, reads gitignored
+                         #   test/e2e/.env for the model config; 1-4 min per case, attempts cap 2 —
+                         #   NEVER in npm test or the PR gate; selfcheck subcommand runs chain-only
 node --test test/structure.test.ts    # single test file
 node ./scripts/validate-package.mjs   # validation alone
 ```
