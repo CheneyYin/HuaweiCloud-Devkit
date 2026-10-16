@@ -267,7 +267,7 @@ function wsSandboxFixtures(): CaseFixtures {
           path: '/connect',
           method: 'POST',
           status: 200,
-          body: { session_id: 'sess-e2e-ws-001', dev_stage_id: WS_DEV_STAGE },
+          body: { session_id: WS_DEV_STAGE, dev_stage_id: WS_DEV_STAGE },
         },
         {
           path: `/open-api-public/v1/devenvs/${WS_DEV_STAGE}/connections`,
@@ -281,6 +281,10 @@ function wsSandboxFixtures(): CaseFixtures {
           status: 200,
           body: { result: { connection_info: { url: '{wsUrl}', extensions: { source: 778899 } } } },
         },
+        // session_id and dev_stage_id are the SAME value on purpose: the
+        // agent may pass either as workspace_id, and identical ids keep
+        // the session-cache key and the connection endpoint stable no
+        // matter which one the LLM picks.
       ],
     },
   };
@@ -374,5 +378,44 @@ export const wsSandboxCases: E2eCase[] = [
     ],
     softExpect: [{ kind: 'agentSays', text: { any: ['md5', '校验', 'upload', '上传'] } }],
     budget: { timeoutMs: 360_000, attempts: 2 },
+  },
+  {
+    // upload_project: the full tunnel stack — file-server deploy on the
+    // terminal session, TCP-tunnel relay, in-fake HTTP /health + /upload.
+    // The /upload md5 comes from hashing the RECEIVED bytes, so corruption
+    // anywhere in the archive/tunnel chain mismatches the product's local
+    // hash and the tool call FAILS — a genuine gate.
+    id: 'sandbox-upload-project-tunnel',
+    pack: 'sandbox',
+    prompt:
+      '连接华为云沙箱(不需要配置 git 仓库),然后用 huaweicloud_sandbox_upload_project 把本地项目目录 {workdir}/myproject 上传到沙箱的 /workspace(默认解压),把上传结果和校验情况告诉我。',
+    fixtures: {
+      ...wsSandboxFixtures(),
+      workdir: {
+        'myproject/package.json': JSON.stringify(
+          { name: 'e2e-tunnel-project', private: true, dependencies: { react: '^18.2.0' } },
+          null,
+          2,
+        ),
+        'myproject/README.md': 'A project uploaded through the e2e tunnel case.\n',
+      },
+    },
+    expect: [
+      CONNECT_POST,
+      { kind: 'toolCall', name: 'huaweicloud_sandbox_upload_project', ok: true },
+      // The file-server lifecycle on the terminal session (deploy kill,
+      // cleanup kill, and the attempt loop's sweep — presence is the gate;
+      // agent-initiated verification one-shots make connection counts
+      // meaningless in this case, so none are asserted).
+      { kind: 'ws', intent: 'kill-fileserver', times: { min: 2, max: 4 } },
+      { kind: 'ws', intent: 'write-fileserver-script', times: { min: 1, max: 1 } },
+      { kind: 'ws', intent: 'start-fileserver', times: { min: 1, max: 1 } },
+      { kind: 'ws', intent: 'extract-archive', times: { min: 1, max: 1 } },
+      // The relayed traffic on the tunnel session.
+      { kind: 'ws', intent: 'tunnel:health', times: { min: 1, max: 3 } },
+      { kind: 'ws', intent: 'tunnel:upload', times: { min: 1, max: 1 } },
+    ],
+    softExpect: [{ kind: 'agentSays', text: { any: ['md5', '上传', 'upload', '/workspace'] } }],
+    budget: { timeoutMs: 420_000, attempts: 2 },
   },
 ];

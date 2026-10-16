@@ -125,3 +125,41 @@ test('fake fs round-trip: printf batches → base64 decode → real md5', () => 
   // The tmp file is gone after decode.
   assert.equal(runShellCommand(`md5sum "/tmp/hello.b64tmp"`, fs).exitCode, 1);
 });
+
+test('createPacket golden bytes: tunnel create (0x03) and success (0x0800)', () => {
+  // srcPort 54321 (0xD431), dstPort 8888 (0x22B8), identifier 1, source
+  // 778899 (0x000BE293), empty payloads — the frames P2c's relay exchanges.
+  const create = createPacket({
+    operation: OpCode.OpCreateTcpTunnel,
+    srcPort: 54321,
+    dstPort: 8888,
+    identifier: 1,
+    source: 778899,
+    payload: new Uint8Array(0),
+  });
+  assert.deepEqual(
+    Buffer.from(create),
+    Buffer.from([
+      0x05, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x03, 0xd4, 0x31, 0x22, 0xb8, 0x00, 0x00, 0x00, 0x01, 0x00, 0x0b, 0xe2,
+      0x93,
+    ]),
+  );
+  const success = createPacket({
+    operation: OpCode.OpTunnelSuccess,
+    identifier: 1,
+    source: 778899,
+    payload: new Uint8Array(0),
+  });
+  assert.deepEqual(
+    Buffer.from(success),
+    Buffer.from([
+      0x05, 0x00, 0x00, 0x14, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x0b, 0xe2,
+      0x93,
+    ]),
+  );
+  // Round-trip the create frame through the parser.
+  const parsed = parsePacket(create);
+  assert.equal(parsed.srcPort, 54321);
+  assert.equal(parsed.dstPort, 8888);
+  assert.equal(parsed.identifier, 1);
+});

@@ -27,6 +27,11 @@ export interface ShellResult {
 // math the product's verification does.
 export class FakeFs {
   private readonly files = new Map<string, Buffer>();
+  // The fake machine's process table, reduced to what the tunnel relay
+  // needs: ports a `python3 sandbox-file-server.py <port>` start has
+  // "listened" on. The relay refuses any other dstPort (bounded surface —
+  // dstPort is agent-influenced input).
+  readonly servicePorts = new Set<number>();
 
   appendText(path: string, text: string): void {
     const prev = this.files.get(path);
@@ -63,6 +68,17 @@ interface IntentRow {
 }
 
 const INTENT_TABLE: IntentRow[] = [
+  {
+    // deployFileServer's script write (b64 payload, single line). MUST
+    // sit above `echo`: `echo '<b64>' | base64 -d > …` is this row, not a
+    // plain echo (first match wins).
+    intent: 'write-fileserver-script',
+    pattern: /^echo '([^']*)' \| base64 -d > (.+)$/,
+    run: (m, fs) => {
+      fs.write(m[2]!, Buffer.from(m[1]!, 'base64'));
+      return { stdout: '' };
+    },
+  },
   {
     intent: 'echo',
     pattern: /^echo\s+(.*)$/,
@@ -121,6 +137,45 @@ const INTENT_TABLE: IntentRow[] = [
       if (md5 === null) return { stdout: '', exitCode: 1 };
       return { stdout: `${md5}  ${m[1]}\n` };
     },
+  },
+  {
+    // deployFileServer's kill sweep (deploy + cleanup share the shape).
+    intent: 'kill-fileserver',
+    pattern: /^kill \$\(cat .*sandbox-file-server\.pid.*$/,
+    run: () => ({ stdout: '' }),
+  },
+  {
+    // deployFileServer's start: registers the "listening" port — the
+    // tunnel relay whitelists exactly these (refuses everything else).
+    intent: 'start-fileserver',
+    pattern: /^python3 .*sandbox-file-server\.py (\d+)(?: \S+)? & echo \$! > .*$/,
+    run: (m, fs) => {
+      fs.servicePorts.add(Number(m[1]));
+      return { stdout: '' };
+    },
+  },
+  {
+    // upload_project's extract step.
+    intent: 'extract-archive',
+    pattern: /^mkdir -p "([^"]+)" && tar -xzf "([^"]+)" -C "([^"]+)" && rm -f "([^"]+)"$/,
+    run: (m, fs) => {
+      fs.delete(m[2]!);
+      return { stdout: '' };
+    },
+  },
+  {
+    // upload_project's best-effort permission fixup (multi-line blob,
+    // first line is the readlink assignment).
+    intent: 'fixup-permissions',
+    pattern: /^REAL_PATH=\$\(readlink .*$/,
+    run: () => ({ stdout: '' }),
+  },
+  {
+    // Agent-initiated verification (`ls /workspace/myproject` after an
+    // upload, etc.): improvisation, not fake drift — answer generically.
+    intent: 'ls',
+    pattern: /^ls\b.*$/,
+    run: () => ({ stdout: '' }),
   },
 ];
 
