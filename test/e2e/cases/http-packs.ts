@@ -21,7 +21,7 @@ export const authCases: E2eCase[] = [
     id: 'auth-switch-persist-writes-stores',
     pack: 'auth',
     prompt:
-      '把我的华为云凭证持久化到本地:AK 是 E2E_M3_AK,SK 是 E2E_M3_SK,区域 cn-north-4。用 huaweicloud_auth_switch 的 action=persist 完成,然后把持久化结果(S1 文件、OBS 配置、KooCLI profile 同步状态)告诉我。',
+      '把我的华为云凭证持久化到本地:AK 的字面值就是字符串 E2E_M3_AK,SK 的字面值就是字符串 E2E_M3_SK(直接把这两串字符作为凭证值传给工具参数,它们不是环境变量名,不要去查找 .env 或环境),区域 cn-north-4。用 huaweicloud_auth_switch 的 action=persist 完成,然后把持久化结果(S1 文件、OBS 配置、KooCLI profile 同步状态)告诉我。',
     fixtures: {
       home: {
         '.hcloud/config.json': KOOLCLI_SEED,
@@ -416,6 +416,48 @@ export const wsSandboxCases: E2eCase[] = [
       { kind: 'ws', intent: 'tunnel:upload', times: { min: 1, max: 1 } },
     ],
     softExpect: [{ kind: 'agentSays', text: { any: ['md5', '上传', 'upload', '/workspace'] } }],
+    budget: { timeoutMs: 420_000, attempts: 2 },
+  },
+  {
+    // deploy_nginx: the probes are one-shot execs, and INSTALLED is a REAL
+    // gate (the product throws on MISSING). Intent presence is the drift
+    // tripwire; connection counts are not asserted (one-shot-per-probe
+    // plus agent improvisation).
+    id: 'sandbox-deploy-nginx',
+    pack: 'sandbox',
+    prompt:
+      '连接华为云沙箱(不需要配置 git 仓库),然后用 huaweicloud_sandbox_deploy_nginx 为项目 myproject 配置 nginx:类型 spa、端口 8080、输出目录 dist。把配置和启动结果告诉我。',
+    fixtures: wsSandboxFixtures(),
+    expect: [
+      CONNECT_POST,
+      { kind: 'toolCall', name: 'huaweicloud_sandbox_deploy_nginx', ok: true },
+      { kind: 'ws', intent: 'nginx-installed', times: { min: 1, max: 1 } },
+      { kind: 'ws', intent: 'port-free', times: { min: 1, max: 2 } },
+      // The config-write blob (resolve script + tee heredoc + embedded
+      // reload + chmod fixups, one exec) opens with REAL_PROJECT=.
+      { kind: 'ws', intent: 'resolve-real-path', times: { min: 1, max: 1 } },
+      { kind: 'ws', intent: 'devbridge-active', times: { min: 1, max: 1 } },
+    ],
+    softExpect: [{ kind: 'agentSays', text: { any: ['nginx', '8080', '配置'] } }],
+    budget: { timeoutMs: 420_000, attempts: 2 },
+  },
+  {
+    // deploy_check: the verdict lands in the tool RESULT (a non-assertion
+    // surface by the suite's founding rule), so the honest gates are the
+    // script DELIVERY and recognition on the ws channel plus toolCall ok —
+    // the output grammar itself is pinned cross-tier in
+    // ws-exec-protocol.test.ts (fake synthesis ↔ parseDeployCheckOutput).
+    id: 'sandbox-deploy-check',
+    pack: 'sandbox',
+    prompt:
+      '连接华为云沙箱(不需要配置 git 仓库),然后用 huaweicloud_sandbox_deploy_check 检查项目 myproject 的部署状态:端口 8080、输出目录 dist。把各项检查结果、总分和结论告诉我。',
+    fixtures: wsSandboxFixtures(),
+    expect: [
+      CONNECT_POST,
+      { kind: 'toolCall', name: 'huaweicloud_sandbox_deploy_check', ok: true },
+      { kind: 'ws', intent: 'deploy-check-script', times: { min: 1, max: 1 } },
+    ],
+    softExpect: [{ kind: 'agentSays', text: { any: ['COMPLETE', '6/6', '通过'] } }],
     budget: { timeoutMs: 420_000, attempts: 2 },
   },
 ];

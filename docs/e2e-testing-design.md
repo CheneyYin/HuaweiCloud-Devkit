@@ -99,9 +99,15 @@ are never copied. Local config: gitignored `test/e2e/.env`.
   semantics, approval-tokens.ts), so a model that re-orders flags between
   plan and run gets "args do not match the approved plan". Prompts pin flag
   order; this remains a known retry-worthy jitter source.
-- **ws-exec boundary unfaked**: sandbox connect's hwlink attempts hit the
-  local HTTP fake and fail fast (404, best-effort caught);
-  `transferGitRepo` is a no-op without git args.
+- **ws-exec boundary: faked since P2.** The local hwlink fake
+  (test/e2e/ws-fake/) speaks the product's binary protocol through the
+  product's own codec and marker vocabulary, covers exec one-shot and
+  session semantics, upload_file (b64 batches → decode → true-md5
+  verification), upload_project (tunnel relay + in-fake HTTP file server),
+  and the deploy probes/marker synthesis. Remaining unfaked: the real
+  PTY's echo/canonical quirks (the fake never echoes input — a legal
+  client-side mode), and devbridge itself (the tunnel URL is synthesized
+  to satisfy the domain-pinned pattern, never fetched).
 - **update pack**: covered since the registry seam landed. The earlier "no
   env seam" note was half-wrong: `HUAWEICLOUD_NPM_REGISTRY` existed but only
   the CLI face honored it — the MCP tool face's default query spawned

@@ -16,8 +16,10 @@ import {
   extractReadyNonce,
   readyMarkerFor,
   runShellCommand,
+  DEPLOY_CHECK_ALL_PASS,
   FakeFs,
 } from './e2e/ws-fake/fake-shell.ts';
+import { parseDeployCheckOutput } from '../plugins/huaweicloud-core/src/sandbox/session-manager.ts';
 
 // Golden pins for the hwlink wire protocol the E2E ws-fake shares with the
 // product. The fake imports the product's codec, so a codec regression
@@ -162,4 +164,42 @@ test('createPacket golden bytes: tunnel create (0x03) and success (0x0800)', () 
   assert.equal(parsed.srcPort, 54321);
   assert.equal(parsed.dstPort, 8888);
   assert.equal(parsed.identifier, 1);
+});
+
+// The deploy-check output grammar, pinned from BOTH sides: the fake's
+// synthesized vocabulary must parse through the product's own
+// parseDeployCheckOutput (the extracted pure function), and a degraded
+// variant must yield the incomplete verdict with the missing steps.
+
+test('deploy-check grammar cross-tier pin: fake synthesis parses through the product parser', () => {
+  const parsed = parseDeployCheckOutput(DEPLOY_CHECK_ALL_PASS);
+  assert.equal(parsed.complete, true);
+  assert.deepEqual(parsed.score, { pass: 6, total: 6 });
+  assert.equal(parsed.publicUrl, 'https://e2e-tunnel-1-8080.devbridge-s2.hwtunnel.com');
+  assert.deepEqual(
+    Object.keys(parsed.checks).sort((a, b) => a.localeCompare(b)),
+    ['content_verified', 'devbridge_tunnel', 'nginx_serving', 'output_dir', 'qr_code', 'tunnel_url_accessible'],
+  );
+  assert.deepEqual(parsed.missing, []);
+  assert.equal(parsed.parseWarning, undefined);
+});
+
+test('deploy-check grammar pin: degraded output yields INCOMPLETE with the failing steps', () => {
+  const degraded = DEPLOY_CHECK_ALL_PASS.replace('nginx_serving:PASS', 'nginx_serving:FAIL')
+    .replace('SCORE:6/6', 'SCORE:5/6')
+    .replace('VERDICT:COMPLETE', 'VERDICT:INCOMPLETE');
+  const parsed = parseDeployCheckOutput(degraded);
+  assert.equal(parsed.complete, false);
+  assert.deepEqual(parsed.missing, ['nginx_serving']);
+  assert.equal(parsed.score && parsed.score.pass < parsed.score.total, true);
+});
+
+test('deploy-check script recognition: the anchored first line dispatches to the synthesis', () => {
+  const result = runShellCommand('echo "=== DEPLOY CHECK ==="\nTOTAL=0\n…', new FakeFs());
+  assert.equal(result.intent, 'deploy-check-script');
+  assert.equal(result.stdout, DEPLOY_CHECK_ALL_PASS);
+  // The nginx presence probe answers INSTALLED — the product's real gate.
+  const probe = runShellCommand('command -v nginx >/dev/null 2>&1 && echo "INSTALLED" || echo "MISSING"', new FakeFs());
+  assert.equal(probe.intent, 'nginx-installed');
+  assert.ok(probe.stdout.includes('INSTALLED'));
 });

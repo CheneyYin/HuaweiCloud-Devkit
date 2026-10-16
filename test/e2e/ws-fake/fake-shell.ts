@@ -80,6 +80,14 @@ const INTENT_TABLE: IntentRow[] = [
     },
   },
   {
+    // deployCheck's big script, anchored on its stable first line — NOT
+    // full text (benign script edits keep matching; semantic drift breaks
+    // the parse pin instead). Answers the all-pass marker vocabulary.
+    intent: 'deploy-check-script',
+    pattern: /^echo "=== DEPLOY CHECK ==="$/,
+    run: () => ({ stdout: DEPLOY_CHECK_ALL_PASS }),
+  },
+  {
     intent: 'echo',
     pattern: /^echo\s+(.*)$/,
     run: (m) => ({ stdout: `${m[1]}\n` }),
@@ -164,10 +172,11 @@ const INTENT_TABLE: IntentRow[] = [
     },
   },
   {
-    // upload_project's best-effort permission fixup (multi-line blob,
-    // first line is the readlink assignment).
-    intent: 'fixup-permissions',
-    pattern: /^REAL_PATH=\$\(readlink .*$/,
+    // The resolve-script family (multi-line blobs): upload_project's
+    // permission fixup opens with REAL_PATH=, deployNginx's config-write
+    // blob opens with REAL_PROJECT= — both are readlink resolvers.
+    intent: 'resolve-real-path',
+    pattern: /^REAL_(PATH|PROJECT)=\$\(readlink .*$/,
     run: () => ({ stdout: '' }),
   },
   {
@@ -176,6 +185,32 @@ const INTENT_TABLE: IntentRow[] = [
     intent: 'ls',
     pattern: /^ls\b.*$/,
     run: () => ({ stdout: '' }),
+  },
+  {
+    // deployNginx presence probe — the gate that MATTERS: without
+    // INSTALLED the product throws (nginx MISSING is a real failure path).
+    intent: 'nginx-installed',
+    pattern: /^command -v nginx >\/dev\/null.*$/,
+    run: () => ({ stdout: 'INSTALLED\n' }),
+  },
+  {
+    // deployNginx port scan (up to base+9): always FREE on the fake.
+    intent: 'port-free',
+    pattern: /^ss -tlnp .*echo "IN_USE" \|\| echo "FREE"$/,
+    run: () => ({ stdout: 'FREE\n' }),
+  },
+  {
+    // Standalone reload tolerance (deployNginx's reload is EMBEDDED in the
+    // config blob, keyed by its resolve-script first line instead).
+    intent: 'nginx-reload',
+    pattern: /^sudo killall -9 nginx/,
+    run: () => ({ stdout: '' }),
+  },
+  {
+    // deployNginx tunnel probe (version-aware shape, 2>/dev/null inside).
+    intent: 'devbridge-active',
+    pattern: /^\(devbridge list -j .*grep -q.*$/,
+    run: () => ({ stdout: 'ACTIVE\n' }),
   },
 ];
 
@@ -192,6 +227,22 @@ export function runShellCommand(blob: string, fs: FakeFs): ShellResult {
 }
 
 // --- nonce recognition (product vocabulary, exported for the golden pins) ---
+
+// The deploy-check marker vocabulary the fake synthesizes — pinned
+// BOTH ways by test/ws-exec-protocol.test.ts: this exact output must parse
+// through the product's parseDeployCheckOutput (complete, 6/6, publicUrl),
+// and the product's script must keep emitting this grammar.
+export const DEPLOY_CHECK_ALL_PASS = [
+  'nginx_serving:PASS (port 8080)',
+  'output_dir:PASS',
+  'content_verified:PASS',
+  'devbridge_tunnel:PASS',
+  'tunnel_url_accessible:PASS',
+  'qr_code:PASS',
+  'SCORE:6/6',
+  'TUNNEL_URL:https://e2e-tunnel-1-8080.devbridge-s2.hwtunnel.com',
+  'VERDICT:COMPLETE',
+].join('\n');
 
 // The client's ready command embeds the nonce as the printf argument
 // `'__WS_EXEC_READY_' '<nonce>__'`.
