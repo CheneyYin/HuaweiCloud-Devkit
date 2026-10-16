@@ -17,7 +17,7 @@ permissions:
 jobs:
   e2e:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,8 +25,24 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Install opencode
-        run: npm install -g opencode-ai@latest
+      - name: Preflight E2E configuration
+        env:
+          E2E_APIKEY: ${{ secrets.E2E_TEST_MODEL_APIKEY }}
+          E2E_PROVIDER_ID: ${{ vars.E2E_TEST_PROVIDER_ID }}
+          E2E_PROVIDER_BASEURL: ${{ vars.E2E_TEST_PROVIDER_BASEURL }}
+          E2E_MODEL: ${{ vars.E2E_TEST_MODEL }}
+        run: |
+          missing=0
+          for v in E2E_APIKEY E2E_PROVIDER_ID E2E_PROVIDER_BASEURL E2E_MODEL; do
+            if [ -z "${!v}" ]; then echo "missing: $v"; missing=1; fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::E2E config incomplete — set secret E2E_TEST_MODEL_APIKEY and vars E2E_TEST_PROVIDER_ID / E2E_TEST_PROVIDER_BASEURL / E2E_TEST_MODEL"
+            exit 1
+          fi
+          echo "E2E configuration present (provider: $E2E_PROVIDER_ID, model: $E2E_MODEL)"
+      - name: Install opencode (pinned)
+        run: npm install -g opencode-ai@1.19.0
       - name: Run agent-level E2E suite
         env:
           E2E_ENABLE: '1'
