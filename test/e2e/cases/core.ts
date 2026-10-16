@@ -176,4 +176,39 @@ export const coreCases: E2eCase[] = [
     ],
     budget: { timeoutMs: 240_000, attempts: 2 },
   },
+  {
+    // Thin cases for the remaining core tools: the mechanism under test is
+    // the in-process tool itself (pure, no boundary), so the honest shape
+    // is toolCall with a prompt-pinned arg — never ok-only where the arg is
+    // deterministic.
+    id: 'core-explain-error-code',
+    pack: 'core',
+    prompt: '用 huaweicloud_explain_error 解释华为云错误码 APIG.0301,告诉我原因和处理建议。',
+    fixtures: {},
+    expect: [{ kind: 'toolCall', name: 'huaweicloud_explain_error', args: { errorCode: 'APIG.0301' } }],
+    softExpect: [{ kind: 'agentSays', text: { any: ['认证', 'token', 'auth', 'APIG.0301'] } }],
+    budget: { timeoutMs: 240_000, attempts: 2 },
+  },
+  {
+    id: 'core-service-catalog-routes-ecs',
+    pack: 'core',
+    prompt: '我想部署一台华为云 ECS 云服务器,先用 huaweicloud_service_catalog 查一下该走哪条能力路径、加载哪个技能。',
+    fixtures: {},
+    // service_catalog's `intent` is LLM-authored free text — pinning it
+    // would be exactly the fragile text-matching this suite refuses, so the
+    // case gates on the call itself and the routing lands in the soft
+    // channel (huawei-ecs is the deterministic route for an ECS intent).
+    expect: [{ kind: 'toolCall', name: 'huaweicloud_service_catalog', ok: true }],
+    softExpect: [{ kind: 'agentSays', text: { any: ['huawei-ecs', 'ECS'] } }],
+    budget: { timeoutMs: 240_000, attempts: 2 },
+  },
+  {
+    id: 'core-hook-check-command-risk',
+    pack: 'core',
+    prompt: '用 huaweicloud_hook_check_command 检查这条命令的风险:hcloud VPC ListVpcs。告诉我检查结论。',
+    fixtures: {},
+    expect: [{ kind: 'toolCall', name: 'huaweicloud_hook_check_command', args: { command: 'hcloud VPC ListVpcs' } }],
+    softExpect: [{ kind: 'agentSays', text: { any: ['allow', '允许', 'read', '只读'] } }],
+    budget: { timeoutMs: 240_000, attempts: 2 },
+  },
 ];

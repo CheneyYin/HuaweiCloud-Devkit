@@ -57,4 +57,19 @@ export const discoveryCases: E2eCase[] = [
     softExpect: [{ kind: 'agentSays', text: { any: ['react', 'React', 'spa', 'vite'] } }],
     budget: { timeoutMs: 240_000, attempts: 2 },
   },
+  {
+    // HUAWEICLOUD_ICONS_OFFLINE=1 forces the bundled snapshot
+    // (src/data/icons-manifest.v1.json) — without it a networked host
+    // (the nightly runner) would fetch the LIVE manifest from
+    // open.huaweicloud.com, breaking the zero-egress contract and making
+    // the case's data source environment-dependent.
+    id: 'discovery-get-service-icon-offline',
+    pack: 'discovery',
+    env: { HUAWEICLOUD_ICONS_OFFLINE: '1' },
+    prompt: '用 huaweicloud_get_service_icon 找一下 ECS 服务的官方图标,告诉我图标链接。',
+    fixtures: {},
+    expect: [{ kind: 'toolCall', name: 'huaweicloud_get_service_icon', args: { service: 'ecs' }, ok: true }],
+    softExpect: [{ kind: 'agentSays', text: { any: ['logo', '图标', 'ecs'] } }],
+    budget: { timeoutMs: 240_000, attempts: 2 },
+  },
 ];

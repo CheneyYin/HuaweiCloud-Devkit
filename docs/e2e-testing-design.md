@@ -17,6 +17,8 @@ recording. Assertion surfaces:
 | hcloud argv                        | `HCLOUD_BIN` + `HCLOUD_BIN_ARGS_JSON` + `HCLOUD_FAKE_LOG` (+ `HCLOUD_FAKE_SCRIPT`, `HCLOUD_FAKE_VERSION`) | env contract (long-standing)                                |
 | HTTP (hdkitservice / IAM / hwlink) | `HDKITSERVICE_ENDPOINT`, `HW_IAM_ENDPOINT`, `HWLINK_ENDPOINT` → local `HttpFake`                          | env contract (long-standing)                                |
 | gateway sidecar                    | `OPENMCP_BIN` (+ fixture knob `FAKE_POLICY`, recording `OPENMCP_FAKE_LOG`)                                | env contract (long-standing)                                |
+| icons manifest                     | `HUAWEICLOUD_ICONS_OFFLINE=1` (forces the bundled snapshot; case-scoped `E2eCase.env`)                    | env contract (long-standing)                                |
+| npm registry (update pack)         | `HUAWEICLOUD_NPM_REGISTRY` → local `HttpFake`, honored by `queryDistTags` on both faces                   | env contract (extended — see Known boundaries)              |
 | tool-call trace                    | `HUAWEICLOUD_DEVKIT_TRACE` (see below)                                                                    | new contract, frozen                                        |
 | disclosure events                  | same trace file, recorded at the stdio transport's outbound wire face                                     | new contract, frozen                                        |
 | file artifacts                     | HOME-relative paths under the throwaway home                                                              | installer layout (pinned by cross-platform-install.test.ts) |
@@ -110,6 +112,10 @@ are never copied. Local config: gitignored `test/e2e/.env`.
   process is deliberately NOT intercepted (PATH shims would also capture the
   installer's own npm; `npm_config_registry` would hijack every session npm
   and depends on npm-internal endpoint shapes).
+- **search_marketplace: no hermetic case possible.** `INDEX_URL` is
+  hardcoded (search-market.ts) with an in-memory cache only — no env seam.
+  Covering it needs a product seam (an `HUAWEICLOUD_MARKETPLACE_INDEX`-style
+  override); until one lands, this tool has no E2E case.
 - **LLM cost/latency**: single case 1–4 min, attempts cap 2, ~15 cases per
   full run. Failures attach every recording to the JSON report for offline
   triage.

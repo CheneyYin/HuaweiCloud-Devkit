@@ -82,6 +82,41 @@ export const voucherCases: E2eCase[] = [
     softExpect: [{ kind: 'agentSays', text: { any: ['已领取', 'claimed', '领取'] } }],
     budget: { timeoutMs: 240_000, attempts: 2 },
   },
+  {
+    id: 'voucher-claim-posts',
+    pack: 'voucher',
+    prompt: '帮我领取华为云开发者代金券(如果还没领取的话),把领取结果告诉我。',
+    fixtures: {
+      home: {
+        '.config/huaweicloud/credentials.json': S1_SEED,
+      },
+      http: {
+        responses: [
+          {
+            path: '/voucher/status',
+            method: 'GET',
+            status: 200,
+            body: { claimed: false },
+          },
+          {
+            path: '/voucher/claim',
+            method: 'POST',
+            status: 200,
+            body: { claimed: true, voucherId: 'vou-e2e-002', amount: 50 },
+          },
+        ],
+      },
+    },
+    expect: [
+      // hdkitVoucherClaim swallows errors into {claimed:false,...} (still
+      // ok:true in the trace), so the POST recording is the gate and the
+      // toolCall is liveness.
+      { kind: 'http', method: 'POST', path: '/voucher/claim', times: { min: 1, max: 2 } },
+      { kind: 'toolCall', name: 'huaweicloud_voucher_claim', ok: true },
+    ],
+    softExpect: [{ kind: 'agentSays', text: { any: ['领取成功', 'claimed', 'vou-e2e-002'] } }],
+    budget: { timeoutMs: 240_000, attempts: 2 },
+  },
 ];
 
 export const sandboxCases: E2eCase[] = [

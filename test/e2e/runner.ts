@@ -352,6 +352,7 @@ async function runCase(
         home,
         driverVars: driver.prepare({ home, workdir, platform: process.platform }),
         seamVars: seamVars(home, scriptPath, kooCliVersion, httpFake, caseDef.fixtures, pathShimDir),
+        caseEnv: caseDef.env,
         relaxFixed: caseDef.fixtures.updateCheck ? ['HUAWEICLOUD_DEVKIT_SKIP_UPDATE'] : undefined,
       });
       if (caseDef.fixtures.updateCheck) {

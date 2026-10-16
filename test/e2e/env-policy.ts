@@ -76,6 +76,7 @@ export interface BuildCaseEnvInput {
   home: string;
   driverVars?: NodeJS.ProcessEnv;
   seamVars?: NodeJS.ProcessEnv;
+  caseEnv?: Record<string, string>;
   relaxFixed?: readonly RelaxableFixedKey[];
 }
 
@@ -90,6 +91,9 @@ export function buildCaseEnv(input: BuildCaseEnvInput): NodeJS.ProcessEnv {
   Object.assign(env, homeOverrides(input.home));
   if (input.driverVars) Object.assign(env, input.driverVars);
   if (input.seamVars) Object.assign(env, input.seamVars);
+  // Case env lands BEFORE the fixed posture: a case may add seams, never
+  // defeat the posture (relaxFixed is the only, whitelisted channel).
+  if (input.caseEnv) Object.assign(env, input.caseEnv);
   Object.assign(env, FIXED_ENV_OVERRIDES);
   for (const key of input.relaxFixed ?? []) delete env[key];
   return env;

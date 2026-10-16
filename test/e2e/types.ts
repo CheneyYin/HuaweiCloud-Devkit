@@ -139,6 +139,11 @@ export interface E2eCase {
   id: string;
   pack: PackId;
   prompt: string;
+  // Case-scoped env vars for the RUN env (never the install env), applied
+  // between seam vars and the fixed posture inside buildCaseEnv — so a case
+  // can add seams (e.g. HUAWEICLOUD_ICONS_OFFLINE=1) but can never defeat
+  // the fixed posture (relaxFixed is the only channel for that).
+  env?: Record<string, string>;
   // Pack posture rides the operator channel: `install --packs <ids>`.
   // The env channel (DEVKIT_PACKS) is stripped by env-policy for every
   // case, so this is the single delivery path.
