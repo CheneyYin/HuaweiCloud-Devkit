@@ -191,6 +191,16 @@ export const sandboxCases: E2eCase[] = [
       { kind: 'toolCall', name: 'huaweicloud_sandbox_credentials', args: { dev_stage_id: 'ds-e2e-002' }, ok: true },
       { kind: 'http', method: 'GET', path: '/v3/projects', times: { min: 1, max: 2 } },
       { kind: 'http', method: 'POST', path: '/credentials', times: { min: 1, max: 2 } },
+      // Validation before injection: the IAM read must precede the
+      // hdkitservice credential write on the HTTP channel.
+      {
+        kind: 'sequence',
+        channel: 'http',
+        steps: [
+          { method: 'GET', path: '/v3/projects' },
+          { method: 'POST', path: '/credentials' },
+        ],
+      },
     ],
     softExpect: [{ kind: 'agentSays', text: { any: ['注入', 'inject', 'credential', '凭证'] } }],
     budget: { timeoutMs: 300_000, attempts: 2 },

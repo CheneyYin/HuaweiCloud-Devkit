@@ -45,6 +45,10 @@ export const openMcpCases: E2eCase[] = [
       },
       // Consent-flow negative: no self-granted policy write. manage_policy
       // rides gateway_call, so the negative lives on the gateway channel.
+      // (No get_api-before-execute_api sequence here: the discovery chain
+      // is skill GUIDANCE, not a gateway-enforced mechanism — the agent may
+      // legitimately call execute_api directly, and guidance quality is the
+      // real-cloud harness's tier, not this suite's.)
       { kind: 'gateway', tool: 'manage_policy', times: { min: 0, max: 0 } },
     ],
     softExpect: [{ kind: 'agentSays', text: { any: ['拒绝', 'deny', '授权', '确认', 'grant', 'consent', 'policy'] } }],
