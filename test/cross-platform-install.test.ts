@@ -111,12 +111,12 @@ test('handles platform-specific home directory resolution', () => {
   const home = mkdtempSync(join(tmpdir(), 'cp-userprofile-'));
   const cwd = mkdtempSync(join(tmpdir(), 'cp-proj-'));
   try {
-    const isWin = process.platform === 'win32';
-    const env = {
-      ...process.env,
-      USERPROFILE: isWin ? home : join(tmpdir(), 'not-used'),
-      HOME: isWin ? join(tmpdir(), 'not-used') : home,
-    };
+    // Ride makeEnv for the ambient-override hygiene (XDG_CONFIG_HOME etc.)
+    // and keep the test's discrimination: the platform-discordant home var
+    // points elsewhere so the resolver must pick the right one.
+    const env = makeEnv(home);
+    if (process.platform === 'win32') env.HOME = join(tmpdir(), 'not-used');
+    else env.USERPROFILE = join(tmpdir(), 'not-used');
     const res = spawnSync(process.execPath, [setupCli, 'install', '--target', 'opencode'], {
       cwd,
       env,

@@ -193,7 +193,10 @@ test('MCP server returns -32700 and keeps serving after a malformed frame (#643)
     });
     client.raw('Content-Length: 5\r\n\r\n{bad!');
 
-    const deadline = Date.now() + 3000;
+    // Same budget class as request()/requestInChunks above: the server
+    // cold-boots through type stripping and under machine load a 3s poll
+    // deadline produced load-dependent flakes in full-suite runs.
+    const deadline = Date.now() + 10_000;
     let parseError;
     while (Date.now() < deadline) {
       parseError = client.frames().find((p) => p.error && p.error.code === -32700);
@@ -221,7 +224,10 @@ test('MCP server returns -32700 for a malformed newline-delimited frame (#643)',
   });
   try {
     child.stdin.write('{bad!\n');
-    const deadline = Date.now() + 3000;
+    // Same budget class as request()/requestInChunks above: the server
+    // cold-boots through type stripping and under machine load a 3s poll
+    // deadline produced load-dependent flakes in full-suite runs.
+    const deadline = Date.now() + 10_000;
     let line = '';
     while (Date.now() < deadline) {
       line = out.split('\n').find((l) => l.includes('-32700')) || '';
@@ -392,7 +398,10 @@ test('MCP server returns -32600 for valid JSON that is not a request object', as
     client.raw(frame(null));
     client.raw(frame([1, 2, 3]));
 
-    const deadline = Date.now() + 3000;
+    // Same budget class as request()/requestInChunks above: the server
+    // cold-boots through type stripping and under machine load a 3s poll
+    // deadline produced load-dependent flakes in full-suite runs.
+    const deadline = Date.now() + 10_000;
     let invalidRequest;
     while (Date.now() < deadline) {
       invalidRequest = client.frames().find((p) => p.error && p.error.code === -32600);
@@ -407,7 +416,7 @@ test('MCP server returns -32600 for valid JSON that is not a request object', as
     // not silence (the SDK would drop it and the client would hang). The
     // reply echoes the request id so the failure is correlatable.
     client.raw(frame({ jsonrpc: '2.0', id: 42 }));
-    const deadline2 = Date.now() + 3000;
+    const deadline2 = Date.now() + 10_000;
     let methodNotFound;
     while (Date.now() < deadline2) {
       methodNotFound = client.frames().find((p) => p.error && p.error.code === -32601);
@@ -443,7 +452,10 @@ test('MCP server waits for a frame header split across chunks', async () => {
     client.raw(framed.slice(0, splitAt));
     setTimeout(() => client.raw(framed.slice(splitAt)), 50);
 
-    const deadline = Date.now() + 3000;
+    // Same budget class as request()/requestInChunks above: the server
+    // cold-boots through type stripping and under machine load a 3s poll
+    // deadline produced load-dependent flakes in full-suite runs.
+    const deadline = Date.now() + 10_000;
     let response;
     while (Date.now() < deadline) {
       response = client.frames().find((p) => p.id === 77);

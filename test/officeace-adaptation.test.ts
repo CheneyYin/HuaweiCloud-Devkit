@@ -22,6 +22,11 @@ function makeEnv(home: string, officeaceConfigRoot: string): Record<string, stri
     HOMEDRIVE: home.slice(0, 2),
     HOMEPATH: home.slice(2),
     OFFICE_CLAW_CONFIG_ROOT: officeaceConfigRoot,
+    // OfficeAce install/uninstall also writes devkit-owned state keyed on
+    // HUAWEICLOUD_HOME (the #559 root marker and the uninstall delta
+    // backup) — pin it to the fake home or an ambient export redirects
+    // those writes into real state.
+    HUAWEICLOUD_HOME: home,
   };
 }
 

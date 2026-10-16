@@ -31,10 +31,12 @@ const run = (command, args, opts = {}) =>
   });
 
 function cleanEnv(extra = {}) {
-  const env = { ...process.env, ...extra };
-  // XDG_CONFIG_HOME redirects the installer's opencode config root
-  // (xdgConfigHome); CODEX_HOME keys the uninstaller's codex cache cleanup.
-  // Ambient values would push fake-HOME runs into real state.
+  // Clear ambient overrides BEFORE merging the caller's extra, so a caller
+  // can re-pin what it needs (the officeace row sets OFFICE_CLAW_CONFIG_ROOT).
+  const env = { ...process.env };
+  // The installer honors these ambient overrides (XDG-aware opencode root,
+  // CODEX_HOME cache cleanup, per-agent home dirs, devkit-owned state); an
+  // ambient value would push fake-HOME installs into real state.
   for (const key of [
     'http_proxy',
     'https_proxy',
@@ -44,10 +46,15 @@ function cleanEnv(extra = {}) {
     'ALL_PROXY',
     'XDG_CONFIG_HOME',
     'CODEX_HOME',
+    'HERMES_HOME',
+    'DSH_HOME',
+    'ATOMCODE_HOME',
+    'HUAWEICLOUD_HOME',
+    'OFFICE_CLAW_CONFIG_ROOT',
   ]) {
     delete env[key];
   }
-  return env;
+  return { ...env, ...extra };
 }
 
 const results = [];
