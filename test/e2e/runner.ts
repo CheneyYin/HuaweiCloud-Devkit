@@ -173,6 +173,11 @@ function installPathShim(home: string): string {
     mode: 0o755,
     encoding: 'utf8',
   });
+  // The win32 sibling, always written: cmd.exe resolves bare `hcloud` via
+  // PATHEXT to hcloud.cmd — without it the PATH entry is a dead file on
+  // win32 and lookups fall through to the host's real binary. On POSIX the
+  // .cmd file is inert (nothing resolves it).
+  writeFileSync(join(binDir, 'hcloud.cmd'), `@"${process.execPath}" "${fakeHcloud}" %*\r\n`, { encoding: 'utf8' });
   return binDir;
 }
 
