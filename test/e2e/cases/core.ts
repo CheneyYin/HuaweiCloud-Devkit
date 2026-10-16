@@ -104,6 +104,13 @@ export const coreCases: E2eCase[] = [
         args: { args: ['VPC', 'CreateSecurityGroup'] },
         ok: true,
       },
+      // The flagship ordering: a run without a preceding plan is exactly
+      // the regression this suite exists to catch.
+      {
+        kind: 'sequence',
+        channel: 'toolCall',
+        steps: ['huaweicloud_plan_cli_command', 'huaweicloud_run_approved_command'],
+      },
       {
         kind: 'hcloud',
         head: ['VPC', 'CreateSecurityGroup'],

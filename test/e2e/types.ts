@@ -56,7 +56,22 @@ export type Expectation =
   | ({ kind: 'http' } & HttpExpectation)
   | ({ kind: 'gateway' } & GatewayExpectation)
   | ({ kind: 'file' } & FileExpectation)
+  | ({ kind: 'sequence' } & SequenceExpectation)
   | { kind: 'agentSays'; text: AgentSaysMatcher };
+
+// Ordered-subsequence expectation within ONE recording channel (the
+// channels carry no cross-comparable timestamps, so cross-channel ordering
+// would be dishonest to assert). Steps match by the channel's natural key;
+// extra records between steps are tolerated. This is what pins flagship
+// orderings like plan → approved run, discovery → execution, and
+// IAM validation → credential injection.
+export interface SequenceExpectation {
+  channel: 'toolCall' | 'gateway' | 'http';
+  // toolCall/gateway: tool names. http: method+path records.
+  steps: SequenceStep[];
+}
+
+export type SequenceStep = string | { method?: string; path: string };
 
 // Gateway-sidecar expectation over OPENMCP_FAKE_LOG recordings: a
 // tools/call to `tool` (null tool matches non-call methods like
