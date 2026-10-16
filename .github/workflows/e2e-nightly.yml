@@ -3,8 +3,11 @@ name: e2e-nightly
 # Agent-level E2E suite (test/e2e/): a real opencode run with a real LLM
 # drives the tarball-installed devkit against the fake Huawei Cloud
 # boundary. Runs OUTSIDE the PR gate by design — cost and latency belong in
-# the nightly lane. Requires the E2E_TEST_MODEL_* secrets (a dedicated E2E
-# API key, never a personal auth file; see docs/e2e-testing-design.md).
+# the nightly lane. The ONLY required repository setting is the secret
+# E2E_TEST_MODEL_APIKEY (a dedicated E2E key, never a personal auth file);
+# provider/model/baseURL default to the committed values (mirroring
+# test/e2e/.env's non-secret model config) and stay overridable via the
+# E2E_TEST_PROVIDER_ID / E2E_TEST_PROVIDER_BASEURL / E2E_TEST_MODEL vars.
 
 on:
   schedule:
@@ -28,16 +31,12 @@ jobs:
       - name: Preflight E2E configuration
         env:
           E2E_APIKEY: ${{ secrets.E2E_TEST_MODEL_APIKEY }}
-          E2E_PROVIDER_ID: ${{ vars.E2E_TEST_PROVIDER_ID }}
-          E2E_PROVIDER_BASEURL: ${{ vars.E2E_TEST_PROVIDER_BASEURL }}
-          E2E_MODEL: ${{ vars.E2E_TEST_MODEL }}
+          E2E_PROVIDER_ID: ${{ vars.E2E_TEST_PROVIDER_ID || 'maas' }}
+          E2E_PROVIDER_BASEURL: ${{ vars.E2E_TEST_PROVIDER_BASEURL || 'https://api.modelarts-maas.com/openai/v1' }}
+          E2E_MODEL: ${{ vars.E2E_TEST_MODEL || 'glm-5.2' }}
         run: |
-          missing=0
-          for v in E2E_APIKEY E2E_PROVIDER_ID E2E_PROVIDER_BASEURL E2E_MODEL; do
-            if [ -z "${!v}" ]; then echo "missing: $v"; missing=1; fi
-          done
-          if [ "$missing" -ne 0 ]; then
-            echo "::error::E2E config incomplete — set secret E2E_TEST_MODEL_APIKEY and vars E2E_TEST_PROVIDER_ID / E2E_TEST_PROVIDER_BASEURL / E2E_TEST_MODEL"
+          if [ -z "$E2E_APIKEY" ]; then
+            echo "::error::E2E config incomplete — set secret E2E_TEST_MODEL_APIKEY (the only required setting; provider/model/baseURL default to the committed values)"
             exit 1
           fi
           echo "E2E configuration present (provider: $E2E_PROVIDER_ID, model: $E2E_MODEL)"
@@ -47,9 +46,9 @@ jobs:
         env:
           E2E_ENABLE: '1'
           E2E_APIKEY: ${{ secrets.E2E_TEST_MODEL_APIKEY }}
-          E2E_PROVIDER_ID: ${{ vars.E2E_TEST_PROVIDER_ID }}
-          E2E_PROVIDER_BASEURL: ${{ vars.E2E_TEST_PROVIDER_BASEURL }}
-          E2E_MODEL: ${{ vars.E2E_TEST_MODEL }}
+          E2E_PROVIDER_ID: ${{ vars.E2E_TEST_PROVIDER_ID || 'maas' }}
+          E2E_PROVIDER_BASEURL: ${{ vars.E2E_TEST_PROVIDER_BASEURL || 'https://api.modelarts-maas.com/openai/v1' }}
+          E2E_MODEL: ${{ vars.E2E_TEST_MODEL || 'glm-5.2' }}
         run: npm run test:e2e
       - name: Upload E2E report
         if: always()
