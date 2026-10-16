@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -403,9 +403,21 @@ async function runCase(
 // plan_cli_command, then asserts the fake recorded the version probe.
 async function selfcheck(bin: string, kooCliVersion: string): Promise<boolean> {
   const home = mkdtempSync(join(tmpdir(), `${TEMP_PREFIX}selfcheck-`));
-  const httpFake = new HttpFake({ responses: [] });
+  const httpFake = new HttpFake({
+    responses: [
+      { path: '/voucher/status', method: 'GET', status: 200, body: { claimed: true, voucherId: 'vou-selfcheck-001' } },
+    ],
+  });
   try {
     await httpFake.start();
+    // S1 vault seed: voucher_status reads credentials via hdkitRequest,
+    // which throws without them — the same precondition the live case has.
+    mkdirSync(join(home, '.config', 'huaweicloud'), { recursive: true });
+    writeFileSync(
+      join(home, '.config', 'huaweicloud', 'credentials.json'),
+      JSON.stringify({ ak: 'SELFCHECK_AK', sk: 'SELFCHECK_SK', securityToken: '', region: 'cn-north-4' }, null, 2),
+      'utf8',
+    );
     const env = buildCaseEnv({
       processEnv: process.env,
       home,
@@ -445,9 +457,47 @@ async function selfcheck(bin: string, kooCliVersion: string): Promise<boolean> {
           arguments: { args: ['VPC', 'ListSecurityGroups', '--cli-region=cn-north-4'] },
         },
       },
+      {
+        jsonrpc: '2.0',
+        id: 5,
+        method: 'tools/call',
+        params: { name: 'huaweicloud_voucher_status', arguments: {} },
+      },
     ];
-    const input = requests.map((r) => JSON.stringify(r)).join('\n') + '\n';
-    const res = spawnSync(process.execPath, [server], { input, env, encoding: 'utf8', timeout: 60_000 });
+    // Drive the server like a real client: keep stdin OPEN until the last
+    // (slow, HTTP-bound) response arrives, then close. spawnSync would end
+    // stdin with the input, and the transport's stdin-close semantics
+    // process.exit(0) before the voucher HTTP roundtrip completes.
+    const res = await new Promise<{ stdout: string; stderr: string }>((resolveRun) => {
+      const child = spawn(process.execPath, [server], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      let closed = false;
+      const timer = setTimeout(() => {
+        if (!closed) child.stdin.end();
+      }, 55_000);
+      child.stdout.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString('utf8');
+        // The last request's response is on the wire — close like a client.
+        if (!closed && stdout.includes('"id":5')) {
+          closed = true;
+          clearTimeout(timer);
+          child.stdin.end();
+        }
+      });
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString('utf8');
+      });
+      child.on('close', () => {
+        clearTimeout(timer);
+        resolveRun({ stdout, stderr });
+      });
+      child.on('error', (error) => {
+        stderr += String(error);
+        resolveRun({ stdout, stderr });
+      });
+      for (const request of requests) child.stdin.write(`${JSON.stringify(request)}\n`);
+    });
     const responses = new Map<number, unknown>();
     for (const line of String(res.stdout).split('\n')) {
       if (!line.trim().startsWith('{')) continue;
@@ -516,6 +566,27 @@ async function selfcheck(bin: string, kooCliVersion: string): Promise<boolean> {
       ok = false;
     } else {
       out(`[selfcheck] trace disclosure toolsList=${toolsListEvents[0]?.toolCount} (x${toolsListEvents.length})`);
+    }
+    // The HTTP fake leg: voucher_status over the seeded vault must answer
+    // through the scripted local endpoint (the user-hash prewarm's 404 on
+    // the same fake is expected boot noise, not a failure).
+    const voucher = toolPayload(5);
+    if (!voucher || voucher.claimed !== true) {
+      out(`[selfcheck] FAIL voucher_status did not report claimed=true: ${JSON.stringify(voucher).slice(0, 200)}`);
+      ok = false;
+    } else {
+      out('[selfcheck] voucher_status answered through the local HTTP fake');
+    }
+    const voucherHits = httpFake.recordings.filter((r) => r.method === 'GET' && r.path === '/voucher/status');
+    if (voucherHits.length === 0) {
+      out(
+        `[selfcheck] FAIL HTTP fake has no GET /voucher/status recording: ${
+          httpFake.recordings.map((r) => `${r.method} ${r.path}`).join(' | ') || '(empty)'
+        }`,
+      );
+      ok = false;
+    } else {
+      out(`[selfcheck] HTTP fake recorded GET /voucher/status (x${voucherHits.length})`);
     }
     return ok;
   } finally {
