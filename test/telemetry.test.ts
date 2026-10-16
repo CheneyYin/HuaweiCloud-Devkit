@@ -110,17 +110,37 @@ test('opencode path pattern matches payload paths under any XDG root', () => {
   const opencode = AGENTS.find((a) => a.id === 'opencode');
   assert.ok(opencode?.pathPatterns?.length, 'opencode must carry path patterns');
   const marker = opencode.pathPatterns![0]!;
-  for (const serverPath of [
+  const payloadPaths = [
     '/home/u/.config/opencode/huaweicloud-plugins/dist/mcp-server.js',
     '/home/u/xdg/opencode/huaweicloud-plugins/dist/mcp-server.js',
     '/home/u/.config/opencode/huaweicloud-plugins/src/mcp-server.mjs',
-  ]) {
+  ];
+  for (const serverPath of payloadPaths) {
     assert.ok(serverPath.includes(marker), `marker ${marker} must match ${serverPath}`);
   }
-  // No other agent's payload path may collide with the opencode marker.
+  // matchAgent is substring + first-match over AGENTS order, so the real
+  // no-collision property is non-containment: a future broad pattern (e.g.
+  // /huaweicloud-plugins/) on any agent would shadow or be shadowed by the
+  // opencode marker while passing an exact-equality check.
   for (const agent of AGENTS.filter((a) => a.id !== 'opencode')) {
     for (const pattern of agent.pathPatterns ?? []) {
-      assert.notEqual(pattern, marker, `agent ${agent.id} must not share the opencode payload-dir marker`);
+      assert.ok(
+        !pattern.includes(marker) && !marker.includes(pattern),
+        `agent ${agent.id} pattern ${pattern} must neither contain nor be contained by the opencode marker ${marker}`,
+      );
+    }
+  }
+  // And no agent listed BEFORE opencode may match an opencode payload path
+  // (first-match order would attribute the spawn to that agent instead).
+  const opencodeIdx = AGENTS.findIndex((a) => a.id === 'opencode');
+  for (const agent of AGENTS.slice(0, opencodeIdx)) {
+    for (const pattern of agent.pathPatterns ?? []) {
+      for (const serverPath of payloadPaths) {
+        assert.ok(
+          !serverPath.includes(pattern),
+          `earlier agent ${agent.id} pattern ${pattern} must not match an opencode payload path`,
+        );
+      }
     }
   }
 });

@@ -24,11 +24,14 @@ export const SUPPORTED_AGENT_TARGETS: string[] = [
 // relocates only devkit-owned state (credentials.ts); the installer writes
 // agent configs under homedir(), so detection must read the same place.
 // opencode is the exception on the config ROOT: it reads XDG_CONFIG_HOME
-// (absolute values only per the spec — relative values are ignored) with
-// ~/.config as the default. Every opencode path derivation — the write
-// side (configRoot in setup-cli.ts), the detection side below, and the
-// agent-presence probe — must share this resolver or a non-default
-// XDG_CONFIG_HOME splits them: install green, agent blind.
+// with ~/.config as the default. This resolver follows the XDG spec's
+// absolute-only rule; note the known divergence — the pinned opencode
+// (1.19.0) honors RELATIVE values against its cwd, so a non-compliant
+// relative XDG_CONFIG_HOME still splits installer (~/.config) from agent
+// (<cwd>/<relative>). Matching cwd-dependent resolution would be worse;
+// every opencode path derivation — the write side (configRoot in
+// setup-cli.ts), the detection side below, and the agent-presence probe —
+// must share this resolver regardless.
 export function xdgConfigHome(): string {
   const xdg = process.env.XDG_CONFIG_HOME;
   return xdg && isAbsolute(xdg) ? xdg : join(homedir(), '.config');

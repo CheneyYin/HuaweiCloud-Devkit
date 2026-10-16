@@ -20,10 +20,12 @@ function makeEnv(home: string): Record<string, string | undefined> {
     HOMEPATH: home.slice(2),
     HUAWEICLOUD_HOME: home,
   };
-  // The installer honors XDG_CONFIG_HOME for opencode (xdgConfigHome); an
-  // ambient value on a dev machine would redirect fake-HOME installs into
-  // the real XDG root. Per-test extra env (runCli) can still set it.
+  // The installer honors XDG_CONFIG_HOME for opencode (xdgConfigHome) and
+  // CODEX_HOME for the codex cache cleanup (uninstallCodex); ambient values
+  // on a dev machine would redirect fake-HOME installs/uninstalls into real
+  // state. Per-test extra env (runCli) can still set them.
   delete env.XDG_CONFIG_HOME;
+  delete env.CODEX_HOME;
   return env;
 }
 
@@ -110,7 +112,9 @@ test('handles platform-specific home directory resolution', () => {
       cwd,
       env,
       encoding: 'utf8',
-      timeout: 60000,
+      // Install-bearing spawn: cold-cache undici fetch needs the 240s class
+      // (see runCli above), not 60s.
+      timeout: 240000,
     });
     assert.equal(res.status, 0, res.stderr);
     assert.ok(
@@ -170,6 +174,10 @@ test('relative XDG_CONFIG_HOME values are ignored (spec: absolute only)', () => 
   const home = mkdtempSync(join(tmpdir(), 'cp-xdgrel-'));
   const cwd = mkdtempSync(join(tmpdir(), 'cp-proj-'));
   try {
+    // The installer follows the XDG spec (absolute only). Known divergence:
+    // the pinned opencode (1.19.0) honors relative values against its cwd,
+    // so this input class still splits installer from agent — accepted
+    // rather than matching cwd-dependent resolution (see xdgConfigHome).
     const res = runCli(home, cwd, ['install', '--target', 'opencode'], { XDG_CONFIG_HOME: 'relative-xdg' });
     assert.equal(res.status, 0, `stderr: ${res.stderr}`);
     assert.ok(

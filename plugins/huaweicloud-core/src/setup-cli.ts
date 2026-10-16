@@ -1438,12 +1438,17 @@ function uninstallCodex(): void {
     // `codex plugin remove` strips the version subtrees but leaves the
     // marketplace-keyed cache dir behind (live-verified on codex-cli
     // 0.162.1: only the empty shell survives the CLI's own cleanup); the
-    // registration was ours, so its cache shell is ours to remove. CODEX_HOME
-    // mirrors the CLI's own home resolution so the cleanup follows whatever
-    // root the spawned `codex plugin` commands above actually used.
-    const cacheDir = join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'plugins', 'cache', name);
-    if (removeIfExists(cacheDir)) {
-      console.log(`  Codex plugin cache cleaned: ${name}`);
+    // registration was ours, so its cache shell is ours to remove. Gated on
+    // the remove having exited 0 — if the CLI refused (or was unable) to
+    // remove the marketplace, the registration is still live and deleting
+    // its cache would break a still-registered plugin. CODEX_HOME mirrors
+    // the CLI's own home resolution so the cleanup follows whatever root
+    // the spawned `codex plugin` commands above actually used.
+    if (r2.status === 0) {
+      const cacheDir = join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'plugins', 'cache', name);
+      if (removeIfExists(cacheDir)) {
+        console.log(`  Codex plugin cache cleaned: ${name}`);
+      }
     }
   }
 }
@@ -4292,9 +4297,11 @@ function codexDesktopStatus(): void {
     try {
       const marketplace = asRecord(JSON.parse(readFileSync(mpPath, 'utf8')));
       const plugins: unknown[] = Array.isArray(marketplace.plugins) ? marketplace.plugins : [];
-      // Entry name mirrors the literal ensureCodexMarketplaceEntry writes
-      // and removeCodexMarketplaceEntry filters on.
-      const registered = plugins.some((p) => asRecord(p).name === 'huaweicloud-devkit');
+      // The canonical plugin name (getCodexPluginName) — the same value
+      // ensureCodexMarketplaceEntry writes and removeCodexMarketplaceEntry
+      // filters on (both carry the literal; this reader keeps the status
+      // check rename-safe).
+      const registered = plugins.some((p) => asRecord(p).name === getCodexPluginName());
       console.log(`  Marketplace: ${registered ? '\x1b[32mRegistered\x1b[0m' : '\x1b[31mNot registered\x1b[0m'}`);
     } catch {
       console.log(`  Marketplace: \x1b[31mInvalid\x1b[0m`);

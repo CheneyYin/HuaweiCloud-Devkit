@@ -14,7 +14,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import type { SpawnSyncReturns } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -40,10 +40,10 @@ const INSTALL_TIMEOUT_MS = 400_000;
 // included) and waits for the handshake. A cold sandbox pays ~60s of CPU on
 // the first such startup (agent + server bundle init), ~2-3s once warm —
 // measured, not guessed. 300s leaves headroom for slower machines.
-// Note: opencode scrubs the child env (only HOME/PATH/TERM/NO_COLOR-class
-// vars survive), so the kill switches below do NOT reach the agent-spawned
-// server; its update-check runs async with a 15s cap and its telemetry is
-// best-effort — both are harmless to the assertions here.
+// Note: opencode passes the FULL parent env to MCP child processes
+// (probe-verified on 1.19.0 — 40+ vars survive, no whitelist), so the kill
+// switches in sandboxEnv DO reach the agent-spawned server and are the
+// actual phone-home boundary for this test.
 const AGENT_TIMEOUT_MS = 300_000;
 
 // Env for a sandboxed agent run. HOME must point at the sandbox (the
@@ -75,17 +75,27 @@ function sandboxEnv(home: string, extra: Record<string, string | undefined> = {}
     HUAWEICLOUD_DEVKIT_SKIP_UPDATE: '1',
     // First-spawn telemetry would POST to the Huawei endpoint otherwise.
     HUAWEICLOUD_DEVKIT_TELEMETRY: 'off',
+    // The server's initialize side effect (hdkitservice user-hash) would hit
+    // the real endpoint — with ambient AK/SK exported it would be a
+    // credentialed request. Same closed-port trick as the registry redirect.
+    HDKITSERVICE_ENDPOINT: 'http://127.0.0.1:9',
   };
   // Ambient overrides on a devkit developer's machine would redirect the
-  // spawned server / installer into real global state; clear them.
+  // spawned server / installer into real global state (or send real
+  // credentials); clear them.
   for (const key of [
     'ATOMCODE_HOME',
     'DSH_HOME',
+    'HERMES_HOME',
     'HUAWEICLOUD_HOME',
+    'HUAWEICLOUD_DEVKIT_HOME',
     'OFFICE_CLAW_CONFIG_ROOT',
     'OPENCODE_CONFIG_DIR',
     'OPENCODE_CONFIG',
     'OPENCODE_TEST_HOME',
+    'HW_ACCESS_KEY',
+    'HW_SECRET_KEY',
+    'HW_SECURITY_TOKEN',
   ]) {
     delete env[key];
   }
@@ -126,7 +136,10 @@ const codexProbe = probeEnabled ? probeAgentBinary('codex') : undefined;
 function agentSkip(probe: { state: ProbeState; stderr: string } | undefined, cmd: string): string | false {
   if (platformSkip) return platformSkip;
   if (ciSkip) return ciSkip;
-  if (probe?.state === 'absent') return `${cmd} is not on PATH`;
+  // DEVKIT_REAL_AGENT_TESTS=1 is the operator's explicit demand for this
+  // layer: a missing binary must turn the run red (the in-test assert), not
+  // silently skip the whole lane green.
+  if (probe?.state === 'absent' && process.env.DEVKIT_REAL_AGENT_TESTS !== '1') return `${cmd} is not on PATH`;
   return false;
 }
 
@@ -164,27 +177,60 @@ function parseJsonOut(label: string, out: string): unknown {
 // before, assert byte-equality after — the check runs inside the test, so
 // the worst failure mode is a red test, not a manual post-run inspection.
 // Ambient XDG_CONFIG_HOME (when absolute) redirects the installer's opencode
-// root, so its real location is watched too.
-function realHomeSnapshot(): Array<[string, string | null]> {
+// root, so its real location is watched too. Besides the config files, the
+// highest-volume write surfaces are watched as recursive listings (payload
+// dir, native skills, openclaw payload, codex plugin cache) — a config-file
+// canary alone is blind to a payload-dir leak.
+function dirSnapshot(dir: string): string | null {
+  if (!existsSync(dir)) return null;
+  const entries: string[] = [];
+  const walk = (d: string, prefix: string) => {
+    for (const entry of readdirSync(d, { withFileTypes: true })) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(join(d, entry.name), rel);
+      } else {
+        entries.push(`${rel}:${statSync(join(d, entry.name)).size}`);
+      }
+    }
+  };
+  walk(dir, '');
+  return entries.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).join('\n');
+}
+
+function realHomeSnapshot(): Array<[string, 'file' | 'dir', string | null]> {
   const home = process.env.HOME;
   assert.ok(home, 'HOME must be set for the real-HOME canary');
-  const watched = [
+  const watchedFiles = [
     join(home, '.config', 'opencode', 'opencode.json'),
     join(home, '.config', 'opencode', 'opencode.jsonc'),
     join(home, '.codex', 'config.toml'),
     join(home, '.agents', 'plugins', 'marketplace.json'),
   ];
+  const watchedDirs = [
+    join(home, '.config', 'opencode', 'huaweicloud-plugins'),
+    join(home, '.config', 'opencode', 'skills'),
+    join(home, '.agents', 'huaweicloud-plugins'),
+    join(home, '.codex', 'plugins', 'cache'),
+  ];
   const ambientXdg = process.env.XDG_CONFIG_HOME;
   if (ambientXdg && isAbsolute(ambientXdg)) {
-    watched.push(join(ambientXdg, 'opencode', 'opencode.json'), join(ambientXdg, 'opencode', 'opencode.jsonc'));
+    watchedFiles.push(join(ambientXdg, 'opencode', 'opencode.json'), join(ambientXdg, 'opencode', 'opencode.jsonc'));
+    watchedDirs.push(join(ambientXdg, 'opencode', 'huaweicloud-plugins'), join(ambientXdg, 'opencode', 'skills'));
   }
-  return watched.map((p) => [p, existsSync(p) ? readFileSync(p, 'utf8') : null]);
+  const snapshot: Array<[string, 'file' | 'dir', string | null]> = watchedFiles.map((p) => [
+    p,
+    'file',
+    existsSync(p) ? readFileSync(p, 'utf8') : null,
+  ]);
+  for (const dir of watchedDirs) snapshot.push([dir, 'dir', dirSnapshot(dir)]);
+  return snapshot;
 }
 
-function assertRealHomeUnchanged(snapshot: Array<[string, string | null]>) {
-  for (const [path, before] of snapshot) {
-    const now = existsSync(path) ? readFileSync(path, 'utf8') : null;
-    assert.equal(now, before, `real HOME file changed during the test: ${path}`);
+function assertRealHomeUnchanged(snapshot: Array<[string, 'file' | 'dir', string | null]>) {
+  for (const [path, kind, before] of snapshot) {
+    const now = kind === 'file' ? (existsSync(path) ? readFileSync(path, 'utf8') : null) : dirSnapshot(path);
+    assert.equal(now, before, `real HOME location changed during the test: ${path}`);
   }
 }
 
@@ -222,6 +268,11 @@ test('real opencode: install -> agent view -> uninstall', { skip: agentSkip(open
     opencodeProbe?.state,
     'broken',
     `opencode is on PATH but --version fails — treat as broken, not absent:\n${opencodeProbe?.stderr}`,
+  );
+  assert.notEqual(
+    opencodeProbe?.state,
+    'absent',
+    'DEVKIT_REAL_AGENT_TESTS=1 demands the real opencode CLI on PATH (probe reported absent)',
   );
 
   const home = fixtureDir('hwc-real-opencode-');
@@ -327,6 +378,11 @@ test('real codex: install -> agent view -> uninstall', { skip: agentSkip(codexPr
     codexProbe?.state,
     'broken',
     `codex is on PATH but --version fails — treat as broken, not absent:\n${codexProbe?.stderr}`,
+  );
+  assert.notEqual(
+    codexProbe?.state,
+    'absent',
+    'DEVKIT_REAL_AGENT_TESTS=1 demands the real codex CLI on PATH (probe reported absent)',
   );
 
   const home = fixtureDir('hwc-real-codex-');

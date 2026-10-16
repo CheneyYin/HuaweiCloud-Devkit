@@ -33,8 +33,8 @@ const run = (command, args, opts = {}) =>
 function cleanEnv(extra = {}) {
   const env = { ...process.env, ...extra };
   // XDG_CONFIG_HOME redirects the installer's opencode config root
-  // (xdgConfigHome); an ambient value would push fake-HOME installs into
-  // the real XDG root.
+  // (xdgConfigHome); CODEX_HOME keys the uninstaller's codex cache cleanup.
+  // Ambient values would push fake-HOME runs into real state.
   for (const key of [
     'http_proxy',
     'https_proxy',
@@ -43,6 +43,7 @@ function cleanEnv(extra = {}) {
     'all_proxy',
     'ALL_PROXY',
     'XDG_CONFIG_HOME',
+    'CODEX_HOME',
   ]) {
     delete env[key];
   }
@@ -152,11 +153,12 @@ for (const target of SUPPORTED_AGENT_TARGETS) {
       // owner-missing throw; on Linux it could never pass.)
       const documented = /OfficeAce database not found/.test(install.stdout);
       const payloadLanded = existsSync(join(home, '.office-claw', 'huaweicloud-plugins', 'dist', 'mcp-server.js'));
+      const ok = install.status === 0 && documented && payloadLanded;
       record(
         target,
         'install degrades gracefully with the documented OfficeAce hint',
-        install.status === 0 && documented && payloadLanded,
-        'no real OfficeAce on this host',
+        ok,
+        ok ? 'no real OfficeAce on this host' : `exit=${install.status}, hint=${documented}, payload=${payloadLanded}`,
       );
     } else {
       record(target, 'install exits 0', install.status === 0, firstErrorLine(install));

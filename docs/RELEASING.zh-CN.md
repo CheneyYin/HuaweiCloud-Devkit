@@ -199,14 +199,18 @@ feat/fix 提交 → PR → 合并到 main
 （自研流程里 PR 标题只是装饰——被提升的文件才是版本的唯一依据；
 release-please 的"改标题"快捷方式在这里不适用。）
 
-多类 commit 混在时（fix + feat + feat!），提案取最高优先级
-（feat! > feat > fix）；如果团队判断实际影响低于提案，改发布 PR 的版本
-提升降级即可。
+**提案规则（实际实现）：** `scripts/bump-version.mjs` 默认 patch 升级，只有显式
+覆盖才偏离——commit body 里的 `Release-As: <version>` trailer，或仓库根目录的
+`.version-override` 文件。（原 release-please 设计的 conventional-commit
+feat!/feat/fix 优先级**并未**实现。）团队想要不同版本时，加覆盖或改发布 PR 的
+版本提升——被提升的文件才是版本的唯一依据。
 
 ### 阶段 2 —— `next` 频道（预发布）
 
-- 维护一条 `next` 分支；release-please 在该分支运行，自动产出
-  `X.Y.Z-next.N` 的发布 PR；合并后只打 tag，不发布。
+- `next` 预发布线挂在 `dev` 分支上：Release 工作流的发布 PR 步骤在 dev push
+  时会跳过（只打 tag），所以 `X.Y.Z-next.N` 的发布 PR 来自在 `dev` 上手动
+  dispatch 该工作流——`scripts/bump-version.mjs` 的 dev 分支逻辑会从最新
+  stable tag 计算出 next-N 计数器。合并后只打 tag，不发布。
 - 预发布同样走手动 Publish：从 `vX.Y.Z-next.N` tag 触发，`dist-tag=next`。
 - `next` 线与即将到来的稳定版保持挂钩：`1.1.0` 发布后，`next` 重置并指向
   下一个版本。

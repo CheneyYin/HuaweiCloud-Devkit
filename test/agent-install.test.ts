@@ -33,8 +33,16 @@ function makeEnv(home: string, extra: Record<string, string | undefined> = {}) {
     HERMES_HOME: join(home, '.hermes'),
   };
   // Clear agent home overrides so installs land in the temp home, not the real one.
-  // XDG_CONFIG_HOME redirects the opencode config root (xdgConfigHome).
-  for (const key of ['ATOMCODE_HOME', 'DSH_HOME', 'HUAWEICLOUD_HOME', 'OFFICE_CLAW_CONFIG_ROOT', 'XDG_CONFIG_HOME']) {
+  // XDG_CONFIG_HOME redirects the opencode config root (xdgConfigHome);
+  // CODEX_HOME keys the uninstaller's marketplace-cache cleanup (uninstallCodex).
+  for (const key of [
+    'ATOMCODE_HOME',
+    'DSH_HOME',
+    'HUAWEICLOUD_HOME',
+    'OFFICE_CLAW_CONFIG_ROOT',
+    'XDG_CONFIG_HOME',
+    'CODEX_HOME',
+  ]) {
     delete env[key];
   }
   // OfficeAce detection probes the real Windows registry / Program Files, which
@@ -1138,7 +1146,11 @@ function runAutoPty(
     env: makeEnv(home, extraEnv),
     input,
     encoding: 'utf8',
-    timeout: 90000,
+    // PTY installs are install-bearing: installRuntimeDeps fetches undici
+    // from a cold fake-HOME npm cache (the 79s bad-day measurement), and the
+    // multi-select PTY tests install several targets — same 240s class as
+    // run()/runAuto().
+    timeout: 240000,
   });
 }
 
@@ -1157,7 +1169,7 @@ function runAutoPtyStaged(
     cwd,
     env,
     encoding: 'utf8',
-    timeout: 150000,
+    timeout: 240000,
   });
 }
 

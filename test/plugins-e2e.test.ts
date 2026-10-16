@@ -17,9 +17,11 @@ function makeEnv(home: string, _cwd: string): NodeJS.ProcessEnv {
     HOMEDRIVE: home.slice(0, 2),
     HOMEPATH: home.slice(2),
   };
-  // XDG_CONFIG_HOME redirects the opencode config root (xdgConfigHome); an
-  // ambient value would leak installs into the real XDG root.
+  // XDG_CONFIG_HOME redirects the opencode config root (xdgConfigHome);
+  // CODEX_HOME keys the uninstaller's codex cache cleanup. Ambient values
+  // would leak installs into real state.
   delete env.XDG_CONFIG_HOME;
+  delete env.CODEX_HOME;
   return env;
 }
 

@@ -38,8 +38,16 @@ function makeEnv(home: string) {
     HUAWEICLOUD_NPM_REGISTRY: 'http://127.0.0.1:9',
   };
   // Clear agent home overrides so installs land in the temp home, not the real one.
-  // XDG_CONFIG_HOME redirects the opencode config root (xdgConfigHome).
-  for (const key of ['ATOMCODE_HOME', 'DSH_HOME', 'HUAWEICLOUD_HOME', 'OFFICE_CLAW_CONFIG_ROOT', 'XDG_CONFIG_HOME']) {
+  // XDG_CONFIG_HOME redirects the opencode config root (xdgConfigHome);
+  // CODEX_HOME keys the uninstaller's codex cache cleanup.
+  for (const key of [
+    'ATOMCODE_HOME',
+    'DSH_HOME',
+    'HUAWEICLOUD_HOME',
+    'OFFICE_CLAW_CONFIG_ROOT',
+    'XDG_CONFIG_HOME',
+    'CODEX_HOME',
+  ]) {
     delete env[key];
   }
   return env;

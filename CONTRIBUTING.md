@@ -100,7 +100,7 @@ Do not bypass, disable, or relax these checks. If a check fails, fix the underly
 
 To request a release, use the two live workflows:
 
-- **Release** (`release.yml`, runs on push to `main`/`dev`): tags `v<version>` and opens a release PR that bumps every versioned manifest plus the changelog (`scripts/bump-version.mjs` proposes, `scripts/create-release-pr.mjs` writes).
+- **Release** (`release.yml`, on push to `main` — dev pushes only tag): tags `v<version>` and opens a release PR that bumps every versioned manifest plus the changelog (`scripts/bump-version.mjs` proposes, `scripts/create-release-pr.mjs` writes).
 - **Publish npm** (`npm-publish.yml`, manual dispatch from a `v*` tag): the only publish path — re-runs `npm test`, `npm run validate`, and `scripts/pack-verify.mjs`, then publishes through the `npm-publish` environment approval (`latest` for stable versions, `next` for prereleases).
 
 ## Release Process

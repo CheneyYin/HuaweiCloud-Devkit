@@ -220,14 +220,21 @@ exactly that version. (With the home-grown flow the PR title is decorative —
 the bumped files are the version of record; the release-please
 "retitle the PR" shortcut does not apply.)
 
-When fix + feat + feat! commits are mixed, the proposal takes the highest
-priority (feat! > feat > fix); if the team judges the real impact lower than
-the proposal, edit the release PR's bumps to downgrade.
+**The proposal rule as implemented:** `scripts/bump-version.mjs` patch-bumps
+by default and only deviates on an explicit override — a `Release-As:
+<version>` trailer in a commit body, or a `.version-override` file at the
+repo root. (The conventional-commit feat!/feat/fix priority of the original
+release-please design is **not** implemented.) If the team wants a different
+version, add the override or edit the release PR's bumps — the bumped files
+are the version of record.
 
 ### Phase 2 — The `next` channel (prereleases)
 
-- Maintain a `next` branch; the Release workflow runs there, producing
-  `X.Y.Z-next.N` release PRs; merging only tags, never publishes.
+- Maintain the `next` prerelease line on the `dev` branch: the Release
+  workflow's release-PR step is skipped on dev pushes (tag-only), so
+  `X.Y.Z-next.N` release PRs come from a manual dispatch of the workflow on
+  `dev`, where `scripts/bump-version.mjs`'s dev arm computes the next-N
+  counter from the latest stable tag. Merging only tags, never publishes.
 - Prereleases use the same manual Publish: dispatch from the
   `vX.Y.Z-next.N` tag with `dist-tag=next`.
 - The `next` line stays tied to the upcoming stable: after `1.1.0` ships,
