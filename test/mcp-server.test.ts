@@ -44,6 +44,18 @@ function createClient(server = serverPath) {
   const child = spawn(process.execPath, [server], {
     cwd: root,
     stdio: ['pipe', 'pipe', 'pipe'],
+    // Hermetic boot: without these, every spawned server's initialize
+    // handshake awaits a REAL hdkitGenerateUserHash fetch (3s race against
+    // devkit.huaweicloud.com) and fires telemetry POSTs — a real-network
+    // latency spike under full-suite load delayed initialize past the
+    // split-frame test's 2s deadline (the 2026-10-16 flake). Port 1 on
+    // localhost refuses in milliseconds; the hash prewarm is best-effort.
+    env: {
+      ...process.env,
+      HDKITSERVICE_ENDPOINT: 'http://127.0.0.1:1/',
+      HUAWEICLOUD_DEVKIT_TELEMETRY: 'off',
+      HUAWEICLOUD_DEVKIT_SKIP_UPDATE: '1',
+    },
   });
   let buffer = Buffer.alloc(0);
   const pending = new Map<number | string | null, (payload: JsonRpcResponse) => void>();
@@ -103,7 +115,9 @@ function createClient(server = serverPath) {
       child.stdin.write(first);
       setTimeout(() => child.stdin.write(second), 50);
       return new Promise<JsonRpcResponse>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error(`Timed out waiting for split ${method}`)), 2000);
+        // Same cold-boot margin as request() above: 2s produced
+        // load-dependent initialize timeouts on the split path too.
+        const timer = setTimeout(() => reject(new Error(`Timed out waiting for split ${method}`)), 10_000);
         pending.set(id, (message) => {
           clearTimeout(timer);
           pending.delete(id);

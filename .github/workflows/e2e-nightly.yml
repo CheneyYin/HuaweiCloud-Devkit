@@ -1,0 +1,44 @@
+name: e2e-nightly
+
+# Agent-level E2E suite (test/e2e/): a real opencode run with a real LLM
+# drives the tarball-installed devkit against the fake Huawei Cloud
+# boundary. Runs OUTSIDE the PR gate by design — cost and latency belong in
+# the nightly lane. Requires the E2E_TEST_MODEL_* secrets (a dedicated E2E
+# API key, never a personal auth file; see docs/e2e-testing-design.md).
+
+on:
+  schedule:
+    - cron: '0 19 * * *' # 03:00 Asia/Shanghai
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Install opencode
+        run: npm install -g opencode-ai@latest
+      - name: Run agent-level E2E suite
+        env:
+          E2E_ENABLE: '1'
+          E2E_APIKEY: ${{ secrets.E2E_TEST_MODEL_APIKEY }}
+          E2E_PROVIDER_ID: ${{ vars.E2E_TEST_PROVIDER_ID }}
+          E2E_PROVIDER_BASEURL: ${{ vars.E2E_TEST_PROVIDER_BASEURL }}
+          E2E_MODEL: ${{ vars.E2E_TEST_MODEL }}
+        run: npm run test:e2e
+      - name: Upload E2E report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report
+          path: .e2e-results/
+          retention-days: 30
