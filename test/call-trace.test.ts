@@ -94,6 +94,22 @@ test('api_key/apiKey are redacted (supplemental denylist beyond redactSecrets)',
   assert.equal(redacted.securityToken, '<redacted>');
 });
 
+test('secret_set value payloads are redacted (the trace seam is a superset of the vault face)', () => {
+  // Born from a rebase: v2's trace seam wraps every dispatch while the
+  // secrets pack's channel=value carries the plaintext under `value` —
+  // neither parent could have seen the interaction. `value` is no other
+  // tool's arg name, so the denylist entry is collision-free.
+  const redacted = redactForTrace({
+    ref: 'secret://user/hw-sk',
+    channel: 'value',
+    value: 'PLAINTEXT_SECRET_VALUE',
+    note: 'safe metadata',
+  }) as Record<string, unknown>;
+  assert.equal(redacted.value, '<redacted>');
+  assert.equal(redacted.ref, 'secret://user/hw-sk');
+  assert.equal(redacted.note, 'safe metadata');
+});
+
 test('disclosure records pin event and toolCount', () => {
   withTracePath((path) => {
     recordDisclosure('toolsList', 46);

@@ -30,6 +30,12 @@ export interface DevkitServerOptions {
   // stateless remote leaves this off: it builds a fresh server per request
   // and must never hold cross-request mutable pack state.
   runtimePacks?: boolean;
+  // The stateless remote is unauthenticated HTTP: vault mutations (set /
+  // rotate / delete against the user's local secret store) must never be
+  // reachable there, so the remote surface withholds the secrets pack the
+  // same way it withholds packs_configure. stdio and test constructions
+  // omit it.
+  remoteSurface?: boolean;
 }
 
 export function _decorateResult(sessionId: string | undefined | null, name: string, result: unknown): unknown {
@@ -115,7 +121,11 @@ export function normalizeToolCallParams(message: JSONRPCMessage): JSONRPCMessage
   return message;
 }
 
-export function createDevkitMcpServer({ sessionId, runtimePacks = false }: DevkitServerOptions = {}): McpServer {
+export function createDevkitMcpServer({
+  sessionId,
+  runtimePacks = false,
+  remoteSurface = false,
+}: DevkitServerOptions = {}): McpServer {
   assertConstructedSchemas();
   // Refuse to start on a missing/partial skills tree: list_packs is
   // registry-driven and would otherwise advertise skills retrieve_skill
@@ -133,9 +143,29 @@ export function createDevkitMcpServer({ sessionId, runtimePacks = false }: Devki
 
   // One wanted-set derivation for boot and re-sync: enablement decides pack
   // ownership, runtimePacks decides the session-toggle tool itself, so a
-  // server that never exposed the toggle can never grow it mid-flight.
+  // server that never exposed the toggle can never grow it mid-flight. The
+  // remoteSurface flag withholds every tool that writes the user's LOCAL
+  // credential state on the unauthenticated remote: the vault mutations
+  // (secrets pack), the auth mutation family (auth_init sets module-global
+  // runtime credentials — cross-request state on a stateless face; auth_sync
+  // / auth_switch persist / auth_confirm decrypt S1 vault refs and write
+  // plaintext into ~/.obsutilconfig and the KooCLI profile), and the OBS
+  // config fan-out. Ref-consuming sandbox calls remain callable there
+  // (values go to the sandbox service, not the caller); that read-seam
+  // residual is accepted, loopback-bound, and documented.
+  const REMOTE_WITHHELD_LOCAL_WRITERS = new Set([
+    'huaweicloud_secret_set',
+    'huaweicloud_secret_delete',
+    'huaweicloud_auth_sync',
+    'huaweicloud_auth_init',
+    'huaweicloud_auth_switch',
+    'huaweicloud_auth_confirm',
+    'huaweicloud_setup_obs_config',
+  ]);
   const isWanted = (tool: ToolDefinition, enabled: ReadonlySet<string>): boolean =>
-    enabled.has(PACK_OF[tool.name]) && (runtimePacks || tool.name !== 'huaweicloud_packs_configure');
+    enabled.has(PACK_OF[tool.name]) &&
+    (runtimePacks || tool.name !== 'huaweicloud_packs_configure') &&
+    (!remoteSurface || (PACK_OF[tool.name] !== 'secrets' && !REMOTE_WITHHELD_LOCAL_WRITERS.has(tool.name)));
 
   const registerOne = (tool: ToolDefinition): void => {
     registered.set(

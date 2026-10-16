@@ -51,9 +51,11 @@ export type TraceRecord = ToolCallTraceRecord | DisclosureTraceRecord;
 
 // redactSecrets covers ak/sk/securityToken/token, but the ToolArgs surface
 // also carries long-lived keys under api_key / apiKey (sandbox_credentials,
-// gateway_call toolArgs). Trace redaction must be a superset of the
-// product's, so these get their own pass here.
-const SUPPLEMENTAL_SECRET_KEYS = new Set(['api_key', 'apikey']);
+// gateway_call toolArgs) and the secrets pack's set tool carries the
+// plaintext itself under value (channel=value) — no other tool schema uses
+// that arg name, so the denylist entry is collision-free. Trace redaction
+// must be a superset of the product's, so these get their own pass here.
+const SUPPLEMENTAL_SECRET_KEYS = new Set(['api_key', 'apikey', 'value']);
 
 function redactSupplemental(value: unknown): unknown {
   if (Array.isArray(value)) return value.map((item) => redactSupplemental(item));

@@ -1250,7 +1250,7 @@ test('dep status: a failed codex plugin probe widens the union (fail-safe)', { s
   const stubPath = `${stubDir}${delimiter}/usr/bin${delimiter}/bin`;
   const res = runSetupCli(['dep', 'status'], home, { PATH: stubPath });
   assert.equal(res.status, 0, res.stderr);
-  assert.match(res.stdout, /Dependency status \(effective packs: 9\)/);
+  assert.match(res.stdout, /Dependency status \(effective packs: 10\)/);
   // Doctor names the codex contribution: a widened union with no explaining
   // line reads as a phantom.
   const doc = runSetupCli(['doctor'], home, { PATH: stubPath, HUAWEICLOUD_HOME: home });

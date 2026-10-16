@@ -28,6 +28,7 @@ import { DISCOVERY_TOOLS } from '../plugins/huaweicloud-core/src/packs/discovery
 import { SANDBOX_TOOLS } from '../plugins/huaweicloud-core/src/packs/sandbox/tools.ts';
 import { HUAWEICLOUD_OPEN_MCP_TOOLS } from '../plugins/huaweicloud-core/src/packs/huaweicloud-open-mcp/tools.ts';
 import { HUAWEICLOUD_CLI_TOOLS } from '../plugins/huaweicloud-core/src/packs/huaweicloud-cli/tools.ts';
+import { SECRETS_TOOLS } from '../plugins/huaweicloud-core/src/packs/secrets/tools.ts';
 import { checkPackBoundaries } from '../scripts/lib/pack-boundaries.mjs';
 import { listSkillDirs } from '../plugins/huaweicloud-core/src/lib/skill-tree.ts';
 import { fixtureDir } from './fixture-dir.ts';
@@ -1023,10 +1024,19 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
     .filter((name) => name.endsWith('.ts'))
     .sort((a, b) => a.localeCompare(b));
   assert.ok(depModules.length >= 5, `expected the dep module family, found: ${depModules.join(', ')}`);
+  // Same walk for the secret vault: every .ts file under
+  // src/lib/secret-vault/ joins the zod-free guard automatically.
+  const vaultModules = (readdirSync(join(pluginRoot, 'src', 'lib', 'secret-vault'), { recursive: true }) as string[])
+    .filter((name) => name.endsWith('.ts'))
+    .sort((a, b) => a.localeCompare(b));
+  assert.ok(vaultModules.length >= 3, `expected the secret-vault module family, found: ${vaultModules.join(', ')}`);
   // These compile into the unbundled dist/setup-cli.js graph, where only
   // undici exists at runtime: no zod, no SDK, ever.
   const guarded = [
     ...depModules.map((name) => [`src/dep/${name}`, readSource(join('src', 'dep', name))] as const),
+    ...vaultModules.map(
+      (name) => [`src/lib/secret-vault/${name}`, readSource(join('src', 'lib', 'secret-vault', name))] as const,
+    ),
     ['src/codearts-sandbox.ts', codeartsSandbox] as const,
     ['src/lib/dep-resolve.ts', depResolve] as const,
   ];
@@ -1364,11 +1374,12 @@ test('update pack registers version-update tools; registry carries the central d
   );
 });
 
-test('seven packs register their tools; the central map dispatches them', () => {
+test('eight packs register their tools; the central map dispatches them', () => {
   // Same contract as the update pack, asserted for the packs materialized
   // after P4: sandbox (11), auth (5), obs (2), voucher (2), discovery (3),
-  // huaweicloud-open-mcp (3), huaweicloud-cli (7). Their handlers reach
-  // callTool only through the PACK_TOOL_HANDLERS merge in packs/registry.ts.
+  // huaweicloud-open-mcp (3), huaweicloud-cli (7), secrets (3). Their
+  // handlers reach callTool only through the PACK_TOOL_HANDLERS merge in
+  // packs/registry.ts.
   const packs = [
     { id: 'sandbox', tools: SANDBOX_TOOLS, count: 11 },
     { id: 'auth', tools: AUTH_TOOLS, count: 5 },
@@ -1377,6 +1388,7 @@ test('seven packs register their tools; the central map dispatches them', () => 
     { id: 'discovery', tools: DISCOVERY_TOOLS, count: 3 },
     { id: 'huaweicloud-open-mcp', tools: HUAWEICLOUD_OPEN_MCP_TOOLS, count: 3 },
     { id: 'huaweicloud-cli', tools: HUAWEICLOUD_CLI_TOOLS, count: 7 },
+    { id: 'secrets', tools: SECRETS_TOOLS, count: 3 },
   ];
   const tools = readSource(join('src', 'tools.ts'));
   const registry = readSource(join('src', 'packs', 'registry.ts'));
@@ -1957,4 +1969,68 @@ test('package-lock.json fetch origins are registry.npmjs.org only', () => {
         're-resolve with `npm install --package-lock-only --registry=https://registry.npmjs.org/ <pkg>` and commit',
     );
   }
+});
+
+test('the safety skill documents the secret vault and its reference is not a dead end', () => {
+  const skill = readSource(join('src', 'packs', 'core', 'skills', 'huaweicloud-safety', 'SKILL.md'));
+  const reference = readSource(
+    join('src', 'packs', 'core', 'skills', 'huaweicloud-safety', 'references', 'secrets.md'),
+  );
+  // SKILL.md routes to the reference; the reference actually covers the
+  // ref model, the agent-side exec path, the deny on secret get, and the
+  // honest security boundary (cross-skill references must not dead-end).
+  assert.match(skill, /references\/secrets\.md/);
+  assert.match(reference, /secret:\/\/<scope>\/<name>/);
+  assert.match(reference, /secret exec --env/);
+  assert.match(reference, /secret get/);
+  assert.match(reference, /NOT defend/);
+});
+
+test('auth reconcile propagates through syncAuth (the seam-tested fan-out)', () => {
+  // cmdAuthReconcile once hand-rolled the S1→S2/S3 propagation with a raw
+  // readGlobalCredentials() and wrote literal secret:// refs into
+  // ~/.obsutilconfig and the KooCLI profile. Delegation to syncAuth is the
+  // structural fix; this guard pins it so the propagation cannot be
+  // re-hand-rolled off the seam.
+  const setup = readSource(join('src', 'setup-cli.ts'));
+  const reconcileBody = setup.slice(
+    setup.indexOf('async function cmdAuthReconcile'),
+    setup.indexOf('async function cmdAuthSync'),
+  );
+  assert.match(reconcileBody, /syncAuth\(/);
+  assert.doesNotMatch(reconcileBody, /writeObsConfig\(/, 'reconcile must not hand-roll the OBS fan-out');
+  assert.doesNotMatch(reconcileBody, /runHcloudConfigure\(/, 'reconcile must not hand-roll the KooCLI fan-out');
+});
+
+test('no conflict-marker residue survives in tracked text files (prettier-laundered forms included)', () => {
+  // A rebase resolution once left a `>>>>>>> <hash>` marker in docs/CHANGELOG.md;
+  // the subsequent format pass rewrote it into a 7-deep nested blockquote
+  // ("> > > > > > > <hash>"), so markdownlint, format:check, and every bare
+  // `grep '<<<<<<<'` sweep went blind on it. This guard scans all tracked
+  // text files for BOTH shapes: raw git markers and the formatter-normalized
+  // blockquote spelling (stacked quote markers followed by a commit-hash-
+  // shaped token — legitimate prose never stacks 3+ nested quotes).
+  const tracked = spawnSync('git', ['ls-files'], { cwd: root, encoding: 'utf8' })
+    .stdout!.split('\n')
+    .filter(Boolean)
+    .filter((f) => /\.(ts|mjs|cjs|js|json|md|py|yml|yaml|sh|txt)$/.test(f));
+  const rawMarker = /^(<{7}|={7}|>{7})( |$)/;
+  const launderedMarker = /^(?:>\s?){3,}[0-9a-f]{7,}(\s|$)/;
+  const offenders: string[] = [];
+  for (const file of tracked) {
+    const path = join(root, file);
+    let text: string;
+    try {
+      text = readFileSync(path, 'utf8');
+    } catch {
+      continue;
+    }
+    for (const line of text.split('\n')) {
+      if (rawMarker.test(line) || launderedMarker.test(line)) {
+        offenders.push(`${file}: ${line.slice(0, 60)}`);
+        break;
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], 'conflict-marker residue found');
 });

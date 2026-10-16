@@ -60,6 +60,7 @@ export const PACK_IDS = [
   'update',
   'discovery',
   'huaweicloud-open-mcp',
+  'secrets',
 ] as const;
 export type PackId = (typeof PACK_IDS)[number];
 

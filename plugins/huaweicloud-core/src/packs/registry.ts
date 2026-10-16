@@ -8,6 +8,7 @@ import { voucherPack } from './voucher/pack.ts';
 import { discoveryPack } from './discovery/pack.ts';
 import { huaweicloudCliPack } from './huaweicloud-cli/pack.ts';
 import { huaweicloudOpenMcpPack } from './huaweicloud-open-mcp/pack.ts';
+import { secretsPack } from './secrets/pack.ts';
 import { UPDATE_TOOL_HANDLERS } from './update/tools.ts';
 import { SANDBOX_TOOL_HANDLERS } from './sandbox/tools.ts';
 import { AUTH_TOOL_HANDLERS } from './auth/tools.ts';
@@ -16,6 +17,7 @@ import { VOUCHER_TOOL_HANDLERS } from './voucher/tools.ts';
 import { DISCOVERY_TOOL_HANDLERS } from './discovery/tools.ts';
 import { HUAWEICLOUD_OPEN_MCP_TOOL_HANDLERS } from './huaweicloud-open-mcp/tools.ts';
 import { HUAWEICLOUD_CLI_TOOL_HANDLERS } from './huaweicloud-cli/tools.ts';
+import { SECRETS_TOOL_HANDLERS } from './secrets/tools.ts';
 
 // PackId and the Pack interface live in src/lib/pack-types.ts alongside
 // PackToolDefinition, so packs and the registry share one vocabulary module.
@@ -71,6 +73,9 @@ export const PACK_OF = {
   huaweicloud_gateway_list_tools: 'huaweicloud-open-mcp',
   huaweicloud_gateway_call: 'huaweicloud-open-mcp',
   huaweicloud_gateway_restart: 'huaweicloud-open-mcp',
+  huaweicloud_secret_set: 'secrets',
+  huaweicloud_secret_list: 'secrets',
+  huaweicloud_secret_delete: 'secrets',
 } as const satisfies Record<ToolName, PackId>;
 
 // The pack-owned tool names: every PACK_OF key whose owner is not core.
@@ -83,8 +88,9 @@ type NonCoreToolNames = {
 }[keyof typeof PACK_OF];
 export type PackToolName = NonCoreToolNames;
 
-// Central pack dispatch table: the eight per-pack handler maps merged once
-// (DISCOVERY, OBS, AUTH, SANDBOX, VOUCHER, UPDATE, OPENAPI, HUAWEICLOUD_CLI).
+// Central pack dispatch table: the nine per-pack handler maps merged once
+// (DISCOVERY, OBS, AUTH, SANDBOX, VOUCHER, UPDATE, OPENAPI, HUAWEICLOUD_CLI,
+// SECRETS).
 // The satisfies check closes the loop at compile time — a pack tool that
 // exists in PACK_OF but has no merged handler entry (missing from a pack's
 // X_TOOL_HANDLERS, or a whole pack's spread forgotten here) fails the build
@@ -99,6 +105,7 @@ export const PACK_TOOL_HANDLERS = {
   ...UPDATE_TOOL_HANDLERS,
   ...HUAWEICLOUD_OPEN_MCP_TOOL_HANDLERS,
   ...HUAWEICLOUD_CLI_TOOL_HANDLERS,
+  ...SECRETS_TOOL_HANDLERS,
 } satisfies Record<PackToolName, PackToolDefinition['handler']>;
 
 // Runtime guard over the same table: true exactly for the PackToolName
@@ -145,4 +152,5 @@ export const PACKS: readonly Pack[] = [
   updatePack,
   discoveryPack,
   huaweicloudOpenMcpPack,
+  secretsPack,
 ];

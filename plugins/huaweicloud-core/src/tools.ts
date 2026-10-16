@@ -48,6 +48,7 @@ import { SANDBOX_TOOLS } from './packs/sandbox/tools.ts';
 import { UPDATE_TOOLS } from './packs/update/tools.ts';
 import { HUAWEICLOUD_OPEN_MCP_TOOLS } from './packs/huaweicloud-open-mcp/tools.ts';
 import { HUAWEICLOUD_CLI_TOOLS } from './packs/huaweicloud-cli/tools.ts';
+import { SECRETS_TOOLS } from './packs/secrets/tools.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -114,6 +115,7 @@ for (const tools of [
   UPDATE_TOOLS,
   HUAWEICLOUD_OPEN_MCP_TOOLS,
   HUAWEICLOUD_CLI_TOOLS,
+  SECRETS_TOOLS,
 ]) {
   for (const tool of tools) packToolDescriptions.set(tool.name, tool.description);
 }
@@ -325,6 +327,18 @@ const TOOL_DEFINITIONS_LITERALS = [
     name: 'huaweicloud_gateway_restart',
     description: packDescription('huaweicloud_gateway_restart'),
   },
+  {
+    name: 'huaweicloud_secret_set',
+    description: packDescription('huaweicloud_secret_set'),
+  },
+  {
+    name: 'huaweicloud_secret_list',
+    description: packDescription('huaweicloud_secret_list'),
+  },
+  {
+    name: 'huaweicloud_secret_delete',
+    description: packDescription('huaweicloud_secret_delete'),
+  },
 ] as const;
 
 export type ToolName = (typeof TOOL_DEFINITIONS_LITERALS)[number]['name'];
@@ -414,6 +428,13 @@ export type ToolArgs = {
   version?: string;
   indexDocument?: string;
   errorDocument?: string;
+  ref?: string;
+  channel?: string;
+  value?: string;
+  file?: string;
+  envVar?: string;
+  note?: string;
+  scope?: string;
 };
 
 interface SandboxGitConfig {
@@ -464,6 +485,11 @@ function toolInvokeValue(name: ToolName, args: ToolArgs): string {
     if (parts[0] === 'hcloud' && parts[1]) return `hcloud ${parts.slice(1, 3).join(' ')}`;
     return parts.slice(0, 2).join(' ');
   }
+  // The auditable fact for vault mutations is the ref (and scope), never the
+  // value or any channel payload.
+  if (name === 'huaweicloud_secret_set' && args.ref) return args.ref;
+  if (name === 'huaweicloud_secret_list' && args.scope) return args.scope;
+  if (name === 'huaweicloud_secret_delete' && args.ref) return args.ref;
   return '1';
 }
 

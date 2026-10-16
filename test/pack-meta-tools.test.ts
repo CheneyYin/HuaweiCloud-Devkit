@@ -19,6 +19,7 @@ const PACK_IDS: readonly PackId[] = [
   'update',
   'discovery',
   'huaweicloud-open-mcp',
+  'secrets',
 ];
 
 interface ListPacksPayload {
@@ -59,10 +60,10 @@ interface ClientToolResult {
   isError?: boolean;
 }
 
-test('huaweicloud_list_packs returns all 9 packs, sandbox carries exactly 11 tool names', async () => {
+test('huaweicloud_list_packs returns all 10 packs, sandbox carries exactly 11 tool names', async () => {
   const result = (await callTool('huaweicloud_list_packs', {})) as ListPacksPayload;
   assert.equal(result.ok, true);
-  assert.equal(result.count, 9);
+  assert.equal(result.count, 10);
   assert.deepEqual(
     result.packs.map((pack) => pack.id),
     PACK_IDS,
@@ -284,7 +285,7 @@ test('pack_info schema output matches the tools/list rendering after stripping i
         compared++;
       }
     }
-    assert.equal(compared, 46, 'every registered tool must be compared');
+    assert.equal(compared, 49, 'every registered tool must be compared');
   } finally {
     await client.close();
     await server.close();

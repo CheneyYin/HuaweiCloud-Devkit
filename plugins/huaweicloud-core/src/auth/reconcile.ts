@@ -8,7 +8,7 @@ import {
   hasRuntimeCredentials,
   isPlaceholder,
   obsConfigPath,
-  readGlobalCredentials,
+  readGlobalCredentialsResolved,
   readLastSync,
   resolveCredentialsWithRuntime,
 } from './credentials.ts';
@@ -63,6 +63,8 @@ export interface ScanState {
   kooCliCurrent: string | null;
   envIsPlaceholder: boolean;
   s2Encrypted: boolean;
+  /** Non-null when S1 holds a secret:// ref the vault cannot resolve. */
+  s1RefError: string | null;
   inconsistencies: Inconsistency[];
   hasRuntime: boolean;
   runtimeFingerprint: string | null;
@@ -178,7 +180,17 @@ function s2CurrentMatchesLastDevkitSync(
 }
 
 export function scanState(): ScanState {
-  const s1 = asRecord(readGlobalCredentials());
+  // S1 refs resolve through the shared seam so fingerprints compare plaintext
+  // against plaintext (S2/S3). An unresolvable ref must not crash status
+  // reporting: it surfaces as s1RefError and suppresses the drift checks
+  // (their fingerprints would be meaningless against ref strings).
+  let s1: Record<string, unknown> = {};
+  let s1RefError: string | null = null;
+  try {
+    s1 = asRecord(readGlobalCredentialsResolved());
+  } catch (error) {
+    s1RefError = error instanceof Error ? error.message : String(error);
+  }
   const envAk = isPlaceholder(process.env.HW_ACCESS_KEY) ? '' : process.env.HW_ACCESS_KEY || '';
   const envSk = isPlaceholder(process.env.HW_SECRET_KEY) ? '' : process.env.HW_SECRET_KEY || '';
   const kooCli = readKooCliProfiles();
@@ -187,7 +199,7 @@ export function scanState(): ScanState {
     Boolean(process.env.HW_ACCESS_KEY && isPlaceholder(process.env.HW_ACCESS_KEY)) ||
     Boolean(process.env.HW_SECRET_KEY && isPlaceholder(process.env.HW_SECRET_KEY));
 
-  const s1Fingerprint = fingerprint(s1.ak, s1.sk);
+  const s1Fingerprint = s1RefError ? '' : fingerprint(s1.ak, s1.sk);
   const currentFp = currentFingerprintFromHcloud(kooCli);
   const s2SyncedByDevkit = s1Fingerprint ? s2CurrentMatchesLastDevkitSync(kooCli, s1, s1Fingerprint) : false;
   const effectiveCurrentFp = s2SyncedByDevkit ? s1Fingerprint : currentFp;
@@ -239,6 +251,7 @@ export function scanState(): ScanState {
     // S2 is encrypted storage (authEncrypt) → its fingerprint is unavailable,
     // so the S2-current drift check is intentionally skipped (#533).
     s2Encrypted: Boolean(!('error' in kooCli) && kooCli.authEncrypt),
+    s1RefError,
     inconsistencies,
     hasRuntime,
     runtimeFingerprint,

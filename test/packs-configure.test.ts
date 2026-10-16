@@ -179,6 +179,7 @@ test(
           'update',
           'discovery',
           'huaweicloud-open-mcp',
+          'secrets',
         ],
       });
       assert.equal(result.ok, true);

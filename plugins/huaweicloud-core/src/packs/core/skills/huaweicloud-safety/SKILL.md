@@ -55,5 +55,6 @@ Hook checks inspect the command or plan text that is available before execution.
 
 - Use redacted profile inspection instead of raw `hcloud configure show`.
 - Use runtime secret injection instead of fetching secret values into chat.
+- Use the encrypted secret vault for durable secrets: store values as `secret://<scope>/<name>` refs and pass refs, never values. See `references/secrets.md`.
 - Use read-only verification after a write.
 - Prefer reviewed IaC for durable infrastructure changes.

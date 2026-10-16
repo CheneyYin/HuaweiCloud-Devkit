@@ -30,6 +30,9 @@ const EXEMPT_TOOLS = new Set([
   'huaweicloud_gateway_list_tools',
   'huaweicloud_gateway_call',
   'huaweicloud_gateway_restart',
+  'huaweicloud_secret_set',
+  'huaweicloud_secret_list',
+  'huaweicloud_secret_delete',
 ]);
 
 // Declared, intentional drifts from the legacy literals. Each entry names the

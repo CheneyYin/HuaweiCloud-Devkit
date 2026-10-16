@@ -125,7 +125,7 @@ export const DEPENDENCIES = {
   },
 } as const satisfies Record<DependencyId, DependencySpec>;
 
-// Pack → binary requirement edges. All nine packs are declared (an empty list
+// Pack → binary requirement edges. All ten packs are declared (an empty list
 // is a declaration: "this pack needs nothing beyond the payload"). hcloud is
 // attributed to every real consumer and to core not at all.
 export const PACK_DEPENDENCIES = {
@@ -138,6 +138,7 @@ export const PACK_DEPENDENCIES = {
   update: [],
   discovery: [],
   'huaweicloud-open-mcp': ['open-mcp-gateway'],
+  secrets: [],
 } as const satisfies Record<PackId, readonly DependencyId[]>;
 
 // Pack → pack edges. requires is the hard closure (enabling a pack enables

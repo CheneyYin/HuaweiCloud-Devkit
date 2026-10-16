@@ -149,7 +149,7 @@ async function handleRemoteRequest(req: IncomingMessage, res: ServerResponse): P
   // crashing the listener.
   let mcpServer: McpServer | undefined;
   try {
-    mcpServer = createDevkitMcpServer({ sessionId });
+    mcpServer = createDevkitMcpServer({ sessionId, remoteSurface: true });
     await mcpServer.connect(transport);
     const response = await transport.handleRequest(webRequest, {
       parsedBody: normalizeToolCallParams(message as JSONRPCMessage),

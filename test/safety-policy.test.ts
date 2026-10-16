@@ -155,7 +155,7 @@ test('classifyTextCommand blocks direct credential file reads', () => {
 test('classifyTextCommand blocks env var dumps with HUAWEICLOUD prefix', () => {
   assert.equal(classifyTextCommand('env | grep HUAWEICLOUD').decision, 'deny');
   assert.equal(classifyTextCommand('printenv | grep HWC_').decision, 'deny');
-  assert.equal(classifyTextCommand('Get-ChildItem Env: | where HCLOUD').decision, 'deny');
+  assert.equal(classifyTextCommand('Get-ChildItem Env: | where HCLOUD_PROFILE').decision, 'deny');
 });
 
 test('classifyHcloudArgs blocks secret value reads', () => {
@@ -385,4 +385,198 @@ test('existing credential and secret blocks still win before risk-rule warnings'
   const secretResult = classifyTextCommand('hcloud CSMS ShowSecretVersion --secret_name prod/db');
   assert.equal(secretResult.decision, 'deny');
   assert.equal(secretResult.risk, 'secret');
+});
+
+test('classifyTextCommand blocks the vault CLI reveal face (secret get)', () => {
+  assert.equal(classifyTextCommand('npx huaweicloud-devkit secret get secret://user/hw-sk').decision, 'deny');
+  assert.equal(classifyTextCommand('huaweicloud-devkit secret get secret://user/hw-sk --stdout').decision, 'deny');
+  assert.equal(
+    classifyTextCommand('node ./plugins/huaweicloud-core/dist/setup-cli.js secret get secret://user/hw-sk').decision,
+    'deny',
+  );
+  assert.equal(classifyTextCommand('bin/setup.cjs secret get secret://user/hw-sk').decision, 'deny');
+});
+
+test('classifyTextCommand allows the vault non-reveal subcommands', () => {
+  assert.equal(
+    classifyTextCommand('npx huaweicloud-devkit secret exec --env K=secret://user/ak -- node script.js').decision,
+    'allow',
+  );
+  assert.equal(classifyTextCommand('npx huaweicloud-devkit secret list').decision, 'allow');
+  assert.equal(
+    classifyTextCommand('npx huaweicloud-devkit secret set secret://user/ak --file /tmp/key.txt').decision,
+    'allow',
+  );
+  assert.equal(classifyTextCommand('npx huaweicloud-devkit secret rm secret://user/ak').decision, 'allow');
+});
+
+test('secret exec does not launder hcloud write classification', () => {
+  const write = classifyTextCommand(
+    'npx huaweicloud-devkit secret exec --env K=secret://user/ak -- hcloud ECS CreateServers --cli-region=cn-north-4',
+  );
+  assert.equal(write.decision, 'deny');
+  assert.match(write.reason ?? '', /write/i);
+  const read = classifyTextCommand(
+    'npx huaweicloud-devkit secret exec --env K=secret://user/ak -- hcloud ECS ListServers --cli-region=cn-north-4',
+  );
+  assert.equal(read.decision, 'allow');
+});
+
+test('the vault store directory and master keyfile are credential files', () => {
+  assert.equal(classifyTextCommand('cat ~/.config/huaweicloud/secrets/user/hw-sk.json').decision, 'deny');
+  assert.equal(classifyTextCommand('cat ~/.config/huaweicloud/secrets/.master-key').decision, 'deny');
+});
+
+test('the vault reveal deny survives adversarial spellings (quotes, versions, source form)', () => {
+  const revealCommands = [
+    "npx huaweicloud-devkit secret 'get' secret://user/hw-sk --stdout",
+    'npx huaweicloud-devkit secret "get" secret://user/hw-sk',
+    'npx huaweicloud-devkit@latest secret get secret://user/hw-sk --stdout',
+    'npx huaweicloud-devkit@2.3.0 secret get secret://user/hw-sk',
+    'node ./plugins/huaweicloud-core/src/setup-cli.ts secret get secret://user/hw-sk --stdout',
+    'node dist/setup-cli.mjs secret get secret://user/hw-sk',
+    './node_modules/.bin/huaweicloud-devkit.exe secret get secret://user/hw-sk',
+  ];
+  for (const command of revealCommands) {
+    assert.equal(classifyTextCommand(command).decision, 'deny', command);
+  }
+});
+
+test('secret exec laundering survives adversarial spellings (version specs, shells, segments)', () => {
+  const launderedWrites = [
+    'npx huaweicloud-devkit@2.3.0 secret exec --env K=x -- bash -c "hcloud ECS CreateServers --cli-region=cn-north-4"',
+    "npx huaweicloud-devkit secret exec --env K=x -- bash -c 'hcloud ECS DeleteServers --cli-region=cn-north-4'",
+    'echo hello && npx huaweicloud-devkit secret exec -- hcloud ECS CreateServers --cli-region=cn-north-4',
+    'node ./plugins/huaweicloud-core/src/setup-cli.ts secret exec -- hcloud ECS NovaCreateServers',
+  ];
+  for (const command of launderedWrites) {
+    const result = classifyTextCommand(command);
+    assert.equal(result.decision, 'deny', command);
+    assert.match(result.reason ?? '', /write/i, command);
+  }
+  // Reads through the wrapper stay allowed — the gate is the write, not the wrapper.
+  assert.equal(
+    classifyTextCommand(
+      'npx huaweicloud-devkit@latest secret exec --env K=secret://user/ak -- hcloud ECS ListServers --cli-region=cn-north-4',
+    ).decision,
+    'allow',
+  );
+});
+
+test('quote-adjacent hcloud keeps its classification in plain shell too', () => {
+  // Pre-existing gap closed alongside the exec unwrap: the presence gate ran
+  // on raw text, so `bash -c "hcloud ..."` never routed into the classifier.
+  const result = classifyTextCommand('bash -c "hcloud ECS CreateServers --cli-region=cn-north-4"');
+  assert.equal(result.decision, 'deny');
+  // A quoted hcloud mention that is not a command stays allowed.
+  assert.equal(classifyTextCommand('echo "hcloud rocks"').decision, 'allow');
+});
+
+test('the reveal deny survives ANSI-C quoting, expansion quotes, and multi-invocation lines', () => {
+  const revealCommands = [
+    "npx huaweicloud-devkit secret $'get' secret://user/hw-sk --stdout",
+    'npx huaweicloud-devkit secret $"get" secret://user/hw-sk --stdout',
+    "npx huaweicloud-devkit sec$'r'et get secret://user/hw-sk --stdout",
+    'npx huaweicloud-devkit secret g"e"t secret://user/hw-sk --stdout',
+  ];
+  for (const command of revealCommands) {
+    assert.equal(classifyTextCommand(command).decision, 'deny', command);
+  }
+});
+
+test('secret exec laundering survives earlier devkit invocations and npm separators', () => {
+  const launderedWrites = [
+    'npx huaweicloud-devkit secret list && npx huaweicloud-devkit secret exec -- bash -c "hcloud ECS CreateServers --cli-region=x"',
+    'npx huaweicloud-devkit --version && npx huaweicloud-devkit secret exec -- bash -c "hcloud ECS DeleteServers"',
+    'npx -- huaweicloud-devkit secret exec --env K=x -- bash -c "hcloud ECS CreateServers"',
+    'npm exec huaweicloud-devkit -- secret exec --env K=x -- bash -c "hcloud ECS DeleteServers"',
+    'node dist/setup-cli.mjs secret exec -- bash -c "hcloud ECS DeleteServers"',
+    'secret list | npx huaweicloud-devkit secret exec -- hcloud ECS CreateServers',
+    // No devkit involvement: a non-leading shell-wrapped segment must classify too.
+    'echo hi && bash -c "hcloud ECS CreateServers --cli-region=x"',
+  ];
+  for (const command of launderedWrites) {
+    const result = classifyTextCommand(command);
+    assert.equal(result.decision, 'deny', command);
+    assert.match(result.reason ?? '', /write/i, command);
+  }
+});
+
+test('quote-blind credential gates: env dumps and printenv through quoted command names', () => {
+  assert.equal(classifyTextCommand('bash -c "env | grep HUAWEICLOUD"').decision, 'deny');
+  assert.equal(classifyTextCommand("bash -c 'printenv HW_SECRET_KEY'").decision, 'deny');
+  // Mid-token quotes must not hide a write operation from the write gate.
+  assert.equal(classifyTextCommand("hcloud ECS Cre'ateServers --cli-region=x").decision, 'deny');
+  // Single-quoted $HW_* stays exempt (the shell never expands it) — raw-text
+  // lookbehind is deliberate.
+  assert.equal(classifyTextCommand("echo '$HW_SECRET_KEY is a literal'").decision, 'allow');
+});
+
+test('the write gate classifies every line and command position of a payload', () => {
+  const denyCases = [
+    'hcloud ECS ListServers\nhcloud ECS CreateServers --server.name=x',
+    'echo hello\nhcloud ECS CreateServers --server.name=x',
+    'hcloud ECS ListServers & hcloud ECS DeleteServers',
+    'for i in 1 2 3; do hcloud ECS DeleteServers --server.id=$i; done',
+    'echo i-123 | xargs hcloud ECS DeleteServers --server.id=x',
+    'env HW_REGION=cn-north-4 hcloud ECS DeleteServers --server.id=x',
+    'nohup hcloud ECS DeleteServers --server.id=x',
+    '/usr/bin/hcloud ECS DeleteServers',
+    './hcloud ECS DeleteServers',
+    'echo $(hcloud ECS DeleteServers)',
+    'echo `hcloud ECS DeleteServers`',
+    "hclou'd' ECS DeleteServers",
+    'h\\cloud ECS DeleteServers',
+  ];
+  for (const command of denyCases) {
+    assert.equal(classifyTextCommand(command).decision, 'deny', command);
+  }
+  // Command-position env prefix stays legitimate; prose and filenames do
+  // not fire the env-dump family.
+  const allowCases = [
+    'env -i hcloud ECS ListServers',
+    'cat environment.md | grep nothing',
+    'python3 env_setup.py --region cn-north-4 HUAWEICLOUD',
+    'npx huaweicloud-devkit secret set secret://user/ak --file /tmp/key.txt',
+  ];
+  for (const command of allowCases) {
+    assert.equal(classifyTextCommand(command).decision, 'allow', command);
+  }
+});
+
+test('credential-file reads stay denied through quoted path spellings', () => {
+  assert.equal(classifyTextCommand("cat ~/.config/huawei'cloud/secrets'/.master-key").decision, 'deny');
+  assert.equal(classifyTextCommand('strings ~/.config/huawei"cloud"/secrets/x.json').decision, 'deny');
+});
+
+test('the reveal deny survives npm separators; ANSI-C escape obfuscation is denied outright', () => {
+  assert.equal(
+    classifyTextCommand('npm exec huaweicloud-devkit -- secret get secret://user/hw-sk --stdout').decision,
+    'deny',
+  );
+  assert.equal(
+    classifyTextCommand('npx huaweicloud-devkit -- secret get secret://user/hw-sk --stdout').decision,
+    'deny',
+  );
+  // Escape-sequence ANSI-C builds argv the shadow cannot reconstruct — deny
+  // the obfuscated invocation instead of parsing it.
+  const obfuscated = 'npx huaweicloud-devkit secret $' + "'\\x67et' secret://user/hw-sk --stdout";
+  const result = classifyTextCommand(obfuscated);
+  assert.equal(result.decision, 'deny');
+  assert.match(result.reason ?? '', /obfuscated/i);
+});
+
+test('the env-dump family closes the full-dump and pipe-grep forms', () => {
+  const denyCases = [
+    'env',
+    'printenv',
+    'env -0',
+    'export -p | grep HW_',
+    'env | grep HW_ACCESS_KEY',
+    'printenv PATH HW_SECRET_KEY',
+  ];
+  for (const command of denyCases) {
+    assert.equal(classifyTextCommand(command).decision, 'deny', command);
+  }
+  assert.equal(classifyTextCommand('printenv PATH').decision, 'allow');
 });

@@ -20,13 +20,12 @@ import { createRequire } from 'node:module';
 import { getAuthStatus, syncAuth } from './auth/service.ts';
 import { resolveAndApplyProjectId } from './auth/project-id.ts';
 import { SUPPORTED_AGENT_TARGETS, xdgConfigHome } from './auth/agent-registration.ts';
-import { fingerprint, readKooCliProfiles, resolveManagedProfile } from './auth/reconcile.ts';
+import { readKooCliProfiles, resolveManagedProfile } from './auth/reconcile.ts';
 import { redactSecrets } from './safety-policy.ts';
 import {
   globalCredentialsPath,
   readGlobalCredentials,
   writeGlobalCredentials,
-  writeLastSync,
   writeObsConfig,
 } from './auth/credentials.ts';
 import {
@@ -39,6 +38,10 @@ import {
 } from './proxy/proxy-config.ts';
 import { removeKooCli, removeObsConfig } from './sandbox/uninstall-cleanup.ts';
 import { readReceipt, removeReceipt } from './dep/receipts.ts';
+import { runSecretCommand } from './lib/secret-vault/cli.ts';
+import { custodyReport } from './lib/secret-vault/custody.ts';
+import { vaultList, resolveSecretValue } from './lib/secret-vault/store.ts';
+import { preserveRefForm } from './lib/credentials.ts';
 import { detectCodeartsSandbox } from './codearts-sandbox.ts';
 import { installKooCli } from './dep/installers/hcloud.ts';
 import { installerFor } from './dep/installers/table.ts';
@@ -4734,6 +4737,46 @@ function renderUnknownPackIds(report: PackUnionReport): void {
   }
 }
 
+// The secrets-pack discoverability note, shared by doctor's pack block and
+// `packs status`. Existing installs that pinned DEVKIT_PACKS before the
+// secrets pack shipped keep their seed — the new pack is silently opt-in
+// for them. Two shapes: a stored seed missing `secrets` gets a one-line
+// INFO announcement (a new capability, not a fault); a seed missing
+// `secrets` WHILE the vault is initialized is a real mismatch — the user
+// stores secret:// refs but the MCP face is trimmed — and warns with the
+// fix. Unset (full surface) or already-included seeds print nothing, and
+// the vault probe never throws (a failing keychain tier reads as not
+// initialized here — the dedicated vault block in doctor owns failure
+// rendering).
+function renderSecretsPackNote(report: PackUnionReport, limitLabels?: ReadonlySet<string>): number {
+  let vaultInitialized = false;
+  try {
+    vaultInitialized = custodyReport().initialized;
+  } catch {
+    // an unreadable custody tier is the vault block's story, not this note's
+  }
+  let warns = 0;
+  for (const target of report.targets) {
+    // `packs status --target X` narrows its slot loop; the note follows the
+    // same filter so a filtered view does not advise on other agents' seeds.
+    if (limitLabels && !limitLabels.has(target.label)) continue;
+    if (target.raw === null || target.raw.trim() === '') continue;
+    if (target.unknown.length > 0) continue;
+    if (target.enabled.has('secrets')) continue;
+    if (vaultInitialized) {
+      warns++;
+      console.log(
+        `  \x1b[33m[WARN]\x1b[0m Packs (${target.label}): the secret vault is initialized but the secrets pack is trimmed — the vault MCP tools (huaweicloud_secret_set/list/delete) are not disclosed on this target; secret:// refs still resolve wherever their consumers are enabled. Enable: npx huaweicloud-devkit packs enable secrets --target <agent>`,
+      );
+    } else {
+      console.log(
+        `  \x1b[36m[INFO]\x1b[0m Packs (${target.label}): new pack available — secrets (encrypted local vault, secret:// refs, npx huaweicloud-devkit secret set ...). Disclose it: npx huaweicloud-devkit packs enable secrets --target <agent>`,
+      );
+    }
+  }
+  return warns;
+}
+
 // Provision the enabled packs' host binaries right after payload placement.
 // No output at all when nothing is required (empty union, e.g. a
 // DEVKIT_PACKS=core-only install with no codex CLI).
@@ -4910,6 +4953,38 @@ async function cmdDoctor(): Promise<void> {
 
   const safetyOk = payloadDirs.some((d) => existsSync(join(d, 'safety', 'policy.json')));
   check('Safety policy installed', safetyOk, 'Run: npx huaweicloud-devkit install');
+
+  // Secret vault — custody tier and inventory only; doctor never decrypts.
+  try {
+    const custody = custodyReport();
+    if (custody.initialized) {
+      const count = vaultList().length;
+      check(`Secret vault ready (${custody.tier} custody, ${count} secret(s))`, true, '');
+    } else {
+      console.log(
+        '  \x1b[33m[SKIP]\x1b[0m Secret vault not initialized (optional; run npx huaweicloud-devkit secret set secret://<scope>/<name> --file <path>)',
+      );
+    }
+  } catch (error) {
+    // A failing keychain tier on a machine that never initialized the vault
+    // (secret-tool on PATH, no daemon) is the documented headless shape —
+    // not a red failure for an unused optional feature.
+    const code = (error as { code?: string }).code;
+    const hasRecords = (() => {
+      try {
+        return vaultList().length > 0;
+      } catch {
+        return false;
+      }
+    })();
+    if (code === 'VAULT_CUSTODY_READ_FAILED' && !hasRecords) {
+      console.log(
+        '  \x1b[33m[SKIP]\x1b[0m Secret vault not initialized (keychain backend currently unreadable; nothing stored)',
+      );
+    } else {
+      check('Secret vault', false, error instanceof Error ? error.message : String(error));
+    }
+  }
 
   const hookConfigPath = join(PLUGIN_ROOT, 'hooks', 'hooks.json');
   const hookNodePath = join(PLUGIN_ROOT, 'hooks', 'huaweicloud-safety.mjs');
@@ -5379,6 +5454,10 @@ async function cmdDoctor(): Promise<void> {
   if (packReport.codex) {
     renderCodexPacksLine(true, packReport.codex.reason === 'plugin-installed');
   }
+  // Discoverability for the secrets pack on pinned-seed installs; a real
+  // mismatch (vault in use, pack trimmed) warns here and counts like the
+  // other inline warns above.
+  warn += renderSecretsPackNote(packReport);
   const { union: enabledPacksUnion, carriers } = packReport;
   if (carriers.length > 0) {
     const requiredDeps = requiredDependencies(enabledPacksUnion);
@@ -5713,12 +5792,20 @@ interface AuthStatusSummary {
   obsConfigPath: unknown;
   kooCliInstalled: unknown;
   agents: unknown;
+  reconciled?: { s1RefError?: unknown };
 }
 
 function printAuthStatus(status: AuthStatusSummary): void {
   console.log(
     `Credentials vault: ${status.credentialsConfigured ? 'configured' : 'missing'} (${String(status.credentialsPath)})`,
   );
+  const rawS1RefError = asRecord(status.reconciled).s1RefError;
+  const s1RefError = typeof rawS1RefError === 'string' ? rawS1RefError : null;
+  if (s1RefError) {
+    console.log(
+      `\x1b[31mS1 vault ref error: ${s1RefError}\x1b[0m — fix the vault (npx huaweicloud-devkit secret list) or replace the refs in ~/.config/huaweicloud/credentials.json with plaintext.`,
+    );
+  }
   console.log(`OBS config: ${status.obsConfigured ? 'configured' : 'missing'} (${String(status.obsConfigPath)})`);
   console.log(`KooCLI: ${status.kooCliInstalled ? 'installed' : 'missing'}`);
   console.log('Agent MCP registration:');
@@ -5782,16 +5869,27 @@ async function cmdAuthInit(): Promise<void> {
     return;
   }
 
-  writeGlobalCredentials({ ak, sk, securityToken, region });
+  // Incoming values may be secret:// refs (env-delivered or typed). Resolve
+  // for the mirrors, keep the ref representation in S1 when the resolved
+  // value matches — same preserveRefForm contract as auth_switch persist.
+  const akValue = resolveSecretValue(ak) ?? ak;
+  const skValue = resolveSecretValue(sk) ?? sk;
+  const rawStored = readGlobalCredentials();
+  writeGlobalCredentials({
+    ak: preserveRefForm(akValue, rawStored?.ak),
+    sk: preserveRefForm(skValue, rawStored?.sk),
+    securityToken,
+    region,
+  });
 
   try {
-    writeObsConfig({ ak, sk, securityToken, region });
+    writeObsConfig({ ak: akValue, sk: skValue, securityToken, region });
   } catch (error) {
     console.log(`OBS config sync failed: ${errorMessage(error)}`);
   }
 
   if (findHcloudBin()) {
-    const result = configureHcloud({ ak, sk, region });
+    const result = configureHcloud({ ak: akValue, sk: skValue, region });
     if (!result.ok) console.log(`KooCLI update failed: ${result.error || result.code}`);
     else {
       const proj = resolveAndApplyProjectId({ region });
@@ -5819,8 +5917,18 @@ async function cmdAuthReconcile(): Promise<void> {
   console.log(BANNER);
   console.log('HuaweiCloud DevKit Credential Reconciliation\n');
 
-  const { scanState, runHcloudConfigure, resolveManagedProfile } = await import('./auth/reconcile.ts');
+  const { scanState } = await import('./auth/reconcile.ts');
   const state = scanState();
+  // A broken S1 vault link suppresses the drift fingerprints, so it would
+  // otherwise read as "consistent" while every credential consumer throws.
+  if (state.s1RefError) {
+    console.error(`  \x1b[31mS1 holds a secret ref the vault cannot resolve: ${state.s1RefError}\x1b[0m`);
+    console.error(
+      '  Fix the vault (npx huaweicloud-devkit secret list; check the master key) or replace the refs in ~/.config/huaweicloud/credentials.json with plaintext.',
+    );
+    process.exitCode = 1;
+    return;
+  }
   if (state.inconsistencies.length === 0) {
     console.log('All credential files are consistent. ✓');
     return;
@@ -5845,33 +5953,29 @@ async function cmdAuthReconcile(): Promise<void> {
     console.log('Aborted.');
     return;
   }
-  const credentials = asStoredCredentials(readGlobalCredentials());
-  if (!credentials?.ak || !credentials?.sk) {
-    console.error('No global credentials found after confirmation; aborting.');
-    process.exitCode = 1;
+  // Propagation delegates to syncAuth — the same seam-tested fan-out (S1
+  // refs resolved BEFORE writing ~/.obsutilconfig and the KooCLI profile,
+  // .last_sync fingerprinted from resolved values). A hand-rolled copy here
+  // once escaped the seam and wrote literal secret:// refs into both
+  // mirrors. Result interpretation keeps reconcile's best-effort contract:
+  // a mirror-partial sync (OBS written, KooCLI absent/failed) is a soft
+  // outcome with detail, not a hard failure — the same exit code the
+  // hand-rolled version produced.
+  const result = syncAuth('all');
+  if (result.ok) {
+    console.log('Done. .last_sync refreshed.');
     return;
   }
-  try {
-    writeObsConfig(credentials);
-  } catch (error) {
-    console.log(`OBS sync failed: ${errorMessage(error)}`);
-  }
-  const profile = resolveManagedProfile();
-  let hcloudSynced = false;
-  if (profile) {
-    // runHcloudConfigure declares string params; the vault fields are guarded
-    // truthy above, so String() is identity for real credential values.
-    const region = typeof credentials.region === 'string' ? credentials.region : undefined;
-    const r = runHcloudConfigure(profile, asText(credentials.ak), asText(credentials.sk), region);
-    hcloudSynced = r.ok;
-    console.log(`  KooCLI ${r.ok ? 'synced' : 'sync failed'}: profile=${profile} ${r.error || ''}`);
-  }
-  if (hcloudSynced) {
-    writeLastSync({ kooCliProfile: profile, s1Fingerprint: fingerprint(credentials.ak, credentials.sk) });
-    console.log('Done. .last_sync refreshed.');
-  } else {
+  if (result.obs?.configured) {
+    console.log('  OBS synced ✓.');
+    console.log(`  KooCLI sync did not complete: ${result.error}`);
+    if (result.nextStep) console.log(`  Next: ${result.nextStep}`);
     console.log('Done. .last_sync was not refreshed because KooCLI sync did not complete.');
+    return;
   }
+  console.error(`  \x1b[31m${result.error}\x1b[0m`);
+  if (result.nextStep) console.error(`  Next: ${result.nextStep}`);
+  process.exitCode = 1;
 }
 
 async function cmdAuthSync(): Promise<void> {
@@ -6217,8 +6321,14 @@ function cmdPacksStatus(): void {
     }
     console.log(`  \x1b[36m[INFO]\x1b[0m Packs (${slot.label}): ${[...parsed.enabled].join(', ')}`);
   }
-  const probe = codexPluginProbe();
-  renderCodexPacksLine(probe.ok ? probe.installed : true, probe.ok);
+  // Discoverability note for pinned seeds missing the secrets pack — the
+  // same packUnionReport() derivation doctor uses, so the two faces cannot
+  // drift. One probe serves both the note and the codex attribution line
+  // (report.codex carries the probe outcome; a second codexPluginProbe()
+  // call would spawn the codex CLI twice per status run).
+  const report = packUnionReport();
+  renderSecretsPackNote(report, new Set(slots.map((slot) => slot.label)));
+  renderCodexPacksLine(report.codex !== null, report.codex?.reason !== 'probe-failed');
 }
 
 // Write modes stay silent about codex by design (no write path there), but
@@ -6238,7 +6348,7 @@ function joinPackIds(ids: Iterable<PackId>): string {
 }
 
 // A requested seed that, with core force-included, spans every pack is
-// stored as the unset full surface instead of a nine-id list.
+// stored as the unset full surface instead of a ten-id list.
 function coversFullSurface(ids: ReadonlySet<PackId>): boolean {
   return PACK_IDS.every((id) => id === 'core' || ids.has(id));
 }
@@ -6388,6 +6498,9 @@ async function main(): Promise<void> {
     case 'auth':
       await cmdAuth();
       break;
+    case 'secret':
+      process.exitCode = runSecretCommand(process.argv.slice(3));
+      break;
     case 'proxy':
       await cmdProxy();
       break;
@@ -6416,6 +6529,7 @@ async function main(): Promise<void> {
       console.log('  dep          Dependency tooling: status | install <id> | uninstall <id>');
       console.log('  packs        Post-install pack surface: status | enable <ids> | disable <ids> | all');
       console.log('  auth         Manage unified auth: init | sync | status | reconcile');
+      console.log('  secret       Encrypted secret vault: set | get | list | rm | exec');
       console.log('  proxy        Manage proxy config: init | show | clear');
       console.log('  version      Print CLI version and installed plugin version per agent');
       console.log('  help         Show this help');
