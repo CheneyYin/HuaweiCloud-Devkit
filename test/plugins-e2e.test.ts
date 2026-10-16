@@ -18,10 +18,13 @@ function makeEnv(home: string, _cwd: string): NodeJS.ProcessEnv {
     HOMEPATH: home.slice(2),
   };
   // XDG_CONFIG_HOME redirects the opencode config root (xdgConfigHome);
-  // CODEX_HOME keys the uninstaller's codex cache cleanup. Ambient values
-  // would leak installs into real state.
+  // CODEX_HOME keys the uninstaller's codex cache cleanup. HUAWEICLOUD_HOME
+  // relocates devkit-owned state — every fresh install's takeAgentDelta
+  // reads the pending MCP-config backup there, and an ambient export would
+  // consume (and eventually delete) the real user's pending delta.
   delete env.XDG_CONFIG_HOME;
   delete env.CODEX_HOME;
+  delete env.HUAWEICLOUD_HOME;
   return env;
 }
 
