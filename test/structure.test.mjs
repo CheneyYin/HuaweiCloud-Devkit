@@ -198,9 +198,12 @@ test('skills with references have non-empty reference files', () => {
 
 test('web/static-site deployment intent offers target options with sandbox first, not OBS default', () => {
   const core = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-core', 'SKILL.md'), 'utf8');
-  assert.match(core, /Deployment Target Options/);
+  assert.match(core, /Deployment Target Options \(MANDATORY GATE/);
   assert.match(core, /Sandbox \(DevStation\) — recommended/);
   assert.match(core, /NEVER default to a single service such as OBS/);
+  // Mandatory gate: the options must be presented via the question tool, never skipped.
+  assert.match(core, /MUST present the target options via the `question` tool/);
+  assert.match(core, /NEVER infer or default the target/);
 
   const obs = readFileSync(join(pluginRoot, 'skills', 'huawei-obs', 'SKILL.md'), 'utf8');
   assert.match(obs, /Routing Guard: Deploy vs Store/);
@@ -214,6 +217,57 @@ test('web/static-site deployment intent offers target options with sandbox first
   const discovery = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-capability-discovery', 'SKILL.md'), 'utf8');
   assert.match(discovery, /Deployment Target Options/);
   assert.match(discovery, /do NOT default to OBS/);
+
+  // Deployment-target options must surface the OBS custom-domain reminder and
+  // the ECS EIP pairing reminder in every skill that presents the options.
+  const optionGates = [
+    {
+      name: 'huaweicloud-core',
+      body: core,
+      sectionMarker: '## Deployment Target Options (MANDATORY GATE',
+      order: ['Sandbox (DevStation)', 'OBS static website hosting', 'ECS', 'CCE'],
+    },
+    {
+      name: 'huawei-sandbox',
+      body: sandbox,
+      sectionMarker: '## Target-Selection Gate',
+      order: ['沙箱 (Sandbox)', 'OBS 静态托管', 'ECS', 'CCE'],
+    },
+    {
+      name: 'huawei-obs',
+      body: obs,
+      sectionMarker: '## Routing Guard: Deploy vs Store',
+      order: ['① huawei-sandbox (recommended)', '② OBS static hosting', '③ ECS', '④ CCE'],
+    },
+    {
+      name: 'huaweicloud-capability-discovery',
+      body: discovery,
+      sectionMarker: '## Deployment Target Options (MANDATORY',
+      order: ['① huawei-sandbox', '② huawei-obs', '③ huawei-ecs', '④ huawei-cce'],
+    },
+  ];
+  for (const { name, body, sectionMarker, order } of optionGates) {
+    const start = body.indexOf(sectionMarker);
+    assert.ok(start !== -1, `${name}: mandatory deployment-target gate section missing`);
+    // Scope the guard to the gate section only (from the section title up to
+    // the next `## ` heading). EIP/域名 trigger words elsewhere in the file
+    // (e.g. Cross-Skill References, other hard rules) must not mask a missing
+    // reminder inside the gate section itself.
+    const nextHeading = body.indexOf('\n## ', start + sectionMarker.length);
+    const section = nextHeading === -1 ? body.slice(start) : body.slice(start, nextHeading);
+    assert.match(section, /MUST present/, `${name}: gate must use MUST-present wording`);
+    assert.match(section, /`question` tool/, `${name}: gate must mandate the question tool`);
+    assert.match(section, /NEVER infer or default/, `${name}: gate must carry the NEVER infer or default hard rule`);
+    let pos = -1;
+    for (const option of order) {
+      const idx = section.indexOf(option, pos + 1);
+      assert.ok(idx > pos, `${name}: option "${option}" missing or out of fixed order`);
+      pos = idx;
+    }
+    assert.match(section, /域名/, `${name}: OBS option must carry the custom-domain reminder`);
+    assert.match(section, /EIP/, `${name}: ECS option must carry the EIP pairing reminder`);
+    assert.match(section, /弹性公网/, `${name}: ECS option must name EIP in Chinese for the prompt`);
+  }
 });
 
 test('devbridge uses the valid `list` command, not the non-existent `ls`', () => {

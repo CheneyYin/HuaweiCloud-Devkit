@@ -15,8 +15,8 @@ When the developer asks to **deploy / host / publish / 上线 / 部署 / 发布 
 Use the `question` tool and present, in this exact order:
 
 1. **沙箱 (Sandbox)** — temporary runtime, instant preview URL (recommended for quick preview)
-2. **OBS 静态托管** — long-term static hosting + CDN + custom domain
-3. **ECS** — server-based hosting
+2. **OBS 静态托管** — long-term static hosting + CDN + custom domain. **Remind the developer: a custom domain (域名) must be prepared in advance — the default OBS endpoint does not support HTTPS for static hosting**
+3. **ECS** — server-based hosting. **Remind the developer: ECS must be paired with an EIP (弹性公网IP) for public access — extra billing applies**
 4. **CCE** — container-based hosting
 
 Hard rules:
@@ -24,6 +24,7 @@ Hard rules:
 - **NEVER infer or default the target** when it is unstated. Calling `huaweicloud_sandbox_connect` before this choice is made is a violation.
 - Only skip the question when: (a) the developer already named a target (e.g. "部署到 ECS", "用 OBS"), or (b) the developer explicitly asked for a temporary / sandbox / preview runtime.
 - "部署到华为云" / "deploy to Huawei Cloud" / "上线" alone is NOT a named target — still run the gate.
+- Include the OBS domain reminder and the ECS EIP pairing reminder in the options as presented.
 - After the choice: sandbox → continue with this skill; OBS → `huawei-obs`; ECS → `huawei-ecs` / `huawei-iac`; CCE → `huawei-cce`.
 
 ## Overview
@@ -33,7 +34,7 @@ Domain expertise for Huawei Cloud Sandbox (DevStation) instances and workspace t
 ## Activation
 
 - **Proactive offering**: when the developer's task needs a temporary runtime (e.g. "deploy this web app", "run this app and preview it"), offer the sandbox proactively — the developer never has to say "use sandbox". Prompt: "This task can be satisfied by a sandbox — use it?"
-- **Static website hosting — present options, sandbox first (MANDATORY)**: when the developer asks to deploy/host/publish a static website or web app without naming a target, do NOT silently pick a service and do NOT default to the sandbox. Run the [Target-Selection Gate](#target-selection-gate-mandatory--do-not-skip) via the `question` tool first. Present, in order: ① 沙箱 (recommended — temporary runtime, instant preview URL) ② OBS 静态托管 (long-term static hosting/CDN) ③ ECS ④ CCE. Recommended prompt: "建议优先部署到沙箱（临时运行环境，可预览访问），也可选择 OBS 静态托管、ECS 或 CCE，你想部署到哪里？" Only if the developer, after being asked, expresses no preference may you proceed with the sandbox.
+- **Static website hosting — present options, sandbox first (MANDATORY)**: when the developer asks to deploy/host/publish a static website or web app without naming a target, do NOT silently pick a service and do NOT default to the sandbox. Run the [Target-Selection Gate](#target-selection-gate-mandatory--do-not-skip) via the `question` tool first. Present, in order: ① 沙箱 (recommended — temporary runtime, instant preview URL) ② OBS 静态托管 (long-term static hosting/CDN; 需提前准备好自定义域名) ③ ECS (需搭配弹性公网IP/EIP 才能公网访问) ④ CCE. Recommended prompt: "建议优先部署到沙箱（临时运行环境，可预览访问），也可选择 OBS 静态托管（需提前准备好自定义域名）、ECS（需搭配弹性公网IP/EIP）或 CCE，你想部署到哪里？" Only if the developer, after being asked, expresses no preference may you proceed with the sandbox.
 - **Detect web apps in deploy-a-repo prompts**: prompts like "部署 GitHub - <owner>/<repo>" or "deploy <github repo>" do not say "web app". Clone or inspect the repository first (package.json with dev/serve/build scripts, index.html, frontend framework dependencies such as vue/react/angular/vite, static sites, Dockerfile running a web server). If it is a web application, offer the sandbox first: "检测到该项目是 Web 应用，建议优先使用沙箱部署（临时运行环境，可预览访问），是否使用？"
 - **Clone into the sandbox workspace directory**: always put project code under `/workspace/<repo-name>` (create the directory if missing) — `/workspace` is the sandbox's dedicated workspace mount at the filesystem root, not `$HOME/workspace`. Never use `/tmp` or other ephemeral locations. This keeps the project with the sandbox session, is easy to reference for serving/exposing, and survives session-level restarts of the shell.
 - **Deployment must end with a public URL**: after deploying and exposing the app with DevBridge, always return the tunnel URL to the developer as the final result — a deployment without an accessible link is incomplete.
