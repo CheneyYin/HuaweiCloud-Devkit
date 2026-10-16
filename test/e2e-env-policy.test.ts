@@ -79,6 +79,18 @@ test('driver vars cannot shadow seam vars or the fixed posture', () => {
   assert.equal(env.HUAWEICLOUD_DEVKIT_TELEMETRY, 'off');
 });
 
+test('relaxFixed removes exactly the whitelisted key and nothing else', () => {
+  const env = buildCaseEnv({
+    processEnv: hostileProcessEnv(),
+    home: '/tmp/h',
+    relaxFixed: ['HUAWEICLOUD_DEVKIT_SKIP_UPDATE'],
+  });
+  assert.equal(env.HUAWEICLOUD_DEVKIT_SKIP_UPDATE, undefined, 'the relaxed key must be removed');
+  assert.equal(env.HUAWEICLOUD_DEVKIT_TELEMETRY, 'off', 'telemetry stays pinned');
+  assert.equal(env.HUAWEICLOUD_INJECT_STS_CMD, '0', 'STS injection stays pinned');
+  assert.equal(env.NO_PROXY, '127.0.0.1,localhost', 'NO_PROXY stays pinned');
+});
+
 test('STRIP_ENV_KEYS and FIXED_ENV_OVERRIDES stay disjoint', () => {
   const strip = new Set(STRIP_ENV_KEYS.map((key) => key.toLowerCase()));
   for (const key of Object.keys(FIXED_ENV_OVERRIDES)) {

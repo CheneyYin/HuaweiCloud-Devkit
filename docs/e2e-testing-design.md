@@ -100,8 +100,16 @@ are never copied. Local config: gitignored `test/e2e/.env`.
 - **ws-exec boundary unfaked**: sandbox connect's hwlink attempts hit the
   local HTTP fake and fail fast (404, best-effort caught);
   `transferGitRepo` is a no-op without git args.
-- **update pack deferred**: check_update depends on the npm registry with no
-  env seam; no E2E case until one lands.
+- **update pack**: covered since the registry seam landed. The earlier "no
+  env seam" note was half-wrong: `HUAWEICLOUD_NPM_REGISTRY` existed but only
+  the CLI face honored it — the MCP tool face's default query spawned
+  `npm view` and ignored the var. The seam now delegates in `queryDistTags`
+  itself, so both faces honor it; update cases relax exactly
+  `HUAWEICLOUD_DEVKIT_SKIP_UPDATE` (the env-policy whitelist's only entry,
+  type-level) and point the registry at the local HTTP fake. The npm child
+  process is deliberately NOT intercepted (PATH shims would also capture the
+  installer's own npm; `npm_config_registry` would hijack every session npm
+  and depends on npm-internal endpoint shapes).
 - **LLM cost/latency**: single case 1–4 min, attempts cap 2, ~15 cases per
   full run. Failures attach every recording to the JSON report for offline
   triage.

@@ -399,6 +399,14 @@ export function queryDistTags({
   timeoutMs = 15000,
   cwd,
 }: { timeoutMs?: number; cwd?: string } = {}): Promise<DistTags | null> {
+  // Registry seam: the CLI face already honors HUAWEICLOUD_NPM_REGISTRY
+  // (setup-cli's update command); the tool face silently ignored it — this
+  // delegation closes that inconsistency, so every default consumer
+  // (getCachedUpdateInfo, upgradePackage) honors the operator/E2E override
+  // without spawning npm.
+  if (process.env.HUAWEICLOUD_NPM_REGISTRY) {
+    return queryDistTagsFetch({ timeoutMs });
+  }
   return new Promise<DistTags | null>((resolve) => {
     let child: ChildProcessWithoutNullStreams;
     try {

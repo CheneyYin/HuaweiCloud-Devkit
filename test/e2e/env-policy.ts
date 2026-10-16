@@ -44,6 +44,14 @@ export const FIXED_ENV_OVERRIDES: Readonly<Record<string, string>> = {
   no_proxy: '127.0.0.1,localhost',
 };
 
+// The single relaxation any case may ever need: update cases must let the
+// registry query run. The whitelist is type-level, so relaxing telemetry
+// (production POSTs) or STS injection (credential argv leaks) is not
+// expressible — a case cannot opt out of the posture that keeps sessions
+// hermetic.
+export const RELAXABLE_FIXED_KEYS = ['HUAWEICLOUD_DEVKIT_SKIP_UPDATE'] as const;
+export type RelaxableFixedKey = (typeof RELAXABLE_FIXED_KEYS)[number];
+
 // The cross-platform home relocation recipe (cross-platform-install.test.ts
 // makeEnv precedent) plus XDG relocation: the agent (opencode) resolves its
 // config, data, state, and cache from XDG_* when set — pointing all four
@@ -68,6 +76,7 @@ export interface BuildCaseEnvInput {
   home: string;
   driverVars?: NodeJS.ProcessEnv;
   seamVars?: NodeJS.ProcessEnv;
+  relaxFixed?: readonly RelaxableFixedKey[];
 }
 
 export function buildCaseEnv(input: BuildCaseEnvInput): NodeJS.ProcessEnv {
@@ -82,5 +91,6 @@ export function buildCaseEnv(input: BuildCaseEnvInput): NodeJS.ProcessEnv {
   if (input.driverVars) Object.assign(env, input.driverVars);
   if (input.seamVars) Object.assign(env, input.seamVars);
   Object.assign(env, FIXED_ENV_OVERRIDES);
+  for (const key of input.relaxFixed ?? []) delete env[key];
   return env;
 }

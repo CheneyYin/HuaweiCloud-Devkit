@@ -31,6 +31,7 @@ import { coreCases } from './cases/core.ts';
 import { authCases, sandboxCases, voucherCases } from './cases/http-packs.ts';
 import { openMcpCases } from './cases/open-mcp.ts';
 import { discoveryCases, obsCases } from './cases/local-packs.ts';
+import { updateCases } from './cases/update.ts';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const fakeHcloud = fileURLToPath(new URL('../fixtures/fake-hcloud.ts', import.meta.url));
@@ -47,6 +48,7 @@ const ALL_CASES: E2eCase[] = [
   ...openMcpCases,
   ...obsCases,
   ...discoveryCases,
+  ...updateCases,
 ];
 
 function packageJson(): { version: string; kooCliVersion: string } {
@@ -350,7 +352,14 @@ async function runCase(
         home,
         driverVars: driver.prepare({ home, workdir, platform: process.platform }),
         seamVars: seamVars(home, scriptPath, kooCliVersion, httpFake, caseDef.fixtures, pathShimDir),
+        relaxFixed: caseDef.fixtures.updateCheck ? ['HUAWEICLOUD_DEVKIT_SKIP_UPDATE'] : undefined,
       });
+      if (caseDef.fixtures.updateCheck) {
+        // Run-env only (never the install env): the product's registry seam.
+        // npm itself never reads this var — only the devkit does — so the
+        // agent's own npm usage (if any) is unaffected.
+        env.HUAWEICLOUD_NPM_REGISTRY = httpFake.baseUrl;
+      }
 
       const abort = new AbortController();
       const timer = setTimeout(() => abort.abort(), caseDef.budget.timeoutMs);

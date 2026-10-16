@@ -118,6 +118,12 @@ export interface CaseFixtures {
     // (empty policy = deny, refusal reason teaches the consent path).
     policyTools?: boolean;
   };
+  // Update-pack cases: relaxes HUAWEICLOUD_DEVKIT_SKIP_UPDATE (the only
+  // relaxable posture key, env-policy whitelist) and points
+  // HUAWEICLOUD_NPM_REGISTRY at the case's local HTTP fake for the run env
+  // — the install env keeps the default posture. The dist-tags script
+  // rides fixtures.http like any other response.
+  updateCheck?: boolean;
   // Files written into the throwaway home BEFORE install (relative path →
   // content): S1 vault seeding, KooCLI profile config, etc.
   home?: Record<string, string>;

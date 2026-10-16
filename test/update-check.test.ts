@@ -207,6 +207,35 @@ test('queryDistTagsFetch 尊重 HUAWEICLOUD_NPM_REGISTRY 覆盖', async () => {
   }
 });
 
+test('queryDistTags 在 HUAWEICLOUD_NPM_REGISTRY 设置时委托 fetch 路径(不 spawn npm)', async () => {
+  // 端到端证明委托:本地 server 供 dist-tags,queryDistTags 直接返回其内容。
+  // 若仍走 npm view 子进程,请求不会到达该 server,断言失败。
+  const seen: string[] = [];
+  const server = await import('node:http').then((http) =>
+    http.createServer((req, res) => {
+      seen.push(String(req.url));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ latest: '0.0.1', next: '0.0.1' }));
+    }),
+  );
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = (server.address() as { port: number }).port;
+  const prev = process.env.HUAWEICLOUD_NPM_REGISTRY;
+  process.env.HUAWEICLOUD_NPM_REGISTRY = `http://127.0.0.1:${port}`;
+  try {
+    const result = await queryDistTags({ timeoutMs: 5000 });
+    assert.deepEqual(result, { latest: '0.0.1', next: '0.0.1' });
+    assert.ok(
+      seen.some((url) => url.includes('/-/package/huaweicloud-devkit/dist-tags')),
+      `expected the dist-tags fetch, saw: ${seen.join(', ')}`,
+    );
+  } finally {
+    if (prev === undefined) delete process.env.HUAWEICLOUD_NPM_REGISTRY;
+    else process.env.HUAWEICLOUD_NPM_REGISTRY = prev;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test('queryDistTagsSync 失败时在 DEBUG 下输出日志而非静默', () => {
   const prev = process.env.HUAWEICLOUD_DEVKIT_DEBUG;
   const logs: string[] = [];
