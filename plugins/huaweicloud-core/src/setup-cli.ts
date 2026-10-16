@@ -911,13 +911,16 @@ function removeOwnedSkillsFrom(dir: string): number {
   sweepReceiptTmpFiles(dir);
   const owned = devkitOwnedSkillNames();
   const receipt = readNativeReceipt(dir);
-  if (receipt?.kind === 'ok' && receipt.receipt.layout === 'package-root') {
-    // Liveness: the marketplace postinstall is the writer of this layout,
-    // and it died with the package when npm removed it. A root that no
-    // longer carries the payload tree (or was never recorded) cannot
-    // protect anything — fall through to normal removal. Multiple DSH
-    // profiles share ~/.dsh/skills with per-profile roots (last writer
-    // wins): the probe sees only the recorded root, a known limitation.
+  // Dir-gated to the writer: only the marketplace postinstall writes
+  // package-root receipts, and it writes exclusively the DSH native dir —
+  // a package-root receipt anywhere else is hand-copied and earns nothing,
+  // the same invariant doctor enforces. Liveness: the postinstall died
+  // with the package when npm removed it; a root that no longer carries
+  // the payload tree (or was never recorded) cannot protect anything —
+  // fall through to normal removal. Multiple DSH profiles share the dir
+  // with per-profile roots (last writer wins): the probe sees only the
+  // recorded root, a known limitation.
+  if (receipt?.kind === 'ok' && receipt.receipt.layout === 'package-root' && dir === dshSkillsDir()) {
     const live =
       receipt.receipt.packageRoot !== undefined && existsSync(marketplacePayloadTree(receipt.receipt.packageRoot));
     if (live) {

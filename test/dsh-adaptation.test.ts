@@ -496,6 +496,61 @@ test('dsh bundle postinstall warns and exits 0 when the native dir cannot be cre
   }
 });
 
+// The discriminating cell for the availability-hint gate: a BROKEN package
+// (partial core tree) that ALSO fails the destination write. The catch must
+// return the real package health, so the refuse-to-start diagnosis and the
+// availability promise never share one output — reverting the catch to an
+// unconditional true passes every other test and fails only here.
+test('dsh bundle postinstall suppresses the availability hint when a broken package also fails the destination', () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-home-'));
+  const stage = mkdtempSync(join(tmpdir(), 'dsh-pkg-'));
+  try {
+    const dshHome = join(home, '.dsh');
+    const profileDir = join(dshHome, 'profiles', 'web');
+    mkdirSync(profileDir, { recursive: true });
+
+    mkdirSync(join(stage, 'bin'), { recursive: true });
+    copyFileSync(join(root, 'bin', 'dsh-postinstall.cjs'), join(stage, 'bin', 'dsh-postinstall.cjs'));
+    copyFileSync(join(root, 'cordis.patch.yml'), join(stage, 'cordis.patch.yml'));
+    const stagedLib = join(stage, 'plugins', 'huaweicloud-core', 'dist', 'lib');
+    mkdirSync(stagedLib, { recursive: true });
+    for (const lib of ['native-receipt.js', 'skill-manifest.js']) {
+      copyFileSync(join(root, 'plugins', 'huaweicloud-core', 'dist', 'lib', lib), join(stagedLib, lib));
+    }
+    const stagedSkills = join(stage, 'plugins', 'huaweicloud-core', 'skills');
+    const realSkills = join(root, 'plugins', 'huaweicloud-core', 'skills');
+    mkdirSync(stagedSkills, { recursive: true });
+    copyFileSync(join(realSkills, '.manifest.json'), join(stagedSkills, '.manifest.json'));
+    // Partial tree (2 of 6): the package is broken.
+    for (const name of ['huaweicloud-core', 'huaweicloud-safety']) {
+      mkdirSync(join(stagedSkills, name), { recursive: true });
+      copyFileSync(join(realSkills, name, 'SKILL.md'), join(stagedSkills, name, 'SKILL.md'));
+    }
+
+    // AND the destination write fails: the skills path is a regular file.
+    mkdirSync(join(dshHome), { recursive: true });
+    writeFileSync(join(dshHome, 'skills'), 'occupied by a file');
+
+    const res = spawnSync(process.execPath, [join(stage, 'bin', 'dsh-postinstall.cjs')], {
+      cwd: profileDir,
+      env: makeEnv(home, dshHome),
+      encoding: 'utf8',
+      timeout: 60000,
+    });
+    assert.equal(res.status, 0, `postinstall must not fail the npm install: ${res.stderr}`);
+    assert.match(res.stdout, /rewrote DSH patch MCP path/);
+    assert.match(res.stderr, /claimed by the manifest but missing from the package tree/);
+    assert.match(res.stderr, /native core skills not synced .* MCP disclosure remains authoritative/);
+    assert.ok(
+      !res.stdout.includes('MCP server will be available'),
+      'a broken package must never be promised availability, even when the destination also fails',
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(stage, { recursive: true, force: true });
+  }
+});
+
 test('dsh bundle postinstall rewrites relative MCP path to absolute', () => {
   const home = mkdtempSync(join(tmpdir(), 'dsh-home-'));
   const stage = mkdtempSync(join(tmpdir(), 'dsh-pkg-'));

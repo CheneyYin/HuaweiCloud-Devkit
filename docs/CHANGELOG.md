@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- fix(review): close the seventh-round gaps — uninstall attribution is dir-gated to the DSH native dir (matching the writer invariant doctor already enforces; a hand-copied package-root receipt anywhere else earns nothing), the postinstall hint gate's discriminating cell (broken package × destination failure) is test-pinned, the uninstall-path young-tmp survival is pinned, and AGENTS.md describes the age-gated sweep contract
 - fix(review): close the sixth-round gaps — the postinstall's destination-failure catch returns the real package health (the availability hint never follows a refuse-to-start diagnosis), receipt tmp sweeps are age-gated through one shared sweepReceiptTmpFiles (a concurrent live writer's in-flight tmp is never taken), the marketplace liveness probe is single-sourced as marketplacePayloadTree, doctor honors a package-root receipt only on the dsh row, and the availability hint plus the attribution-path tmp sweep are test-pinned in both directions
 
 - feat(skills): native disclosure for the six core meta-skills — the core routing skills ship as full native copies into the native skill dirs of the eight directory-based agents (receipt-gated convergence, manifest packOf ownership, PAYLOAD_TARGETS-driven sync, DSH postinstall parity); the 24 service skills stay MCP-only so DEVKIT_PACKS gating holds
