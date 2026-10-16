@@ -345,4 +345,34 @@ export const wsSandboxCases: E2eCase[] = [
     softExpect: [{ kind: 'agentSays', text: { any: ['e2e-before-close', 'e2e-after-close'] } }],
     budget: { timeoutMs: 360_000, attempts: 2 },
   },
+  {
+    // upload_file's md5 verification is the REAL gate: the fake's shell
+    // decodes the b64 batches and hashes true bytes, so a corruption
+    // anywhere in the chunk/append/decode chain makes the product THROW
+    // (ok:false in the trace) — this case can fail for the right reason.
+    id: 'sandbox-upload-file-md5',
+    pack: 'sandbox',
+    prompt:
+      '连接华为云沙箱(不需要配置 git 仓库),然后用 huaweicloud_sandbox_upload_file 把本地文件 {workdir}/hello-upload.txt 上传到沙箱的 /tmp/hello-upload.txt,把上传结果和 md5 校验情况告诉我。',
+    fixtures: {
+      ...wsSandboxFixtures(),
+      workdir: {
+        'hello-upload.txt': 'Hello from the e2e upload case — line two for body mass.\n'.repeat(40),
+      },
+    },
+    expect: [
+      CONNECT_POST,
+      { kind: 'toolCall', name: 'huaweicloud_sandbox_upload_file', ok: true },
+      // Upload rides the CACHED session: connect's two connections, zero
+      // more — same reuse arithmetic as the reuse case.
+      { kind: 'wsConnections', times: { min: 2, max: 2 } },
+      { kind: 'ws', intent: 'rm', times: { min: 1, max: 1 } },
+      { kind: 'ws', intent: 'printf-append', times: { min: 1, max: 3 } },
+      { kind: 'ws', intent: 'base64-decode', times: { min: 1, max: 1 } },
+      { kind: 'ws', intent: 'md5sum', times: { min: 1, max: 1 } },
+      ZERO_UNKNOWN,
+    ],
+    softExpect: [{ kind: 'agentSays', text: { any: ['md5', '校验', 'upload', '上传'] } }],
+    budget: { timeoutMs: 360_000, attempts: 2 },
+  },
 ];

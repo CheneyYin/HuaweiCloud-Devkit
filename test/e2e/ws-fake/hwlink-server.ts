@@ -23,6 +23,7 @@ import {
   type HwlinkPacket,
 } from '../../../plugins/huaweicloud-core/src/ws-exec/hwlink-packet.ts';
 import {
+  FakeFs,
   READY_PREFIX,
   doneMarkerFor,
   extractDoneNonce,
@@ -58,6 +59,10 @@ interface ConnState {
   // client's mux routes incoming packets BY IDENTIFIER, so responses must
   // echo it (an identifier-0 reply is silently dropped).
   identifier: number | null;
+  // Per-connection shell state: upload_file's batches, decode, and md5
+  // verification ride ONE persistent session, so the fs must outlive any
+  // single exec.
+  fs: FakeFs;
 }
 
 export class WsFake {
@@ -109,7 +114,7 @@ export class WsFake {
       close: null,
     };
     this.connections.push(recording);
-    const state: ConnState = { recording, socket, input: '', readyNonce: null, identifier: null };
+    const state: ConnState = { recording, socket, input: '', readyNonce: null, identifier: null, fs: new FakeFs() };
     socket.on('message', (data) => {
       try {
         this.handlePacket(state, parsePacket(data as Uint8Array));
@@ -178,7 +183,7 @@ export class WsFake {
       state.input = state.input.slice(lineEnd + 1);
       if (!isDoneCommandLine(doneLine)) continue;
       const nonce = extractDoneNonce(doneLine) ?? state.readyNonce;
-      const result = runShellCommand(blob);
+      const result = runShellCommand(blob, state.fs);
       state.recording.commands.push({ intent: result.intent, exitCode: result.exitCode });
       this.sendTerminalData(state, result.stdout + doneMarkerFor(nonce, result.exitCode));
     }

@@ -3,6 +3,8 @@
 // PRODUCT's buildMarkers — single source of truth, cross-tier pinned by
 // test/ws-exec-protocol.test.ts (feed buildShellCommands output through
 // these recognizers; drift on either side reds the test).
+import { createHash } from 'node:crypto';
+
 import { buildMarkers } from '../../../plugins/huaweicloud-core/src/ws-exec/ws-exec-client.ts';
 
 const MARKERS = buildMarkers('0000000000000000');
@@ -18,6 +20,38 @@ export interface ShellResult {
   exitCode: number;
 }
 
+// Per-connection in-memory filesystem (one ws connection = one terminal =
+// one shell; upload_file rides the persistent session, so its state must
+// outlive a single exec). b64 temp files live as their appended text; the
+// decode step materializes a Buffer; md5sum hashes real bytes — the same
+// math the product's verification does.
+export class FakeFs {
+  private readonly files = new Map<string, Buffer>();
+
+  appendText(path: string, text: string): void {
+    const prev = this.files.get(path);
+    const chunk = Buffer.from(text, 'utf8');
+    this.files.set(path, prev ? Buffer.concat([prev, chunk]) : chunk);
+  }
+
+  write(path: string, content: Buffer): void {
+    this.files.set(path, content);
+  }
+
+  delete(path: string): void {
+    this.files.delete(path);
+  }
+
+  read(path: string): Buffer | undefined {
+    return this.files.get(path);
+  }
+
+  md5(path: string): string | null {
+    const content = this.files.get(path);
+    return content ? createHash('md5').update(content).digest('hex') : null;
+  }
+}
+
 // Recognized-intent table — data, not branches. An unrecognized first line
 // records intent 'unknown' (generic exit 0): the ws expectation channel
 // gates zero-unknown, so a product script edit the fake no longer
@@ -25,34 +59,78 @@ export interface ShellResult {
 interface IntentRow {
   intent: string;
   pattern: RegExp;
-  run: (firstLine: string) => { stdout: string };
+  run: (match: RegExpExecArray, fs: FakeFs) => { stdout: string; exitCode?: number };
 }
 
 const INTENT_TABLE: IntentRow[] = [
   {
     intent: 'echo',
-    pattern: /^echo\s+/,
-    run: (line) => ({ stdout: `${line.replace(/^echo\s+/, '')}\n` }),
+    pattern: /^echo\s+(.*)$/,
+    run: (m) => ({ stdout: `${m[1]}\n` }),
   },
   {
     // handleConnect's best-effort cleanup (session-manager.ts).
     intent: 'devbridge-delete-all',
-    pattern: /^devbridge\s+delete-all\b/,
+    pattern: /^devbridge\s+delete-all\b.*$/,
     run: () => ({ stdout: '' }),
   },
   {
     // handleConnect's PATH export for later devbridge calls.
     intent: 'export-path',
-    pattern: /^export\s+PATH=/,
+    pattern: /^export\s+PATH=.*$/,
     run: () => ({ stdout: '' }),
+  },
+  {
+    // upload_file reset: `rm -f "<tmp>"` (double-quoted path).
+    intent: 'rm',
+    pattern: /^rm -f "([^"]+)"$/,
+    run: (m, fs) => {
+      fs.delete(m[1]!);
+      return { stdout: '' };
+    },
+  },
+  {
+    // upload_file batches: `printf '%s' '<b64>' >> "<tmp>"` — the b64
+    // alphabet carries no quotes, and the payload rides the FIRST line.
+    intent: 'printf-append',
+    pattern: /^printf '%s' '([^']*)' >> "([^"]+)"$/,
+    run: (m, fs) => {
+      fs.appendText(m[2]!, m[1]!);
+      return { stdout: '' };
+    },
+  },
+  {
+    // upload_file decode: `base64 -d "<tmp>" > "<remote>" && rm -f "<tmp>"`.
+    intent: 'base64-decode',
+    pattern: /^base64 -d "([^"]+)" > "([^"]+)" && rm -f "([^"]+)"$/,
+    run: (m, fs) => {
+      const appended = fs.read(m[1]!);
+      if (appended === undefined) return { stdout: '', exitCode: 1 };
+      fs.write(m[2]!, Buffer.from(appended.toString('utf8'), 'base64'));
+      fs.delete(m[3]!);
+      return { stdout: '' };
+    },
+  },
+  {
+    // upload_file verify: `md5sum "<remote>"` — real md5 over the decoded
+    // bytes; a mismatch makes the product THROW, which is the case's gate.
+    intent: 'md5sum',
+    pattern: /^md5sum "([^"]+)"$/,
+    run: (m, fs) => {
+      const md5 = fs.md5(m[1]!);
+      if (md5 === null) return { stdout: '', exitCode: 1 };
+      return { stdout: `${md5}  ${m[1]}\n` };
+    },
   },
 ];
 
-export function runShellCommand(blob: string): ShellResult {
+export function runShellCommand(blob: string, fs: FakeFs): ShellResult {
   const firstLine = blob.split('\n', 1)[0] ?? '';
   for (const row of INTENT_TABLE) {
-    if (row.pattern.test(firstLine)) {
-      return { intent: row.intent, exitCode: 0, ...row.run(firstLine) };
+    const match = row.pattern.exec(firstLine);
+    if (match) {
+      const { stdout, exitCode } = row.run(match, fs);
+      return { intent: row.intent, stdout, exitCode: exitCode ?? 0 };
     }
   }
   return { intent: 'unknown', stdout: '', exitCode: 0 };

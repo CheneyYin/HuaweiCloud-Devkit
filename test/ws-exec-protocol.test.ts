@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 
 import {
@@ -15,6 +16,7 @@ import {
   extractReadyNonce,
   readyMarkerFor,
   runShellCommand,
+  FakeFs,
 } from './e2e/ws-fake/fake-shell.ts';
 
 // Golden pins for the hwlink wire protocol the E2E ws-fake shares with the
@@ -85,14 +87,41 @@ test('buildShellCommands output shape is pinned (printf framing)', () => {
 });
 
 test('fake shell intent table: echo answers its text, probes answer empty, unknown is distinct', () => {
-  const echo = runShellCommand('echo hello-from-e2e\n');
+  const echo = runShellCommandWithFs('echo hello-from-e2e\n');
   assert.equal(echo.intent, 'echo');
   assert.equal(echo.stdout, 'hello-from-e2e\n');
   assert.equal(echo.exitCode, 0);
 
-  assert.equal(runShellCommand('devbridge delete-all 2>/dev/null || true\n').intent, 'devbridge-delete-all');
-  assert.equal(runShellCommand('export PATH=$HOME/.huawei/bin${PATH:+:$PATH}\n').intent, 'export-path');
+  assert.equal(runShellCommandWithFs('devbridge delete-all 2>/dev/null || true\n').intent, 'devbridge-delete-all');
+  assert.equal(runShellCommandWithFs('export PATH=$HOME/.huawei/bin${PATH:+:$PATH}\n').intent, 'export-path');
   // Unrecognized commands record distinctly — the zero-unknown gate keys on
   // this so product script drift turns cases red instead of degrading.
-  assert.equal(runShellCommand('some-future-script --flag\n').intent, 'unknown');
+  assert.equal(runShellCommandWithFs('some-future-script --flag\n').intent, 'unknown');
+});
+
+function runShellCommandWithFs(command: string): ReturnType<typeof runShellCommand> {
+  return runShellCommand(command, new FakeFs());
+}
+
+test('fake fs round-trip: printf batches → base64 decode → real md5', () => {
+  const fs = new FakeFs();
+  const content = Buffer.from('Hello from the e2e upload case — line two for body mass.\n'.repeat(40), 'utf8');
+  const b64 = content.toString('base64');
+  const chunks = [b64.slice(0, 30000), b64.slice(30000)].filter(Boolean);
+  const reset = runShellCommand(`rm -f "/tmp/hello.b64tmp"`, fs);
+  assert.equal(reset.intent, 'rm');
+  for (const chunk of chunks) {
+    const append = runShellCommand(`printf '%s' '${chunk}' >> "/tmp/hello.b64tmp"`, fs);
+    assert.equal(append.intent, 'printf-append');
+    assert.equal(append.exitCode, 0);
+  }
+  const decode = runShellCommand(`base64 -d "/tmp/hello.b64tmp" > "/tmp/hello.txt" && rm -f "/tmp/hello.b64tmp"`, fs);
+  assert.equal(decode.intent, 'base64-decode');
+  assert.equal(decode.exitCode, 0);
+  const verify = runShellCommand(`md5sum "/tmp/hello.txt"`, fs);
+  assert.equal(verify.intent, 'md5sum');
+  const expected = createHash('md5').update(content).digest('hex');
+  assert.ok(verify.stdout.startsWith(`${expected}  `), `md5 must match the real hash: ${verify.stdout}`);
+  // The tmp file is gone after decode.
+  assert.equal(runShellCommand(`md5sum "/tmp/hello.b64tmp"`, fs).exitCode, 1);
 });
