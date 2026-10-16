@@ -1609,9 +1609,10 @@ function removeCodexMarketplaceEntry(): void {
     return;
   }
   if (!marketplace.plugins) return;
+  const pluginName = getCodexPluginName();
   const plugins: unknown[] = Array.isArray(marketplace.plugins) ? marketplace.plugins : [];
   const before = plugins.length;
-  const filtered = plugins.filter((p) => asRecord(p).name !== getCodexPluginName());
+  const filtered = plugins.filter((p) => asRecord(p).name !== pluginName);
   if (filtered.length === before) return;
   marketplace.plugins = filtered;
   writeFileSync(mpPath, JSON.stringify(marketplace, null, 2) + '\n');

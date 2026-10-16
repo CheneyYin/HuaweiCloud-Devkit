@@ -1139,6 +1139,12 @@ test('codex uninstall keeps the plugin cache when marketplace remove fails', () 
     // registration potentially live, so its cache must survive the uninstall
     // (deleting it would break a still-registered plugin).
     assert.ok(existsSync(join(cacheDir, 'marker')), 'failed marketplace remove must keep the plugin cache');
+
+    // Positive twin: a successful marketplace remove opens the gate and
+    // cleans the cache (the fake-CLI pin; real-agents covers the real CLI).
+    const again = run('codex', home, cwd, 'uninstall', fakeCodexEnv(cwd));
+    assert.equal(again.status, 0, again.stderr);
+    assert.ok(!existsSync(join(cacheDir, 'marker')), 'successful marketplace remove must clean the plugin cache');
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });

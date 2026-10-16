@@ -845,12 +845,14 @@ function cliEnv(home: string, extra: Record<string, string | undefined> = {}): R
     HUAWEICLOUD_DEVKIT_SKIP_OFFICEACE_DETECT: '1',
   };
   // These tests reach `install --target opencode` (the XDG-aware config
-  // root) and uninstall flows (uninstallCodex's CODEX_HOME-keyed cache
-  // cleanup) with the ambient PATH; ambient home overrides would
-  // write/delete real state on a dev machine.
+  // root) and `uninstall --target all` (uninstallCodex's CODEX_HOME-keyed
+  // cache cleanup, uninstallHermes's HERMES_HOME-keyed payload removal)
+  // with the ambient PATH; ambient home overrides would write/delete real
+  // state on a dev machine.
   for (const key of [
     'ATOMCODE_HOME',
     'DSH_HOME',
+    'HERMES_HOME',
     'HUAWEICLOUD_HOME',
     'OFFICE_CLAW_CONFIG_ROOT',
     'XDG_CONFIG_HOME',

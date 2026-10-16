@@ -203,7 +203,13 @@ function dirSnapshot(dir: string): string | null {
       // and recursed, or a leak routed through it is invisible. An entry
       // vanishing between readdir and stat (concurrent host activity on
       // the real HOME) must not crash the canary itself — record a
-      // tombstone instead; anything other than ENOENT stays fatal.
+      // tombstone instead; anything other than ENOENT stays fatal. The
+      // guarantee covers the stat path only: a vanishing DIRECTORY or a
+      // symlink cycle still throws (ELOOP / ENOENT from readdir) —
+      // fail-loud, and pathological for these devkit-owned trees. The
+      // name-based skip also blinds the canary to dist/telemetry/ payload
+      // module code — accepted: no realistic leak writes only that, a
+      // payload leak always includes visible dist/safety/skills files.
       let st: Stats;
       try {
         st = statSync(join(d, entry.name));

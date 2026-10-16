@@ -219,7 +219,13 @@ for (const target of SUPPORTED_AGENT_TARGETS) {
 // ---- 3. hook from an installed plugin copy ----
 console.log('[smoke] hook check...');
 const hookHome = mkdtempSync(join(tmpdir(), 'hwc-smoke-hook-'));
-run(process.execPath, [bin, 'install', '--target', 'hermes'], { env: { HOME: hookHome } });
+const hookInstall = run(process.execPath, [bin, 'install', '--target', 'hermes'], {
+  env: { HOME: hookHome },
+  // Same ladder bound as the per-target installs above (cold-cache undici
+  // fetch, ~368s worst case).
+  timeout: 400_000,
+});
+record('hook', 'hook-check install exits 0', hookInstall.status === 0, firstErrorLine(hookInstall));
 const hookPath = findFile(join(hookHome, '.hermes'), 'huaweicloud-safety.mjs');
 if (!hookPath) {
   record('hook', 'installed hook wrapper found', false, 'hermes install did not copy hooks');
