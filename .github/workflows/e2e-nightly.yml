@@ -49,7 +49,16 @@ jobs:
           E2E_PROVIDER_ID: ${{ vars.E2E_TEST_PROVIDER_ID || 'maas' }}
           E2E_PROVIDER_BASEURL: ${{ vars.E2E_TEST_PROVIDER_BASEURL || 'https://api.modelarts-maas.com/openai/v1' }}
           E2E_MODEL: ${{ vars.E2E_TEST_MODEL || 'glm-5.2' }}
-        run: npm run test:e2e
+        # The workflow file ships to main ahead of the suite branch so
+        # GitHub registers it (discovery/dispatch/cron all read the default
+        # branch). On refs where the suite is not merged yet, fail loud as
+        # a no-op instead of erroring on a missing script.
+        run: |
+          if ! grep -q '"test:e2e"' package.json; then
+            echo "test:e2e is not defined on this ref — the E2E suite is not merged here yet; nothing to run."
+            exit 0
+          fi
+          npm run test:e2e
       - name: Upload E2E report
         if: always()
         uses: actions/upload-artifact@v4
