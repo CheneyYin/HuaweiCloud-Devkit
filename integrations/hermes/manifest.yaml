@@ -5,7 +5,8 @@ description: >
   guardrails for Huawei Cloud services within Hermes Agent. Service skills
   (ECS, OBS, VPC, RDS, CCE, ModelArts, and more) ship as server data and are
   disclosed through the MCP tools (huaweicloud_list_packs,
-  huaweicloud_retrieve_skill) instead of ~/.hermes/skills/ copies.
+  huaweicloud_list_skills, huaweicloud_retrieve_skill) instead of
+  ~/.hermes/skills/ copies.
 
 source: https://github.com/huaweicloud/huaweicloud-devkit
 
@@ -39,7 +40,8 @@ post_install: |
     • Safety policy + skills tree (server data) → ~/.hermes/huaweicloud-plugins/
 
   Skills are MCP-disclosed: ask the agent to call huaweicloud_list_packs,
-  or route a task with huaweicloud_service_catalog and load the recommended
+  browse the skill catalog with huaweicloud_list_skills, or route a task with
+  huaweicloud_service_catalog and load the recommended
   skill with huaweicloud_retrieve_skill. The six core meta-skills
   (huaweicloud-*) are additionally installed as native copies in
   ~/.hermes/skills for system-prompt visibility.

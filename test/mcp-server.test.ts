@@ -103,7 +103,9 @@ function createClient(server = serverPath) {
       child.stdin.write(first);
       setTimeout(() => child.stdin.write(second), 50);
       return new Promise<JsonRpcResponse>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error(`Timed out waiting for split ${method}`)), 2000);
+        // Same cold-boot cost the request() helper documents: 2s produced
+        // load-dependent timeouts here too once the tool registry grew.
+        const timer = setTimeout(() => reject(new Error(`Timed out waiting for split ${method}`)), 10_000);
         pending.set(id, (message) => {
           clearTimeout(timer);
           pending.delete(id);

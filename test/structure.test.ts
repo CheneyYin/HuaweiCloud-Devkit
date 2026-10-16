@@ -7,6 +7,7 @@ import test from 'node:test';
 
 import { TOOL_DEFINITIONS } from '../plugins/huaweicloud-core/src/tools.ts';
 import { PACK_OF, PACKS } from '../plugins/huaweicloud-core/src/packs/registry.ts';
+import { parseSkillFrontmatter } from '../plugins/huaweicloud-core/src/lib/skill-frontmatter.ts';
 import { SUPPORTED_AGENT_TARGETS } from '../plugins/huaweicloud-core/src/auth/agent-registration.ts';
 import { PACK_IDS } from '../plugins/huaweicloud-core/src/lib/pack-types.ts';
 import {
@@ -205,6 +206,33 @@ test('plugin skills are compact meta-skills instead of service encyclopedia entr
     const body = readFileSync(join(skillsDir, name, 'SKILL.md'), 'utf8');
     assert.match(body, /^---\r?\nname: /);
     assert.doesNotMatch(body, /TODO|\[TODO/i);
+  }
+});
+
+// The corpus contract for frontmatter, pinned over every source skill:
+// non-empty quote-free description, frontmatter name equal to the
+// registry/directory name (the search_docs → retrieve_skill chain), absent
+// or numeric version, no unsupported block-scalar marker. The multi-line
+// and second-paragraph guarantees are pinned at the consumer level
+// (test/pack-meta-tools.test.ts, test/tools.test.ts) — a truncation that
+// still yields a clean single line would pass these shape checks.
+test('every source SKILL.md description parses non-empty and quote-free', () => {
+  for (const pack of PACKS) {
+    for (const name of pack.skills) {
+      const body = readFileSync(join(pluginRoot, 'src', 'packs', pack.id, 'skills', name, 'SKILL.md'), 'utf8');
+      const fm = parseSkillFrontmatter(body);
+      assert.ok(fm.description && fm.description.length > 0, `${name} description must parse non-empty`);
+      assert.ok(
+        !/^['"]|['"]$/.test(fm.description),
+        `${name} description must parse quote-stripped (multi-line or quoted frontmatter regressed)`,
+      );
+      assert.ok(
+        !/^[>|]/.test(fm.description),
+        `${name} description must not parse to an unsupported block-scalar marker`,
+      );
+      assert.equal(fm.name, name, `${name} frontmatter name must equal the registry/directory name`);
+      assert.ok(fm.version === null || /^\d+(\.\d+)*$/.test(fm.version), `${name} version must be absent or numeric`);
+    }
   }
 });
 

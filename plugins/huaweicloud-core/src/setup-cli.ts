@@ -639,8 +639,9 @@ function copyDir(src: string, dest: string): void {
 
 // The payload every per-agent plugin dir must carry: the MCP server (dist/),
 // the safety policy, and the skills tree. Skills are server data disclosed
-// through the MCP tools (list_packs / pack_info / retrieve_skill /
-// search_docs); the core meta-skills are ADDITIONALLY disclosed natively by
+// through the MCP tools (list_packs / pack_info / list_skills /
+// retrieve_skill / search_docs); the core meta-skills are ADDITIONALLY
+// disclosed natively by
 // syncNativeCoreSkills, so every install and update path must place the tree
 // next to the server it deploys (the native sync rides the same
 // PAYLOAD_TARGETS table from the dispatch layer).

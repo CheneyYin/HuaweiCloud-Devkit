@@ -29,6 +29,8 @@ interface RetrieveSkillResult {
   ok: boolean;
   error?: string;
   name?: string;
+  version?: string | number;
+  description?: string;
   content?: string;
   references: Array<{ filename: string; content: string }>;
 }
@@ -123,6 +125,7 @@ test('TOOL_DEFINITIONS includes all required tools including sandbox', () => {
     'huaweicloud_voucher_claim',
     'huaweicloud_list_packs',
     'huaweicloud_pack_info',
+    'huaweicloud_list_skills',
   ] as const;
   for (const name of required) {
     assert.ok(names.includes(name), `Missing tool: ${name}`);
@@ -323,6 +326,41 @@ test('retrieve_skill serves the full skill from the server-relative tree', async
   assert.match(result.content!, /^---\r?\nname: huawei-ecs/);
   assert.ok(result.references.length > 0, 'huawei-ecs ships reference files');
   assert.ok(result.references.some((ref) => ref.filename === 'create-instance.md'));
+});
+
+// The consumer-level pin of the truncation fix: the parser unit tests and
+// the structure invariant guard the module and the corpus, this guards the
+// wiring — a future first-line regex dropped back into retrieveSkill fails
+// here even though every other gate stays green.
+test('retrieve_skill returns the full multi-line description, quote-stripped', async () => {
+  const result = (await callTool('huaweicloud_retrieve_skill', { name: 'huawei-ecs' })) as RetrieveSkillResult;
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.version, '1');
+  assert.ok(result.description!.startsWith('Use when'), 'the YAML quote must not survive into retrieve_skill output');
+  assert.ok(
+    result.description!.includes('HC活动场景'),
+    'the multi-line second paragraph must survive into retrieve_skill output',
+  );
+  assert.deepEqual(
+    result.references.map((ref) => ref.filename),
+    ['create-instance.md', 'evs.md', 'flavors.md', 'hc-activity.md', 'troubleshooting.md'],
+    'references list in the same deterministic order list_skills serves',
+  );
+});
+
+test('search_docs matches tokens from the multi-line description second paragraph', async () => {
+  // 'Nginx部署' lives only in huawei-ecs's second paragraph: the CONTENT
+  // index path found it even before the multi-line fix (whole-file match),
+  // so the discriminating assertion is the snippet — the old first-line
+  // snippet was quote-prefixed and paragraph-free.
+  const result = (await callTool('huaweicloud_search_docs', { query: 'Nginx部署' })) as {
+    ok: boolean;
+    results: Array<{ name: string; snippet: string }>;
+  };
+  assert.equal(result.ok, true);
+  const hit = result.results.find((entry) => entry.name === 'huawei-ecs');
+  assert.ok(hit, 'the second-paragraph token must find huawei-ecs');
+  assert.ok(hit!.snippet.startsWith('Use when'), 'the snippet must carry the quote-stripped description');
 });
 
 test('auth_switch temporary sets runtime credentials for api path', async () => {

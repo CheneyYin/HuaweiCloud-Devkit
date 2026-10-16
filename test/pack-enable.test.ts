@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 
-import { resolveEnabledPacks } from '../plugins/huaweicloud-core/src/packs/enable.ts';
+import { clearRuntimePacksOverride, resolveEnabledPacks } from '../plugins/huaweicloud-core/src/packs/enable.ts';
 import { PACKS } from '../plugins/huaweicloud-core/src/packs/registry.ts';
 import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
 import { createLinkedDevkitServers } from '../plugins/huaweicloud-core/src/mcp-protocol.ts';
@@ -41,6 +41,13 @@ interface PackInfoPayload {
 
 interface SkillPayload {
   ok: boolean;
+  error?: string;
+}
+
+interface ListSkillsPayload {
+  ok: boolean;
+  count: number;
+  skills: Array<{ name: string; pack: string }>;
   error?: string;
 }
 
@@ -169,7 +176,7 @@ test(
 test(
   'enabling huaweicloud-cli loads service skills and gates other packs',
   withDevkitPacks('huaweicloud-cli', async () => {
-    // Skill gating is half the pack's surface; the tools/list half (core 10 +
+    // Skill gating is half the pack's surface; the tools/list half (core 11 +
     // the seven CLI execution tools) is pinned by the trimming test below.
     const listed = (await callTool('huaweicloud_list_packs', {})) as ListPacksPayload;
     assert.equal(listed.ok, true);
@@ -194,14 +201,14 @@ test(
   withDevkitPacks('huaweicloud-cli', async () => {
     // Fail-closed trimming, positive direction: the pack carries the CLI
     // execution face and its approval tools together, so a trimmed-to-cli
-    // server exposes exactly core 10 + cli 7 and nothing else.
+    // server exposes exactly core 11 + cli 7 and nothing else.
     const { server, transport } = await createLinkedDevkitServers();
     const client = new Client({ name: 'pack-enable-test', version: '0.0.0' });
     try {
       await client.connect(transport);
       const listed = await client.listTools();
       const names = listed.tools.map((tool) => tool.name);
-      assert.equal(names.length, 17, 'core 10 + huaweicloud-cli 7');
+      assert.equal(names.length, 18, 'core 11 + huaweicloud-cli 7');
       for (const name of [
         'huaweicloud_check_cli',
         'huaweicloud_plan_cli_command',
@@ -226,4 +233,55 @@ test('without DEVKIT_PACKS every skill and pack is available again', async () =>
   assert.equal(skill.ok, true, 'huawei-obs must be retrievable with no trimming');
   const info = (await callTool('huaweicloud_pack_info', { pack: 'obs' })) as PackInfoPayload;
   assert.equal(info.ok, true);
+});
+
+test(
+  'list_skills follows DEVKIT_PACKS: trimmed packs are omitted from the catalog',
+  withDevkitPacks('core,huaweicloud-cli', async () => {
+    const result = (await callTool('huaweicloud_list_skills', {})) as ListSkillsPayload;
+    assert.equal(result.ok, true);
+    assert.ok(result.count > 0, 'huaweicloud-cli carries the twenty service skills');
+    for (const entry of result.skills) {
+      assert.equal(entry.pack, 'huaweicloud-cli', 'only the enabled non-core pack may appear');
+    }
+    const names = new Set(result.skills.map((skill) => skill.name));
+    assert.ok(names.has('huawei-ecs'), 'the enabled pack\u2019s skills stay catalogued');
+    for (const absent of ['huawei-obs', 'huawei-sandbox', 'huawei-voucher', 'huawei-openapi']) {
+      assert.ok(!names.has(absent), `${absent} from a disabled pack must not be catalogued`);
+    }
+  }),
+);
+
+test(
+  'list_skills pack filter on a disabled pack returns the enablement error, not a silent empty list',
+  withDevkitPacks('core,huaweicloud-cli', async () => {
+    const denied = (await callTool('huaweicloud_list_skills', { pack: 'obs' })) as ListSkillsPayload;
+    assert.equal(denied.ok, false);
+    assert.match(denied.error ?? '', /Pack "obs" is not enabled/);
+    assert.match(denied.error ?? '', /DEVKIT_PACKS/, 'the error must explain how to enable the pack');
+  }),
+);
+
+test('list_skills follows the session override, not just the env posture', async () => {
+  // The runtime override wins over env unconditionally (enable.ts), so this
+  // is the seam a shared-file env-pinned test could silently lose to; the
+  // finally restores the override before any later test reads enablement.
+  try {
+    const configured = (await callTool(
+      'huaweicloud_packs_configure',
+      { disable: ['huaweicloud-cli'] },
+      { onPacksChanged: () => {} },
+    )) as { ok: boolean; changed: boolean };
+    assert.equal(configured.ok, true);
+    assert.equal(configured.changed, true);
+
+    const result = (await callTool('huaweicloud_list_skills', {})) as ListSkillsPayload;
+    assert.equal(result.ok, true);
+    const names = new Set(result.skills.map((skill) => skill.name));
+    assert.ok(!names.has('huawei-ecs'), 'the override must gate the catalog even with env unset');
+    assert.ok(!result.skills.some((skill) => skill.pack === 'huaweicloud-cli'));
+    assert.ok(names.has('huawei-obs'), 'an enabled pack\u2019s skills must stay catalogued under the override');
+  } finally {
+    clearRuntimePacksOverride();
+  }
 });

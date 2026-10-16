@@ -25,6 +25,7 @@ const IGNORED_KEYS = new Set(['$schema', 'additionalProperties', 'description'])
 const EXEMPT_TOOLS = new Set([
   'huaweicloud_list_packs',
   'huaweicloud_pack_info',
+  'huaweicloud_list_skills',
   'huaweicloud_packs_configure',
   'huaweicloud_gateway_list_tools',
   'huaweicloud_gateway_call',

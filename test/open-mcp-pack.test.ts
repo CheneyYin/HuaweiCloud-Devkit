@@ -128,7 +128,7 @@ test(
       await client.connect(transport);
       const listed = await client.listTools();
       const names = listed.tools.map((tool) => tool.name);
-      assert.equal(names.length, 10, 'core-only tools/list');
+      assert.equal(names.length, 11, 'core-only tools/list');
       for (const name of OPEN_MCP_TOOLS) {
         assert.ok(!names.includes(name), `${name} must not be registered when huaweicloud-open-mcp is trimmed`);
       }

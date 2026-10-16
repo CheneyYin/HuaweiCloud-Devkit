@@ -106,11 +106,12 @@ When the intent is to **deploy, host, or preview a web app or static website** (
 - KooCLI hcloud: local inspection and reviewed command execution
 - API documentation: exact endpoint, request body, pagination, project_id
 - SDK documentation: application integration
-- MCP tools: huaweicloud_search_docs, huaweicloud_retrieve_skill, huaweicloud_list_regions
+- MCP tools: huaweicloud_list_skills, huaweicloud_search_docs, huaweicloud_retrieve_skill, huaweicloud_list_regions
 - Terraform Provider: lower-priority V1 path for reviewed IaC
 
 ## Tool Boundary
 
+- Use huaweicloud_list_skills to browse every pack-owned skill's metadata (name, description, version, pack, reference filenames) in one call before paying for retrieve_skill's full payload
 - Use huaweicloud_search_docs to discover skills covering a topic
 - Use huaweicloud_retrieve_skill to load a full SKILL.md after routing
 - Use huaweicloud_auth_init to switch credentials at runtime when different accounts co-exist in the same session

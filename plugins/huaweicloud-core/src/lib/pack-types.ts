@@ -48,8 +48,8 @@ export interface PackToolDefinition {
 // 'huaweicloud-cli' is a mixed knowledge+tools pack: the twenty service
 // skills plus the seven KooCLI execution tools (the CLI face and its
 // approval chain, sunk from core), while the meta tools that disclose packs
-// (list_packs / pack_info / retrieve_skill) stay in core so an enabled pack
-// can always be discovered.
+// (list_packs / pack_info / list_skills / retrieve_skill) stay in core so
+// an enabled pack can always be discovered.
 export const PACK_IDS = [
   'core',
   'huaweicloud-cli',

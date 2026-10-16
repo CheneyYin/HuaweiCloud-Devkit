@@ -116,6 +116,18 @@ const TOOL_SCHEMAS = {
         'Pack id from huaweicloud_list_packs, such as core, huaweicloud-cli, sandbox, auth, obs, voucher, update, discovery, huaweicloud-open-mcp.',
       ),
   }),
+  // The pack filter is deliberately z.string (handler-side PACKS lookup),
+  // not z.enum(PACK_IDS): the unknown-id error must name every valid id at
+  // the handler boundary so callTool-driven callers and SDK-validated MCP
+  // callers see the same shape packs_configure's enum boundary would split.
+  huaweicloud_list_skills: z.looseObject({
+    pack: z
+      .string()
+      .optional()
+      .describe(
+        'Optional pack id filter from huaweicloud_list_packs. Skill-owning packs (huaweicloud-cli, sandbox, obs, voucher, huaweicloud-open-mcp) list their skills; a valid zero-skill pack (auth, update, discovery) returns an empty list; the core pack is refused with an explanation (its six meta-skills are excluded by design). Omit to list every enabled pack\u2019s skills.',
+      ),
+  }),
   huaweicloud_packs_configure: z.looseObject({
     enable: z
       .array(z.enum(PACK_IDS))

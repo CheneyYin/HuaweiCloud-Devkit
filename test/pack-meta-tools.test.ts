@@ -40,6 +40,12 @@ interface PackInfoPayload {
   tools: Array<{ name: string; description: string; schema: Record<string, unknown> }>;
 }
 
+interface ListSkillsPayload {
+  ok: boolean;
+  count: number;
+  skills: Array<{ name: string; description: string; pack: PackId; version: string | number; references: string[] }>;
+}
+
 interface ToolErrorPayload {
   ok: boolean;
   error: string;
@@ -89,19 +95,99 @@ test('huaweicloud_pack_info returns the 11 sandbox tools with name, description,
   }
 });
 
-test('huaweicloud_pack_info bogus pack returns an error listing the valid pack ids', async () => {
-  const result = (await callTool('huaweicloud_pack_info', { pack: 'bogus' })) as ToolErrorPayload;
+// pack_info and list_skills serve the same refusal for an unknown pack id
+// (they share the packNotFound helper in tools.ts); one assertion body pins
+// both surfaces instead of a parallel test pair.
+async function assertBogusPackError(toolName: 'huaweicloud_pack_info' | 'huaweicloud_list_skills'): Promise<void> {
+  const result = (await callTool(toolName, { pack: 'bogus' })) as ToolErrorPayload;
   assert.equal(result.ok, false);
   assert.match(result.error, /not found/);
   for (const id of PACK_IDS) {
     assert.match(result.error, new RegExp(`\\b${id}\\b`), `error must list valid id ${id}`);
   }
+}
+
+test('huaweicloud_pack_info bogus pack returns an error listing the valid pack ids', async () => {
+  await assertBogusPackError('huaweicloud_pack_info');
 });
 
 test('huaweicloud_pack_info without a pack id reports it as required', async () => {
   const result = (await callTool('huaweicloud_pack_info', {})) as ToolErrorPayload;
   assert.equal(result.ok, false);
   assert.match(result.error, /required/);
+});
+
+// The catalog must carry the full multi-line description, quote-stripped:
+// the huawei-ecs frontmatter's second paragraph (HC activity triggers) is
+// the exact shape the old single-line regex truncated, and a parse that
+// regressed to first-line-only would still pass a mere "non-empty" check.
+test('huaweicloud_list_skills catalogs the enabled non-core skills with parsed descriptions', async () => {
+  const result = (await callTool('huaweicloud_list_skills', {})) as ListSkillsPayload;
+  assert.equal(result.ok, true);
+  assert.equal(result.count, result.skills.length);
+  assert.ok(result.count >= 20, 'the five skill-owning packs carry at least 20 skills');
+  for (const entry of result.skills) {
+    assert.notEqual(entry.pack, 'core', 'core meta-skills are excluded by design');
+    assert.ok(entry.name.startsWith('huawei-'), 'every catalogued skill is a pack-owned huawei-* skill');
+    assert.ok(entry.description.length > 0, `${entry.name} description must parse non-empty`);
+    assert.ok(
+      !/^['"]|['"]$/.test(entry.description),
+      `${entry.name} description must be quote-stripped (the truncated-bug symptom)`,
+    );
+    assert.ok(Array.isArray(entry.references), `${entry.name} references must be a filename array`);
+  }
+  const ecs = result.skills.find((skill) => skill.name === 'huawei-ecs')!;
+  assert.ok(ecs, 'huawei-ecs must be catalogued');
+  assert.equal(ecs.pack, 'huaweicloud-cli');
+  assert.equal(ecs.version, '1');
+  assert.equal(ecs.description.startsWith('Use when'), true, 'leading YAML quote must not survive the parse');
+  assert.ok(ecs.description.includes('HC活动场景'), 'the multi-line second paragraph must survive the parse');
+  assert.deepEqual(ecs.references, [
+    'create-instance.md',
+    'evs.md',
+    'flavors.md',
+    'hc-activity.md',
+    'troubleshooting.md',
+  ]);
+});
+
+test('huaweicloud_list_skills pack filter returns exactly the pack\u2019s skills', async () => {
+  const result = (await callTool('huaweicloud_list_skills', { pack: 'obs' })) as ListSkillsPayload;
+  assert.equal(result.ok, true);
+  assert.equal(result.count, 1);
+  assert.deepEqual(
+    result.skills.map((skill) => skill.name),
+    ['huawei-obs'],
+  );
+  assert.equal(result.skills[0]!.pack, 'obs');
+  assert.ok(result.skills[0]!.description.length > 0, 'huawei-obs description must parse');
+});
+
+test('huaweicloud_list_skills on a valid zero-skill pack returns an empty catalog', async () => {
+  const result = (await callTool('huaweicloud_list_skills', { pack: 'auth' })) as ListSkillsPayload;
+  assert.equal(result.ok, true);
+  assert.equal(result.count, 0);
+  assert.deepEqual(result.skills, []);
+});
+
+test('huaweicloud_list_skills bogus pack returns an error listing the valid pack ids', async () => {
+  await assertBogusPackError('huaweicloud_list_skills');
+});
+
+test('huaweicloud_list_skills blank pack reports it as required instead of silently listing everything', async () => {
+  // pack_info answers the same degenerate input with the same error; a
+  // blank filter that silently returns the full catalog would look like a
+  // filter that "worked" to a buggy caller.
+  const result = (await callTool('huaweicloud_list_skills', { pack: '   ' })) as ToolErrorPayload;
+  assert.equal(result.ok, false);
+  assert.match(result.error, /required/);
+});
+
+test('huaweicloud_list_skills core filter explains the meta-skill exclusion instead of listing nothing', async () => {
+  const result = (await callTool('huaweicloud_list_skills', { pack: 'core' })) as ToolErrorPayload;
+  assert.equal(result.ok, false);
+  assert.match(result.error, /core.*meta-skills|six core meta-skills/);
+  assert.match(result.error, /huaweicloud_retrieve_skill/, 'the error must name the portable load path');
 });
 
 // The skill-name pattern is the MCP boundary guard for the sole skill-loading
@@ -147,7 +233,7 @@ test('pack_info schema output matches the tools/list rendering after stripping i
         compared++;
       }
     }
-    assert.equal(compared, 45, 'every registered tool must be compared');
+    assert.equal(compared, 46, 'every registered tool must be compared');
   } finally {
     await client.close();
     await server.close();

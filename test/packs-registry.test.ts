@@ -34,7 +34,7 @@ test('pack tool counts match the P0 grouping', () => {
   // huaweicloud-cli is a mixed pack: the twenty service skills plus the seven
   // KooCLI execution tools sunk from core.
   const expected = {
-    core: 11,
+    core: 12,
     'huaweicloud-cli': 7,
     sandbox: 11,
     auth: 5,
@@ -49,7 +49,7 @@ test('pack tool counts match the P0 grouping', () => {
     assert.equal(pack.tools.length, expected[pack.id], `${pack.id} tool count`);
     total += pack.tools.length;
   }
-  assert.equal(total, 46);
+  assert.equal(total, 47);
 });
 
 test('the central pack handler map keys equal the pack-owned tool names', () => {
