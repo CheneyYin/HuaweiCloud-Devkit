@@ -4949,7 +4949,10 @@ async function cmdDoctor(): Promise<void> {
       const mp = asRecord(JSON.parse(readFileSync(mpPath, 'utf8')));
       if (
         mp.plugins &&
-        (Array.isArray(mp.plugins) ? mp.plugins : []).some((p) => asRecord(p).name === 'huaweicloud-devkit')
+        // Canonical plugin name — the same getCodexPluginName() reader
+        // ensureCodexMarketplaceEntry writes and codexDesktopStatus reads,
+        // so a marketplace.json rename moves all of them together.
+        (Array.isArray(mp.plugins) ? mp.plugins : []).some((p) => asRecord(p).name === getCodexPluginName())
       ) {
         mcpConfigured = true;
         mcpCfgTarget = 'Codex Desktop';

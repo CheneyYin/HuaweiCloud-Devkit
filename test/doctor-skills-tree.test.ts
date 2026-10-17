@@ -43,9 +43,9 @@ function doctorEnv(home: string, extra: Record<string, string> = {}): NodeJS.Pro
   delete env.HERMES_HOME;
   // XDG_CONFIG_HOME redirects the opencode config root (xdgConfigHome);
   // CODEX_HOME keys the uninstaller's codex cache cleanup. Ambient values
-  // would leak doctor's fresh-install probes into real state (if a test
-  // ever needs them set, use the DSH_HOME guard pattern).
-  delete env.XDG_CONFIG_HOME;
+  // would leak doctor's fresh-install probes into real state (a test that
+  // needs XDG_CONFIG_HOME set uses the DSH_HOME guard pattern).
+  if (!('XDG_CONFIG_HOME' in extra)) delete env.XDG_CONFIG_HOME;
   delete env.CODEX_HOME;
   if (!('DSH_HOME' in extra)) delete env.DSH_HOME;
   return env;
@@ -69,10 +69,10 @@ function runDoctor(home: string, extra: Record<string, string> = {}): string {
 
 // A real install into the fake home, so the native freshness checks see an
 // installed payload with receipt-managed native copies.
-function runInstall(home: string): void {
+function runInstall(home: string, extra: Record<string, string> = {}): void {
   const run = spawnSync(process.execPath, [setupCli, 'install', '--target', 'opencode'], {
     encoding: 'utf8',
-    env: doctorEnv(home),
+    env: doctorEnv(home, extra),
     // Install-bearing: cold fake-HOME undici fetch needs the 240s class.
     timeout: 240_000,
   });
@@ -111,6 +111,34 @@ test('doctor: DSH layout resolves the skills tree from the package root', () => 
   );
   const stdout = runDoctor(home, { DSH_HOME: dshHome });
   assert.ok(stdout.includes('[PASS] Skills tree'), `expected the DSH candidate to pass, got:\n${stdout}`);
+});
+
+// The doctor probe must read the opencode config through the same
+// xdgConfigHome() resolver the installer wrote it with — under a
+// non-default absolute XDG_CONFIG_HOME, install and doctor each resolving
+// their own root would pass vacuously everywhere else and split only here
+// (install green, doctor "MCP not configured"). The direction assertions
+// (config under the XDG root, legacy root untouched) keep the test
+// non-vacuous against a broken env plumb.
+test('doctor: opencode probe follows an absolute XDG_CONFIG_HOME', () => {
+  const home = fixtureDir('hwc-doctor-xdg-home-');
+  const xdgRoot = join(home, 'xdg-config');
+  runInstall(home, { XDG_CONFIG_HOME: xdgRoot });
+  assert.ok(
+    existsSync(join(xdgRoot, 'opencode', 'opencode.json')),
+    'install must write the config under the XDG root (env plumb took effect)',
+  );
+  assert.ok(!existsSync(join(home, '.config', 'opencode')), 'the legacy root must stay untouched');
+  const stdout = runDoctor(home, { XDG_CONFIG_HOME: xdgRoot });
+  // check() prints the detail only on FAIL, so the candidate name is not
+  // visible on a pass — but the direction assertions above already prove
+  // the config exists ONLY under the XDG root, so a PASS here means doctor
+  // resolved it through the shared XDG resolver (a split would read the
+  // empty legacy root and print [FAIL] MCP configured).
+  assert.ok(
+    stdout.includes('[PASS] MCP configured'),
+    `doctor must probe the config through the shared XDG resolver, got:\n${stdout}`,
+  );
 });
 
 // Equality, not subset: an installed payload carrying an unclaimed extra dir
