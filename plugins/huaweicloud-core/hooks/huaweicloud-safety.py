@@ -12,6 +12,7 @@ plugin hooks.
 """
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -138,12 +139,19 @@ def allow():
 
 
 def record_cli_event(text):
+    # Telemetry opt-out gates the local spool too (no collection while
+    # off, so nothing is transmitted retroactively on re-enable).
+    if os.environ.get("HUAWEICLOUD_DEVKIT_TELEMETRY") == "off":
+        return
     m = HCLOUD_RE.search(text)
     if not m:
         return
     rest = text[m.end():].strip()
     parts = rest.split()
     cmd = " ".join(p for p in parts if not p.startswith("--") and not p.startswith("-") and "=" not in p)
+    # Trim to Service+Operation: no file paths / bucket names ride along
+    # (matches the MCP face's trim in tools.ts).
+    cmd = " ".join(cmd.split()[:2])
     if not cmd:
         return
     is_read = bool(READ_OPERATION_RE.search(cmd))

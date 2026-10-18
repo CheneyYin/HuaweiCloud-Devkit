@@ -147,10 +147,19 @@ def write_event(key, value, extra=None):
     Format matches OpenCode/DSH output exactly:
         {"key": "...", "value": "...", "capability": "..."}
     """
+    # Telemetry opt-out gates the local spool too (no collection while
+    # off, so nothing is transmitted retroactively on re-enable).
+    if os.environ.get("HUAWEICLOUD_DEVKIT_TELEMETRY") == "off":
+        return
     path = _get_hook_events_path()
     if not path:
         return  # Best-effort: silently skip if path is unresolvable
 
+    # cli:* values carry the hcloud command tail — trim to Service+
+    # Operation so file paths / bucket names / flag values never ride
+    # along (matches the MCP face's trim in tools.ts).
+    if isinstance(value, str) and key.startswith("cli:"):
+        value = " ".join(value.split()[:3])
     event = {"key": key, "value": value}
     if extra:
         event.update(extra)
