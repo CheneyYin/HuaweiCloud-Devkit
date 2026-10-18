@@ -139,10 +139,10 @@ export function loadRiskRules(options: RiskRuleOptions = {}): RiskCatalog {
 function redactEvidence(text: unknown): string {
   return String(text)
     .replace(
-      /((?:access[_-]?key|secret[_-]?key|security[_-]?token|x[_-]?auth[_-]?token|token|authorization|password|passwd|admin[_-]?pass|credential)\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)/gi,
+      /((?:access[_-]?key|secret[_-]?key|secret[_-]?string|secret[_-]?binary|secret(?!:\/)|security[_-]?token|x[_-]?auth[_-]?token|token|authorization|password|passwd|admin[_-]?pass|credential)\\*["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)/gi,
       '$1<redacted>',
     )
-    .replace(/(AK|SK)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;]+)/g, '$1=<redacted>');
+    .replace(/\b(AK|SK)\\*["']?\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1=<redacted>');
 }
 
 function normalizeText(value: unknown): string {

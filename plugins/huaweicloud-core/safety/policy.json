@@ -28,7 +28,7 @@
     "huaweicloud\\s*(?:&&|;|/|[\\n\\r])\\s*(?:\\S+\\s+){0,2}(?:credentials|creds-import|config)\\.json"
   ],
   "blockedConfigureSubcommands": ["show", "get", "list", "export", "init"],
-  "blockedSecretOperations": ["ShowSecretVersion", "DownloadSecret", "GetSecretValue"],
+  "blockedSecretOperations": ["ShowSecret", "ShowSecretVersion", "DownloadSecret", "GetSecretValue"],
   "blockedSecretCliPatterns": [
     "huaweicloud-devkit(@[\\w.+-]+)?(\\.(js|cjs|mjs|exe|ts))?(\\s+--)?\\s+secret\\s+get\\b",
     "setup-cli\\.(js|mjs|ts)(\\s+--)?\\s+secret\\s+get\\b",

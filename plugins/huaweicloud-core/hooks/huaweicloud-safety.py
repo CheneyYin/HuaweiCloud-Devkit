@@ -40,9 +40,25 @@ def load_policy():
         cred_patterns = policy.get("credentialFilePatterns", [])
         if cred_patterns:
             CONFIG_FILE_RE = re.compile("|".join(cred_patterns), re.I)
-        blocked_secrets = policy.get("blockedSecretOperations", [])
+        blocked_secrets = [op for op in policy.get("blockedSecretOperations", []) if op != ""]
         if blocked_secrets:
-            SECRET_READ_RE = re.compile("|".join(re.escape(op) for op in blocked_secrets), re.I)
+            # Only entries that are a PREFIX of another entry (ShowSecret is
+            # a stem of ShowSecretVersion) get boundary guards, so the stem
+            # does not substring-match longer operations or stem-containing
+            # resource names (ShowSecretsConfig, showsecret-demo). The
+            # self-specific entries stay unguarded: their substring
+            # semantics on the quote-stripped shadow must match the TS
+            # layer's unguarded alternatives or the layers drift.
+            def _secret_pattern(op):
+                pattern = re.escape(op)
+                is_stem = any(
+                    other != op and other.lower().startswith(op.lower()) for other in blocked_secrets
+                )
+                if is_stem:
+                    pattern = r"(?<![A-Za-z0-9._/-])" + pattern + r"(?![A-Za-z0-9._/-])"
+                return pattern
+
+            SECRET_READ_RE = re.compile("|".join(_secret_pattern(op) for op in blocked_secrets), re.I)
         blocked_configure = policy.get("blockedConfigureSubcommands", [])
         if blocked_configure:
             global BLOCKED_CONFIGURE_SUBCOMMANDS
@@ -65,7 +81,7 @@ def load_policy():
 load_policy()
 
 ENV_DUMP_RE = re.compile(
-    r"(^|\s)(env|printenv|export\s+-p|declare|typeset|set|Get-ChildItem\s+Env:|gci\s+Env:|dir\s+Env:)(?![A-Za-z0-9_-]).*(HUAWEICLOUD(?!-devkit)|HWC_|HCLOUD_|OS_|HW_(?:ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY))",
+    r"(^|\s)(env|printenv|export\s+-p|declare|typeset|set|Get-ChildItem\s+Env:|gci\s+Env:|dir\s+Env:)(?![A-Za-z0-9_-]).*(HUAWEICLOUD(?!-devkit)|HWC_|HCLOUD_|OS_|HW_(?:ACCESS_KEY|SECRET_KEY|SECRET_ACCESS_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY))",
     re.I,
 )
 HCLOUD_RE = re.compile(r"(^|\s)hcloud(\.exe)?\s+", re.I)
@@ -75,13 +91,13 @@ READ_OPERATION_RE = re.compile(r"\b(List|Show|Get|Describe|NovaList|NovaShow)\w*
 # command. The negative lookbehind exempts backslash-escaped or single-quoted
 # names (the shell never expands those), so this stays on RAW text.
 CRED_EXPANSION_RE = re.compile(
-    r"(?<!['\\])\$\{?(?:HUAWEICLOUD|HWC|HW|OS)_(?:ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY)",
+    r"(?<!['\\])\$\{?(?:HUAWEICLOUD|HWC|HW|OS)_(?:ACCESS_KEY|SECRET_KEY|SECRET_ACCESS_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY)",
     re.I,
 )
 # printenv with a bare credential name: a command-name gate, so it runs on
 # the quote-stripped shadow (quoting a command name does not stop it).
 PRINTENV_CRED_RE = re.compile(
-    r"(^|\s)printenv\s+.*(?:HUAWEICLOUD|HWC|HW|OS)_(?:ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY)",
+    r"(^|\s)printenv\s+.*(?:HUAWEICLOUD|HWC|HW|OS)_(?:ACCESS_KEY|SECRET_KEY|SECRET_ACCESS_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY)",
     re.I,
 )
 

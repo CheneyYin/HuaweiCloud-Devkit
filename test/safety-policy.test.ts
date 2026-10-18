@@ -1,15 +1,19 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import {
   classifyHcloudArgs,
   classifyTextCommand,
+  deriveSecretOperationAlternation,
   loadPolicy,
   redactSecrets,
 } from '../plugins/huaweicloud-core/src/safety-policy.ts';
+
+const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 
 test('loadPolicy fails closed on a malformed policy file', () => {
   const dir = mkdtempSync(join(tmpdir(), 'hwc-policy-'));
@@ -162,6 +166,12 @@ test('classifyHcloudArgs blocks secret value reads', () => {
   const result = classifyHcloudArgs(['CSMS', 'ShowSecretVersion', '--secret_name', 'prod/db']);
   assert.equal(result.decision, 'deny');
   assert.match(result.reason ?? '', /secret value/i);
+});
+
+test('classifyHcloudArgs blocks ShowSecret as an operation (#770 D4-3)', () => {
+  const result = classifyHcloudArgs(['CSMS', 'ShowSecret', '--secret_name', 'prod/db']);
+  assert.equal(result.decision, 'deny');
+  assert.equal(result.risk, 'secret');
 });
 
 test('classifyHcloudArgs blocks unapproved writes', () => {
@@ -348,6 +358,136 @@ test('classifyTextCommand blocks secret value patterns in shell commands', () =>
   assert.equal(classifyTextCommand('hcloud CSMS ShowSecretVersion --secret_name x').decision, 'deny');
   assert.equal(classifyTextCommand('GetSecretValue xxx').decision, 'deny');
   assert.equal(classifyTextCommand('secret_string xxx').decision, 'deny');
+});
+
+test('deriveSecretOperationAlternation survives degenerate policy shapes', () => {
+  // Empty or absent list → never-matching pattern (mirrors the py layer's
+  // `if blocked_secrets:` skip; an empty alternation branch would match
+  // EVERYTHING and brick the TS Bash face).
+  for (const empty of [[], [''], ['', '']]) {
+    const alternation = deriveSecretOperationAlternation(empty);
+    assert.equal(alternation, '(?!)');
+    assert.equal(new RegExp(alternation, 'i').test('git status'), false);
+  }
+  // Empty-string entries are dropped, not treated as stems of everything.
+  assert.equal(deriveSecretOperationAlternation(['', 'ShowSecret']), 'showsecret');
+  // Identity compares originals (py parity): case-variant duplicates count
+  // as distinct entries, so each becomes a guarded stem of the other.
+  const caseDup = deriveSecretOperationAlternation(['ShowSecret', 'showsecret']);
+  assert.match(caseDup, /\(\?<!\[A-Za-z0-9._\/-\]\)showsecret/);
+  assert.match(caseDup, /showsecret\(\?!\[A-Za-z0-9._\/-\]\)/);
+});
+
+test('the secret vocabulary is derived from policy.json and mirrored in the risk-rule catalog', () => {
+  // The TS text faces and the py SECRET_READ_RE both derive from
+  // policy.blockedSecretOperations; the cloud-risk-rules.json
+  // secret-value-read regex is the one remaining hand-maintained copy.
+  // Assert it SEMANTICALLY: every policy entry matches the rule regex, and
+  // stem entries keep their boundary guards there (longer names exempt).
+  const policy = JSON.parse(
+    readFileSync(join(repoRoot, 'plugins', 'huaweicloud-core', 'safety', 'policy.json'), 'utf8'),
+  );
+  const rules = JSON.parse(
+    readFileSync(join(repoRoot, 'plugins', 'huaweicloud-core', 'safety', 'rules', 'cloud-risk-rules.json'), 'utf8'),
+  );
+  const rule = rules.rules.find((r: { id: string }) => r.id === 'hwc-command-secret-value-read');
+  const condition = rule.match.any.find((c: { regex: string }) => /ShowSecret/i.test(c.regex));
+  const regex = new RegExp(condition.regex, 'i');
+  for (const op of policy.blockedSecretOperations) {
+    assert.ok(regex.test(` ${op} `), `${op} must be matched by the rule regex`);
+  }
+  const loweredOps = new Set(policy.blockedSecretOperations.map((op: string) => op.toLowerCase()));
+  const stems = policy.blockedSecretOperations.filter((op: string) =>
+    policy.blockedSecretOperations.some(
+      (other: string) => other !== op && other.toLowerCase().startsWith(op.toLowerCase()),
+    ),
+  );
+  // Guard drift in the hand-maintained JSON copy must not false-pass: pin
+  // both boundary directions AND the separator members of the guard class
+  // against the same corpus the TS face is pinned to.
+  for (const stem of stems) {
+    const s = stem.toLowerCase();
+    assert.ok(!regex.test(` ${stem}List `), `${stem}List must stay exempt (lookahead guard present)`);
+    assert.ok(!regex.test(`my${s}`), `my${s} must stay exempt (lookbehind guard present)`);
+    for (const shape of [`${s}-demo`, `${s}_v`, `${s}.x`, `${s}/x`, `x/${s}`]) {
+      assert.ok(!regex.test(shape), `${shape} must stay exempt (full guard class present)`);
+    }
+    assert.ok(regex.test(`--secret_name=${s}`), `--secret_name=${s} must still deny (exact stem)`);
+  }
+  // Self-specific entries stay UNGUARDED substrings in the JSON copy:
+  // embedded shapes must still match (the hook faces' documented contract).
+  for (const op of policy.blockedSecretOperations) {
+    if (stems.includes(op)) continue;
+    assert.ok(regex.test(`${op.toLowerCase()}-demo`), `${op}-demo must still match (unguarded substring)`);
+  }
+  // Reverse containment: no stale JSON-only vocabulary that policy dropped.
+  // Strip lookaround guards FIRST (they carry their own parens), then drop
+  // the wrapping group and split alternatives.
+  const guardStripped = condition.regex
+    .replace(/\(\?<!\[[^\]]*\]\)|\(\?!\[[^\]]*\]\)/g, '')
+    .replace(/^[()]+|[()]+$/g, '')
+    .split('|')
+    .map((part: string) => part.trim().toLowerCase())
+    .filter((part: string) => part !== '');
+  for (const part of guardStripped) {
+    assert.ok(
+      loweredOps.has(part),
+      `JSON rule carries "${part}" which policy.blockedSecretOperations lacks — stale vocabulary`,
+    );
+  }
+});
+
+test('classifyTextCommand blocks KMS/CSMS ShowSecret retrieval (#770 D4-3)', () => {
+  const blocked = [
+    'hcloud KMS ShowSecret',
+    'hcloud KMS ShowSecret --key_id x',
+    'hcloud DEW ShowSecret --secret_name prod/db',
+    'ShowSecret --secret_name prod/db',
+  ];
+  for (const cmd of blocked) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd);
+    assert.equal(result.risk, 'secret', cmd);
+  }
+  // Plain Show* reads that are not secret retrieval keep working.
+  assert.equal(classifyTextCommand('hcloud KMS ShowKey').decision, 'allow');
+  // The ShowSecret stem is boundary-guarded: longer operation names and
+  // resource-name values containing the stem do not become secret denies.
+  assert.equal(classifyTextCommand('hcloud CSMS ShowSecretList').decision, 'allow');
+  for (const name of [
+    'showsecret-demo',
+    'showsecret_version',
+    'showsecret.prod',
+    'showsecret/prod',
+    'prod/showsecret',
+    'myshowsecret',
+  ]) {
+    const result = classifyTextCommand(`hcloud CSMS ListSecrets --secret_name=${name}`);
+    assert.equal(result.decision, 'allow', name);
+    assert.equal(result.risk, 'read_only', name);
+  }
+  const approved = classifyTextCommand('hcloud IAM CreatePolicy --policy.name=showsecret-demo', {
+    allowWrites: true,
+  });
+  assert.equal(approved.decision, 'allow');
+  assert.equal(approved.risk, 'write');
+  // Quote-mangled tokens outside hcloud routing still deny (shadow parity
+  // with the py hook).
+  assert.equal(classifyTextCommand("echo Show'Secret'").decision, 'deny');
+  assert.equal(classifyTextCommand("echo Show'Secret'Version").decision, 'deny');
+});
+
+test('the env-credential family covers SECRET_ACCESS_KEY spellings (#770)', () => {
+  assert.equal(classifyTextCommand('echo $HUAWEICLOUD_SECRET_ACCESS_KEY').decision, 'deny');
+  assert.equal(classifyTextCommand('echo ${HUAWEICLOUD_SECRET_ACCESS_KEY}').decision, 'deny');
+  assert.equal(classifyTextCommand('printenv HWC_SECRET_ACCESS_KEY').decision, 'deny');
+  assert.equal(classifyTextCommand('echo $OS_SECRET_ACCESS_KEY').decision, 'deny');
+  assert.equal(classifyTextCommand('env | grep HW_SECRET_ACCESS_KEY').decision, 'deny');
+  // Single-quoted and backslash-escaped names are shell literals — exempt.
+  assert.equal(classifyTextCommand("echo '$HUAWEICLOUD_SECRET_ACCESS_KEY' is literal").decision, 'allow');
+  assert.equal(classifyTextCommand('echo \\$HUAWEICLOUD_SECRET_ACCESS_KEY').decision, 'allow');
+  // Non-credential spellings stay legitimate.
+  assert.equal(classifyTextCommand('echo $HUAWEICLOUD_REGION').decision, 'allow');
 });
 
 test('classifyTextCommand blocks approved public admin port exposure', () => {

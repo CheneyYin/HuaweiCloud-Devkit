@@ -36,7 +36,7 @@
           },
           {
             "field": "text",
-            "regex": "(HUAWEICLOUD(?!-devkit)|HWC_|HCLOUD_|OS_|HW_(?:ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY))"
+            "regex": "(HUAWEICLOUD(?!-devkit)|HWC_|HCLOUD_|OS_|HW_(?:ACCESS_KEY|SECRET_KEY|SECRET_ACCESS_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY))"
           }
         ]
       },
@@ -53,7 +53,7 @@
         "any": [
           {
             "field": "text",
-            "regex": "(ShowSecretVersion|DownloadSecret|GetSecretValue)"
+            "regex": "(ShowSecretVersion|(?<![A-Za-z0-9._/-])ShowSecret(?![A-Za-z0-9._/-])|DownloadSecret|GetSecretValue)"
           },
           {
             "field": "text",
@@ -63,6 +63,23 @@
       },
       "message": "The command appears to retrieve plaintext secret values.",
       "remediation": "Use runtime secret references, user-side inspection, or redacted metadata checks instead of returning secret values to the agent."
+    },
+    {
+      "id": "hwc-command-adminpass-exposure",
+      "title": "Plaintext adminPass exposure",
+      "category": "secret",
+      "severity": "warn",
+      "stages": ["artifact", "deploy_plan"],
+      "match": {
+        "any": [
+          {
+            "field": "text",
+            "regex": "(adminPass|admin_pass|admin-password)"
+          }
+        ]
+      },
+      "message": "The artifact or plan contains a plaintext adminPass parameter. The password may be exposed in version control, logs, or agent context.",
+      "remediation": "Use userData cloud-init, KMS/CSMS secret references, or encrypted password injection instead of embedding adminPass as plaintext in deployment files."
     },
     {
       "id": "hwc-command-sts-credential",
@@ -201,6 +218,23 @@
       "remediation": "Use least-privilege service actions, resource constraints, and short-lived credentials for generated application workflows."
     },
     {
+      "id": "hwc-iam-highrisk-write",
+      "title": "High-risk IAM write operation",
+      "category": "iam",
+      "severity": "warn",
+      "stages": ["command"],
+      "match": {
+        "any": [
+          {
+            "field": "text",
+            "regex": "hcloud(?:\\.exe)?\\s+IAM\\s+(?:Keystone)?(?:Create|Update|Attach|Detach|Delete|Associate|Disassociate)\\w*(?:User|Group|Policy|Role|Agency|Token)\\w*"
+          }
+        ]
+      },
+      "message": "This hcloud command creates or modifies IAM principals (users, policies, roles, or agencies). These operations can grant elevated privileges.",
+      "remediation": "Confirm the principal name, scope, and attached permissions with the user before creating IAM users, policies, roles, or agencies."
+    },
+    {
       "id": "hwc-destructive-delete-force",
       "title": "Forced destructive operation",
       "category": "destructive",
@@ -335,6 +369,27 @@
       "remediation": "Use small preview defaults, explicit quotas, budget labels, and user approval before creating high-cost resources."
     },
     {
+      "id": "hwc-command-secret-in-arg",
+      "title": "Plaintext secret in command argument",
+      "category": "secret",
+      "severity": "warn",
+      "stages": ["command"],
+      "match": {
+        "all": [
+          {
+            "field": "text",
+            "regex": "\\bhcloud\\b"
+          },
+          {
+            "field": "text",
+            "regex": "--(?:[A-Za-z0-9_.-]*[._-])?(?:admin(?:Pass|[_-]pass)|passwd|password|secret(?:[_-]?key)?|access[_-]?key|token|ak|sk)\\b\\s*[=:]\\s*[^\\s<][^\\s<>\"']"
+          }
+        ]
+      },
+      "message": "The command passes a plaintext password or secret as a direct CLI argument, which may leak into shell history, logs, or process listings.",
+      "remediation": "Use environment variables, DEW secret references, or interactive prompts instead of passing secrets as command-line arguments."
+    },
+    {
       "id": "hwc-sandbox-destructive-command",
       "title": "Destructive command in sandbox terminal",
       "category": "destructive",
@@ -356,7 +411,7 @@
           },
           {
             "field": "text",
-            "regex": ":\\\\(\\\\)\\\\{[^}]*\\\\|[^}]*&[^}]*\\\\}[^;]*;:"
+            "regex": ":\\s*\\(\\s*\\)\\s*\\{[^}|]{0,64}\\|[^}|&]{0,64}&[^}|]{0,64}\\}[^;]{0,64};\\s*:"
           },
           {
             "field": "text",

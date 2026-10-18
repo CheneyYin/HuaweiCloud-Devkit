@@ -25,7 +25,7 @@ Hook 系统强制以下隐私边界，禁止以下数据进入 agent 上下文�
 | -------------------- | ------------------------------------------------------ | --------------------------------------------- |
 | **凭证文件读取**     | `cat ~/.hcloud/config`、读取 `huaweicloud/credentials` | `policy.json` → `credentialFilePatterns`      |
 | **环境变量泄露**     | `env                                                   | grep HUAWEICLOUD`、`printenv HWC_*`           | `policy.json` → `secretKeyNamePatterns` |
-| **明文 Secret 检索** | `ShowSecretVersion`、`GetSecretValue`                  | `policy.json` → `blockedSecretOperations`     |
+| **明文 Secret 检索** | `ShowSecret`、`ShowSecretVersion`、`DownloadSecret`、`GetSecretValue` | `policy.json` → `blockedSecretOperations`     |
 | **AK/SK 输出**       | `hcloud configure show`、`hcloud configure get`        | `policy.json` → `blockedConfigureSubcommands` |
 | **未经审批的写操作** | `Create*`、`Delete*`、`Bind*` 等 hcloud 命令           | `policy.json` → `writeOperationPrefixes`      |
 
@@ -39,7 +39,7 @@ Codex 原生插件通过 `hooks/huaweicloud-safety.mjs` 执行 PreToolUse 拦截
 
 - **凭证文件**：匹配 `.hcloud`、`.huaweicloud`、`hcloud/config` 等路径模式
 - **环境变量**：匹配 `env | HUAWEICLOUD` 等组合
-- **Secret 读取**：匹配 `ShowSecretVersion`、`secret_string` 等
+- **Secret 读取**：匹配 `ShowSecret`、`ShowSecretVersion`、`secret_string` 等
 - **风险规则**：加载 `safety/rules/cloud-risk-rules.json`，对 `hcloud` 命令和通用 shell 命令文本进行规则匹配
 
 拦截时返回 `permissionDecision: "deny"`，并附带 `permissionDecisionReason`。
@@ -147,14 +147,22 @@ Agent 在**执行前**应主动调用以下 MCP 工具进行风险检查：
 | `hwc-command-credential-file`      | credential      | deny   | command               | 禁止读取本地凭据文件        |
 | `hwc-command-env-dump`             | credential      | deny   | command               | 禁止打印云凭据环境变量      |
 | `hwc-command-secret-value-read`    | secret          | deny   | command               | 禁止检索明文 Secret         |
+| `hwc-command-adminpass-exposure`   | secret          | warn   | artifact, deploy_plan | 警告明文 adminPass 参数     |
+| `hwc-command-sts-credential`       | credential      | warn   | command               | 警告临时凭据暴露            |
 | `hwc-command-encoded-shell-exec`   | execution       | deny   | command               | 禁止 base64 解码后管道执行  |
 | `hwc-network-public-admin-port`    | public_exposure | deny   | 全部                  | 禁止 0.0.0.0/0 开放管理端口 |
 | `hwc-obs-anonymous-write`          | public_exposure | deny   | 全部                  | 禁止 OBS 匿名写入           |
 | `hwc-functiongraph-public-no-auth` | public_exposure | warn   | 全部                  | 警告无认证的公网函数        |
 | `hwc-iam-admin-policy`             | iam             | deny   | 全部                  | 禁止创建管理员权限策略      |
+| `hwc-iam-highrisk-write`           | iam             | warn   | command               | 警告 IAM 主体高危写操作     |
 | `hwc-destructive-delete-force`     | destructive     | deny   | command               | 禁止强制递归删除            |
+| `hwc-destructive-delete-operation` | destructive     | warn   | command               | 警告云资源删除/解绑操作     |
+| `hwc-destructive-reset-operation`  | destructive     | warn   | command               | 警告资源重置操作            |
+| `hwc-destructive-delete-cascade`   | destructive     | warn   | command               | 警告级联删除（EIP/卷）      |
+| `hwc-command-secret-in-arg`        | secret          | warn   | command               | 警告命令行明文密码/密钥参数 |
 | `hwc-sandbox-missing-ttl`          | sandbox         | warn   | artifact, deploy_plan | 警告沙箱无清理计划          |
 | `hwc-cost-unbounded-scale`         | cost            | warn   | 全部                  | 警告高成本/无边界扩容       |
+| `hwc-sandbox-destructive-command`  | destructive     | deny   | command               | 禁止沙箱毁灭性命令（含 fork bomb） |
 
 ## Agent 使用 Hook 的推荐流程
 

@@ -60,6 +60,43 @@ export function loadPolicy(path: string = policyPath): Policy {
 
 const DEFAULT_POLICY = loadPolicy();
 
+// The secret-read vocabulary for the TEXT faces (joined args, raw text,
+// quote-stripped shadow) is DERIVED from policy.blockedSecretOperations —
+// the same source the py hook compiles SECRET_READ_RE from — so the layers
+// share one vocabulary by construction instead of by editing discipline.
+// Only entries that are a prefix of another entry (ShowSecret is a stem of
+// ShowSecretVersion) get boundary guards: the stem must not substring-match
+// longer operations or stem-containing resource names (ShowSecretsConfig,
+// showsecret-demo), while self-specific entries keep substring semantics so
+// quote-mangled shadows (download'secret') stay denied in both layers.
+// Empty-string entries are dropped; an empty list yields a NEVER-MATCHING
+// pattern so an absent/emptied field degrades like the py layer (which
+// skips the gate entirely) instead of matching everything.
+export function deriveSecretOperationAlternation(ops: readonly string[]): string {
+  const entries = ops.filter((op) => op !== '');
+  if (entries.length === 0) return '(?!)';
+  return entries
+    .map((op) => {
+      const l = op.toLowerCase();
+      // Identity compares the ORIGINAL strings (matching the py closure)
+      // so case-variant duplicate entries cannot silently change guard
+      // semantics in one layer only.
+      const isStem = entries.some((other) => other !== op && other.toLowerCase().startsWith(l));
+      const escaped = l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return isStem ? `(?<![A-Za-z0-9._/-])${escaped}(?![A-Za-z0-9._/-])` : escaped;
+    })
+    .join('|');
+}
+
+const SECRET_OP_ALTERNATION = deriveSecretOperationAlternation(DEFAULT_POLICY.blockedSecretOperations);
+// Joined-args face: static value-shape extras plus the derived entries.
+const SECRET_ARGS_RE = new RegExp(`secret[_-]?string|secret[_-]?binary|${SECRET_OP_ALTERNATION}`, 'i');
+// Raw-text face: derived entries plus the static value-shape extras.
+const SECRET_TEXT_RE = new RegExp(`${SECRET_OP_ALTERNATION}|secret_string|secret_binary`, 'i');
+// Shadow face: derived entries only — the py layer has no secret_string
+// vocabulary, so carrying the static extras here would split the layers.
+const SECRET_SHADOW_RE = new RegExp(SECRET_OP_ALTERNATION, 'i');
+
 function regexFrom(pattern: string): RegExp {
   return new RegExp(pattern, 'i');
 }
@@ -701,7 +738,7 @@ export function classifyHcloudArgs(args: unknown, options: ClassifyOptions = {})
     };
   }
 
-  if (/secret[_-]?string|secret[_-]?binary|showsecretversion|getsecretvalue/i.test(joined)) {
+  if (SECRET_ARGS_RE.test(joined)) {
     return {
       decision: 'deny',
       risk: 'secret',
@@ -962,7 +999,7 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
   // `-devkit` suffix so the devkit bin name does not feed the family token;
   // `export -p` and `declare`/`typeset` are dump forms of the same class.
   const CRED_ENV_NAMES =
-    '(?:HUAWEICLOUD(?!-devkit)|HWC_|HCLOUD_|OS_|HW_(?:ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY))';
+    '(?:HUAWEICLOUD(?!-devkit)|HWC_|HCLOUD_|OS_|HW_(?:ACCESS_KEY|SECRET_KEY|SECRET_ACCESS_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY))';
   if (
     /(^|\s)(env|printenv|export\s+-p|declare|typeset|set|Get-ChildItem\s+Env:|gci\s+Env:|dir\s+Env:)(?![A-Za-z0-9_-])/i.test(
       shadowText,
@@ -998,7 +1035,9 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
 
   // Credential variable references bypass the env-command gate above: HW_ is
   // the plugin's own documented credential prefix (HW_ACCESS_KEY/HW_SECRET_KEY/
-  // HW_SECURITY_TOKEN), and `echo $HW_SECRET_KEY` / `printenv HW_ACCESS_KEY`
+  // HW_SECURITY_TOKEN), cloud environments also expose the AWS-style
+  // HUAWEICLOUD_SECRET_ACCESS_KEY spelling (#770), and `echo $HW_SECRET_KEY` /
+  // `printenv HW_ACCESS_KEY`
   // previously fell through to allow (#650 D4-2).
   //
   // The negative lookbehind exempts literal-NAME references — backslash-escaped
@@ -1016,10 +1055,10 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
   // wrongly exempted that.
   const unSingleQuoted = text.replace(/'[^']*'/g, '');
   if (
-    /(?<!['\\])\$\{?(?:HUAWEICLOUD|HWC|HW|OS)_(?:ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY)/i.test(
+    /(?<!['\\])\$\{?(?:HUAWEICLOUD|HWC|HW|OS)_(?:ACCESS_KEY|SECRET_KEY|SECRET_ACCESS_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY)/i.test(
       unSingleQuoted,
     ) ||
-    /(?:^|\s)printenv\s+.*(?:HUAWEICLOUD|HWC|HW|OS)_(?:ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY)/i.test(
+    /(?:^|\s)printenv\s+.*(?:HUAWEICLOUD|HWC|HW|OS)_(?:ACCESS_KEY|SECRET_KEY|SECRET_ACCESS_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY)/i.test(
       shadowText,
     )
   ) {
@@ -1030,20 +1069,26 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
     };
   }
 
+  // Secret-retrieval vocabulary on the raw text AND the quote-stripped
+  // shadow — the py hook searches both (a quote-mangled `show'secret'`
+  // token is still a secret read), so the layers must agree. This check
+  // runs BEFORE the hcloud routing return so a compound payload with
+  // mangled vocabulary in a non-hcloud trailing segment (py's whole-payload
+  // shadow) cannot slip past the TS face.
+  if (SECRET_TEXT_RE.test(text) || SECRET_SHADOW_RE.test(shadowText)) {
+    return {
+      decision: 'deny',
+      risk: 'secret',
+      reason: 'Direct secret value retrieval patterns are blocked.',
+    };
+  }
+
   // Routing on the shadow with a boundary class that admits `/`, `(`, and
   // backtick before the bin: path-qualified (`/usr/bin/hcloud`) and
   // substituted (`$(hcloud …)`) invocations must reach classification, not
   // just whitespace-preceded bare names.
   if (/(^|[^a-z0-9.-])hcloud(\.exe)?\s+/i.test(shadowText)) {
     return classifyHcloudArgs(splitSimpleCommand(text), { ...options, rawCommand: text });
-  }
-
-  if (/ShowSecretVersion|GetSecretValue|secret_string|secret_binary/i.test(text)) {
-    return {
-      decision: 'deny',
-      risk: 'secret',
-      reason: 'Direct secret value retrieval patterns are blocked.',
-    };
   }
 
   return applyRawCommandRiskRules(
