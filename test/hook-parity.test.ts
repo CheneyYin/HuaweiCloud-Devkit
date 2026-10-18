@@ -125,6 +125,54 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
   ["hcloud CSMS ListServers; echo download'secret'", 'deny'],
   ['hcloud CSMS ShowSecret --help', 'deny'],
   ['echo ShowSecret', 'deny'],
+  // skill-quality-cli wrapper: adopted service skills teach it — the seam
+  // unwraps it so embedded hcloud keeps its verdict in both layers.
+  ['skill-quality-cli run --skill-name ecs -- hcloud ECS CreateServers --server.name=x', 'deny'],
+  ['skill-quality-cli run -- hcloud CSMS ListSecrets', 'allow'],
+  ['~/.local/bin/skill-quality-cli run -- hcloud ECS DeleteServers --server.id=1', 'deny'],
+  ['skill-quality-cli run --skill-name x hcloud ECS DeleteServers --server.id=1', 'deny'],
+  ['skill-quality-cli run --skill-name x --session-id s hcloud ECS DeleteServers --server.id=1', 'deny'],
+  ['skill-quality-cli run --json hcloud ECS DeleteServers --server.id=1', 'deny'],
+  ['skill-quality-cli run --skill-name x hcloud ECS ListServers', 'allow'],
+  ['skill-quality-cli --no-auto-upgrade run -- hcloud ECS DeleteServers --server.id=1', 'deny'],
+  ['skill-quality-cli.exe run -- hcloud ECS DeleteServers --server.id=1', 'deny'],
+  ["skill'-'quality'-'cli run -- hcloud ECS DeleteServers --server.id=1", 'deny'],
+  ['skill-quality-cli run --skill-name x hcloud ECS DeleteServers --server.id=1 --', 'deny'],
+  ['skill-quality-cli run hcloud ECS DeleteServers -- --server.id=1', 'deny'],
+  ['sudo skill-quality-cli run -- hcloud ECS DeleteServers --server.id=1', 'deny'],
+  [
+    'npx huaweicloud-devkit secret exec --env K=x -- bash -c "skill-quality-cli run -- hcloud ECS DeleteServers"',
+    'deny',
+  ],
+  ["npx huawei'cloud'-devkit secret exec --env K=x -- hcloud ECS DeleteServers --server.id=1", 'deny'],
+  ['skill-quality-cli run --config /etc/x hcloud ECS DeleteServers --server.id=1', 'deny'],
+  ["skill-quality-cli --no-auto-'upgrade' run -- hcloud ECS DeleteServers --server.id=1", 'deny'],
+  ['skill-quality-cli --config x run -- hcloud ECS DeleteServers --server.id=1', 'deny'],
+  ['skill-quality-cli run bash -c "hcloud ECS DeleteServers --server.id=1"', 'deny'],
+  ['skill-quality-cli run --config x bash -c "hcloud ECS ListServers"', 'allow'],
+  // The wrapper's `--` separator is authoritative only while the flag
+  // region is still live: a child-owned `--` never suppresses the
+  // fail-closed slot re-base. The reachability scan consumes the wrapper's
+  // own value-flag grammar (so an intervening --session-id s pair does not
+  // fake unreachability) and treats a script-head slot's `-c` argument as
+  // data (so a dash-leading script cannot fake reachability).
+  ['skill-quality-cli run --json bash -c "hcloud ECS DeleteServers" -- x', 'deny'],
+  ['skill-quality-cli run --json hcloud ECS DeleteServers --server.id=1 --', 'deny'],
+  ['skill-quality-cli run --skill-name hcloud -- ECS ListServers', 'allow'],
+  ['skill-quality-cli run --json hcloud --session-id s -- hcloud ECS DeleteServers --server.id=1', 'deny'],
+  ['skill-quality-cli run --skill-name hcloud --skill-name y -- hcloud ECS DeleteServers --server.id=1', 'deny'],
+  ['skill-quality-cli run --json bash -c "-e; hcloud ECS DeleteServers" -- x', 'deny'],
+  // The grammar model resolves wrapper-flag/value pairs between the slot
+  // and the real child: the child head (hcloud bin or script head) reached
+  // through the wrapper's own flag grammar composes the deny — with or
+  // without the separator, and whether the interleaved value is a plain
+  // token or the `--` itself.
+  ['skill-quality-cli run --json hcloud --session-id s hcloud ECS DeleteServers --server.id=1', 'deny'],
+  ['skill-quality-cli run --json hcloud --session-id -- hcloud ECS DeleteServers --server.id=1', 'deny'],
+  ['skill-quality-cli run --json hcloud --session-id s bash -c "hcloud ECS DeleteServers"', 'deny'],
+  ['skill-quality-cli run --json eval "-e; hcloud ECS DeleteServers" -- x', 'deny'],
+  ['skill-quality-cli run -- ls /opt/hcloud', 'allow'],
+  ['skill-quality-cli run ls /opt/hcloud', 'allow'],
   ['hcloud KMS ShowKey', 'allow'],
   ['env -u TERM', 'deny'],
   ['env --unset=TERM', 'deny'],

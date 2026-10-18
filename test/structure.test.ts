@@ -2204,6 +2204,11 @@ test('the safety skill documents the secret vault and its reference is not a dea
   assert.match(reference, /secret exec --env/);
   assert.match(reference, /secret get/);
   assert.match(reference, /NOT defend/);
+  // The skill-quality-cli wrapper-unwrap residual is documented here too:
+  // variable-indirection and alternate-entry spellings are the seam gaps.
+  assert.match(reference, /skill-quality-cli/);
+  assert.match(reference, /python3 -m skill_quality_cli/);
+  assert.match(reference, /cli_entry\.py/);
 });
 
 test('auth reconcile propagates through syncAuth (the seam-tested fan-out)', () => {
