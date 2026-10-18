@@ -49,7 +49,7 @@ npx --yes huaweicloud-devkit install --target dsh
 
 安装器会写入：
 
-- `$DSH_HOME/huaweicloud-plugins`：MCP Server、安全策略和 Skills（服务器数据，服务类技能经 MCP 的 `huaweicloud_list_packs` / `huaweicloud_list_skills` / `huaweicloud_retrieve_skill` 披露；stdio 会话的 `huaweicloud_list_skills` 载荷另携带 `skillRoot` 技能树位置，同机 agent 默认直读技能文件，文件不可及时回退 `huaweicloud_retrieve_skill`）。
+- `$DSH_HOME/huaweicloud-plugins`：MCP Server、安全策略和 Skills（服务器数据，服务类技能经 MCP 的 `huaweicloud_list_packs` / `huaweicloud_list_skills` / `huaweicloud_retrieve_skill` 披露；stdio 会话的 `huaweicloud_list_skills` 载荷另携带 `skillRoot` 技能树位置，同机 agent 默认直读技能文件，文件不可达时回退到 `huaweicloud_retrieve_skill`）
 - `$DSH_HOME/skills`：六个核心元技能（`huaweicloud-*` 路由层）的原生副本，用于系统提示级披露；由安装/更新和 npm postinstall 幂等刷新。
 - `$DSH_HOME/profiles/web/cordis.patch.yml`：DSH MCP 注册补丁。
 

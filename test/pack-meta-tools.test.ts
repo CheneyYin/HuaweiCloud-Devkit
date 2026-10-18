@@ -239,7 +239,7 @@ test('huaweicloud_list_skills core filter explains the meta-skill exclusion inst
   const result = (await callTool('huaweicloud_list_skills', { pack: 'core' })) as ToolErrorPayload;
   assert.equal(result.ok, false);
   assert.match(result.error, /core.*meta-skills|six core meta-skills/);
-  assert.match(result.error, /huaweicloud_retrieve_skill/, 'the error must name the portable load path');
+  assert.match(result.error, /huaweicloud_retrieve_skill/, 'the error must name the portable fallback');
 });
 
 // The skill-name pattern is the MCP boundary guard for the server-side

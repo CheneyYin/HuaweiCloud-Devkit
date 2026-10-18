@@ -502,7 +502,7 @@ test('web/static-site deployment intent offers target options with sandbox first
   assert.match(discovery, /do NOT default to OBS/);
 });
 
-test('core meta-skills teach the skillRoot direct-read path alongside retrieve_skill', () => {
+test('core meta-skills teach the skillRoot direct read as the default with retrieve_skill as the fallback', () => {
   // The dual-path contract: list_skills discloses the tree's location on
   // stdio sessions, and both routing skills teach the direct read as the
   // default with retrieve_skill as the fallback for files the session's
