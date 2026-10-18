@@ -504,19 +504,31 @@ test('web/static-site deployment intent offers target options with sandbox first
 
 test('core meta-skills teach the skillRoot direct-read path alongside retrieve_skill', () => {
   // The dual-path contract: list_skills discloses the tree's location on
-  // stdio sessions, and both routing skills must teach the direct read as
-  // an alternative to the portable loader. The references/ assertion is
+  // stdio sessions, and both routing skills teach the direct read as the
+  // default with retrieve_skill as the fallback for files the session's
+  // tools cannot reach. The references/ assertion is
   // co-occurrence-anchored (same line as skillRoot) so it pins the teaching
   // line, not the pre-existing step-2 "Read references/{sub-skill-id}.md".
-  // New SKILL.md copy must keep avoiding see/load followed by a backticked
-  // non-skill identifier — the cross-reference guard resolves those against
-  // the skills tree.
+  // The order pins anchor on the "otherwise" fallback connector (not a
+  // bare retrieve mention, which any phrasing could satisfy) so a
+  // retrieve-first regression cannot pass. Scope is the two hot lines
+  // (core step 3, discovery step 3); Tool Boundary's line is deliberately
+  // outside — its "read the chosen skill's SKILL.md" phrasing is what
+  // keeps this anchor from matching it, so do not harmonize the two
+  // wordings. New SKILL.md copy must keep avoiding see/load followed by a
+  // backticked non-skill identifier — the cross-reference guard resolves
+  // those against the skills tree.
   const core = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-core', 'SKILL.md'), 'utf8');
   assert.match(core, /skillRoot/, 'huaweicloud-core must teach the skillRoot direct-read path');
   assert.match(
     core,
     /skillRoot[^\n]*references\//,
     'the direct-read line must name the references directory beside skillRoot',
+  );
+  assert.match(
+    core,
+    /read the skill's SKILL\.md[^\n]*otherwise[^\n]{0,20}load/,
+    'the hot line must lead with the direct read and close with the otherwise-fallback',
   );
 
   const discovery = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-capability-discovery', 'SKILL.md'), 'utf8');
@@ -526,6 +538,20 @@ test('core meta-skills teach the skillRoot direct-read path alongside retrieve_s
     /skillRoot[^\n]*references\//,
     'the discovery teaching line must name the references directory beside skillRoot',
   );
+  assert.match(
+    discovery,
+    /read the skill's SKILL\.md[^\n]*otherwise[^\n]{0,20}load/,
+    'the discovery chain must lead with the direct read and close with the otherwise-fallback',
+  );
+});
+
+test('agent rules file carries the skillRoot direct-read teaching', () => {
+  // The rules file is agent-loaded copy with no other guard coverage; this
+  // presence pin keeps its skillRoot teaching from silently vanishing in a
+  // copy pass (word order there is unpinned by design — the hot lines own
+  // the order contract).
+  const rules = readFileSync(join(root, 'rules', 'huawei-agent-rules.mdc'), 'utf8');
+  assert.match(rules, /skillRoot/, 'the agent rules file must teach the skillRoot direct-read path');
 });
 
 test('retrieve_skill reference cap stays in sync between code and description', () => {
