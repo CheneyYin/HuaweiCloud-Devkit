@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.9-next.3 (2026-10-18)
+
+- fix(sandbox): strip OSC/CSI escapes in all DB_* parsers — root-cause fix for #946 (#947)
+
 ## 1.1.9-next.2 (2026-10-18)
 
 - fix(sandbox): treat gateway-level tunnel errors as unreachable — root-cause fix for #943
