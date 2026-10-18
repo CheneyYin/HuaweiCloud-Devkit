@@ -1604,7 +1604,7 @@ test('eight packs register their tools; the central map dispatches them', () => 
     { id: 'sandbox', tools: SANDBOX_TOOLS, count: 11 },
     { id: 'auth', tools: AUTH_TOOLS, count: 5 },
     { id: 'obs', tools: OBS_TOOLS, count: 2 },
-    { id: 'voucher', tools: VOUCHER_TOOLS, count: 2 },
+    { id: 'voucher', tools: VOUCHER_TOOLS, count: 3 },
     { id: 'discovery', tools: DISCOVERY_TOOLS, count: 3 },
     { id: 'huaweicloud-open-mcp', tools: HUAWEICLOUD_OPEN_MCP_TOOLS, count: 3 },
     { id: 'huaweicloud-cli', tools: HUAWEICLOUD_CLI_TOOLS, count: 7 },

@@ -187,3 +187,21 @@ export async function hdkitVoucherClaim(domainId?: string): Promise<Record<strin
     };
   }
 }
+
+export async function hdkitCompetitionVoucherClaim(domainId?: string): Promise<Record<string, unknown>> {
+  try {
+    const body: Record<string, unknown> = domainId ? { domain_id: domainId } : {};
+    return await hdkitRequest('POST', 'competition/voucher/claim', body);
+  } catch (error) {
+    const err = error as { message?: unknown; code?: unknown; remediation?: unknown };
+    return {
+      claimed: false,
+      message:
+        typeof err.message === 'string' && err.message
+          ? err.message
+          : 'Competition voucher service unavailable, please try again later',
+      code: err.code,
+      ...(err.remediation ? { remediation: err.remediation } : {}),
+    };
+  }
+}

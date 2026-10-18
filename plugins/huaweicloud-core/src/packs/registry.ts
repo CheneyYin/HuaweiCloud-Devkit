@@ -68,6 +68,7 @@ export const PACK_OF = {
   huaweicloud_sandbox_credentials: 'sandbox',
   huaweicloud_voucher_status: 'voucher',
   huaweicloud_voucher_claim: 'voucher',
+  huaweicloud_competition_voucher_claim: 'voucher',
   huaweicloud_check_update: 'update',
   huaweicloud_upgrade: 'update',
   huaweicloud_gateway_list_tools: 'huaweicloud-open-mcp',

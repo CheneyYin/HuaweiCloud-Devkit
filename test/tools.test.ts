@@ -123,6 +123,7 @@ test('TOOL_DEFINITIONS includes all required tools including sandbox', () => {
     'huaweicloud_sandbox_credentials',
     'huaweicloud_voucher_status',
     'huaweicloud_voucher_claim',
+    'huaweicloud_competition_voucher_claim',
     'huaweicloud_list_packs',
     'huaweicloud_pack_info',
     'huaweicloud_list_skills',

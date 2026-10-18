@@ -287,6 +287,10 @@ const TOOL_DEFINITIONS_LITERALS = [
     description: packDescription('huaweicloud_voucher_claim'),
   },
   {
+    name: 'huaweicloud_competition_voucher_claim',
+    description: packDescription('huaweicloud_competition_voucher_claim'),
+  },
+  {
     name: 'huaweicloud_check_update',
     description: packDescription('huaweicloud_check_update'),
   },
