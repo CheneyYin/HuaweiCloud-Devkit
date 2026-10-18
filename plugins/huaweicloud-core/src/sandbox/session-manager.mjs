@@ -28,6 +28,17 @@ const execFileAsync = promisify(execFile);
 const DEVBRIDGE_TUNNEL_DOMAIN = 'devbridge-s2.hwtunnel.com';
 // Migration placeholder page marker — a tunnel URL returning this body must be treated as unreachable.
 const DEVBRIDGE_MIGRATION_MARKER = '服务已迁移';
+// Gateway-level tunnel error markers (verified against the live s2 gateway, Oct 2026).
+// The gateway answers with exact text/plain bodies:
+//   404 "tunnel not found"    — no live host session on the gateway (host process dead or
+//                               tunnel deleted); the tunnel RECORD may still exist in `list`
+//   404 "port not configured" — the URL's port is not registered on the tunnel
+//   502 "bad gateway"         — host session alive, but the registered port has no local service
+// A bare status check cannot distinguish these from app-generated 404/502 responses, so the
+// checks below match the exact body AND gate on the HTTP status code.
+const DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER = 'tunnel not found';
+const DEVBRIDGE_PORT_NOT_CONFIGURED_MARKER = 'port not configured';
+const DEVBRIDGE_BAD_GATEWAY_MARKER = 'bad gateway';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const WS_EXEC_INDEX_URL = pathToFileURL(join(__dirname, '..', 'ws-exec', 'index.js')).href;
@@ -989,31 +1000,49 @@ export function buildDeployCheckScript({ port, project, outputPath, isCrossPlatf
     `fi`,
     ``,
     `TOTAL=$((TOTAL+1))`,
-    `TUNNEL_ID=$(devbridge list -j 2>/dev/null | grep -oP '"tunnelId":\\s*"\\K[^"]+' | head -1)`,
-    `if [ -z "$TUNNEL_ID" ]; then`,
-    `  TUNNEL_ID=$(devbridge list 2>/dev/null | grep -E '^[a-z2-7]{8}[[:space:]]' | awk '{print $1}' | head -1)`,
+    `TUNNEL_IDS=$(devbridge list -j 2>/dev/null | grep -oP '"tunnelId":\\s*"\\K[^"]+' | head -5)`,
+    `if [ -z "$TUNNEL_IDS" ]; then`,
+    `  TUNNEL_IDS=$(devbridge list 2>/dev/null | grep -E '^[a-z2-7]{8}[[:space:]]' | awk '{print $1}' | head -5)`,
     `fi`,
-    `TUNNEL_URL="https://\${TUNNEL_ID}-${port}.${DEVBRIDGE_TUNNEL_DOMAIN}"`,
+    `# Gateway-level tunnel errors have exact text/plain bodies (verified on the s2`,
+    `# gateway): 404 "tunnel not found" = no live host session (the tunnel RECORD may`,
+    `# still be in \`list\`); 404 "port not configured" = URL port not registered; 502`,
+    `# "bad gateway" = tunnel alive, local service down. grep -x (exact-line match) +`,
+    `# status gating avoids flagging app-generated 404/502 pages.`,
     `probe_tunnel() {`,
     `  local url="$1" code`,
-    `  code=$(curl -s -o /tmp/.dc_tunnel_body -w "%{http_code}" --max-time 10 "$url" 2>/dev/null)`,
-    `  [ "$code" = "000" ] && return 1`,
-    `  # A migrated gateway serves a placeholder page with HTTP 200 — treat it as unreachable.`,
-    `  if grep -q "${DEVBRIDGE_MIGRATION_MARKER}" /tmp/.dc_tunnel_body 2>/dev/null; then return 1; fi`,
-    `  # Any non-000 HTTP code means the tunnel is connected and nginx is serving`,
-    `  # (404/502 = content issue, not a connectivity issue — consistent with nginx_serving).`,
+    `  code=$(curl -s -o /tmp/.dc_tunnel_body -w "%{http_code}" --max-time 5 "$url" 2>/dev/null)`,
+    `  PROBE_FAIL_REASON=""`,
+    `  if [ "$code" = "000" ]; then PROBE_FAIL_REASON="unreachable"; rm -f /tmp/.dc_tunnel_body; return 1; fi`,
+    `  if grep -q "${DEVBRIDGE_MIGRATION_MARKER}" /tmp/.dc_tunnel_body 2>/dev/null; then PROBE_FAIL_REASON="migration placeholder page"; rm -f /tmp/.dc_tunnel_body; return 1; fi`,
+    `  if [ "$code" = "404" ] && grep -qx "${DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER}" /tmp/.dc_tunnel_body 2>/dev/null; then PROBE_FAIL_REASON="tunnel not found (no live host session on the gateway)"; rm -f /tmp/.dc_tunnel_body; return 1; fi`,
+    `  if [ "$code" = "404" ] && grep -qx "${DEVBRIDGE_PORT_NOT_CONFIGURED_MARKER}" /tmp/.dc_tunnel_body 2>/dev/null; then PROBE_FAIL_REASON="port not configured (URL port not registered on the tunnel)"; rm -f /tmp/.dc_tunnel_body; return 1; fi`,
+    `  if [ "$code" = "502" ] && grep -qx "${DEVBRIDGE_BAD_GATEWAY_MARKER}" /tmp/.dc_tunnel_body 2>/dev/null; then PROBE_FAIL_REASON="bad gateway (tunnel alive, local service not serving)"; rm -f /tmp/.dc_tunnel_body; return 1; fi`,
     `  rm -f /tmp/.dc_tunnel_body`,
     `  return 0`,
     `}`,
-    `if [ -n "$TUNNEL_ID" ] && probe_tunnel "$TUNNEL_URL"; then`,
-    `  echo "tunnel_url_accessible:PASS ($TUNNEL_URL)"`,
+    `# Probe each listed tunnel (bounded to 5) and select the first one that actually`,
+    `# serves this port — \`devbridge list\` order is arbitrary, so a stale tunnel listed`,
+    `# first must not shadow the live one.`,
+    `SELECTED_URL=""`,
+    `FIRST_ID=""`,
+    `for CAND in $TUNNEL_IDS; do`,
+    `  if [ -z "$FIRST_ID" ]; then FIRST_ID="$CAND"; fi`,
+    `  CAND_URL="https://\${CAND}-${port}.${DEVBRIDGE_TUNNEL_DOMAIN}"`,
+    `  if probe_tunnel "$CAND_URL"; then`,
+    `    SELECTED_URL="$CAND_URL"`,
+    `    break`,
+    `  fi`,
+    `done`,
+    `TUNNEL_URL="$SELECTED_URL"`,
+    `if [ -n "$SELECTED_URL" ]; then`,
+    `  echo "tunnel_url_accessible:PASS ($SELECTED_URL)"`,
     `  PASS=$((PASS+1))`,
-    `elif [ -n "$TUNNEL_ID" ]; then`,
-    `  echo "tunnel_url_accessible:FAIL ($TUNNEL_URL -> unreachable, tunnel not found, or migration placeholder page)"`,
+    `elif [ -n "$FIRST_ID" ]; then`,
+    `  echo "tunnel_url_accessible:FAIL (https://\${FIRST_ID}-${port}.${DEVBRIDGE_TUNNEL_DOMAIN} -> $PROBE_FAIL_REASON)"`,
     `else`,
     `  echo "tunnel_url_accessible:FAIL (no tunnel)"`,
     `fi`,
-    `rm -f /tmp/.dc_tunnel_body 2>/dev/null || true`,
     ``,
     `${`
 TOTAL=$((TOTAL+1))
@@ -1058,18 +1087,27 @@ fi
     .join('\n');
 }
 
-export function parseDeployCheckOutput(stdout, { port, isCrossPlatform } = {}) {
-  // Strip ANSI escape sequences (CSI color/cursor codes and OSC shell-integration markers)
-  // and split on any line-ending style (\r\n, \r, or \n) to handle all terminal outputs.
-  // Use new RegExp to avoid ESLint no-control-regex on literal control chars in regex.
+// Strip terminal escape sequences from sandbox command output (#946): CSI
+// color/cursor codes and OSC shell-integration markers (shells with integration
+// enabled wrap EVERY line in \x1b]133;C\x07, which blinds anchored ^DB_...=
+// parsers), then normalize \r\n / \r line endings to \n.
+// Use new RegExp to avoid ESLint no-control-regex on literal control chars.
+export function stripTerminalEscapes(text) {
   const ESC = '\x1b';
   const csiRe = new RegExp(ESC + '\\[[0-9;]*[a-zA-Z]', 'g');
   const oscRe = new RegExp(ESC + '\\][^' + ESC + '\x07]*(?:\x07|' + ESC + '\\\\)', 'g');
-  const cleanStdout = String(stdout || '')
+  return String(text || '')
     .replace(csiRe, '')
-    .replace(oscRe, '');
+    .replace(oscRe, '')
+    .replace(/\r\n|\r/g, '\n');
+}
+
+export function parseDeployCheckOutput(stdout, { port, isCrossPlatform } = {}) {
+  // Strip ANSI escape sequences (CSI color/cursor codes and OSC shell-integration markers)
+  // and split on any line-ending style (\r\n, \r, or \n) to handle all terminal outputs.
+  const cleanStdout = stripTerminalEscapes(stdout);
   const checks = {};
-  const lines = cleanStdout.split(new RegExp('\\r\\n|\\r|\\n'));
+  const lines = cleanStdout.split('\n');
   for (const line of lines) {
     const trimmed = line.trim();
     const m = trimmed.match(/^(\w+):(PASS|FAIL|SKIP)\b(.*)/);
@@ -1241,7 +1279,9 @@ export function buildDevbridgeAuthProbe() {
 // authMode is the LAST DB_AUTH_MODE line; attempts collects the non-sensitive
 // DB_ATTEMPT_* diagnostics emitted by tiers that failed and fell through.
 export function parseDevbridgeAuthOutput(stdout) {
-  const text = String(stdout || '');
+  // #946: OSC 133 markers precede every line on integration-enabled shells; the
+  // anchored ^DB_ATTEMPT_ regexes are blind to them without stripping first.
+  const text = stripTerminalEscapes(stdout);
   const modes = text.match(/DB_AUTH_MODE=([A-Z_]+)/g) || [];
   const authMode = modes.length > 0 ? modes[modes.length - 1].split('=')[1] : '';
   const attempts = {};
@@ -1251,40 +1291,121 @@ export function parseDevbridgeAuthOutput(stdout) {
   return { authMode, attempts };
 }
 
+// Tunnel lifetime for expose-created hosts, in hours. The report that motivated
+// #919 uses -e 72 so the shared link survives long after the deploying session
+// ends; the value is surfaced to callers via exposeTunnel's expiresAt field.
+export const DEVBRIDGE_HOST_EXPIRY_HOURS = 72;
+
 // Start (or replace) a devbridge host bound to a single port, extract the public
 // URL, and health-check it. Mirrors the huaweicloud-sandbox skill's Expose flow:
 // pre-clean stale tunnels (quota 10006), start host in background, read
 // "Tunnel URL: ..." from /tmp/host.log, curl-check, retry once on unreachable.
-export function buildDevbridgeExposeScript(port) {
+// The host MUST survive the exec session that started it (#919): setsid detaches
+// it from the session's process group, `< /dev/null` drops the controlling tty
+// stdin, and `disown` removes it from the shell's job table — without all three
+// the host is reaped when the one-shot session ends and the tunnel dies
+// immediately after a green in-session health check (the "假成功" bug).
+export function buildDevbridgeExposeScript(port, expiryHours = DEVBRIDGE_HOST_EXPIRY_HOURS) {
   const hostLog = '/tmp/host.log';
   return [
     `pkill -f "devbridge host" 2>/dev/null || true`,
     `sleep 2`,
     `devbridge delete-all > /dev/null 2>&1 || true`,
-    `nohup devbridge host -p ${port} -e 8 > ${hostLog} 2>&1 &`,
+    // #922 (S8): setsid is unavailable on some sandbox images — fall back to a
+    // bare nohup launch so the host still starts; persistence is then judged by
+    // the independent re-verify below, which emits the 请勿分享 warning in the
+    // non-persistent case. disown is guarded: shells without the builtin must
+    // not abort the script.
+    `if command -v setsid > /dev/null 2>&1; then setsid nohup devbridge host -p ${port} -e ${expiryHours} > ${hostLog} 2>&1 < /dev/null & else nohup devbridge host -p ${port} -e ${expiryHours} > ${hostLog} 2>&1 < /dev/null & fi`,
+    `disown 2>/dev/null || true`,
     `sleep 12`,
-    `TUNNEL_URL=$(sed -n 's/.*Tunnel URL: *//p' ${hostLog} | tail -1)`,
-    `HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$TUNNEL_URL" 2>/dev/null || echo "000")`,
+    // Port-anchored extraction: a multi-port host prints one "Tunnel URL:" line per
+    // port, so a port-blind `sed | tail -1` can pick another port's URL.
+    `TUNNEL_URL=$(grep -oE "https://[A-Za-z0-9_-]+-${port}\\.devbridge-s2\\.hwtunnel\\.com" ${hostLog} | head -1)`,
+    `HTTP_CODE=$(curl -s -o /tmp/.db_probe_body -w "%{http_code}" --max-time 10 "$TUNNEL_URL" 2>/dev/null || echo "000")`,
     `echo "DB_HOST_LOG="`,
     `tail -n 5 ${hostLog}`,
     `echo "DB_TUNNEL_URL=$TUNNEL_URL"`,
     `echo "DB_HTTP_CODE=$HTTP_CODE"`,
+    `echo "DB_EXPIRY_HOURS=${expiryHours}"`,
+    // First 64 bytes of the probe body (non-sensitive) so gateway-error markers
+    // like "tunnel not found" can be distinguished from app-generated 404/502 pages.
+    `echo "DB_TUNNEL_BODY=$(head -c 64 /tmp/.db_probe_body 2>/dev/null)"`,
+    `rm -f /tmp/.db_probe_body`,
     `echo "DB_QUOTA_ERROR=$(grep -c '10006' ${hostLog} 2>/dev/null || echo 0)"`,
   ].join('\n');
 }
 
+// Build the script for the SECOND, independent exec session that re-verifies the
+// tunnel with a real GET (#919): the in-session health check inside
+// buildDevbridgeExposeScript cannot prove the host survived session teardown —
+// a GET from a fresh session can. #922 (B2): the response body is kept and
+// checked for the native false-success form — a 200 whose body is "tunnel not
+// found" — and the verdict is emitted as DB_VERIFY_NOT_FOUND so
+// parseDevbridgeVerifyOutput can catch it. The URL is validated (https,
+// URL-safe chars only) before being spliced into the shell command.
+export function buildDevbridgeVerifyScript(tunnelUrl) {
+  const url = String(tunnelUrl || '');
+  if (!/^https:\/\/[A-Za-z0-9:._/-]+$/.test(url)) {
+    throw new Error(
+      `sandbox expose tunnel: invalid tunnel URL ${JSON.stringify(url.slice(0, 80))}. Expected an https:// URL with URL-safe characters (from the expose script's DB_TUNNEL_URL output).`,
+    );
+  }
+  const bodyFile = '/tmp/devbridge_verify_body';
+  return [
+    `VERIFY_CODE=$(curl -s -o ${bodyFile} -w "%{http_code}" --max-time 10 "${url}" 2>/dev/null || echo "000")`,
+    `VERIFY_NOT_FOUND=$(grep -ci 'tunnel not found' ${bodyFile} 2>/dev/null || true)`,
+    `if [ -z "$VERIFY_NOT_FOUND" ]; then VERIFY_NOT_FOUND=0; fi`,
+    `rm -f ${bodyFile} 2>/dev/null || true`,
+    `echo "DB_VERIFY_HTTP_CODE=$VERIFY_CODE"`,
+    `echo "DB_VERIFY_NOT_FOUND=$VERIFY_NOT_FOUND"`,
+  ].join('\n');
+}
+
 // Parse the raw stdout of buildDevbridgeExposeScript into structured fields.
+// `gatewayTunnelError` marks a URL the s2 gateway itself reports as dead
+// (404 "tunnel not found" / "port not configured") — it can never serve content
+// regardless of the app. `badGateway` (502 "bad gateway") means the tunnel is
+// alive but the local service on the exposed port is not serving.
 export function parseDevbridgeExposeOutput(stdout) {
-  const text = String(stdout || '');
+  // #946: strip OSC/CSI escapes + \r BEFORE the anchored ^DB_ lookups — otherwise
+  // every field is lost on integration-enabled shells and a perfectly good tunnel
+  // comes back as ok:true with publicUrl missing (and pointlessly re-built once).
+  const text = stripTerminalEscapes(stdout);
   const getField = (key) => {
     const m = text.match(new RegExp(`^${key}=(.*)$`, 'm'));
     return m ? m[1].trim() : '';
   };
   const tunnelUrl = getField('DB_TUNNEL_URL') || (text.match(/TUNNEL_URL:(https:\/\/[^\s]+)/) || [])[1] || '';
   const httpCode = getField('DB_HTTP_CODE');
+  const body = getField('DB_TUNNEL_BODY');
   const quotaError = getField('DB_QUOTA_ERROR') === '1' || /10006/.test(text);
   const tunnelId = (tunnelUrl.match(/^https:\/\/([A-Za-z0-9_-]+)-\d+\./) || [])[1] || '';
-  return { tunnelUrl, httpCode, quotaError, tunnelId };
+  const expiryHours = Number(getField('DB_EXPIRY_HOURS')) || undefined;
+  // Exact-body match gated on the status code: an app's own 404/502 page is never misjudged.
+  const gatewayTunnelError =
+    httpCode === '404' && (body === DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER || body === DEVBRIDGE_PORT_NOT_CONFIGURED_MARKER);
+  const badGateway = httpCode === '502' && body === DEVBRIDGE_BAD_GATEWAY_MARKER;
+  return { tunnelUrl, httpCode, quotaError, tunnelId, expiryHours, gatewayTunnelError, badGateway };
+}
+
+// Parse the raw stdout of buildDevbridgeVerifyScript into structured fields.
+// Dedicated parser (#922 B1): the verify script emits DB_VERIFY_HTTP_CODE /
+// DB_VERIFY_NOT_FOUND keys — the anchored ^DB_HTTP_CODE= lookup in
+// parseDevbridgeExposeOutput never matches them, which used to leave
+// verifyHttpCode empty and persistent always false.
+export function parseDevbridgeVerifyOutput(stdout) {
+  // #946: strip OSC/CSI escapes + \r — the anchored DB_VERIFY_* lookups are blind
+  // to them, leaving verifyHttpCode empty and persistent permanently false.
+  const text = stripTerminalEscapes(stdout);
+  const getField = (key) => {
+    const m = text.match(new RegExp(`^${key}=(.*)$`, 'm'));
+    return m ? m[1].trim() : '';
+  };
+  const httpCode = getField('DB_VERIFY_HTTP_CODE');
+  const notFoundCount = Number(getField('DB_VERIFY_NOT_FOUND')) || 0;
+  const notFound = notFoundCount > 0;
+  return { httpCode, notFound };
 }
 
 // Parse and validate a TCP port number destined for shell interpolation. Returns
@@ -1303,7 +1424,10 @@ export function validateTunnelPort(port) {
 // Expose a sandbox port to a public DevBridge tunnel URL. `port` MUST be the
 // ACTUAL port reported by deployNginx (deploy_nginx auto-increments on conflict),
 // otherwise the tunnel is bound to a dead port. Returns ok, publicUrl, port,
-// tunnelId, auth mode, and warnings.
+// tunnelId, auth mode, expiresAt (tunnel lifetime from -e), and warnings; the
+// tunnel is re-verified from a second independent exec session (#919) and the
+// result carries verifyHttpCode + persistent so callers can tell a
+// session-surviving URL from one that dies with the deploying session.
 export async function exposeTunnel(workspaceId, { port }, username = 'root', timeoutMs = 90000) {
   if (!workspaceId) {
     throw new Error('sandbox expose tunnel: workspace_id is required.');
@@ -1347,10 +1471,15 @@ export async function exposeTunnel(workspaceId, { port }, username = 'root', tim
     if (parsed.quotaError && attempt < maxAttempts) {
       continue;
     }
-    // Unreachable (000) or a migrated-gateway placeholder: one retry.
+    // Unreachable (000), migrated-gateway placeholder, or gateway-level tunnel errors
+    // (404 "tunnel not found" / "port not configured"): one cleanup + rebuild retry.
+    // 502 "bad gateway" (host alive, local service down) also gets one retry to cover
+    // slow app starts.
     const unreachable = parsed.httpCode === '000' || parsed.httpCode === '';
     const migration = /服务已迁移/.test(String(result.stdout || ''));
-    if (unreachable || migration) {
+    const gatewayTunnelError = parsed.gatewayTunnelError === true;
+    const backendDown = parsed.badGateway === true;
+    if (unreachable || migration || gatewayTunnelError || backendDown) {
       if (attempt === 1) {
         try {
           await execOneShot(
@@ -1362,16 +1491,81 @@ export async function exposeTunnel(workspaceId, { port }, username = 'root', tim
         } catch {}
         continue;
       }
+      // Retry exhausted: a URL the gateway itself reports as dead (or one pointing at
+      // the retired pre-migration gateway) must NOT be handed over as a working
+      // deployment link — previously this returned ok:true with a soft warning.
+      if (gatewayTunnelError || migration) {
+        return {
+          ok: false,
+          error: gatewayTunnelError
+            ? 'DevBridge gateway reports the fresh tunnel URL as dead (404 "tunnel not found" / "port not configured") — the host session is not registered on the gateway. A rebuild was already attempted.'
+            : 'DevBridge gateway serves a migration placeholder page (服务已迁移) — the URL points at the retired pre-migration gateway and cannot work.',
+          authMode,
+          httpCode: parsed.httpCode,
+          hostLog: String(result.stdout || '').slice(0, 400),
+        };
+      }
     }
 
     const warnings = [];
     if (parsed.quotaError)
       warnings.push('DevBridge tunnel quota (10006) hit — stale tunnels were cleaned up and the host was retried.');
+
+    // #919: re-verify with a real GET from a SECOND, independent exec session.
+    // The in-session health check above cannot prove the host survived session
+    // teardown (setsid/nohup/disown make that likely, not certain). When the
+    // fresh-session GET fails, the URL will die with the deploying session —
+    // say so explicitly instead of returning a link the visitor cannot open.
+    let verifyHttpCode = '';
+    let verifyNotFound = false;
+    let persistent = undefined;
+    if (parsed.tunnelUrl) {
+      try {
+        const verifyResult = await execOneShot(
+          workspaceId,
+          buildDevbridgeVerifyScript(parsed.tunnelUrl),
+          username,
+          30000,
+        );
+        // #922 (B1): parse with the dedicated verify parser — the
+        // DB_VERIFY_HTTP_CODE key is not visible to parseDevbridgeExposeOutput.
+        const verify = parseDevbridgeVerifyOutput(verifyResult.stdout);
+        verifyHttpCode = verify.httpCode || '';
+        // #922 (B2): a native false-success form answers HTTP 200 with a
+        // "tunnel not found" body — treat it as non-persistent.
+        verifyNotFound = verify.notFound;
+      } catch {}
+      // 000 = the fresh session could not reach the tunnel (host already dead
+      // or gateway not serving); 200 with a "tunnel not found" body = the
+      // gateway answered but the tunnel is gone; anything non-200/304 is
+      // surfaced as-is below.
+      persistent = verifyHttpCode !== '' && verifyHttpCode !== '000' && !verifyNotFound;
+      if (!persistent) {
+        if (verifyNotFound) {
+          warnings.push(
+            '复测返回 HTTP 200 但 body 为 "tunnel not found"（原生假成功形态），隧道实际未生效，请勿分享 (the recheck answered HTTP 200 with a "tunnel not found" body — the tunnel is NOT serving; do NOT share this URL).',
+          );
+        } else {
+          warnings.push(
+            '隧道将在会话结束后失效，请勿分享 (the tunnel did NOT survive an independent exec-session recheck — do NOT share this URL; the host process is not persistent).',
+          );
+        }
+      }
+    }
+
+    if (parsed.badGateway)
+      warnings.push(
+        'Tunnel reachable but the gateway reports "bad gateway" — the local service on the exposed port is not serving.',
+      );
     if (parsed.httpCode !== '200' && parsed.httpCode !== '304') {
       warnings.push(
         `Tunnel reachable check returned HTTP ${parsed.httpCode} (expected 200/304). The URL may not be serving yet.`,
       );
     }
+    const expiresAt =
+      parsed.expiryHours !== undefined
+        ? new Date(Date.now() + parsed.expiryHours * 3_600_000).toISOString()
+        : undefined;
     return {
       ok: true,
       publicUrl: parsed.tunnelUrl || undefined,
@@ -1379,6 +1573,11 @@ export async function exposeTunnel(workspaceId, { port }, username = 'root', tim
       tunnelId: parsed.tunnelId || undefined,
       authMode,
       httpCode: parsed.httpCode,
+      verifyHttpCode: verifyHttpCode || undefined,
+      verifyNotFound: verifyNotFound || undefined,
+      persistent,
+      expiresAt,
+      expiresInHours: parsed.expiryHours,
       warnings: warnings.length > 0 ? warnings.join(' ') : undefined,
       hostLog: String(result.stdout || '').slice(0, 400),
     };

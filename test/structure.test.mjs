@@ -198,9 +198,12 @@ test('skills with references have non-empty reference files', () => {
 
 test('web/static-site deployment intent offers target options with sandbox first, not OBS default', () => {
   const core = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-core', 'SKILL.md'), 'utf8');
-  assert.match(core, /Deployment Target Options/);
+  assert.match(core, /Deployment Target Options \(MANDATORY GATE/);
   assert.match(core, /Sandbox \(DevStation\) — recommended/);
   assert.match(core, /NEVER default to a single service such as OBS/);
+  // Mandatory gate: the options must be presented via the question tool, never skipped.
+  assert.match(core, /MUST present the target options via the `question` tool/);
+  assert.match(core, /NEVER infer or default the target/);
 
   const obs = readFileSync(join(pluginRoot, 'skills', 'huawei-obs', 'SKILL.md'), 'utf8');
   assert.match(obs, /Routing Guard: Deploy vs Store/);
@@ -214,6 +217,57 @@ test('web/static-site deployment intent offers target options with sandbox first
   const discovery = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-capability-discovery', 'SKILL.md'), 'utf8');
   assert.match(discovery, /Deployment Target Options/);
   assert.match(discovery, /do NOT default to OBS/);
+
+  // Deployment-target options must surface the OBS custom-domain reminder and
+  // the ECS EIP pairing reminder in every skill that presents the options.
+  const optionGates = [
+    {
+      name: 'huaweicloud-core',
+      body: core,
+      sectionMarker: '## Deployment Target Options (MANDATORY GATE',
+      order: ['Sandbox (DevStation)', 'OBS static website hosting', 'ECS', 'CCE'],
+    },
+    {
+      name: 'huawei-sandbox',
+      body: sandbox,
+      sectionMarker: '## Target-Selection Gate',
+      order: ['沙箱 (Sandbox)', 'OBS 静态托管', 'ECS', 'CCE'],
+    },
+    {
+      name: 'huawei-obs',
+      body: obs,
+      sectionMarker: '## Routing Guard: Deploy vs Store',
+      order: ['① huawei-sandbox (recommended)', '② OBS static hosting', '③ ECS', '④ CCE'],
+    },
+    {
+      name: 'huaweicloud-capability-discovery',
+      body: discovery,
+      sectionMarker: '## Deployment Target Options (MANDATORY',
+      order: ['① huawei-sandbox', '② huawei-obs', '③ huawei-ecs', '④ huawei-cce'],
+    },
+  ];
+  for (const { name, body, sectionMarker, order } of optionGates) {
+    const start = body.indexOf(sectionMarker);
+    assert.ok(start !== -1, `${name}: mandatory deployment-target gate section missing`);
+    // Scope the guard to the gate section only (from the section title up to
+    // the next `## ` heading). EIP/域名 trigger words elsewhere in the file
+    // (e.g. Cross-Skill References, other hard rules) must not mask a missing
+    // reminder inside the gate section itself.
+    const nextHeading = body.indexOf('\n## ', start + sectionMarker.length);
+    const section = nextHeading === -1 ? body.slice(start) : body.slice(start, nextHeading);
+    assert.match(section, /MUST present/, `${name}: gate must use MUST-present wording`);
+    assert.match(section, /`question` tool/, `${name}: gate must mandate the question tool`);
+    assert.match(section, /NEVER infer or default/, `${name}: gate must carry the NEVER infer or default hard rule`);
+    let pos = -1;
+    for (const option of order) {
+      const idx = section.indexOf(option, pos + 1);
+      assert.ok(idx > pos, `${name}: option "${option}" missing or out of fixed order`);
+      pos = idx;
+    }
+    assert.match(section, /域名/, `${name}: OBS option must carry the custom-domain reminder`);
+    assert.match(section, /EIP/, `${name}: ECS option must carry the EIP pairing reminder`);
+    assert.match(section, /弹性公网/, `${name}: ECS option must name EIP in Chinese for the prompt`);
+  }
 });
 
 test('devbridge uses the valid `list` command, not the non-existent `ls`', () => {
@@ -885,4 +939,78 @@ test('agent rules file is included in npm package and injected on install (#758 
   // 10 supported agents × 2 (install + update) = 20 expected call sites.
   const calls = setup.match(/injectAgentRules\(pluginDest\)/g) || [];
   assert.ok(calls.length >= 20, `Expected ≥20 injectAgentRules calls, found ${calls.length}`);
+});
+
+test('huawei-iac SKILL.md keeps the pre-emptive balance gate (#922)', () => {
+  const skill = readFileSync(join(pluginRoot, 'skills', 'huawei-iac', 'SKILL.md'), 'utf8');
+  // Stage 5 must intercept BEFORE the order is placed, and must tell the
+  // agent how to resume with the same configuration after a recharge.
+  assert.match(skill, /前置拦截/);
+  assert.match(skill, /续跑原配置/);
+  assert.match(skill, /Ecs\.7000/);
+  // The recharge entry point must be preserved.
+  assert.match(skill, /balanceRecharge/);
+});
+
+test('huawei-ecs routes Windows SSH to references/windows-ssh.md (#922)', () => {
+  const refPath = join(pluginRoot, 'skills', 'huawei-ecs', 'references', 'windows-ssh.md');
+  assert.ok(existsSync(refPath), 'Missing huawei-ecs/references/windows-ssh.md');
+
+  const skill = readFileSync(join(pluginRoot, 'skills', 'huawei-ecs', 'SKILL.md'), 'utf8');
+  assert.match(skill, /references\/windows-ssh\.md/);
+
+  const ref = readFileSync(refPath, 'utf8');
+  assert.match(ref, /paramiko/); // Windows-safe password auth (no sshpass)
+  assert.match(ref, /Connection refused/); // sshd-not-ready retry guidance
+  assert.match(ref, /ssh_authorized_keys/); // cloud-init key injection path
+});
+
+test('huawei-sandbox distinguishes the workspace URL 401 trap from tunnel failure (#919)', () => {
+  const skill = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
+  // The authenticated workspace URL returns 401 when opened logged-out —
+  // that must not be debugged as an exposure failure; the shareable link is
+  // the DevBridge tunnel URL.
+  assert.match(skill, /workspace\.developer\.huaweicloud\.com/);
+  assert.match(skill, /401/);
+  assert.match(skill, /devbridge-s2\.hwtunnel\.com/);
+});
+
+test('find-skills marks npx skills add as broken and keeps the git clone bypass (#921)', () => {
+  const skill = readFileSync(join(root, 'skills', 'huawei-cloud-find-skills', 'SKILL.md'), 'utf8');
+  assert.match(skill, /实测失效/);
+  assert.match(skill, /npx skills add/);
+  assert.match(skill, /git clone/);
+});
+
+test('gateway tunnel-error bodies are treated as unreachable, not content issues', () => {
+  // Verified against the live s2 gateway (Oct 2026): the gateway answers
+  //   404 "tunnel not found"    — no live host session (tunnel record may still list)
+  //   404 "port not configured" — URL port not registered on the tunnel
+  //   502 "bad gateway"         — host alive, local service down
+  // A bare non-000 status check misreads these as PASS and dead URLs get handed
+  // over as successful deployments. The probe must match the exact body.
+  const sandbox = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
+  const sessionManager = readFileSync(join(pluginRoot, 'src', 'sandbox', 'session-manager.mjs'), 'utf8');
+
+  // Code: status-gated exact-body probes in both deploy check and expose parse.
+  assert.match(sessionManager, /const DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER = 'tunnel not found'/);
+  assert.match(sessionManager, /const DEVBRIDGE_PORT_NOT_CONFIGURED_MARKER = 'port not configured'/);
+  assert.match(sessionManager, /const DEVBRIDGE_BAD_GATEWAY_MARKER = 'bad gateway'/);
+  assert.match(sessionManager, /grep -qx "\$\{DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER\}"/);
+  assert.match(sessionManager, /gatewayTunnelError/);
+  // Expose must extract the URL anchored to the requested port (multi-port hosts
+  // print one "Tunnel URL:" line per port; a port-blind tail -1 picks the wrong one).
+  // Plain substring check: the target text is itself a regex, so regex-matching it
+  // needs every metacharacter escaped — includes() avoids that trap.
+  assert.ok(
+    sessionManager.includes('grep -oE "https://[A-Za-z0-9_-]+-${port}'),
+    'expose script must extract the tunnel URL anchored to the requested port',
+  );
+  assert.doesNotMatch(sessionManager, /sed -n 's\/\.\*Tunnel URL: \*\/\/p' \$\{hostLog\} \| tail -1/);
+
+  // Skill: the deploy_check contract and the pitfall table document the markers.
+  assert.match(sandbox, /tunnel not found/);
+  assert.match(sandbox, /port not configured/);
+  assert.match(sandbox, /bad gateway/);
+  assert.match(sandbox, /404 "tunnel not found" ≠ content issue/);
 });

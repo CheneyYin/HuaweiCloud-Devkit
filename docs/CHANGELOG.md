@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.1.9-next.3 (2026-10-18)
+
+- fix(sandbox): strip OSC/CSI escapes in all DB_* parsers — root-cause fix for #946 (#947)
+
+## 1.1.9-next.2 (2026-10-18)
+
+- fix(sandbox): treat gateway-level tunnel errors as unreachable — root-cause fix for #943
+- Revert "feat(opencode): native plugin — 42 MCP tools as in-process custom tools (1.1.9-next.1) (#940)" (#941)
+- feat(opencode): native plugin — 42 MCP tools as in-process custom tools (1.1.9-next.1) (#940)
+- fix: 1024活动体验实测批次 — 沙箱隧道假成功 / auth persist 假输出 / CLI ok 判定 / ECS 指引 (#919-#922)
+- skills: enforce mandatory deployment-target gate via question tool (#3) (#918)
+
+## 1.1.9-next.0 (2026-10-14)
+
+- chore: set version-override to 1.1.9 + sync badge (prepare 1.1.9-next.0) (#913)
+- fix(auth): unify onboarding guidance + error surface — root-cause fix for #900 (#905)
+- docs(huawei-obs): document OBS Content-Disposition forced-download trap from real test (#899)
+- docs(voucher): add HDKIT_COMPETITION_NOT_CONFIGURED UX row for competition voucher
+
 ## 1.1.8 (2026-10-12)
 
 - chore: merge dev into main for 1.1.8 release (#892)

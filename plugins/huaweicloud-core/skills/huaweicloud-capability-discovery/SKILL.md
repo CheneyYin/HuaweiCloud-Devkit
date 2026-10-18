@@ -41,9 +41,9 @@ Route to the sandbox when the developer signals free/quick preview intent ("免�
 - Use `huaweicloud_get_service_icon` with the service name, alias, or Chinese name (e.g. `ecs`, `obs`, `modelarts`, `对象存储`). It returns the official CDN logo URL (`logo.source_url`), category, and product page link from https://open.huaweicloud.com/openplatform/icons.html.
 - Prefer `logo.source_url` for web deliverables and the Icons library search page for browsing; do not scrape logos from third-party sites.
 
-## Deployment Target Options
+## Deployment Target Options (MANDATORY — use the `question` tool)
 
-When the intent is to **deploy, host, or preview a web app or static website** and the developer has not named a target, do NOT default to OBS or any single service. Present the options and let the developer choose, recommending the sandbox first: ① huawei-sandbox (recommended — temporary runtime, instant preview URL) ② huawei-obs (long-term static hosting/CDN) ③ huawei-ecs ④ huawei-cce. Only follow an explicit target when the developer names one.
+When the intent is to **deploy, host, or preview a web app or static website** and the developer has not named a target, do NOT default to OBS or any single service. **NEVER infer or default the target** when it is unstated. You MUST present the options via the `question` tool and obtain an explicit choice before calling any deploy tool, recommending the sandbox first: ① huawei-sandbox (recommended — temporary runtime, instant preview URL) ② huawei-obs (long-term static hosting/CDN; 需提前准备好自定义域名) ③ huawei-ecs (需搭配弹性公网IP/EIP 才能公网访问) ④ huawei-cce. Only follow an explicit target when the developer names one; "部署到华为云" alone is NOT a named target — still ask.
 
 ## Region Intent
 

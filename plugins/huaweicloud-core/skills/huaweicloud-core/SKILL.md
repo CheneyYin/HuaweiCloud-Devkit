@@ -85,18 +85,25 @@ Do not rely on training data for facts. Huawei Cloud services, pricing, quotas, 
 
 **Web app scenario layering**: for "deploy a web app", prefer `huawei-sandbox` for free/quick try (hello world, prototype, demo, temporary preview — temporary runtime + public URL (runtime lifetime not exposed via API); credential expiry see `expiresAt` from `connect`/`credentials`, zero billed resources); route to `huawei-functiongraph` / `huawei-ecs` (or `huawei-cce`) for production / long-term / custom-domain / high-availability hosting. When the chosen target requires **multiple purchased resources** (e.g. VPC + subnet + ECS + EIP + RDS, or OBS + CDN + DNS) or the user asks for an architecture/cost proposal first, hand off to `huawei-iac` for orchestrated provisioning with a mandatory cost gate.
 
-## Deployment Target Options
+## Deployment Target Options (MANDATORY GATE — do not skip)
 
-When the intent is to **deploy, host, or preview a web app or static website** (no explicit target named), NEVER default to a single service such as OBS. Ask the developer to choose a target and present the options in this order:
+When the intent is to **deploy, host, or preview a web app or static website** (no explicit target named), NEVER default to a single service such as OBS. You MUST present the target options via the `question` tool and obtain an explicit choice BEFORE calling any deployment tool. Present the options in this order:
 
-| #   | Option                                 | When to choose                                             | Skill          |
-| --- | -------------------------------------- | ---------------------------------------------------------- | -------------- |
-| 1   | **Sandbox (DevStation) — recommended** | Temporary runtime, quick preview, demo; instant public URL | huawei-sandbox |
-| 2   | OBS static website hosting             | Long-term static hosting / CDN, no backend                 | huawei-obs     |
-| 3   | ECS                                    | Needs a server runtime (backend, custom server)            | huawei-ecs     |
-| 4   | CCE                                    | Containerized workloads, scaling                           | huawei-cce     |
+| #   | Option                                 | When to choose                                                                                                                                                       | Skill          |
+| --- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| 1   | **Sandbox (DevStation) — recommended** | Temporary runtime, quick preview, demo; instant public URL                                                                                                           | huawei-sandbox |
+| 2   | OBS static website hosting             | Long-term static hosting / CDN, no backend. **Remind: a custom domain (域名) must be prepared — the default OBS endpoint does not support HTTPS for static hosting** | huawei-obs     |
+| 3   | ECS                                    | Needs a server runtime (backend, custom server). **Remind: ECS must be paired with an EIP (弹性公网IP) for public access — extra billing**                           | huawei-ecs     |
+| 4   | CCE                                    | Containerized workloads, scaling                                                                                                                                     | huawei-cce     |
 
-- Recommended prompt: "这个项目是 Web 应用/静态网站，建议优先部署到沙箱（临时运行环境，立即可预览）。也可选择 OBS 静态托管、ECS 或 CCE，你想部署到哪里？"
+Hard rules:
+
+- **NEVER infer or default the target** when it is unstated. Calling any deploy tool (`sandbox_connect`, `OBS mb`, `ECS CreateServers`, ...) before the choice is made is a violation.
+- Only skip the question when: (a) the developer already named a target (e.g. "部署到 ECS", "用 OBS"), or (b) the developer explicitly asked for a temporary / sandbox / preview runtime.
+- "部署到华为云" / "deploy to Huawei Cloud" / "上线" alone is NOT a named target — still run the gate.
+- Include the OBS domain reminder and the ECS EIP pairing reminder in the options as presented.
+
+- Recommended prompt: "这个项目是 Web 应用/静态网站，建议优先部署到沙箱（临时运行环境，立即可预览）。也可选择 OBS 静态托管（需提前准备好自定义域名）、ECS（需搭配弹性公网IP/EIP 才能公网访问）或 CCE，你想部署到哪里？"
 - If the developer explicitly names a target (e.g. "deploy to OBS"), the SANDBOX target hands off directly to `huawei-sandbox`; every other target (OBS / ECS / CCE / FunctionGraph / ...) hands off to `huawei-iac` for orchestration - iac loads the corresponding service skill for commands and adds the mandatory cost+balance gate, batch approval, state tracking, and ordered destroy. Direct handoff to the bare service skill skips these safety stages and must not happen for deployment intent. **Existing network resources (a reusable VPC) do NOT downgrade this to a single-service task - the purchase itself (compute, EIP, disk, rules) is what triggers iac.**
 - If the developer has no preference, recommend the sandbox first.
 
