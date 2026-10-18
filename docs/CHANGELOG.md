@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.9-next.2 (2026-10-18)
+
+- fix(sandbox): treat gateway-level tunnel errors as unreachable — root-cause fix for #943
+- Revert "feat(opencode): native plugin — 42 MCP tools as in-process custom tools (1.1.9-next.1) (#940)" (#941)
+- feat(opencode): native plugin — 42 MCP tools as in-process custom tools (1.1.9-next.1) (#940)
+- fix: 1024活动体验实测批次 — 沙箱隧道假成功 / auth persist 假输出 / CLI ok 判定 / ECS 指引 (#919-#922)
+- skills: enforce mandatory deployment-target gate via question tool (#3) (#918)
+
 ## 1.1.9-next.0 (2026-10-14)
 
 - chore: set version-override to 1.1.9 + sync badge (prepare 1.1.9-next.0) (#913)
