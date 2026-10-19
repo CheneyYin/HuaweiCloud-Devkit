@@ -717,7 +717,7 @@ function serviceCatalog(intent: string = '') {
     },
     {
       keywords: ['dds', 'dcs', 'mongodb', 'redis', 'memcached', 'cache', 'document db'],
-      skills: ['huawei-dds-dcs'],
+      skills: ['huawei-cloud-dds-dcs-instance-management'],
       services: ['DDS', 'DCS'],
     },
     {

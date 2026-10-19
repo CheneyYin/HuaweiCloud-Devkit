@@ -35,7 +35,7 @@ Do not rely on training data for facts. Huawei Cloud services, pricing, quotas, 
 | select        | Service Selection       | which service, what should I use, compare, recommend                                                                                        | Read references/select.md                                                                                                                                                                | select |
 | compute       | Compute Routing         | server, VM, instance, ECS, BMS, GPU, HPC                                                                                                    | Handoff to huawei-ecs or huawei-cce                                                                                                                                                      |
 | storage       | Storage Routing         | store files, bucket, OBS, backup, disk, EVS, SFS (long-term storage/CDN intent only)                                                        | Handoff to huawei-obs or huawei-cbr                                                                                                                                                      |
-| database      | Database Routing        | database, SQL, NoSQL, cache, RDS, GaussDB, DDS, DCS                                                                                         | Handoff to huawei-rds or huawei-gaussdb                                                                                                                                                  |
+| database      | Database Routing        | database, SQL, NoSQL, cache, RDS, GaussDB, DDS, DCS                                                                                         | Handoff to huawei-rds, huawei-gaussdb, or huawei-cloud-dds-dcs-instance-management                                                                                                       |
 | network       | Network Routing         | VPC, subnet, security group, EIP, NAT, VPN                                                                                                  | Handoff to huawei-vpc                                                                                                                                                                    |
 | serverless    | Serverless Routing      | function, Lambda, serverless, FunctionGraph, API gateway                                                                                    | Handoff to huawei-functiongraph or huawei-cloud-apig-instance-management                                                                                                                 |
 | ai            | AI/ML Routing           | AI, model, LLM, Pangu, training, inference, RAG                                                                                             | Handoff to huawei-modelarts                                                                                                                                                              |
@@ -56,32 +56,32 @@ Do not rely on training data for facts. Huawei Cloud services, pricing, quotas, 
 
 ## Service Map
 
-| Workload                                         | Primary Service      | Skill                                 |
-| ------------------------------------------------ | -------------------- | ------------------------------------- |
-| Web application hosting (production / long-term) | ECS                  | huawei-ecs                            |
-| Containerized microservices                      | CCE                  | huawei-cce                            |
-| Static file storage / CDN (long-term)            | OBS                  | huawei-obs                            |
-| Relational database (MySQL/PG)                   | RDS                  | huawei-rds                            |
-| Distributed SQL database                         | GaussDB              | huawei-gaussdb                        |
-| Document database (MongoDB API)                  | DDS                  | huawei-dds-dcs                        |
-| In-memory cache                                  | DCS (Redis)          | huawei-dds-dcs                        |
-| Serverless functions                             | FunctionGraph        | huawei-functiongraph                  |
-| API management                                   | APIG                 | huawei-cloud-apig-instance-management |
-| AI model training/inference                      | ModelArts            | huawei-modelarts                      |
-| Message queuing                                  | DMS (Kafka/RabbitMQ) | huawei-smn-dms                        |
-| Push notifications                               | SMN                  | huawei-smn-dms                        |
-| Secret management                                | DEW (CSMS)           | huawei-dew                            |
-| Key management                                   | DEW (KMS)            | huawei-dew                            |
-| DDoS protection                                  | AAD                  | huawei-waf-aad                        |
-| Web firewall                                     | WAF                  | huawei-waf-aad                        |
-| Monitoring dashboards                            | Cloud Eye (CES)      | huawei-cloud-eye                      |
-| Audit trails                                     | CTS                  | huawei-cloud-cts-trace-management     |
-| Backup / disaster recovery                       | CBR                  | huawei-cbr                            |
-| CI/CD pipeline                                   | CloudDeploy          | huawei-deployment                     |
-| Temporary runtime / web app preview              | Sandbox (DevStation) | huawei-sandbox                        |
-| Getting started                                  | Account setup        | huaweicloud-cli-and-auth              |
-| Incentive voucher                                | Voucher              | huawei-voucher                        |
-| Competition voucher (小红书skill创新赛)          | Voucher              | huawei-voucher                        |
+| Workload                                         | Primary Service      | Skill                                    |
+| ------------------------------------------------ | -------------------- | ---------------------------------------- |
+| Web application hosting (production / long-term) | ECS                  | huawei-ecs                               |
+| Containerized microservices                      | CCE                  | huawei-cce                               |
+| Static file storage / CDN (long-term)            | OBS                  | huawei-obs                               |
+| Relational database (MySQL/PG)                   | RDS                  | huawei-rds                               |
+| Distributed SQL database                         | GaussDB              | huawei-gaussdb                           |
+| Document database (MongoDB API)                  | DDS                  | huawei-cloud-dds-dcs-instance-management |
+| In-memory cache                                  | DCS (Redis)          | huawei-cloud-dds-dcs-instance-management |
+| Serverless functions                             | FunctionGraph        | huawei-functiongraph                     |
+| API management                                   | APIG                 | huawei-cloud-apig-instance-management    |
+| AI model training/inference                      | ModelArts            | huawei-modelarts                         |
+| Message queuing                                  | DMS (Kafka/RabbitMQ) | huawei-smn-dms                           |
+| Push notifications                               | SMN                  | huawei-smn-dms                           |
+| Secret management                                | DEW (CSMS)           | huawei-dew                               |
+| Key management                                   | DEW (KMS)            | huawei-dew                               |
+| DDoS protection                                  | AAD                  | huawei-waf-aad                           |
+| Web firewall                                     | WAF                  | huawei-waf-aad                           |
+| Monitoring dashboards                            | Cloud Eye (CES)      | huawei-cloud-eye                         |
+| Audit trails                                     | CTS                  | huawei-cloud-cts-trace-management        |
+| Backup / disaster recovery                       | CBR                  | huawei-cbr                               |
+| CI/CD pipeline                                   | CloudDeploy          | huawei-deployment                        |
+| Temporary runtime / web app preview              | Sandbox (DevStation) | huawei-sandbox                           |
+| Getting started                                  | Account setup        | huaweicloud-cli-and-auth                 |
+| Incentive voucher                                | Voucher              | huawei-voucher                           |
+| Competition voucher (小红书skill创新赛)          | Voucher              | huawei-voucher                           |
 
 **Web app scenario layering**: for "deploy a web app", prefer `huawei-sandbox` for free/quick try (hello world, prototype, demo, temporary preview — temporary runtime + public URL (runtime lifetime not exposed via API); credential expiry see `expiresAt` from `connect`/`credentials`, zero billed resources); route to `huawei-functiongraph` / `huawei-ecs` (or `huawei-cce`) for production / long-term / custom-domain / high-availability hosting. When the chosen target requires **multiple purchased resources** (e.g. VPC + subnet + ECS + EIP + RDS, or OBS + CDN + DNS) or the user asks for an architecture/cost proposal first, hand off to `huawei-iac` for orchestrated provisioning with a mandatory cost gate.
 

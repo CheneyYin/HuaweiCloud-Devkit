@@ -26,8 +26,8 @@ Route based on answers:
 
 - SQL + standard scale -> huawei-rds
 - SQL + massive scale / distributed -> huawei-gaussdb
-- Document model (MongoDB-compatible) -> huawei-dds-dcs
-- Cache / key-value -> huawei-dds-dcs (DCS)
+- Document model (MongoDB-compatible) -> huawei-cloud-dds-dcs-instance-management
+- Cache / key-value -> huawei-cloud-dds-dcs-instance-management (DCS)
 
 ## Example: I need to deploy a web app
 

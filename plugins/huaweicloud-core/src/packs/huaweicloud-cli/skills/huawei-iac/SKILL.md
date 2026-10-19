@@ -90,7 +90,7 @@ Execution: show the to-be-deleted list for final confirmation → delete in **re
 
 ## Cross-Skill References
 
-- Per-resource commands: `huawei-vpc` (VPC / subnet / security group / EIP), `huawei-ecs`, `huawei-rds`, `huawei-gaussdb`, `huawei-dds-dcs`, `huawei-cce`, `huawei-obs`, `huawei-functiongraph`, `huawei-cloud-apig-instance-management`, `huawei-smn-dms`, `huawei-cbr`, `huawei-cloud-eye`, `huawei-cloud-cts-trace-management`, `huawei-dew`, `huawei-modelarts`, `huawei-waf-aad`, `huawei-iam`
+- Per-resource commands: `huawei-vpc` (VPC / subnet / security group / EIP), `huawei-ecs`, `huawei-rds`, `huawei-gaussdb`, `huawei-cloud-dds-dcs-instance-management`, `huawei-cce`, `huawei-obs`, `huawei-functiongraph`, `huawei-cloud-apig-instance-management`, `huawei-smn-dms`, `huawei-cbr`, `huawei-cloud-eye`, `huawei-cloud-cts-trace-management`, `huawei-dew`, `huawei-modelarts`, `huawei-waf-aad`, `huawei-iam`
 - **CDN and DNS have no dedicated skill** - discover operations with `hcloud CDN <Operation> --help` and `hcloud DNS <Operation> --help`
 - Full purchase catalog: `references/resource-catalog.md`
 - Architecture templates by scale: `references/architectures.md`

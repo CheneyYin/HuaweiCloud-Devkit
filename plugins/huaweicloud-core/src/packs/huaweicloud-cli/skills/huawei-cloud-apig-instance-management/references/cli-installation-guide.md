@@ -7,7 +7,7 @@ https://support.huaweicloud.com/qs-hcli/hcli_02_003.html
 
 ```bash
 # Linux x86_64
-curl -sSL https://cn-north-4-hww-cloud-download.obs.cn-north-4.myhuaweicloud.com/cli/hcloud_install.sh -o hcloud_install.sh
+curl -sSL https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/latest/hcloud_install.sh -o hcloud_install.sh
 bash hcloud_install.sh
 
 # Or via Python package manager

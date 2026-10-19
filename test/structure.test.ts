@@ -2302,6 +2302,19 @@ test('adopted huawei-cloud-* skills teach the optional wrapper and the approval 
       /huaweicloud_plan_cli_command[\s\S]{0,120}huaweicloud_run_approved_command/,
       `${name}: approval write-path routing note missing`,
     );
+    // The repo-wide service-skill mandate (AGENTS.md): parameters are
+    // discovered via --help, not hardcoded. S3 dropped it silently — the
+    // guard now pins it for every name on the adopted list (extend the
+    // list when adopting a new skill). Two family forms count: the S2/S3
+    // blockquote ("Always run `hcloud SVC <Operation> ... --help` before
+    // constructing a command") and the S1 list-item phrasing ("Always
+    // discover parameters with `hcloud SVC <Operation> --help` before
+    // executing").
+    assert.match(
+      skill,
+      /Always (run|discover)[^\n]{0,80}`hcloud [A-Za-z|]+ <Operation>[^\n]{0,80}--help` before/,
+      `${name}: --help-first discovery mandate missing`,
+    );
     // Doctrine bans across SKILL.md, every reference, AND every template —
     // the mandate and the reporting doctrine were removed by ruling, not
     // reworded. templates/ joined the sweep with S2 (cts): the first adopted
