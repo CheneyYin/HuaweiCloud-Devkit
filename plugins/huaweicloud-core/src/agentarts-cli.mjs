@@ -216,12 +216,15 @@ function buildChildEnv(options = {}) {
   }
   return env;
 }
-
 // The CLI returns exit code 0 even on failure (measured: full traceback,
 // exit 0) — success must be decided from the output. Signatures measured
 // against 0.1.7: rich ERROR log lines, Python tracebacks, "Failed to …"
-// operation errors, and EOF-aborted prompts ("Aborted.").
-const FAILURE_SIGNATURE_RE = /Traceback \(most recent call last\)| - ERROR - |^Failed to |^Aborted\.$/m;
+// operation errors, EOF-aborted prompts ("Aborted."), the "× ERROR:" echo
+// the CLI prints for operation errors (no data-plane endpoint, auth
+// failure), and the deploy stage's "Error building image:" (docker build
+// failure surfaced through the CLI).
+const FAILURE_SIGNATURE_RE =
+  /Traceback \(most recent call last\)| - ERROR - |^Failed to |^Aborted\.$|^× ERROR:|^Error building image:/m;
 
 function detectFailure(stdout, stderr) {
   return FAILURE_SIGNATURE_RE.test(`${stdout}\n${stderr}`);

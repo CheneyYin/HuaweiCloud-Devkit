@@ -71,9 +71,28 @@ Use `--output json` for machine parsing (default is a rich table).
 ## Exit Codes Lie
 
 agentarts 0.1.7 prints a full traceback and STILL exits 0 on failure. The
-wrapper decides success by parsing output (`Traceback (most recent call last)`,
-`- ERROR -`, `^Failed to …`, `^Aborted.`) — treat any `failureDetected:
-true` or `ok: false` as failure regardless of `exitCode`.
+wrapper decides success by parsing output — measured signatures: Python
+tracebacks, `- ERROR -` log lines, `Failed to …` operation errors,
+`Aborted.` (EOF-aborted prompts), `× ERROR:` (the CLI's operation-error
+echo: no data-plane endpoint, auth failure), and `Error building image:`
+(deploy-stage docker build failure). Treat any `failureDetected: true` or
+`ok: false` as failure regardless of `exitCode`.
+
+## Restricted Networks (e2e-measured)
+
+`launch` builds `FROM python:3.10-slim` and the generated Dockerfile
+pip-installs from pypi.org directly. Where docker.io / pypi.org are
+unreachable:
+
+- Pre-pull the base image from a reachable mirror and retag it
+  (`docker pull docker.1ms.run/library/python:3.10-slim && docker tag …
+python:3.10-slim`) — `FROM` then resolves locally.
+- Add a pip index to the Dockerfile's pip line
+  (`-i https://mirrors.huaweicloud.com/repository/pypi/simple`).
+
+Runtime readiness after launch is asynchronous: an immediate invoke can
+fail with "could not get access_endpoint" — retry after ~20s. The
+docker build dominates deploy time (~2–3 min measured).
 
 ## First-run HOME Writes
 
