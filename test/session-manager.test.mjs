@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, sep } from 'node:path';
 
 import {
   WS_EXEC_INDEX_URL,
@@ -22,7 +25,13 @@ import {
   parseDevbridgeVerifyOutput,
   DEVBRIDGE_HOST_EXPIRY_HOURS,
   validateTunnelPort,
+  classifyLocalUploadPath,
+  buildUploadResetCommand,
 } from '../plugins/huaweicloud-core/src/sandbox/session-manager.mjs';
+
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 test('ws-exec dynamic import uses file:// URL (Windows-safe)', async () => {
   assert.ok(WS_EXEC_INDEX_URL.startsWith('file://'), `expected file:// URL, got: ${WS_EXEC_INDEX_URL}`);
@@ -405,6 +414,52 @@ test('919: validateTunnelPort rejects strings, decimals, and out-of-range ports 
   for (const bad of ['80;rm -rf /', 'abc', '', null, undefined, 0, -1, 65536, 1.5, '8080;true']) {
     assert.throws(() => validateTunnelPort(bad), /invalid port/, `expected rejection for ${JSON.stringify(bad)}`);
   }
+});
+
+// --- 953: upload local-path classification + remote mkdir ---
+
+test('953: buildUploadResetCommand mkdirs the remote parent before any chunk writes', () => {
+  const cmd = buildUploadResetCommand('/workspace/game2048/index.html', '/workspace/game2048/index.html.b64tmp');
+  assert.match(cmd, /^mkdir -p "\$\(dirname "\/workspace\/game2048\/index\.html"\)" && /);
+  assert.match(cmd, /rm -f "\/workspace\/game2048\/index\.html\.b64tmp"$/);
+});
+
+test('953: buildUploadResetCommand quotes paths containing spaces', () => {
+  const cmd = buildUploadResetCommand('/workspace/my site/index .html', '/tmp/x y.b64tmp');
+  assert.ok(cmd.includes('"/workspace/my site/index .html"'));
+  assert.ok(cmd.includes('"/tmp/x y.b64tmp"'));
+});
+
+test('953: classifyLocalUploadPath distinguishes missing file vs missing parent directory', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'upload-classify-'));
+  const existingFile = join(dir, 'exists.txt');
+  writeFileSync(existingFile, 'x');
+
+  // Existing file with existing parent -> pass.
+  assert.equal(classifyLocalUploadPath(existingFile, 'file'), null);
+  // Existing directory as file -> type mismatch keeps the old semantics.
+  assert.match(classifyLocalUploadPath(dir, 'file').message, /path is not a regular file/);
+
+  // Missing file, existing parent -> accurate "not found".
+  const missingFile = join(dir, 'missing.txt');
+  assert.match(classifyLocalUploadPath(missingFile, 'file').message, /local regular file not found/);
+
+  // Missing file AND missing parent -> names the parent + tmp hint (the #953 report case).
+  const deepMissing = join(dir, 'no', 'such', 'dir', 'file.txt');
+  const err = classifyLocalUploadPath(deepMissing, 'file');
+  assert.match(err.message, /directory not found/);
+  assert.match(err.message, new RegExp(escapeRegExp(dir + sep + 'no')));
+  assert.match(err.message, /temp directory/);
+
+  // Directory kind mirrors the three states for upload_project.
+  assert.equal(classifyLocalUploadPath(dir, 'directory'), null);
+  assert.match(classifyLocalUploadPath(join(dir, 'no', 'dir'), 'directory').message, /directory not found/);
+  assert.match(classifyLocalUploadPath(existingFile, 'directory').message, /path is not a directory/);
+});
+
+test('953: classifyLocalUploadPath hint names the real OS temp dir', () => {
+  const err = classifyLocalUploadPath(join(tmpdir(), 'definitely-not-here-953', 'f.txt'), 'file');
+  assert.ok(err.message.includes(tmpdir()), 'hint should include the actual tmpdir path');
 });
 
 // --- G404: gateway-level tunnel errors (verified against the live s2 gateway) ---

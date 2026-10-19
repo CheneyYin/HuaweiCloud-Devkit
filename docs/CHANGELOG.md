@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- fix(sandbox): upload_file auto-creates the remote parent directory and reports honest local-path errors (#953)
 - feat(iam): huaweicloud_check_account_type tool — one-shot primary/sub-account judgment via GetCallerIdentity + KeystoneListAuthDomains, rule username == domainName (#954)
 - docs(iam): primary-account judgment rule + disproved-rules exclusions in huawei-iam skill (#954)
 - fix(safety): stop misclassifying STS GetCallerIdentity as temporary-credential exposure (#954)

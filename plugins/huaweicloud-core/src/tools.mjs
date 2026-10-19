@@ -637,12 +637,16 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'huaweicloud_sandbox_upload_file',
     description:
-      'Upload a local file into the sandbox workspace. Base64-encodes the file, writes it in small chunks through the terminal session (the exec channel is fragile for large single commands), then decodes and verifies the md5 checksum. Use this instead of embedding large file content directly in a command.',
+      'Upload a local file into the sandbox workspace. Base64-encodes the file, writes it in small chunks through the terminal session (the exec channel is fragile for large single commands), then decodes and verifies the md5 checksum. The remote parent directory is created automatically if absent. Use this instead of embedding large file content directly in a command. local_path must be readable from the machine running the DevKit MCP server — if the file lives elsewhere, copy it to the local temp directory first.',
     inputSchema: {
       type: 'object',
       required: ['local_path', 'remote_path'],
       properties: {
-        local_path: { type: 'string', description: 'Absolute path to the local file to upload.' },
+        local_path: {
+          type: 'string',
+          description:
+            'Absolute path to the local file, readable from the machine running the DevKit MCP server (copy to the local temp dir first if not).',
+        },
         remote_path: { type: 'string', description: 'Target path in the sandbox, e.g. /workspace/<repo>/index.html.' },
         workspace_id: {
           type: 'string',
@@ -657,12 +661,16 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'huaweicloud_sandbox_upload_project',
     description:
-      'Package a local project directory and upload it to a sandbox workspace via HTTP tunnel. Falls back to base64 chunking if tunnel fails. Creates a tar.gz archive, uploads it, and extracts it on the sandbox by default.',
+      'Package a local project directory and upload it to a sandbox workspace via HTTP tunnel. Falls back to base64 chunking if tunnel fails. Creates a tar.gz archive, uploads it, and extracts it on the sandbox by default. local_dir must be readable from the machine running the DevKit MCP server — if the project lives elsewhere, copy it to the local temp directory first.',
     inputSchema: {
       type: 'object',
       required: ['local_dir'],
       properties: {
-        local_dir: { type: 'string', description: 'Local project directory to upload.' },
+        local_dir: {
+          type: 'string',
+          description:
+            'Local project directory, readable from the machine running the DevKit MCP server (copy to the local temp dir first if not).',
+        },
         remote_dir: {
           type: 'string',
           description:
