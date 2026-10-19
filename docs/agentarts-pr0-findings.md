@@ -1,8 +1,8 @@
 # AgentArts PR0 实测裁决记录
 
-日期: 2026-10-19（第三轮 interrogate 修订版）。环境: Python 3.12.3, agentarts-sdk 0.1.7 (pip, 华为云镜像), aarch64 Linux, typer 0.27.3 / rich 15.0.0。
+日期: 2026-10-19（interrogate 循环下多轮修订，轮次见 git 历史）。环境: Python 3.12.3, agentarts-sdk 0.1.7 (pip, 华为云镜像), aarch64 Linux, typer 0.27.3 / rich 15.0.0。
 fixture 捕获环境: `COLUMNS=80 NO_COLOR=1` 非 TTY 重定向，共 43 个文件（`_root`、`_version` + 9 个一级 + 32 个二级 help），位于 `test/fixtures/agentarts/help-tree/`。
-标注纪律: 【实测】= 本机运行观测；【源码】= 钉版 venv 内源码验证；【文档】= SDK 文档转述（不作裁决依据）；【预测】= 待 S0 裁决。
+标注纪律: 【实测】= 本机运行观测；【源码】= 钉版 venv 内源码验证；【源码预裁】= 源码级预裁决（待 S0 真机确认）；【文档】= SDK 文档转述（不作裁决依据）；【预测】= 待 S0 裁决。
 后续 PR 以本文为单一事实源；与本文件冲突的早期规划段落以本文件为准。
 
 ## 裁决汇总（映射计划 v3 决策号）
