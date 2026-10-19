@@ -36,7 +36,7 @@ export const huaweicloudCliPack: Pack = {
     'huawei-rds',
     'huawei-cloud-smn-dms-message',
     'huawei-vpc',
-    'huawei-waf-aad',
+    'huawei-cloud-waf-aad-rule-management',
   ],
   tools: HUAWEICLOUD_CLI_TOOLS.map((tool) => tool.name),
 };

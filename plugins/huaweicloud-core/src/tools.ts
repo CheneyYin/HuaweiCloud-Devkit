@@ -672,7 +672,7 @@ function serviceCatalog(intent: string = '') {
     },
     {
       keywords: ['waf', 'aad', 'ddos', 'firewall', 'web protection'],
-      skills: ['huawei-waf-aad'],
+      skills: ['huawei-cloud-waf-aad-rule-management'],
       services: ['WAF', 'AAD'],
     },
     {
