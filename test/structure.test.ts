@@ -817,6 +817,53 @@ test('telemetry hooks never classify skill-tool loads', () => {
   }
 });
 
+test('proxy nginx template listens on targetPort, not the stale listenPort (#738)', () => {
+  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
+
+  // The proxy template must reference ${targetPort} (the auto-incremented port),
+  // not ${listenPort} (the original requested port which may be occupied).
+  const proxyBlock = sessionManager.match(/proxy: `server \{[\s\S]*?\}`/);
+  assert.ok(proxyBlock, 'proxy nginx template block not found');
+  assert.match(proxyBlock[0], /listen \$\{targetPort\}/);
+  assert.doesNotMatch(proxyBlock[0], /listen \$\{listenPort\}/);
+});
+
+test('effectiveNodePort for proxy resolves via the pure resolveProxyNodePort helper on targetPort (#738)', () => {
+  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
+
+  // effectiveNodePort must track the resolved targetPort so the Node app and
+  // nginx stay in sync after auto-increment, and the resolution must be
+  // extractable into a pure, unit-testable function.
+  const nodePortBlock = sessionManager.match(
+    /const effectiveNodePort =[\s\S]*?resolveProxyNodePort\(nodePort, targetPort[^;]*;[\s\S]*?\n\s*: undefined;/,
+  );
+  assert.ok(nodePortBlock, 'effectiveNodePort block not found');
+  const block = nodePortBlock[0];
+  assert.match(block, /resolveProxyNodePort\(nodePort, targetPort/);
+  assert.doesNotMatch(block, /nodePort !== listenPort/);
+
+  const helper = sessionManager.match(/export async function resolveProxyNodePort\([\s\S]*?\n\}/);
+  assert.ok(helper, 'resolveProxyNodePort helper not found');
+  assert.match(helper[0], /nodePort && nodePort !== nginxListenPort \? nodePort : nginxListenPort \+ 1/);
+  assert.match(helper[0], /candidate === nginxListenPort \|\| \(await isPortInUse\(candidate\)\)/);
+});
+
+test('port conflict and drift warnings use the unified logic for all nginx types (#738)', () => {
+  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
+
+  // The #736 stopgap formatProxyPortWarning must stay retired; proxy gets the
+  // same conflict/drift warnings as spa/static.
+  assert.doesNotMatch(sessionManager, /formatProxyPortWarning/);
+  assert.match(sessionManager, /formatPortConflictWarning\(basePort, targetPort\)/);
+  assert.match(sessionManager, /formatPortDriftWarning\(basePort, targetPort\)/);
+  assert.doesNotMatch(sessionManager, /nginxType !== 'proxy'\s*\?\s*formatPortDriftWarning/);
+});
+
+test('deploy_nginx warnings are joined with the pipe separator (#738)', () => {
+  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
+  assert.match(sessionManager, /\.join\(' \| '\)/);
+});
+
 test('devbridge uses the valid `list` command, not the non-existent `ls`', () => {
   const sandbox = readFileSync(
     join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'SKILL.md'),

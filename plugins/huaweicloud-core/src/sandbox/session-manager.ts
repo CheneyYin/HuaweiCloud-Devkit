@@ -399,9 +399,21 @@ export function formatPortDriftWarning(basePort: number, targetPort: number): st
   return `Port ${basePort} was occupied — nginx now listens on port ${targetPort}. Any DevBridge tunnel bound to port ${basePort} is detached: run "devbridge port create <tunnelId> -p ${targetPort} --protocol http -a" and restart "devbridge host" for the new port.`;
 }
 
-export function formatProxyPortWarning(basePort: number, targetPort: number): string | undefined {
-  if (targetPort === basePort) return undefined;
-  return `Port ${basePort} is in use — the proxy template still listens on port ${basePort}: auto-increment does not apply to proxy configs, so nginx may fail to bind. Free the port or deploy a static/spa build instead.`;
+export async function resolveProxyNodePort(
+  nodePort: number | undefined,
+  nginxListenPort: number,
+  isPortInUse: (candidate: number) => Promise<boolean>,
+): Promise<number> {
+  const baseCandidate = nodePort && nodePort !== nginxListenPort ? nodePort : nginxListenPort + 1;
+  let candidate = baseCandidate;
+  for (
+    let attempt = 0;
+    attempt < 10 && (candidate === nginxListenPort || (await isPortInUse(candidate)));
+    attempt += 1
+  ) {
+    candidate += 1;
+  }
+  return candidate;
 }
 
 export function buildExposeRemediation(port: number): string {
@@ -1020,7 +1032,17 @@ export async function deployNginx(
   }
 
   const effectiveNodePort =
-    nginxType === 'proxy' ? (nodePort && nodePort !== listenPort ? nodePort : listenPort + 1) : undefined;
+    nginxType === 'proxy'
+      ? await resolveProxyNodePort(nodePort, targetPort, async (candidate) => {
+          const portCheck = await execOneShot(
+            workspaceId,
+            `ss -tlnp 2>/dev/null | grep -q ":${candidate} " && echo "IN_USE" || echo "FREE"`,
+            username,
+            10000,
+          );
+          return String(portCheck.stdout || '').includes('IN_USE');
+        })
+      : undefined;
 
   const projectPath = `/workspace/${project}`;
   const outputPath = outputDir.startsWith('/') ? outputDir : `${projectPath}/${outputDir}`;
@@ -1048,7 +1070,7 @@ fi`;
     }
 }`,
     proxy: `server {
-    listen ${listenPort};
+    listen ${targetPort};
     server_name _;
     large_client_header_buffers 4 32k;
 
@@ -1136,13 +1158,11 @@ fi`;
         !tunnelActive
           ? 'No active DevBridge tunnel — deployment is incomplete. Proceed to Step 7 to expose the app.'
           : undefined,
-        nginxType === 'proxy'
-          ? formatProxyPortWarning(basePort, targetPort)
-          : formatPortConflictWarning(basePort, targetPort),
-        tunnelActive && nginxType !== 'proxy' ? formatPortDriftWarning(basePort, targetPort) : undefined,
+        formatPortConflictWarning(basePort, targetPort),
+        tunnelActive ? formatPortDriftWarning(basePort, targetPort) : undefined,
       ]
         .filter(Boolean)
-        .join(' ') || undefined,
+        .join(' | ') || undefined,
   };
 }
 

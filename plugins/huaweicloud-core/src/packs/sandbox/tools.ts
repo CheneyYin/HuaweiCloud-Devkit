@@ -497,7 +497,12 @@ const deployNginxSchema = z.looseObject({
   port: z.number().describe('Listen port (from framework detection).'),
   project: z.string().describe('Project directory name under /workspace, e.g. movie-ticket.'),
   output_dir: z.string().describe('Build output directory relative to /workspace/<project>, e.g. dist/build/h5.'),
-  node_port: z.number().optional().describe('Node.js app port for SSR (required when nginx_type=proxy).'),
+  node_port: z
+    .number()
+    .optional()
+    .describe(
+      'Node.js app port for SSR proxy. Defaults to the resolved nginx listen port plus one (targetPort + 1) when omitted; the result carries nodePort so you know which port to bind the Node process to.',
+    ),
   public_port: z.number().optional().describe('Public listen port for SSR proxy (optional, defaults to port).'),
   config_name: z
     .string()
