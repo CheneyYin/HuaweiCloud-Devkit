@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- feat(iam): huaweicloud_check_account_type tool — one-shot primary/sub-account judgment via GetCallerIdentity + KeystoneListAuthDomains, rule username == domainName (#954)
+- docs(iam): primary-account judgment rule + disproved-rules exclusions in huawei-iam skill (#954)
+- fix(safety): stop misclassifying STS GetCallerIdentity as temporary-credential exposure (#954)
+- chore: correct stale MCP tool count in AGENTS.md (39 → 43)
+
 ## 1.1.9-next.3 (2026-10-18)
 
 - fix(sandbox): strip OSC/CSI escapes in all DB_* parsers — root-cause fix for #946 (#947)
