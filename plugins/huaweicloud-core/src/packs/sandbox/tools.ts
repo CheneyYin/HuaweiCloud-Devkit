@@ -533,7 +533,7 @@ const exposeTunnelSchema = z.looseObject({
   port: z
     .number()
     .describe(
-      'Actual port nginx is listening on — use the "port" value returned by huaweicloud_sandbox_deploy_nginx, not the originally requested port.',
+      'Port nginx actually serves on — use the "port" value returned by huaweicloud_sandbox_deploy_nginx, not the originally requested port.',
     ),
   workspace_id: workspaceId,
   username,
