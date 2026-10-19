@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import test from 'node:test';
 
 const hookPath = join(process.cwd(), 'plugins', 'huaweicloud-core', 'hooks', 'huaweicloud-safety.py');
@@ -331,6 +332,7 @@ test('python hook stays fast on padded input (linear env-dump and locator)', () 
 test('python hook mirrors the round-9 launcher/xargs vectors and stays timed on all padding alphabets', () => {
   for (const command of [
     'echo launch | XARGS agentarts',
+    'echo launch | Xargs agentarts',
     'GXARGS agentarts',
     'echo launch | parallel agentarts',
     'genv agentarts launch',
@@ -391,4 +393,70 @@ test('python hook denies hcloud configure set at parity with the Node layer', ()
   const reason = JSON.parse(result.stdout);
   assert.equal(typeof reason, 'string', 'configure set is a write-classified operation on both layers');
   assert.match(reason, /write operations/i);
+});
+
+test('python hook denies wrapper-embedded env and credential dumps (#682 parity)', () => {
+  for (const command of [
+    "bash -c 'env | grep HUAWEICLOUD'",
+    'bash -c "env | grep HUAWEICLOUD"',
+    "eval 'env | grep HWC_'",
+    'echo x $(env | grep HWC_)',
+    'echo x `env | grep HWC_`',
+    'powershell -Command "env | grep HWC_"',
+    'bash -c "printenv HW_ACCESS_KEY"',
+    'bash -c "printenv | grep HWC_"',
+  ]) {
+    const result = runEvaluate('Bash', { command });
+    if (pythonUnavailable(result)) return;
+    assert.equal(result.status, 0, command);
+    const reason = JSON.parse(result.stdout);
+    assert.equal(typeof reason, 'string', `${command} should be blocked`);
+    assert.match(reason, /credential|env/i, command);
+  }
+});
+
+test('python hook agentarts locator is pinned linear in isolation', () => {
+  const probe = [
+    'import importlib.util, json, time',
+    `spec = importlib.util.spec_from_file_location("hws", ${JSON.stringify(hookPath)})`,
+    'm = importlib.util.module_from_spec(spec)',
+    'spec.loader.exec_module(m)',
+    'bombs = ["env " * 12000 + "; agentarts launch", "ab=" * 16000 + " agentarts launch"]',
+    'worst = 0.0',
+    'for bomb in bombs:',
+    '    t0 = time.perf_counter()',
+    '    assert m.agentarts_block_reason(bomb)',
+    '    worst = max(worst, time.perf_counter() - t0)',
+    `print(json.dumps({"worstMs": worst * 1000}))`,
+  ].join('\n');
+  const result = spawnSync(pythonBin, ['-c', probe], { encoding: 'utf8' });
+  if (pythonUnavailable(result)) return;
+  assert.equal(result.status, 0, result.stderr);
+  const { worstMs } = JSON.parse(result.stdout);
+  assert.ok(worstMs < 500, `agentarts_block_reason took ${worstMs.toFixed(0)}ms — locator linearity regressed`);
+});
+
+test('python hook fails safe when safety/policy.json is missing or corrupt', () => {
+  const pluginRoot = join(process.cwd(), 'plugins', 'huaweicloud-core');
+  for (const scenario of ['missing', 'corrupt']) {
+    const tmp = mkdtempSync(join(tmpdir(), 'hw-pyhook-failsafe-'));
+    const dest = join(tmp, 'huaweicloud-core');
+    cpSync(pluginRoot, dest, { recursive: true, filter: (src) => !src.startsWith(join(pluginRoot, 'telemetry')) });
+    const policyDest = join(dest, 'safety', 'policy.json');
+    if (scenario === 'missing') {
+      rmSync(policyDest);
+    } else {
+      writeFileSync(policyDest, '{not valid json');
+    }
+    const result = spawnSync(pythonBin, [join(dest, 'hooks', 'huaweicloud-safety.py')], {
+      input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'agentarts launch' } }),
+      encoding: 'utf8',
+    });
+    rmSync(tmp, { recursive: true, force: true });
+    if (pythonUnavailable(result)) continue;
+    assert.equal(result.status, 0, `${scenario}: hook must not crash through — ${result.stderr}`);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.hookSpecificOutput.permissionDecision, 'deny', scenario);
+    assert.match(output.hookSpecificOutput.permissionDecisionReason, /failed to load/i, scenario);
+  }
 });

@@ -713,12 +713,13 @@ export function classifyAgentartsArgs(tokens, options = {}) {
   );
 }
 
-// Segment sweep for the agentarts gate: shell operators and newlines can
-// chain a write after a readonly agentarts command (`agentarts memory list
-// && agentarts launch`), which a single first-keyword classification misses.
-// Splits on the same operator set as findHcloudCommandSegments (plus
-// newlines, where the keyword pattern also recognizes command position) and
-// classifies every segment that invokes agentarts, merging to the most
+// Segment sweep for the agentarts gate: shell operators, single `&`, and
+// newlines can chain a write after a readonly agentarts command
+// (`agentarts memory list && agentarts launch`), which a single
+// first-keyword classification misses. Splits on a SUPERSET of the
+// findHcloudCommandSegments operator set (newlines and single `&` added —
+// the hcloud sweep still lacks both, a documented pre-existing residual)
+// and classifies every segment that invokes agentarts, merging to the most
 // severe decision — the hcloud segment-sweep contract.
 function classifyAgentartsText(text, options = {}) {
   const segments = String(text || '')

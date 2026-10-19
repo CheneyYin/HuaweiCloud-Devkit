@@ -29,10 +29,11 @@ CONFIG_FILE_RE = None
 SECRET_READ_RE = None
 WRITE_OPERATION_RE = None
 AGENTARTS_POLICY = None
+POLICY_OK = True
 
 
 def load_policy():
-    global CONFIG_FILE_RE, SECRET_READ_RE, WRITE_OPERATION_RE, AGENTARTS_POLICY
+    global CONFIG_FILE_RE, SECRET_READ_RE, WRITE_OPERATION_RE, AGENTARTS_POLICY, POLICY_OK
     try:
         with POLICY_PATH.open("r", encoding="utf-8") as file_obj:
             policy = json.load(file_obj)
@@ -51,7 +52,10 @@ def load_policy():
             WRITE_OPERATION_RE = re.compile(r"(?:^|\s|[A-Za-z0-9])(" + "|".join(write_prefixes) + r")\w*", re.I)
         AGENTARTS_POLICY = policy.get("agentartsCommandPolicy")
     except Exception:
-        pass
+        # Fail-safe flag: evaluate() denies everything while the policy is
+        # unavailable, matching the wired Node hook's load-failure posture
+        # (a silently-degraded hook would allow writes unclassified).
+        POLICY_OK = False
 
 
 load_policy()
@@ -73,7 +77,9 @@ ENV_DUMP_CLOUD_RE = re.compile(r"(HUAWEICLOUD|HWC_|HCLOUD|HW_|OS_)", re.I)
 # The negative lookbehind exempts literal-NAME references — backslash-escaped
 # (\$HW_*) or single-quoted ('$HW_*', which the shell never expands) —
 # while unescaped `$HW_*` is a potential expansion/dump regardless of the
-# command. Aligned with safety-policy.mjs L419-423.
+# command. Aligned with the cred-var block in classifyTextCommand
+# (safety-policy.mjs); both gates sweep inner-command candidates so
+# wrapper-embedded dumps (`bash -c "printenv HW_ACCESS_KEY"`) classify.
 CRED_VAR_REF_RE = re.compile(
     r"(?<!['\\])\$\{?(?:HUAWEICLOUD|HWC|HW|OS)_(?:SECRET_ACCESS_KEY|ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|SDK_AK|SDK_SK)"
     r"|(?:^|\s)printenv\s+(?:HUAWEICLOUD|HWC|HW|OS)_(?:SECRET_ACCESS_KEY|ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|SDK_AK|SDK_SK)",
@@ -368,12 +374,25 @@ def evaluate(tool_name, tool_input):
     """
     text = command_text(tool_input)
 
+    # Env-dump and credential-var gates are module-level constants (no
+    # policy.json dependency), so credential protection survives a broken
+    # policy; they sweep the inner-command candidates so wrapper-embedded
+    # payloads (`bash -c "env | grep HUAWEICLOUD"`, #682) classify like they
+    # do in classifyTextCommand.
+    candidates = _inner_command_candidates(text)
     if CONFIG_FILE_RE and CONFIG_FILE_RE.search(text):
         return "reading Huawei Cloud credential/profile files can expose AK/SK or tokens. Use redacted toolkit tools."
-    if ENV_DUMP_CMD_RE.search(text) and ENV_DUMP_CLOUD_RE.search(text):
-        return "dumping cloud credential environment variables is not allowed."
-    if CRED_VAR_REF_RE.search(text):
-        return "printing cloud credential environment variables is not allowed."
+    for candidate in candidates:
+        if ENV_DUMP_CMD_RE.search(candidate) and ENV_DUMP_CLOUD_RE.search(candidate):
+            return "dumping cloud credential environment variables is not allowed."
+    for candidate in candidates:
+        if CRED_VAR_REF_RE.search(candidate):
+            return "printing cloud credential environment variables is not allowed."
+    if not POLICY_OK:
+        # Policy-dependent gates below are unclassifiable without the policy:
+        # deny rather than degrade silently, matching the wired Node hook's
+        # load-failure posture.
+        return "safety policy failed to load; blocking this action (fail-safe)."
     if SECRET_READ_RE and SECRET_READ_RE.search(text):
         return "direct secret value retrieval would put plaintext secrets into the agent context."
     denied_rule = first_denied_command_rule(text)
