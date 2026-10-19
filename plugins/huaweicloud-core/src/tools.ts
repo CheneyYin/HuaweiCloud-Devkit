@@ -263,6 +263,10 @@ const TOOL_DEFINITIONS_LITERALS = [
     description: packDescription('huaweicloud_sandbox_deploy_check'),
   },
   {
+    name: 'huaweicloud_sandbox_expose_tunnel',
+    description: packDescription('huaweicloud_sandbox_expose_tunnel'),
+  },
+  {
     name: 'huaweicloud_sandbox_check_user',
     description: packDescription('huaweicloud_sandbox_check_user'),
   },

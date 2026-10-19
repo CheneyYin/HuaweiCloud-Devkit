@@ -851,16 +851,28 @@ test('devbridge 0.2.x flow: auth capability probe, version detection, in-place u
   assert.doesNotMatch(sandbox, /Login needs --huaweicloud/);
   assert.match(sandbox, /Never expose tunnel details/);
 
-  // Auth must be decided by probing the binary's capability, not by the version string —
-  // image builds retain AK/SK (auto), release builds accept only API Key.
+  // Auth is a verified three-tier waterfall (keyring → AK/SK → api-key file);
+  // the preferred path is the expose_tunnel tool, the manual script is the
+  // fallback. The probe vocabulary is DB_AUTH_MODE modes, not AUTH_MODE.
   assert.match(sandbox, /auth login --help 2>&1 \| grep -q -- '--access-key'/);
-  assert.match(sandbox, /AUTH_MODE=AKSK_SUPPORTED/);
-  assert.match(sandbox, /AUTH_MODE=API_KEY_ONLY/);
+  assert.match(sandbox, /hwcloud keyring get HW_DEVBRIDGE_API_KEY 2>&1/);
+  assert.match(sandbox, /devbridge_"\*\)|devbridge_\*\)/);
+  assert.match(sandbox, /API_KEY_KEYRING/);
+  assert.match(sandbox, /AKSK_SUPPORTED/);
+  assert.match(sandbox, /API_KEY_FILE/);
+  assert.match(sandbox, /NO_CREDENTIAL/);
+  assert.match(
+    sandbox,
+    /--security-token "\$HW_SECURITY_TOKEN"/,
+    'STS credentials must carry the security token or the gateway rejects with 401 APIGW.0301',
+  );
   assert.match(
     sandbox,
     /auth login --access-key "\$HW_ACCESS_KEY" --secret-key "\$HW_SECRET_KEY"/,
     'image-build branch must teach the direct AK/SK login',
   );
+  assert.match(sandbox, /huaweicloud_sandbox_expose_tunnel/);
+  assert.match(sandbox, /attempts/);
 
   // The API Key guidance (release-build branch) must survive, incl. version detection
   // and the in-place upgrade.
@@ -894,8 +906,9 @@ test('devbridge 0.2.x flow: auth capability probe, version detection, in-place u
     assert.doesNotMatch(sidecopy, /devbridge ls\b/);
     assert.doesNotMatch(sidecopy, /https:\/\/<id>-<port>\.cn-north-4-bridge/);
     assert.match(sidecopy, /auth login --help 2>&1 \| grep -q -- '--access-key'/);
-    assert.match(sidecopy, /AUTH_MODE=AKSK_SUPPORTED/);
-    assert.match(sidecopy, /AUTH_MODE=API_KEY_ONLY/);
+    assert.match(sidecopy, /API_KEY_KEYRING/);
+    assert.match(sidecopy, /AKSK_SUPPORTED/);
+    assert.match(sidecopy, /NO_CREDENTIAL/);
     assert.match(sidecopy, /auth login --api-key "\$HW_API_KEY"/);
     assert.match(sidecopy, /devbridge-s2\.hwtunnel\.com/);
     assert.match(sidecopy, /\/tmp\/hw_api_key/);
@@ -1477,7 +1490,7 @@ test('sandbox timeout defaults stay single-sourced (no raw numeric fallbacks)', 
   const src = readSource(join('src', 'packs', 'sandbox', 'tools.ts'));
   assert.doesNotMatch(src, /args\.timeout_ms \|\| \d/, 'handler fallbacks must read SANDBOX_TIMEOUT_MS');
   const fallbacks = src.match(/args\.timeout_ms \|\| SANDBOX_TIMEOUT_MS\.\w+/g);
-  assert.equal(fallbacks?.length ?? 0, 6, 'six tool handlers apply the shared defaults');
+  assert.equal(fallbacks?.length ?? 0, 7, 'seven tool handlers apply the shared defaults');
 });
 
 test('setup-cli.ts supports the version command', () => {
@@ -1596,12 +1609,12 @@ test('update pack registers version-update tools; registry carries the central d
 
 test('eight packs register their tools; the central map dispatches them', () => {
   // Same contract as the update pack, asserted for the packs materialized
-  // after P4: sandbox (11), auth (5), obs (2), voucher (2), discovery (3),
+  // after P4: sandbox (12), auth (5), obs (2), voucher (3), discovery (3),
   // huaweicloud-open-mcp (3), huaweicloud-cli (7), secrets (3). Their
   // handlers reach callTool only through the PACK_TOOL_HANDLERS merge in
   // packs/registry.ts.
   const packs = [
-    { id: 'sandbox', tools: SANDBOX_TOOLS, count: 11 },
+    { id: 'sandbox', tools: SANDBOX_TOOLS, count: 12 },
     { id: 'auth', tools: AUTH_TOOLS, count: 5 },
     { id: 'obs', tools: OBS_TOOLS, count: 2 },
     { id: 'voucher', tools: VOUCHER_TOOLS, count: 3 },

@@ -17,6 +17,7 @@ import {
   getCurrentWorkspaceId,
   setWorkspaceId,
 } from '../../sandbox/session-manager.ts';
+import { exposeTunnel } from '../../sandbox/devbridge-tunnel.ts';
 import {
   hdkitCheckUser,
   hdkitSignAgreement,
@@ -47,6 +48,7 @@ export const SANDBOX_TIMEOUT_MS = {
   upload_project: 120000,
   deploy_nginx: 60000,
   deploy_check: 30000,
+  expose_tunnel: 90000,
 } as const;
 
 const execFilePromise = promisify(execFile);
@@ -231,6 +233,24 @@ async function handleDeployNginx(args: ToolArgs = {}, _opts: CallToolOptions = {
     sandboxUser7,
     sandboxTimeout7,
   );
+}
+
+async function handleExposeTunnel(args: ToolArgs = {}, _opts: CallToolOptions = {}) {
+  if (!args.port) {
+    throw new Error(
+      'port is required. Use the ACTUAL "port" value returned by huaweicloud_sandbox_deploy_nginx (it may have been auto-incremented on a port conflict).',
+    );
+  }
+  const sandboxWsId9 = args.workspace_id || getCurrentWorkspaceId();
+  if (!sandboxWsId9) {
+    throw new Error(
+      'workspace_id is required. No sandbox connected — call huaweicloud_sandbox_connect first, ' +
+        'or set HW_WORKSPACE_ID environment variable before starting the agent.',
+    );
+  }
+  const sandboxUser9 = args.username || 'root';
+  const sandboxTimeout9 = args.timeout_ms || SANDBOX_TIMEOUT_MS.expose_tunnel;
+  return await exposeTunnel(sandboxWsId9, { port: args.port }, sandboxUser9, sandboxTimeout9);
 }
 
 async function handleDeployCheck(args: ToolArgs = {}, _opts: CallToolOptions = {}) {
@@ -509,6 +529,19 @@ const deployCheckSchema = z.looseObject({
 
 const checkUserSchema = z.looseObject({});
 
+const exposeTunnelSchema = z.looseObject({
+  port: z
+    .number()
+    .describe(
+      'Actual port nginx is listening on — use the "port" value returned by huaweicloud_sandbox_deploy_nginx, not the originally requested port.',
+    ),
+  workspace_id: workspaceId,
+  username,
+  timeout_ms: numericArg
+    .optional()
+    .describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.expose_tunnel})`),
+});
+
 const signAgreementSchema = z.looseObject({});
 
 const connectSchema = z.looseObject({
@@ -590,6 +623,13 @@ export const SANDBOX_TOOLS = [
     handler: handleDeployCheck,
   },
   {
+    name: 'huaweicloud_sandbox_expose_tunnel',
+    description:
+      'Expose a port on the sandbox to a public DevBridge tunnel URL (devbridge 0.2.x). Authenticates automatically (probing AK/SK vs API-Key builds, using /tmp/hw_creds.sh and /tmp/hw_api_key as injected by huaweicloud_sandbox_credentials), pre-cleans stale tunnels to avoid quota errors, starts the host, extracts the public URL (https://<id>-<port>.devbridge-s2.hwtunnel.com), and health-checks it before returning. Use the ACTUAL port reported by huaweicloud_sandbox_deploy_nginx (its "port" field auto-increments on conflict) — never the originally requested port. This automates the manual "Expose the deployed app" flow (huawei-sandbox skill). Returns ok, publicUrl, port, tunnelId, and warnings; when no usable URL is reachable after retries it returns ok:false instead of a dead URL. If the API Key is missing on a release build it returns ok:false with instructions to create one.',
+    schema: exposeTunnelSchema,
+    handler: handleExposeTunnel,
+  },
+  {
     name: 'huaweicloud_sandbox_check_user',
     description:
       'Check if the current user has completed real-name verification and signed the required agreements. Returns 200 {realnameVerified, agreementSigned} when all good; throws 403 HDKIT_NOT_REALNAME / HDKIT_NOT_AGREEMENT / HDKIT_NOT_REALNAME_AND_AGREEMENT to indicate what is missing. Never signs anything itself.',
@@ -632,6 +672,7 @@ export const SANDBOX_TOOL_SCHEMAS: Readonly<Record<SandboxToolName, LooseToolSch
   huaweicloud_sandbox_upload_project: uploadProjectSchema,
   huaweicloud_sandbox_deploy_nginx: deployNginxSchema,
   huaweicloud_sandbox_deploy_check: deployCheckSchema,
+  huaweicloud_sandbox_expose_tunnel: exposeTunnelSchema,
   huaweicloud_sandbox_check_user: checkUserSchema,
   huaweicloud_sandbox_sign_agreement: signAgreementSchema,
   huaweicloud_sandbox_connect: connectSchema,
@@ -649,6 +690,7 @@ export const SANDBOX_TOOL_HANDLERS: Readonly<Record<SandboxToolName, PackToolDef
   huaweicloud_sandbox_upload_project: handleUploadProject,
   huaweicloud_sandbox_deploy_nginx: handleDeployNginx,
   huaweicloud_sandbox_deploy_check: handleDeployCheck,
+  huaweicloud_sandbox_expose_tunnel: handleExposeTunnel,
   huaweicloud_sandbox_check_user: handleCheckUser,
   huaweicloud_sandbox_sign_agreement: handleSignAgreement,
   huaweicloud_sandbox_connect: handleConnect,

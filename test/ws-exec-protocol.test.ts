@@ -17,9 +17,15 @@ import {
   readyMarkerFor,
   runShellCommand,
   DEPLOY_CHECK_ALL_PASS,
+  DEVBRIDGE_AUTH_KEYRING_STDOUT,
+  DEVBRIDGE_EXPOSE_OK_STDOUT,
   FakeFs,
 } from './e2e/ws-fake/fake-shell.ts';
 import { parseDeployCheckOutput } from '../plugins/huaweicloud-core/src/sandbox/session-manager.ts';
+import {
+  parseDevbridgeAuthOutput,
+  parseDevbridgeExposeOutput,
+} from '../plugins/huaweicloud-core/src/sandbox/devbridge-tunnel.ts';
 
 // Golden pins for the hwlink wire protocol the E2E ws-fake shares with the
 // product. The fake imports the product's codec, so a codec regression
@@ -202,4 +208,45 @@ test('deploy-check script recognition: the anchored first line dispatches to the
   const probe = runShellCommand('command -v nginx >/dev/null 2>&1 && echo "INSTALLED" || echo "MISSING"', new FakeFs());
   assert.equal(probe.intent, 'nginx-installed');
   assert.ok(probe.stdout.includes('INSTALLED'));
+});
+
+test('devbridge auth grammar cross-tier pin: fake synthesis parses through the product parser', () => {
+  const parsed = parseDevbridgeAuthOutput(DEVBRIDGE_AUTH_KEYRING_STDOUT);
+  assert.equal(parsed.authMode, 'API_KEY_KEYRING');
+  assert.deepEqual(parsed.attempts, {});
+});
+
+test('devbridge expose grammar cross-tier pin: fake synthesis parses through the product parser', () => {
+  const parsed = parseDevbridgeExposeOutput(DEVBRIDGE_EXPOSE_OK_STDOUT);
+  assert.equal(parsed.tunnelUrl, 'https://e2e-tunnel-1-8080.devbridge-s2.hwtunnel.com');
+  assert.equal(parsed.tunnelId, 'e2e-tunnel-1');
+  assert.equal(parsed.httpCode, '200');
+  assert.equal(parsed.quotaError, false);
+});
+
+test('devbridge fake rows recognize the real scripts (first-line anchors)', () => {
+  // The auth probe's first line is the double-quoted PATH export — unique
+  // to the probe; the expose script and cleanup share the pkill first line.
+  const fs = new FakeFs();
+  const auth = runShellCommand(
+    'export PATH="$HOME/.huawei/bin:$PATH"\nDB_OK=0\ndb_login_ok() { devbridge auth status 2>/dev/null | grep -q "Logged in"; }',
+    fs,
+  );
+  assert.equal(auth.stdout, DEVBRIDGE_AUTH_KEYRING_STDOUT);
+  const expose = runShellCommand(
+    'pkill -f "devbridge host" 2>/dev/null || true\nsleep 2\ndevbridge delete-all > /dev/null 2>&1 || true',
+    fs,
+  );
+  assert.equal(expose.stdout, DEVBRIDGE_EXPOSE_OK_STDOUT);
+  // The retry-cleanup blob is a single ;-joined line with the same pkill
+  // prefix — the anchor must recognize it too (ZERO_UNKNOWN gate).
+  const cleanup = runShellCommand(
+    'pkill -f "devbridge host" 2>/dev/null || true; sleep 2; devbridge delete-all > /dev/null 2>&1 || true',
+    fs,
+  );
+  assert.equal(cleanup.stdout, DEVBRIDGE_EXPOSE_OK_STDOUT);
+  // The connect flow's unquoted PATH export still hits the generic row,
+  // not the auth-probe row.
+  const plain = runShellCommand('export PATH=$HOME/.huawei/bin${PATH:+:$PATH}', fs);
+  assert.equal(plain.stdout, '');
 });

@@ -115,6 +115,10 @@ test('remote MCP server initializes, lists tools, and plans CLI commands', async
       `${tool.name} description must not teach the stdio-only packs_configure on the remote face`,
     );
   }
+  // expose_tunnel is reachable remotely BY DESIGN (accepted residual, see
+  // the remoteSurface comment in mcp-protocol.ts) — pin it so a future
+  // withholding change is a deliberate edit, not an accident.
+  assert.ok(toolNames.has('huaweicloud_sandbox_expose_tunnel'));
 
   const planned = await rpc('tools/call', {
     name: 'huaweicloud_plan_cli_command',
