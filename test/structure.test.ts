@@ -434,7 +434,6 @@ test('skill SKILL.md files meet minimum content quality bar', () => {
     'huaweicloud-troubleshooting',
     'huawei-deployment',
     'huawei-getting-started',
-    'huawei-apig',
     'huawei-gaussdb',
   ]);
 
@@ -2272,3 +2271,118 @@ test('no conflict-marker residue survives in tracked text files (prettier-launde
   }
   assert.deepEqual(offenders, [], 'conflict-marker residue found');
 });
+
+test('adopted huawei-cloud-* skills teach the optional wrapper and the approval write path', () => {
+  // The adopted corpus (main's 1.1.8 huawei-cloud-* skills) ships with a
+  // mandatory-wrapper doctrine and a network-facing quality CLI. The v2
+  // adoption rulings flip both: the wrapper is OPTIONAL (bare hcloud is
+  // equivalent; the safety seam classifies both), and the shipped scripts
+  // carry no telemetry/network/download surface. Every adopted skill's
+  // SKILL.md must carry the two teaching notes, and its scripts must be
+  // the normalized forms.
+  const adopted = [
+    'huawei-cloud-apig-instance-management',
+    'huawei-cloud-cts-trace-management',
+    'huawei-cloud-dds-dcs-instance-management',
+    'huawei-cloud-deployment-task-management',
+    'huawei-cloud-dew-key-management',
+    'huawei-cloud-gaussdb-instance-management',
+    'huawei-cloud-smn-dms-message',
+    'huawei-cloud-waf-aad-rule-management',
+  ];
+  const cliRoot = join(pluginRoot, 'src', 'packs', 'huaweicloud-cli', 'skills');
+  const present = listSkillDirs(join(pluginRoot, 'skills'));
+  for (const name of adopted) {
+    if (!present.includes(name)) continue; // not adopted yet (S-series in flight)
+    const skillDir = join(cliRoot, name);
+    const skill = readSource(join('src', 'packs', 'huaweicloud-cli', 'skills', name, 'SKILL.md'));
+    assert.match(skill, /wrapper is OPTIONAL/i, `${name}: optional-wrapper note missing`);
+    assert.match(
+      skill,
+      /huaweicloud_plan_cli_command[\s\S]{0,120}huaweicloud_run_approved_command/,
+      `${name}: approval write-path routing note missing`,
+    );
+    // Doctrine bans across SKILL.md AND every reference — the mandate and
+    // the reporting doctrine were removed by ruling, not reworded.
+    for (const file of [
+      join(skillDir, 'SKILL.md'),
+      ...readdirSync(join(skillDir, 'references')).map((f) => join(skillDir, 'references', f)),
+    ]) {
+      const text = readFileSync(file, 'utf8');
+      for (const banned of [
+        /MUST be wrapped/i,
+        /mandatory rule/i,
+        /strictly forbidden/i,
+        /Quality telemetry is collected/i,
+        /SKILL_QUALITY_REPORT/,
+        /cli_reporting/,
+        /skillsapi\.developer\.myhuaweicloud\.com/,
+        /urlretrieve/,
+      ]) {
+        assert.doesNotMatch(text, banned, `${name}/${file.split(/[/\\]/).pop()}: banned doctrine ${banned}`);
+      }
+    }
+    // The normalized script pair (no reporting module, no network).
+    const ensurePath = join(cliRoot, name, 'scripts', 'ensure_cli.sh');
+    const ensure = readFileSync(ensurePath, 'utf8');
+    assert.match(ensure, /OPTIONAL/i, `${name}: ensure_cli.sh must frame the wrapper as optional`);
+    assert.doesNotMatch(ensure, />> ~\/\.bashrc/, `${name}: ensure_cli.sh must not persist PATH`);
+    assert.doesNotMatch(ensure, /ln -sf/, `${name}: ensure_cli.sh must not symlink into system dirs`);
+    const entry = readFileSync(join(cliRoot, name, 'scripts', 'cli', 'cli_entry.py'), 'utf8');
+    assert.match(entry, /ALLOWED_COMMANDS = \("hcloud",\)/, `${name}: whitelist missing`);
+    for (const banned of ['urlretrieve', 'urllib.request', 'skillsapi.developer.myhuaweicloud.com', 'cli_reporting']) {
+      assert.ok(!entry.includes(banned), `${name}: cli_entry.py must not reference ${banned}`);
+    }
+    assert.ok(
+      !existsSync(join(cliRoot, name, 'scripts', 'cli', 'cli_reporting.py')),
+      `${name}: cli_reporting.py must not ship`,
+    );
+  }
+});
+
+test(
+  'the normalized skill-quality-cli wrapper dispatches run and enforces the whitelist (executing probe)',
+  {
+    skip:
+      !existsSync(
+        join(
+          pluginRoot,
+          'src',
+          'packs',
+          'huaweicloud-cli',
+          'skills',
+          'huawei-cloud-apig-instance-management',
+          'scripts',
+          'cli',
+          'cli_entry.py',
+        ),
+      ) || spawnSync('python3', ['--version']).error !== undefined,
+  },
+  () => {
+    const entry = join(
+      pluginRoot,
+      'src',
+      'packs',
+      'huaweicloud-cli',
+      'skills',
+      'huawei-cloud-apig-instance-management',
+      'scripts',
+      'cli',
+      'cli_entry.py',
+    );
+    // version: dispatch reaches the subcommand (the argparse dest must not
+    // collide with the REMAINDER positional).
+    const version = spawnSync('python3', [entry, 'version'], { encoding: 'utf8', timeout: 30_000 });
+    assert.equal(version.status, 0, version.stderr);
+    assert.match(version.stdout, /skill-quality-cli/);
+    // run: whitelist rejects a non-hcloud child with exit 2 (dispatch +
+    // validation both reachable).
+    const rejected = spawnSync('python3', [entry, 'run', '--', 'ls'], { encoding: 'utf8', timeout: 30_000 });
+    assert.equal(rejected.status, 2, rejected.stderr);
+    assert.match(rejected.stderr, /not allowed by the wrapper whitelist/);
+    // self-check: local sanity summary.
+    const check = spawnSync('python3', [entry, 'self-check'], { encoding: 'utf8', timeout: 30_000 });
+    assert.equal(check.status, 0, check.stderr);
+    assert.match(check.stdout, /network: none|no network/i);
+  },
+);

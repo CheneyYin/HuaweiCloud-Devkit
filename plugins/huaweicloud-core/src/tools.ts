@@ -639,7 +639,11 @@ function serviceCatalog(intent: string = '') {
       skills: ['huawei-cce'],
       services: ['CCE', 'SWR'],
     },
-    { keywords: ['apig', 'api gateway', 'publish', 'throttle'], skills: ['huawei-apig'], services: ['APIG'] },
+    {
+      keywords: ['apig', 'api gateway', 'publish', 'throttle'],
+      skills: ['huawei-cloud-apig-instance-management'],
+      services: ['APIG'],
+    },
     { keywords: ['rds', 'mysql', 'postgresql', 'database', 'db'], skills: ['huawei-rds'], services: ['RDS'] },
     {
       keywords: ['gaussdb', 'distributed', 'sharding', 'opengauss'],

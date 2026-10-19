@@ -17,7 +17,7 @@ export const huaweicloudCliPack: Pack = {
   description:
     'Task-shaped Huawei Cloud CLI knowledge: ECS, VPC, OBS, IAM, and sixteen more service skills with per-service KooCLI workflows, verified operation names, and troubleshooting plays. Complements the huaweicloud-cli-and-auth meta-skill, which covers KooCLI installation and credentials; this pack carries what to run per service. Load a skill with the attempt-first direct read under skillRoot when known, or with huaweicloud_retrieve_skill.',
   skills: [
-    'huawei-apig',
+    'huawei-cloud-apig-instance-management',
     'huawei-billing',
     'huawei-cbr',
     'huawei-cce',

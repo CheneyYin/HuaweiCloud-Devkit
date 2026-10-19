@@ -1,6 +1,6 @@
 ---
 name: huawei-smn-dms
-description: 'Use when creating or managing SMN topics/subscriptions/messages or DMS Kafka/RabbitMQ/RocketMQ queues on Huawei Cloud. Triggers: SMN, DMS, notification, message queue, Kafka, RabbitMQ, RocketMQ, topic, subscription. NOT for: APIG (use huawei-apig), FunctionGraph triggers (use huawei-functiongraph).'
+description: 'Use when creating or managing SMN topics/subscriptions/messages or DMS Kafka/RabbitMQ/RocketMQ queues on Huawei Cloud. Triggers: SMN, DMS, notification, message queue, Kafka, RabbitMQ, RocketMQ, topic, subscription. NOT for: APIG (use huawei-cloud-apig-instance-management), FunctionGraph triggers (use huawei-functiongraph).'
 version: 1
 ---
 
