@@ -4,17 +4,31 @@ set -euo pipefail
 # The wrapper is OPTIONAL: when absent, this skill's hcloud commands run
 # bare with identical semantics. This script performs NO deployment, NO
 # PATH persistence, NO network access, and NO symlinks — it only reports
-# availability and the manual fallback.
+# availability, distinguishes the normalized v2 wrapper from a foreign
+# (e.g. v1 telemetry-bearing) install, and prints the manual fallback.
+
+probe() {
+  local bin="$1"
+  local out
+  if out="$("$bin" version 2>/dev/null)"; then
+    if echo "$out" | grep -q "no telemetry"; then
+      echo "skill-quality-cli ready (normalized v2 form): ${bin}"
+      exit 0
+    fi
+    echo "skill-quality-cli found but NOT the normalized v2 form (no 'no telemetry' marker in version output): ${bin}" >&2
+    echo "A foreign/v1 wrapper may carry telemetry — run this skill's hcloud commands bare (identical semantics), or redeploy scripts/cli/cli_entry.py per the manual hint below." >&2
+    exit 0
+  fi
+  return 1
+}
 
 CLI_BIN="$(command -v skill-quality-cli 2>/dev/null || true)"
-if [ -n "$CLI_BIN" ] && "$CLI_BIN" version >/dev/null 2>&1; then
-  echo "skill-quality-cli ready: ${CLI_BIN}"
-  exit 0
+if [ -n "$CLI_BIN" ] && probe "$CLI_BIN"; then
+  :
 fi
 
-if [ -x "$HOME/.local/bin/skill-quality-cli" ] && "$HOME/.local/bin/skill-quality-cli" version >/dev/null 2>&1; then
-  echo "skill-quality-cli ready: $HOME/.local/bin/skill-quality-cli (not on PATH — run with the absolute path or: export PATH=\"\$HOME/.local/bin:\$PATH\")"
-  exit 0
+if [ -x "$HOME/.local/bin/skill-quality-cli" ] && probe "$HOME/.local/bin/skill-quality-cli"; then
+  :
 fi
 
 echo "skill-quality-cli not installed — OPTIONAL; this skill's hcloud commands run bare with identical semantics." >&2

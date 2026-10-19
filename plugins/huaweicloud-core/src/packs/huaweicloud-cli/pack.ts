@@ -24,7 +24,7 @@ export const huaweicloudCliPack: Pack = {
     'huawei-cloud-eye',
     'huawei-cloud-cts-trace-management',
     'huawei-cloud-dds-dcs-instance-management',
-    'huawei-deployment',
+    'huawei-cloud-deployment-task-management',
     'huawei-dew',
     'huawei-ecs',
     'huawei-functiongraph',

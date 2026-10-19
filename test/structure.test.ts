@@ -432,7 +432,6 @@ test('skill SKILL.md files meet minimum content quality bar', () => {
     'huaweicloud-api-and-sdk',
     'huaweicloud-safety',
     'huaweicloud-troubleshooting',
-    'huawei-deployment',
     'huawei-getting-started',
     'huawei-gaussdb',
   ]);
@@ -445,18 +444,28 @@ test('skill SKILL.md files meet minimum content quality bar', () => {
   }
 });
 
-test('huawei-deployment skill uses verified KooCLI service and operation names', () => {
-  const body = readFileSync(join(pluginRoot, 'skills', 'huawei-deployment', 'SKILL.md'), 'utf8');
+test('huawei-cloud-deployment-task-management skill uses verified KooCLI service and operation names', () => {
+  // S4 adoption: the corpus pins, re-derived from main's verified skill
+  // (KooCLI 7.2.12). The legacy thin skill's --app_id / DeleteApplication
+  // match pins were dropped — those tokens now appear only inside the
+  // sunset/replacement notes naming the new-model equivalents.
+  // APIGW.0301 IS taught (the auth-failure row); Deploy.00016902 /
+  // DEV-12-50002 are the project-scope / parameter errors, not auth.
+  const body = readSource(
+    join('src', 'packs', 'huaweicloud-cli', 'skills', 'huawei-cloud-deployment-task-management', 'SKILL.md'),
+  );
   assert.match(body, /CodeArtsDeploy/);
   assert.match(body, /StartDeployTask/);
   assert.match(body, /ListAllApp/);
+  assert.match(body, /CreateDeployTaskByTemplate/);
   assert.match(body, /DeleteDeployTask/);
   assert.match(body, /Deploy\.00016902/);
+  assert.match(body, /DEV-12-50002/);
   assert.match(body, /APIGW\.0301/);
-  assert.match(body, /--app_id/);
-  assert.match(body, /DeleteApplication/);
-  assert.match(body, /deprecated since 2024-09-30/);
+  assert.match(body, /不支持的服务名称:CloudDeploy/);
+  assert.match(body, /sunset after 2024-09-30/);
   assert.doesNotMatch(body, /--application_id/);
+  assert.doesNotMatch(body, /--app_name/);
   assert.doesNotMatch(body, /\bStartTask\b/);
   assert.doesNotMatch(body, /\bListTasks\b/);
   assert.doesNotMatch(body, /\bCreateTask\b/);

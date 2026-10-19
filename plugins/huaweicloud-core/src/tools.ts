@@ -693,7 +693,7 @@ function serviceCatalog(intent: string = '') {
     { keywords: ['cbr', 'backup', 'restore', 'vault', 'snapshot'], skills: ['huawei-cbr'], services: ['CBR'] },
     {
       keywords: ['deployment', 'deploy', 'ci/cd', 'pipeline', 'release'],
-      skills: ['huawei-deployment'],
+      skills: ['huawei-cloud-deployment-task-management'],
       services: ['CloudDeploy'],
     },
     {
