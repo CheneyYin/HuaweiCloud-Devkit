@@ -657,7 +657,7 @@ function serviceCatalog(intent: string = '') {
     },
     {
       keywords: ['dew', 'secret', 'kms', 'encrypt', 'decrypt', 'certificate', 'csms'],
-      skills: ['huawei-dew'],
+      skills: ['huawei-cloud-dew-key-management'],
       services: ['CSMS', 'KMS'],
     },
     {

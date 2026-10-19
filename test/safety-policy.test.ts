@@ -477,6 +477,47 @@ test('classifyTextCommand blocks KMS/CSMS ShowSecret retrieval (#770 D4-3)', () 
   assert.equal(classifyTextCommand("echo Show'Secret'Version").decision, 'deny');
 });
 
+test('KMS plaintext-returning operations deny as secret reads; rotation/cancel are writes (S5)', () => {
+  // The dew skill's Blocked Operations table taught "blocked" for KMS
+  // DecryptData/CreateDatakey while the classifier allowed them (S5 review,
+  // probed live). The policy vocabulary now carries the plaintext stems;
+  // CreateDatakey stays an approval-gated write on purpose — it is a prefix
+  // of the safe CreateDatakeyWithoutPlaintext, and unguarded substring
+  // semantics would block the safe variant too.
+  for (const cmd of [
+    'hcloud KMS DecryptData --cli-region=cn-north-4 --key_id=k --cipher_text=abc',
+    'hcloud KMS DecryptDatakey --cli-region=cn-north-4 --key_id=k --cipher_text=abc',
+    'hcloud KMS DecryptDatakeyCapsule --cli-region=cn-north-4 --key_id=k',
+    'hcloud KMS DownloadAccessPointPrivateKey --cli-region=cn-north-4',
+    'hcloud KMS DeriveSharedSecret --cli-region=cn-north-4 --key_id=k',
+    'hcloud KMS CreateRsaDatakeyPair --cli-region=cn-north-4',
+    'hcloud KMS CreateEcDatakeyPair --cli-region=cn-north-4',
+  ]) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd);
+    assert.equal(result.risk, 'secret', cmd);
+  }
+  // The stem guard: DecryptData must not leak onto longer names.
+  assert.equal(classifyTextCommand('hcloud CSMS ListSecrets --secret_name=decryptdata-demo').decision, 'allow');
+  // CreateDatakey: write (approval path), and the safe variant is a write too.
+  const datakey = classifyTextCommand('hcloud KMS CreateDatakey --cli-region=cn-north-4 --key_id=k');
+  assert.equal(datakey.decision, 'deny');
+  assert.equal(datakey.risk, 'write');
+  const safe = classifyTextCommand('hcloud KMS CreateDatakeyWithoutPlaintext --cli-region=cn-north-4 --key_id=k');
+  assert.equal(safe.decision, 'deny');
+  assert.equal(safe.risk, 'write');
+  // RotateSecret / CancelKeyDeletion are writes now (they were unknown reads).
+  for (const cmd of [
+    'hcloud CSMS RotateSecret --cli-region=cn-north-4 --secret_name=x',
+    'hcloud KMS RotateOnDemand --cli-region=cn-north-4 --key_id=k',
+    'hcloud KMS CancelKeyDeletion --cli-region=cn-north-4 --key_id=k',
+  ]) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd);
+    assert.equal(result.risk, 'write', cmd);
+  }
+});
+
 test('the skill-quality-cli wrapper does not launder hcloud classification', () => {
   // The adopted huawei-cloud-* service skills teach the wrapper; the
   // command-position seam unwraps it so embedded hcloud keeps its verdict.

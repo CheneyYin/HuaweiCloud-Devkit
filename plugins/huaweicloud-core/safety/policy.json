@@ -28,7 +28,18 @@
     "huaweicloud\\s*(?:&&|;|/|[\\n\\r])\\s*(?:\\S+\\s+){0,2}(?:credentials|creds-import|config)\\.json"
   ],
   "blockedConfigureSubcommands": ["show", "get", "list", "export", "init"],
-  "blockedSecretOperations": ["ShowSecret", "ShowSecretVersion", "DownloadSecret", "GetSecretValue"],
+  "blockedSecretOperations": [
+    "ShowSecret",
+    "ShowSecretVersion",
+    "DownloadSecret",
+    "GetSecretValue",
+    "DecryptData",
+    "DecryptDatakey",
+    "DownloadAccessPointPrivateKey",
+    "DeriveSharedSecret",
+    "CreateRsaDatakeyPair",
+    "CreateEcDatakeyPair"
+  ],
   "blockedSecretCliPatterns": [
     "huaweicloud-devkit(@[\\w.+-]+)?(\\.(js|cjs|mjs|exe|ts))?(\\s+--)?\\s+secret\\s+get\\b",
     "setup-cli\\.(js|mjs|ts)(\\s+--)?\\s+secret\\s+get\\b",
@@ -67,7 +78,9 @@
     "Invoke",
     "Execute",
     "Trigger",
-    "Deploy"
+    "Deploy",
+    "Rotate",
+    "Cancel"
   ],
   "readOperationPrefixes": ["List", "Show", "Get", "Describe", "NovaList", "NovaShow"],
   "safeTextReadCommands": ["rg", "grep", "findstr", "git", "ls", "dir", "Get-ChildItem"],

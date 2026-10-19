@@ -53,7 +53,7 @@
         "any": [
           {
             "field": "text",
-            "regex": "(ShowSecretVersion|(?<![A-Za-z0-9._/-])ShowSecret(?![A-Za-z0-9._/-])|DownloadSecret|GetSecretValue)"
+            "regex": "(ShowSecretVersion|(?<![A-Za-z0-9._/-])ShowSecret(?![A-Za-z0-9._/-])|DownloadSecret|GetSecretValue|(?<![A-Za-z0-9._/-])DecryptData(?![A-Za-z0-9._/-])|DecryptDatakey|DownloadAccessPointPrivateKey|DeriveSharedSecret|CreateRsaDatakeyPair|CreateEcDatakeyPair)"
           },
           {
             "field": "text",
@@ -95,8 +95,8 @@
           }
         ]
       },
-      "message": "此操作将返回临时 AK/SK 和 SecurityToken。注意敏感数据保密，不要将凭证输出到日志或分享给第三方。",
-      "remediation": "临时凭证仅用于当前会话，使用完毕后及时销毁，不要持久化存储。"
+      "message": "\u6b64\u64cd\u4f5c\u5c06\u8fd4\u56de\u4e34\u65f6 AK/SK \u548c SecurityToken\u3002\u6ce8\u610f\u654f\u611f\u6570\u636e\u4fdd\u5bc6\uff0c\u4e0d\u8981\u5c06\u51ed\u8bc1\u8f93\u51fa\u5230\u65e5\u5fd7\u6216\u5206\u4eab\u7ed9\u7b2c\u4e09\u65b9\u3002",
+      "remediation": "\u4e34\u65f6\u51ed\u8bc1\u4ec5\u7528\u4e8e\u5f53\u524d\u4f1a\u8bdd\uff0c\u4f7f\u7528\u5b8c\u6bd5\u540e\u53ca\u65f6\u9500\u6bc1\uff0c\u4e0d\u8981\u6301\u4e45\u5316\u5b58\u50a8\u3002"
     },
     {
       "id": "hwc-command-encoded-shell-exec",
