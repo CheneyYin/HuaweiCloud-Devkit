@@ -28,7 +28,7 @@ export const huaweicloudCliPack: Pack = {
     'huawei-cloud-dew-key-management',
     'huawei-ecs',
     'huawei-functiongraph',
-    'huawei-gaussdb',
+    'huawei-cloud-gaussdb-instance-management',
     'huawei-getting-started',
     'huawei-iac',
     'huawei-iam',

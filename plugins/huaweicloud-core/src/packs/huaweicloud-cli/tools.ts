@@ -85,7 +85,11 @@ const SERVICE_EXAMPLES: Record<string, { list: string; create: string; show: str
   OBS: { list: 'OBS ls', create: 'OBS mb obs://<bucket>', show: 'OBS stat obs://<bucket>/<key>' },
   RDS: { list: 'RDS ListInstances', create: 'RDS CreateInstance', show: 'RDS ShowInstance' },
   CES: { list: 'CES ListAlarms', create: 'CES CreateAlarm', show: 'CES ListMetrics' },
-  GAUSSDB: { list: 'GaussDB ListInstances', create: 'GaussDB CreateInstance', show: 'GaussDB ShowInstance' },
+  GAUSSDB: {
+    list: 'GaussDB ListGaussMySqlInstances',
+    create: 'GaussDB CreateGaussMySqlInstance',
+    show: 'GaussDB ShowGaussMySqlInstanceInfo',
+  },
   DDS: { list: 'DDS ListInstances', create: 'DDS CreateInstance', show: 'DDS ShowInstance' },
   DCS: { list: 'DCS ListInstances', create: 'DCS CreateInstance', show: 'DCS ShowInstance' },
 };

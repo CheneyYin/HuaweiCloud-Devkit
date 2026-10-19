@@ -433,7 +433,6 @@ test('skill SKILL.md files meet minimum content quality bar', () => {
     'huaweicloud-safety',
     'huaweicloud-troubleshooting',
     'huawei-getting-started',
-    'huawei-gaussdb',
   ]);
 
   for (const name of skillNames) {
@@ -470,6 +469,26 @@ test('huawei-cloud-deployment-task-management skill uses verified KooCLI service
   assert.doesNotMatch(body, /\bListTasks\b/);
   assert.doesNotMatch(body, /\bCreateTask\b/);
   assert.doesNotMatch(body, /\bDeleteTask\b/);
+});
+
+test('every serviceCatalog route names a skill a pack actually owns', () => {
+  // The S-series adoption loop twice shipped a staged tree whose routeMap
+  // still pointed at a deleted legacy skill (S5/S6 reviews caught the
+  // unstaged-rename class). The routing data lives inline in tools.ts's
+  // serviceCatalog, so the guard scans the source and cross-checks every
+  // `skills: ['...']` entry against the pack registry's union.
+  const known = new Set(PACKS.flatMap((pack) => pack.skills));
+  const source = readSource(join('src', 'tools.ts'));
+  const routed = [...source.matchAll(/skills: \[([^\]]+)\]/g)].flatMap((m) =>
+    m[1]!
+      .split(',')
+      .map((s) => s.trim().replace(/^['"]|['"]$/g, ''))
+      .filter(Boolean),
+  );
+  assert.ok(routed.length > 20, `expected a substantive routeMap, found ${routed.length} entries`);
+  for (const name of routed) {
+    assert.ok(known.has(name), `serviceCatalog routes to "${name}" which no pack owns (stale rename?)`);
+  }
 });
 
 test('skills with references have non-empty reference files', () => {
@@ -2350,6 +2369,9 @@ test('adopted huawei-cloud-* skills teach the optional wrapper and the approval 
         /skillsapi\.developer\.myhuaweicloud\.com/,
         /urlretrieve/,
         /allow_writes/i,
+        /Quality reporting is delivered/i,
+        /hard-binds a report/i,
+        /installed by `scripts\/ensure_cli\.sh`/i,
       ]) {
         assert.doesNotMatch(text, banned, `${name}/${file.split(/[/\\]/).pop()}: banned doctrine ${banned}`);
       }
@@ -2394,6 +2416,28 @@ test('adopted huawei-cloud-* skills teach the optional wrapper and the approval 
           `${name}/${rel} must stay byte-identical to ${reference}/${rel}`,
         );
       }
+    }
+    // The scripts directory carries EXACTLY the family pair — main's corpus
+    // shipped extra wrappers (gaussdb_cli.sh region-injector/reporter,
+    // smn_dms_skill.py engine, install_cli.sh deployer) whose doctrine the
+    // adoption rulings strip; a stray script in any adopted skill fails here
+    // (S6's gaussdb_cli.sh drop is the precedent).
+    for (const name of adopted) {
+      if (!present.includes(name)) continue;
+      assert.ok(
+        existsSync(join(cliRoot, name, 'scripts')),
+        `${name}/scripts must exist with the family pair (ensure_cli.sh + cli/cli_entry.py)`,
+      );
+      assert.deepEqual(
+        readdirSync(join(cliRoot, name, 'scripts')).sort((a, b) => a.localeCompare(b)),
+        ['cli', 'ensure_cli.sh'],
+        `${name}/scripts must contain exactly the family pair (ensure_cli.sh + cli/cli_entry.py)`,
+      );
+      assert.deepEqual(
+        readdirSync(join(cliRoot, name, 'scripts', 'cli')).sort((a, b) => a.localeCompare(b)),
+        ['cli_entry.py'],
+        `${name}/scripts/cli must contain exactly cli_entry.py`,
+      );
     }
   }
 });

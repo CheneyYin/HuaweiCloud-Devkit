@@ -647,7 +647,7 @@ function serviceCatalog(intent: string = '') {
     { keywords: ['rds', 'mysql', 'postgresql', 'database', 'db'], skills: ['huawei-rds'], services: ['RDS'] },
     {
       keywords: ['gaussdb', 'distributed', 'sharding', 'opengauss'],
-      skills: ['huawei-gaussdb'],
+      skills: ['huawei-cloud-gaussdb-instance-management'],
       services: ['GaussDB'],
     },
     {
