@@ -180,6 +180,21 @@ test('huawei-cloud-deployment-task-management skill uses verified KooCLI service
   assert.doesNotMatch(body, /\bDeleteApplication\b/);
 });
 
+test('huawei-iam skill documents the validated primary-account judgment rule (#954)', () => {
+  const body = readFileSync(join(pluginRoot, 'skills', 'huawei-iam', 'SKILL.md'), 'utf8');
+  assert.match(body, /username == domainName/);
+  assert.match(body, /huaweicloud_check_account_type/);
+  // Both disproved judgment rules must be named so they are not rediscovered.
+  assert.match(body, /ShowDomainPasswordPolicy/);
+  assert.match(body, /principal_id == account_id/);
+
+  const quickRef = readFileSync(join(pluginRoot, 'skills', 'huawei-iam', 'references', 'quick-ref.md'), 'utf8');
+  assert.match(quickRef, /STS GetCallerIdentity/);
+  assert.match(quickRef, /KeystoneListAuthDomains/);
+  assert.match(quickRef, /username == domainName/);
+  assert.match(quickRef, /assumed-agency/);
+});
+
 test('skills with references have non-empty reference files', () => {
   const skillsDir = join(pluginRoot, 'skills');
   const skillNames = readdirSync(skillsDir).filter((name) => existsSync(join(skillsDir, name, 'SKILL.md')));
