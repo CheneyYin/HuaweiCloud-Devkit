@@ -518,6 +518,9 @@ const HCLOUD_KEYWORD_PATTERN = /(?:^|[;|&]\s*|\$\(\s*|`\s*|sudo\s+|\r?\n\s*)(hcl
 // assignment-shaped prose (`echo version=1.0 agentarts rocks`); prose after
 // a launcher token-run (`watch -n 5 grep agentarts logfile`). The remedy in
 // every case is the taught degraded path — run it in the user terminal.
+// One windowing artifact: a cut landing mid-word can expose a launcher-word
+// fragment at window start (fabricating the \b) — engineered >256-char
+// padding only, deny-direction.
 const AGENTARTS_KW_PATTERN = /(?:agentarts(?:\.exe)?|\$\{?AGENTARTS_BIN\}?)(?![\w./-])/gi;
 const AGENTARTS_PREFIX_SUFFIX_RE = new RegExp(
   '(?:^|[;|&]\\s*|\\$\\(\\s*|`\\s*|\\r?\\n\\s*|' +

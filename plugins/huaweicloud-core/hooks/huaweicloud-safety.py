@@ -58,9 +58,10 @@ load_policy()
 
 # Env-var dump gate: two independent linear searches (command word, cloud
 # prefix) instead of one bridged `.*` regex — the bridge was quadratic on
-# padded input and could stall this hook past its runner timeout. Aligned
-# with safety-policy.mjs classifyTextCommand.
-ENV_DUMP_CMD_RE = re.compile(r"(env|printenv|Get-ChildItem\s+Env:|gci\s+Env:|dir\s+Env:)", re.I)
+# padded input and could stall this hook past its runner timeout. The command
+# word is anchored like safety-policy.mjs classifyTextCommand (^|\s), so
+# mid-word mentions (notenv) and quote-preceded words stay allowed.
+ENV_DUMP_CMD_RE = re.compile(r"(?:^|\s)(env|printenv|Get-ChildItem\s+Env:|gci\s+Env:|dir\s+Env:)", re.I)
 ENV_DUMP_CLOUD_RE = re.compile(r"(HUAWEICLOUD|HWC_|HCLOUD|HW_|OS_)", re.I)
 # Credential variable references bypass the env-command gate above: HW_ is
 # the plugin's own documented credential prefix (HW_ACCESS_KEY/HW_SECRET_KEY/

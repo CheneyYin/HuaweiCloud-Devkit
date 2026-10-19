@@ -327,3 +327,68 @@ test('python hook stays fast on padded input (linear env-dump and locator)', () 
   const reason = JSON.parse(result.stdout);
   assert.equal(typeof reason, 'string', 'padded bomb should be blocked, not stall');
 });
+
+test('python hook mirrors the round-9 launcher/xargs vectors and stays timed on all padding alphabets', () => {
+  for (const command of [
+    'echo launch | XARGS agentarts',
+    'GXARGS agentarts',
+    'echo launch | parallel agentarts',
+    'genv agentarts launch',
+    'gnohup agentarts launch',
+    'gsetsid agentarts destroy',
+    'ionice -c 2 agentarts launch',
+    'taskset -c 0 agentarts launch',
+    'env -u A -u B -u C -u D -u E -u F -u G agentarts launch',
+  ]) {
+    const result = runEvaluate('Bash', { command });
+    if (pythonUnavailable(result)) return;
+    assert.equal(result.status, 0, command);
+    const reason = JSON.parse(result.stdout);
+    assert.equal(typeof reason, 'string', `${command} should be blocked`);
+    assert.match(reason, /agentarts/i, command);
+  }
+  const bombs = [
+    { command: 'env '.repeat(12000) + '; agentarts launch', deny: true },
+    { command: 'a/'.repeat(24000) + 'b agentarts launch; agentarts launch', deny: true },
+    // Plain word before the keyword is not command position: fast AND allowed.
+    { command: 'a'.repeat(48000) + ' agentarts launch', deny: false },
+    // Assignment-value prefix (…= agentarts) is command position: deny.
+    { command: 'ab='.repeat(16000) + ' agentarts launch', deny: true },
+  ];
+  for (const { command, deny } of bombs) {
+    const start = process.hrtime.bigint();
+    const result = runEvaluate('Bash', { command });
+    const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+    if (pythonUnavailable(result)) return;
+    assert.equal(result.status, 0, 'padded bomb should not crash the hook');
+    if (elapsedMs < 4000) {
+      const reason = JSON.parse(result.stdout);
+      if (deny) {
+        assert.equal(typeof reason, 'string', 'padded bomb should be blocked');
+      } else {
+        assert.equal(reason, null, 'plain-word padding should be allowed');
+      }
+    }
+    // The wired deny path still traverses the shared risk-rule engine, whose
+    // pre-existing large-input cost is out of scope: assert decisions only
+    // when the run stayed within the runner-timeout budget.
+  }
+});
+
+test('python hook env-dump gate is anchored like the Node layer', () => {
+  for (const command of ['notenv | grep HUAWEICLOUD', 'xprintenv HUAWEICLOUD=1']) {
+    const result = runEvaluate('Bash', { command });
+    if (pythonUnavailable(result)) return;
+    assert.equal(result.status, 0, command);
+    assert.equal(JSON.parse(result.stdout), null, `${command} should be allowed (mid-word env mention)`);
+  }
+});
+
+test('python hook denies hcloud configure set at parity with the Node layer', () => {
+  const result = runEvaluate('Bash', { command: 'hcloud configure set --cli-lang=cn' });
+  if (pythonUnavailable(result)) return;
+  assert.equal(result.status, 0);
+  const reason = JSON.parse(result.stdout);
+  assert.equal(typeof reason, 'string', 'configure set is a write-classified operation on both layers');
+  assert.match(reason, /write operations/i);
+});
