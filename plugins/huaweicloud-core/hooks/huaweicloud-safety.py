@@ -28,10 +28,11 @@ HOOK_EVENTS_PATH = TELEMETRY_DIR / "hook-events.jsonl"
 CONFIG_FILE_RE = None
 SECRET_READ_RE = None
 WRITE_OPERATION_RE = None
+AGENTARTS_POLICY = None
 
 
 def load_policy():
-    global CONFIG_FILE_RE, SECRET_READ_RE, WRITE_OPERATION_RE
+    global CONFIG_FILE_RE, SECRET_READ_RE, WRITE_OPERATION_RE, AGENTARTS_POLICY
     try:
         with POLICY_PATH.open("r", encoding="utf-8") as file_obj:
             policy = json.load(file_obj)
@@ -44,6 +45,7 @@ def load_policy():
         write_prefixes = policy.get("writeOperationPrefixes", [])
         if write_prefixes:
             WRITE_OPERATION_RE = re.compile(r"(^|[A-Za-z0-9])(" + "|".join(write_prefixes) + r")\w*", re.I)
+        AGENTARTS_POLICY = policy.get("agentartsCommandPolicy")
     except Exception:
         pass
 
@@ -65,12 +67,117 @@ ENV_DUMP_RE = re.compile(
 # while unescaped `$HW_*` is a potential expansion/dump regardless of the
 # command. Aligned with safety-policy.mjs L419-423.
 CRED_VAR_REF_RE = re.compile(
-    r"(?<!['\\])\$\{?(?:HUAWEICLOUD|HWC|HW|OS)_(?:SECRET_ACCESS_KEY|ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN)"
-    r"|(?:^|\s)printenv\s+(?:HUAWEICLOUD|HWC|HW|OS)_(?:SECRET_ACCESS_KEY|ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN)",
+    r"(?<!['\\])\$\{?(?:HUAWEICLOUD|HWC|HW|OS)_(?:SECRET_ACCESS_KEY|ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|SDK_AK|SDK_SK)"
+    r"|(?:^|\s)printenv\s+(?:HUAWEICLOUD|HWC|HW|OS)_(?:SECRET_ACCESS_KEY|ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|SDK_AK|SDK_SK)",
     re.I,
 )
 HCLOUD_RE = re.compile(r"(^|\s)hcloud(\.exe)?\s+", re.I)
 READ_OPERATION_RE = re.compile(r"\b(List|Show|Get|Describe|NovaList|NovaShow)\w*", re.I)
+
+# AgentArts CLI (agentarts-sdk) keyword locator — command-position semantics
+# aligned with safety-policy.mjs: plain mid-text mentions do not match;
+# separators, command substitution, sudo, and line starts do. Tiers come from
+# policy.json agentartsCommandPolicy (measured facts, see
+# docs/agentarts-pr0-findings.md) so both hooks and the approval wrapper
+# consume one source.
+AGENTARTS_KEYWORD_RE = re.compile(
+    r"(?:^|[;|&]\s*|\$\(\s*|`\s*|sudo\s+|\r?\n\s*)(agentarts(?:\.exe)?\b)",
+    re.I | re.M,
+)
+
+
+def _agentarts_tokens(rest):
+    # Mirror splitSimpleCommand: keep quoted segments whole, then strip ALL
+    # quote characters so embedded-quote keywords/tokens still classify
+    # (#927 shape).
+    parts = re.findall(r'"[^"]*"|\'[^\']*\'|\S+', rest)
+    return [part.replace("'", "").replace('"', "") for part in parts]
+
+
+def _inner_command_candidates(text):
+    # Minimal mirror of extractInnerCommand for the agentarts gate: pull the
+    # payload out of `bash -c "…"`, `eval '…'`, `$(…)`, and backticks so a
+    # wrapped write command classifies. Plain quoted natural language
+    # (`echo "agentarts is a CLI"`) does not match any wrapper shape.
+    candidates = [text]
+    wrappers = (
+        r"\b(?:bash|sh|zsh|dash|\/bin\/(?:bash|sh|zsh|dash)|bash\.exe|sh\.exe)\s+-c\s+(\"[^\"]*\"|'[^']*')",
+        r"\beval\s+(\"[^\"]*\"|'[^']*')",
+        r"\$\(([^)]+)\)",
+        r"`([^`]+)`",
+    )
+    for pattern in wrappers:
+        for m in re.finditer(pattern, text, re.I):
+            inner = m.group(1)
+            candidates.append(inner.strip("\"'"))
+    return candidates
+
+
+def agentarts_block_reason(text):
+    """Classify an `agentarts …` command against agentartsCommandPolicy.
+
+    Returns a block reason for approved/blocked tiers, None for
+    local/readonly. Fails safe: an unresolvable group/subcommand classifies
+    as the policy defaultTier (approved), and a missing policy denies any
+    agentarts command rather than allowing it unclassified.
+    """
+    for candidate in _inner_command_candidates(text):
+        reason = _agentarts_block_reason_single(candidate)
+        if reason:
+            return reason
+    return None
+
+
+def _agentarts_block_reason_single(text):
+    m = AGENTARTS_KEYWORD_RE.search(text)
+    if not m:
+        # Quote-embedded keyword retry (de-quoted copy, keyword location only).
+        stripped = re.sub(r"['\"]", "", text)
+        m = AGENTARTS_KEYWORD_RE.search(stripped)
+        if not m:
+            return None
+        rest = stripped[m.end(1):]
+    else:
+        rest = text[m.end(1):]
+    tokens = [t.lower() for t in _agentarts_tokens(rest)]
+    i = 0
+    while i < len(tokens) and tokens[i].startswith("-"):
+        i += 1
+    if i >= len(tokens) or any(t in ("--help", "-h") for t in tokens[i:]):
+        return None
+    if AGENTARTS_POLICY is None:
+        return "agentarts safety policy is unavailable; agentarts commands are blocked until the policy loads."
+    group = tokens[i]
+    aliases = AGENTARTS_POLICY.get("aliases", {})
+    commands = AGENTARTS_POLICY.get("commands", {})
+    default_tier = AGENTARTS_POLICY.get("defaultTier", "approved")
+    normalized = aliases.get(group, group)
+    entry = commands.get(normalized)
+    tier = default_tier
+    labels = []
+    op = normalized
+    if entry:
+        tier = entry.get("tier", default_tier)
+        labels = entry.get("labels", [])
+        subs = entry.get("subcommands")
+        if subs and i + 1 < len(tokens) and not tokens[i + 1].startswith("-"):
+            sub_entry = subs.get(tokens[i + 1])
+            if sub_entry:
+                tier = sub_entry.get("tier", tier)
+                labels = sub_entry.get("labels", labels)
+                op = f"{normalized} {tokens[i + 1]}"
+    if tier not in ("approved", "blocked"):
+        return None
+    label_text = ", ".join(labels) if labels else "cloud write"
+    if tier == "blocked":
+        return (
+            f"agentarts {op} is deferred to a later toolkit release; run it in your own terminal if needed "
+            "(see the huawei-agentarts skill)."
+        )
+    return (
+        f"agentarts {op} is a cloud write operation ({label_text}). Run it in your own terminal, or use the "
+        "approved agentarts tooling (see the huawei-agentarts skill)."
+    )
 
 
 def deny(reason, hermes=False):
@@ -202,6 +309,10 @@ def evaluate(tool_name, tool_input):
         return f"{denied_rule.get('message')} Remediation: {denied_rule.get('remediation')}"
     if tool_name in ("Bash", "terminal") and HCLOUD_RE.search(text) and WRITE_OPERATION_RE.search(text) and not READ_OPERATION_RE.search(text):
         return "unapproved Huawei Cloud write operations must be planned first and explicitly approved by the user."
+    if tool_name in ("Bash", "terminal"):
+        agentarts_reason = agentarts_block_reason(text)
+        if agentarts_reason:
+            return agentarts_reason
 
     return None
 

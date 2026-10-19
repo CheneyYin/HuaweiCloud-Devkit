@@ -673,3 +673,76 @@ test('hcloud classification quote normalization preserves existing exemptions (#
   assert.equal(jsonInput.decision, 'deny');
   assert.equal(jsonInput.risk, 'write');
 });
+
+test('classifyTextCommand gates agentarts cloud-write commands (policy-driven hook floor)', () => {
+  const denied = [
+    'agentarts launch',
+    'agentarts deploy', // alias of launch
+    'agentarts destroy --yes',
+    'agentarts invoke {"message":"hi"}',
+    'agentarts config set base.region cn-southwest-2',
+    'agentarts configure set base.region x', // alias of config
+    'agentarts config set-env HUAWEICLOUD_SDK_AK dummy',
+    'agentarts memory install opencode --yes',
+    'agentarts memory uninstall opencode',
+    'agentarts memory create --name x', // blocked tier this release
+    'agentarts memory update <id> --name y',
+    'agentarts memory delete <id> --force',
+    'agentarts runtime exec-command "pip install pandas" --agent a --session s',
+    'agentarts runtime invoke {"message":"hi"}',
+    'agentarts runtime upload-files -f data.txt --agent a --session s',
+    'agentarts runtime download-files -p /tmp/data --agent a --session s',
+    'agentarts runtime start-session --agent a',
+    'agentarts runtime stop-session --agent a --session s',
+    'agentarts gateway create --name g',
+    'agentarts gateway delete-target 123 456',
+    'agentarts newsubcommand --foo', // unknown -> fail-safe defaultTier
+    'agentarts memory newsub --flag', // unknown subcommand -> group default tier
+    'bash -c "agentarts destroy"', // shell wrapper (#758 shape)
+    'echo hi && agentarts launch', // separator
+    'echo hi; agentarts launch',
+    'sudo agentarts destroy',
+    "agen'tarts destroy", // quote-embedded keyword (#927 shape)
+  ];
+  for (const cmd of denied) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd);
+    assert.match(result.reason, /agentarts/i, cmd);
+    assert.equal(result.service, 'AgentArts', cmd);
+  }
+});
+
+test('classifyTextCommand allows agentarts local and read-only commands', () => {
+  const allowed = [
+    'agentarts --version',
+    'agentarts --help',
+    'agentarts', // bare invocation prints help
+    'agentarts init -n demo -t basic -r cn-southwest-2',
+    'agentarts dev --port 8080',
+    'agentarts memory --help', // --help anywhere is local metadata
+    'agentarts memory list --region cn-southwest-2',
+    'agentarts memory get <space-id>',
+    'agentarts memory status',
+    'agentarts gateway list',
+    'agentarts gateway get-target 123 456',
+    'agentarts gateway list-targets 123',
+    'pip install agentarts-sdk==0.1.7', // not in command position
+    'echo agentarts is a CLI', // natural-language mention
+    'see agentarts docs for details',
+    'cat /opt/agentarts/README.md', // path, not command position
+  ];
+  for (const cmd of allowed) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'allow', cmd);
+  }
+});
+
+test('credential variable references cover HUAWEICLOUD_SDK_AK/SK (agentarts env contract)', () => {
+  assert.equal(classifyTextCommand('echo $HUAWEICLOUD_SDK_SK').decision, 'deny');
+  assert.equal(classifyTextCommand('echo $HUAWEICLOUD_SDK_AK').decision, 'deny');
+  assert.equal(classifyTextCommand('printenv HUAWEICLOUD_SDK_SK').decision, 'deny');
+  // Literal-name references (single-quoted / backslash-escaped) stay exempt,
+  // same lookbehind semantics as the existing credential prefixes.
+  assert.equal(classifyTextCommand("echo '$HUAWEICLOUD_SDK_SK'").decision, 'allow');
+  assert.equal(classifyTextCommand('echo \\$HUAWEICLOUD_SDK_AK').decision, 'allow');
+});

@@ -1108,3 +1108,46 @@ test('gateway tunnel-error bodies are treated as unreachable, not content issues
   assert.match(sandbox, /bad gateway/);
   assert.match(sandbox, /404 "tunnel not found" ≠ content issue/);
 });
+
+test('huawei-agentarts skill ships with routing floor and core registry wiring', () => {
+  const skillDir = join(pluginRoot, 'skills', 'huawei-agentarts');
+  assert.ok(existsSync(join(skillDir, 'SKILL.md')), 'huawei-agentarts/SKILL.md missing');
+  const body = readFileSync(join(skillDir, 'SKILL.md'), 'utf8');
+  assert.match(body, /^---\r?\nname: huawei-agentarts/);
+  assert.doesNotMatch(body, /TODO|\[TODO/i);
+  // Zero dead ends: every referenced skill directory must exist.
+  for (const match of body.matchAll(/huawei-[a-z0-9-]+/g)) {
+    assert.ok(
+      existsSync(join(pluginRoot, 'skills', match[0], 'SKILL.md')),
+      `huawei-agentarts references missing skill: ${match[0]}`,
+    );
+  }
+  // Pinned SDK version is stated (D17) and hook-enforced tiers are documented.
+  assert.match(body, /agentarts-sdk==0\.1\.7/);
+  assert.match(body, /AGENTARTS_BIN/);
+  assert.match(body, /HUAWEICLOUD_SDK_AK/);
+  assert.match(body, /cn-north-4/);
+
+  // Core skill routes agent workloads and declares the gate exemption (D15).
+  const core = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-core', 'SKILL.md'), 'utf8');
+  assert.match(core, /huawei-agentarts/);
+  assert.match(core, /AgentArts/);
+  assert.match(core, /deploy an agent/i);
+  assert.match(core, /Deployment Target Options gate below does not apply/);
+
+  // The shared classification source exists in policy.json and covers the
+  // measured command surface (fixture-backed registry).
+  const policy = readJson(join(pluginRoot, 'safety', 'policy.json'));
+  const agentarts = policy.agentartsCommandPolicy;
+  assert.ok(agentarts, 'policy.json agentartsCommandPolicy missing');
+  assert.deepEqual(
+    Object.keys(agentarts.aliases).sort((a, b) => a.localeCompare(b)),
+    ['configure', 'deploy'],
+  );
+  for (const group of ['init', 'dev', 'config', 'launch', 'destroy', 'invoke', 'memory', 'gateway', 'runtime']) {
+    assert.ok(agentarts.commands[group], `agentartsCommandPolicy missing group: ${group}`);
+  }
+  assert.equal(agentarts.commands.memory.subcommands.create.tier, 'blocked');
+  assert.equal(agentarts.commands.memory.subcommands.list.tier, 'readonly');
+  assert.equal(agentarts.commands.gateway.subcommands.delete.tier, 'approved');
+});

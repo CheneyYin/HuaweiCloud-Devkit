@@ -186,3 +186,49 @@ test('python hook blocks credential variable references incl. HW_ prefix (#561 D
     assert.equal(JSON.parse(result.stdout), null, `${safe} should be allowed`);
   }
 });
+
+test('python hook blocks agentarts cloud-write commands (policy-driven floor)', () => {
+  const cases = [
+    'agentarts destroy --yes',
+    'agentarts launch',
+    'agentarts deploy',
+    'agentarts config set base.region cn-southwest-2',
+    'agentarts memory install opencode --yes',
+    'agentarts memory create --name x',
+    'agentarts runtime exec-command "pip install pandas" --agent a --session s',
+    'agentarts newsubcommand --foo',
+    'bash -c "agentarts destroy"',
+    "agen'tarts destroy",
+    'echo ok; agentarts launch',
+  ];
+  for (const command of cases) {
+    const result = runEvaluate('Bash', { command });
+    if (pythonUnavailable(result)) return;
+    assert.equal(result.status, 0, command);
+    const reason = JSON.parse(result.stdout);
+    assert.equal(typeof reason, 'string', `${command} should be blocked`);
+    assert.match(reason, /agentarts/i, command);
+  }
+});
+
+test('python hook allows agentarts local/read-only commands and blocks SDK env var echo', () => {
+  for (const command of [
+    'agentarts --version',
+    'agentarts init -n demo -t basic -r cn-southwest-2',
+    'agentarts dev --port 8080',
+    'agentarts memory list --region cn-southwest-2',
+    'agentarts gateway list',
+    'echo agentarts is a CLI',
+    'pip install agentarts-sdk==0.1.7',
+  ]) {
+    const result = runEvaluate('Bash', { command });
+    if (pythonUnavailable(result)) return;
+    assert.equal(result.status, 0, command);
+    assert.equal(JSON.parse(result.stdout), null, `${command} should be allowed`);
+  }
+  const denied = runEvaluate('Bash', { command: 'echo $HUAWEICLOUD_SDK_SK' });
+  if (pythonUnavailable(denied)) return;
+  assert.equal(denied.status, 0);
+  const reason = JSON.parse(denied.stdout);
+  assert.equal(typeof reason, 'string', 'SDK_SK echo should be blocked');
+});

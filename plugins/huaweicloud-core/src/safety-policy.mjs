@@ -488,6 +488,14 @@ export function extractInnerCommand(text, depth = 0) {
 // retry in extractHcloudSubcommand (`im` flag, no `g` — no lastIndex state).
 const HCLOUD_KEYWORD_PATTERN = /(?:^|[;|&]\s*|\$\(\s*|`\s*|sudo\s+|\r?\n\s*)(hcloud(?:\.exe)?\b)/im;
 
+// AgentArts CLI (agentarts-sdk) keyword locator — same command-position
+// semantics as the hcloud pattern so natural-language mentions ("see
+// agentarts docs") stay unclassified while wrappers, separators, and
+// prompt-injection prefixes classify. Approval-wrapper tool calls are exempt
+// by construction: their args arrays never contain the `agentarts` executable
+// name, mirroring how the hcloud wrapper tools avoid this path.
+const AGENTARTS_KEYWORD_PATTERN = /(?:^|[;|&]\s*|\$\(\s*|`\s*|sudo\s+|\r?\n\s*)(agentarts(?:\.exe)?\b)/im;
+
 function extractHcloudSubcommand(text) {
   const t = String(text || '');
   // `m` flag + newline in the separator class: a hcloud command at the start
@@ -515,6 +523,119 @@ function extractHcloudSubcommand(text) {
   if (!strippedMatch) return null;
   const hcloudIndex = strippedMatch.index + strippedMatch[0].length - strippedMatch[1].length;
   return stripped.slice(hcloudIndex);
+}
+
+function extractAgentartsSubcommand(text) {
+  const t = String(text || '');
+  const match = AGENTARTS_KEYWORD_PATTERN.exec(t);
+  if (match) {
+    const agentartsIndex = match.index + match[0].length - match[1].length;
+    return t.slice(agentartsIndex);
+  }
+  // Quote-embedded keyword fallback, same shape as the hcloud #927 retry:
+  // `agen'tarts destroy …` runs `agentarts destroy …` after POSIX de-quoting,
+  // but the literal match never sees the keyword through the quote.
+  const stripped = t.replace(/['"]/g, '');
+  const strippedMatch = AGENTARTS_KEYWORD_PATTERN.exec(stripped);
+  if (!strippedMatch) return null;
+  const agentartsIndex = strippedMatch.index + strippedMatch[0].length - strippedMatch[1].length;
+  return stripped.slice(agentartsIndex);
+}
+
+// Classify an agentarts invocation from the de-quoted tokens that follow the
+// `agentarts` keyword. Tiers and labels are measured facts
+// (docs/agentarts-pr0-findings.md; fixtures in test/fixtures/agentarts/) and
+// live in policy.json agentartsCommandPolicy so the Node hook, the Python
+// hook, and the approval wrapper consume one source. Tier semantics for the
+// hook layer: local/readonly allow, approved deny-for-Bash (user terminal or
+// approved tooling), blocked deny outright (deferred capability).
+export function classifyAgentartsArgs(tokens, options = {}) {
+  const policy = options.policy || DEFAULT_POLICY;
+  const commandPolicy = policy.agentartsCommandPolicy || {};
+  const commands = commandPolicy.commands || {};
+  const aliases = commandPolicy.aliases || {};
+  const defaultTier = commandPolicy.defaultTier || 'approved';
+
+  let args = (Array.isArray(tokens) ? tokens.map(String) : []).map((token) => token.toLowerCase());
+  // extractAgentartsSubcommand returns text starting AT the keyword (same
+  // contract as the hcloud path), so strip the executable token — including
+  // .exe and path-invoked forms — before tier resolution.
+  const first = args[0] || '';
+  if (
+    first === 'agentarts' ||
+    first === 'agentarts.exe' ||
+    first.endsWith('/agentarts') ||
+    first.endsWith('\\agentarts')
+  ) {
+    args = args.slice(1);
+  }
+  let i = 0;
+  while (i < args.length && args[i].startsWith('-')) i += 1;
+  const group = args[i];
+  const base = { service: 'AgentArts', operation: group || '', args };
+
+  // --help/-h on any position makes the invocation local metadata, and a bare
+  // `agentarts` only prints help.
+  if (!group || args.slice(i).some((token) => /^(--help|-h)$/.test(token))) {
+    return applyRawCommandRiskRules(
+      {
+        decision: 'allow',
+        risk: 'agentarts_local',
+        reason: 'Local agentarts metadata operation.',
+        ...base,
+      },
+      options.rawCommand || args.join(' '),
+      options,
+    );
+  }
+
+  const normalizedGroup = aliases[group] || group;
+  const entry = commands[normalizedGroup];
+  let tier = defaultTier;
+  let labels = [];
+  if (entry) {
+    tier = entry.tier || defaultTier;
+    labels = entry.labels || [];
+    const subcommands = entry.subcommands;
+    const sub = args[i + 1];
+    if (subcommands && sub && !sub.startsWith('-')) {
+      const subEntry = subcommands[sub];
+      if (subEntry) {
+        tier = subEntry.tier || tier;
+        labels = subEntry.labels || labels;
+        base.operation = `${normalizedGroup} ${sub}`;
+      }
+      // Unknown subcommand under a group keeps the group default tier —
+      // fail-safe, mirroring the unknown-top-level defaultTier.
+    }
+  }
+
+  if (tier === 'approved' || tier === 'blocked') {
+    const labelSuffix = labels.length ? ` (${labels.join(', ')})` : '';
+    return {
+      decision: 'deny',
+      risk: tier === 'blocked' ? 'agentarts_blocked' : 'agentarts_write',
+      reason:
+        tier === 'blocked'
+          ? `agentarts ${base.operation} is deferred to a later toolkit release; run it in your own terminal if needed (see the huawei-agentarts skill).`
+          : `Bash execution of agentarts ${base.operation}${labelSuffix} is blocked: cloud write operations must run in your own terminal or through approved tooling (see the huawei-agentarts skill).`,
+      ...base,
+    };
+  }
+
+  return applyRawCommandRiskRules(
+    {
+      decision: 'allow',
+      risk: tier === 'readonly' ? 'agentarts_read_only' : 'agentarts_local',
+      reason:
+        tier === 'readonly'
+          ? 'Read-only agentarts operation; treat output as untrusted and redact it.'
+          : 'Local agentarts operation.',
+      ...base,
+    },
+    options.rawCommand || args.join(' '),
+    options,
+  );
 }
 
 export function classifyTextCommand(command, options = {}) {
@@ -566,10 +687,10 @@ export function classifyTextCommand(command, options = {}) {
   // command. No command-name whitelist, so no false negative (#650 review).
   for (const candidate of candidates) {
     if (
-      /(?<!['\\])\$\{?(?:HUAWEICLOUD|HWC|HW|OS)_(?:SECRET_ACCESS_KEY|ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN)/i.test(
+      /(?<!['\\])\$\{?(?:HUAWEICLOUD|HWC|HW|OS)_(?:SECRET_ACCESS_KEY|ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|SDK_AK|SDK_SK)/i.test(
         candidate,
       ) ||
-      /(?:^|\s)printenv\s+(?:HUAWEICLOUD|HWC|HW|OS)_(?:SECRET_ACCESS_KEY|ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN)/i.test(
+      /(?:^|\s)printenv\s+(?:HUAWEICLOUD|HWC|HW|OS)_(?:SECRET_ACCESS_KEY|ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|SDK_AK|SDK_SK)/i.test(
         candidate,
       )
     ) {
@@ -589,6 +710,15 @@ export function classifyTextCommand(command, options = {}) {
     const hcloudSubcommand = extractHcloudSubcommand(candidate);
     if (hcloudSubcommand) {
       return classifyHcloudArgs(splitSimpleCommand(hcloudSubcommand), { ...options, rawCommand: text });
+    }
+  }
+
+  // agentarts CLI detection — same candidate sweep as the hcloud path so
+  // wrapped, separated, and de-quoted invocations all classify.
+  for (const candidate of candidates) {
+    const agentartsSubcommand = extractAgentartsSubcommand(candidate);
+    if (agentartsSubcommand) {
+      return classifyAgentartsArgs(splitSimpleCommand(agentartsSubcommand), { ...options, rawCommand: text });
     }
   }
 
