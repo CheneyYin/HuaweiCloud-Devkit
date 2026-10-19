@@ -68,6 +68,12 @@ fixture 捕获环境: `COLUMNS=80 NO_COLOR=1` 非 TTY 重定向，共 43 个文�
 凭证文件 `~/.config/agentarts-e2e/creds`（0600，工作树外；变量名 `AK`/`SK`，harness 映射为 `HUAWEICLOUD_SDK_AK/SK`）。迁出工作树的理由是工作树卫生与 harness 映射需求（0.1.7 无 load_dotenv 调用点，"防 dotenv 自动加载"不成立【源码 grep 零命中】）。S0 落地时增补 `E2E_FORBIDDEN_ACCOUNT_ID`。
 既有发现【运维】: `~/.bash_history` 存在 2026-08-21 用户会话遗留的明文 `export HUAWEICLOUD_SDK_AK/SK/PROJECT_ID=<值>`（早于本项目，非 PR0 泄漏——PR0 探针仅引用变量名未展开值）。建议清理该历史条目并评估轮换 AK/SK。
 
+## 文档级事实（非裁决依据，供 skill 引用标注出处）
+
+- 产品四种使用方式（Managed Agents、自带代码运行时托管、外部智能体观测评估、低代码编排）与 Python ≥3.10 最低版本:【文档】产品介绍页 / SDK README。
+- memory 插件行为 = 会话捕获 + 回复追踪（SDK 仓库 opencode/claude_code 插件自述）:【文档】agentarts-sdk-python 仓库 plugin.json 描述。凭证持久化为【源码】（陷阱 14）。
+- `AGENTARTS_BIN`:【约定】devkit 侧未来包装器的可执行覆盖（对齐 HCLOUD_BIN 先例），PR2 落地消费方；本版仅作为前瞻声明。
+
 ## 遗留到 S0（账号侧实测项）
 
 - `launch`/`destroy` 的真实交互提示行为。【源码预裁】destroy 的唯一提示是 `Confirm.ask` 且被 `--yes` 门控（destroy.py:39-47）；launch 链无任何 CLI 级 prompt 站点（deploy.py 全链零 confirm/prompt/input）；docker login 经 subprocess 程序化传参。S0 仅做真机确认。

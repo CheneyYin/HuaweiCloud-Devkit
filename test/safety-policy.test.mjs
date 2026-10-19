@@ -746,3 +746,61 @@ test('credential variable references cover HUAWEICLOUD_SDK_AK/SK (agentarts env 
   assert.equal(classifyTextCommand("echo '$HUAWEICLOUD_SDK_SK'").decision, 'allow');
   assert.equal(classifyTextCommand('echo \\$HUAWEICLOUD_SDK_AK').decision, 'allow');
 });
+
+test('agentarts keyword locator catches launcher, assignment, path, and BIN-handle forms', () => {
+  const denied = [
+    'env agentarts destroy',
+    'nohup agentarts launch &',
+    'FOO=1 agentarts destroy',
+    'AGENTARTS_BIN=/opt/x/agentarts destroy',
+    '/opt/venv/bin/agentarts destroy --yes',
+    './agentarts launch',
+    '$AGENTARTS_BIN destroy --yes',
+    'timeout 300 agentarts invoke {"message":"hi"}',
+    'sudo -u root agentarts destroy',
+    'watch agentarts launch',
+    'echo launch | xargs agentarts',
+    'bash -c "/opt/venv/bin/agentarts destroy"',
+  ];
+  for (const cmd of denied) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd);
+    assert.match(result.reason, /agentarts/i, cmd);
+  }
+});
+
+test('agentarts segment sweep catches writes chained after readonly segments', () => {
+  const denied = [
+    'agentarts memory list && agentarts launch',
+    'agentarts memory list ; agentarts launch',
+    'agentarts memory list | agentarts launch',
+    'agentarts memory list\nagentarts launch',
+    'agentarts gateway list; agentarts gateway delete 123',
+    'bash -c "agentarts memory list && agentarts launch"',
+  ];
+  for (const cmd of denied) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd);
+    assert.match(result.reason, /agentarts (launch|gateway delete)/, cmd);
+  }
+});
+
+test('agentarts eager flags and lookalike names stay unblocked', () => {
+  const allowed = [
+    'agentarts --help destroy',
+    'agentarts -h memory',
+    'agentarts --version memory create',
+    'agentarts -v launch',
+    'agentarts-setup.sh deploy', // hyphenated lookalike: not the CLI
+    'agentarts-deploy.sh destroy',
+    'command -v agentarts',
+    'pip show agentarts-sdk',
+    'cat /opt/agentarts/README.md', // path segment, not executable position
+    'ls docs/agentarts',
+    'agentarts memory list | jq .', // pipeline into a non-agentarts consumer
+  ];
+  for (const cmd of allowed) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'allow', cmd);
+  }
+});

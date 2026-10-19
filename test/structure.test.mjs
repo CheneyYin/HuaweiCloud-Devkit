@@ -1115,11 +1115,16 @@ test('huawei-agentarts skill ships with routing floor and core registry wiring',
   const body = readFileSync(join(skillDir, 'SKILL.md'), 'utf8');
   assert.match(body, /^---\r?\nname: huawei-agentarts/);
   assert.doesNotMatch(body, /TODO|\[TODO/i);
-  // Zero dead ends: every referenced skill directory must exist.
-  for (const match of body.matchAll(/huawei-[a-z0-9-]+/g)) {
+  // Zero dead ends: every referenced skill directory must exist (the
+  // huawei- sweep misses huaweicloud-* meta-skill names, so both patterns run).
+  const referenced = new Set();
+  for (const match of body.matchAll(/huawei-[a-z0-9-]+|huaweicloud-[a-z0-9-]+/g)) {
+    referenced.add(match[0]);
+  }
+  for (const name of referenced) {
     assert.ok(
-      existsSync(join(pluginRoot, 'skills', match[0], 'SKILL.md')),
-      `huawei-agentarts references missing skill: ${match[0]}`,
+      existsSync(join(pluginRoot, 'skills', name, 'SKILL.md')),
+      `huawei-agentarts references missing skill: ${name}`,
     );
   }
   // Pinned SDK version is stated (D17) and hook-enforced tiers are documented.
@@ -1150,4 +1155,24 @@ test('huawei-agentarts skill ships with routing floor and core registry wiring',
   assert.equal(agentarts.commands.memory.subcommands.create.tier, 'blocked');
   assert.equal(agentarts.commands.memory.subcommands.list.tier, 'readonly');
   assert.equal(agentarts.commands.gateway.subcommands.delete.tier, 'approved');
+
+  // Labels are a closed enum — free strings would drift silently into deny
+  // reasons rendered to users.
+  const closedLabels = new Set([
+    'billing',
+    'irreversible',
+    'rce',
+    'data-exfil',
+    'local-write',
+    'host-trust',
+    'execute',
+    'credential-guard',
+  ]);
+  const collectLabels = (entry) => {
+    for (const label of entry.labels || []) {
+      assert.ok(closedLabels.has(label), `unknown agentarts label: ${label}`);
+    }
+    for (const sub of Object.values(entry.subcommands || {})) collectLabels(sub);
+  };
+  for (const entry of Object.values(agentarts.commands)) collectLabels(entry);
 });

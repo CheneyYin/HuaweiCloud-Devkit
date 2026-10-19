@@ -10,7 +10,7 @@ version: 1
 
 ## What AgentArts Is
 
-Enterprise agent platform: hosts agent runtimes (LangGraph/LangChain/custom), provides memory spaces, agent gateway, sandboxed code execution, and observability/evaluation. Four usage modes: Managed Agents, BYO-code runtime hosting, observability for external agents, low-code orchestration.
+Enterprise agent platform for Huawei Cloud: hosts agent runtimes (LangGraph/LangChain/custom code), memory spaces, agent gateway, and cloud runtime operations (command execution, file transfer, sessions). Product overview and usage modes: https://support.huaweicloud.com/productdesc-agentarts/agentarts_03_0002.html
 
 ## Scenario Routing
 
@@ -25,10 +25,9 @@ Enterprise agent platform: hosts agent runtimes (LangGraph/LangChain/custom), pr
 
 ## Prerequisites
 
-- Python 3.10+ and `pip install agentarts-sdk==0.1.7` (pinned; verify with `agentarts --version`)
-- `AGENTARTS_BIN` env var points to the executable when installed outside PATH
+- Python 3.10+ (per the SDK README) and `pip install agentarts-sdk==0.1.7` (pinned; verify with `agentarts --version`). A venv install lives outside PATH — invoke it by full path in your terminal; the upcoming approval wrapper will honor an `AGENTARTS_BIN` override.
 - Credentials: `HUAWEICLOUD_SDK_AK` / `HUAWEICLOUD_SDK_SK` env vars. NEVER let AK/SK enter shell history or the conversation — see huaweicloud-cli-and-auth
-- Region: control plane is cn-southwest-2 only; memory subcommands default to cn-north-4 — always pass `--region` explicitly
+- Region: control plane is cn-southwest-2 only; the memory create/get/list/update/delete/status subcommands default to cn-north-4 (install/uninstall take no region flag) — pass `--region` explicitly on the six that have it
 
 ## Safety Tier Map (hook-enforced)
 
@@ -43,27 +42,27 @@ Enterprise agent platform: hosts agent runtimes (LangGraph/LangChain/custom), pr
 
 - `--bearer-token`/`-bt` on ANY command is forbidden — argv is process-list visible. Env-var auth only.
 - The CLI can FAIL with exit code 0 (prints a traceback, still exits 0). Parse output, never trust exit codes.
-- First run of any agentarts command writes `~/.bashrc`, `~/.bash_completions/`, and `~/.huaweicloud/application_id` (a telemetry UUID sent in every request's User-Agent). Warn the user before first use.
-- `memory install` modifies the HOST agent's own config (session capture + system-prompt injection) — a user decision, run in the user's terminal, never agent-initiated.
+- First run of any agentarts command writes `~/.bashrc`, `~/.bash_completions/`, `~/.agentarts/.completion_shown`, and `~/.huaweicloud/application_id` (a telemetry UUID sent in every request's User-Agent). Warn the user before first use.
+- `memory install` persists credentials into the host agent's own config (e.g. `~/.hermes/.env` API key plus a config rewrite); per the SDK repo the plugin adds session capture and reply tracking to the host agent. A user decision — run in the user's terminal, never agent-initiated.
 - Auth chain is env → `~/.huaweicloud/credentials` profile → metadata: without env vars the CLI may silently authenticate from a profile file. Credentials must come from explicit injection only.
 
 ## Measured Traps
 
-| Trap                                                                         | Fix                                                          |
-| ---------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `init` prompts for region and aborts on EOF                                  | Always pass `-n <name> -t <template> -r <region>`            |
-| Bare `agentarts config` is an interactive wizard                             | Always use a subcommand (`config set`, `config get`, …)      |
-| `config set` rewrites the yaml destructively                                 | Comments stripped, keys reordered, defaults materialized     |
-| `destroy` prompts; `gateway delete`/`delete-target` prompt with NO skip flag | Use `destroy --yes`; gateway deletes go to the user terminal |
-| `invoke` default timeout is 900s                                             | Budget time accordingly                                      |
-| `config set-env` crashes on basic-template projects                          | 0.1.7 SDK bug (null env list); edit yaml directly instead    |
+| Trap                                                                         | Fix                                                                                                  |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `init` prompts for region and aborts on EOF                                  | Always pass `-n <name> -t <template> -r <region>`                                                    |
+| Bare `agentarts config` is an interactive wizard                             | Always use a subcommand (`config set`, `config get`, …)                                              |
+| `config set` rewrites the yaml destructively                                 | Comments stripped, keys reordered, defaults materialized                                             |
+| `destroy` prompts; `gateway delete`/`delete-target` prompt with NO skip flag | Use `destroy --yes`; gateway deletes go to the user terminal                                         |
+| `invoke` default timeout is 900s                                             | Budget time accordingly                                                                              |
+| `config set-env` crashes on basic-template projects                          | 0.1.7 SDK bug (null env list); `config remove-env` crashes the same way — edit yaml directly instead |
 
 ## Cross-Skill References
 
 - **Routing entry**: huaweicloud-core
 - **AK/SK hygiene and credential setup**: huaweicloud-cli-and-auth
 - **Web app preview contrast**: huawei-sandbox
-- **Approval model and safety policy**: huaweicloud-safety
+- **General safety and output-redaction rules**: huaweicloud-safety
 
 ## External Docs
 

@@ -232,3 +232,38 @@ test('python hook allows agentarts local/read-only commands and blocks SDK env v
   const reason = JSON.parse(denied.stdout);
   assert.equal(typeof reason, 'string', 'SDK_SK echo should be blocked');
 });
+
+test('python hook mirrors agentarts launcher/path/chained vectors and eager-flag allows', () => {
+  for (const command of [
+    'env agentarts destroy',
+    'nohup agentarts launch &',
+    '/opt/venv/bin/agentarts destroy --yes',
+    '$AGENTARTS_BIN destroy',
+    'agentarts memory list && agentarts launch',
+    'agentarts memory list\nagentarts launch',
+    'echo launch | xargs agentarts',
+    'cmd /c "agentarts destroy"',
+    'powershell -Command "agentarts destroy"',
+    'bash -c \'bash -c "agentarts destroy"\'',
+  ]) {
+    const result = runEvaluate('Bash', { command });
+    if (pythonUnavailable(result)) return;
+    assert.equal(result.status, 0, command);
+    const reason = JSON.parse(result.stdout);
+    assert.equal(typeof reason, 'string', `${command} should be blocked`);
+    assert.match(reason, /agentarts/i, command);
+  }
+  for (const command of [
+    'agentarts --help destroy',
+    'agentarts -v launch',
+    'agentarts-setup.sh deploy',
+    'command -v agentarts',
+    'cat /opt/agentarts/README.md',
+    'agentarts memory list | jq .',
+  ]) {
+    const result = runEvaluate('Bash', { command });
+    if (pythonUnavailable(result)) return;
+    assert.equal(result.status, 0, command);
+    assert.equal(JSON.parse(result.stdout), null, `${command} should be allowed`);
+  }
+});

@@ -1,7 +1,5 @@
 import { readFileSync } from 'node:fs';
 
-import { classifyTextCommand } from '../src/safety-policy.mjs';
-
 const DENY_PREFIX = 'Huawei Cloud safety hook blocked this action: ';
 
 function commandText(toolInput) {
@@ -39,7 +37,7 @@ function readStdin() {
   }
 }
 
-function main() {
+async function main() {
   const input = readStdin();
   let data;
   try {
@@ -48,9 +46,16 @@ function main() {
     return;
   }
 
+  // Dynamic import so a missing or corrupt safety/policy.json fails SAFE:
+  // a crashed hook process is a non-blocking error for hook runners (the
+  // tool call proceeds), so the module-load failure must surface as an
+  // explicit deny instead — matching the Python layer's posture.
+  const { classifyTextCommand } = await import('../src/safety-policy.mjs');
   const text = commandText(data.tool_input ?? {});
   const result = classifyTextCommand(text);
   if (result.decision === 'deny') deny(result.reason);
 }
 
-main();
+main().catch(() => {
+  deny('safety policy failed to load; blocking this action (fail-safe).');
+});

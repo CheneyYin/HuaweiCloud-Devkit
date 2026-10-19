@@ -75,13 +75,20 @@ HCLOUD_RE = re.compile(r"(^|\s)hcloud(\.exe)?\s+", re.I)
 READ_OPERATION_RE = re.compile(r"\b(List|Show|Get|Describe|NovaList|NovaShow)\w*", re.I)
 
 # AgentArts CLI (agentarts-sdk) keyword locator — command-position semantics
-# aligned with safety-policy.mjs: plain mid-text mentions do not match;
-# separators, command substitution, sudo, and line starts do. Tiers come from
+# aligned with safety-policy.mjs, extended for invocation shapes the agentarts
+# floor must catch on its own (no approval wrapper yet): launcher prefixes
+# (env/nohup/xargs/exec/command/nice/setsid/stdbuf/watch, timeout N), env-var
+# assignments, path invocation, sudo with option flags, and the
+# $AGENTARTS_BIN handle. The (?![\w./-]) boundary excludes agentarts-sdk /
+# agentarts-setup lookalikes and directory paths. Tiers come from
 # policy.json agentartsCommandPolicy (measured facts, see
 # docs/agentarts-pr0-findings.md) so both hooks and the approval wrapper
 # consume one source.
 AGENTARTS_KEYWORD_RE = re.compile(
-    r"(?:^|[;|&]\s*|\$\(\s*|`\s*|sudo\s+|\r?\n\s*)(agentarts(?:\.exe)?\b)",
+    r"(?:^|[;|&]\s*|\$\(\s*|`\s*|\r?\n\s*|(?:env|nohup|exec|command|xargs|nice|setsid|stdbuf|watch)\s+"
+    r"|sudo(?:\s+\S+)*\s+|timeout\s+\S+\s+|[A-Za-z_][A-Za-z0-9_]*=\S*\s+|[A-Za-z_][A-Za-z0-9_]*="
+    r"|[\w.~\\/-]*[/\\])"
+    r"(?P<kw>agentarts(?:\.exe)?|\$\{?AGENTARTS_BIN\}?)(?![\w./-])",
     re.I | re.M,
 )
 
@@ -89,61 +96,79 @@ AGENTARTS_KEYWORD_RE = re.compile(
 def _agentarts_tokens(rest):
     # Mirror splitSimpleCommand: keep quoted segments whole, then strip ALL
     # quote characters so embedded-quote keywords/tokens still classify
-    # (#927 shape).
+    # (#927 shape). Empty fragments (a lone quote stripping to "") are
+    # dropped so the deny reason never names an empty operation.
     parts = re.findall(r'"[^"]*"|\'[^\']*\'|\S+', rest)
-    return [part.replace("'", "").replace('"', "") for part in parts]
+    return [part.replace("'", "").replace('"', "") for part in parts if part.replace("'", "").replace('"', "")]
+
+
+def _unwrap_quoted(payload):
+    # Strip only the matched delimiter pair: str.strip("\"'") would eat a
+    # nested closing quote too (`bash -c 'bash -c "x"'` losing its final "),
+    # breaking one level of recursion.
+    if len(payload) >= 2 and payload[0] == payload[-1] and payload[0] in "\"'":
+        return payload[1:-1]
+    return payload
 
 
 def _inner_command_candidates(text):
-    # Minimal mirror of extractInnerCommand for the agentarts gate: pull the
-    # payload out of `bash -c "…"`, `eval '…'`, `$(…)`, and backticks so a
-    # wrapped write command classifies. Plain quoted natural language
-    # (`echo "agentarts is a CLI"`) does not match any wrapper shape.
+    # Mirror of extractInnerCommand for the agentarts gate: pull the payload
+    # out of `bash -c "…"`, `eval '…'`, `$(…)`, backticks, and the Windows
+    # wrappers, recursing one level so double-wrapped payloads classify.
+    # Plain quoted natural language (`echo "agentarts is a CLI"`) does not
+    # match any wrapper shape.
     candidates = [text]
     wrappers = (
         r"\b(?:bash|sh|zsh|dash|\/bin\/(?:bash|sh|zsh|dash)|bash\.exe|sh\.exe)\s+-c\s+(\"[^\"]*\"|'[^']*')",
         r"\beval\s+(\"[^\"]*\"|'[^']*')",
         r"\$\(([^)]+)\)",
         r"`([^`]+)`",
+        r"\b(?:cmd|cmd\.exe)\s+\/[ck]\s+(\"[^\"]*\"|'[^']*')",
+        r"\b(?:powershell|powershell\.exe|pwsh|pwsh\.exe)\s+(?:-Command|-c)\s+(\"[^\"]*\"|'[^']*')",
     )
     for pattern in wrappers:
         for m in re.finditer(pattern, text, re.I):
-            inner = m.group(1)
-            candidates.append(inner.strip("\"'"))
+            payload = _unwrap_quoted(m.group(1))
+            candidates.append(payload)
+            for sub in re.finditer(pattern, payload, re.I):
+                candidates.append(_unwrap_quoted(sub.group(1)))
     return candidates
 
 
-def agentarts_block_reason(text):
-    """Classify an `agentarts …` command against agentartsCommandPolicy.
-
-    Returns a block reason for approved/blocked tiers, None for
-    local/readonly. Fails safe: an unresolvable group/subcommand classifies
-    as the policy defaultTier (approved), and a missing policy denies any
-    agentarts command rather than allowing it unclassified.
-    """
-    for candidate in _inner_command_candidates(text):
-        reason = _agentarts_block_reason_single(candidate)
-        if reason:
-            return reason
-    return None
-
-
-def _agentarts_block_reason_single(text):
-    m = AGENTARTS_KEYWORD_RE.search(text)
+def _agentarts_classify_segment(segment):
+    m = AGENTARTS_KEYWORD_RE.search(segment)
+    stripped_retry = False
     if not m:
         # Quote-embedded keyword retry (de-quoted copy, keyword location only).
-        stripped = re.sub(r"['\"]", "", text)
+        stripped = re.sub(r"['\"]", "", segment)
         m = AGENTARTS_KEYWORD_RE.search(stripped)
         if not m:
             return None
-        rest = stripped[m.end(1):]
+        rest = stripped[m.end("kw"):]
+        stripped_retry = True
     else:
-        rest = text[m.end(1):]
+        rest = segment[m.end("kw"):]
+    pre = (stripped if stripped_retry else segment)[m.start():m.start("kw")]
     tokens = [t.lower() for t in _agentarts_tokens(rest)]
+    if tokens:
+        first = tokens[0]
+        if (
+            first in ("agentarts", "agentarts.exe")
+            or first.endswith("/agentarts")
+            or first.endswith("\\agentarts")
+            or re.match(r"^\$\{?agentarts_bin\}?$", first)
+        ):
+            tokens = tokens[1:]
     i = 0
     while i < len(tokens) and tokens[i].startswith("-"):
         i += 1
-    if i >= len(tokens) or any(t in ("--help", "-h") for t in tokens[i:]):
+    eager_flag = any(t in ("--help", "-h") for t in tokens) or any(t in ("--version", "-v") for t in tokens[:i])
+    if i >= len(tokens) or eager_flag:
+        if i >= len(tokens) and pre and re.search(r"(?:^|\s)xargs\s*$", pre, re.I):
+            return (
+                "agentarts invoked via xargs (arguments arrive on stdin and cannot be classified); "
+                "run it in your own terminal (see the huawei-agentarts skill)."
+            )
         return None
     if AGENTARTS_POLICY is None:
         return "agentarts safety policy is unavailable; agentarts commands are blocked until the policy loads."
@@ -168,16 +193,37 @@ def _agentarts_block_reason_single(text):
                 op = f"{normalized} {tokens[i + 1]}"
     if tier not in ("approved", "blocked"):
         return None
-    label_text = ", ".join(labels) if labels else "cloud write"
+    label_suffix = f" ({', '.join(labels)})" if labels else ""
     if tier == "blocked":
         return (
             f"agentarts {op} is deferred to a later toolkit release; run it in your own terminal if needed "
             "(see the huawei-agentarts skill)."
         )
     return (
-        f"agentarts {op} is a cloud write operation ({label_text}). Run it in your own terminal, or use the "
-        "approved agentarts tooling (see the huawei-agentarts skill)."
+        f"Bash execution of agentarts {op}{label_suffix} is blocked: cloud write operations must run in your "
+        "own terminal or through approved tooling (see the huawei-agentarts skill)."
     )
+
+
+def agentarts_block_reason(text):
+    """Classify an `agentarts …` command against agentartsCommandPolicy.
+
+    Returns a block reason for approved/blocked tiers, None for
+    local/readonly. Fails safe: an unresolvable group/subcommand classifies
+    as the policy defaultTier (approved), and a missing policy denies any
+    agentarts command rather than allowing it unclassified. Inner wrapper
+    payloads and shell-operator/newline segments are each classified, so a
+    write chained after a readonly segment is caught.
+    """
+    for candidate in _inner_command_candidates(text):
+        for segment in re.split(r"\|\||&&|;|\||\r?\n", candidate):
+            segment = segment.strip()
+            if not segment:
+                continue
+            reason = _agentarts_classify_segment(segment)
+            if reason:
+                return reason
+    return None
 
 
 def deny(reason, hermes=False):

@@ -488,13 +488,24 @@ export function extractInnerCommand(text, depth = 0) {
 // retry in extractHcloudSubcommand (`im` flag, no `g` — no lastIndex state).
 const HCLOUD_KEYWORD_PATTERN = /(?:^|[;|&]\s*|\$\(\s*|`\s*|sudo\s+|\r?\n\s*)(hcloud(?:\.exe)?\b)/im;
 
-// AgentArts CLI (agentarts-sdk) keyword locator — same command-position
-// semantics as the hcloud pattern so natural-language mentions ("see
-// agentarts docs") stay unclassified while wrappers, separators, and
-// prompt-injection prefixes classify. Approval-wrapper tool calls are exempt
-// by construction: their args arrays never contain the `agentarts` executable
-// name, mirroring how the hcloud wrapper tools avoid this path.
-const AGENTARTS_KEYWORD_PATTERN = /(?:^|[;|&]\s*|\$\(\s*|`\s*|sudo\s+|\r?\n\s*)(agentarts(?:\.exe)?\b)/im;
+// AgentArts CLI (agentarts-sdk) keyword locator — command-position semantics
+// aligned with the hcloud pattern, extended for invocation shapes the
+// agentarts floor must catch on its own (PR1 has no approval wrapper yet as
+// the second line of defense): launcher prefixes (env/nohup/xargs/exec/
+// command/nice/setsid/stdbuf/watch, timeout N), env-var assignments
+// (FOO=1 agentarts …, VAR=/path/agentarts …), path invocation
+// (/opt/venv/bin/agentarts …, ./agentarts …), sudo with option flags, and
+// the $AGENTARTS_BIN handle. Natural-language mentions ("see agentarts
+// docs") still never match: plain whitespace is not a command-position
+// prefix. The (?![\w./-]) boundary excludes agentarts-sdk / agentarts-setup
+// lookalikes and directory paths like docs/agentarts/README (a trailing
+// slash after the keyword means it is a path segment, not an executable).
+// Accepted false-positive tradeoffs mirror the settled hcloud #927 posture:
+// quoted strings and grep patterns containing `;|& agentarts <group>` or
+// `<path>/ agentarts <group>` can deny; remedy is running them in the
+// user terminal, which is the taught degraded path anyway.
+const AGENTARTS_KEYWORD_PATTERN =
+  /(?:^|[;|&]\s*|\$\(\s*|`\s*|\r?\n\s*|(?:env|nohup|exec|command|xargs|nice|setsid|stdbuf|watch)\s+|sudo(?:\s+\S+)*\s+|timeout\s+\S+\s+|[A-Za-z_][A-Za-z0-9_]*=\S*\s+|[A-Za-z_][A-Za-z0-9_]*=|[\w.~\\/-]*[/\\])(?<kw>agentarts(?:\.exe)?|\$\{?AGENTARTS_BIN\}?)(?![\w./-])/im;
 
 function extractHcloudSubcommand(text) {
   const t = String(text || '');
@@ -529,8 +540,8 @@ function extractAgentartsSubcommand(text) {
   const t = String(text || '');
   const match = AGENTARTS_KEYWORD_PATTERN.exec(t);
   if (match) {
-    const agentartsIndex = match.index + match[0].length - match[1].length;
-    return t.slice(agentartsIndex);
+    const agentartsIndex = match.index + match[0].length - match.groups.kw.length;
+    return { subcommand: t.slice(agentartsIndex), pre: match[0].slice(0, -match.groups.kw.length) };
   }
   // Quote-embedded keyword fallback, same shape as the hcloud #927 retry:
   // `agen'tarts destroy …` runs `agentarts destroy …` after POSIX de-quoting,
@@ -538,8 +549,11 @@ function extractAgentartsSubcommand(text) {
   const stripped = t.replace(/['"]/g, '');
   const strippedMatch = AGENTARTS_KEYWORD_PATTERN.exec(stripped);
   if (!strippedMatch) return null;
-  const agentartsIndex = strippedMatch.index + strippedMatch[0].length - strippedMatch[1].length;
-  return stripped.slice(agentartsIndex);
+  const agentartsIndex = strippedMatch.index + strippedMatch[0].length - strippedMatch.groups.kw.length;
+  return {
+    subcommand: stripped.slice(agentartsIndex),
+    pre: strippedMatch[0].slice(0, -strippedMatch.groups.kw.length),
+  };
 }
 
 // Classify an agentarts invocation from the de-quoted tokens that follow the
@@ -558,14 +572,15 @@ export function classifyAgentartsArgs(tokens, options = {}) {
 
   let args = (Array.isArray(tokens) ? tokens.map(String) : []).map((token) => token.toLowerCase());
   // extractAgentartsSubcommand returns text starting AT the keyword (same
-  // contract as the hcloud path), so strip the executable token — including
-  // .exe and path-invoked forms — before tier resolution.
+  // contract as the hcloud path), so strip the executable token first —
+  // exact name, .exe, path-invoked forms, and the $AGENTARTS_BIN handle.
   const first = args[0] || '';
   if (
     first === 'agentarts' ||
     first === 'agentarts.exe' ||
     first.endsWith('/agentarts') ||
-    first.endsWith('\\agentarts')
+    first.endsWith('\\agentarts') ||
+    /^\$\{?agentarts_bin\}?$/.test(first)
   ) {
     args = args.slice(1);
   }
@@ -574,9 +589,26 @@ export function classifyAgentartsArgs(tokens, options = {}) {
   const group = args[i];
   const base = { service: 'AgentArts', operation: group || '', args };
 
-  // --help/-h on any position makes the invocation local metadata, and a bare
-  // `agentarts` only prints help.
-  if (!group || args.slice(i).some((token) => /^(--help|-h)$/.test(token))) {
+  // Typer eager flags: --help/-h are valid at every command level, so any
+  // position makes the invocation local metadata; --version/-v only exist at
+  // root level, so only the leading flag region (before the group token)
+  // counts. A bare `agentarts` prints help.
+  if (
+    !group ||
+    args.some((token) => /^(--help|-h)$/.test(token)) ||
+    args.slice(0, i).some((token) => /^(--version|-v)$/.test(token))
+  ) {
+    if (!group && options.pre && /(?:^|\s)xargs\s*$/i.test(options.pre)) {
+      // `… | xargs agentarts` feeds the subcommand on stdin — unclassifiable
+      // and therefore fail-safe deny rather than bare-help allow.
+      return {
+        decision: 'deny',
+        risk: 'agentarts_write',
+        reason:
+          'agentarts invoked via xargs (arguments arrive on stdin and cannot be classified); run it in your own terminal (see the huawei-agentarts skill).',
+        ...base,
+      };
+    }
     return applyRawCommandRiskRules(
       {
         decision: 'allow',
@@ -636,6 +668,32 @@ export function classifyAgentartsArgs(tokens, options = {}) {
     options.rawCommand || args.join(' '),
     options,
   );
+}
+
+// Segment sweep for the agentarts gate: shell operators and newlines can
+// chain a write after a readonly agentarts command (`agentarts memory list
+// && agentarts launch`), which a single first-keyword classification misses.
+// Splits on the same operator set as findHcloudCommandSegments (plus
+// newlines, where the keyword pattern also recognizes command position) and
+// classifies every segment that invokes agentarts, merging to the most
+// severe decision — the hcloud segment-sweep contract.
+function classifyAgentartsText(text, options = {}) {
+  const segments = String(text || '')
+    .split(/(?:\|\||&&|;|\||\r?\n)/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  let merged = null;
+  for (const segment of segments) {
+    const found = extractAgentartsSubcommand(segment);
+    if (!found) continue;
+    const decision = classifyAgentartsArgs(splitSimpleCommand(found.subcommand), {
+      ...options,
+      pre: found.pre,
+    });
+    if (decision.decision === 'deny') return decision;
+    if (!merged) merged = decision;
+  }
+  return merged;
 }
 
 export function classifyTextCommand(command, options = {}) {
@@ -714,11 +772,13 @@ export function classifyTextCommand(command, options = {}) {
   }
 
   // agentarts CLI detection — same candidate sweep as the hcloud path so
-  // wrapped, separated, and de-quoted invocations all classify.
+  // wrapped, separated, and de-quoted invocations all classify; each
+  // candidate additionally gets a segment sweep so chained writes after a
+  // readonly segment are caught.
   for (const candidate of candidates) {
-    const agentartsSubcommand = extractAgentartsSubcommand(candidate);
-    if (agentartsSubcommand) {
-      return classifyAgentartsArgs(splitSimpleCommand(agentartsSubcommand), { ...options, rawCommand: text });
+    const agentartsDecision = classifyAgentartsText(candidate, { ...options, rawCommand: text });
+    if (agentartsDecision) {
+      return agentartsDecision;
     }
   }
 
