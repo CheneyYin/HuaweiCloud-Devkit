@@ -34,7 +34,7 @@ export const huaweicloudCliPack: Pack = {
     'huawei-iam',
     'huawei-modelarts',
     'huawei-rds',
-    'huawei-smn-dms',
+    'huawei-cloud-smn-dms-message',
     'huawei-vpc',
     'huawei-waf-aad',
   ],

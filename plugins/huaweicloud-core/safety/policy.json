@@ -80,7 +80,9 @@
     "Trigger",
     "Deploy",
     "Rotate",
-    "Cancel"
+    "Cancel",
+    "Confirm",
+    "Subscribe"
   ],
   "readOperationPrefixes": ["List", "Show", "Get", "Describe", "NovaList", "NovaShow"],
   "safeTextReadCommands": ["rg", "grep", "findstr", "git", "ls", "dir", "Get-ChildItem"],

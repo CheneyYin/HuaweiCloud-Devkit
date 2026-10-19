@@ -676,8 +676,8 @@ function serviceCatalog(intent: string = '') {
       services: ['WAF', 'AAD'],
     },
     {
-      keywords: ['smn', 'dms', 'notification', 'message', 'kafka', 'rabbitmq'],
-      skills: ['huawei-smn-dms'],
+      keywords: ['smn', 'dms', 'notification', 'message', 'kafka', 'rabbitmq', 'rocketmq'],
+      skills: ['huawei-cloud-smn-dms-message'],
       services: ['SMN', 'DMS'],
     },
     {

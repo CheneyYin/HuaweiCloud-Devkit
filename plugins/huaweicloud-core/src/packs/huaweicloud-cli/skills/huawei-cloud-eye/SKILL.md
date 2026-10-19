@@ -28,7 +28,7 @@ Domain expertise for Cloud Eye (CES). Covers metric queries, alarm rules, dashbo
 
 - ECS instances need the **Telescope agent** installed for detailed metrics (memory, disk, network)
 - Without agent: only SYS.ECS namespace metrics available (CPU, network bytes, disk read/write)
-- Alarm notifications require an SMN topic (see `huawei-smn-dms`)
+- Alarm notifications require an SMN topic (see `huawei-cloud-smn-dms-message`)
 
 ## Common Workflows
 
@@ -86,5 +86,5 @@ For event alarms: `cycle_decrease`, `cycle_increase`, `cycle_wave`.
 
 ## Cross-Skill References
 
-- **SMN topics**: See `huawei-smn-dms` for alarm notification setup
+- **SMN topics**: See `huawei-cloud-smn-dms-message` for alarm notification setup
 - **ECS monitoring**: See `huawei-ecs` for instance creation
