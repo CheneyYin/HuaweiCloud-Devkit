@@ -555,28 +555,36 @@ test('agent rules file carries the skillRoot direct-read teaching', () => {
   assert.match(rules, /skillRoot/, 'the agent rules file must teach the skillRoot direct-read path');
 });
 
-test('the directory-level approval teaching survives copy passes on every load-path surface', () => {
+test('the reactive fallback teaching survives copy passes on every load-path surface', () => {
   // One presence pin per clause-carrying surface outside instructionsFor
   // and the retrieve_skill description (both pinned in their own tests):
-  // the two routing skills' bodies, the rules file, and the doctor
-  // command. The clause is teach-only behavioral contract (ask once for
-  // the whole tree, never per file) — a copy pass reverting it in any one
-  // file would keep every other gate green, the exact one-file-at-a-time
-  // drift mode the telemetry-hooks sweep documented.
-  const clause = /approve the whole skills tree directory/;
-  const neverPerFile = /never per file/;
+  // the two routing skills' bodies, the rules file, the doctor command,
+  // the list_skills description, and the hermes manifest — the two extra
+  // pins close the drift window the a60ab5b guard family left open. The
+  // clause is the reactive permission fallback (a direct read fails or is
+  // denied -> load via retrieve_skill) — a copy pass reverting it in any
+  // one file would keep every other gate green, the exact
+  // one-file-at-a-time drift mode the telemetry-hooks sweep documented.
+  const reactive = /fails or is denied/;
   const core = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-core', 'SKILL.md'), 'utf8');
-  assert.match(core, clause, 'huaweicloud-core must teach the directory-level approval ask');
-  assert.match(core, neverPerFile, 'huaweicloud-core must forbid per-file approval requests');
+  assert.match(core, reactive, 'huaweicloud-core must teach the reactive permission fallback');
   const discovery = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-capability-discovery', 'SKILL.md'), 'utf8');
-  assert.match(discovery, clause, 'capability-discovery must teach the directory-level approval ask');
-  assert.match(discovery, neverPerFile, 'capability-discovery must forbid per-file approval requests');
+  assert.match(discovery, reactive, 'capability-discovery must teach the reactive permission fallback');
   const rules = readFileSync(join(root, 'rules', 'huawei-agent-rules.mdc'), 'utf8');
-  assert.match(rules, clause, 'the agent rules file must teach the directory-level approval ask');
-  assert.match(rules, neverPerFile, 'the agent rules file must forbid per-file approval requests');
+  assert.match(rules, reactive, 'the agent rules file must teach the reactive permission fallback');
   const doctor = readFileSync(join(root, 'integrations', 'opencode', 'commands', 'huaweicloud-doctor.md'), 'utf8');
-  assert.match(doctor, clause, 'the doctor command must teach the directory-level approval ask');
-  assert.match(doctor, neverPerFile, 'the doctor command must forbid per-file approval requests');
+  assert.match(doctor, reactive, 'the doctor command must teach the reactive permission fallback');
+  const tools = readSource(join('src', 'tools.ts'));
+  const listSkillsDescription = TOOL_DEFINITIONS.find((tool) => tool.name === 'huaweicloud_list_skills');
+  assert.ok(listSkillsDescription, 'the list_skills definition must exist');
+  assert.match(
+    listSkillsDescription.description,
+    reactive,
+    'the list_skills description must teach the reactive permission fallback',
+  );
+  const manifest = readFileSync(join(root, 'integrations', 'hermes', 'manifest.yaml'), 'utf8');
+  assert.match(manifest, reactive, 'the hermes manifest must teach the reactive permission fallback');
+  assert.match(tools, /fails or is denied/, 'the source carries the trigger vocabulary the pins grep for');
 });
 
 test('retrieve_skill reference cap stays in sync between code and description', () => {
@@ -618,7 +626,11 @@ test('server instructions carry the three-form skillRoot disclosure contract', (
   );
   assert.match(full, /huaweicloud_packs_configure/, 'the full stdio form names the session-toggle tool it registers');
   assert.match(full, /huaweicloud_list_skills/, 'the stdio form must name the effective-catalog tool');
-  assert.match(full, /fallback/, 'the stdio form must keep retrieve_skill framed as the fallback');
+  assert.match(
+    full,
+    /huaweicloud_retrieve_skill instead/,
+    'the stdio form must frame retrieve_skill as the instead-of fallback',
+  );
   assert.match(full, /huawei-\* service skill absent/, 'the absence rule must be scoped to service skills');
   assert.match(full, /never appear in the catalog and are always available/, 'the meta-skill exclusion must be taught');
 
@@ -636,11 +648,13 @@ test('server instructions carry the three-form skillRoot disclosure contract', (
   );
   assert.match(bare, /huawei-\* service skill absent/, 'the bare form keeps the scoped absence rule');
 
-  // The one-time directory-level permission teaching: both stdio forms
-  // carry it (harnesses gate outside-workspace reads behind an approval;
-  // the agent asks once for the whole tree, never per file), the remote
-  // form does not (that face reads no tree). The fallback phrasing names
-  // permission denial as an explicit trigger on the stdio forms.
+  // The reactive permission fallback: both stdio forms carry it (when a
+  // direct read of the tree fails or is denied, load the skill via
+  // retrieve_skill, which needs no file access, instead of repeatedly
+  // requesting — the universal reaction, since the agent cannot choose an
+  // approval prompt's granularity and a chat-level ask binds nothing),
+  // the remote form does not (that face reads no tree; its own loader
+  // sentence keeps the fallback framing).
   const remote = instructionsFor(true);
   for (const [label, form] of [
     ['full', full],
@@ -648,20 +662,15 @@ test('server instructions carry the three-form skillRoot disclosure contract', (
   ] as const) {
     assert.match(
       form,
-      /approve the whole skills tree directory/,
-      `the ${label} stdio form must teach the directory-level approval ask`,
+      /If a direct read of the tree fails or is denied, load the skill with huaweicloud_retrieve_skill instead/,
+      `the ${label} stdio form must teach the reactive fallback sentence verbatim`,
     );
-    assert.match(form, /never per file/, `the ${label} stdio form must forbid per-file approval requests`);
-    assert.match(
-      form,
-      /cannot reach or are not permitted to read/,
-      `the ${label} stdio form must name permission denial as a fallback trigger`,
-    );
+    assert.match(form, /it needs no file access/, `the ${label} stdio form must state the loader needs no file access`);
   }
   assert.doesNotMatch(
     remote,
-    /approve the whole skills tree directory/,
-    'the remote form reads no tree and must not teach the approval ask',
+    /fails or is denied/,
+    'the remote form reads no tree and must not teach the reactive fallback',
   );
   assert.doesNotMatch(remote, /the skills tree lives at/, 'the remote form must not state a host tree path');
   assert.match(remote, /skillRoot is withheld/, 'the remote form must state skillRoot is withheld');
@@ -678,7 +687,7 @@ test('server instructions carry the three-form skillRoot disclosure contract', (
 test('retrieve_skill description frames the fallback, not the default', () => {
   // The observed free-choice failure was agents jumping straight to
   // retrieve_skill; the description now opens by demoting it. This pins
-  // the demotion phrases, the directory-level approval teaching, and the
+  // the demotion phrases, the reactive fallback trigger, and the
   // self-heal teaching (the stdio payload carries skillRoot) so a copy
   // pass cannot quietly revert any of them.
   const retrieve = TOOL_DEFINITIONS.find((tool) => tool.name === 'huaweicloud_retrieve_skill');
@@ -687,12 +696,12 @@ test('retrieve_skill description frames the fallback, not the default', () => {
   assert.match(retrieve.description, /skillRoot so the next skill can be a direct read/);
   assert.match(
     retrieve.description,
-    /Use this tool only when the tree is out of reach, its location is unknown, or reads are not permitted/,
+    /Use this tool only when the tree is out of reach, its location is unknown, or a direct read fails or is denied/,
   );
   assert.match(
     retrieve.description,
-    /approve the whole skills tree directory — never per file/,
-    'the description must teach the directory-level approval ask beside the direct-read invitation',
+    /it needs no file access/,
+    'the description must state the loader needs no file access beside the trigger',
   );
 });
 

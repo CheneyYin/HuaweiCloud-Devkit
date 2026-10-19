@@ -30,6 +30,11 @@ export const STRIP_ENV_KEYS: readonly string[] = [
   // Pack posture rides the install --packs channel; env must stay unset so
   // the runner controls the only delivery path per case.
   'DEVKIT_PACKS',
+  // The installer's opencode permission-seam override is host state, not a
+  // case seam: the runner's install relies on the natural version probe
+  // (the driver's probe gate already enforces >= the seam floor), so a
+  // host-set value must never leak into a case session.
+  'HUAWEICLOUD_OPENCODE_PERMISSION_SEAM',
 ];
 
 // Posture overrides applied last: telemetry off (no production POSTs from

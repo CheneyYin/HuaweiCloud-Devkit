@@ -162,7 +162,11 @@ test('MCP server initializes, lists tools, and plans CLI commands', async () => 
     );
     assert.match(instructions, /pack-gated/, 'stdio instructions must carry the enablement caveat');
     assert.match(instructions, /huaweicloud_packs_configure/, 'stdio instructions must name the session-toggle tool');
-    assert.match(instructions, /fallback/, 'stdio instructions must keep retrieve_skill framed as the fallback');
+    assert.match(
+      instructions,
+      /If a direct read of the tree fails or is denied, load the skill with huaweicloud_retrieve_skill instead/,
+      'stdio instructions must teach the reactive fallback sentence',
+    );
 
     const listed = await client.request('tools/list');
     const toolNames = new Set(listed.result.tools.map((tool) => tool.name));

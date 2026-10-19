@@ -7,7 +7,7 @@
 ## Core Principles
 
 - **Always use the Huawei MCP server first** (sandboxed, observable, auditable). Fall back to `hcloud` CLI only when MCP is unavailable.
-- **Before any task, check for available skills.** `huaweicloud_list_skills` is the effective catalog (which skills are ENABLED is pack-gated and can change at runtime; a `huawei-*` service skill absent from it belongs to a trimmed pack — treat it as unavailable and confirm with the user before enabling; the six `huaweicloud-*` meta-skills never appear in it and are always available). On stdio sessions the MCP server instructions state `skillRoot` (the skills tree's location) at initialize, and the list_skills payload carries it too; when your file tools reach that root, read the skill files directly under it (if reads outside the workspace need approval, ask the user once to approve the whole skills tree directory — never per file) — otherwise load them with `huaweicloud_retrieve_skill`. Follow skill procedures over general knowledge.
+- **Before any task, check for available skills.** `huaweicloud_list_skills` is the effective catalog (which skills are ENABLED is pack-gated and can change at runtime; a `huawei-*` service skill absent from it belongs to a trimmed pack — treat it as unavailable and confirm with the user before enabling; the six `huaweicloud-*` meta-skills never appear in it and are always available). On stdio sessions the MCP server instructions state `skillRoot` (the skills tree's location) at initialize, and the list_skills payload carries it too; when your file tools reach that root, read the skill files directly under it — otherwise load them with `huaweicloud_retrieve_skill` when the direct read fails or is denied (the loader needs no file access). Follow skill procedures over general knowledge.
 - **When uncertain** about API parameters, quotas, limits, or error codes — search documentation via MCP. Do not guess.
 - **Prefer IaC over direct CLI calls** for infrastructure creation (Terraform for Huawei Cloud, or CloudFormation equivalent).
 - **Never use em dashes in resource names/tags.** Use hyphens only.
@@ -64,7 +64,7 @@
 ## Skill Discovery Priority
 
 1. **`huaweicloud-core`** — always check first for routing
-2. **Service-specific skills** — read them directly under the `skillRoot` the stdio MCP instructions / `huaweicloud_list_skills` payload disclose (when your file tools reach it — if reads outside the workspace need approval, ask the user once to approve the whole skills tree directory, never per file), or load after routing via `huaweicloud_retrieve_skill` when the files are out of reach or reads are not permitted
+2. **Service-specific skills** — read them directly under the `skillRoot` the stdio MCP instructions / `huaweicloud_list_skills` payload disclose (when your file tools reach it), or load after routing via `huaweicloud_retrieve_skill` when the files are out of reach or a direct read fails or is denied
 3. **Knowledge cards** (`references/`) — quick facts without full skill load
 
 ## Red Flags — STOP and Re-evaluate

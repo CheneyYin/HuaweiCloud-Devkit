@@ -49,11 +49,9 @@ post_install: |
   huaweicloud_service_catalog, then read the recommended skill's files
   directly under the skillRoot the MCP server instructions state at
   initialize (and the list_skills payload carries) when the agent's file
-  tools reach it (if the harness gates outside-workspace reads behind an
-  approval, ask once to approve the whole skills tree directory — never per
-  file), falling back to
-  huaweicloud_retrieve_skill when the files are out of reach or reads are
-  not permitted. The six core
+  tools reach it, falling back to
+  huaweicloud_retrieve_skill when the files are out of reach or a direct
+  read fails or is denied (the loader needs no file access). The six core
   meta-skills (huaweicloud-*) are additionally installed as native copies in
   ~/.hermes/skills for system-prompt visibility.
 

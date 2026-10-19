@@ -53,12 +53,12 @@ const pkgVersion = readInstalledVersion() || '0.0.0';
 // The factory refuses the contradictory remoteSurface+runtimePacks
 // combination, so no form can name a tool its face withholds while its
 // payloads publish host paths — the pairs stay legal by construction.
-// The stdio forms also teach the one-time directory-level permission
-// request: harnesses gate reads outside the workspace behind an approval,
-// and the agent should ask once for the whole skills tree directory —
-// never per file — then stop asking for the rest of the session. A denial
-// or an unreachable tree hands over to retrieve_skill, which needs no
-// file access at all. Installer-side relief (OpenCode only, the one
+// The stdio forms also teach the reactive permission fallback: when a
+// direct read of the tree fails or is denied, the agent loads the skill
+// via retrieve_skill (which needs no file access) instead of repeatedly
+// requesting — the universal reaction that holds on every harness, since
+// the agent cannot choose an approval prompt's granularity and a
+// chat-level approval request binds nothing in the permission system. Installer-side relief (OpenCode only, the one
 // harness measured where the prompt cannot express directory-scope
 // grants): setup-cli.ts writes a persistent permission seam —
 // external_directory allow + edit deny over the tree globs
@@ -89,9 +89,7 @@ export function instructionsFor(remote: boolean, runtimePacks = false): string {
     enablement +
     'When your file tools reach the tree and the skill is enabled, read ' +
     `${SKILLS_ROOT}/<name>/SKILL.md and the references/ files directly, untruncated and selective. ` +
-    'If reads outside the workspace need approval in your environment, ask the user once to approve the whole skills tree directory — ' +
-    'never per file; a directory-level approval covers every later read this session. ' +
-    'huaweicloud_retrieve_skill is the fallback for files you cannot reach or are not permitted to read. ' +
+    'If a direct read of the tree fails or is denied, load the skill with huaweicloud_retrieve_skill instead — it needs no file access. ' +
     'Route Huawei Cloud tasks through the huaweicloud-core skill; browse packs with huaweicloud_list_packs.'
   );
 }

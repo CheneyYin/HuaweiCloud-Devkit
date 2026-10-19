@@ -31,6 +31,25 @@ function resolveCommand(name: string): string | null {
   return null;
 }
 
+// The free-choice skill cases exercise the direct-read default, which needs
+// the installer's permission seam to land (outside-workspace reads are
+// gated; an unapproved ask has no interactive approver under `opencode run`).
+// The seam writes only on opencode at or above the measured floor (1.19.0,
+// a knowledge boundary), so the driver refuses to run on older binaries —
+// a loud skip, never a silent no-allow posture that would misattribute
+// fallback behavior to the teaching.
+function opencodeVersionSupported(): { ok: boolean; detail: string } {
+  const r = spawnSync('opencode', ['--version'], { encoding: 'utf8', timeout: 10_000 });
+  const out = r.stdout?.toString() ?? '';
+  const match = /v?(\d+)\.(\d+)\.(\d+)/.exec(out);
+  if (!match) return { ok: false, detail: `opencode --version unparsable: ${out.trim() || '(no output)'}` };
+  const [major, minor] = [Number(match[1]), Number(match[2])];
+  if (major < 1 || (major === 1 && minor < 19)) {
+    return { ok: false, detail: `opencode ${match[0]} predates the measured permission-seam floor (1.19.0)` };
+  }
+  return { ok: true, detail: `opencode ${match[0]}` };
+}
+
 function opencodeConfigFile(home: string): string {
   const jsonc = join(home, '.config', 'opencode', 'opencode.jsonc');
   if (existsSync(jsonc)) return jsonc;
@@ -46,6 +65,10 @@ export const opencodeDriver: AgentDriver = {
     if (!command) {
       return { ok: false, detail: 'opencode binary not found on PATH', command: null };
     }
+    const version = opencodeVersionSupported();
+    if (!version.ok) {
+      return { ok: false, command, detail: `${version.detail} — the free-choice skill cases need the permission seam` };
+    }
     const { missing, apiKeyVar } = requiredEnv();
     if (missing.length > 0) {
       return {
@@ -54,7 +77,7 @@ export const opencodeDriver: AgentDriver = {
         detail: `missing environment: ${missing.join(', ')}. Set a dedicated E2E key (never the real auth file) plus provider/model pins.`,
       };
     }
-    return { ok: true, command, detail: `opencode ready (auth via ${apiKeyVar})` };
+    return { ok: true, command, detail: `opencode ready, ${version.detail} (auth via ${apiKeyVar})` };
   },
 
   prepare(ctx: DriverContext): NodeJS.ProcessEnv {
