@@ -23,6 +23,7 @@ import {
   runHcloudConfigure,
 } from './reconcile.mjs';
 import { hcloudProbeNextStep, hcloudProbeRaw, probeHcloud } from '../hcloud-probe.mjs';
+import { probeAgentarts } from '../agentarts-doctor.mjs';
 
 function envHasRealTriplet() {
   return (
@@ -186,6 +187,7 @@ export function getAuthStatus(target = 'all') {
     credentialPanel,
     obsConfigured: existsSync(obsConfigPath()),
     obsConfigPath: obsConfigPath(),
+    agentarts: probeAgentarts(),
     kooCliInstalled: hcloud.installed,
     kooCliStatus: hcloud.status,
     kooCliNextStep: hcloudProbeNextStep(hcloud),
@@ -304,6 +306,7 @@ export function syncAuth(target = 'all') {
     profile,
     obs: { configured: true, path: obs.path, endpoint: obs.endpoint },
     hcloud: { ok: true, message: `KooCLI config synced to profile=${profile}` },
+    agentarts: probeAgentarts(),
     credentialsConfigured: true,
     agents: getAgentRegistrationStatuses(target).agents,
     note: 'OBS credentials were synced from the global credential vault. Agent MCP registration is managed by "npx huaweicloud-devkit install --target <agent>".',

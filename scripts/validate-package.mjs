@@ -143,6 +143,25 @@ for (const file of walk(join(pluginRoot, 'skills')).concat(walk(join(pluginRoot,
 }
 console.log(`Validated KooCLI version pairing: ${kooCliVersion}.`);
 
+// AgentArts SDK pin: package.json declares the paired version, and every
+// `agentarts-sdk==<semver>` literal in the skills must match it, so the
+// taught install command and the doctor soft-warn can never drift apart.
+const agentartsSdkVersion = pkg.agentartsSdkVersion;
+assert.match(
+  agentartsSdkVersion ?? '',
+  /^\d+\.\d+\.\d+$/,
+  'package.json must declare an "agentartsSdkVersion" semver (e.g. "0.1.7")',
+);
+for (const file of walk(join(pluginRoot, 'skills'))) {
+  const text = readFileSync(file, 'utf8');
+  for (const m of text.matchAll(/agentarts-sdk==(\d+\.\d+\.\d+)/g)) {
+    if (m[1] !== agentartsSdkVersion) {
+      assert.fail(`${file}: pins agentarts-sdk==${m[1]}, expected ==${agentartsSdkVersion}`);
+    }
+  }
+}
+console.log(`Validated AgentArts SDK pin: ${agentartsSdkVersion}.`);
+
 const readmePaths = [join(root, 'README.md'), join(root, 'README.zh-CN.md')];
 
 readmePaths.forEach((path) => {

@@ -307,3 +307,30 @@ test('tool definitions register and dispatch through callTool', async () => {
     assert.equal(run.ok, true);
   });
 });
+
+test('agentarts doctor probes CLI version, Python, and Docker (advisory)', async () => {
+  const { probeAgentarts, checkAgentarts } = await import('../plugins/huaweicloud-core/src/agentarts-doctor.mjs');
+  await withIsolation(async ({ stubPath }) => {
+    const probe = probeAgentarts();
+    assert.equal(probe.installed, true);
+    // The stub does not print the version banner — version-unreadable, still
+    // installed, never throws.
+    assert.equal(probe.reason, 'version-unreadable');
+
+    // A stub that prints the measured version banner reports the pinned match.
+    const versioned = join(stubPath, '..', 'agentarts-versioned.sh');
+    writeFileSync(versioned, '#!/bin/bash\necho "agentarts version: 0.1.7"\n', { mode: 0o755 });
+    chmodSync(versioned, 0o755);
+    process.env.AGENTARTS_BIN = versioned;
+    const ok = probeAgentarts();
+    assert.equal(ok.version, '0.1.7');
+    assert.equal(ok.pinned, '0.1.7');
+    assert.equal(ok.versionMatches, true);
+
+    const full = checkAgentarts();
+    assert.equal(full.advisory, true);
+    assert.equal(typeof full.ok, 'boolean');
+    assert.ok(Array.isArray(full.warnings));
+    assert.ok(Array.isArray(full.nextSteps));
+  });
+});

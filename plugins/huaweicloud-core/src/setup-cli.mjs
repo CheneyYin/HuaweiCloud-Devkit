@@ -22,6 +22,7 @@ import { resolveAndApplyProjectId } from './auth/project-id.mjs';
 import { SUPPORTED_AGENT_TARGETS } from './auth/agent-registration.mjs';
 import { fingerprint, readKooCliProfiles, resolveManagedProfile } from './auth/reconcile.mjs';
 import { redactSecrets } from './safety-policy.mjs';
+import { checkAgentarts } from './agentarts-doctor.mjs';
 import {
   globalCredentialsPath,
   readGlobalCredentials,
@@ -4089,6 +4090,23 @@ async function cmdDoctor() {
     existsSync(hookNodePath) && hookConfigUsesNode && !hookConfigUsesPython,
     'hooks/hooks.json should invoke node hooks/huaweicloud-safety.mjs, not python3',
   );
+
+  // AgentArts (optional dependency — advisory checks, never fail the run)
+  const agentarts = checkAgentarts();
+  if (agentarts.ok) {
+    console.log(`  \x1b[32m[PASS]\x1b[0m AgentArts CLI ${agentarts.cli.version} (pinned ${agentarts.cli.pinned})`);
+    pass++;
+  } else if (agentarts.cli.installed) {
+    for (const warning of agentarts.warnings) {
+      console.log(`  \x1b[33m[WARN]\x1b[0m AgentArts: ${warning}`);
+      warn++;
+    }
+    for (const step of agentarts.nextSteps) console.log(`      → ${step}`);
+  } else {
+    console.log('  \x1b[33m[WARN]\x1b[0m AgentArts CLI not installed (optional — agent hosting workflows need it)');
+    warn++;
+    console.log(`      → ${agentarts.nextSteps[0] || 'pip install agentarts-sdk'}`);
+  }
 
   // MCP config — check OpenCode, Codex Desktop, CodeArts, WorkBuddy, and DSH
   let mcpConfigured = false;
