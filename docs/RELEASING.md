@@ -116,21 +116,30 @@ Steps:
    npm run smoke:agents
    ```
 
-7. Publish to the `next` tag:
+7. Run the agent-level E2E suite (the only gate that exercises free-choice
+   skill-disclosure behavior, including the two `core-free-choice-*` cases;
+   needs `E2E_ENABLE=1` plus the gitignored `test/e2e/.env` model config and
+   the real agent CLIs on PATH — never part of `npm test` by policy):
+
+   ```powershell
+   npm run test:e2e
+   ```
+
+8. Publish to the `next` tag:
 
    ```powershell
    npm publish --tag next
    ```
 
-8. Restore `package.json` to the stable version and commit only non-version
+9. Restore `package.json` to the stable version and commit only non-version
    changes (the repo must never drift from what is published):
 
    ```powershell
    npm version <previous-stable> --no-git-tag-version
    ```
 
-9. Announce `1.1.0-next.N` with its change list; collect feedback under that
-   version number.
+10. Announce `1.1.0-next.N` with its change list; collect feedback under that
+    version number.
 
 Subsequent iterations use `1.1.0-next.1`, `1.1.0-next.2`, and so on.
 

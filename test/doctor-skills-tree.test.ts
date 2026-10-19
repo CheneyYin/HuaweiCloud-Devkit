@@ -458,3 +458,54 @@ test('doctor: missing skills tree fails the check without aborting the run', () 
   assert.ok(stdout.includes('lacks usable core-pack info'), 'the native block must warn instead of aborting the run');
   assert.ok(!stdout.includes('skills tree missing at'), `the throw leaked into output:\n${stdout}`);
 });
+
+// ── The skills-tree permission seam's doctor states ──
+// The check is OpenCode-scoped and gate-dependent; HUAWEICLOUD_OPENCODE_PERMISSION_SEAM=on
+// pins the gate so the states are deterministic regardless of the host's opencode.
+// Four states pinned: ok (PASS), pure-missing (FAIL + reinstall remediation),
+// mixed user-owned + missing (FAIL reporting BOTH — one user-owned glob must never
+// mask a healable gap, the masking shape the per-glob evaluation exists to kill),
+// and scalar-shaped permission (SKIP with the manual pointer — the installer itself
+// refuses that config, so a re-run-install remediation could never succeed).
+test('doctor: seam check reports ok, pure-missing, mixed, and scalar states per its contract', () => {
+  const home = fixtureDir('hwc-doctor-seam-');
+  runInstall(home, { HUAWEICLOUD_OPENCODE_PERMISSION_SEAM: 'on' });
+  const configPath = join(home, '.config', 'opencode', 'opencode.json');
+  const readConfig = () => JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+
+  const okOut = runDoctor(home, { HUAWEICLOUD_OPENCODE_PERMISSION_SEAM: 'on' });
+  assert.ok(okOut.includes('[PASS] Skills-tree permission seam'), `a complete seam must PASS, got:\n${okOut}`);
+
+  const treeGlob = `${join(home, '.config', 'opencode', 'huaweicloud-plugins', 'skills').replace(/\\/g, '/')}/**`;
+  const asMissing = readConfig();
+  const missingPermission = asMissing.permission as Record<string, Record<string, string>>;
+  delete missingPermission.edit[treeGlob];
+  writeFileSync(configPath, JSON.stringify(asMissing, null, 2));
+  const missingOut = runDoctor(home, { HUAWEICLOUD_OPENCODE_PERMISSION_SEAM: 'on' });
+  assert.ok(
+    missingOut.includes('[FAIL] Skills-tree permission seam') &&
+      missingOut.includes('writes the missing skills-tree rules'),
+    `a deleted edit deny must FAIL with the reinstall remediation, got:\n${missingOut}`,
+  );
+
+  const asMixed = readConfig();
+  const mixedPermission = asMixed.permission as Record<string, Record<string, string>>;
+  const extKeys = Object.keys(mixedPermission.external_directory);
+  const userGlob = extKeys.find((k) => k !== treeGlob)!;
+  mixedPermission.external_directory[userGlob] = 'ask';
+  const secondGlob = extKeys.find((k) => k !== treeGlob && k !== userGlob)!;
+  delete mixedPermission.edit[secondGlob];
+  writeFileSync(configPath, JSON.stringify(asMixed, null, 2));
+  const mixedOut = runDoctor(home, { HUAWEICLOUD_OPENCODE_PERMISSION_SEAM: 'on' });
+  assert.ok(
+    /\d+ rule\(s\) missing/.test(mixedOut) && mixedOut.includes('1 user-owned glob(s) kept as-is'),
+    `mixed state must report BOTH the healable gap and the kept glob, got:\n${mixedOut}`,
+  );
+
+  writeFileSync(configPath, JSON.stringify({ permission: 'ask', mcp: readConfig().mcp }, null, 2));
+  const scalarOut = runDoctor(home, { HUAWEICLOUD_OPENCODE_PERMISSION_SEAM: 'on' });
+  assert.ok(
+    scalarOut.includes('[SKIP] Skills-tree permission seam') && scalarOut.includes('add the rules manually'),
+    `a scalar permission posture must SKIP with the manual pointer (never a reinstall FAIL), got:\n${scalarOut}`,
+  );
+});

@@ -211,4 +211,94 @@ export const coreCases: E2eCase[] = [
     softExpect: [{ kind: 'agentSays', text: { any: ['allow', '允许', 'read', '只读'] } }],
     budget: { timeoutMs: 240_000, attempts: 2 },
   },
+  {
+    // Free-choice disclosure, default posture: the prompt names NO tool and
+    // NO skill, so the session's own teaching must carry the load path. The
+    // stdio MCP instructions state the tree location at initialize (the
+    // disclosure event below proves emission), so the taught default is the
+    // attempt-first direct read or a catalog call — never the
+    // retrieve_skill fallback, which exists for attempted reads that fail
+    // or are denied. This is the
+    // regression guard for the observed free-choice behavior (agents
+    // jumping straight to retrieve_skill); core-retrieve-skill-guides-cli
+    // beside it tests instruction-following on the fallback path and stays
+    // prompt-pinned by design.
+    id: 'core-free-choice-direct-read',
+    pack: 'core',
+    prompt: '帮我在华为云 cn-north-4 区域查一下 VPC 列表，只读就行，把结果告诉我。不要执行任何写操作。',
+    fixtures: {
+      hcloud: {
+        responses: [
+          {
+            argv: ['VPC', 'ListVpcs'],
+            stdout: JSON.stringify({ vpcs: [{ id: 'vpc-e2e-001', name: 'e2e-vpc', status: 'ACTIVE' }] }, null, 2),
+          },
+          {
+            argv: ['VPC', '--help'],
+            stdout: [
+              'VPC service operations (subset):',
+              '  ListVpcs                list VPCs',
+              '  CreateVpc               create a VPC',
+            ].join('\n'),
+          },
+        ],
+      },
+    },
+    expect: [
+      // The strictest gate: the fallback must not fire on a session whose
+      // initialize already carried the tree path AND whose skill-tree reads
+      // are pre-approved — the installer's permission seam, written by the
+      // natural version probe on a >=1.19.0 opencode (the driver's probe
+      // gate enforces that floor; the runner's install env carries no
+      // override — env-policy strips host state), makes the direct read
+      // succeed with no ask. W1's automated regression signal is the seam's
+      // own test file; this pin is manual corroboration — if it goes red,
+      // check the allow rules in the throwaway home's opencode config
+      // first, not the teaching. Degrade path (a deliberate contract edit,
+      // never drive-by): if real-model runs flake here, replace with a
+      // sequence pin of list_skills before retrieve_skill.
+      { kind: 'noToolCall', name: 'huaweicloud_retrieve_skill' },
+      {
+        kind: 'hcloud',
+        head: ['VPC', 'ListVpcs'],
+        flags: { 'cli-region': 'cn-north-4' },
+        times: { min: 1, max: 3 },
+      },
+      { kind: 'disclosure', event: 'instructions', times: { min: 1, max: 5 } },
+      { kind: 'disclosure', event: 'toolsList', toolCount: TOTAL_TOOLS },
+    ],
+    softExpect: [{ kind: 'agentSays', text: { any: ['e2e-vpc', 'vpc-e2e-001', 'VPC'] } }],
+    budget: { timeoutMs: 240_000, attempts: 2 },
+  },
+  {
+    // Free-choice disclosure, trimmed posture: install --packs voucher
+    // leaves core + voucher, so huaweicloud-cli (huawei-vpc's owner, and
+    // the whole CLI execution face) is trimmed away. The availability truth
+    // lives in the effective catalog, and the taught behavior is to treat
+    // an absent skill as unavailable and confirm with the user — never to
+    // silently use it (a direct read of the skill FILE would succeed; the
+    // tree is ungated by design) and never to self-enable the pack. The
+    // truth check is pinned to the taught line (list_skills);
+    // list_packs/pack_info are equally honest discovery, so a real-model
+    // flake here relaxes to any of the three as the same deliberate edit.
+    id: 'core-free-choice-trimmed-availability',
+    pack: 'core',
+    installPacks: 'voucher',
+    prompt: '帮我在华为云 cn-north-4 区域查一下 VPC 列表，把结果告诉我。',
+    fixtures: {},
+    expect: [
+      { kind: 'toolCall', name: 'huaweicloud_list_skills' },
+      // Consent gate: enabling a trimmed pack is the user's call.
+      { kind: 'noToolCall', name: 'huaweicloud_packs_configure' },
+      // The capability face is gone, so no VPC operation may run — not even
+      // read-only. Silently proceeding (e.g. Bash-facing the CLI after a
+      // direct read of the trimmed pack's skill file) is exactly the
+      // failure mode this case exists to catch; the PATH shim records any
+      // Bash-layer hcloud attempt the same as an MCP one.
+      { kind: 'hcloud', head: ['VPC', 'ListVpcs'], times: { min: 0, max: 0 } },
+      { kind: 'disclosure', event: 'toolsList', toolCount: CORE_TOOLS + VOUCHER_TOOLS },
+    ],
+    softExpect: [{ kind: 'agentSays', text: { any: ['启用', '确认', '不可用', '未启用', 'pack', '裁剪', 'enable'] } }],
+    budget: { timeoutMs: 240_000, attempts: 2 },
+  },
 ];

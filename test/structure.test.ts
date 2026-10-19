@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { TOOL_DEFINITIONS } from '../plugins/huaweicloud-core/src/tools.ts';
+import { TOOL_DEFINITIONS, SKILLS_ROOT } from '../plugins/huaweicloud-core/src/tools.ts';
+import { instructionsFor } from '../plugins/huaweicloud-core/src/mcp-protocol.ts';
 import { PACK_OF, PACKS } from '../plugins/huaweicloud-core/src/packs/registry.ts';
 import { parseSkillFrontmatter } from '../plugins/huaweicloud-core/src/lib/skill-frontmatter.ts';
 import { SUPPORTED_AGENT_TARGETS } from '../plugins/huaweicloud-core/src/auth/agent-registration.ts';
@@ -502,21 +503,33 @@ test('web/static-site deployment intent offers target options with sandbox first
   assert.match(discovery, /do NOT default to OBS/);
 });
 
-test('core meta-skills teach the skillRoot direct-read path alongside retrieve_skill', () => {
+test('core meta-skills teach the skillRoot direct read as the default with retrieve_skill as the fallback', () => {
   // The dual-path contract: list_skills discloses the tree's location on
-  // stdio sessions, and both routing skills must teach the direct read as
-  // an alternative to the portable loader. The references/ assertion is
+  // stdio sessions, and both routing skills teach the attempt-first
+  // direct read as the default with retrieve_skill as the fallback when
+  // the attempted read fails or is denied. The references/ assertion is
   // co-occurrence-anchored (same line as skillRoot) so it pins the teaching
   // line, not the pre-existing step-2 "Read references/{sub-skill-id}.md".
-  // New SKILL.md copy must keep avoiding see/load followed by a backticked
-  // non-skill identifier — the cross-reference guard resolves those against
-  // the skills tree.
+  // The order pins anchor on the "otherwise" fallback connector (not a
+  // bare retrieve mention, which any phrasing could satisfy) so a
+  // retrieve-first regression cannot pass. Scope is the two hot lines
+  // (core step 3, discovery step 3); Tool Boundary's line is deliberately
+  // outside — its "read the chosen skill's SKILL.md" phrasing is what
+  // keeps this anchor from matching it, so do not harmonize the two
+  // wordings. New SKILL.md copy must keep avoiding see/load followed by a
+  // backticked non-skill identifier — the cross-reference guard resolves
+  // those against the skills tree.
   const core = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-core', 'SKILL.md'), 'utf8');
   assert.match(core, /skillRoot/, 'huaweicloud-core must teach the skillRoot direct-read path');
   assert.match(
     core,
     /skillRoot[^\n]*references\//,
     'the direct-read line must name the references directory beside skillRoot',
+  );
+  assert.match(
+    core,
+    /read the skill's SKILL\.md[^\n]*otherwise[^\n]{0,20}load/,
+    'the hot line must lead with the direct read and close with the otherwise-fallback',
   );
 
   const discovery = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-capability-discovery', 'SKILL.md'), 'utf8');
@@ -526,6 +539,70 @@ test('core meta-skills teach the skillRoot direct-read path alongside retrieve_s
     /skillRoot[^\n]*references\//,
     'the discovery teaching line must name the references directory beside skillRoot',
   );
+  assert.match(
+    discovery,
+    /read the skill's SKILL\.md[^\n]*otherwise[^\n]{0,20}load/,
+    'the discovery chain must lead with the direct read and close with the otherwise-fallback',
+  );
+});
+
+test('agent rules file carries the skillRoot direct-read teaching', () => {
+  // The rules file is agent-loaded copy with no other guard coverage; this
+  // presence pin keeps its skillRoot teaching from silently vanishing in a
+  // copy pass (word order there is unpinned by design — the hot lines own
+  // the order contract).
+  const rules = readFileSync(join(root, 'rules', 'huawei-agent-rules.mdc'), 'utf8');
+  assert.match(rules, /skillRoot/, 'the agent rules file must teach the skillRoot direct-read path');
+});
+
+test('the action-first load teaching survives copy passes on every load-path surface', () => {
+  // One presence pin per clause-carrying surface outside instructionsFor
+  // and the retrieve_skill description (both pinned in their own tests):
+  // the two routing skills' bodies, the rules file, the doctor command,
+  // the list_skills description, and the hermes manifest — the two extra
+  // pins close the drift window the a60ab5b guard family left open. Two
+  // vocabularies pinned per file: the attempt-first imperative (attempt
+  // the direct read — no reachability pre-check) and the reactive
+  // fallback (fails or is denied -> load via retrieve_skill) — a copy
+  // pass reverting either in any one file would keep every other gate
+  // green, the exact one-file-at-a-time drift mode the telemetry-hooks
+  // sweep documented.
+  const attemptFirst = /attempt the direct read/;
+  const reactive = /fails or is denied/;
+  const core = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-core', 'SKILL.md'), 'utf8');
+  assert.match(core, attemptFirst, 'huaweicloud-core must teach the attempt-first imperative');
+  assert.match(core, reactive, 'huaweicloud-core must teach the reactive permission fallback');
+  const discovery = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-capability-discovery', 'SKILL.md'), 'utf8');
+  assert.match(discovery, attemptFirst, 'capability-discovery must teach the attempt-first imperative');
+  assert.match(discovery, reactive, 'capability-discovery must teach the reactive permission fallback');
+  const rules = readFileSync(join(root, 'rules', 'huawei-agent-rules.mdc'), 'utf8');
+  assert.match(rules, attemptFirst, 'the agent rules file must teach the attempt-first imperative');
+  assert.match(rules, reactive, 'the agent rules file must teach the reactive permission fallback');
+  const doctor = readFileSync(join(root, 'integrations', 'opencode', 'commands', 'huaweicloud-doctor.md'), 'utf8');
+  assert.match(doctor, attemptFirst, 'the doctor command must teach the attempt-first imperative');
+  assert.match(doctor, reactive, 'the doctor command must teach the reactive permission fallback');
+  const tools = readSource(join('src', 'tools.ts'));
+  const listSkillsDescription = TOOL_DEFINITIONS.find((tool) => tool.name === 'huaweicloud_list_skills');
+  assert.ok(listSkillsDescription, 'the list_skills definition must exist');
+  assert.match(
+    listSkillsDescription.description,
+    attemptFirst,
+    'the list_skills description must teach the attempt-first imperative',
+  );
+  assert.match(
+    listSkillsDescription.description,
+    reactive,
+    'the list_skills description must teach the reactive permission fallback',
+  );
+  const manifest = readFileSync(join(root, 'integrations', 'hermes', 'manifest.yaml'), 'utf8');
+  assert.match(manifest, attemptFirst, 'the hermes manifest must teach the attempt-first imperative');
+  assert.match(manifest, reactive, 'the hermes manifest must teach the reactive permission fallback');
+  assert.doesNotMatch(
+    manifest,
+    /file tools reach/,
+    'the hermes manifest must not carry the old conditional in ANY section (the description field and post_install block are one file)',
+  );
+  assert.match(tools, /fails or is denied/, 'the source carries the trigger vocabulary the pins grep for');
 });
 
 test('retrieve_skill reference cap stays in sync between code and description', () => {
@@ -539,6 +616,149 @@ test('retrieve_skill reference cap stays in sync between code and description', 
     tools,
     new RegExp(`capped at ${cap} characters`),
     'the retrieve_skill description must teach the actual reference cap',
+  );
+});
+
+test('server instructions carry the three-form skillRoot disclosure contract', () => {
+  // The zero-call home of the load path, keyed on the same option pair the
+  // tool registry keys on. Full stdio (the production face): path stated
+  // outright + enablement caveat ahead of the read invitation + the
+  // packs_configure consent sentence naming a tool that face registers.
+  // Bare stdio (embedded/test constructions): same location and catalog
+  // teaching, but operator-posture enablement — never the toggle's name,
+  // never a runtime-mutability claim a face without the toggle cannot
+  // honor. Remote: no host path, skillRoot stated as withheld, no
+  // packs_configure. The absence rule is scoped to huawei-* service skills
+  // on every form: the six huaweicloud-* meta-skills never appear in the
+  // catalog (listSkills excludes core by design) yet are always available.
+  // Wire-level content pins ride both faces in mcp-server.test.ts and
+  // remote-mcp-server.test.ts; this pins the builder's forms directly.
+  const full = instructionsFor(false, true);
+  assert.ok(full.includes(SKILLS_ROOT), 'the stdio form must state the runtime-resolved tree location');
+  assert.match(full, /the skills tree lives at/, 'the stdio form must open with the location sentence');
+  assert.match(full, /pack-gated/, 'the stdio form must carry the enablement caveat');
+  assert.match(
+    full,
+    /can change at runtime/,
+    'the full stdio form may claim runtime mutability (it registers the toggle)',
+  );
+  assert.match(full, /huaweicloud_packs_configure/, 'the full stdio form names the session-toggle tool it registers');
+  assert.match(full, /huaweicloud_list_skills/, 'the stdio form must name the effective-catalog tool');
+  assert.match(
+    full,
+    /huaweicloud_retrieve_skill instead/,
+    'the stdio form must frame retrieve_skill as the instead-of fallback',
+  );
+  assert.match(full, /huawei-\* service skill absent/, 'the absence rule must be scoped to service skills');
+  assert.match(full, /never appear in the catalog and are always available/, 'the meta-skill exclusion must be taught');
+
+  const bare = instructionsFor(false);
+  assert.ok(bare.includes(SKILLS_ROOT), 'the bare stdio form still states the tree location');
+  assert.doesNotMatch(
+    bare,
+    /huaweicloud_packs_configure/,
+    'a face without the toggle must not be taught the toggle tool',
+  );
+  assert.doesNotMatch(
+    bare,
+    /can change at runtime/,
+    'a face without the toggle cannot honor a runtime-mutability claim',
+  );
+  assert.match(bare, /huawei-\* service skill absent/, 'the bare form keeps the scoped absence rule');
+
+  // The action-first load policy: both stdio forms carry it (attempt the
+  // direct read first — the attempt itself is the reachability check,
+  // never a pre-check, and never retrieve_skill before the attempt; only
+  // when the read fails or is denied, load via retrieve_skill, which
+  // needs no file access). Measured failure this guards against (operator
+  // test, 2026-10-19): the previous conditional invitation ("when your
+  // file tools reach the tree") made the model pre-evaluate reachability
+  // pessimistically and jump straight to the guaranteed MCP loader
+  // without attempting the read. The remote form does not carry it (that
+  // face reads no tree; its own loader sentence keeps the fallback
+  // framing).
+  const remote = instructionsFor(true);
+  for (const [label, form] of [
+    ['full', full],
+    ['bare', bare],
+  ] as const) {
+    assert.match(
+      form,
+      /attempt the direct read first/,
+      `the ${label} stdio form must teach the attempt-first imperative`,
+    );
+    assert.match(
+      form,
+      /the attempt itself is the check/,
+      `the ${label} stdio form must teach that attempting is the reachability check`,
+    );
+    assert.match(
+      form,
+      /do not call huaweicloud_retrieve_skill before attempting/,
+      `the ${label} stdio form must forbid the loader before the attempt`,
+    );
+    assert.match(
+      form,
+      /If a direct read of the tree fails or is denied, load the skill with huaweicloud_retrieve_skill instead/,
+      `the ${label} stdio form must teach the reactive fallback sentence verbatim`,
+    );
+    assert.match(form, /it needs no file access/, `the ${label} stdio form must state the loader needs no file access`);
+    assert.doesNotMatch(
+      form,
+      /When your file tools reach the tree/,
+      `the ${label} stdio form must not carry the evaluative reachability conditional`,
+    );
+  }
+  assert.doesNotMatch(
+    remote,
+    /attempt the direct read first/,
+    'the remote form reads no tree and must not teach the attempt-first imperative',
+  );
+  assert.doesNotMatch(
+    remote,
+    /fails or is denied/,
+    'the remote form reads no tree and must not teach the reactive fallback',
+  );
+  assert.doesNotMatch(remote, /the skills tree lives at/, 'the remote form must not state a host tree path');
+  assert.match(remote, /skillRoot is withheld/, 'the remote form must state skillRoot is withheld');
+  assert.match(remote, /huaweicloud_list_skills/, 'the remote form must name the effective-catalog tool');
+  assert.match(remote, /fallback/, 'the remote form must frame retrieve_skill as the loader');
+  assert.match(remote, /huawei-\* service skill absent/, 'the remote form keeps the scoped absence rule');
+  assert.doesNotMatch(
+    remote,
+    /huaweicloud_packs_configure/,
+    'packs_configure is stdio-only and must not be taught on the remote form',
+  );
+});
+
+test('retrieve_skill description frames the fallback, not the default', () => {
+  // The observed free-choice failure was agents jumping straight to
+  // retrieve_skill; the description now opens by demoting it. This pins
+  // the demotion phrases, the reactive fallback trigger, and the
+  // self-heal teaching (the stdio payload carries skillRoot) so a copy
+  // pass cannot quietly revert any of them.
+  const retrieve = TOOL_DEFINITIONS.find((tool) => tool.name === 'huaweicloud_retrieve_skill');
+  assert.ok(retrieve, 'the retrieve_skill definition must exist');
+  assert.match(retrieve.description, /the fallback loader, not the default/);
+  assert.match(retrieve.description, /skillRoot so the next skill can be a direct read/);
+  assert.match(
+    retrieve.description,
+    /attempt the direct read first/,
+    'the description must open the load procedure with the attempt-first imperative',
+  );
+  assert.match(
+    retrieve.description,
+    /do not call this tool before the read is attempted/,
+    'the description must forbid its own use before the attempt (the measured failure mode)',
+  );
+  assert.match(
+    retrieve.description,
+    /Call it only after a direct read attempt fails or is denied, or when the tree location is unknown/,
+  );
+  assert.match(
+    retrieve.description,
+    /it needs no file access/,
+    'the description must state the loader needs no file access beside the trigger',
   );
 });
 

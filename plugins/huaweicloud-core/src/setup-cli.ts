@@ -3,6 +3,7 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -11,7 +12,7 @@ import {
 } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { homedir, platform } from 'node:os';
+import { homedir, platform, tmpdir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { spawnSync, type SpawnSyncOptions, type SpawnSyncReturns } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -80,6 +81,12 @@ import {
   type DependencyId,
 } from './lib/dependency-model.ts';
 import { resolveDependencyCommand } from './lib/dep-resolve.ts';
+import {
+  applySkillTreePermissionSeam,
+  opencodeSeamVersionSupported,
+  removeSkillTreePermissionSeam,
+  skillTreePermissionGlobs,
+} from './lib/opencode-permission-seam.ts';
 import { codexPluginProbe, getCodexPluginName, getMarketplaceName, type CodexPluginProbe } from './codex-probe.ts';
 
 // node:sqlite is a runtime-only builtin loaded through createRequire; only the
@@ -646,8 +653,9 @@ function copyDir(src: string, dest: string): void {
 // The payload every per-agent plugin dir must carry: the MCP server (dist/),
 // the safety policy, and the skills tree. Skills are server data disclosed
 // through the MCP tools (list_packs / pack_info / list_skills /
-// retrieve_skill / search_docs) — list_skills also carries the tree's
-// location (skillRoot, stdio sessions only) for direct reads; the core
+// retrieve_skill / search_docs) — the stdio server instructions state the
+// tree's location (skillRoot) at initialize, and list_skills carries it too
+// for direct reads; the core
 // meta-skills are ADDITIONALLY disclosed natively by syncNativeCoreSkills,
 // so every install and update path must place the tree next to the server
 // it deploys (the native sync rides the same PAYLOAD_TARGETS table from
@@ -676,7 +684,7 @@ function copyServerPayload(pluginDest: string, opts: { skipDist?: boolean } = {}
   // retrieve_skill/search_docs (unclaimed dirs bypass pack enablement).
   const stale = pruneStale(join(pluginDest, 'skills'), skillsSrc);
   console.log(
-    `  Skills (server data; MCP catalog + stdio skillRoot) -> ${join(pluginDest, 'skills')}${stale > 0 ? ` (removed ${stale} stale)` : ''}`,
+    `  Skills (server data; MCP catalog + stdio skillRoot instructions) -> ${join(pluginDest, 'skills')}${stale > 0 ? ` (removed ${stale} stale)` : ''}`,
   );
 }
 
@@ -1235,6 +1243,81 @@ function readOfficeaceDevkitPacks(): string | null {
   }
 }
 
+// The seam's version gate. HUAWEICLOUD_OPENCODE_PERMISSION_SEAM=on|off is
+// the deterministic override for the installer test suite (e2e strips it —
+// the runner's install relies on the natural probe, and the e2e driver's
+// own probe gate demands a floor-eligible opencode anyway); unset runs the
+// probe. Unknown polarity is skip: a below-floor, absent, or unparsable
+// opencode gets no key writes and a README pointer, never a paste snippet —
+// an older version may reject the keys outright. A later update heals the
+// skip: the seam is a third change source in updateOpenCodeConfig, so an
+// unchanged mcp config no longer short-circuits.
+function probeOpencodeVersion(): string | null {
+  // The probe runs the agent's own binary, which initializes its config
+  // root on every run — so the probe must pin that root to a throwaway
+  // mkdtemp directory instead of inheriting the caller's XDG/HOME: a
+  // relative XDG_CONFIG_HOME makes opencode materialize dirs against its
+  // cwd (the known 1.19.0 divergence cross-platform-install.test.ts
+  // pins), and an inherited HOME would create legacy ~/.config/opencode
+  // roots in fake-home installs. A fixed shared name would be clippable
+  // on multi-user machines, so the root is per-run and best-effort
+  // cleaned. The version string never depends on the config root. The
+  // win32 retries cover npm-global .cmd shims (spawn cannot execute them
+  // without a shell — the hasCodexCLI precedent; the shell string is a
+  // fixed literal, no interpolation surface).
+  let probeRoot: string;
+  try {
+    probeRoot = mkdtempSync(join(tmpdir(), 'devkit-opencode-probe-'));
+  } catch {
+    return null;
+  }
+  const probeEnv = { ...process.env, XDG_CONFIG_HOME: probeRoot };
+  const run = (cmd: string, shell: boolean): string | null => {
+    try {
+      const r = spawnSync(cmd, ['--version'], {
+        shell,
+        windowsHide: true,
+        stdio: 'pipe',
+        timeout: 10000,
+        cwd: tmpdir(),
+        env: probeEnv,
+      });
+      if (r.status === 0 && r.stdout) return r.stdout.toString();
+    } catch {
+      // not on PATH in this spelling — fall through to the next attempt
+    }
+    return null;
+  };
+  let out = run('opencode', false);
+  if (out === null && process.platform === 'win32') {
+    out = run('opencode.exe', false) ?? run('opencode --version', true);
+  }
+  try {
+    rmSync(probeRoot, { recursive: true, force: true });
+  } catch {
+    // best-effort: a leftover probe dir is inert
+  }
+  return out !== null ? (/v?\d+\.\d+\.\d+/.exec(out)?.[0] ?? null) : null;
+}
+
+function openCodeSeamGate(): 'on' | 'off' {
+  const forced = process.env.HUAWEICLOUD_OPENCODE_PERMISSION_SEAM;
+  if (forced === 'on' || forced === 'off') return forced;
+  return opencodeSeamVersionSupported(probeOpencodeVersion()) ? 'on' : 'off';
+}
+
+// The glob set the seam covers: the plugin-dir tree actually deployed by
+// this run plus per-skill globs for the native core meta-skill copies
+// (under the XDG opencode skills dir). An unusable manifest degrades to
+// the tree listing (devkitOwnedSkillNames, readdir) rather than dropping
+// the native globs: uninstall removes the native copies by that same
+// listing, so the seam cleanup must not leave per-skill allows behind
+// over directories the uninstall just deleted.
+function openCodeSeamGlobs(pluginDir: string): string[] {
+  const core = tryCoreSkillNames() ?? devkitOwnedSkillNames();
+  return skillTreePermissionGlobs(join(pluginDir, 'skills'), opencodeSkillsDir(), [...core]);
+}
+
 function updateOpenCodeConfig(pluginDir: string): void {
   const configPath = opencodeConfigFile();
   const mcpPath = join(pluginDir, 'dist', 'mcp-server.js').replace(/\\/g, '/');
@@ -1244,25 +1327,50 @@ function updateOpenCodeConfig(pluginDir: string): void {
       config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
     } catch {
       console.log(
-        `  \x1b[33m[WARN]\x1b[0m Could not parse ${configPath} (jsonc comments?). Skipping MCP config write; ensure "mcp.huaweicloud-devkit" points to ${mcpPath}.`,
+        `  \x1b[33m[WARN]\x1b[0m Could not parse ${configPath} (jsonc comments?). Skipping MCP config write; ensure "mcp.huaweicloud-devkit" points to ${mcpPath}, and add the skills-tree permission rules manually (see README, Harness permission notes).`,
       );
       return;
     }
-    const existing: unknown = asRecord(config.mcp)['huaweicloud-devkit'];
-    if (existing) {
-      const { entry, changed } = mergeCommandStyle(existing, { mcpPath });
-      const packsChanged = applyPacksToEntry(entry, 'environment', 'OpenCode');
-      if (!changed && !packsChanged) {
-        console.log(`  OpenCode MCP config unchanged: ${configPath}`);
-        return;
-      }
-      const mcpMap = asRecord(config.mcp);
-      mcpMap['huaweicloud-devkit'] = entry;
-      config.mcp = mcpMap;
-      writeMcpSettingsFile(configPath, config);
-      console.log(`  OpenCode MCP config merged (user fields preserved): ${configPath}`);
+  }
+  // The skills-tree permission seam is a THIRD change source, computed
+  // before the unchanged short-circuit below: a reinstall whose mcp entry
+  // and packs value are identical is the dominant update shape, and every
+  // install made before this seam existed is exactly the population it
+  // must heal — an early "config unchanged" return would skip the write
+  // forever. Parse-fail above stays the only skip path. The seam mutates
+  // config in place (add-only-if-absent per section; ownership rules in
+  // lib/opencode-permission-seam.ts), so the single write below carries it.
+  let permChanged = false;
+  if (openCodeSeamGate() === 'on') {
+    const seam = applySkillTreePermissionSeam(config, openCodeSeamGlobs(pluginDir));
+    permChanged = seam.changed;
+    for (const section of seam.skipped) {
+      console.log(
+        `  \x1b[33m[WARN]\x1b[0m opencode permission${section === 'permission' ? '' : `.${section}`} is not object-shaped — keeping the user's value; add the skills-tree rules manually (see README, Harness permission notes).`,
+      );
+    }
+    if (permChanged) {
+      console.log(`  Skills-tree permission (external_directory allow + edit deny) -> ${configPath}`);
+    }
+  } else {
+    console.log(
+      '  \x1b[33m[INFO]\x1b[0m opencode not verifiably at or above the measured permission floor — skipping the skills-tree permission write; see README (Harness permission notes) if direct skill reads prompt for approval.',
+    );
+  }
+  const existing: unknown = asRecord(config.mcp)['huaweicloud-devkit'];
+  if (existing) {
+    const { entry, changed } = mergeCommandStyle(existing, { mcpPath });
+    const packsChanged = applyPacksToEntry(entry, 'environment', 'OpenCode');
+    if (!changed && !packsChanged && !permChanged) {
+      console.log(`  OpenCode MCP config unchanged: ${configPath}`);
       return;
     }
+    const mcpMap = asRecord(config.mcp);
+    mcpMap['huaweicloud-devkit'] = entry;
+    config.mcp = mcpMap;
+    writeMcpSettingsFile(configPath, config);
+    console.log(`  OpenCode MCP config merged (user fields preserved): ${configPath}`);
+    return;
   }
   const mcpMap: Record<string, unknown> = asRecord(config.mcp);
   let entry = mergeCommandStyle(undefined, { mcpPath }).entry;
@@ -1345,15 +1453,26 @@ function removeOpenCodeConfig(): void {
     return;
   }
   const mcpMap = asRecord(config.mcp);
-  if (!mcpMap['huaweicloud-devkit']) return;
-  // Back up user-customized fields before removal so a later reinstall can restore them (issue #615).
-  const delta = extractUserDelta(mcpMap['huaweicloud-devkit'], 'command');
-  if (delta) saveAgentDelta('opencode', delta);
-  delete mcpMap['huaweicloud-devkit'];
-  config.mcp = mcpMap;
-  if (Object.keys(mcpMap).length === 0) delete config.mcp;
+  const hadEntry = Boolean(mcpMap['huaweicloud-devkit']);
+  if (hadEntry) {
+    // Back up user-customized fields before removal so a later reinstall can restore them (issue #615).
+    const delta = extractUserDelta(mcpMap['huaweicloud-devkit'], 'command');
+    if (delta) saveAgentDelta('opencode', delta);
+    delete mcpMap['huaweicloud-devkit'];
+    config.mcp = mcpMap;
+    if (Object.keys(mcpMap).length === 0) delete config.mcp;
+  }
+  // The seam cleanup runs independently of the mcp entry: a config may
+  // carry the seam from an install whose mcp entry was later removed by
+  // hand. Globs derive from the stable XDG paths (the plugin dir may
+  // already be gone) and the running package's own manifest;
+  // value-exact deletion keeps user-modified rules (the ownership contract
+  // lives in lib/opencode-permission-seam.ts).
+  const permCleaned = removeSkillTreePermissionSeam(config, openCodeSeamGlobs(opencodePluginsDir()));
+  if (!hadEntry && !permCleaned) return;
   writeMcpSettingsFile(configPath, config);
-  console.log(`  OpenCode MCP config cleaned: ${configPath}`);
+  if (hadEntry) console.log(`  OpenCode MCP config cleaned: ${configPath}`);
+  if (permCleaned) console.log(`  Skills-tree permission rules removed: ${configPath}`);
 }
 
 function hasCodexCLI(): boolean {
@@ -4818,8 +4937,9 @@ type PayloadTarget = {
   // Agent-native skill dirs this target's install/update refreshes with the
   // core meta-skills (system-prompt disclosure; non-core skills stay off
   // the native surface so DEVKIT_PACKS gating holds — their disclosure is
-  // the MCP catalog plus, on stdio sessions, list_skills' skillRoot
-  // location for direct reads, both disclosure-level). Absent = no native
+  // the MCP catalog plus, on stdio sessions, the skillRoot location the
+  // server instructions state at initialize and list_skills carries, both
+  // disclosure-level). Absent = no native
   // copies: codex-desktop's plugin-dir skills/ IS server data, and
   // officeace's native surface is the capabilities.json registration
   // 4a030c0 removed.
@@ -5141,6 +5261,68 @@ async function cmdDoctor(): Promise<void> {
     mcpCfgTarget ? `Found in ${mcpCfgTarget} config` : 'Run: npx huaweicloud-devkit install',
   );
 
+  // Skills-tree permission seam — OpenCode installs only (the seam is the
+  // installer's zero-prompt path for direct skill reads on that harness).
+  // Doctor verifies the two keys and their values, honoring the ownership
+  // contract: a user-owned value on a devkit glob is reported as kept, not
+  // broken; a below-floor or absent opencode is a SKIP, never a FAIL.
+  if (installedPayload?.id === 'opencode') {
+    if (openCodeSeamGate() === 'off') {
+      console.log(
+        '  \x1b[33m[SKIP]\x1b[0m Skills-tree permission seam (opencode not verifiably at or above the measured permission floor)',
+      );
+    } else {
+      // Per-glob evaluation, matching the installer's per-section/per-glob
+      // contract exactly: user-owned globs (any non-devkit value) are
+      // reported as kept, missing globs as healable — one user-owned glob
+      // must never mask a missing edit deny. Configs the installer itself
+      // refuses to touch (scalar-shaped permission, unparseable file — the
+      // parse-fail skip is the install path's ONLY skip) get a SKIP with
+      // the manual pointer, never a FAIL whose re-run-install remediation
+      // cannot succeed.
+      const globs = openCodeSeamGlobs(opencodePluginsDir());
+      let cfg: Record<string, unknown> | null;
+      try {
+        cfg = asRecord(JSON.parse(readFileSync(opencodeCfg, 'utf8')));
+      } catch {
+        cfg = null;
+      }
+      const permission = cfg !== null ? cfg.permission : undefined;
+      if (
+        cfg === null ||
+        (permission !== undefined &&
+          (typeof permission !== 'object' || permission === null || Array.isArray(permission)))
+      ) {
+        console.log(
+          '  \x1b[33m[SKIP]\x1b[0m Skills-tree permission seam: opencode config unreadable or scalar-shaped — the installer keeps it untouched; add the rules manually (see README, Harness permission notes)',
+        );
+      } else {
+        const permRecord = asRecord(permission);
+        const ext = asRecord(permRecord.external_directory);
+        const editRules = asRecord(permRecord.edit);
+        const kept = globs.filter(
+          (g) => (g in ext && ext[g] !== 'allow') || (g in editRules && editRules[g] !== 'deny'),
+        );
+        const missing = globs.filter((g) => ext[g] !== 'allow' || editRules[g] !== 'deny');
+        if (missing.length === 0) {
+          check('Skills-tree permission seam (allow + edit deny)', true, '');
+        } else if (kept.length === 0) {
+          check(
+            'Skills-tree permission seam (allow + edit deny)',
+            false,
+            'Run: npx huaweicloud-devkit install (writes the missing skills-tree rules; see README, Harness permission notes)',
+          );
+        } else {
+          check(
+            'Skills-tree permission seam (allow + edit deny)',
+            false,
+            `${missing.length} rule(s) missing (re-run: npx huaweicloud-devkit install); ${kept.length} user-owned glob(s) kept as-is (see README, Harness permission notes)`,
+          );
+        }
+      }
+    }
+  }
+
   // Hermes MCP Python SDK (only checked when Hermes config is found)
   if (
     mcpCfgTarget === 'Hermes Agent' ||
@@ -5232,7 +5414,7 @@ async function cmdDoctor(): Promise<void> {
       return present.size === expectedSkills.length && expectedSkills.every((name) => present.has(name));
     });
   check(
-    'Skills tree (server data; MCP catalog + stdio skillRoot)',
+    'Skills tree (server data; MCP catalog + stdio skillRoot instructions)',
     skillsTreeOk,
     'Run: npx huaweicloud-devkit install (from a git checkout: npm run build first)',
   );

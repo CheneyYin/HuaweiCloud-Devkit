@@ -186,10 +186,13 @@ def main():
     # Devkit service skills are server data disclosed over MCP (never
     # installed natively), so their retrieval telemetry rides
     # trackSkillRetrieve inside huaweicloud_retrieve_skill; direct reads via
-    # the stdio skillRoot disclosure are observable only as catalog calls,
-    # never as which skill file was consumed. The six core
-    # meta-skills are native copies (no telemetry for those loads). Only
-    # the CLI classifier and MCP invocations are tracked here.
+    # the stdio skillRoot disclosure (server instructions at initialize, or
+    # the list_skills payload) are observable only as catalog calls within
+    # telemetry — the instructions emission itself is trace-file-only (the
+    # e2e seam), never a telemetry event — and neither channel shows which
+    # skill file was consumed. The six core meta-skills are native copies
+    # (no telemetry for those loads). Only the CLI classifier and MCP
+    # invocations are tracked here.
     if tool_name in ("Bash", "terminal", "bash", "pwsh"):
         command = command_text(tool_input)
         if command and HCLOUD_RE.search(command):

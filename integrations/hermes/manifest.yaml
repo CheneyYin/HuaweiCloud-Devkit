@@ -6,9 +6,13 @@ description: >
   (ECS, OBS, VPC, RDS, CCE, ModelArts, and more) ship as server data and are
   disclosed through the MCP tools (huaweicloud_list_packs,
   huaweicloud_list_skills, huaweicloud_retrieve_skill) instead of
-  ~/.hermes/skills/ copies; the stdio list_skills payload additionally
-  carries skillRoot (the tree's location) so the agent can read the files
-  directly with its own tools.
+  ~/.hermes/skills/ copies; the stdio MCP server instructions state skillRoot
+  (the tree's location) at initialize — the default load path is
+  action-first: attempt the direct read, the attempt itself is the
+  reachability check — and huaweicloud_list_skills is the effective
+  catalog (which skills are ENABLED is pack-gated and can change at runtime),
+  with huaweicloud_retrieve_skill as the fallback when the attempted read
+  fails or is denied.
 
 source: https://github.com/huaweicloud/huaweicloud-devkit
 
@@ -42,12 +46,15 @@ post_install: |
     • Safety policy + skills tree (server data) → ~/.hermes/huaweicloud-plugins/
 
   Skills are MCP-disclosed: ask the agent to call huaweicloud_list_packs,
-  browse the skill catalog with huaweicloud_list_skills, or route a task with
-  huaweicloud_service_catalog and load the recommended
-  skill with huaweicloud_retrieve_skill; the list_skills payload also
-  carries skillRoot (the skills tree's location) so the agent can read the
-  files directly with its own tools. The six core meta-skills
-  (huaweicloud-*) are additionally installed as native copies in
+  browse the effective catalog with huaweicloud_list_skills (which skills are
+  ENABLED is pack-gated and can change at runtime), or route a task with
+  huaweicloud_service_catalog, then attempt the direct read —
+  read the recommended skill's files directly under the skillRoot the MCP
+  server instructions state at initialize (and the list_skills payload
+  carries), no reachability pre-check — falling back to
+  huaweicloud_retrieve_skill when the attempted read fails or is denied
+  (the loader needs no file access). The six core
+  meta-skills (huaweicloud-*) are additionally installed as native copies in
   ~/.hermes/skills for system-prompt visibility.
 
   Next steps:

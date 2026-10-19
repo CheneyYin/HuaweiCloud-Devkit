@@ -6,6 +6,7 @@ import {
   TOOL_DEFINITIONS,
   callTool,
   verifySkillTree,
+  SKILLS_ROOT,
   type CallToolOptions,
   type ToolDefinition,
   type ToolName,
@@ -18,6 +19,89 @@ import { initTelemetry } from './telemetry/telemetry.ts';
 import { detectAgent } from './telemetry/agent-detect.ts';
 
 const pkgVersion = readInstalledVersion() || '0.0.0';
+
+// Server-level instructions ride the initialize handshake result — the one
+// teaching surface that needs neither a skill load nor a description read.
+// Emission is what this side controls and proves; whether the client
+// renders instructions into model context is the client's contract (the
+// MCP spec makes it a courtesy), and agents that do not render them keep
+// the old posture — that residual is accepted and documented.
+// Three honest forms, keyed on the same option pair the tool registry
+// keys on (which face am I / does this face carry session toggling):
+// - stdio with runtimePacks (the production stdio face): the tree's
+//   absolute location (SKILLS_ROOT, resolved at runtime — never baked at
+//   build time) is stated outright, so the direct read needs no catalog
+//   detour; the enablement caveat deliberately PRECEDES the read
+//   instruction (a path never implies "on disk == usable": trimmed packs'
+//   files are reachable but gated), the load instruction is the
+//   unconditional attempt-first imperative, and the packs_configure
+//   consent sentence names a tool this face actually registers.
+// - stdio without runtimePacks (embedded/test constructions): the same
+//   location and catalog teaching, but the operator-posture enablement
+//   line — never the toggle tool's name, never a runtime-mutability claim
+//   a face without the toggle cannot honor.
+// - remote: skillRoot is withheld on that face, so the text names the
+//   catalog + retrieve_skill loader instead of a path the caller cannot
+//   use, and never names the stdio-only packs_configure.
+// The absence rule is scoped to huawei-* service skills everywhere: the
+// six huaweicloud-* meta-skills never appear in the catalog (listSkills
+// excludes core by design) yet are always available — an unscoped rule
+// would teach "huaweicloud-core is trimmed", a dead end no pack can fix.
+// Flag matrix: instructions key on (remoteSurface, runtimePacks) at
+// construction; the payload skillRoot seams (list_skills, retrieve_skill)
+// key on opts.onPacksChanged, which registerOne attaches from runtimePacks.
+// The factory refuses the contradictory remoteSurface+runtimePacks
+// combination, so no form can name a tool its face withholds while its
+// payloads publish host paths — the pairs stay legal by construction.
+// The stdio forms teach the action-first load policy: attempt the direct
+// read FIRST — the attempt itself is the reachability check — and only
+// when the read fails or is denied, load the skill via retrieve_skill
+// (which needs no file access) instead of repeatedly requesting. Measured
+// failure this closes (operator test, 2026-10-19): a conditional
+// invitation ("when your file tools reach the tree, read directly") made
+// the model pre-evaluate reachability pessimistically and jump straight
+// to the guaranteed MCP loader without ever attempting the read — the
+// model's own post-hoc reflection named the gap ("did not try read
+// <skillRoot>/<name>/SKILL.md first"). The imperative sequence removes
+// the evaluation step: the read is attempted unconditionally, and failure
+// IS the fallback signal. This holds on every harness — with the
+// installer's permission seam the attempt succeeds silently; on a gating
+// harness the attempt triggers the ask and a denial is the signal; on
+// ungated harnesses it just succeeds. Installer-side relief (OpenCode only, the one
+// harness measured where the prompt cannot express directory-scope
+// grants): setup-cli.ts writes a persistent permission seam —
+// external_directory allow + edit deny over the tree globs
+// (lib/opencode-permission-seam.ts owns the contract) — so direct reads
+// stop prompting; the teaching here stays true on every harness
+// regardless of config.
+export function instructionsFor(remote: boolean, runtimePacks = false): string {
+  if (remote) {
+    return (
+      'Skill loading: call huaweicloud_list_skills once for the effective skill catalog ' +
+      '(the six huaweicloud-* meta-skills never appear in it and are always available). ' +
+      'Remote sessions cannot reach the skills tree on the server host (skillRoot is withheld on the remote face), ' +
+      'so huaweicloud_retrieve_skill is the loader — the fallback that applies to every skill here. ' +
+      'Which skills are ENABLED is pack-gated (the operator controls pack posture); ' +
+      'a huawei-* service skill absent from the catalog belongs to a trimmed pack; treat it as unavailable. ' +
+      'Route Huawei Cloud tasks through the huaweicloud-core skill; browse packs with huaweicloud_list_packs.'
+    );
+  }
+  const enablement = runtimePacks
+    ? 'Which skills are ENABLED is pack-gated and can change at runtime — call huaweicloud_list_skills for the effective catalog; ' +
+      'a huawei-* service skill absent from that catalog belongs to a trimmed pack, so treat it as unavailable and confirm with the user before huaweicloud_packs_configure ' +
+      '(the six huaweicloud-* meta-skills never appear in the catalog and are always available). '
+    : 'Which skills are ENABLED is pack-gated (the operator controls pack posture) — call huaweicloud_list_skills for the effective catalog; ' +
+      'a huawei-* service skill absent from that catalog belongs to a trimmed pack, so treat it as unavailable ' +
+      '(the six huaweicloud-* meta-skills never appear in the catalog and are always available). ';
+  return (
+    `Skill loading: the skills tree lives at ${SKILLS_ROOT} (stdio session). ` +
+    enablement +
+    `To load a skill, attempt the direct read first: read ${SKILLS_ROOT}/<name>/SKILL.md and the references/ files you need with your file tools — untruncated and selective. ` +
+    'Do not pre-check reachability and do not call huaweicloud_retrieve_skill before attempting — the attempt itself is the check. ' +
+    'If a direct read of the tree fails or is denied, load the skill with huaweicloud_retrieve_skill instead — it needs no file access. ' +
+    'Route Huawei Cloud tasks through the huaweicloud-core skill; browse packs with huaweicloud_list_packs.'
+  );
+}
 
 // 会话内首个非 check/upgrade 工具调用附加 _updateInfo，只消费一次。
 // 按会话隔离：同进程内不同会话(A/B)各自首次提示；stdio 用固定 'stdin'。
@@ -127,6 +211,19 @@ export function createDevkitMcpServer({
   remoteSurface = false,
 }: DevkitServerOptions = {}): McpServer {
   assertConstructedSchemas();
+  // The contradictory construction is refused, not cautioned: a remote that
+  // also carried runtime pack toggling would attach the onPacksChanged seam
+  // to every callOpts, publishing the server host's absolute install path
+  // through every list_skills/retrieve_skill payload on an unauthenticated
+  // HTTP face while its instructions honestly claimed withholding. Illegal
+  // states stay unrepresentable (the same doctrine the packs_configure
+  // refusal applies from the other direction).
+  if (remoteSurface && runtimePacks) {
+    throw new Error(
+      'contradictory construction: remoteSurface and runtimePacks are mutually exclusive — ' +
+        'the stateless remote must not carry runtime pack toggling (it would leak host paths through skill payloads)',
+    );
+  }
   // Refuse to start on a missing/partial skills tree: list_packs is
   // registry-driven and would otherwise advertise skills retrieve_skill
   // cannot serve. stdio and the stateless remote both boot through here,
@@ -138,7 +235,10 @@ export function createDevkitMcpServer({
   // transport branching. Unknown pack ids throw here; core is always in the
   // set, so its tools (the base face plus the three pack meta tools and
   // packs_configure) are never filtered.
-  const server = new McpServer({ name: 'huaweicloud-devkit', version: pkgVersion });
+  const server = new McpServer(
+    { name: 'huaweicloud-devkit', version: pkgVersion },
+    { instructions: instructionsFor(remoteSurface, runtimePacks) },
+  );
   const registered = new Map<ToolName, RegisteredTool>();
 
   // One wanted-set derivation for boot and re-sync: enablement decides pack

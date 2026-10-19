@@ -19,9 +19,10 @@ type StartedRemote = Awaited<ReturnType<StartRemoteServer>>;
 
 interface JsonRpcResult {
   serverInfo: { name: string; version: string };
+  instructions?: string;
   protocolVersion: string;
   capabilities: unknown;
-  tools: { name: string }[];
+  tools: { name: string; description?: string }[];
   isError: boolean;
   content: { text: string }[];
 }
@@ -78,11 +79,42 @@ test('remote MCP server initializes, lists tools, and plans CLI commands', async
   assert.equal(initialized.body.result.protocolVersion, '2024-11-05');
   // The SDK high-level server advertises tools.listChanged on registration.
   assert.deepEqual(initialized.body.result.capabilities, { tools: { listChanged: true } });
+  // Server instructions ride the initialize handshake (the shared factory
+  // keys the form on the face): the remote form must stay honest for a
+  // caller that can never read the server host's tree — it names the
+  // catalog tool, states that skillRoot is withheld (so retrieve_skill is
+  // the loader, framed as the fallback that applies to every skill here),
+  // and never states a tree path.
+  const instructions = initialized.body.result.instructions ?? '';
+  assert.match(instructions, /huaweicloud_list_skills/, 'instructions must name the catalog tool');
+  assert.match(instructions, /skillRoot is withheld/, 'instructions must state skillRoot is withheld on this face');
+  assert.match(instructions, /fallback/, 'instructions must frame retrieve_skill as the fallback');
+  assert.doesNotMatch(
+    instructions,
+    /the skills tree lives at/,
+    'the remote face must not state a host tree path the caller cannot use',
+  );
+  assert.doesNotMatch(
+    instructions,
+    /huaweicloud_packs_configure/,
+    'packs_configure is stdio-only and must not be taught here',
+  );
 
   const listed = await rpc('tools/list');
   const toolNames = new Set(listed.body.result.tools.map((tool) => tool.name));
   assert.ok(toolNames.has('huaweicloud_plan_cli_command'));
   assert.ok(toolNames.has('huaweicloud_list_operations'));
+  // The remote face never registers packs_configure, so no description it
+  // serves may teach it either — the list_skills description scopes its
+  // mention to stdio agent sessions, and this pin closes the side door for
+  // every future description edit.
+  for (const tool of listed.body.result.tools) {
+    assert.doesNotMatch(
+      tool.description ?? '',
+      /huaweicloud_packs_configure/,
+      `${tool.name} description must not teach the stdio-only packs_configure on the remote face`,
+    );
+  }
 
   const planned = await rpc('tools/call', {
     name: 'huaweicloud_plan_cli_command',

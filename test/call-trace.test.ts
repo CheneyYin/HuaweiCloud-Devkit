@@ -145,6 +145,33 @@ test('traceOutboundDisclosure extracts only the two disclosure messages', () => 
   });
 });
 
+test('traceOutboundDisclosure records the initialize instructions emission, nothing else about it', () => {
+  // The initialize result is recognized by serverInfo; instructions
+  // presence is the emission fact. An initialize WITHOUT instructions
+  // records nothing (absence is honest — the content pins live in the
+  // unit tests), and a non-initialize result carrying an instructions key
+  // (never a real shape, but the extractor must not be fooled) records
+  // nothing either.
+  withTracePath((path) => {
+    traceOutboundDisclosure({
+      jsonrpc: '2.0',
+      id: 1,
+      result: { serverInfo: { name: 'huaweicloud-devkit', version: '2.0.0' }, instructions: 'Skill loading: …' },
+    });
+    traceOutboundDisclosure({
+      jsonrpc: '2.0',
+      id: 2,
+      result: { serverInfo: { name: 'huaweicloud-devkit', version: '2.0.0' } },
+    });
+    traceOutboundDisclosure({ jsonrpc: '2.0', id: 3, result: { instructions: 'not an initialize result' } });
+    const records = readRecords(path);
+    assert.equal(records.length, 1, 'only the instructions-carrying initialize result is traced');
+    assert.equal(records[0]!.type, 'disclosure');
+    assert.equal(records[0]!.event, 'instructions');
+    assert.equal('toolCount' in records[0]!, false, 'the instructions event carries no toolCount');
+  });
+});
+
 test('unset env means no file is written', () => {
   const dir = fixtureDir('call-trace-');
   try {

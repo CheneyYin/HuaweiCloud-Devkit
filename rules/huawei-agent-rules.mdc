@@ -7,7 +7,7 @@
 ## Core Principles
 
 - **Always use the Huawei MCP server first** (sandboxed, observable, auditable). Fall back to `hcloud` CLI only when MCP is unavailable.
-- **Before any task, check for available skills.** Use `huaweicloud_list_skills` or `huaweicloud_search_docs` via MCP, then load with `huaweicloud_retrieve_skill` — or, when the list_skills payload carries `skillRoot` (stdio sessions) and your file tools reach it, read the skill files directly under that root. Follow skill procedures over general knowledge.
+- **Before any task, check for available skills.** `huaweicloud_list_skills` is the effective catalog (which skills are ENABLED is pack-gated and can change at runtime; a `huawei-*` service skill absent from it belongs to a trimmed pack — treat it as unavailable and confirm with the user before enabling; the six `huaweicloud-*` meta-skills never appear in it and are always available). On stdio sessions the MCP server instructions state `skillRoot` (the skills tree's location) at initialize, and the list_skills payload carries it too; attempt the direct read — read the skill files directly under it, the attempt itself is the reachability check — otherwise load them with `huaweicloud_retrieve_skill` when the attempted read fails or is denied (the loader needs no file access). Follow skill procedures over general knowledge.
 - **When uncertain** about API parameters, quotas, limits, or error codes — search documentation via MCP. Do not guess.
 - **Prefer IaC over direct CLI calls** for infrastructure creation (Terraform for Huawei Cloud, or CloudFormation equivalent).
 - **Never use em dashes in resource names/tags.** Use hyphens only.
@@ -64,7 +64,7 @@
 ## Skill Discovery Priority
 
 1. **`huaweicloud-core`** — always check first for routing
-2. **Service-specific skills** — load after routing via `huaweicloud_retrieve_skill`, or read them directly under the `skillRoot` the stdio `huaweicloud_list_skills` payload discloses
+2. **Service-specific skills** — attempt the direct read first: read them directly under the `skillRoot` the stdio MCP instructions / `huaweicloud_list_skills` payload disclose, or load after routing via `huaweicloud_retrieve_skill` only when the attempted read fails or is denied or the location is unknown
 3. **Knowledge cards** (`references/`) — quick facts without full skill load
 
 ## Red Flags — STOP and Re-evaluate
