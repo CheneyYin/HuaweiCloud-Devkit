@@ -1,0 +1,23 @@
+                                                                                
+ Usage: agentarts launch [OPTIONS]                                              
+                                                                                
+ Deploy agent to Huawei Cloud or run locally. (alias: deploy)                   
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --agent                  -a      <str>  Agent name (uses default if not      │
+│                                         specified)                           │
+│ --mode                   -m      <str>  Deploy mode: 'local' for local       │
+│                                         Docker, 'cloud' for Huawei Cloud SWR │
+│                                         (default)                            │
+│                                         [default: cloud]                     │
+│ --tag                    -t      <str>  Docker image tag [default: latest]   │
+│ --local-port             -l      <int>  Local port mapping (for local mode)  │
+│ --swr-org                        <str>  SWR organization (overrides config)  │
+│ --swr-repo                       <str>  SWR repository (overrides config)    │
+│ --description            -d      <str>  Agent description (overrides config) │
+│ --skip-build                            Skip build/push, use config URL to   │
+│                                         create agent directly                │
+│ --skip-ssl-verification  -k             Skip SSL certificate verification    │
+│ --help                                  Show this message and exit.          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

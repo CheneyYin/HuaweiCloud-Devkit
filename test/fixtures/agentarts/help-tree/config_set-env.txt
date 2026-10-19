@@ -1,0 +1,20 @@
+                                                                                
+ Usage: agentarts config set-env [OPTIONS] {key} {value}                        
+                                                                                
+ Set an environment variable for an agent.                                      
+                                                                                
+ If the variable already exists, its value is updated.                          
+                                                                                
+ Examples:                                                                      
+     agentarts config set-env HUAWEICLOUD_SDK_AK your-ak                        
+     agentarts config set-env MY_VAR my-value --agent myagent                   
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    key        <str>  Environment variable name [required]                  │
+│ *    value      <str>  Environment variable value [required]                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --agent  -a      <str>  Agent name                                           │
+│ --help                  Show this message and exit.                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

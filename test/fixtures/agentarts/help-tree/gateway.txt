@@ -1,0 +1,21 @@
+                                                                                
+ Usage: agentarts gateway [OPTIONS] COMMAND [ARGS]...                           
+                                                                                
+ Gateway management commands                                                    
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ create         Create a new gateway                                          │
+│ update         Update an existing gateway                                    │
+│ delete         Delete a gateway                                              │
+│ get            Get details of a gateway                                      │
+│ list           List gateways                                                 │
+│ create-target  Create a new gateway target                                   │
+│ update-target  Update an existing gateway target                             │
+│ delete-target  Delete a gateway target                                       │
+│ get-target     Get details of a gateway target                               │
+│ list-targets   List gateway targets                                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

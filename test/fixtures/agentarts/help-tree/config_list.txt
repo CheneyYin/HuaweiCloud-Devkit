@@ -1,0 +1,12 @@
+                                                                                
+ Usage: agentarts config list [OPTIONS]                                         
+                                                                                
+ List all configured agents.                                                    
+                                                                                
+ Examples:                                                                      
+ agentarts config list                                                          
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

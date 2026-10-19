@@ -1,0 +1,26 @@
+                                                                                
+ Usage: agentarts config [OPTIONS] COMMAND [ARGS]...                            
+                                                                                
+ Configuration management. (alias: configure)                                   
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --name             -n      <str>  Agent name                                 │
+│ --entrypoint       -e      <str>  Agent entrypoint (e.g., app:main)          │
+│ --region           -r      <str>  Huawei Cloud region (e.g., cn-southwest-2) │
+│ --dependency-file  -d      <str>  Path to dependency file (e.g.,             │
+│                                   requirements.txt)                          │
+│ --swr-org                  <str>  SWR organization name                      │
+│ --swr-repo                 <str>  SWR repository name                        │
+│ --help                            Show this message and exit.                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ list         List all configured agents.                                     │
+│ set-default  Set the default agent name.                                     │
+│ get          Get configuration value or agent details.                       │
+│ set          Set configuration value.                                        │
+│ remove       Remove an agent configuration.                                  │
+│ set-env      Set an environment variable for an agent.                       │
+│ remove-env   Remove an environment variable from an agent.                   │
+│ list-env     List environment variables for an agent.                        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

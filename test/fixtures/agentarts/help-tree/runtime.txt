@@ -1,0 +1,18 @@
+                                                                                
+ Usage: agentarts runtime [OPTIONS] COMMAND [ARGS]...                           
+                                                                                
+ Runtime operations (cloud only): invoke, exec-command, upload-files,           
+ download-files, start-session, stop-session                                    
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ invoke          Invoke agent with JSON payload.                              │
+│ exec-command    Execute command in runtime (cloud only).                     │
+│ upload-files    Upload files to runtime (cloud only).                        │
+│ download-files  Download files from runtime (cloud only).                    │
+│ start-session   Start runtime session (cloud only).                          │
+│ stop-session    Stop runtime session (cloud only).                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -1,0 +1,35 @@
+                                                                                
+ Usage: agentarts init [OPTIONS]                                                
+                                                                                
+ Initialize a new AgentArts project.                                            
+                                                                                
+ Creates a complete project structure with:                                     
+ - .agentarts_config.yaml: Configuration file for deployment                    
+ - agent.py: Agent implementation based on selected template                    
+ - Dockerfile: Docker build file for containerization                           
+ - requirements.txt: Dependencies including SDK and framework packages          
+                                                                                
+ After initialization, you can directly deploy using 'agentarts deploy'.        
+                                                                                
+ Examples:                                                                      
+     agentarts init                                                             
+     agentarts init -n myagent                                                  
+     agentarts init -n myagent -t langgraph                                     
+     agentarts init -n myagent -t langchain -r cn-southwest-2                   
+     agentarts init -n myagent --swr-org my-org --swr-repo my-repo              
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --name      -n      <str>                       Project name                 │
+│ --template  -t      <basic|langgraph|langchain  Project template (basic,     │
+│                     |google-adk>                langgraph, langchain,        │
+│                                                 google-adk)                  │
+│ --path      -p      <str>                       Project path [default: .]    │
+│ --region    -r      <str>                       Huawei Cloud region          │
+│ --swr-org           <str>                       SWR organization             │
+│                                                 (auto-generated if not       │
+│                                                 specified)                   │
+│ --swr-repo          <str>                       SWR repository (default:     │
+│                                                 {name})                      │
+│ --help                                          Show this message and exit.  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

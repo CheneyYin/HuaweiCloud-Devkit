@@ -1,0 +1,15 @@
+                                                                                
+ Usage: agentarts memory install [OPTIONS] [target]                             
+                                                                                
+ Install the AgentArts Memory plugin for a supported AI agent.                  
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   target      <str>  Platform (hermes, claude, codex, opencode, openclaw).   │
+│                      Omit to detect.                                         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --global            Install to user-level config.                            │
+│ --yes     -y        Auto-confirm all prompts.                                │
+│ --help              Show this message and exit.                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

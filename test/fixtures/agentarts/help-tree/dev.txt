@@ -1,0 +1,23 @@
+                                                                                
+ Usage: agentarts dev [OPTIONS]                                                 
+                                                                                
+ Run local development server.                                                  
+                                                                                
+ Environment variables can be set via --env option or in                        
+ .agentarts_config.yaml.                                                        
+ Command-line --env takes precedence over config file.                          
+                                                                                
+ Examples:                                                                      
+     agentarts dev --port 8080 --reload                                         
+     agentarts dev --env OPENAI_API_KEY=sk-xxx --env OPENAI_MODEL_NAME=gpt-4o   
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --port    -p      <int>  Server port [default: 8080]                         │
+│ --host    -h      <str>  Server host [default: 0.0.0.0]                      │
+│ --reload                 Enable auto-reload                                  │
+│ --config  -c      <str>  Configuration file path                             │
+│ --env     -e      <str>  Environment variables (KEY=VALUE). Can be used      │
+│                          multiple times.                                     │
+│ --help                   Show this message and exit.                         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

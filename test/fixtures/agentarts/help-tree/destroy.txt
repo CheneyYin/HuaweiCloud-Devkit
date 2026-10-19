@@ -1,0 +1,14 @@
+                                                                                
+ Usage: agentarts destroy [OPTIONS]                                             
+                                                                                
+ Destroy agent from Huawei Cloud.                                               
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --agent                  -a      <str>  Agent name to destroy (uses default  │
+│                                         if not specified)                    │
+│ --region                 -r      <str>  Huawei Cloud region                  │
+│ --yes                    -y             Skip confirmation prompt             │
+│ --skip-ssl-verification  -k             Skip SSL certificate verification    │
+│ --help                                  Show this message and exit.          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
