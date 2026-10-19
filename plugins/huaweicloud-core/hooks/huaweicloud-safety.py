@@ -426,9 +426,24 @@ def evaluate(tool_name, tool_input):
         # across candidates and segments, matching the Node layer's
         # deny-first candidate merge.
         for candidate in candidates:
-            if not HCLOUD_RE.search(candidate):
-                continue
             for segment in re.split(r"\|\||&&|;|\||&|\r?\n", candidate):
+                segment = segment.strip()
+                if not segment:
+                    continue
+                # `… | xargs/parallel hcloud` (segment ends with the keyword,
+                # no in-text args): the arguments arrive on stdin and cannot
+                # be classified — fail-safe deny, mirroring the Node layer's
+                # bare-allow guard. Quote-split spellings covered via the
+                # de-quoted copy.
+                dequoted = re.sub(r"['\"]", "", segment)
+                if (
+                    re.search(r"\b(?:g)?(?:xargs|parallel)\b", dequoted, re.I)
+                    and re.search(r"(?:^|\s)hcloud(?:\.exe)?\s*$", dequoted, re.I)
+                ):
+                    return (
+                        "hcloud invoked via xargs/parallel (arguments arrive on stdin and cannot be classified); "
+                        "run it in your own terminal or use the approved tooling."
+                    )
                 if HCLOUD_RE.search(segment) and WRITE_OPERATION_RE.search(segment) and not READ_OPERATION_RE.search(segment):
                     return "unapproved Huawei Cloud write operations must be planned first and explicitly approved by the user."
     if tool_name in ("Bash", "terminal"):

@@ -994,3 +994,26 @@ test('padded-separator anchors and path-final hcloud operands restore pre-window
     assert.equal(result.decision, 'allow', cmd);
   }
 });
+
+test('stdin-fed bare hcloud and operator-chained writes deny (sweep + xargs guard)', () => {
+  const denied = [
+    'echo ECS DeleteServer x | xargs hcloud',
+    'echo ECS DeleteServer x | parallel hcloud',
+    'echo ECS DeleteServer x | xargs /usr/local/bin/hcloud',
+    'echo ECS DeleteServer x | gxargs hcloud',
+    'echo ECS DeleteServer x | xa"rgs hcloud',
+    'hcloud ECS ListServers & hcloud ECS DeleteServer x',
+    'hcloud ECS ListServers\nhcloud ECS DeleteServer x',
+    'echo ' + ' '.repeat(300) + 'hcloud & hcloud ECS DeleteServer x',
+    'echo ' + ' '.repeat(300) + 'hcloud\nhcloud ECS DeleteServer x',
+    'echo see docs/hcloud & hcloud ECS DeleteServer x',
+  ];
+  for (const cmd of denied) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd.slice(0, 50));
+  }
+  // Documented deny-direction FP: path-terminated window + a single space.
+  assert.equal(classifyTextCommand('echo see docs/ hcloud ECS DeleteServer guide').decision, 'deny');
+  // Pipelines into non-hcloud consumers stay allowed.
+  assert.equal(classifyTextCommand('hcloud ECS ListServers | jq .').decision, 'allow');
+});

@@ -69,7 +69,7 @@ test('node hook allows safe commands with empty stdout', () => {
 
 test('node hook fails safe when safety/policy.json is missing or corrupt', () => {
   const pluginRoot = join(process.cwd(), 'plugins', 'huaweicloud-core');
-  for (const scenario of ['missing', 'corrupt', 'empty', 'emptylist', 'wrongtype']) {
+  for (const scenario of ['missing', 'corrupt', 'empty', 'emptylist', 'wrongtype', 'arraytype']) {
     const tmp = mkdtempSync(join(tmpdir(), 'hw-hook-failsafe-'));
     const dest = join(tmp, 'huaweicloud-core');
     cpSync(pluginRoot, dest, { recursive: true, filter: (src) => !src.startsWith(join(pluginRoot, 'telemetry')) });
@@ -96,6 +96,16 @@ test('node hook fails safe when safety/policy.json is missing or corrupt', () =>
           blockedSecretOperations: ['ShowSecret'],
           writeOperationPrefixes: ['Delete'],
           agentartsCommandPolicy: 'approved',
+        }),
+      );
+    } else if (scenario === 'arraytype') {
+      writeFileSync(
+        policyDest,
+        JSON.stringify({
+          credentialFilePatterns: ['\\.hcloud'],
+          blockedSecretOperations: ['ShowSecret'],
+          writeOperationPrefixes: ['Delete'],
+          agentartsCommandPolicy: ['approved'],
         }),
       );
     } else {

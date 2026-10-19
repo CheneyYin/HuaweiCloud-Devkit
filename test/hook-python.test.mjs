@@ -438,7 +438,7 @@ test('python hook agentarts locator is pinned linear in isolation', () => {
 
 test('python hook fails safe when safety/policy.json is missing or corrupt', () => {
   const pluginRoot = join(process.cwd(), 'plugins', 'huaweicloud-core');
-  for (const scenario of ['missing', 'corrupt', 'empty', 'emptylist', 'wrongtype']) {
+  for (const scenario of ['missing', 'corrupt', 'empty', 'emptylist', 'wrongtype', 'arraytype']) {
     const tmp = mkdtempSync(join(tmpdir(), 'hw-pyhook-failsafe-'));
     const dest = join(tmp, 'huaweicloud-core');
     cpSync(pluginRoot, dest, { recursive: true, filter: (src) => !src.startsWith(join(pluginRoot, 'telemetry')) });
@@ -465,6 +465,16 @@ test('python hook fails safe when safety/policy.json is missing or corrupt', () 
           blockedSecretOperations: ['ShowSecret'],
           writeOperationPrefixes: ['Delete'],
           agentartsCommandPolicy: 'approved',
+        }),
+      );
+    } else if (scenario === 'arraytype') {
+      writeFileSync(
+        policyDest,
+        JSON.stringify({
+          credentialFilePatterns: ['\\.hcloud'],
+          blockedSecretOperations: ['ShowSecret'],
+          writeOperationPrefixes: ['Delete'],
+          agentartsCommandPolicy: ['approved'],
         }),
       );
     } else {
@@ -527,4 +537,22 @@ test('python hook keeps the specific credential reason under a corrupt policy', 
   assert.equal(output.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(output.hookSpecificOutput.permissionDecisionReason, /dumping cloud credential/i);
   assert.doesNotMatch(output.hookSpecificOutput.permissionDecisionReason, /failed to load/i);
+});
+
+test('python hook denies stdin-fed hcloud, padded-decoy chains, and padded separators (agentarts)', () => {
+  for (const command of [
+    'echo ECS DeleteServer x | xargs hcloud',
+    'echo ECS DeleteServer x | parallel hcloud',
+    'echo ECS DeleteServer x | gxargs hcloud',
+    'hcloud ECS ListServers & hcloud ECS DeleteServer x',
+    'echo ' + ' '.repeat(300) + 'hcloud & hcloud ECS DeleteServer x',
+    'echo hi; ' + ' '.repeat(300) + 'agentarts launch',
+    'sudo -u root ' + ' '.repeat(300) + 'agentarts destroy',
+  ]) {
+    const result = runEvaluate('Bash', { command });
+    if (pythonUnavailable(result)) return;
+    assert.equal(result.status, 0, command.slice(0, 50));
+    const reason = JSON.parse(result.stdout);
+    assert.equal(typeof reason, 'string', `${command.slice(0, 50)} should be blocked`);
+  }
 });

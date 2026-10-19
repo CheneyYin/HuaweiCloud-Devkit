@@ -227,6 +227,21 @@ export function classifyHcloudArgs(args, options = {}) {
   const joined = normalizedArgs.join(' ');
 
   if (!normalizedArgs.length) {
+    // `… | xargs/parallel hcloud` feeds the arguments on stdin — they cannot
+    // be classified, so fail-safe deny (the same guard the agentarts
+    // bare-allow carries). Without it the bare-allow re-opened the write
+    // floor for stdin-fed invocations.
+    if (options.segment && isStdinFedSegment(options.segment)) {
+      return {
+        decision: 'deny',
+        risk: 'write',
+        reason:
+          'hcloud invoked via xargs/parallel (arguments arrive on stdin and cannot be classified); run it in your own terminal or use the approved tooling (huaweicloud_run_approved_command).',
+        service,
+        operation,
+        args: normalizedArgs,
+      };
+    }
     // Bare `hcloud` (and path-final references like `ls /usr/local/bin/hcloud`
     // located by the path-prefix window) print help or probe the binary —
     // local metadata, mirroring the bare-agentarts allow. The old deny
@@ -579,9 +594,12 @@ function findKeywordCommandPosition(hay, kwRegex) {
     // The trim restores the pre-window unbounded `\s*` anchor semantics for
     // padded separators (`echo hi; <300 spaces> hcloud …`): a pure-whitespace
     // window means the keyword is still preceded by a whitespace run from a
-    // command position, whatever the anchor char was. The FP cost is an
-    // absurd echo-with-giant-whitespace-before-a-trailing-mention —
-    // deny-direction, documented.
+    // command position, whatever the anchor char was. Deny-direction FP
+    // surface (documented): pure-whitespace windows ≥256 chars
+    // (`echo <300 spaces> hcloud …`), and — because the path alternative
+    // cannot consume trailing whitespace — path-terminated windows followed
+    // by ANY trailing whitespace, a single space suffices
+    // (`echo see docs/ hcloud ECS DeleteServer guide`).
     if (AGENTARTS_PREFIX_SUFFIX_RE.test(window) || AGENTARTS_PREFIX_SUFFIX_RE.test(window.replace(/\s+$/, ''))) {
       return match.index;
     }
@@ -641,6 +659,14 @@ function extractAgentartsSubcommand(text) {
 // hook, and the approval wrapper consume one source. Tier semantics for the
 // hook layer: local/readonly allow, approved deny-for-Bash (user terminal or
 // approved tooling), blocked deny outright (deferred capability).
+// A segment whose command resolves to a bare keyword fed by xargs/parallel:
+// the arguments arrive on stdin and cannot be classified. Matched on the raw
+// and de-quoted segment copies (g-prefixed and quote-split spellings too).
+function isStdinFedSegment(segment) {
+  const re = /\b(?:g)?(?:xargs|parallel)\b/i;
+  return re.test(segment) || re.test(segment.replace(/['"]/g, ''));
+}
+
 export function classifyAgentartsArgs(tokens, options = {}) {
   const policy = options.policy || DEFAULT_POLICY;
   const commandPolicy = policy.agentartsCommandPolicy || {};
@@ -681,12 +707,7 @@ export function classifyAgentartsArgs(tokens, options = {}) {
     args.some((token) => /^(--help|-h)$/.test(token)) ||
     args.slice(0, i).some((token) => /^(--version|-v)$/.test(token))
   ) {
-    if (
-      !group &&
-      options.segment &&
-      (/\b(?:g)?(?:xargs|parallel)\b/i.test(options.segment) ||
-        /\b(?:g)?(?:xargs|parallel)\b/i.test(options.segment.replace(/['"]/g, '')))
-    ) {
+    if (!group && options.segment && isStdinFedSegment(options.segment)) {
       // `… | xargs [-r/-n1/…] agentarts` (any spelling, incl. path or
       // $AGENTARTS_BIN) feeds the subcommand on stdin — unclassifiable and
       // therefore fail-safe deny rather than bare-help allow.
@@ -766,10 +787,11 @@ export function classifyAgentartsArgs(tokens, options = {}) {
 // newlines can chain a write after a readonly agentarts command
 // (`agentarts memory list && agentarts launch`), which a single
 // first-keyword classification misses. Splits on a SUPERSET of the
-// findHcloudCommandSegments operator set (newlines and single `&` added —
-// the hcloud sweep still lacks both, a documented pre-existing residual)
-// and classifies every segment that invokes agentarts, merging to the most
-// severe decision — the hcloud segment-sweep contract.
+// findHcloudCommandSegments operator set (newlines and single `&` added;
+// the args-level sweep still lacks both — a documented pre-existing
+// residual — but the text-level classifyHcloudText sweep below covers them
+// for raw-text classification) and classifies every segment that invokes
+// agentarts, merging to the most severe decision.
 function classifyAgentartsText(text, options = {}) {
   const segments = String(text || '')
     .split(/(?:\|\||&&|;|\||&|\r?\n)/)
@@ -780,6 +802,33 @@ function classifyAgentartsText(text, options = {}) {
     const subcommand = extractAgentartsSubcommand(segment);
     if (!subcommand) continue;
     const decision = classifyAgentartsArgs(splitSimpleCommand(subcommand), {
+      ...options,
+      segment,
+    });
+    if (decision.decision === 'deny') return decision;
+    if (!merged) merged = decision;
+  }
+  return merged;
+}
+
+// Text-level segment sweep for the hcloud gate (the same contract): splits
+// on ||, &&, ;, |, single &, and newlines, then classifies every segment
+// that invokes hcloud, merging deny-first. This closes the shapes the
+// args-level findHcloudCommandSegments sweep cannot see from the TEXT path —
+// a write chained after a readonly segment via & or a newline, and the
+// padded-decoy shape where the FIRST located keyword is a whitespace-echo
+// false positive (`echo <300 spaces> hcloud & hcloud ECS DeleteServer …`)
+// and the real write would be swallowed into the first extraction.
+function classifyHcloudText(text, options = {}) {
+  const segments = String(text || '')
+    .split(/(?:\|\||&&|;|\||&|\r?\n)/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  let merged = null;
+  for (const segment of segments) {
+    const subcommand = extractHcloudSubcommand(segment);
+    if (!subcommand) continue;
+    const decision = classifyHcloudArgs(splitSimpleCommand(subcommand), {
       ...options,
       segment,
     });
@@ -856,7 +905,11 @@ export function classifyTextCommand(command, options = {}) {
   // hcloud command detection — extract the subcommand starting from the hcloud
   // keyword so prompt-injection prefixes ("Ignore previous instructions and
   // hcloud …") and shell wrappers ("bash -c \"hcloud …\"") are classified
-  // correctly (#758 D4-16 + D4-11). Check all candidates (original + inners).
+  // correctly (#758 D4-16 + D4-11). Check all candidates (original + inners),
+  // each through a text-level segment sweep (classifyHcloudText) so a write
+  // chained after a readonly segment via && ; | & or a newline is caught —
+  // including the padded-decoy shape where the FIRST located keyword is a
+  // whitespace-echo FP and the real write follows an operator.
   // Non-deny decisions are held pending instead of returned immediately: a
   // readonly allow from the first matching candidate must not shadow a deny
   // in a later candidate or in the agentarts sweep below (e.g.
@@ -865,13 +918,12 @@ export function classifyTextCommand(command, options = {}) {
   // mirroring the Python hook's loop semantics.
   let hcloudPending = null;
   for (const candidate of candidates) {
-    const hcloudSubcommand = extractHcloudSubcommand(candidate);
-    if (hcloudSubcommand) {
-      const decision = classifyHcloudArgs(splitSimpleCommand(hcloudSubcommand), { ...options, rawCommand: text });
-      if (decision.decision === 'deny') {
-        return decision;
+    const hcloudDecision = classifyHcloudText(candidate, { ...options, rawCommand: text });
+    if (hcloudDecision) {
+      if (hcloudDecision.decision === 'deny') {
+        return hcloudDecision;
       }
-      hcloudPending = hcloudPending || decision;
+      hcloudPending = hcloudPending || hcloudDecision;
     }
   }
 
