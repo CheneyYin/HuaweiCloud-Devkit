@@ -505,9 +505,9 @@ test('web/static-site deployment intent offers target options with sandbox first
 
 test('core meta-skills teach the skillRoot direct read as the default with retrieve_skill as the fallback', () => {
   // The dual-path contract: list_skills discloses the tree's location on
-  // stdio sessions, and both routing skills teach the direct read as the
-  // default with retrieve_skill as the fallback for files the session's
-  // tools cannot reach. The references/ assertion is
+  // stdio sessions, and both routing skills teach the attempt-first
+  // direct read as the default with retrieve_skill as the fallback when
+  // the attempted read fails or is denied. The references/ assertion is
   // co-occurrence-anchored (same line as skillRoot) so it pins the teaching
   // line, not the pre-existing step-2 "Read references/{sub-skill-id}.md".
   // The order pins anchor on the "otherwise" fallback connector (not a
@@ -555,35 +555,53 @@ test('agent rules file carries the skillRoot direct-read teaching', () => {
   assert.match(rules, /skillRoot/, 'the agent rules file must teach the skillRoot direct-read path');
 });
 
-test('the reactive fallback teaching survives copy passes on every load-path surface', () => {
+test('the action-first load teaching survives copy passes on every load-path surface', () => {
   // One presence pin per clause-carrying surface outside instructionsFor
   // and the retrieve_skill description (both pinned in their own tests):
   // the two routing skills' bodies, the rules file, the doctor command,
   // the list_skills description, and the hermes manifest — the two extra
-  // pins close the drift window the a60ab5b guard family left open. The
-  // clause is the reactive permission fallback (a direct read fails or is
-  // denied -> load via retrieve_skill) — a copy pass reverting it in any
-  // one file would keep every other gate green, the exact
-  // one-file-at-a-time drift mode the telemetry-hooks sweep documented.
+  // pins close the drift window the a60ab5b guard family left open. Two
+  // vocabularies pinned per file: the attempt-first imperative (attempt
+  // the direct read — no reachability pre-check) and the reactive
+  // fallback (fails or is denied -> load via retrieve_skill) — a copy
+  // pass reverting either in any one file would keep every other gate
+  // green, the exact one-file-at-a-time drift mode the telemetry-hooks
+  // sweep documented.
+  const attemptFirst = /attempt the direct read/;
   const reactive = /fails or is denied/;
   const core = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-core', 'SKILL.md'), 'utf8');
+  assert.match(core, attemptFirst, 'huaweicloud-core must teach the attempt-first imperative');
   assert.match(core, reactive, 'huaweicloud-core must teach the reactive permission fallback');
   const discovery = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-capability-discovery', 'SKILL.md'), 'utf8');
+  assert.match(discovery, attemptFirst, 'capability-discovery must teach the attempt-first imperative');
   assert.match(discovery, reactive, 'capability-discovery must teach the reactive permission fallback');
   const rules = readFileSync(join(root, 'rules', 'huawei-agent-rules.mdc'), 'utf8');
+  assert.match(rules, attemptFirst, 'the agent rules file must teach the attempt-first imperative');
   assert.match(rules, reactive, 'the agent rules file must teach the reactive permission fallback');
   const doctor = readFileSync(join(root, 'integrations', 'opencode', 'commands', 'huaweicloud-doctor.md'), 'utf8');
+  assert.match(doctor, attemptFirst, 'the doctor command must teach the attempt-first imperative');
   assert.match(doctor, reactive, 'the doctor command must teach the reactive permission fallback');
   const tools = readSource(join('src', 'tools.ts'));
   const listSkillsDescription = TOOL_DEFINITIONS.find((tool) => tool.name === 'huaweicloud_list_skills');
   assert.ok(listSkillsDescription, 'the list_skills definition must exist');
   assert.match(
     listSkillsDescription.description,
+    attemptFirst,
+    'the list_skills description must teach the attempt-first imperative',
+  );
+  assert.match(
+    listSkillsDescription.description,
     reactive,
     'the list_skills description must teach the reactive permission fallback',
   );
   const manifest = readFileSync(join(root, 'integrations', 'hermes', 'manifest.yaml'), 'utf8');
+  assert.match(manifest, attemptFirst, 'the hermes manifest must teach the attempt-first imperative');
   assert.match(manifest, reactive, 'the hermes manifest must teach the reactive permission fallback');
+  assert.doesNotMatch(
+    manifest,
+    /file tools reach/,
+    'the hermes manifest must not carry the old conditional in ANY section (the description field and post_install block are one file)',
+  );
   assert.match(tools, /fails or is denied/, 'the source carries the trigger vocabulary the pins grep for');
 });
 
@@ -648,13 +666,17 @@ test('server instructions carry the three-form skillRoot disclosure contract', (
   );
   assert.match(bare, /huawei-\* service skill absent/, 'the bare form keeps the scoped absence rule');
 
-  // The reactive permission fallback: both stdio forms carry it (when a
-  // direct read of the tree fails or is denied, load the skill via
-  // retrieve_skill, which needs no file access, instead of repeatedly
-  // requesting — the universal reaction, since the agent cannot choose an
-  // approval prompt's granularity and a chat-level ask binds nothing),
-  // the remote form does not (that face reads no tree; its own loader
-  // sentence keeps the fallback framing).
+  // The action-first load policy: both stdio forms carry it (attempt the
+  // direct read first — the attempt itself is the reachability check,
+  // never a pre-check, and never retrieve_skill before the attempt; only
+  // when the read fails or is denied, load via retrieve_skill, which
+  // needs no file access). Measured failure this guards against (operator
+  // test, 2026-10-19): the previous conditional invitation ("when your
+  // file tools reach the tree") made the model pre-evaluate reachability
+  // pessimistically and jump straight to the guaranteed MCP loader
+  // without attempting the read. The remote form does not carry it (that
+  // face reads no tree; its own loader sentence keeps the fallback
+  // framing).
   const remote = instructionsFor(true);
   for (const [label, form] of [
     ['full', full],
@@ -662,11 +684,36 @@ test('server instructions carry the three-form skillRoot disclosure contract', (
   ] as const) {
     assert.match(
       form,
+      /attempt the direct read first/,
+      `the ${label} stdio form must teach the attempt-first imperative`,
+    );
+    assert.match(
+      form,
+      /the attempt itself is the check/,
+      `the ${label} stdio form must teach that attempting is the reachability check`,
+    );
+    assert.match(
+      form,
+      /do not call huaweicloud_retrieve_skill before attempting/,
+      `the ${label} stdio form must forbid the loader before the attempt`,
+    );
+    assert.match(
+      form,
       /If a direct read of the tree fails or is denied, load the skill with huaweicloud_retrieve_skill instead/,
       `the ${label} stdio form must teach the reactive fallback sentence verbatim`,
     );
     assert.match(form, /it needs no file access/, `the ${label} stdio form must state the loader needs no file access`);
+    assert.doesNotMatch(
+      form,
+      /When your file tools reach the tree/,
+      `the ${label} stdio form must not carry the evaluative reachability conditional`,
+    );
   }
+  assert.doesNotMatch(
+    remote,
+    /attempt the direct read first/,
+    'the remote form reads no tree and must not teach the attempt-first imperative',
+  );
   assert.doesNotMatch(
     remote,
     /fails or is denied/,
@@ -696,7 +743,17 @@ test('retrieve_skill description frames the fallback, not the default', () => {
   assert.match(retrieve.description, /skillRoot so the next skill can be a direct read/);
   assert.match(
     retrieve.description,
-    /Use this tool only when the tree is out of reach, its location is unknown, or a direct read fails or is denied/,
+    /attempt the direct read first/,
+    'the description must open the load procedure with the attempt-first imperative',
+  );
+  assert.match(
+    retrieve.description,
+    /do not call this tool before the read is attempted/,
+    'the description must forbid its own use before the attempt (the measured failure mode)',
+  );
+  assert.match(
+    retrieve.description,
+    /Call it only after a direct read attempt fails or is denied, or when the tree location is unknown/,
   );
   assert.match(
     retrieve.description,

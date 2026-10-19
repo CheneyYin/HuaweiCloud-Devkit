@@ -215,9 +215,10 @@ export const coreCases: E2eCase[] = [
     // Free-choice disclosure, default posture: the prompt names NO tool and
     // NO skill, so the session's own teaching must carry the load path. The
     // stdio MCP instructions state the tree location at initialize (the
-    // disclosure event below proves emission), so the taught default is a
-    // direct read or a catalog call — never the retrieve_skill fallback,
-    // which exists for files the session's tools cannot reach. This is the
+    // disclosure event below proves emission), so the taught default is the
+    // attempt-first direct read or a catalog call — never the
+    // retrieve_skill fallback, which exists for attempted reads that fail
+    // or are denied. This is the
     // regression guard for the observed free-choice behavior (agents
     // jumping straight to retrieve_skill); core-retrieve-skill-guides-cli
     // beside it tests instruction-following on the fallback path and stays

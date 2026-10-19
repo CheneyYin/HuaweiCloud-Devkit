@@ -164,6 +164,16 @@ test('MCP server initializes, lists tools, and plans CLI commands', async () => 
     assert.match(instructions, /huaweicloud_packs_configure/, 'stdio instructions must name the session-toggle tool');
     assert.match(
       instructions,
+      /To load a skill, attempt the direct read first/,
+      'stdio instructions must lead the load procedure with the attempt-first imperative',
+    );
+    assert.doesNotMatch(
+      instructions,
+      /When your file tools reach the tree/,
+      'stdio instructions must not carry the evaluative reachability conditional',
+    );
+    assert.match(
+      instructions,
       /If a direct read of the tree fails or is denied, load the skill with huaweicloud_retrieve_skill instead/,
       'stdio instructions must teach the reactive fallback sentence',
     );

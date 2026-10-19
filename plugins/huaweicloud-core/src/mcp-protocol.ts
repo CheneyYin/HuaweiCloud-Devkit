@@ -32,10 +32,10 @@ const pkgVersion = readInstalledVersion() || '0.0.0';
 //   absolute location (SKILLS_ROOT, resolved at runtime — never baked at
 //   build time) is stated outright, so the direct read needs no catalog
 //   detour; the enablement caveat deliberately PRECEDES the read
-//   invitation (a path never implies "on disk == usable": trimmed packs'
-//   files are reachable but gated), the invitation is conditioned on the
-//   skill being enabled, and the packs_configure consent sentence names a
-//   tool this face actually registers.
+//   instruction (a path never implies "on disk == usable": trimmed packs'
+//   files are reachable but gated), the load instruction is the
+//   unconditional attempt-first imperative, and the packs_configure
+//   consent sentence names a tool this face actually registers.
 // - stdio without runtimePacks (embedded/test constructions): the same
 //   location and catalog teaching, but the operator-posture enablement
 //   line — never the toggle tool's name, never a runtime-mutability claim
@@ -53,12 +53,21 @@ const pkgVersion = readInstalledVersion() || '0.0.0';
 // The factory refuses the contradictory remoteSurface+runtimePacks
 // combination, so no form can name a tool its face withholds while its
 // payloads publish host paths — the pairs stay legal by construction.
-// The stdio forms also teach the reactive permission fallback: when a
-// direct read of the tree fails or is denied, the agent loads the skill
-// via retrieve_skill (which needs no file access) instead of repeatedly
-// requesting — the universal reaction that holds on every harness, since
-// the agent cannot choose an approval prompt's granularity and a
-// chat-level approval request binds nothing in the permission system. Installer-side relief (OpenCode only, the one
+// The stdio forms teach the action-first load policy: attempt the direct
+// read FIRST — the attempt itself is the reachability check — and only
+// when the read fails or is denied, load the skill via retrieve_skill
+// (which needs no file access) instead of repeatedly requesting. Measured
+// failure this closes (operator test, 2026-10-19): a conditional
+// invitation ("when your file tools reach the tree, read directly") made
+// the model pre-evaluate reachability pessimistically and jump straight
+// to the guaranteed MCP loader without ever attempting the read — the
+// model's own post-hoc reflection named the gap ("did not try read
+// <skillRoot>/<name>/SKILL.md first"). The imperative sequence removes
+// the evaluation step: the read is attempted unconditionally, and failure
+// IS the fallback signal. This holds on every harness — with the
+// installer's permission seam the attempt succeeds silently; on a gating
+// harness the attempt triggers the ask and a denial is the signal; on
+// ungated harnesses it just succeeds. Installer-side relief (OpenCode only, the one
 // harness measured where the prompt cannot express directory-scope
 // grants): setup-cli.ts writes a persistent permission seam —
 // external_directory allow + edit deny over the tree globs
@@ -87,8 +96,8 @@ export function instructionsFor(remote: boolean, runtimePacks = false): string {
   return (
     `Skill loading: the skills tree lives at ${SKILLS_ROOT} (stdio session). ` +
     enablement +
-    'When your file tools reach the tree and the skill is enabled, read ' +
-    `${SKILLS_ROOT}/<name>/SKILL.md and the references/ files directly, untruncated and selective. ` +
+    `To load a skill, attempt the direct read first: read ${SKILLS_ROOT}/<name>/SKILL.md and the references/ files you need with your file tools — untruncated and selective. ` +
+    'Do not pre-check reachability and do not call huaweicloud_retrieve_skill before attempting — the attempt itself is the check. ' +
     'If a direct read of the tree fails or is denied, load the skill with huaweicloud_retrieve_skill instead — it needs no file access. ' +
     'Route Huawei Cloud tasks through the huaweicloud-core skill; browse packs with huaweicloud_list_packs.'
   );
