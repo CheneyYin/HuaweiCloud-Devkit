@@ -8,7 +8,24 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const policyPath = join(__dirname, '..', 'safety', 'policy.json');
 
 export function loadPolicy() {
-  return JSON.parse(readFileSync(policyPath, 'utf8'));
+  const policy = JSON.parse(readFileSync(policyPath, 'utf8'));
+  // A parseable-but-degraded policy must fail loud: missing keys, empty
+  // lists, or a wrong-typed agentartsCommandPolicy would silently disable
+  // gates (or crash mid-classification) while the module still loads. The
+  // wired hook converts the throw into a fail-safe deny.
+  for (const key of ['credentialFilePatterns', 'blockedSecretOperations', 'writeOperationPrefixes']) {
+    if (!Array.isArray(policy[key]) || policy[key].length === 0) {
+      throw new Error(`safety policy key ${key} must be a non-empty array`);
+    }
+  }
+  if (
+    typeof policy.agentartsCommandPolicy !== 'object' ||
+    policy.agentartsCommandPolicy === null ||
+    Object.keys(policy.agentartsCommandPolicy).length === 0
+  ) {
+    throw new Error('safety policy key agentartsCommandPolicy must be a non-empty object');
+  }
+  return policy;
 }
 
 const DEFAULT_POLICY = loadPolicy();
@@ -412,8 +429,9 @@ function splitSimpleCommand(command) {
 // unbounded runs made every `$(`/backtick/quote start a quadratic
 // backtracking position, and a ~40-80KB padded command killed the hook
 // before any gate could deny — a dead hook is a non-blocking error, i.e.
-// allow. A substitution payload longer than the bound is left unextracted
-// (documented residual, same class as the locator's 256-char window).
+// allow. A quoted payload longer than 1024 or a substitution payload longer
+// than 512 is left unextracted (documented residual, same class as the
+// locator's 256-char window).
 export function extractInnerCommand(text, depth = 0) {
   if (depth > 3) return [];
   const t = String(text || '');
@@ -483,17 +501,16 @@ export function extractInnerCommand(text, depth = 0) {
   return results;
 }
 
-// Find the hcloud keyword in a command position (string start, after shell
-// separators ; | &, after command-substitution openings $( `, or after sudo).
-// Excludes hcloud mentioned in natural-language/echo text to avoid false-
-// positive deny/write on documentation text (#758 D4-11 P1 fix). Candidates
-// from extractInnerCommand (shell wrappers) start with hcloud directly so
-// ^hcloud still catches wrapped commands and prompt-injections using
-// separators. sudo\s+ preserves the dev-baseline behaviour where
-// `sudo hcloud …` is treated as a real command, not documentation (#760 P0).
-// Keyword-locator pattern shared by the raw-text match and the quote-stripped
-// retry in extractHcloudSubcommand (`im` flag, no `g` — no lastIndex state).
-const HCLOUD_KEYWORD_PATTERN = /(?:^|[;|&]\s*|\$\(\s*|`\s*|sudo\s+|\r?\n\s*)(hcloud(?:\.exe)?\b)/im;
+// hcloud keyword, located with the same linear no-star scan + bounded
+// suffix-window prefix test as the agentarts keyword (see the performance
+// contract below). Excludes hcloud mentioned in natural-language/echo text
+// (#758 D4-11); candidates from extractInnerCommand start with hcloud
+// directly so the empty window (^) catches wrapped commands. `sudo hcloud …`
+// stays a real command (#760 P0). The prefix window ALSO catches
+// launcher/assignment/path-prefixed writes (`FOO=1 hcloud …`, `nice hcloud
+// …`, `env hcloud …`) that the pre-window anchored pattern missed —
+// one-word prefixes must not bypass the write floor on the wired layer.
+const HCLOUD_KW_PATTERN = /(hcloud(?:\.exe)?\b)/gi;
 
 // AgentArts CLI (agentarts-sdk) keyword locator — command-position semantics
 // aligned with the hcloud pattern, extended for invocation shapes the
@@ -538,8 +555,8 @@ const AGENTARTS_PREFIX_SUFFIX_RE = new RegExp(
 );
 const AGENTARTS_WINDOW = 256;
 
-function findAgentartsKeyword(hay) {
-  for (const match of hay.matchAll(AGENTARTS_KW_PATTERN)) {
+function findKeywordCommandPosition(hay, kwRegex) {
+  for (const match of hay.matchAll(kwRegex)) {
     const window = hay.slice(Math.max(0, match.index - AGENTARTS_WINDOW), match.index);
     if (AGENTARTS_PREFIX_SUFFIX_RE.test(window)) {
       return match.index;
@@ -548,33 +565,33 @@ function findAgentartsKeyword(hay) {
   return -1;
 }
 
+function findAgentartsKeyword(hay) {
+  return findKeywordCommandPosition(hay, AGENTARTS_KW_PATTERN);
+}
+
 function extractHcloudSubcommand(text) {
   const t = String(text || '');
-  // `m` flag + newline in the separator class: a hcloud command at the start
-  // of any line (not just the first) must be located and fully classified —
-  // previously `echo hello\nhcloud ECS DeleteServer …` fell through as
-  // not_huaweicloud allow (#927).
-  const match = HCLOUD_KEYWORD_PATTERN.exec(t);
-  if (match) {
-    const hcloudIndex = match.index + match[0].length - match[1].length;
-    return t.slice(hcloudIndex);
+  // A hcloud command at the start of any line must be located and fully
+  // classified — previously `echo hello\nhcloud ECS DeleteServer …` fell
+  // through as not_huaweicloud allow (#927); the window's \r?\n branch
+  // covers line starts.
+  const direct = findKeywordCommandPosition(t, HCLOUD_KW_PATTERN);
+  if (direct !== -1) {
+    return t.slice(direct);
   }
   // Keyword-embedded quotes fallback (#927 B1): POSIX shells strip quotes
   // before execution, so `hc'loud ECS DeleteServer …` runs `hcloud …` — but
-  // the literal match above never sees the keyword through the quotes and the
-  // command fell through as not_huaweicloud allow (its de-quoted form is
-  // DENY). Retry on a quote-stripped COPY used only for hcloud keyword
-  // location; the returned subcommand is the de-quoted text, matching the
-  // de-quote semantics splitSimpleCommand already applies to tokens.
-  // Credential/env-var checks in classifyTextCommand still run on the raw
-  // text — the two paths stay independent — and natural-language mentions
-  // ("see hcloud docs", "echo hcloud is a CLI") match the same anchored
-  // pattern, so no new false positives are introduced.
+  // the literal match never sees the keyword through the quotes. Retry on a
+  // quote-stripped COPY used only for keyword location; the returned
+  // subcommand is the de-quoted text, matching the de-quote semantics
+  // splitSimpleCommand already applies to tokens. Credential/env-var checks
+  // in classifyTextCommand still run on the raw text — the two paths stay
+  // independent — and natural-language mentions ("see hcloud docs") never
+  // match the prefix window, so no new false positives are introduced.
   const stripped = t.replace(/['"]/g, '');
-  const strippedMatch = HCLOUD_KEYWORD_PATTERN.exec(stripped);
-  if (!strippedMatch) return null;
-  const hcloudIndex = strippedMatch.index + strippedMatch[0].length - strippedMatch[1].length;
-  return stripped.slice(hcloudIndex);
+  const retry = findKeywordCommandPosition(stripped, HCLOUD_KW_PATTERN);
+  if (retry === -1) return null;
+  return stripped.slice(retry);
 }
 
 function extractAgentartsSubcommand(text) {

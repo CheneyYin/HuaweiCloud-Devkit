@@ -943,3 +943,24 @@ test('command-substitution padding is linear and the comment-composed bypass den
     `substitution-pad classification took ${elapsedMs.toFixed(0)}ms — extraction bound regressed`,
   );
 });
+
+test('hcloud keyword locator catches launcher, assignment, and path prefixes (windowed)', () => {
+  const denied = [
+    'FOO=1 hcloud ECS DeleteServer x',
+    'nice hcloud ECS DeleteServer x',
+    'timeout 30 hcloud ECS DeleteServer x',
+    'nohup hcloud ECS DeleteServer x',
+    'env hcloud ECS DeleteServer x',
+    'command hcloud ECS DeleteServer x',
+    'bash -c "FOO=1 hcloud ECS DeleteServer x"',
+    'sudo -u root hcloud ECS DeleteServer x',
+  ];
+  for (const cmd of denied) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd);
+  }
+  // Natural-language hcloud mentions stay allowed.
+  assert.equal(classifyTextCommand('see hcloud docs').decision, 'allow');
+  assert.equal(classifyTextCommand('echo hcloud is a CLI').decision, 'allow');
+  assert.equal(classifyTextCommand('pip install hcloud-cli').decision, 'allow');
+});

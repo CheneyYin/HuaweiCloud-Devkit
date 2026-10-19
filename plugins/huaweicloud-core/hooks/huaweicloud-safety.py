@@ -37,17 +37,16 @@ def load_policy():
     try:
         with POLICY_PATH.open("r", encoding="utf-8") as file_obj:
             policy = json.load(file_obj)
-        # A parseable-but-empty policy is a third degradation state: treat it
-        # like a load failure so the None-guarded gates cannot silently turn
-        # off while POLICY_OK stays true.
-        required_keys = (
-            "credentialFilePatterns",
-            "blockedSecretOperations",
-            "writeOperationPrefixes",
-            "agentartsCommandPolicy",
-        )
-        if any(policy.get(key) is None for key in required_keys):
-            raise ValueError("policy.json is missing required keys")
+        # A parseable-but-degraded policy is a third degradation state: treat
+        # it like a load failure so the None-guarded gates cannot silently
+        # turn off (or crash mid-classification) while POLICY_OK stays true —
+        # missing keys, empty lists, and a wrong-typed agentartsCommandPolicy
+        # all raise here.
+        list_keys = ("credentialFilePatterns", "blockedSecretOperations", "writeOperationPrefixes")
+        if any(not isinstance(policy.get(key), list) or not policy[key] for key in list_keys):
+            raise ValueError("policy.json list keys must be non-empty arrays")
+        if not isinstance(policy.get("agentartsCommandPolicy"), dict) or not policy["agentartsCommandPolicy"]:
+            raise ValueError("policy.json agentartsCommandPolicy must be a non-empty object")
         cred_patterns = policy.get("credentialFilePatterns", [])
         if cred_patterns:
             CONFIG_FILE_RE = re.compile("|".join(cred_patterns), re.I)

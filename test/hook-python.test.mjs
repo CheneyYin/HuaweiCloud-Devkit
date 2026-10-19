@@ -438,7 +438,7 @@ test('python hook agentarts locator is pinned linear in isolation', () => {
 
 test('python hook fails safe when safety/policy.json is missing or corrupt', () => {
   const pluginRoot = join(process.cwd(), 'plugins', 'huaweicloud-core');
-  for (const scenario of ['missing', 'corrupt', 'empty']) {
+  for (const scenario of ['missing', 'corrupt', 'empty', 'emptylist', 'wrongtype']) {
     const tmp = mkdtempSync(join(tmpdir(), 'hw-pyhook-failsafe-'));
     const dest = join(tmp, 'huaweicloud-core');
     cpSync(pluginRoot, dest, { recursive: true, filter: (src) => !src.startsWith(join(pluginRoot, 'telemetry')) });
@@ -447,6 +447,26 @@ test('python hook fails safe when safety/policy.json is missing or corrupt', () 
       rmSync(policyDest);
     } else if (scenario === 'empty') {
       writeFileSync(policyDest, '{}');
+    } else if (scenario === 'emptylist') {
+      writeFileSync(
+        policyDest,
+        JSON.stringify({
+          credentialFilePatterns: ['\\.hcloud'],
+          blockedSecretOperations: ['ShowSecret'],
+          writeOperationPrefixes: [],
+          agentartsCommandPolicy: {},
+        }),
+      );
+    } else if (scenario === 'wrongtype') {
+      writeFileSync(
+        policyDest,
+        JSON.stringify({
+          credentialFilePatterns: ['\\.hcloud'],
+          blockedSecretOperations: ['ShowSecret'],
+          writeOperationPrefixes: ['Delete'],
+          agentartsCommandPolicy: 'approved',
+        }),
+      );
     } else {
       writeFileSync(policyDest, '{not valid json');
     }
@@ -484,13 +504,10 @@ test('python hook extraction is linear on command-substitution padding', () => {
   const bomb = '# ' + '$('.repeat(20000) + '\nagentarts destroy';
   const start = process.hrtime.bigint();
   const result = runEvaluate('Bash', { command: bomb });
-  const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
   if (pythonUnavailable(result)) return;
   assert.equal(result.status, 0, 'substitution bomb must not crash the hook');
-  if (elapsedMs < 4000) {
-    const reason = JSON.parse(result.stdout);
-    assert.equal(typeof reason, 'string', 'newline-chained agentarts destroy must be blocked');
-  }
+  const reason = JSON.parse(result.stdout);
+  assert.equal(typeof reason, 'string', 'newline-chained agentarts destroy must be blocked');
 });
 
 test('python hook keeps the specific credential reason under a corrupt policy', () => {
