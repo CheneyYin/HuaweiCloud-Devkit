@@ -58,10 +58,13 @@ const pkgVersion = readInstalledVersion() || '0.0.0';
 // and the agent should ask once for the whole skills tree directory —
 // never per file — then stop asking for the rest of the session. A denial
 // or an unreachable tree hands over to retrieve_skill, which needs no
-// file access at all. Deliberately teach-only: the installer never writes
-// permission config (a rejected option — the operator's consent surface
-// stays the approval prompt, and OpenCode's session-scoped "always" makes
-// one prompt per session the accepted cost).
+// file access at all. Installer-side relief (OpenCode only, the one
+// harness measured where the prompt cannot express directory-scope
+// grants): setup-cli.ts writes a persistent permission seam —
+// external_directory allow + edit deny over the tree globs
+// (lib/opencode-permission-seam.ts owns the contract) — so direct reads
+// stop prompting; the teaching here stays true on every harness
+// regardless of config.
 export function instructionsFor(remote: boolean, runtimePacks = false): string {
   if (remote) {
     return (
