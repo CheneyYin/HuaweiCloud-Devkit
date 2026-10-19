@@ -930,3 +930,16 @@ test('agentarts case-variant xargs/parallel and extended launcher words are deni
     assert.match(result.reason, /agentarts/i, cmd);
   }
 });
+
+test('command-substitution padding is linear and the comment-composed bypass denies', () => {
+  const bomb = '# ' + '$('.repeat(20000) + '\nagentarts destroy';
+  const start = process.hrtime.bigint();
+  const result = classifyTextCommand(bomb);
+  const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+  assert.equal(result.decision, 'deny', 'newline-chained agentarts destroy must deny');
+  assert.match(result.reason, /agentarts destroy/);
+  assert.ok(
+    elapsedMs < 2000,
+    `substitution-pad classification took ${elapsedMs.toFixed(0)}ms — extraction bound regressed`,
+  );
+});

@@ -37,6 +37,17 @@ def load_policy():
     try:
         with POLICY_PATH.open("r", encoding="utf-8") as file_obj:
             policy = json.load(file_obj)
+        # A parseable-but-empty policy is a third degradation state: treat it
+        # like a load failure so the None-guarded gates cannot silently turn
+        # off while POLICY_OK stays true.
+        required_keys = (
+            "credentialFilePatterns",
+            "blockedSecretOperations",
+            "writeOperationPrefixes",
+            "agentartsCommandPolicy",
+        )
+        if any(policy.get(key) is None for key in required_keys):
+            raise ValueError("policy.json is missing required keys")
         cred_patterns = policy.get("credentialFilePatterns", [])
         if cred_patterns:
             CONFIG_FILE_RE = re.compile("|".join(cred_patterns), re.I)
@@ -148,15 +159,18 @@ def _inner_command_candidates(text):
     # out of `bash -c "…"`, `eval '…'`, `$(…)`, backticks, and the Windows
     # wrappers, recursing one level so double-wrapped payloads classify.
     # Plain quoted natural language (`echo "agentarts is a CLI"`) does not
-    # match any wrapper shape.
+    # match any wrapper shape. Payload captures are BOUNDED ({0,1024} quoted /
+    # {1,512} substitution): unbounded runs were quadratic per start position
+    # and a padded `$(`-repeat command killed this hook before any gate could
+    # deny (a dead hook is a non-blocking error, i.e. allow).
     candidates = [text]
     wrappers = (
-        r"\b(?:bash|sh|zsh|dash|\/bin\/(?:bash|sh|zsh|dash)|bash\.exe|sh\.exe)\s+-c\s+(\"[^\"]*\"|'[^']*')",
-        r"\beval\s+(\"[^\"]*\"|'[^']*')",
-        r"\$\(([^)]+)\)",
-        r"`([^`]+)`",
-        r"\b(?:cmd|cmd\.exe)\s+\/[ck]\s+(\"[^\"]*\"|'[^']*')",
-        r"\b(?:powershell|powershell\.exe|pwsh|pwsh\.exe)\s+(?:-Command|-c)\s+(\"[^\"]*\"|'[^']*')",
+        r"\b(?:bash|sh|zsh|dash|\/bin\/(?:bash|sh|zsh|dash)|bash\.exe|sh\.exe)\s+-c\s+(\"[^\"]{0,1024}\"|'[^']{0,1024}')",
+        r"\beval\s+(\"[^\"]{0,1024}\"|'[^']{0,1024}')",
+        r"\$\(([^)]{1,512})\)",
+        r"`([^`]{1,512})`",
+        r"\b(?:cmd|cmd\.exe)\s+\/[ck]\s+(\"[^\"]{0,1024}\"|'[^']{0,1024}')",
+        r"\b(?:powershell|powershell\.exe|pwsh|pwsh\.exe)\s+(?:-Command|-c)\s+(\"[^\"]{0,1024}\"|'[^']{0,1024}')",
     )
     for pattern in wrappers:
         for m in re.finditer(pattern, text, re.I):
@@ -398,14 +412,17 @@ def evaluate(tool_name, tool_input):
     denied_rule = first_denied_command_rule(text)
     if denied_rule:
         return f"{denied_rule.get('message')} Remediation: {denied_rule.get('remediation')}"
-    if tool_name in ("Bash", "terminal") and HCLOUD_RE.search(text):
-        # Per-segment hcloud gate: a read-looking token anywhere in the text
-        # used to suppress the whole gate, so `hcloud ListServers && hcloud
-        # DeleteServer …` slipped. Check each shell-operator segment for the
-        # write shape independently — deny wins, matching the Node layer's
+    if tool_name in ("Bash", "terminal") and WRITE_OPERATION_RE:
+        # Per-segment hcloud gate over every inner-command candidate: a
+        # read-looking token anywhere used to suppress the whole gate, and a
+        # quote-preceded hcloud inside a wrapper (`bash -c "hcloud ECS
+        # DeleteServer …"`) escaped the raw-text match entirely — deny wins
+        # across candidates and segments, matching the Node layer's
         # deny-first candidate merge.
-        if WRITE_OPERATION_RE:
-            for segment in re.split(r"\|\||&&|;|\||&|\r?\n", text):
+        for candidate in candidates:
+            if not HCLOUD_RE.search(candidate):
+                continue
+            for segment in re.split(r"\|\||&&|;|\||&|\r?\n", candidate):
                 if HCLOUD_RE.search(segment) and WRITE_OPERATION_RE.search(segment) and not READ_OPERATION_RE.search(segment):
                     return "unapproved Huawei Cloud write operations must be planned first and explicitly approved by the user."
     if tool_name in ("Bash", "terminal"):

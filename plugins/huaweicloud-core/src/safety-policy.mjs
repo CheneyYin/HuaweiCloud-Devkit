@@ -408,6 +408,12 @@ function splitSimpleCommand(command) {
 // eval "…", $(…), `…`, Windows cmd/powershell. Returns an array of extracted
 // inner strings (may include nested extractions). This lets classifyTextCommand
 // inspect the actual payload instead of the wrapper tokens (#758 D4-16).
+// Payload captures are BOUNDED ({0,1024} quoted / {1,512} substitution):
+// unbounded runs made every `$(`/backtick/quote start a quadratic
+// backtracking position, and a ~40-80KB padded command killed the hook
+// before any gate could deny — a dead hook is a non-blocking error, i.e.
+// allow. A substitution payload longer than the bound is left unextracted
+// (documented residual, same class as the locator's 256-char window).
 export function extractInnerCommand(text, depth = 0) {
   if (depth > 3) return [];
   const t = String(text || '');
@@ -415,7 +421,8 @@ export function extractInnerCommand(text, depth = 0) {
   let m;
 
   // bash -c "…" / sh -c '…' / /bin/bash -c "…" / bash.exe -c '…'
-  const shellWrap = /\b(?:bash|sh|zsh|dash|\/bin\/(?:bash|sh|zsh|dash)|bash\.exe|sh\.exe)\s+-c\s+(["'])([\s\S]*?)\1/gi;
+  const shellWrap =
+    /\b(?:bash|sh|zsh|dash|\/bin\/(?:bash|sh|zsh|dash)|bash\.exe|sh\.exe)\s+-c\s+(["'])([\s\S]{0,1024}?)\1/gi;
   while ((m = shellWrap.exec(t)) !== null) {
     if (m[2]) {
       results.push(m[2]);
@@ -424,7 +431,7 @@ export function extractInnerCommand(text, depth = 0) {
   }
 
   // eval "…" / eval '…'
-  const evalWrap = /\beval\s+(["'])([\s\S]*?)\1/gi;
+  const evalWrap = /\beval\s+(["'])([\s\S]{0,1024}?)\1/gi;
   while ((m = evalWrap.exec(t)) !== null) {
     if (m[2]) {
       results.push(m[2]);
@@ -433,7 +440,7 @@ export function extractInnerCommand(text, depth = 0) {
   }
 
   // $(…) command substitution (single-level; nested parens are a known limitation)
-  const cmdSubst = /\$\(([^)]+)\)/g;
+  const cmdSubst = /\$\(([^)]{1,512})\)/g;
   while ((m = cmdSubst.exec(t)) !== null) {
     if (m[1]) {
       results.push(m[1]);
@@ -444,7 +451,7 @@ export function extractInnerCommand(text, depth = 0) {
   // `…` backtick command substitution (POSIX sh). Treated the same as $(…):
   // the inner text is extracted as an independent candidate and recursed
   // into so that `hcloud ECS DeleteServer …` is classified correctly (#758).
-  const backtickSubst = /`([^`]+)`/g;
+  const backtickSubst = /`([^`]{1,512})`/g;
   while ((m = backtickSubst.exec(t)) !== null) {
     if (m[1]) {
       results.push(m[1]);
@@ -454,7 +461,7 @@ export function extractInnerCommand(text, depth = 0) {
 
   // Windows: cmd /c "…" / cmd /k '…' / cmd.exe /c "…" (#731 / #760).
   // /c runs and terminates; /k runs and keeps the shell — both can wrap hcloud.
-  const cmdWrap = /\b(?:cmd|cmd\.exe)\s+\/[ck]\s+(["'])([\s\S]*?)\1/gi;
+  const cmdWrap = /\b(?:cmd|cmd\.exe)\s+\/[ck]\s+(["'])([\s\S]{0,1024}?)\1/gi;
   while ((m = cmdWrap.exec(t)) !== null) {
     if (m[2]) {
       results.push(m[2]);
@@ -465,7 +472,7 @@ export function extractInnerCommand(text, depth = 0) {
   // Windows: powershell -Command "…" / powershell -c '…' / pwsh -Command "…"
   // / pwsh.exe -c "…" (#731 / #760). Covers both Windows PowerShell and
   // PowerShell Core (pwsh). The -Command/-c flag executes the quoted string.
-  const psWrap = /\b(?:powershell|powershell\.exe|pwsh|pwsh\.exe)\s+(?:-Command|-c)\s+(["'])([\s\S]*?)\1/gi;
+  const psWrap = /\b(?:powershell|powershell\.exe|pwsh|pwsh\.exe)\s+(?:-Command|-c)\s+(["'])([\s\S]{0,1024}?)\1/gi;
   while ((m = psWrap.exec(t)) !== null) {
     if (m[2]) {
       results.push(m[2]);

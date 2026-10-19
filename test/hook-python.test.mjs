@@ -438,13 +438,15 @@ test('python hook agentarts locator is pinned linear in isolation', () => {
 
 test('python hook fails safe when safety/policy.json is missing or corrupt', () => {
   const pluginRoot = join(process.cwd(), 'plugins', 'huaweicloud-core');
-  for (const scenario of ['missing', 'corrupt']) {
+  for (const scenario of ['missing', 'corrupt', 'empty']) {
     const tmp = mkdtempSync(join(tmpdir(), 'hw-pyhook-failsafe-'));
     const dest = join(tmp, 'huaweicloud-core');
     cpSync(pluginRoot, dest, { recursive: true, filter: (src) => !src.startsWith(join(pluginRoot, 'telemetry')) });
     const policyDest = join(dest, 'safety', 'policy.json');
     if (scenario === 'missing') {
       rmSync(policyDest);
+    } else if (scenario === 'empty') {
+      writeFileSync(policyDest, '{}');
     } else {
       writeFileSync(policyDest, '{not valid json');
     }
@@ -459,4 +461,53 @@ test('python hook fails safe when safety/policy.json is missing or corrupt', () 
     assert.equal(output.hookSpecificOutput.permissionDecision, 'deny', scenario);
     assert.match(output.hookSpecificOutput.permissionDecisionReason, /failed to load/i, scenario);
   }
+});
+
+test('python hook denies wrapper-embedded hcloud writes (candidate-sweep parity)', () => {
+  for (const command of [
+    'bash -c "hcloud ECS DeleteServer --server_id=i-1"',
+    "eval 'hcloud ECS DeleteServer x'",
+    'echo x $(hcloud ECS DeleteServer x)',
+    'powershell -Command "hcloud ECS DeleteServer x"',
+    'bash -c "hcloud configure set --cli-lang=cn"',
+  ]) {
+    const result = runEvaluate('Bash', { command });
+    if (pythonUnavailable(result)) return;
+    assert.equal(result.status, 0, command);
+    const reason = JSON.parse(result.stdout);
+    assert.equal(typeof reason, 'string', `${command} should be blocked`);
+    assert.match(reason, /write operations/i, command);
+  }
+});
+
+test('python hook extraction is linear on command-substitution padding', () => {
+  const bomb = '# ' + '$('.repeat(20000) + '\nagentarts destroy';
+  const start = process.hrtime.bigint();
+  const result = runEvaluate('Bash', { command: bomb });
+  const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+  if (pythonUnavailable(result)) return;
+  assert.equal(result.status, 0, 'substitution bomb must not crash the hook');
+  if (elapsedMs < 4000) {
+    const reason = JSON.parse(result.stdout);
+    assert.equal(typeof reason, 'string', 'newline-chained agentarts destroy must be blocked');
+  }
+});
+
+test('python hook keeps the specific credential reason under a corrupt policy', () => {
+  const pluginRoot = join(process.cwd(), 'plugins', 'huaweicloud-core');
+  const tmp = mkdtempSync(join(tmpdir(), 'hw-pyhook-credreason-'));
+  const dest = join(tmp, 'huaweicloud-core');
+  cpSync(pluginRoot, dest, { recursive: true, filter: (src) => !src.startsWith(join(pluginRoot, 'telemetry')) });
+  writeFileSync(join(dest, 'safety', 'policy.json'), '{not valid json');
+  const result = spawnSync(pythonBin, [join(dest, 'hooks', 'huaweicloud-safety.py')], {
+    input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'bash -c "env | grep HUAWEICLOUD"' } }),
+    encoding: 'utf8',
+  });
+  rmSync(tmp, { recursive: true, force: true });
+  if (pythonUnavailable(result)) return;
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(output.hookSpecificOutput.permissionDecisionReason, /dumping cloud credential/i);
+  assert.doesNotMatch(output.hookSpecificOutput.permissionDecisionReason, /failed to load/i);
 });
