@@ -21,6 +21,7 @@ export function loadPolicy() {
   if (
     typeof policy.agentartsCommandPolicy !== 'object' ||
     policy.agentartsCommandPolicy === null ||
+    Array.isArray(policy.agentartsCommandPolicy) ||
     Object.keys(policy.agentartsCommandPolicy).length === 0
   ) {
     throw new Error('safety policy key agentartsCommandPolicy must be a non-empty object');
@@ -226,11 +227,22 @@ export function classifyHcloudArgs(args, options = {}) {
   const joined = normalizedArgs.join(' ');
 
   if (!normalizedArgs.length) {
-    return {
-      decision: 'deny',
-      risk: 'invalid',
-      reason: 'Empty hcloud command arguments are not executable.',
-    };
+    // Bare `hcloud` (and path-final references like `ls /usr/local/bin/hcloud`
+    // located by the path-prefix window) print help or probe the binary —
+    // local metadata, mirroring the bare-agentarts allow. The old deny
+    // turned every path-form file operand into a block.
+    return applyCommandRiskRules(
+      {
+        decision: 'allow',
+        risk: 'local_metadata',
+        reason: 'Bare hcloud invocation prints help.',
+        service,
+        operation,
+        args: normalizedArgs,
+      },
+      joined,
+      options,
+    );
   }
 
   if (isLocalMetadataCommand(normalizedArgs)) {
@@ -503,13 +515,18 @@ export function extractInnerCommand(text, depth = 0) {
 
 // hcloud keyword, located with the same linear no-star scan + bounded
 // suffix-window prefix test as the agentarts keyword (see the performance
-// contract below). Excludes hcloud mentioned in natural-language/echo text
-// (#758 D4-11); candidates from extractInnerCommand start with hcloud
-// directly so the empty window (^) catches wrapped commands. `sudo hcloud …`
-// stays a real command (#760 P0). The prefix window ALSO catches
-// launcher/assignment/path-prefixed writes (`FOO=1 hcloud …`, `nice hcloud
-// …`, `env hcloud …`) that the pre-window anchored pattern missed —
-// one-word prefixes must not bypass the write floor on the wired layer.
+// contract below). Natural-language/echo mentions with PLAIN whitespace
+// before the keyword stay excluded (#758 D4-11); candidates from
+// extractInnerCommand start with hcloud directly so the empty window (^)
+// catches wrapped commands. `sudo hcloud …` stays a real command (#760 P0).
+// The prefix window ALSO catches launcher/assignment/path-prefixed writes
+// (`FOO=1 hcloud …`, `nice hcloud …`) that the pre-window anchored pattern
+// missed. Inherited deny-direction FP classes from the shared window (same
+// ledger as agentarts): assignment-shaped prose (`echo version=1.0 hcloud
+// ECS DeleteServer x`), launcher token-run prose (`watch -n 5 grep hcloud
+// …`), and path-prefix prose (`see docs/hcloud ECS DeleteServer guide`).
+// Bare/path-final `hcloud` (a file operand or help print) is allowed — see
+// the empty-args branch in classifyHcloudArgs.
 const HCLOUD_KW_PATTERN = /(hcloud(?:\.exe)?\b)/gi;
 
 // AgentArts CLI (agentarts-sdk) keyword locator — command-position semantics
@@ -558,7 +575,14 @@ const AGENTARTS_WINDOW = 256;
 function findKeywordCommandPosition(hay, kwRegex) {
   for (const match of hay.matchAll(kwRegex)) {
     const window = hay.slice(Math.max(0, match.index - AGENTARTS_WINDOW), match.index);
-    if (AGENTARTS_PREFIX_SUFFIX_RE.test(window)) {
+    // Dual test: raw window, then the trailing-whitespace-trimmed window.
+    // The trim restores the pre-window unbounded `\s*` anchor semantics for
+    // padded separators (`echo hi; <300 spaces> hcloud …`): a pure-whitespace
+    // window means the keyword is still preceded by a whitespace run from a
+    // command position, whatever the anchor char was. The FP cost is an
+    // absurd echo-with-giant-whitespace-before-a-trailing-mention —
+    // deny-direction, documented.
+    if (AGENTARTS_PREFIX_SUFFIX_RE.test(window) || AGENTARTS_PREFIX_SUFFIX_RE.test(window.replace(/\s+$/, ''))) {
       return match.index;
     }
   }
@@ -586,8 +610,9 @@ function extractHcloudSubcommand(text) {
   // subcommand is the de-quoted text, matching the de-quote semantics
   // splitSimpleCommand already applies to tokens. Credential/env-var checks
   // in classifyTextCommand still run on the raw text — the two paths stay
-  // independent — and natural-language mentions ("see hcloud docs") never
-  // match the prefix window, so no new false positives are introduced.
+  // independent — and plain-whitespace natural-language mentions ("see
+  // hcloud docs") never match the prefix window; the inherited deny-direction
+  // FP classes are enumerated at HCLOUD_KW_PATTERN above.
   const stripped = t.replace(/['"]/g, '');
   const retry = findKeywordCommandPosition(stripped, HCLOUD_KW_PATTERN);
   if (retry === -1) return null;

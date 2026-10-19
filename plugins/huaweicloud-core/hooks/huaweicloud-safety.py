@@ -130,7 +130,14 @@ AGENTARTS_WINDOW = 256
 def _agentarts_locate(hay):
     """Return the end offset of an agentarts keyword in command position, else None."""
     for m in AGENTARTS_KW_RE.finditer(hay):
-        if AGENTARTS_PREFIX_SUFFIX_RE.search(hay[max(0, m.start() - AGENTARTS_WINDOW):m.start()]):
+        window = hay[max(0, m.start() - AGENTARTS_WINDOW):m.start()]
+        # Dual test: raw window, then trailing-whitespace-trimmed — restores
+        # the unbounded \s* anchor semantics for padded separators (a
+        # pure-whitespace window means the keyword follows a whitespace run
+        # from a command position).
+        if AGENTARTS_PREFIX_SUFFIX_RE.search(window) or AGENTARTS_PREFIX_SUFFIX_RE.search(
+            re.sub(r"\s+$", "", window)
+        ):
             return m.end()
     return None
 

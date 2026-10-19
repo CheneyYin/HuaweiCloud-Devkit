@@ -471,9 +471,12 @@ test('classifyHcloudArgs blocks hcloud configure show without allowCredentialRea
   assert.equal(result.risk, 'credential');
 });
 
-test('classifyHcloudArgs rejects empty args', () => {
-  assert.equal(classifyHcloudArgs([]).decision, 'deny');
-  assert.equal(classifyHcloudArgs([]).risk, 'invalid');
+test('classifyHcloudArgs treats bare/path-final invocations as local metadata', () => {
+  // Bare `hcloud` prints help; path-final references (ls /usr/local/bin/hcloud,
+  // located by the path-prefix window) are file operands. Denying them turned
+  // every binary probe into a block.
+  assert.equal(classifyHcloudArgs([]).decision, 'allow');
+  assert.equal(classifyHcloudArgs([]).risk, 'local_metadata');
 });
 
 test('classifyHcloudArgs allows version commands', () => {
@@ -963,4 +966,31 @@ test('hcloud keyword locator catches launcher, assignment, and path prefixes (wi
   assert.equal(classifyTextCommand('see hcloud docs').decision, 'allow');
   assert.equal(classifyTextCommand('echo hcloud is a CLI').decision, 'allow');
   assert.equal(classifyTextCommand('pip install hcloud-cli').decision, 'allow');
+});
+
+test('padded-separator anchors and path-final hcloud operands restore pre-window semantics', () => {
+  // ≥256 whitespace between the separator and the keyword: the trimmed
+  // window matches, so the write still denies.
+  const denied = [
+    'echo hi; ' + ' '.repeat(300) + 'hcloud ECS DeleteServer x',
+    'echo hi\n' + ' '.repeat(300) + 'hcloud ECS DeleteServer x',
+    'sudo -u root ' + ' '.repeat(300) + 'hcloud ECS DeleteServer x',
+  ];
+  for (const cmd of denied) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd.slice(0, 40));
+  }
+  // Path-final file operands are not invocations: allow (bare hcloud prints
+  // help; ls/stat of the binary path is a benign probe).
+  const allowed = [
+    'ls /usr/local/bin/hcloud',
+    'stat /opt/hcloud',
+    'cd ~/hcloud',
+    'test -x /usr/bin/hcloud && echo present',
+    'hcloud',
+  ];
+  for (const cmd of allowed) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'allow', cmd);
+  }
 });
