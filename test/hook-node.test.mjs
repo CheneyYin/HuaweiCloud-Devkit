@@ -72,7 +72,7 @@ test('node hook fails safe when safety/policy.json is missing or corrupt', () =>
   for (const scenario of ['missing', 'corrupt']) {
     const tmp = mkdtempSync(join(tmpdir(), 'hw-hook-failsafe-'));
     const dest = join(tmp, 'huaweicloud-core');
-    cpSync(pluginRoot, dest, { recursive: true, filter: (src) => !src.includes(`${dest}${sep}telemetry`) });
+    cpSync(pluginRoot, dest, { recursive: true, filter: (src) => !src.startsWith(join(pluginRoot, 'telemetry')) });
     const policyDest = join(dest, 'safety', 'policy.json');
     if (scenario === 'missing') {
       rmSync(policyDest);

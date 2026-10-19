@@ -491,24 +491,27 @@ const HCLOUD_KEYWORD_PATTERN = /(?:^|[;|&]\s*|\$\(\s*|`\s*|sudo\s+|\r?\n\s*)(hcl
 // AgentArts CLI (agentarts-sdk) keyword locator — command-position semantics
 // aligned with the hcloud pattern, extended for invocation shapes the
 // agentarts floor must catch on its own (PR1 has no approval wrapper yet as
-// the second line of defense): launcher prefixes with options and arguments
-// (env -i, nice -n 5, xargs -r, timeout --foreground 300, …), env-var
-// assignments (FOO=1 agentarts …, VAR=/path/agentarts …), path invocation
-// (/opt/venv/bin/agentarts …, ./agentarts …), sudo with options and values,
-// and the $AGENTARTS_BIN handle. Natural-language mentions ("see agentarts
-// docs") still never match: plain whitespace is not a command-position
-// prefix. The (?![\w./-]) boundary excludes agentarts-sdk / agentarts-setup
-// lookalikes and directory paths like docs/agentarts/README (a trailing
-// slash after the keyword means it is a path segment, not an executable).
-// Accepted deny-direction false positives (stronger than the hcloud set
-// because these prefix branches are new): quoted strings and grep patterns
+// the second line of defense): launcher prefixes with a bounded run of
+// options and arguments (env -i, nice -n 5, xargs -r, timeout --foreground
+// 300, g-prefixed GNU spellings, dotenv), env-var assignments (FOO=1
+// agentarts …, VAR=/path/agentarts …), path invocation
+// (/opt/venv/bin/agentarts …, ./agentarts …), sudo with options, values, and
+// executor words (strace/time/ltrace/perf/valgrind/script), and the
+// $AGENTARTS_BIN handle. The token-runs are BOUNDED ({0,6}/{0,8}): an
+// unbounded star made every launcher word a quadratic backtracking start
+// position, and a ~48KB padded command stalled the wired hook past its 5s
+// runner timeout — a dead hook is a non-blocking error, i.e. allow.
+// Natural-language mentions ("see agentarts docs") still never match: plain
+// whitespace is not a command-position prefix. The (?![\w./-]) boundary
+// excludes agentarts-sdk / agentarts-setup lookalikes, directory paths like
+// docs/agentarts/README, and printenv/setenv variable-name mentions.
+// Accepted deny-direction false positives: quoted strings and grep patterns
 // containing `;|& agentarts <group>` or `<path>/ agentarts <group>`;
 // assignment-shaped prose (`echo version=1.0 agentarts rocks`); prose after
-// a launcher or sudo token-run (`watch -n 5 grep agentarts logfile`). The
-// remedy in every case is the taught degraded path — run it in the user
-// terminal.
+// a launcher token-run (`watch -n 5 grep agentarts logfile`). The remedy in
+// every case is the taught degraded path — run it in the user terminal.
 const AGENTARTS_KEYWORD_PATTERN =
-  /(?:^|[;|&]\s*|\$\(\s*|`\s*|\r?\n\s*|\b(?:env|nohup|exec|command|xargs|nice|setsid|stdbuf|watch|timeout)(?:\s+\S+)*\s+|sudo(?:\s+-\S+(?:\s+[^\s-]+)?)*\s+|[A-Za-z_][A-Za-z0-9_]*=\S*\s+|[A-Za-z_][A-Za-z0-9_]*=|[\w.~\\/-]*[/\\])(?<kw>agentarts(?:\.exe)?|\$\{?AGENTARTS_BIN\}?)(?![\w./-])/im;
+  /(?:^|[;|&]\s*|\$\(\s*|`\s*|\r?\n\s*|\b(?:g(?:timeout|xargs|nice|stdbuf|watch)|dotenv|env|nohup|exec|command|xargs|nice|setsid|stdbuf|watch|timeout)(?:\s+\S+){0,6}\s+|sudo(?:\s+(?:-\S+(?:\s+[^\s-]+)?|strace|ltrace|perf|valgrind|script|time)){0,8}\s+|[A-Za-z_][A-Za-z0-9_]*=\S*\s+|[A-Za-z_][A-Za-z0-9_]*=|[\w.~\\/-]*[/\\])(?<kw>agentarts(?:\.exe)?|\$\{?AGENTARTS_BIN\}?)(?![\w./-])/im;
 
 function extractHcloudSubcommand(text) {
   const t = String(text || '');
@@ -603,7 +606,11 @@ export function classifyAgentartsArgs(tokens, options = {}) {
     args.some((token) => /^(--help|-h)$/.test(token)) ||
     args.slice(0, i).some((token) => /^(--version|-v)$/.test(token))
   ) {
-    if (!group && options.segment && /\bxargs\b/i.test(options.segment)) {
+    if (
+      !group &&
+      options.segment &&
+      (/\b(?:g)?xargs\b/.test(options.segment) || /\b(?:g)?xargs\b/.test(options.segment.replace(/['"]/g, '')))
+    ) {
       // `… | xargs [-r/-n1/…] agentarts` (any spelling, incl. path or
       // $AGENTARTS_BIN) feeds the subcommand on stdin — unclassifiable and
       // therefore fail-safe deny rather than bare-help allow.

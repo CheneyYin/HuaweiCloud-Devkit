@@ -88,8 +88,8 @@ READ_OPERATION_RE = re.compile(r"\b(List|Show|Get|Describe|NovaList|NovaShow)\w*
 # so both hooks and the approval wrapper consume one source.
 AGENTARTS_KEYWORD_RE = re.compile(
     r"(?:^|[;|&]\s*|\$\(\s*|`\s*|\r?\n\s*"
-    r"|\b(?:env|nohup|exec|command|xargs|nice|setsid|stdbuf|watch|timeout)(?:\s+\S+)*\s+"
-    r"|sudo(?:\s+-\S+(?:\s+[^\s-]+)?)*\s+"
+    r"|\b(?:g(?:timeout|xargs|nice|stdbuf|watch)|dotenv|env|nohup|exec|command|xargs|nice|setsid|stdbuf|watch|timeout)(?:\s+\S+){0,6}\s+"
+    r"|sudo(?:\s+(?:-\S+(?:\s+[^\s-]+)?|strace|ltrace|perf|valgrind|script|time)){0,8}\s+"
     r"|[A-Za-z_][A-Za-z0-9_]*=\S*\s+|[A-Za-z_][A-Za-z0-9_]*="
     r"|[\w.~\\/-]*[/\\])"
     r"(?P<kw>agentarts(?:\.exe)?|\$\{?AGENTARTS_BIN\}?)(?![\w./-])",
@@ -165,7 +165,10 @@ def _agentarts_classify_segment(segment):
         i += 1
     eager_flag = any(t in ("--help", "-h") for t in tokens) or any(t in ("--version", "-v") for t in tokens[:i])
     if i >= len(tokens) or eager_flag:
-        if i >= len(tokens) and re.search(r"\bxargs\b", segment, re.I):
+        if i >= len(tokens) and (
+            re.search(r"\b(?:g)?xargs\b", segment, re.I)
+            or re.search(r"\b(?:g)?xargs\b", re.sub(r"['\"]", "", segment), re.I)
+        ):
             return (
                 "agentarts invoked via xargs (arguments arrive on stdin and cannot be classified); "
                 "run it in your own terminal (see the huawei-agentarts skill)."
@@ -354,8 +357,16 @@ def evaluate(tool_name, tool_input):
     denied_rule = first_denied_command_rule(text)
     if denied_rule:
         return f"{denied_rule.get('message')} Remediation: {denied_rule.get('remediation')}"
-    if tool_name in ("Bash", "terminal") and HCLOUD_RE.search(text) and WRITE_OPERATION_RE.search(text) and not READ_OPERATION_RE.search(text):
-        return "unapproved Huawei Cloud write operations must be planned first and explicitly approved by the user."
+    if tool_name in ("Bash", "terminal") and HCLOUD_RE.search(text):
+        # Per-segment hcloud gate: a read-looking token anywhere in the text
+        # used to suppress the whole gate, so `hcloud ListServers && hcloud
+        # DeleteServer …` slipped. Check each shell-operator segment for the
+        # write shape independently — deny wins, matching the Node layer's
+        # deny-first candidate merge.
+        if WRITE_OPERATION_RE:
+            for segment in re.split(r"\|\||&&|;|\||&|\r?\n", text):
+                if HCLOUD_RE.search(segment) and WRITE_OPERATION_RE.search(segment) and not READ_OPERATION_RE.search(segment):
+                    return "unapproved Huawei Cloud write operations must be planned first and explicitly approved by the user."
     if tool_name in ("Bash", "terminal"):
         agentarts_reason = agentarts_block_reason(text)
         if agentarts_reason:

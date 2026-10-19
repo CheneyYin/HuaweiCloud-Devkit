@@ -857,3 +857,32 @@ test('agentarts empty-token invocation aligns across layers (write still denied)
   assert.equal(classifyTextCommand('agentarts "" launch').decision, 'deny');
   assert.equal(classifyTextCommand('agentarts "" destroy').decision, 'deny');
 });
+
+test('agentarts sudo executor words, g-prefixed launchers, and quote-split xargs are denied', () => {
+  const denied = [
+    'sudo strace agentarts destroy',
+    'sudo time agentarts launch',
+    'sudo ltrace agentarts destroy',
+    'sudo -u root strace agentarts destroy',
+    'gtimeout 300 agentarts launch',
+    'gxargs agentarts',
+    'dotenv agentarts launch',
+    'xa"rgs agentarts',
+    "echo launch | xa'rgs agentarts",
+  ];
+  for (const cmd of denied) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd);
+    assert.match(result.reason, /agentarts/i, cmd);
+  }
+});
+
+test('agentarts locator stays linear on padded launcher input (bounded token-run)', () => {
+  const bomb = 'env '.repeat(12000) + '; agentarts launch';
+  const start = process.hrtime.bigint();
+  const result = classifyTextCommand(bomb);
+  const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+  assert.equal(result.decision, 'deny');
+  assert.match(result.reason, /agentarts launch/);
+  assert.ok(elapsedMs < 2000, `padded classification took ${elapsedMs.toFixed(0)}ms — token-run bound regressed`);
+});

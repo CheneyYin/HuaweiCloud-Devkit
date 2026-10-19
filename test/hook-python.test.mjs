@@ -290,3 +290,23 @@ test('python hook denies option-bearing launchers, xargs variants, and wrapper-c
   if (pythonUnavailable(deploy)) return;
   assert.match(JSON.parse(deploy.stdout), /agentarts launch \(billing\)/);
 });
+
+test('python hook hcloud gate is per-segment: mixed read/write chains deny', () => {
+  for (const command of [
+    'hcloud ECS ListServers && hcloud ECS NovaDeleteServer i-1',
+    'hcloud ECS ListServers ; hcloud ECS DeleteServer --cli-jsonInput=x',
+    'hcloud ECS ListServers & hcloud ECS NovaDeleteServer i-1',
+  ]) {
+    const result = runEvaluate('Bash', { command });
+    if (pythonUnavailable(result)) return;
+    assert.equal(result.status, 0, command);
+    const reason = JSON.parse(result.stdout);
+    assert.equal(typeof reason, 'string', `${command} should be blocked`);
+    assert.match(reason, /write operations/i, command);
+  }
+  // Single-segment behavior is unchanged: a read-only command still allows.
+  const read = runEvaluate('Bash', { command: 'hcloud ECS ListServers --cli-region=cn-north-4' });
+  if (pythonUnavailable(read)) return;
+  assert.equal(read.status, 0);
+  assert.equal(JSON.parse(read.stdout), null, 'read-only hcloud should be allowed');
+});
