@@ -53,6 +53,15 @@ const pkgVersion = readInstalledVersion() || '0.0.0';
 // The factory refuses the contradictory remoteSurface+runtimePacks
 // combination, so no form can name a tool its face withholds while its
 // payloads publish host paths — the pairs stay legal by construction.
+// The stdio forms also teach the one-time directory-level permission
+// request: harnesses gate reads outside the workspace behind an approval,
+// and the agent should ask once for the whole skills tree directory —
+// never per file — then stop asking for the rest of the session. A denial
+// or an unreachable tree hands over to retrieve_skill, which needs no
+// file access at all. Deliberately teach-only: the installer never writes
+// permission config (a rejected option — the operator's consent surface
+// stays the approval prompt, and OpenCode's session-scoped "always" makes
+// one prompt per session the accepted cost).
 export function instructionsFor(remote: boolean, runtimePacks = false): string {
   if (remote) {
     return (
@@ -77,7 +86,9 @@ export function instructionsFor(remote: boolean, runtimePacks = false): string {
     enablement +
     'When your file tools reach the tree and the skill is enabled, read ' +
     `${SKILLS_ROOT}/<name>/SKILL.md and the references/ files directly, untruncated and selective. ` +
-    'huaweicloud_retrieve_skill is the fallback for files your tools cannot reach. ' +
+    'If reads outside the workspace need approval in your environment, ask the user once to approve the whole skills tree directory — ' +
+    'never per file; a directory-level approval covers every later read this session. ' +
+    'huaweicloud_retrieve_skill is the fallback for files you cannot reach or are not permitted to read. ' +
     'Route Huawei Cloud tasks through the huaweicloud-core skill; browse packs with huaweicloud_list_packs.'
   );
 }
