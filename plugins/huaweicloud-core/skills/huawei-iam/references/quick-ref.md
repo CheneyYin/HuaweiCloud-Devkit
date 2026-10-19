@@ -80,10 +80,10 @@ Example: `principal_urn ...:user:dingchunlei` + domain name `es_hwcddbdt_OpenCap
 
 **Do NOT use these two tempting-but-wrong rules** (both disproved in live testing):
 
-| Wrong rule | Why it fails |
-| ---------- | ------------ |
-| `ShowDomainPasswordPolicy` succeeds → primary | Permission-gated, not account-type-gated: a sub-user with IAM permissions also succeeds |
-| `principal_id == account_id` → primary | False for primary accounts too (observed on three separate primary samples; IDs only share a prefix) |
+| Wrong rule                                    | Why it fails                                                                                         |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `ShowDomainPasswordPolicy` succeeds → primary | Permission-gated, not account-type-gated: a sub-user with IAM permissions also succeeds              |
+| `principal_id == account_id` → primary        | False for primary accounts too (observed on three separate primary samples; IDs only share a prefix) |
 
 Edge cases:
 

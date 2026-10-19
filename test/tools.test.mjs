@@ -237,7 +237,6 @@ test('judgeAccountType: account_id not present in domains -> inconsistent error'
   assert.match(result.error, /Inconsistent identity response/);
 });
 
-
 test('huaweicloud_hook_check_command returns deny finding', async () => {
   const result = await callTool('huaweicloud_hook_check_command', {
     command:
