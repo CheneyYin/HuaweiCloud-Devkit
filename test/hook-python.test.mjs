@@ -294,7 +294,7 @@ test('python hook denies option-bearing launchers, xargs variants, and wrapper-c
 test('python hook hcloud gate is per-segment: mixed read/write chains deny', () => {
   for (const command of [
     'hcloud ECS ListServers && hcloud ECS NovaDeleteServer i-1',
-    'hcloud ECS ListServers ; hcloud ECS DeleteServer --cli-jsonInput=x',
+    'hcloud ECS ListServers ; hcloud ECS DeleteServer --server_id=i-1',
     'hcloud ECS ListServers & hcloud ECS NovaDeleteServer i-1',
   ]) {
     const result = runEvaluate('Bash', { command });
@@ -309,4 +309,21 @@ test('python hook hcloud gate is per-segment: mixed read/write chains deny', () 
   if (pythonUnavailable(read)) return;
   assert.equal(read.status, 0);
   assert.equal(JSON.parse(read.stdout), null, 'read-only hcloud should be allowed');
+});
+
+test('python hook write gate catches plain space-preceded write operations', () => {
+  const denied = runEvaluate('Bash', { command: 'hcloud ECS DeleteServer --server_id=i-1' });
+  if (pythonUnavailable(denied)) return;
+  assert.equal(denied.status, 0);
+  const reason = JSON.parse(denied.stdout);
+  assert.equal(typeof reason, 'string', 'plain DeleteServer should be blocked');
+  assert.match(reason, /write operations/i);
+});
+
+test('python hook stays fast on padded input (linear env-dump and locator)', () => {
+  const result = runEvaluate('Bash', { command: 'env '.repeat(12000) + '; agentarts launch' });
+  if (pythonUnavailable(result)) return;
+  assert.equal(result.status, 0);
+  const reason = JSON.parse(result.stdout);
+  assert.equal(typeof reason, 'string', 'padded bomb should be blocked, not stall');
 });

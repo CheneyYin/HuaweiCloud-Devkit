@@ -886,3 +886,47 @@ test('agentarts locator stays linear on padded launcher input (bounded token-run
   assert.match(result.reason, /agentarts launch/);
   assert.ok(elapsedMs < 2000, `padded classification took ${elapsedMs.toFixed(0)}ms — token-run bound regressed`);
 });
+
+test('agentarts locator is linear across padding alphabets (windowed suffix match)', () => {
+  const cases = [
+    { bomb: 'env '.repeat(12000) + '; agentarts launch', decision: 'deny' },
+    { bomb: 'a/'.repeat(24000) + 'b agentarts launch; agentarts launch', decision: 'deny' },
+    // Plain word before the keyword is NOT command position: fast AND allowed.
+    { bomb: 'a'.repeat(48000) + ' agentarts launch', decision: 'allow' },
+    // Assignment-value prefix (…= agentarts) is command position by the
+    // assignment branch: deny-direction, same as VAR=/path/agentarts.
+    { bomb: 'ab='.repeat(16000) + ' agentarts launch', decision: 'deny' },
+  ];
+  for (const { bomb, decision } of cases) {
+    const start = process.hrtime.bigint();
+    const result = classifyTextCommand(bomb);
+    const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+    assert.equal(result.decision, decision, bomb.slice(0, 40));
+    // Timing is pinned only for deny paths: the allow path still runs the
+    // shared risk-rule engine, whose own pre-existing quadratic on large
+    // inputs is out of scope for the agentarts locator.
+    if (decision === 'deny') {
+      assert.ok(elapsedMs < 2000, `padded classification took ${elapsedMs.toFixed(0)}ms — window bound regressed`);
+    }
+  }
+});
+
+test('agentarts case-variant xargs/parallel and extended launcher words are denied', () => {
+  const denied = [
+    'echo launch | XARGS agentarts',
+    'echo launch | Xargs agentarts',
+    'GXARGS agentarts',
+    'echo launch | parallel agentarts',
+    'genv agentarts launch',
+    'gnohup agentarts launch',
+    'gsetsid agentarts destroy',
+    'ionice -c 2 agentarts launch',
+    'taskset -c 0 agentarts launch',
+    'env -u A -u B -u C -u D -u E -u F -u G agentarts launch',
+  ];
+  for (const cmd of denied) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd);
+    assert.match(result.reason, /agentarts/i, cmd);
+  }
+});

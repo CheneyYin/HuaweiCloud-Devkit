@@ -44,7 +44,11 @@ def load_policy():
             SECRET_READ_RE = re.compile("|".join(re.escape(op) for op in blocked_secrets), re.I)
         write_prefixes = policy.get("writeOperationPrefixes", [])
         if write_prefixes:
-            WRITE_OPERATION_RE = re.compile(r"(^|[A-Za-z0-9])(" + "|".join(write_prefixes) + r")\w*", re.I)
+            # \s joins the prefix class so plain space-preceded operation
+            # tokens (`hcloud ECS DeleteServer …`) match, not only
+            # camel-compounded ones (NovaDeleteServer) — the previous
+            # wordchar-only class missed the most common shape.
+            WRITE_OPERATION_RE = re.compile(r"(?:^|\s|[A-Za-z0-9])(" + "|".join(write_prefixes) + r")\w*", re.I)
         AGENTARTS_POLICY = policy.get("agentartsCommandPolicy")
     except Exception:
         pass
@@ -52,9 +56,12 @@ def load_policy():
 
 load_policy()
 
-ENV_DUMP_RE = re.compile(
-    r"(env|printenv|Get-ChildItem\s+Env:|gci\s+Env:|dir\s+Env:).*(HUAWEICLOUD|HWC_|HCLOUD|HW_|OS_)", re.I,
-)
+# Env-var dump gate: two independent linear searches (command word, cloud
+# prefix) instead of one bridged `.*` regex — the bridge was quadratic on
+# padded input and could stall this hook past its runner timeout. Aligned
+# with safety-policy.mjs classifyTextCommand.
+ENV_DUMP_CMD_RE = re.compile(r"(env|printenv|Get-ChildItem\s+Env:|gci\s+Env:|dir\s+Env:)", re.I)
+ENV_DUMP_CLOUD_RE = re.compile(r"(HUAWEICLOUD|HWC_|HCLOUD|HW_|OS_)", re.I)
 # Credential variable references bypass the env-command gate above: HW_ is
 # the plugin's own documented credential prefix (HW_ACCESS_KEY/HW_SECRET_KEY/
 # HW_SECURITY_TOKEN), cloud environments also expose the AWS-style
@@ -77,24 +84,38 @@ READ_OPERATION_RE = re.compile(r"\b(List|Show|Get|Describe|NovaList|NovaShow)\w*
 # AgentArts CLI (agentarts-sdk) keyword locator — command-position semantics
 # aligned with safety-policy.mjs, extended for invocation shapes the agentarts
 # floor must catch on its own (no approval wrapper yet): launcher prefixes
-# with options and arguments (env -i, nice -n 5, xargs -r, timeout
-# --foreground 300), env-var assignments, path invocation, sudo with options
-# and values, and the $AGENTARTS_BIN handle. The (?![\w./-]) boundary
+# with option/argument runs (env -i, nice -n 5, xargs -r, timeout
+# --foreground 300, g-prefixed GNU spellings, dotenv, parallel/ionice/
+# taskset), env-var assignments, path invocation, sudo with options, values,
+# and executor words, and the $AGENTARTS_BIN handle. The (?![\w./-]) boundary
 # excludes agentarts-sdk / agentarts-setup lookalikes and directory paths.
-# Accepted deny-direction false positives are documented in
-# safety-policy.mjs (quoted separators, assignment-shaped prose,
-# launcher/sudo token-run prose). Tiers come from policy.json
-# agentartsCommandPolicy (measured facts, see docs/agentarts-pr0-findings.md)
-# so both hooks and the approval wrapper consume one source.
-AGENTARTS_KEYWORD_RE = re.compile(
+# Performance contract: linear no-star keyword scan + 256-char
+# suffix-anchored prefix window (token runs bounded to 32) — starred prefix
+# alternations over the full text were quadratic and could stall this hook
+# past its runner timeout. Documented residuals and accepted deny-direction
+# false positives are listed in safety-policy.mjs. Tiers come from
+# policy.json agentartsCommandPolicy (measured facts, see
+# docs/agentarts-pr0-findings.md) so both hooks and the approval wrapper
+# consume one source.
+AGENTARTS_KW_RE = re.compile(r"(?:agentarts(?:\.exe)?|\$\{?AGENTARTS_BIN\}?)(?![\w./-])", re.I)
+AGENTARTS_PREFIX_SUFFIX_RE = re.compile(
     r"(?:^|[;|&]\s*|\$\(\s*|`\s*|\r?\n\s*"
-    r"|\b(?:g(?:timeout|xargs|nice|stdbuf|watch)|dotenv|env|nohup|exec|command|xargs|nice|setsid|stdbuf|watch|timeout)(?:\s+\S+){0,6}\s+"
-    r"|sudo(?:\s+(?:-\S+(?:\s+[^\s-]+)?|strace|ltrace|perf|valgrind|script|time)){0,8}\s+"
+    r"|\b(?:g(?:timeout|xargs|nice|stdbuf|watch|env|nohup|setsid)|dotenv|parallel|ionice|taskset"
+    r"|env|nohup|exec|command|xargs|nice|setsid|stdbuf|watch|timeout)(?:\s+\S+){0,32}\s+"
+    r"|sudo(?:\s+(?:-\S+(?:\s+[^\s-]+)?|strace|ltrace|perf|valgrind|script|time)){0,32}\s+"
     r"|[A-Za-z_][A-Za-z0-9_]*=\S*\s+|[A-Za-z_][A-Za-z0-9_]*="
-    r"|[\w.~\\/-]*[/\\])"
-    r"(?P<kw>agentarts(?:\.exe)?|\$\{?AGENTARTS_BIN\}?)(?![\w./-])",
-    re.I | re.M,
+    r"|[\w.~\\/-]*[/\\])$",
+    re.I,
 )
+AGENTARTS_WINDOW = 256
+
+
+def _agentarts_locate(hay):
+    """Return the end offset of an agentarts keyword in command position, else None."""
+    for m in AGENTARTS_KW_RE.finditer(hay):
+        if AGENTARTS_PREFIX_SUFFIX_RE.search(hay[max(0, m.start() - AGENTARTS_WINDOW):m.start()]):
+            return m.end()
+    return None
 
 
 def _agentarts_tokens(rest):
@@ -140,16 +161,16 @@ def _inner_command_candidates(text):
 
 
 def _agentarts_classify_segment(segment):
-    m = AGENTARTS_KEYWORD_RE.search(segment)
-    if not m:
+    pos = _agentarts_locate(segment)
+    source = segment
+    if pos is None:
         # Quote-embedded keyword retry (de-quoted copy, keyword location only).
         stripped = re.sub(r"['\"]", "", segment)
-        m = AGENTARTS_KEYWORD_RE.search(stripped)
-        if not m:
+        pos = _agentarts_locate(stripped)
+        if pos is None:
             return None
-        rest = stripped[m.end("kw"):]
-    else:
-        rest = segment[m.end("kw"):]
+        source = stripped
+    rest = source[pos:]
     tokens = [t.lower() for t in _agentarts_tokens(rest)]
     if tokens:
         first = tokens[0]
@@ -166,8 +187,8 @@ def _agentarts_classify_segment(segment):
     eager_flag = any(t in ("--help", "-h") for t in tokens) or any(t in ("--version", "-v") for t in tokens[:i])
     if i >= len(tokens) or eager_flag:
         if i >= len(tokens) and (
-            re.search(r"\b(?:g)?xargs\b", segment, re.I)
-            or re.search(r"\b(?:g)?xargs\b", re.sub(r"['\"]", "", segment), re.I)
+            re.search(r"\b(?:g)?(?:xargs|parallel)\b", segment, re.I)
+            or re.search(r"\b(?:g)?(?:xargs|parallel)\b", re.sub(r"['\"]", "", segment), re.I)
         ):
             return (
                 "agentarts invoked via xargs (arguments arrive on stdin and cannot be classified); "
@@ -348,7 +369,7 @@ def evaluate(tool_name, tool_input):
 
     if CONFIG_FILE_RE and CONFIG_FILE_RE.search(text):
         return "reading Huawei Cloud credential/profile files can expose AK/SK or tokens. Use redacted toolkit tools."
-    if ENV_DUMP_RE.search(text):
+    if ENV_DUMP_CMD_RE.search(text) and ENV_DUMP_CLOUD_RE.search(text):
         return "dumping cloud credential environment variables is not allowed."
     if CRED_VAR_REF_RE.search(text):
         return "printing cloud credential environment variables is not allowed."

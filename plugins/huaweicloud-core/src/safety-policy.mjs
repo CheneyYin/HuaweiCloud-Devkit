@@ -491,27 +491,52 @@ const HCLOUD_KEYWORD_PATTERN = /(?:^|[;|&]\s*|\$\(\s*|`\s*|sudo\s+|\r?\n\s*)(hcl
 // AgentArts CLI (agentarts-sdk) keyword locator — command-position semantics
 // aligned with the hcloud pattern, extended for invocation shapes the
 // agentarts floor must catch on its own (PR1 has no approval wrapper yet as
-// the second line of defense): launcher prefixes with a bounded run of
-// options and arguments (env -i, nice -n 5, xargs -r, timeout --foreground
-// 300, g-prefixed GNU spellings, dotenv), env-var assignments (FOO=1
-// agentarts …, VAR=/path/agentarts …), path invocation
+// the second line of defense): launcher prefixes with option/argument runs
+// (env -i, nice -n 5, xargs -r, timeout --foreground 300, g-prefixed GNU
+// spellings, dotenv, parallel/ionice/taskset), env-var assignments
+// (FOO=1 agentarts …, VAR=/path/agentarts …), path invocation
 // (/opt/venv/bin/agentarts …, ./agentarts …), sudo with options, values, and
 // executor words (strace/time/ltrace/perf/valgrind/script), and the
-// $AGENTARTS_BIN handle. The token-runs are BOUNDED ({0,6}/{0,8}): an
-// unbounded star made every launcher word a quadratic backtracking start
-// position, and a ~48KB padded command stalled the wired hook past its 5s
-// runner timeout — a dead hook is a non-blocking error, i.e. allow.
-// Natural-language mentions ("see agentarts docs") still never match: plain
-// whitespace is not a command-position prefix. The (?![\w./-]) boundary
-// excludes agentarts-sdk / agentarts-setup lookalikes, directory paths like
-// docs/agentarts/README, and printenv/setenv variable-name mentions.
+// $AGENTARTS_BIN handle. Natural-language mentions ("see agentarts docs")
+// still never match: plain whitespace is not a command-position prefix.
+// The (?![\w./-]) boundary excludes agentarts-sdk / agentarts-setup
+// lookalikes, directory paths like docs/agentarts/README, and
+// printenv/setenv variable-name mentions.
+//
+// Performance contract: the keyword is located with a linear no-star scan,
+// and the prefix is validated against a 256-character window ENDING at the
+// keyword (suffix-anchored, token runs bounded to 32). Scanning the full
+// text with starred prefix alternations was quadratic per start position —
+// a ~48KB padded command stalled the wired hook past its 5s runner timeout,
+// and a dead hook is a non-blocking error, i.e. allow. The window and the
+// token bound leave one documented residual: a launcher more than 256
+// characters or 32 tokens before the keyword, and path-form executor words
+// under sudo (sudo /usr/bin/strace agentarts …), fall back to allow.
+//
 // Accepted deny-direction false positives: quoted strings and grep patterns
 // containing `;|& agentarts <group>` or `<path>/ agentarts <group>`;
 // assignment-shaped prose (`echo version=1.0 agentarts rocks`); prose after
 // a launcher token-run (`watch -n 5 grep agentarts logfile`). The remedy in
 // every case is the taught degraded path — run it in the user terminal.
-const AGENTARTS_KEYWORD_PATTERN =
-  /(?:^|[;|&]\s*|\$\(\s*|`\s*|\r?\n\s*|\b(?:g(?:timeout|xargs|nice|stdbuf|watch)|dotenv|env|nohup|exec|command|xargs|nice|setsid|stdbuf|watch|timeout)(?:\s+\S+){0,6}\s+|sudo(?:\s+(?:-\S+(?:\s+[^\s-]+)?|strace|ltrace|perf|valgrind|script|time)){0,8}\s+|[A-Za-z_][A-Za-z0-9_]*=\S*\s+|[A-Za-z_][A-Za-z0-9_]*=|[\w.~\\/-]*[/\\])(?<kw>agentarts(?:\.exe)?|\$\{?AGENTARTS_BIN\}?)(?![\w./-])/im;
+const AGENTARTS_KW_PATTERN = /(?:agentarts(?:\.exe)?|\$\{?AGENTARTS_BIN\}?)(?![\w./-])/gi;
+const AGENTARTS_PREFIX_SUFFIX_RE = new RegExp(
+  '(?:^|[;|&]\\s*|\\$\\(\\s*|`\\s*|\\r?\\n\\s*|' +
+    '\\b(?:g(?:timeout|xargs|nice|stdbuf|watch|env|nohup|setsid)|dotenv|parallel|ionice|taskset|env|nohup|exec|command|xargs|nice|setsid|stdbuf|watch|timeout)(?:\\s+\\S+){0,32}\\s+|' +
+    'sudo(?:\\s+(?:-\\S+(?:\\s+[^\\s-]+)?|strace|ltrace|perf|valgrind|script|time)){0,32}\\s+|' +
+    '[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+|[A-Za-z_][A-Za-z0-9_]*=|[\\w.~\\\\/-]*[/\\\\])$',
+  'i',
+);
+const AGENTARTS_WINDOW = 256;
+
+function findAgentartsKeyword(hay) {
+  for (const match of hay.matchAll(AGENTARTS_KW_PATTERN)) {
+    const window = hay.slice(Math.max(0, match.index - AGENTARTS_WINDOW), match.index);
+    if (AGENTARTS_PREFIX_SUFFIX_RE.test(window)) {
+      return match.index;
+    }
+  }
+  return -1;
+}
 
 function extractHcloudSubcommand(text) {
   const t = String(text || '');
@@ -544,19 +569,17 @@ function extractHcloudSubcommand(text) {
 
 function extractAgentartsSubcommand(text) {
   const t = String(text || '');
-  const match = AGENTARTS_KEYWORD_PATTERN.exec(t);
-  if (match) {
-    const agentartsIndex = match.index + match[0].length - match.groups.kw.length;
-    return t.slice(agentartsIndex);
+  const direct = findAgentartsKeyword(t);
+  if (direct !== -1) {
+    return t.slice(direct);
   }
   // Quote-embedded keyword fallback, same shape as the hcloud #927 retry:
   // `agen'tarts destroy …` runs `agentarts destroy …` after POSIX de-quoting,
   // but the literal match never sees the keyword through the quote.
   const stripped = t.replace(/['"]/g, '');
-  const strippedMatch = AGENTARTS_KEYWORD_PATTERN.exec(stripped);
-  if (!strippedMatch) return null;
-  const agentartsIndex = strippedMatch.index + strippedMatch[0].length - strippedMatch.groups.kw.length;
-  return stripped.slice(agentartsIndex);
+  const retry = findAgentartsKeyword(stripped);
+  if (retry === -1) return null;
+  return stripped.slice(retry);
 }
 
 // Classify an agentarts invocation from the de-quoted tokens that follow the
@@ -609,7 +632,8 @@ export function classifyAgentartsArgs(tokens, options = {}) {
     if (
       !group &&
       options.segment &&
-      (/\b(?:g)?xargs\b/.test(options.segment) || /\b(?:g)?xargs\b/.test(options.segment.replace(/['"]/g, '')))
+      (/\b(?:g)?(?:xargs|parallel)\b/i.test(options.segment) ||
+        /\b(?:g)?(?:xargs|parallel)\b/i.test(options.segment.replace(/['"]/g, '')))
     ) {
       // `… | xargs [-r/-n1/…] agentarts` (any spelling, incl. path or
       // $AGENTARTS_BIN) feeds the subcommand on stdin — unclassifiable and
