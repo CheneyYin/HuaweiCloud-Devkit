@@ -7,6 +7,7 @@ import { DevkitStdioTransport } from './mcp-stdio-transport.ts';
 import { createDevkitMcpServer } from './mcp-protocol.ts';
 import { DEFAULT_PORT, DEFAULT_HOST } from './mcp-server-remote.ts';
 import { getCachedUpdateInfo, readInstalledVersion } from './update-check.ts';
+import { maybePreinstallKooCli } from './preflight.ts';
 
 const transportIdx = process.argv.indexOf('--transport');
 const transport = transportIdx > -1 && process.argv[transportIdx + 1] ? process.argv[transportIdx + 1] : 'stdio';
@@ -64,6 +65,15 @@ if (transport === 'remote') {
     process.exit(1);
   });
 } else {
+  // First-use UX (stdio only — the stateless remote must not churn the lock
+  // or trigger unattended downloads): if KooCLI is missing, kick off a
+  // background install so the first cloud command doesn't hit a bare
+  // "command not found". Fire-and-forget; never fatal, never blocks.
+  try {
+    maybePreinstallKooCli();
+  } catch {
+    // best-effort: preflight failures must never keep the server from starting
+  }
   void runStdioServer();
 }
 

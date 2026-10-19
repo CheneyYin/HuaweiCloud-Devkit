@@ -23,6 +23,10 @@ import { getCodexPluginName, getMarketplaceName } from '../plugins/huaweicloud-c
 import { parseCoreSkillNames } from '../plugins/huaweicloud-core/src/lib/skill-manifest.ts';
 import { fixtureDir } from './fixture-dir.ts';
 
+// Real agent sessions must not kick off a REAL background KooCLI install
+// from inside the test run.
+process.env.HUAWEICLOUD_SKIP_HCLOUD_PREINSTALL = '1';
+
 const root = fileURLToPath(new URL('..', import.meta.url));
 const setupCli = join(root, 'bin', 'setup.cjs');
 

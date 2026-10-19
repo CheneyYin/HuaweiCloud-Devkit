@@ -43,6 +43,7 @@ export const STRIP_ENV_KEYS: readonly string[] = [
 // and a local NO_PROXY belt-and-braces behind the proxy strip.
 export const FIXED_ENV_OVERRIDES: Readonly<Record<string, string>> = {
   HUAWEICLOUD_DEVKIT_TELEMETRY: 'off',
+  HUAWEICLOUD_SKIP_HCLOUD_PREINSTALL: '1',
   HUAWEICLOUD_DEVKIT_SKIP_UPDATE: '1',
   HUAWEICLOUD_INJECT_STS_CMD: '0',
   NO_PROXY: '127.0.0.1,localhost',

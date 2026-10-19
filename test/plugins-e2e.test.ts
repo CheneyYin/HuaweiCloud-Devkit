@@ -12,6 +12,7 @@ const setupCli = join(root, 'bin', 'setup.cjs');
 function makeEnv(home: string, _cwd: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    HUAWEICLOUD_SKIP_HCLOUD_PREINSTALL: '1',
     USERPROFILE: home,
     HOME: home,
     HOMEDRIVE: home.slice(0, 2),
