@@ -1,0 +1,16 @@
+                                                                                
+ Usage: agentarts gateway delete [OPTIONS] {gateway_id}                         
+                                                                                
+ Delete a gateway                                                               
+                                                                                
+ Examples:                                                                      
+ agentarts gateway delete 123                                                   
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    gateway_id      <str>  Gateway ID [required]                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --skip-ssl-verification  -k        Skip SSL certificate verification         │
+│ --help                             Show this message and exit.               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

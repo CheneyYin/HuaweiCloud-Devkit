@@ -1,0 +1,20 @@
+                                                                                
+ Usage: agentarts gateway list-targets [OPTIONS] {gateway_id}                   
+                                                                                
+ List gateway targets                                                           
+                                                                                
+ Examples:                                                                      
+ agentarts gateway list-targets 123 --limit 10                                  
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    gateway_id      <str>  Gateway ID [required]                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --limit                          <int>  Limit for pagination (default: 50,   │
+│                                         min: 1, max: 100)                    │
+│ --offset                         <int>  Offset for pagination (default: 0,   │
+│                                         min: 0, max: 100000)                 │
+│ --skip-ssl-verification  -k             Skip SSL certificate verification    │
+│ --help                                  Show this message and exit.          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

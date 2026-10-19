@@ -1,0 +1,17 @@
+                                                                                
+ Usage: agentarts memory delete [OPTIONS] {space_id}                            
+                                                                                
+ Delete a Space.                                                                
+                                                                                
+ Uses AK/SK authentication via environment variables.                           
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    space_id      <str>  Space ID [required]                                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --region                 -r      <str>  Region name (default: cn-north-4)    │
+│ --force                  -f             Force deletion without confirmation  │
+│ --skip-ssl-verification                 Skip SSL certificate verification    │
+│ --help                                  Show this message and exit.          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

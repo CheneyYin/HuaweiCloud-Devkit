@@ -1,0 +1,18 @@
+                                                                                
+ Usage: agentarts memory list [OPTIONS]                                         
+                                                                                
+ List Spaces.                                                                   
+                                                                                
+ Uses AK/SK authentication via environment variables.                           
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --limit                  -l      <int>  Maximum number of spaces             │
+│                                         [default: 20]                        │
+│ --offset                         <int>  Offset for pagination [default: 0]   │
+│ --region                 -r      <str>  Region name (default: cn-north-4)    │
+│ --output                 -o      <str>  Output format: table, json           │
+│                                         [default: table]                     │
+│ --skip-ssl-verification                 Skip SSL certificate verification    │
+│ --help                                  Show this message and exit.          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

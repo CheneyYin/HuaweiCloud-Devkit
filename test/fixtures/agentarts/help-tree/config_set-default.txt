@@ -1,0 +1,15 @@
+                                                                                
+ Usage: agentarts config set-default [OPTIONS] {name}                           
+                                                                                
+ Set the default agent name.                                                    
+                                                                                
+ Examples:                                                                      
+ agentarts config set-default my-agent                                          
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    name      <str>  Agent name to set as default [required]                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

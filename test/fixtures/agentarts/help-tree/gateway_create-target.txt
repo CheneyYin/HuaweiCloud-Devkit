@@ -1,0 +1,24 @@
+                                                                                
+ Usage: agentarts gateway create-target [OPTIONS] {gateway_id}                  
+                                                                                
+ Create a new gateway target                                                    
+                                                                                
+ Examples:                                                                      
+ agentarts gateway create-target 123 --name my-target                           
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    gateway_id      <str>  Gateway ID [required]                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --target-configuration               <str>  Target configuration (JSON    │
+│                                                format)                       │
+│                                                [required]                    │
+│    --name                       -n      <str>  Target name                   │
+│    --description                -d      <str>  Target description            │
+│    --credential-provider-conf…          <str>  Credential provider           │
+│                                                configuration (JSON format)   │
+│    --skip-ssl-verification      -k             Skip SSL certificate          │
+│                                                verification                  │
+│    --help                                      Show this message and exit.   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

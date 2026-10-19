@@ -1,0 +1,17 @@
+                                                                                
+ Usage: agentarts gateway get-target [OPTIONS] {gateway_id} {target_id}         
+                                                                                
+ Get details of a gateway target                                                
+                                                                                
+ Examples:                                                                      
+ agentarts gateway get-target 123 456                                           
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    gateway_id      <str>  Gateway ID [required]                            │
+│ *    target_id       <str>  Target ID [required]                             │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --skip-ssl-verification  -k        Skip SSL certificate verification         │
+│ --help                             Show this message and exit.               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

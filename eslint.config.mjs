@@ -7,7 +7,7 @@ import globals from 'globals';
 
 export default [
   {
-    ignores: ['node_modules/', 'dist/', '.codeartsdoer/', '*.zst', '*.db'],
+    ignores: ['node_modules/', 'dist/', '.codeartsdoer/', '.e2e-home/', '*.zst', '*.db'],
   },
   js.configs.recommended,
   nodePlugin.configs['flat/recommended'],

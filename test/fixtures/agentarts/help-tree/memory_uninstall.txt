@@ -1,0 +1,15 @@
+                                                                                
+ Usage: agentarts memory uninstall [OPTIONS] [target]                           
+                                                                                
+ Uninstall an AgentArts Memory plugin.                                          
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   target      <str>  Platform (hermes, claude, codex, opencode, openclaw).   │
+│                      Omit to select.                                         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --global            Limit to user-level installs.                            │
+│ --yes     -y        Auto-confirm all prompts.                                │
+│ --help              Show this message and exit.                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

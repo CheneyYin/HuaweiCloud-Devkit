@@ -1,0 +1,28 @@
+                                                                                
+ Usage: agentarts [OPTIONS] COMMAND [ARGS]...                                   
+                                                                                
+ AgentArts CLI - Huawei Cloud Agent Development Toolkit                         
+                                                                                
+ Build, test, and deploy Agent applications quickly.                            
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --version             -v        Show version and exit                        │
+│ --verbose                       Enable verbose logging (DEBUG level)         │
+│ --install-completion            Install completion for the current shell.    │
+│ --show-completion               Show completion for the current shell, to    │
+│                                 copy it or customize the installation.       │
+│ --help                          Show this message and exit.                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ init     Initialize a new AgentArts project.                                 │
+│ config   Configuration management. (alias: configure)                        │
+│ dev      Run local development server.                                       │
+│ launch   Deploy agent to Huawei Cloud or run locally. (alias: deploy)        │
+│ invoke   Invoke agent with JSON payload.                                     │
+│ runtime  Runtime operations (cloud only): invoke, exec-command,              │
+│          upload-files, download-files, start-session, stop-session           │
+│ destroy  Destroy agent from Huawei Cloud.                                    │
+│ gateway  Gateway management commands                                         │
+│ memory   Memory Space management commands                                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

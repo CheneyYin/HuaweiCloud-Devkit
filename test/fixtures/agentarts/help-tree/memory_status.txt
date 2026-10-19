@@ -1,0 +1,23 @@
+                                                                                
+ Usage: agentarts memory status [OPTIONS] {space_id}                            
+                                                                                
+ Check the status of a Memory Space.                                            
+                                                                                
+ This command provides a simplified view of space status showing                
+ only the essential information like available status and health.               
+                                                                                
+ Uses AK/SK authentication via environment variables:                           
+ - HUAWEICLOUD_SDK_AK: Access Key                                               
+ - HUAWEICLOUD_SDK_SK: Secret Key                                               
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    space_id      <str>  Space ID to check status [required]                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --region                 -r      <str>  Region name (default: cn-north-4)    │
+│ --output                 -o      <str>  Output format: table, json           │
+│                                         [default: table]                     │
+│ --skip-ssl-verification                 Skip SSL certificate verification    │
+│ --help                                  Show this message and exit.          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

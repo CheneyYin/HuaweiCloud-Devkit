@@ -1,0 +1,53 @@
+                                                                                
+ Usage: agentarts runtime download-files [OPTIONS]                              
+                                                                                
+ Download files from runtime (cloud only).                                      
+                                                                                
+ Configuration Requirement:                                                     
+     This command requires file transfer to be enabled on the deployed agent.   
+     You can enable it in two ways:                                             
+     1. Set file_transfer_config.enabled=true in .agentarts_config.yaml and     
+ redeploy with 'agentarts deploy'                                               
+     2. Update the configuration directly on Huawei Cloud AgentArts console     
+                                                                                
+ Example configuration in .agentarts_config.yaml:                               
+     runtime:                                                                   
+       invoke_config:                                                           
+         file_transfer_config:                                                  
+           enabled: true                                                        
+                                                                                
+ Examples:                                                                      
+     # Download single file                                                     
+     agentarts runtime download-files --agent myagent --session <session-id>    
+ --path /tmp/data.txt                                                           
+                                                                                
+     # Download with custom output path                                         
+     agentarts runtime download-files -a myagent -s <session-id> -p             
+ /tmp/data.txt -o ./local_data.txt                                              
+                                                                                
+     # Download directory as tar                                                
+     agentarts runtime download-files -a myagent -s <session-id> -p             
+ /tmp/project --recursive                                                       
+                                                                                
+     # Use bearer token                                                         
+     agentarts runtime download-files -a myagent -s <session-id> -p             
+ /data/file.txt -bt <token>                                                     
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --agent                  -a       <str>  Agent name                          │
+│ --session                -s       <str>  Session ID                          │
+│ --path                   -p       <str>  Remote file/directory path          │
+│ --output                 -o       <str>  Local output path                   │
+│ --recursive                              Download directory as tar archive   │
+│ --bearer-token           -bt      <str>  Bearer token for authentication     │
+│ --region                 -r       <str>  Region name                         │
+│ --endpoint               -e       <str>  Endpoint name                       │
+│ --skip-ssl-verification  -k              Skip SSL certificate verification   │
+│ --user-id                -u       <str>  User ID for OAuth2 outbound         │
+│                                          credentials                         │
+│ --timeout                         <int>  Request timeout in seconds          │
+│                                          (default: 900)                      │
+│                                          [default: 900]                      │
+│ --help                                   Show this message and exit.         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

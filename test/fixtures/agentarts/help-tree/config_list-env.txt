@@ -1,0 +1,14 @@
+                                                                                
+ Usage: agentarts config list-env [OPTIONS]                                     
+                                                                                
+ List environment variables for an agent.                                       
+                                                                                
+ Examples:                                                                      
+ agentarts config list-env                                                      
+ agentarts config list-env --agent myagent                                      
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --agent  -a      <str>  Agent name                                           │
+│ --help                  Show this message and exit.                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

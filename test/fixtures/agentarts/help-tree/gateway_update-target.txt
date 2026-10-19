@@ -1,0 +1,24 @@
+                                                                                
+ Usage: agentarts gateway update-target [OPTIONS] {gateway_id} {target_id}      
+                                                                                
+ Update an existing gateway target                                              
+                                                                                
+ Examples:                                                                      
+ agentarts gateway update-target 123 456 --name updated-target                  
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    gateway_id      <str>  Gateway ID [required]                            │
+│ *    target_id       <str>  Target ID [required]                             │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --name                         -n      <str>  Target name                    │
+│ --description                  -d      <str>  Target description             │
+│ --target-configuration                 <str>  Target configuration (JSON     │
+│                                               format)                        │
+│ --credential-provider-config…          <str>  Credential provider            │
+│                                               configuration (JSON format)    │
+│ --skip-ssl-verification        -k             Skip SSL certificate           │
+│                                               verification                   │
+│ --help                                        Show this message and exit.    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
