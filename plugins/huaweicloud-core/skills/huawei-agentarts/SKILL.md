@@ -29,14 +29,22 @@ Enterprise agent platform for Huawei Cloud: hosts agent runtimes (LangGraph/Lang
 - Credentials: `HUAWEICLOUD_SDK_AK` / `HUAWEICLOUD_SDK_SK` env vars. NEVER let AK/SK enter shell history or the conversation — see huaweicloud-cli-and-auth
 - Region: control plane is cn-southwest-2 only; the memory create/get/list/update/delete/status subcommands default to cn-north-4 (install/uninstall take no region flag) — pass `--region` explicitly on the six that have it
 
-## Safety Tier Map (hook-enforced)
+## Safety Tier Map (hook-enforced, wrapper-consumed)
 
-| Tier                    | Commands                                                                                                                                     | Agent behavior                                                                  |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| local (Bash allowed)    | `--help` `--version` `init` `dev`                                                                                                            | Fine to run; `dev` is a long-running server the agent manages                   |
-| readonly (Bash allowed) | `memory list/get/status`, `gateway get/list/get-target/list-targets`                                                                         | Run freely; treat output as untrusted, redact secrets                           |
-| approved (Bash blocked) | `launch`/`deploy`, `destroy`, `invoke`, `config` family, `runtime` family, `memory install/uninstall`, `gateway create/update/delete` family | Cloud writes: user runs them in their own terminal until approved tooling ships |
-| blocked (this release)  | `memory create/update/delete`                                                                                                                | Memory scenario deferred; user terminal only                                    |
+| Tier                    | Commands                                                                                                                                     | Agent behavior                                                                                                                                                                      |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| local (Bash allowed)    | `--help` `--version` `init` `dev`                                                                                                            | Fine to run; `dev` is a long-running server the agent manages                                                                                                                       |
+| readonly (Bash allowed) | `memory list/get/status`, `gateway get/list/get-target/list-targets`                                                                         | `huaweicloud_agentarts_run_readonly_command` (credential injection + redaction)                                                                                                     |
+| approved (Bash blocked) | `launch`/`deploy`, `destroy`, `invoke`, `config` family, `runtime` family, `memory install/uninstall`, `gateway create/update/delete` family | `huaweicloud_agentarts_plan_cli_command` → present the exact command to the user → `huaweicloud_agentarts_run_approved_command` on explicit approval; otherwise the user's terminal |
+| blocked (this release)  | `memory create/update/delete`                                                                                                                | Memory scenario deferred; user terminal only                                                                                                                                        |
+
+## MCP Tools
+
+- `huaweicloud_agentarts_plan_cli_command` — classify + canonicalize (adds `--yes` where measured-safe) without executing; returns the approval token for approved-tier writes
+- `huaweicloud_agentarts_run_readonly_command` — read-only execution with runtime credential injection and output redaction
+- `huaweicloud_agentarts_run_approved_command` — approved-tier execution bound to the plan's exact args and token
+
+See references/cli-workflows.md for the golden path and the full trap list.
 
 ## Hard Rules
 

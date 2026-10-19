@@ -10,6 +10,7 @@ import { evaluateArtifacts, evaluateCommandRisk, evaluateDeployPlan } from './ri
 import { classifyTextCommand, redactSecrets } from './safety-policy.mjs';
 import { planHcloudCommand, runHcloud, consumeApprovalToken, inspectApprovalToken, hashArgs } from './hcloud-cli.mjs';
 import { checkAccountType } from './account-type.mjs';
+import { AGENTARTS_TOOL_DEFINITIONS, callAgentartsTool } from './agentarts-cli.mjs';
 import { searchMarketplace } from './search-market.mjs';
 import { getServiceIcon } from './icon-library.mjs';
 import { detectFramework } from './detect-framework.mjs';
@@ -951,6 +952,7 @@ export const TOOL_DEFINITIONS = [
       required: ['action', 'bucket', 'region'],
     },
   },
+  ...AGENTARTS_TOOL_DEFINITIONS,
 ];
 
 function toolInvokeValue(name, args) {
@@ -1193,6 +1195,10 @@ export async function callTool(name, rawArgs = {}, opts = {}) {
       return listOperations(args.service, { timeoutMs: args.timeoutMs });
     case 'huaweicloud_run_approved_command':
       return runApprovedCommand(args);
+    case 'huaweicloud_agentarts_plan_cli_command':
+    case 'huaweicloud_agentarts_run_readonly_command':
+    case 'huaweicloud_agentarts_run_approved_command':
+      return callAgentartsTool(name, args);
     case 'huaweicloud_show_profile_redacted':
       return showProfileRedacted(args.profile);
     case 'huaweicloud_hook_check_command':

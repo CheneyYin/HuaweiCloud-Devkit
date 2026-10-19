@@ -13,6 +13,7 @@
     "private[_-]?key",
     "user[_-]?data",
     "metadata",
+    "api[_-]?key",
     "ak",
     "sk"
   ],
@@ -20,7 +21,9 @@
     "\\.hcloud",
     "\\.huaweicloud",
     "hcloud[/\\\\](config|credentials)",
-    "huaweicloud[/\\\\](config|credentials)"
+    "huaweicloud[/\\\\](config|credentials)",
+    "\\.agentarts_config",
+    "\\.env"
   ],
   "blockedConfigureSubcommands": ["show", "get", "list", "export", "init"],
   "blockedSecretOperations": ["ShowSecret", "ShowSecretVersion", "DownloadSecret", "GetSecretValue"],
@@ -85,7 +88,20 @@
     "commands": {
       "init": { "tier": "local" },
       "dev": { "tier": "local" },
-      "config": { "tier": "approved", "labels": ["credential-guard"] },
+      "config": {
+        "tier": "approved",
+        "labels": ["credential-guard"],
+        "subcommands": {
+          "list": { "tier": "approved", "labels": ["credential-guard"] },
+          "set-default": { "tier": "approved", "labels": ["credential-guard"] },
+          "get": { "tier": "approved", "labels": ["credential-guard"] },
+          "set": { "tier": "approved", "labels": ["credential-guard"] },
+          "remove": { "tier": "approved", "labels": ["credential-guard"] },
+          "set-env": { "tier": "approved", "labels": ["credential-guard"] },
+          "remove-env": { "tier": "approved", "labels": ["credential-guard"] },
+          "list-env": { "tier": "approved", "labels": ["credential-guard"] }
+        }
+      },
       "launch": { "tier": "approved", "labels": ["billing"] },
       "destroy": { "tier": "approved", "labels": ["irreversible"] },
       "invoke": { "tier": "approved", "labels": ["execute"] },

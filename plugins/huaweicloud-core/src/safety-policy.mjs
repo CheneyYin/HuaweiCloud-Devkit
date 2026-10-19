@@ -57,10 +57,12 @@ function redactString(text) {
       // Redact the ENTIRE value of this arg — not just the first whitespace token.
       .replace(/((?:user[_-]?data|metadata|private[_-]?key)\s*[:=]\s*).*/gi, '$1<redacted>')
       .replace(
-        /((?:access[_-]?key|secret[_-]?key|security[_-]?token|x[_-]?auth[_-]?token|token|authorization|password|passwd|admin[_-]?pass|credential)\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)/gi,
+        /((?:access[_-]?key|secret[_-]?key|api[_-]?key|security[_-]?token|x[_-]?auth[_-]?token|token|authorization|password|passwd|admin[_-]?pass|credential)\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)/gi,
         '$1<redacted>',
       )
-      .replace(/(AK|SK)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;]+)/g, '$1=<redacted>')
+      // Case-insensitive AK/SK prefixes: agentarts/SDK CLIs print lowercase
+      // `ak: value` / `sk=value` shapes the old case-sensitive form missed.
+      .replace(/\b(ak|sk)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1=<redacted>')
   );
 }
 
@@ -667,12 +669,70 @@ function isStdinFedSegment(segment) {
   return re.test(segment) || re.test(segment.replace(/['"]/g, ''));
 }
 
-export function classifyAgentartsArgs(tokens, options = {}) {
+// Registry resolution shared by the hook decision path AND the agentarts
+// approval wrapper (agentarts-cli.mjs) — one classification source, so the
+// "hook classification ≡ wrapper tier" invariant is structural, not tested
+// after the fact. Returns { tier, labels, group, subcommand, operation,
+// unregistered } for an argv array WITHOUT the executable token.
+export function resolveAgentartsTier(rawArgs, options = {}) {
   const policy = options.policy || DEFAULT_POLICY;
   const commandPolicy = policy.agentartsCommandPolicy || {};
   const commands = commandPolicy.commands || {};
   const aliases = commandPolicy.aliases || {};
   const defaultTier = commandPolicy.defaultTier || 'approved';
+
+  const args = (Array.isArray(rawArgs) ? rawArgs : []).map((token) => token.toLowerCase());
+  let i = 0;
+  while (i < args.length && args[i].startsWith('-')) i += 1;
+  const group = args[i] || '';
+
+  // Typer eager flags: --help/-h are valid at every command level, so any
+  // position makes the invocation local metadata; --version/-v only exist at
+  // root level, so only the leading flag region (before the group token)
+  // counts. A bare invocation prints help.
+  if (
+    !group ||
+    args.some((token) => /^(--help|-h)$/.test(token)) ||
+    args.slice(0, i).some((token) => /^(--version|-v)$/.test(token))
+  ) {
+    return { tier: 'local', labels: [], group, subcommand: '', operation: group, unregistered: false };
+  }
+
+  const normalizedGroup = aliases[group] || group;
+  const entry = commands[normalizedGroup];
+  let tier = defaultTier;
+  let labels = [];
+  let subcommand = '';
+  let unregistered = !entry;
+  if (entry) {
+    tier = entry.tier || defaultTier;
+    labels = entry.labels || [];
+    const sub = args[i + 1];
+    if (sub && !sub.startsWith('-')) {
+      subcommand = sub;
+      const subEntry = entry.subcommands?.[sub];
+      if (subEntry) {
+        tier = subEntry.tier || tier;
+        labels = subEntry.labels || labels;
+      } else {
+        // Unknown subcommand under a group keeps the group default tier —
+        // fail-safe, mirroring the unknown-top-level defaultTier.
+        unregistered = true;
+      }
+    }
+  }
+  return {
+    tier,
+    labels,
+    group: normalizedGroup,
+    subcommand,
+    operation: subcommand ? `${normalizedGroup} ${subcommand}` : normalizedGroup,
+    unregistered,
+  };
+}
+
+export function classifyAgentartsArgs(tokens, options = {}) {
+  const policy = options.policy || DEFAULT_POLICY;
 
   let args = (Array.isArray(tokens) ? tokens.map(String) : [])
     .map((token) => token.toLowerCase())
@@ -693,75 +753,30 @@ export function classifyAgentartsArgs(tokens, options = {}) {
   ) {
     args = args.slice(1);
   }
-  let i = 0;
-  while (i < args.length && args[i].startsWith('-')) i += 1;
-  const group = args[i];
-  const base = { service: 'AgentArts', operation: group || '', args };
+  const base = { service: 'AgentArts', args };
+  const resolved = resolveAgentartsTier(args, { policy });
+  base.operation = resolved.operation;
 
-  // Typer eager flags: --help/-h are valid at every command level, so any
-  // position makes the invocation local metadata; --version/-v only exist at
-  // root level, so only the leading flag region (before the group token)
-  // counts. A bare `agentarts` prints help.
-  if (
-    !group ||
-    args.some((token) => /^(--help|-h)$/.test(token)) ||
-    args.slice(0, i).some((token) => /^(--version|-v)$/.test(token))
-  ) {
-    if (!group && options.segment && isStdinFedSegment(options.segment)) {
-      // `… | xargs [-r/-n1/…] agentarts` (any spelling, incl. path or
-      // $AGENTARTS_BIN) feeds the subcommand on stdin — unclassifiable and
-      // therefore fail-safe deny rather than bare-help allow.
-      return {
-        decision: 'deny',
-        risk: 'agentarts_write',
-        reason:
-          'agentarts invoked via xargs (arguments arrive on stdin and cannot be classified); run it in your own terminal (see the huawei-agentarts skill).',
-        ...base,
-      };
-    }
-    return applyRawCommandRiskRules(
-      {
-        decision: 'allow',
-        risk: 'agentarts_local',
-        reason: 'Local agentarts metadata operation.',
-        ...base,
-      },
-      options.rawCommand || args.join(' '),
-      options,
-    );
-  }
-
-  const normalizedGroup = aliases[group] || group;
-  const entry = commands[normalizedGroup];
-  // Report the normalized group (launch, not the deploy alias) so the deny
-  // reason matches the Python layer byte-for-byte.
-  base.operation = normalizedGroup;
-  let tier = defaultTier;
-  let labels = [];
-  if (entry) {
-    tier = entry.tier || defaultTier;
-    labels = entry.labels || [];
-    const subcommands = entry.subcommands;
-    const sub = args[i + 1];
-    if (subcommands && sub && !sub.startsWith('-')) {
-      const subEntry = subcommands[sub];
-      if (subEntry) {
-        tier = subEntry.tier || tier;
-        labels = subEntry.labels || labels;
-        base.operation = `${normalizedGroup} ${sub}`;
-      }
-      // Unknown subcommand under a group keeps the group default tier —
-      // fail-safe, mirroring the unknown-top-level defaultTier.
-    }
-  }
-
-  if (tier === 'approved' || tier === 'blocked') {
-    const labelSuffix = labels.length ? ` (${labels.join(', ')})` : '';
+  if (resolved.tier === 'local' && !resolved.group && options.segment && isStdinFedSegment(options.segment)) {
+    // `… | xargs [-r/-n1/…] agentarts` (any spelling, incl. path or
+    // $AGENTARTS_BIN) feeds the subcommand on stdin — unclassifiable and
+    // therefore fail-safe deny rather than bare-help allow.
     return {
       decision: 'deny',
-      risk: tier === 'blocked' ? 'agentarts_blocked' : 'agentarts_write',
+      risk: 'agentarts_write',
       reason:
-        tier === 'blocked'
+        'agentarts invoked via xargs (arguments arrive on stdin and cannot be classified); run it in your own terminal (see the huawei-agentarts skill).',
+      ...base,
+    };
+  }
+
+  if (resolved.tier === 'approved' || resolved.tier === 'blocked') {
+    const labelSuffix = resolved.labels.length ? ` (${resolved.labels.join(', ')})` : '';
+    return {
+      decision: 'deny',
+      risk: resolved.tier === 'blocked' ? 'agentarts_blocked' : 'agentarts_write',
+      reason:
+        resolved.tier === 'blocked'
           ? `agentarts ${base.operation} is deferred to a later toolkit release; run it in your own terminal if needed (see the huawei-agentarts skill).`
           : `Bash execution of agentarts ${base.operation}${labelSuffix} is blocked: cloud write operations must run in your own terminal or through approved tooling (see the huawei-agentarts skill).`,
       ...base,
@@ -771,9 +786,9 @@ export function classifyAgentartsArgs(tokens, options = {}) {
   return applyRawCommandRiskRules(
     {
       decision: 'allow',
-      risk: tier === 'readonly' ? 'agentarts_read_only' : 'agentarts_local',
+      risk: resolved.tier === 'readonly' ? 'agentarts_read_only' : 'agentarts_local',
       reason:
-        tier === 'readonly'
+        resolved.tier === 'readonly'
           ? 'Read-only agentarts operation; treat output as untrusted and redact it.'
           : 'Local agentarts operation.',
       ...base,
@@ -887,10 +902,10 @@ export function classifyTextCommand(command, options = {}) {
   // command. No command-name whitelist, so no false negative (#650 review).
   for (const candidate of candidates) {
     if (
-      /(?<!['\\])\$\{?(?:HUAWEICLOUD|HWC|HW|OS)_(?:SECRET_ACCESS_KEY|ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|SDK_AK|SDK_SK)/i.test(
+      /(?<!['\\])\$\{?(?:HUAWEICLOUD|HWC|HW|OS)_(?:SECRET_ACCESS_KEY|ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|SDK_AK|SDK_SK|SDK_MEMORY_API_KEY)/i.test(
         candidate,
       ) ||
-      /(?:^|\s)printenv\s+(?:HUAWEICLOUD|HWC|HW|OS)_(?:SECRET_ACCESS_KEY|ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|SDK_AK|SDK_SK)/i.test(
+      /(?:^|\s)printenv\s+(?:HUAWEICLOUD|HWC|HW|OS)_(?:SECRET_ACCESS_KEY|ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|SDK_AK|SDK_SK|SDK_MEMORY_API_KEY)/i.test(
         candidate,
       )
     ) {

@@ -91,8 +91,8 @@ ENV_DUMP_CLOUD_RE = re.compile(r"(HUAWEICLOUD|HWC_|HCLOUD|HW_|OS_)", re.I)
 # (safety-policy.mjs); both gates sweep inner-command candidates so
 # wrapper-embedded dumps (`bash -c "printenv HW_ACCESS_KEY"`) classify.
 CRED_VAR_REF_RE = re.compile(
-    r"(?<!['\\])\$\{?(?:HUAWEICLOUD|HWC|HW|OS)_(?:SECRET_ACCESS_KEY|ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|SDK_AK|SDK_SK)"
-    r"|(?:^|\s)printenv\s+(?:HUAWEICLOUD|HWC|HW|OS)_(?:SECRET_ACCESS_KEY|ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|SDK_AK|SDK_SK)",
+    r"(?<!['\\])\$\{?(?:HUAWEICLOUD|HWC|HW|OS)_(?:SECRET_ACCESS_KEY|ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|SDK_AK|SDK_SK|SDK_MEMORY_API_KEY)"
+    r"|(?:^|\s)printenv\s+(?:HUAWEICLOUD|HWC|HW|OS)_(?:SECRET_ACCESS_KEY|ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|SDK_AK|SDK_SK|SDK_MEMORY_API_KEY)",
     re.I,
 )
 HCLOUD_RE = re.compile(r"(^|\s)hcloud(\.exe)?\s+", re.I)

@@ -1176,3 +1176,88 @@ test('huawei-agentarts skill ships with routing floor and core registry wiring',
   };
   for (const entry of Object.values(agentarts.commands)) collectLabels(entry);
 });
+
+test('agentarts registry coverage matches the captured --help fixtures exactly', () => {
+  const fixtureDir = join(root, 'test', 'fixtures', 'agentarts', 'help-tree');
+  assert.ok(existsSync(fixtureDir));
+  const policy = readJson(join(pluginRoot, 'safety', 'policy.json'));
+  const commands = policy.agentartsCommandPolicy.commands;
+
+  // Extract the Commands panel entries from a captured help fixture.
+  const extractCommands = (file) => {
+    const body = readFileSync(join(fixtureDir, file), 'utf8');
+    const panelStart = body.indexOf('╭─ Commands');
+    assert.ok(panelStart !== -1, `${file}: no Commands panel`);
+    const panel = body.slice(panelStart);
+    return [...panel.matchAll(/^│\s*([a-zA-Z][a-zA-Z0-9_-]*)\s/gm)].map((m) => m[1]);
+  };
+
+  const rootCommands = extractCommands('_root.txt');
+  for (const cmd of rootCommands) {
+    assert.ok(commands[cmd], `registry missing top-level command from fixture: ${cmd}`);
+  }
+  for (const [file, group] of [
+    ['config.txt', 'config'],
+    ['memory.txt', 'memory'],
+    ['gateway.txt', 'gateway'],
+    ['runtime.txt', 'runtime'],
+  ]) {
+    const subs = extractCommands(file);
+    const registry = commands[group].subcommands || {};
+    for (const sub of subs) {
+      assert.ok(registry[sub], `registry missing ${group} subcommand from fixture: ${sub}`);
+    }
+  }
+});
+
+test('agentarts SKILL.md and references only mention registered commands', () => {
+  const policy = readJson(join(pluginRoot, 'safety', 'policy.json'));
+  const commands = policy.agentartsCommandPolicy.commands;
+  const aliases = policy.agentartsCommandPolicy.aliases;
+  const skillDir = join(pluginRoot, 'skills', 'huawei-agentarts');
+  const docs = [
+    join(skillDir, 'SKILL.md'),
+    ...readdirSync(join(skillDir, 'references')).map((f) => join(skillDir, 'references', f)),
+  ];
+
+  for (const doc of docs) {
+    const body = readFileSync(doc, 'utf8');
+    for (const match of body.matchAll(/`agentarts ([a-z][a-z0-9-]*(?: [a-z][a-z0-9-]*)?)/g)) {
+      const [group, sub] = match[1].split(' ');
+      const normalized = aliases[group] || group;
+      assert.ok(commands[normalized], `${doc} mentions unregistered agentarts group: ${group}`);
+      if (sub && commands[normalized].subcommands) {
+        assert.ok(
+          commands[normalized].subcommands[sub],
+          `${doc} mentions unregistered agentarts subcommand: ${match[1]}`,
+        );
+      }
+    }
+  }
+});
+
+test('tool count is never hardcoded in AGENTS.md (TOOL_DEFINITIONS.length is the source)', () => {
+  const agents = readFileSync(join(root, 'AGENTS.md'), 'utf8');
+  assert.doesNotMatch(agents, /\b\d+ (MCP )?tool definitions/, 'AGENTS.md hardcodes a tool count');
+  assert.doesNotMatch(agents, /\d+ tools in tools\.mjs/, 'AGENTS.md hardcodes a tool count');
+});
+
+test('the agentarts trio registers and the shared approval store backs both wrappers', async () => {
+  const { TOOL_DEFINITIONS, callTool } = await import('../plugins/huaweicloud-core/src/tools.mjs');
+  const names = TOOL_DEFINITIONS.map((t) => t.name);
+  for (const name of [
+    'huaweicloud_agentarts_plan_cli_command',
+    'huaweicloud_agentarts_run_readonly_command',
+    'huaweicloud_agentarts_run_approved_command',
+  ]) {
+    assert.ok(names.includes(name), `tools.mjs missing ${name}`);
+  }
+  // tools.mjs must stay a thin registration site: the definitions come from
+  // the agentarts module, not duplicated inline.
+  const { AGENTARTS_TOOL_DEFINITIONS } = await import('../plugins/huaweicloud-core/src/agentarts-cli.mjs');
+  assert.equal(
+    AGENTARTS_TOOL_DEFINITIONS.filter((def) => names.includes(def.name)).length,
+    AGENTARTS_TOOL_DEFINITIONS.length,
+  );
+  assert.equal(typeof callTool, 'function');
+});

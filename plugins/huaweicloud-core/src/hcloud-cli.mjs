@@ -1,138 +1,41 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 
 import { classifyHcloudArgs, redactSecrets, assertAllowed } from './safety-policy.mjs';
 import { getProxySettings } from './proxy/proxy-config.mjs';
 import { resolveHcloudCommand } from './hcloud-probe.mjs';
 import { parseStsExpiry, resolveCredentialsWithRuntime } from './auth/credentials.mjs';
+import { createApprovalTokenStore } from './approval-tokens.mjs';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_FORCE_KILL_AFTER_MS = 2_000;
 const DEFAULT_MAX_RETRIES = 1;
-const APPROVAL_TTL_MS = 5 * 60_000;
 const LARGE_OUTPUT_THRESHOLD = 50_000;
 const OUTPUT_DIR = join('/tmp', 'huaweicloud-devkit');
 
 // Approval tokens must survive a process boundary: plan and run land in
 // different MCP sessions/processes (and headless subprocesses), so the old
 // in-memory Map lost the token and plan→approve→run became unreachable (#578).
-// Persist to a per-user JSON file as the single source of truth. Only the
-// sha256 of the args plus the redacted form are stored — never the raw args,
-// which may carry --adminPass / --server.user_data secrets.
-function approvalFilePath() {
-  return join(process.env.HUAWEICLOUD_HOME || homedir(), '.config', 'huaweicloud', 'approvals.json');
-}
-
-function sha256Hex(data) {
-  return createHash('sha256').update(data).digest('hex');
-}
-
-export function hashArgs(args) {
-  return sha256Hex(JSON.stringify(args));
-}
-
-function readApprovals() {
-  try {
-    const path = approvalFilePath();
-    if (!existsSync(path)) return {};
-    const parsed = JSON.parse(readFileSync(path, 'utf8'));
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeApprovals(map) {
-  try {
-    const path = approvalFilePath();
-    mkdirSync(dirname(path), { recursive: true });
-    const tmp = `${path}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify(map), { encoding: 'utf8', mode: 0o600 });
-    renameSync(tmp, path);
-  } catch {
-    // Best-effort: an in-file failure degrades cross-process persistence but a
-    // token created/consumed within one process still works.
-  }
-}
-
-function pruneStale(map, now = Date.now()) {
-  let changed = false;
-  for (const [key, value] of Object.entries(map)) {
-    if (now - value.createdAt > APPROVAL_TTL_MS) {
-      delete map[key];
-      changed = true;
-    }
-  }
-  return changed;
-}
-
-// Approval token lifecycle states, surfaced to callers so they can emit the
-// precise JSON contract required by D4-24 (#745):
-//   'valid'            — token exists, not expired, not yet consumed
-//   'expired'          — token exists but createdAt is past APPROVAL_TTL_MS
-//   'already_consumed' — token was consumed on a prior call (tombstone kept)
-//   'not_found'        — token was never created (unknown / typo / pruned)
-const TOKEN_STATE_VALID = 'valid';
-const TOKEN_STATE_EXPIRED = 'expired';
-const TOKEN_STATE_ALREADY_CONSUMED = 'already_consumed';
-const TOKEN_STATE_NOT_FOUND = 'not_found';
-
-export function createApprovalToken(rawArgs) {
-  const token = randomUUID();
-  const map = readApprovals();
-  map[token] = {
-    argsHash: hashArgs(rawArgs),
-    argsRedacted: redactSecrets(rawArgs),
-    createdAt: Date.now(),
-  };
-  pruneStale(map);
-  writeApprovals(map);
-  return token;
-}
-
-// Inspect a token's lifecycle state WITHOUT consuming it. Used by
-// runApprovedCommand to decide between the 'expired' / 'already_consumed'
-// / 'not_found' JSON shapes. A consumed token leaves a tombstone
-// ({ consumedAt }) until it ages out past APPROVAL_TTL_MS.
-export function inspectApprovalToken(token) {
-  const map = readApprovals();
-  const entry = map[token];
-  if (!entry) return { state: TOKEN_STATE_NOT_FOUND };
-  if (entry.consumedAt !== undefined) return { state: TOKEN_STATE_ALREADY_CONSUMED };
-  if (Date.now() - entry.createdAt > APPROVAL_TTL_MS) return { state: TOKEN_STATE_EXPIRED };
-  return { state: TOKEN_STATE_VALID, entry };
-}
-
-// Backward-compatible single-use consume. Returns the stored entry on first
-// call, then null. After consumption a tombstone ({ consumedAt }) is written
-// so a second call can be distinguished from an unknown token via
-// inspectApprovalToken. Kept for existing tests that assert null on reuse.
-export function consumeApprovalToken(token) {
-  const map = readApprovals();
-  const entry = map[token];
-  if (!entry) return null;
-  if (entry.consumedAt !== undefined) return null;
-  if (Date.now() - entry.createdAt > APPROVAL_TTL_MS) {
-    delete map[token];
-    writeApprovals(map);
-    return null;
-  }
-  // Mark as consumed (tombstone) instead of deleting outright, so a repeat
-  // call can be classified as already_processed rather than not_found.
-  map[token] = { consumedAt: Date.now(), createdAt: entry.createdAt };
-  writeApprovals(map);
-  return entry;
-}
+// The machinery (persistence, TTL, tombstones, atomic writes, #745 states)
+// lives in approval-tokens.mjs, shared with the agentarts wrapper; this
+// per-CLI store binds it to the hcloud namespace so tokens cannot be
+// consumed across wrappers.
+const hcloudApprovals = createApprovalTokenStore('hcloud');
+export const createApprovalToken = hcloudApprovals.create;
+export const inspectApprovalToken = hcloudApprovals.inspect;
+export const consumeApprovalToken = hcloudApprovals.consume;
+export const hashArgs = hcloudApprovals.hashArgs;
 
 function saveLargeOutput(rawStdout) {
   if (rawStdout.length <= LARGE_OUTPUT_THRESHOLD) return null;
   try {
     mkdirSync(OUTPUT_DIR, { recursive: true });
     const filePath = join(OUTPUT_DIR, `output-${Date.now()}.json`);
-    writeFileSync(filePath, rawStdout, { encoding: 'utf8' });
+    // Redact BEFORE writing and keep the file private: the spilled buffer can
+    // carry credential-shaped values a truncated in-memory view never showed.
+    writeFileSync(filePath, redactSecrets(rawStdout), { encoding: 'utf8', mode: 0o600 });
     return filePath;
   } catch {
     return null;
