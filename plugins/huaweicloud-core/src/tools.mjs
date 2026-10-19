@@ -9,6 +9,7 @@ import { createHmac, createHash } from 'node:crypto';
 import { evaluateArtifacts, evaluateCommandRisk, evaluateDeployPlan } from './risk-rule-engine.mjs';
 import { classifyTextCommand, redactSecrets } from './safety-policy.mjs';
 import { planHcloudCommand, runHcloud, consumeApprovalToken, inspectApprovalToken, hashArgs } from './hcloud-cli.mjs';
+import { checkAccountType } from './account-type.mjs';
 import { searchMarketplace } from './search-market.mjs';
 import { getServiceIcon } from './icon-library.mjs';
 import { detectFramework } from './detect-framework.mjs';
@@ -418,6 +419,21 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {},
+    },
+  },
+  {
+    name: 'huaweicloud_check_account_type',
+    description:
+      'Check whether the current credentials belong to the primary account or an IAM sub-user. Runs STS GetCallerIdentity + IAM KeystoneListAuthDomains (both read-only, no identity-policy permission required) and applies the validated rule: username == domainName -> primary account, otherwise IAM sub-user. Use before sandbox deployment (primary-account prechecks), account confirmation, or any task that needs to know who the current AK/SK belongs to. Returns isPrimaryAccount, applicable, domainId, domainName, userId, username, principalUrn, and an evidence string. Agency-session credentials are detected and reported as applicable:false.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        region: {
+          type: 'string',
+          description:
+            'Optional region ID for the region-level GetCallerIdentity endpoint (e.g., cn-north-4). Defaults to the configured cli-region.',
+        },
+      },
     },
   },
   {
@@ -1186,6 +1202,8 @@ export async function callTool(name, rawArgs = {}, opts = {}) {
       return retrieveSkill(args.name || '');
     case 'huaweicloud_list_regions':
       return listRegions();
+    case 'huaweicloud_check_account_type':
+      return checkAccountType(args);
     case 'huaweicloud_get_regional_availability':
       return getRegionalAvailability(args.service || '', args.region || '');
     case 'huaweicloud_explain_error':
