@@ -34,7 +34,7 @@
     "test": "node --experimental-test-module-mocks --test \"test/*.test.mjs\"",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "lint:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#.git\" \"#test/**\" \"#docs/**\" \"#.superpowers/**\"",
+    "lint:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#.git\" \"#test/**\" \"#docs/**\" \"#.superpowers/**\" \"#.e2e-home\"",
     "lint:js": "eslint .",
     "lint": "npm run lint:md && npm run lint:js",
     "validate": "node ./scripts/validate-package.mjs && node ./scripts/sync-readme-badge.mjs",
