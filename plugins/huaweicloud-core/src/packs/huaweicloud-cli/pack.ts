@@ -22,7 +22,7 @@ export const huaweicloudCliPack: Pack = {
     'huawei-cbr',
     'huawei-cce',
     'huawei-cloud-eye',
-    'huawei-cts',
+    'huawei-cloud-cts-trace-management',
     'huawei-dds-dcs',
     'huawei-deployment',
     'huawei-dew',

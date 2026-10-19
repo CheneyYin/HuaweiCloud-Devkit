@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -2302,12 +2302,21 @@ test('adopted huawei-cloud-* skills teach the optional wrapper and the approval 
       /huaweicloud_plan_cli_command[\s\S]{0,120}huaweicloud_run_approved_command/,
       `${name}: approval write-path routing note missing`,
     );
-    // Doctrine bans across SKILL.md AND every reference — the mandate and
-    // the reporting doctrine were removed by ruling, not reworded.
-    for (const file of [
+    // Doctrine bans across SKILL.md, every reference, AND every template —
+    // the mandate and the reporting doctrine were removed by ruling, not
+    // reworded. templates/ joined the sweep with S2 (cts): the first adopted
+    // skill to ship templates carried dead v1-framework write-gating notes
+    // there (ALLOW_WRITES + allow_writes.yaml — no such file exists in v2;
+    // the approval chain is the devkit's), caught only by hand.
+    const doctrineFiles = [
       join(skillDir, 'SKILL.md'),
       ...readdirSync(join(skillDir, 'references')).map((f) => join(skillDir, 'references', f)),
-    ]) {
+    ];
+    const templatesDir = join(skillDir, 'templates');
+    if (existsSync(templatesDir)) {
+      doctrineFiles.push(...readdirSync(templatesDir).map((f) => join(templatesDir, f)));
+    }
+    for (const file of doctrineFiles) {
       const text = readFileSync(file, 'utf8');
       for (const banned of [
         /MUST be wrapped/i,
@@ -2318,6 +2327,7 @@ test('adopted huawei-cloud-* skills teach the optional wrapper and the approval 
         /cli_reporting/,
         /skillsapi\.developer\.myhuaweicloud\.com/,
         /urlretrieve/,
+        /allow_writes/i,
       ]) {
         assert.doesNotMatch(text, banned, `${name}/${file.split(/[/\\]/).pop()}: banned doctrine ${banned}`);
       }
@@ -2337,6 +2347,32 @@ test('adopted huawei-cloud-* skills teach the optional wrapper and the approval 
       !existsSync(join(cliRoot, name, 'scripts', 'cli', 'cli_reporting.py')),
       `${name}: cli_reporting.py must not ship`,
     );
+  }
+  // The normalized script pair is shared verbatim across every adopted
+  // skill and ships non-executable (it is invoked via `bash` / `python3`)
+  // — a copy that drifts in content OR file mode fails here (S2's
+  // ensure_cli.sh file-mode fork was the first such silent drift).
+  const reference: string | undefined = adopted.find((name) => present.includes(name));
+  if (reference) {
+    for (const rel of ['scripts/ensure_cli.sh', 'scripts/cli/cli_entry.py']) {
+      const referenceText: string = readFileSync(join(cliRoot, reference, rel), 'utf8');
+      for (const name of adopted) {
+        if (!present.includes(name)) continue;
+        if (process.platform !== 'win32') {
+          assert.equal(
+            statSync(join(cliRoot, name, rel)).mode & 0o111,
+            0,
+            `${name}/${rel} must ship non-executable (invoked via bash/python3)`,
+          );
+        }
+        if (name === reference) continue;
+        assert.equal(
+          readFileSync(join(cliRoot, name, rel), 'utf8'),
+          referenceText,
+          `${name}/${rel} must stay byte-identical to ${reference}/${rel}`,
+        );
+      }
+    }
   }
 });
 

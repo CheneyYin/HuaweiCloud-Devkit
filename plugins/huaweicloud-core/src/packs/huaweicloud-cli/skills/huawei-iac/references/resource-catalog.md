@@ -63,16 +63,16 @@ Every resource type the orchestration flow can purchase, bind, and destroy. This
 
 ## Messaging / Backup / Observability / Security
 
-| Resource                      | Create                                                  | Delete                            | Skill            |
-| ----------------------------- | ------------------------------------------------------- | --------------------------------- | ---------------- |
-| SMN topic / subscription      | discover with `hcloud SMN --help`                       | discover with `hcloud SMN --help` | huawei-smn-dms   |
-| DMS queue (Kafka/RocketMQ)    | discover with `hcloud DMS --help`                       | discover with `hcloud DMS --help` | huawei-smn-dms   |
-| CBR vault / policy            | discover with `hcloud CBR --help`                       | discover with `hcloud CBR --help` | huawei-cbr       |
-| CES alarm rule                | discover with `hcloud CES --help`                       | discover with `hcloud CES --help` | huawei-cloud-eye |
-| CTS tracker                   | discover with `hcloud CTS --help`                       | discover with `hcloud CTS --help` | huawei-cts       |
-| DEW secret / KMS key          | discover with `hcloud DEW --help` / `hcloud KMS --help` | discover with `hcloud DEW --help` | huawei-dew       |
-| WAF policy                    | discover with `hcloud WAF --help`                       | discover with `hcloud WAF --help` | huawei-waf-aad   |
-| IAM users / groups / agencies | discover with `hcloud IAM --help`                       | discover with `hcloud IAM --help` | huawei-iam       |
+| Resource                      | Create                                                  | Delete                            | Skill                             |
+| ----------------------------- | ------------------------------------------------------- | --------------------------------- | --------------------------------- |
+| SMN topic / subscription      | discover with `hcloud SMN --help`                       | discover with `hcloud SMN --help` | huawei-smn-dms                    |
+| DMS queue (Kafka/RocketMQ)    | discover with `hcloud DMS --help`                       | discover with `hcloud DMS --help` | huawei-smn-dms                    |
+| CBR vault / policy            | discover with `hcloud CBR --help`                       | discover with `hcloud CBR --help` | huawei-cbr                        |
+| CES alarm rule                | discover with `hcloud CES --help`                       | discover with `hcloud CES --help` | huawei-cloud-eye                  |
+| CTS tracker                   | discover with `hcloud CTS --help`                       | discover with `hcloud CTS --help` | huawei-cloud-cts-trace-management |
+| DEW secret / KMS key          | discover with `hcloud DEW --help` / `hcloud KMS --help` | discover with `hcloud DEW --help` | huawei-dew                        |
+| WAF policy                    | discover with `hcloud WAF --help`                       | discover with `hcloud WAF --help` | huawei-waf-aad                    |
+| IAM users / groups / agencies | discover with `hcloud IAM --help`                       | discover with `hcloud IAM --help` | huawei-iam                        |
 
 ## Pricing and Balance
 

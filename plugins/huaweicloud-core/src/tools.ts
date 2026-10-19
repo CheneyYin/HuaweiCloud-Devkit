@@ -685,7 +685,11 @@ function serviceCatalog(intent: string = '') {
       skills: ['huawei-cloud-eye'],
       services: ['CES'],
     },
-    { keywords: ['cts', 'audit', 'trace', 'tracker'], skills: ['huawei-cts'], services: ['CTS'] },
+    {
+      keywords: ['cts', 'audit', 'trace', 'tracker'],
+      skills: ['huawei-cloud-cts-trace-management'],
+      services: ['CTS'],
+    },
     { keywords: ['cbr', 'backup', 'restore', 'vault', 'snapshot'], skills: ['huawei-cbr'], services: ['CBR'] },
     {
       keywords: ['deployment', 'deploy', 'ci/cd', 'pipeline', 'release'],

@@ -34,20 +34,15 @@ Two supported ways (AK/SK never hardcoded in this skill):
 ### Option A — Local profile (recommended for interactive agents)
 
 The agent must NOT write credentials on the user's behalf — never execute a credential-writing
-command (e.g. `configure set`/`configure init`) for them.
+command (e.g. `configure set`/`configure init`) for them, and never inspect the raw profile:
+raw `hcloud configure show/list/get/export` is hook-blocked in agent tools.
 
-Check whether a profile already exists:
+Check whether a profile already exists with `huaweicloud_show_profile_redacted` (the devkit's
+redacted status tool):
 
-```bash
-hcloud configure list
-```
-
-- If the output shows an existing profile, use it directly (the agent reads it via the CLI, never prints it).
-- If no profile exists, prompt the user to authenticate themselves (interactive, user-run):
-
-```bash
-hcloud configure init
-```
+- If a profile exists, use it directly (status via the redacted tool; the agent never sees secrets).
+- If no profile exists, tell the user to run `npx huaweicloud-devkit auth init` — the single
+  credential entry point, which mirrors to KooCLI without AK/SK entering shell history.
 
 ### Option B — Environment variables (recommended for CI/agent runtimes)
 
@@ -71,7 +66,7 @@ export HUAWEICLOUD_SDK_REGION=cn-north-4
 ### Security rules
 
 - Never print, persist, or hardcode AK/SK — read them from the environment or the local profile only.
-- Never write AK/SK with `configure set` from inside a skill document or script; the agent only checks `hcloud configure list`.
+- Never write AK/SK with `configure set` from inside a skill document or script; the agent checks profile status only via `huaweicloud_show_profile_redacted`.
 - Use the most restrictive IAM identity that still allows the needed APIG operations (least privilege, see `references/iam-policies.md`).
 
 ## 3. Region and project
@@ -87,7 +82,7 @@ project of the region from the authentication information, then the profile's
 | ------------------------------- | -------------------------------------------------------------------------------- |
 | `hcloud APIG --help` fails      | Update KooCLI: `hcloud update -y`                                                |
 | `Missing required parameter(s)` | Check `hcloud APIG <Op> --help` for required params and include them             |
-| `Authentication failed` / 401   | Re-run `hcloud configure` or refresh AK/SK env vars                              |
+| `Authentication failed` / 401   | User re-runs `npx huaweicloud-devkit auth init`, or refresh AK/SK env vars       |
 | `No such operation`             | Operation names change across API versions — enumerate with `hcloud APIG --help` |
 
 ## 5. skill-quality-cli (OPTIONAL local wrapper)

@@ -60,7 +60,7 @@ The huawei-cloud-apig-instance-management skill is accepted when all of the foll
 
 ## G. Wrapper scripts (normalized v2 form)
 
-- [ ] `scripts/ensure_cli.sh` exists and is executable (availability check only; the wrapper is OPTIONAL).
+- [ ] `scripts/ensure_cli.sh` exists (availability check only; the wrapper is OPTIONAL).
 - [ ] `scripts/cli/cli_entry.py` ships the whitelist wrapper: `ALLOWED_COMMANDS = ("hcloud",)`, charset
       validation, passthrough stdio — no telemetry, no network, no self-upgrade.
 - [ ] No reporting module ships (the guard asserts its absence); no quality-report E2E is required.
