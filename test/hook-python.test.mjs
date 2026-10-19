@@ -267,3 +267,26 @@ test('python hook mirrors agentarts launcher/path/chained vectors and eager-flag
     assert.equal(JSON.parse(result.stdout), null, `${command} should be allowed`);
   }
 });
+
+test('python hook denies option-bearing launchers, xargs variants, and wrapper-chained writes', () => {
+  for (const command of [
+    'env -i agentarts destroy',
+    'nice -n 5 agentarts launch',
+    'timeout --foreground 300 agentarts launch',
+    'echo launch | xargs -r agentarts',
+    'echo launch | xargs /opt/venv/bin/agentarts',
+    'agentarts memory list & agentarts launch',
+    'agentarts memory list && bash -c "agentarts launch"',
+    'agentarts deploy',
+  ]) {
+    const result = runEvaluate('Bash', { command });
+    if (pythonUnavailable(result)) return;
+    assert.equal(result.status, 0, command);
+    const reason = JSON.parse(result.stdout);
+    assert.equal(typeof reason, 'string', `${command} should be blocked`);
+    assert.match(reason, /agentarts/i, command);
+  }
+  const deploy = runEvaluate('Bash', { command: 'agentarts deploy' });
+  if (pythonUnavailable(deploy)) return;
+  assert.match(JSON.parse(deploy.stdout), /agentarts launch \(billing\)/);
+});

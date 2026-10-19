@@ -117,7 +117,17 @@
           "delete-target": { "tier": "approved", "labels": ["irreversible"] }
         }
       },
-      "runtime": { "tier": "approved", "labels": ["execute"] }
+      "runtime": {
+        "tier": "approved",
+        "subcommands": {
+          "invoke": { "tier": "approved", "labels": ["execute"] },
+          "exec-command": { "tier": "approved", "labels": ["rce"] },
+          "upload-files": { "tier": "approved", "labels": ["data-exfil"] },
+          "download-files": { "tier": "approved", "labels": ["local-write"] },
+          "start-session": { "tier": "approved", "labels": ["execute"] },
+          "stop-session": { "tier": "approved", "labels": ["execute"] }
+        }
+      }
     }
   }
 }

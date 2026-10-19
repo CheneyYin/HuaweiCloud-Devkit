@@ -77,16 +77,20 @@ READ_OPERATION_RE = re.compile(r"\b(List|Show|Get|Describe|NovaList|NovaShow)\w*
 # AgentArts CLI (agentarts-sdk) keyword locator — command-position semantics
 # aligned with safety-policy.mjs, extended for invocation shapes the agentarts
 # floor must catch on its own (no approval wrapper yet): launcher prefixes
-# (env/nohup/xargs/exec/command/nice/setsid/stdbuf/watch, timeout N), env-var
-# assignments, path invocation, sudo with option flags, and the
-# $AGENTARTS_BIN handle. The (?![\w./-]) boundary excludes agentarts-sdk /
-# agentarts-setup lookalikes and directory paths. Tiers come from
-# policy.json agentartsCommandPolicy (measured facts, see
-# docs/agentarts-pr0-findings.md) so both hooks and the approval wrapper
-# consume one source.
+# with options and arguments (env -i, nice -n 5, xargs -r, timeout
+# --foreground 300), env-var assignments, path invocation, sudo with options
+# and values, and the $AGENTARTS_BIN handle. The (?![\w./-]) boundary
+# excludes agentarts-sdk / agentarts-setup lookalikes and directory paths.
+# Accepted deny-direction false positives are documented in
+# safety-policy.mjs (quoted separators, assignment-shaped prose,
+# launcher/sudo token-run prose). Tiers come from policy.json
+# agentartsCommandPolicy (measured facts, see docs/agentarts-pr0-findings.md)
+# so both hooks and the approval wrapper consume one source.
 AGENTARTS_KEYWORD_RE = re.compile(
-    r"(?:^|[;|&]\s*|\$\(\s*|`\s*|\r?\n\s*|(?:env|nohup|exec|command|xargs|nice|setsid|stdbuf|watch)\s+"
-    r"|sudo(?:\s+\S+)*\s+|timeout\s+\S+\s+|[A-Za-z_][A-Za-z0-9_]*=\S*\s+|[A-Za-z_][A-Za-z0-9_]*="
+    r"(?:^|[;|&]\s*|\$\(\s*|`\s*|\r?\n\s*"
+    r"|\b(?:env|nohup|exec|command|xargs|nice|setsid|stdbuf|watch|timeout)(?:\s+\S+)*\s+"
+    r"|sudo(?:\s+-\S+(?:\s+[^\s-]+)?)*\s+"
+    r"|[A-Za-z_][A-Za-z0-9_]*=\S*\s+|[A-Za-z_][A-Za-z0-9_]*="
     r"|[\w.~\\/-]*[/\\])"
     r"(?P<kw>agentarts(?:\.exe)?|\$\{?AGENTARTS_BIN\}?)(?![\w./-])",
     re.I | re.M,
@@ -137,7 +141,6 @@ def _inner_command_candidates(text):
 
 def _agentarts_classify_segment(segment):
     m = AGENTARTS_KEYWORD_RE.search(segment)
-    stripped_retry = False
     if not m:
         # Quote-embedded keyword retry (de-quoted copy, keyword location only).
         stripped = re.sub(r"['\"]", "", segment)
@@ -145,10 +148,8 @@ def _agentarts_classify_segment(segment):
         if not m:
             return None
         rest = stripped[m.end("kw"):]
-        stripped_retry = True
     else:
         rest = segment[m.end("kw"):]
-    pre = (stripped if stripped_retry else segment)[m.start():m.start("kw")]
     tokens = [t.lower() for t in _agentarts_tokens(rest)]
     if tokens:
         first = tokens[0]
@@ -164,7 +165,7 @@ def _agentarts_classify_segment(segment):
         i += 1
     eager_flag = any(t in ("--help", "-h") for t in tokens) or any(t in ("--version", "-v") for t in tokens[:i])
     if i >= len(tokens) or eager_flag:
-        if i >= len(tokens) and pre and re.search(r"(?:^|\s)xargs\s*$", pre, re.I):
+        if i >= len(tokens) and re.search(r"\bxargs\b", segment, re.I):
             return (
                 "agentarts invoked via xargs (arguments arrive on stdin and cannot be classified); "
                 "run it in your own terminal (see the huawei-agentarts skill)."
@@ -216,7 +217,7 @@ def agentarts_block_reason(text):
     write chained after a readonly segment is caught.
     """
     for candidate in _inner_command_candidates(text):
-        for segment in re.split(r"\|\||&&|;|\||\r?\n", candidate):
+        for segment in re.split(r"\|\||&&|;|\||&|\r?\n", candidate):
             segment = segment.strip()
             if not segment:
                 continue

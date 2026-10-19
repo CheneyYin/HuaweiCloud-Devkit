@@ -804,3 +804,56 @@ test('agentarts eager flags and lookalike names stay unblocked', () => {
     assert.equal(result.decision, 'allow', cmd);
   }
 });
+
+test('agentarts option-bearing launchers, xargs variants, and single-ampersand chains are denied', () => {
+  const denied = [
+    'env -i agentarts destroy',
+    'env -u FOO agentarts launch',
+    'nice -n 5 agentarts launch',
+    'watch -n 5 agentarts launch',
+    'stdbuf -oL agentarts destroy',
+    'setsid -w agentarts destroy',
+    'timeout -k 10 300 agentarts destroy',
+    'timeout --foreground 300 agentarts launch',
+    'echo launch | xargs -r agentarts',
+    'echo launch | xargs -n1 agentarts',
+    'echo launch | xargs /opt/venv/bin/agentarts',
+    'echo destroy | xargs -I{} agentarts {} launch',
+    'agentarts memory list & agentarts launch',
+  ];
+  for (const cmd of denied) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd);
+    assert.match(result.reason, /agentarts/i, cmd);
+  }
+});
+
+test('a readonly allow never shadows a deny in a later candidate or CLI (deny-first merge)', () => {
+  const denied = [
+    'agentarts memory list && bash -c "agentarts launch"',
+    'agentarts memory list ; eval "agentarts launch"',
+    'agentarts memory list | sh -c "agentarts launch"',
+    'agentarts memory list\nbash -c "agentarts launch"',
+    "bash -c 'agentarts memory list' && bash -c 'agentarts launch'",
+    'hcloud ECS ListServers && agentarts launch',
+    'hcloud ECS ListServers && bash -c "hcloud ECS NovaDeleteServer i-1"',
+  ];
+  for (const cmd of denied) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd);
+  }
+});
+
+test('agentarts alias deny reasons name the normalized group', () => {
+  const deploy = classifyTextCommand('agentarts deploy');
+  assert.equal(deploy.decision, 'deny');
+  assert.match(deploy.reason, /agentarts launch \(billing\)/);
+  const configure = classifyTextCommand('agentarts configure set base.region x');
+  assert.equal(configure.decision, 'deny');
+  assert.match(configure.reason, /agentarts config/);
+});
+
+test('agentarts empty-token invocation aligns across layers (write still denied)', () => {
+  assert.equal(classifyTextCommand('agentarts "" launch').decision, 'deny');
+  assert.equal(classifyTextCommand('agentarts "" destroy').decision, 'deny');
+});
