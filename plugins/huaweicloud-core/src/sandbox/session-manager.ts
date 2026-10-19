@@ -198,10 +198,11 @@ interface DeployCheckResult {
 
 // Public tunnel URL domain for the DevBridge s2 gateway. The pre-migration Huawei Cloud
 // bridge domain was retired in Sep 2026 and now serves a 「服务已迁移」 placeholder page with
-// HTTP 200 — never construct tunnel URLs from it.
-const DEVBRIDGE_TUNNEL_DOMAIN = 'devbridge-s2.hwtunnel.com';
+// HTTP 200 — never construct tunnel URLs from it. Exported for devbridge-tunnel.ts (the
+// DevBridge-owned module keeps the single copy).
+export const DEVBRIDGE_TUNNEL_DOMAIN = 'devbridge-s2.hwtunnel.com';
 // Migration placeholder page marker — a tunnel URL returning this body must be treated as unreachable.
-const DEVBRIDGE_MIGRATION_MARKER = '服务已迁移';
+export const DEVBRIDGE_MIGRATION_MARKER = '服务已迁移';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
