@@ -246,16 +246,16 @@ export const coreCases: E2eCase[] = [
     expect: [
       // The strictest gate: the fallback must not fire on a session whose
       // initialize already carried the tree path AND whose skill-tree reads
-      // are pre-approved — the installer's permission seam (written under
-      // HUAWEICLOUD_OPENCODE_PERMISSION_SEAM=on by the runner's install, or
-      // the natural probe on a >=1.19.0 opencode, which the driver's probe
-      // gate enforces) makes the direct read succeed with no ask. W1's
-      // automated regression signal is the seam's own test file; this pin is
-      // manual corroboration — if it goes red, check the allow rules in the
-      // throwaway home's opencode config first, not the teaching. Degrade
-      // path (a deliberate contract edit, never drive-by): if real-model
-      // runs flake here, replace with a sequence pin of list_skills
-      // before retrieve_skill.
+      // are pre-approved — the installer's permission seam, written by the
+      // natural version probe on a >=1.19.0 opencode (the driver's probe
+      // gate enforces that floor; the runner's install env carries no
+      // override — env-policy strips host state), makes the direct read
+      // succeed with no ask. W1's automated regression signal is the seam's
+      // own test file; this pin is manual corroboration — if it goes red,
+      // check the allow rules in the throwaway home's opencode config
+      // first, not the teaching. Degrade path (a deliberate contract edit,
+      // never drive-by): if real-model runs flake here, replace with a
+      // sequence pin of list_skills before retrieve_skill.
       { kind: 'noToolCall', name: 'huaweicloud_retrieve_skill' },
       {
         kind: 'hcloud',

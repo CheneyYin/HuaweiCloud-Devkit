@@ -248,12 +248,19 @@ test('install writes the full seam (plugin tree + six native per-skill globs) an
 test('a pre-seam install (unchanged mcp entry, no permission section) is healed by re-install', () => {
   // The C1 regression shape: the dominant update path returns early on an
   // unchanged mcp entry, and the seam must ride the same write anyway —
-  // every install made before the seam existed is exactly this config.
+  // every install made before this seam existed is exactly this config.
+  // The seed is the CANONICAL entry the current installer writes
+  // (dist/mcp-server.js + the default timeout), so mergeCommandStyle
+  // reports changed=false and applyPacksToEntry reports false — only
+  // permChanged can carry the write. Seeding a drifted entry (src/ path,
+  // missing timeout) would let the mcp rewrite itself trigger the write
+  // and the regression would stay green.
   const home = fixtureDir('devkit-seam-heal-');
   const configDir = join(home, '.config', 'opencode');
-  const srcDir = join(configDir, 'huaweicloud-plugins', 'src');
-  mkdirSync(srcDir, { recursive: true });
-  const mcpPath = join(srcDir, 'mcp-server.mjs').replace(/\\/g, '/');
+  const distDir = join(configDir, 'huaweicloud-plugins', 'dist');
+  mkdirSync(distDir, { recursive: true });
+  writeFileSync(join(distDir, 'mcp-server.js'), '// seeded\n');
+  const mcpPath = join(distDir, 'mcp-server.js').replace(/\\/g, '/');
   writeFileSync(
     opencodeConfigPath(home),
     JSON.stringify(
@@ -263,6 +270,7 @@ test('a pre-seam install (unchanged mcp entry, no permission section) is healed 
             type: 'local',
             command: ['node', mcpPath],
             enabled: true,
+            timeout: 300000,
           },
         },
       },
@@ -277,6 +285,14 @@ test('a pre-seam install (unchanged mcp entry, no permission section) is healed 
     assert.equal(sections.external[glob], 'allow', `heal missed ${glob}`);
     assert.equal(sections.edit[glob], 'deny', `heal missed ${glob}`);
   }
+  // The mcp entry itself must be untouched by the heal write — the seam
+  // was the only change source, proving the early-return path was taken
+  // and the seam still landed.
+  assert.match(
+    res.stdout,
+    /OpenCode MCP config merged \(user fields preserved\)/,
+    'the unchanged-mcp path executed (not the fresh-entry path)',
+  );
 });
 
 test('the seam gate override off writes no permission section', () => {

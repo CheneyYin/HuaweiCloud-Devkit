@@ -17,6 +17,7 @@ function hostileProcessEnv(): NodeJS.ProcessEnv {
     HCLOUD_CONFIG_PATH: '/real/.hcloud',
     DEVKIT_PACKS: 'core',
     HUAWEICLOUD_HOME: '/real/devkit-home',
+    HUAWEICLOUD_OPENCODE_PERMISSION_SEAM: 'off',
     HOME: '/real/home',
   };
 }
@@ -32,6 +33,7 @@ test('buildCaseEnv strips every hostile key case-insensitively', () => {
     'HW_REGION',
     'HCLOUD_CONFIG_PATH',
     'DEVKIT_PACKS',
+    'HUAWEICLOUD_OPENCODE_PERMISSION_SEAM',
   ]) {
     assert.equal(env[key], undefined, `${key} must not survive the trim`);
   }

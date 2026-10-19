@@ -3,6 +3,7 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -1243,32 +1244,38 @@ function readOfficeaceDevkitPacks(): string | null {
 }
 
 // The seam's version gate. HUAWEICLOUD_OPENCODE_PERMISSION_SEAM=on|off is
-// the deterministic override for tests and e2e (machines without opencode
-// on PATH); unset runs the probe. Unknown polarity is skip: a below-floor,
-// absent, or unparsable opencode gets no key writes and a README pointer,
-// never a paste snippet — an older version may reject the keys outright.
-// A later update heals the skip: the seam is a third change source in
-// updateOpenCodeConfig, so an unchanged mcp config no longer short-circuits.
+// the deterministic override for the installer test suite (e2e strips it —
+// the runner's install relies on the natural probe, and the e2e driver's
+// own probe gate demands a floor-eligible opencode anyway); unset runs the
+// probe. Unknown polarity is skip: a below-floor, absent, or unparsable
+// opencode gets no key writes and a README pointer, never a paste snippet —
+// an older version may reject the keys outright. A later update heals the
+// skip: the seam is a third change source in updateOpenCodeConfig, so an
+// unchanged mcp config no longer short-circuits.
 function probeOpencodeVersion(): string | null {
   // The probe runs the agent's own binary, which initializes its config
   // root on every run — so the probe must pin that root to a throwaway
-  // directory instead of inheriting the caller's XDG/HOME: a relative
-  // XDG_CONFIG_HOME makes opencode materialize dirs against its cwd (the
-  // known 1.19.0 divergence cross-platform-install.test.ts pins), and an
-  // inherited HOME would create legacy ~/.config/opencode roots in
-  // fake-home installs. The version string itself never depends on the
-  // config root.
-  const probeRoot = join(tmpdir(), 'huaweicloud-devkit-opencode-probe');
+  // mkdtemp directory instead of inheriting the caller's XDG/HOME: a
+  // relative XDG_CONFIG_HOME makes opencode materialize dirs against its
+  // cwd (the known 1.19.0 divergence cross-platform-install.test.ts
+  // pins), and an inherited HOME would create legacy ~/.config/opencode
+  // roots in fake-home installs. A fixed shared name would be clippable
+  // on multi-user machines, so the root is per-run and best-effort
+  // cleaned. The version string never depends on the config root. The
+  // win32 retries cover npm-global .cmd shims (spawn cannot execute them
+  // without a shell — the hasCodexCLI precedent; the shell string is a
+  // fixed literal, no interpolation surface).
+  let probeRoot: string;
   try {
-    mkdirSync(probeRoot, { recursive: true });
+    probeRoot = mkdtempSync(join(tmpdir(), 'devkit-opencode-probe-'));
   } catch {
-    // best-effort: opencode creates its own root on run
+    return null;
   }
   const probeEnv = { ...process.env, XDG_CONFIG_HOME: probeRoot };
-  const run = (cmd: string): string | null => {
+  const run = (cmd: string, shell: boolean): string | null => {
     try {
       const r = spawnSync(cmd, ['--version'], {
-        shell: false,
+        shell,
         windowsHide: true,
         stdio: 'pipe',
         timeout: 10000,
@@ -1281,7 +1288,15 @@ function probeOpencodeVersion(): string | null {
     }
     return null;
   };
-  const out = run('opencode') ?? (process.platform === 'win32' ? run('opencode.exe') : null);
+  let out = run('opencode', false);
+  if (out === null && process.platform === 'win32') {
+    out = run('opencode.exe', false) ?? run('opencode --version', true);
+  }
+  try {
+    rmSync(probeRoot, { recursive: true, force: true });
+  } catch {
+    // best-effort: a leftover probe dir is inert
+  }
   return out !== null ? (/v?\d+\.\d+\.\d+/.exec(out)?.[0] ?? null) : null;
 }
 
@@ -1293,11 +1308,14 @@ function openCodeSeamGate(): 'on' | 'off' {
 
 // The glob set the seam covers: the plugin-dir tree actually deployed by
 // this run plus per-skill globs for the native core meta-skill copies
-// (under the XDG opencode skills dir). An unusable manifest degrades to the
-// plugin glob only — the native sync's own loudness covers the gap.
+// (under the XDG opencode skills dir). An unusable manifest degrades to
+// the tree listing (devkitOwnedSkillNames, readdir) rather than dropping
+// the native globs: uninstall removes the native copies by that same
+// listing, so the seam cleanup must not leave per-skill allows behind
+// over directories the uninstall just deleted.
 function openCodeSeamGlobs(pluginDir: string): string[] {
-  const core = tryCoreSkillNames();
-  return skillTreePermissionGlobs(join(pluginDir, 'skills'), opencodeSkillsDir(), core ? [...core] : []);
+  const core = tryCoreSkillNames() ?? devkitOwnedSkillNames();
+  return skillTreePermissionGlobs(join(pluginDir, 'skills'), opencodeSkillsDir(), [...core]);
 }
 
 function updateOpenCodeConfig(pluginDir: string): void {
@@ -5254,36 +5272,53 @@ async function cmdDoctor(): Promise<void> {
         '  \x1b[33m[SKIP]\x1b[0m Skills-tree permission seam (opencode not verifiably at or above the measured permission floor)',
       );
     } else {
+      // Per-glob evaluation, matching the installer's per-section/per-glob
+      // contract exactly: user-owned globs (any non-devkit value) are
+      // reported as kept, missing globs as healable — one user-owned glob
+      // must never mask a missing edit deny. Configs the installer itself
+      // refuses to touch (scalar-shaped permission, unparseable file — the
+      // parse-fail skip is the install path's ONLY skip) get a SKIP with
+      // the manual pointer, never a FAIL whose re-run-install remediation
+      // cannot succeed.
       const globs = openCodeSeamGlobs(opencodePluginsDir());
-      let seamState: 'ok' | 'missing' | 'user-owned' | 'unreadable' = 'unreadable';
+      let cfg: Record<string, unknown> | null;
       try {
-        const cfg = asRecord(JSON.parse(readFileSync(opencodeCfg, 'utf8')));
-        const permission = asRecord(cfg.permission);
-        const ext = asRecord(permission.external_directory);
-        const editRules = asRecord(permission.edit);
-        const userOwned =
-          globs.some((g) => g in ext && ext[g] !== 'allow') ||
-          globs.some((g) => g in editRules && editRules[g] !== 'deny');
-        const complete = globs.every((g) => ext[g] === 'allow' && editRules[g] === 'deny');
-        seamState = complete ? 'ok' : userOwned ? 'user-owned' : 'missing';
+        cfg = asRecord(JSON.parse(readFileSync(opencodeCfg, 'utf8')));
       } catch {
-        // missing or corrupt opencode config — the mcp probes above already
-        // reported their side; here it means the seam cannot be verified
+        cfg = null;
       }
-      if (seamState === 'ok') {
-        check('Skills-tree permission seam (allow + edit deny)', true, '');
-      } else if (seamState === 'user-owned') {
+      const permission = cfg !== null ? cfg.permission : undefined;
+      if (
+        cfg === null ||
+        (permission !== undefined &&
+          (typeof permission !== 'object' || permission === null || Array.isArray(permission)))
+      ) {
         console.log(
-          '  \x1b[33m[SKIP]\x1b[0m Skills-tree permission seam: user-owned rules on the skill-tree globs are kept as-is (see README, Harness permission notes)',
+          '  \x1b[33m[SKIP]\x1b[0m Skills-tree permission seam: opencode config unreadable or scalar-shaped — the installer keeps it untouched; add the rules manually (see README, Harness permission notes)',
         );
       } else {
-        check(
-          'Skills-tree permission seam (allow + edit deny)',
-          false,
-          seamState === 'unreadable'
-            ? `opencode config unreadable at ${opencodeCfg} — re-run: npx huaweicloud-devkit install`
-            : 'Run: npx huaweicloud-devkit install (writes the missing skills-tree rules; see README, Harness permission notes)',
+        const permRecord = asRecord(permission);
+        const ext = asRecord(permRecord.external_directory);
+        const editRules = asRecord(permRecord.edit);
+        const kept = globs.filter(
+          (g) => (g in ext && ext[g] !== 'allow') || (g in editRules && editRules[g] !== 'deny'),
         );
+        const missing = globs.filter((g) => ext[g] !== 'allow' || editRules[g] !== 'deny');
+        if (missing.length === 0) {
+          check('Skills-tree permission seam (allow + edit deny)', true, '');
+        } else if (kept.length === 0) {
+          check(
+            'Skills-tree permission seam (allow + edit deny)',
+            false,
+            'Run: npx huaweicloud-devkit install (writes the missing skills-tree rules; see README, Harness permission notes)',
+          );
+        } else {
+          check(
+            'Skills-tree permission seam (allow + edit deny)',
+            false,
+            `${missing.length} rule(s) missing (re-run: npx huaweicloud-devkit install); ${kept.length} user-owned glob(s) kept as-is (see README, Harness permission notes)`,
+          );
+        }
       }
     }
   }

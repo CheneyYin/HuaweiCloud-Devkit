@@ -1,8 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 
 import type { AgentDriver, DriverContext, DriverProbe, RunRequest, RunResult } from './types.ts';
+import { opencodeSeamVersionSupported } from '../../../plugins/huaweicloud-core/src/lib/opencode-permission-seam.ts';
 
 // opencode adapter. Auth is a dedicated E2E key injected via env
 // (E2E_APIKEY or E2E_TEST_API_KEY) — real auth files are never copied into
@@ -37,17 +39,39 @@ function resolveCommand(name: string): string | null {
 // The seam writes only on opencode at or above the measured floor (1.19.0,
 // a knowledge boundary), so the driver refuses to run on older binaries —
 // a loud skip, never a silent no-allow posture that would misattribute
-// fallback behavior to the teaching.
+// fallback behavior to the teaching. The floor check is imported from the
+// seam's pure module (no drift when the floor moves), and the probe spawn
+// pins XDG_CONFIG_HOME to a throwaway dir — opencode initializes its config
+// root on every run, and the probe must not touch the developer's real one.
 function opencodeVersionSupported(): { ok: boolean; detail: string } {
-  const r = spawnSync('opencode', ['--version'], { encoding: 'utf8', timeout: 10_000 });
-  const out = r.stdout?.toString() ?? '';
-  const match = /v?(\d+)\.(\d+)\.(\d+)/.exec(out);
-  if (!match) return { ok: false, detail: `opencode --version unparsable: ${out.trim() || '(no output)'}` };
-  const [major, minor] = [Number(match[1]), Number(match[2])];
-  if (major < 1 || (major === 1 && minor < 19)) {
-    return { ok: false, detail: `opencode ${match[0]} predates the measured permission-seam floor (1.19.0)` };
+  let probeRoot: string;
+  try {
+    probeRoot = mkdtempSync(join(tmpdir(), 'devkit-e2e-opencode-'));
+  } catch {
+    return { ok: false, detail: 'could not create a probe temp dir' };
   }
-  return { ok: true, detail: `opencode ${match[0]}` };
+  try {
+    const r = spawnSync('opencode', ['--version'], {
+      encoding: 'utf8',
+      timeout: 10_000,
+      env: { ...process.env, XDG_CONFIG_HOME: probeRoot },
+    });
+    const out = r.stdout?.toString() ?? '';
+    const version = /v?\d+\.\d+\.\d+/.exec(out)?.[0] ?? null;
+    if (!opencodeSeamVersionSupported(version)) {
+      return {
+        ok: false,
+        detail: `opencode ${version ?? '(unparsable: ' + (out.trim() || 'no output') + ')'} predates the measured permission-seam floor`,
+      };
+    }
+    return { ok: true, detail: `opencode ${version}` };
+  } finally {
+    try {
+      rmSync(probeRoot, { recursive: true, force: true });
+    } catch {
+      // best-effort: a leftover probe dir is inert
+    }
+  }
 }
 
 function opencodeConfigFile(home: string): string {
