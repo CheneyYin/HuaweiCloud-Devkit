@@ -6,8 +6,11 @@
  * report. Service skills are server data disclosed over MCP, so their
  * retrieval telemetry rides trackSkillRetrieve inside
  * huaweicloud_retrieve_skill; direct reads via the stdio skillRoot
- * disclosure are observable only as catalog calls, never as which skill
- * file was consumed. The six core meta-skills are installed as native
+ * disclosure (server instructions at initialize, or the list_skills
+ * payload) are observable only as catalog calls within telemetry — the
+ * instructions emission itself is trace-file-only (the e2e seam), never a
+ * telemetry event — and neither channel shows which skill file was
+ * consumed. The six core meta-skills are installed as native
  * copies (system-prompt disclosure); those loads produce no telemetry by
  * design — so this hook never classifies skill-tool loads (the prefix
  * match would also misattribute user skills sharing the huawei* prefix).

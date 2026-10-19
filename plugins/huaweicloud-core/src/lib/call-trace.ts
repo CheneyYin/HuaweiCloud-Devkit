@@ -5,7 +5,7 @@
 //   Env: HUAWEICLOUD_DEVKIT_TRACE=<absolute file path>. Unset = no tracing.
 //   Records: one JSON object per line, two discriminated shapes (v: 1):
 //     { type: 'toolCall', v: 1, ts, name, args, ok, error? }
-//     { type: 'disclosure', v: 1, ts, event: 'toolsList'|'toolsListChanged', toolCount? }
+//     { type: 'disclosure', v: 1, ts, event: 'toolsList'|'toolsListChanged'|'instructions', toolCount? }
 //   Redaction: args pass redactSecrets plus this module's supplemental key
 //   denylist (api_key/apiKey) BEFORE the write; credentials never reach the
 //   file. error strings are truncated and redacted.
@@ -13,10 +13,14 @@
 //   SDK-level zod validation rejects a call BEFORE callTool and is
 //   deliberately NOT traced (that path is pinned by mcp-server.test.ts).
 //   disclosure records are written at the stdio transport's outbound wire
-//   face only (notifications/tools/list_changed and tools/list results);
-//   the remote HTTP transport does not trace. Recording tools/list_changed
-//   proves EMISSION in a live stdio session; delivery/convergence is
-//   covered by the in-memory unit tests (packs-configure.test.ts).
+//   face only (the initialize result's instructions, tools/list results,
+//   and notifications/tools/list_changed); the remote HTTP transport does
+//   not trace. Recording instructions proves the session's first context
+//   block carried the load-path teaching; content pins live in the unit
+//   tests (mcp-server.test.ts, remote-mcp-server.test.ts). Recording
+//   tools/list_changed proves EMISSION in a live stdio session;
+//   delivery/convergence is covered by the in-memory unit tests
+//   (packs-configure.test.ts).
 //   Failure model: best-effort — a trace write error must never fail a
 //   tool call or a transport send.
 //   Permissions: the file is created 0600 on first write.
@@ -43,7 +47,7 @@ export interface DisclosureTraceRecord {
   type: 'disclosure';
   v: number;
   ts: string;
-  event: 'toolsList' | 'toolsListChanged';
+  event: 'toolsList' | 'toolsListChanged' | 'instructions';
   toolCount?: number;
 }
 
@@ -110,7 +114,7 @@ export function recordToolCall(name: string, args: unknown, ok: boolean, error?:
   appendRecord(record);
 }
 
-export function recordDisclosure(event: 'toolsList' | 'toolsListChanged', toolCount?: number): void {
+export function recordDisclosure(event: 'toolsList' | 'toolsListChanged' | 'instructions', toolCount?: number): void {
   if (!traceEnabled()) return;
   const record: DisclosureTraceRecord = {
     type: 'disclosure',
@@ -124,7 +128,8 @@ export function recordDisclosure(event: 'toolsList' | 'toolsListChanged', toolCo
 
 // Outbound-wire disclosure extraction: called from the stdio transport's
 // send() with every outgoing JSON-RPC message. Only disclosure-relevant
-// messages produce records — the tools/list result (its .tools array) and
+// messages produce records — the initialize result (when it carries
+// server instructions), the tools/list result (its .tools array), and
 // the tools/list_changed notification.
 export function traceOutboundDisclosure(message: unknown): void {
   if (!traceEnabled() || !message || typeof message !== 'object') return;
@@ -133,8 +138,16 @@ export function traceOutboundDisclosure(message: unknown): void {
     recordDisclosure('toolsListChanged');
     return;
   }
-  const result = msg.result as { tools?: unknown } | undefined;
+  const result = msg.result as { tools?: unknown; serverInfo?: unknown; instructions?: unknown } | undefined;
   if (result && Array.isArray(result.tools)) {
     recordDisclosure('toolsList', result.tools.length);
+    return;
+  }
+  // The initialize result is the only message carrying serverInfo; when it
+  // also carries instructions, emission is the disclosure fact worth
+  // tracing. An initialize without instructions records nothing — absence
+  // is honest, and the content itself is pinned by the unit tests.
+  if (result && result.serverInfo && typeof result.instructions === 'string') {
+    recordDisclosure('instructions');
   }
 }

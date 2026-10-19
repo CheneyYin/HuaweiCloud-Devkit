@@ -20,7 +20,8 @@ if (!cwd.startsWith(profilesRoot)) {
 // here for the npm-in-profile layout, and by the setup CLI's install/update
 // for the plugin-dir layout); every non-core skill stays off the native
 // surface so DEVKIT_PACKS gating holds (its disclosure is the MCP catalog,
-// plus the stdio skillRoot location for direct reads — both
+// plus the stdio skillRoot location the server instructions state at
+// initialize and list_skills carries — both
 // disclosure-level). The pack claims come from the shipped
 // manifest — when it is missing or unusable this script refuses to mutate
 // anything rather than guess the core set (a wrong guess would purge the
@@ -173,7 +174,7 @@ async function syncNativeSkills() {
     });
     if (purged > 0) {
       console.log(
-        `HuaweiCloud DevKit: cleaned ${purged} stale native skill cop${purged === 1 ? 'y' : 'ies'} (non-core skills are server data; MCP catalog + stdio skillRoot)`,
+        `HuaweiCloud DevKit: cleaned ${purged} stale native skill cop${purged === 1 ? 'y' : 'ies'} (non-core skills are server data; MCP catalog + stdio skillRoot instructions)`,
       );
     }
     console.log(

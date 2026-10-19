@@ -26,7 +26,7 @@ export interface TraceToolCall {
 }
 
 export interface TraceDisclosure {
-  event: 'toolsList' | 'toolsListChanged';
+  event: 'toolsList' | 'toolsListChanged' | 'instructions';
   toolCount?: number;
 }
 

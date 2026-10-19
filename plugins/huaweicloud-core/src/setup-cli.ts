@@ -646,8 +646,9 @@ function copyDir(src: string, dest: string): void {
 // The payload every per-agent plugin dir must carry: the MCP server (dist/),
 // the safety policy, and the skills tree. Skills are server data disclosed
 // through the MCP tools (list_packs / pack_info / list_skills /
-// retrieve_skill / search_docs) — list_skills also carries the tree's
-// location (skillRoot, stdio sessions only) for direct reads; the core
+// retrieve_skill / search_docs) — the stdio server instructions state the
+// tree's location (skillRoot) at initialize, and list_skills carries it too
+// for direct reads; the core
 // meta-skills are ADDITIONALLY disclosed natively by syncNativeCoreSkills,
 // so every install and update path must place the tree next to the server
 // it deploys (the native sync rides the same PAYLOAD_TARGETS table from
@@ -676,7 +677,7 @@ function copyServerPayload(pluginDest: string, opts: { skipDist?: boolean } = {}
   // retrieve_skill/search_docs (unclaimed dirs bypass pack enablement).
   const stale = pruneStale(join(pluginDest, 'skills'), skillsSrc);
   console.log(
-    `  Skills (server data; MCP catalog + stdio skillRoot) -> ${join(pluginDest, 'skills')}${stale > 0 ? ` (removed ${stale} stale)` : ''}`,
+    `  Skills (server data; MCP catalog + stdio skillRoot instructions) -> ${join(pluginDest, 'skills')}${stale > 0 ? ` (removed ${stale} stale)` : ''}`,
   );
 }
 
@@ -4818,8 +4819,9 @@ type PayloadTarget = {
   // Agent-native skill dirs this target's install/update refreshes with the
   // core meta-skills (system-prompt disclosure; non-core skills stay off
   // the native surface so DEVKIT_PACKS gating holds — their disclosure is
-  // the MCP catalog plus, on stdio sessions, list_skills' skillRoot
-  // location for direct reads, both disclosure-level). Absent = no native
+  // the MCP catalog plus, on stdio sessions, the skillRoot location the
+  // server instructions state at initialize and list_skills carries, both
+  // disclosure-level). Absent = no native
   // copies: codex-desktop's plugin-dir skills/ IS server data, and
   // officeace's native surface is the capabilities.json registration
   // 4a030c0 removed.
@@ -5232,7 +5234,7 @@ async function cmdDoctor(): Promise<void> {
       return present.size === expectedSkills.length && expectedSkills.every((name) => present.has(name));
     });
   check(
-    'Skills tree (server data; MCP catalog + stdio skillRoot)',
+    'Skills tree (server data; MCP catalog + stdio skillRoot instructions)',
     skillsTreeOk,
     'Run: npx huaweicloud-devkit install (from a git checkout: npm run build first)',
   );

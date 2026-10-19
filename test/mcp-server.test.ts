@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import test from 'node:test';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -24,6 +24,7 @@ interface ToolDescriptor {
 
 interface JsonRpcResult {
   serverInfo: { name: string; version: string };
+  instructions?: string;
   tools: ToolDescriptor[];
   isError: boolean;
   content: { text: string }[];
@@ -140,6 +141,28 @@ test('MCP server initializes, lists tools, and plans CLI commands', async () => 
       clientInfo: { name: 'test-client', version: '0.0.0' },
     });
     assert.equal(initialized.result.serverInfo.name, 'huaweicloud-devkit');
+    // The stdio instruction form states the tree's location outright (no
+    // catalog detour), keeps the enablement caveat ahead of the read
+    // invitation (a path never implies "on disk == usable"), and names the
+    // session-toggle tool this face actually registers. The path is
+    // runtime-resolved, so pin it against the generated tree this file
+    // already requires — same "must locate the catalogued tree" pin
+    // pack-meta-tools holds for the list_skills payload.
+    const instructions = initialized.result.instructions ?? '';
+    assert.match(instructions, /the skills tree lives at /, 'stdio instructions must state the tree location');
+    const marker = 'the skills tree lives at ';
+    const suffix = ' (stdio session)';
+    const at = instructions.indexOf(marker);
+    const end = instructions.indexOf(suffix, at + marker.length);
+    const stated = at >= 0 && end > at + marker.length ? instructions.slice(at + marker.length, end) : undefined;
+    assert.ok(stated && isAbsolute(stated), 'the stated tree location must be an absolute path');
+    assert.ok(
+      existsSync(join(stated!, 'huawei-vpc', 'SKILL.md')),
+      'the stated tree location must locate the catalogued tree',
+    );
+    assert.match(instructions, /pack-gated/, 'stdio instructions must carry the enablement caveat');
+    assert.match(instructions, /huaweicloud_packs_configure/, 'stdio instructions must name the session-toggle tool');
+    assert.match(instructions, /fallback/, 'stdio instructions must keep retrieve_skill framed as the fallback');
 
     const listed = await client.request('tools/list');
     const toolNames = new Set(listed.result.tools.map((tool) => tool.name));

@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { TOOL_DEFINITIONS } from '../plugins/huaweicloud-core/src/tools.ts';
+import { TOOL_DEFINITIONS, SKILLS_ROOT } from '../plugins/huaweicloud-core/src/tools.ts';
+import { instructionsFor } from '../plugins/huaweicloud-core/src/mcp-protocol.ts';
 import { PACK_OF, PACKS } from '../plugins/huaweicloud-core/src/packs/registry.ts';
 import { parseSkillFrontmatter } from '../plugins/huaweicloud-core/src/lib/skill-frontmatter.ts';
 import { SUPPORTED_AGENT_TARGETS } from '../plugins/huaweicloud-core/src/auth/agent-registration.ts';
@@ -566,6 +567,74 @@ test('retrieve_skill reference cap stays in sync between code and description', 
     new RegExp(`capped at ${cap} characters`),
     'the retrieve_skill description must teach the actual reference cap',
   );
+});
+
+test('server instructions carry the three-form skillRoot disclosure contract', () => {
+  // The zero-call home of the load path, keyed on the same option pair the
+  // tool registry keys on. Full stdio (the production face): path stated
+  // outright + enablement caveat ahead of the read invitation + the
+  // packs_configure consent sentence naming a tool that face registers.
+  // Bare stdio (embedded/test constructions): same location and catalog
+  // teaching, but operator-posture enablement — never the toggle's name,
+  // never a runtime-mutability claim a face without the toggle cannot
+  // honor. Remote: no host path, skillRoot stated as withheld, no
+  // packs_configure. The absence rule is scoped to huawei-* service skills
+  // on every form: the six huaweicloud-* meta-skills never appear in the
+  // catalog (listSkills excludes core by design) yet are always available.
+  // Wire-level content pins ride both faces in mcp-server.test.ts and
+  // remote-mcp-server.test.ts; this pins the builder's forms directly.
+  const full = instructionsFor(false, true);
+  assert.ok(full.includes(SKILLS_ROOT), 'the stdio form must state the runtime-resolved tree location');
+  assert.match(full, /the skills tree lives at/, 'the stdio form must open with the location sentence');
+  assert.match(full, /pack-gated/, 'the stdio form must carry the enablement caveat');
+  assert.match(
+    full,
+    /can change at runtime/,
+    'the full stdio form may claim runtime mutability (it registers the toggle)',
+  );
+  assert.match(full, /huaweicloud_packs_configure/, 'the full stdio form names the session-toggle tool it registers');
+  assert.match(full, /huaweicloud_list_skills/, 'the stdio form must name the effective-catalog tool');
+  assert.match(full, /fallback/, 'the stdio form must keep retrieve_skill framed as the fallback');
+  assert.match(full, /huawei-\* service skill absent/, 'the absence rule must be scoped to service skills');
+  assert.match(full, /never appear in the catalog and are always available/, 'the meta-skill exclusion must be taught');
+
+  const bare = instructionsFor(false);
+  assert.ok(bare.includes(SKILLS_ROOT), 'the bare stdio form still states the tree location');
+  assert.doesNotMatch(
+    bare,
+    /huaweicloud_packs_configure/,
+    'a face without the toggle must not be taught the toggle tool',
+  );
+  assert.doesNotMatch(
+    bare,
+    /can change at runtime/,
+    'a face without the toggle cannot honor a runtime-mutability claim',
+  );
+  assert.match(bare, /huawei-\* service skill absent/, 'the bare form keeps the scoped absence rule');
+
+  const remote = instructionsFor(true);
+  assert.doesNotMatch(remote, /the skills tree lives at/, 'the remote form must not state a host tree path');
+  assert.match(remote, /skillRoot is withheld/, 'the remote form must state skillRoot is withheld');
+  assert.match(remote, /huaweicloud_list_skills/, 'the remote form must name the effective-catalog tool');
+  assert.match(remote, /fallback/, 'the remote form must frame retrieve_skill as the loader');
+  assert.match(remote, /huawei-\* service skill absent/, 'the remote form keeps the scoped absence rule');
+  assert.doesNotMatch(
+    remote,
+    /huaweicloud_packs_configure/,
+    'packs_configure is stdio-only and must not be taught on the remote form',
+  );
+});
+
+test('retrieve_skill description frames the fallback, not the default', () => {
+  // The observed free-choice failure was agents jumping straight to
+  // retrieve_skill; the description now opens by demoting it. This pins
+  // the demotion phrases and the self-heal teaching (the stdio payload
+  // carries skillRoot) so a copy pass cannot quietly revert either.
+  const retrieve = TOOL_DEFINITIONS.find((tool) => tool.name === 'huaweicloud_retrieve_skill');
+  assert.ok(retrieve, 'the retrieve_skill definition must exist');
+  assert.match(retrieve.description, /the fallback loader, not the default/);
+  assert.match(retrieve.description, /skillRoot so the next skill can be a direct read/);
+  assert.match(retrieve.description, /Use this tool only when the tree is out of reach or its location is unknown/);
 });
 
 test('telemetry hooks never classify skill-tool loads', () => {

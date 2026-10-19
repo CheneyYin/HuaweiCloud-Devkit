@@ -7,7 +7,16 @@
 import type { HttpScript } from './http-fake.ts';
 
 export type PackId =
-  'core' | 'huaweicloud-cli' | 'sandbox' | 'auth' | 'obs' | 'voucher' | 'update' | 'discovery' | 'huaweicloud-open-mcp';
+  | 'core'
+  | 'huaweicloud-cli'
+  | 'sandbox'
+  | 'auth'
+  | 'obs'
+  | 'voucher'
+  | 'update'
+  | 'discovery'
+  | 'huaweicloud-open-mcp'
+  | 'secrets';
 
 export interface Range {
   min: number;
@@ -41,9 +50,13 @@ export interface ToolCallMatcher {
 }
 
 // Disclosure matcher over the outbound wire face: toolsList (with the
-// client-visible tool count) and toolsListChanged notifications.
+// client-visible tool count), toolsListChanged notifications, and
+// instructions (the initialize result carried server instructions — the
+// emission-side proof that the server sent the load-path teaching;
+// rendering into context is the client's contract, not something this
+// side can observe, and content pins live in the unit tests).
 export interface DisclosureMatcher {
-  event: 'toolsList' | 'toolsListChanged';
+  event: 'toolsList' | 'toolsListChanged' | 'instructions';
   toolCount?: number;
   times?: Range;
 }

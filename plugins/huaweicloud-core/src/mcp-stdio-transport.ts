@@ -69,7 +69,8 @@ export class DevkitStdioTransport implements Transport {
   async send(message: JSONRPCMessage, _options?: TransportSendOptions): Promise<void> {
     if (this.closed) return;
     // Outbound-wire disclosure tracing (see lib/call-trace.ts contract):
-    // tools/list results and tools/list_changed notifications only.
+    // the initialize result's instructions, tools/list results, and
+    // tools/list_changed notifications.
     traceOutboundDisclosure(message);
     const json = JSON.stringify(message);
     if (this.useContentLengthFraming) {

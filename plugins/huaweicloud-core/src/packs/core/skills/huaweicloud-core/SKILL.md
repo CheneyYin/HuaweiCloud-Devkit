@@ -22,7 +22,7 @@ Huawei Cloud comprises 200+ services. This skill is the entry point for ANY acti
 
 1. Match user intent against the Sub-skill registry below
 2. Read references/{sub-skill-id}.md and follow its procedure
-3. If the procedure says to hand off to a service skill, when the session's huaweicloud_list_skills payload carries skillRoot and your file tools can reach it, read the skill's SKILL.md and references/ under that root directly (untruncated, selective) — otherwise load it via huaweicloud_retrieve_skill
+3. If the procedure says to hand off to a service skill, locate the skills tree — stdio sessions get its path from the MCP server instructions at initialize, or from a huaweicloud_list_skills payload that carries skillRoot — then, when the skill is enabled per that catalog (a `huawei-*` service skill absent from it belongs to a trimmed pack; the six `huaweicloud-*` meta-skills never appear in it and are always available) and your file tools can reach that root, read the skill's SKILL.md and references/ under it directly (untruncated, selective) — otherwise load it via huaweicloud_retrieve_skill
 4. If no match, use the Service Map to narrow down, then hand off
 5. Revise when new information arrives - pushback means re-check the registry
 
@@ -111,10 +111,9 @@ When the intent is to **deploy, host, or preview a web app or static website** (
 
 ## Tool Boundary
 
-- Use huaweicloud_list_skills to browse every pack-owned skill's metadata (name, description, version, pack, reference filenames) in one call before paying for retrieve_skill's full payload; on stdio sessions the payload also carries skillRoot, the skills tree's absolute location
-- With skillRoot disclosed and your file tools able to reach it, read the chosen skill's SKILL.md and references/ files directly under that root — like a native skill, untruncated and selectively; otherwise load via retrieve_skill
-- Use huaweicloud_search_docs to discover skills covering a topic
-- Use huaweicloud_retrieve_skill to load a full SKILL.md when the files are out of reach — the gated, telemetry-bearing, portable fallback remote sessions rely on
+- On stdio sessions the MCP server instructions state skillRoot, the skills tree's absolute location, at initialize — no catalog call is needed to start reading; when your file tools can reach that root, read the chosen skill's SKILL.md and references/ files directly under it, like a native skill, untruncated and selectively
+- Call huaweicloud_list_skills for the effective catalog: which skills are ENABLED is pack-gated and can change at runtime (a `huawei-*` service skill absent from it belongs to a trimmed pack — treat it as unavailable and confirm with the user before huaweicloud_packs_configure; the six `huaweicloud-*` meta-skills never appear in it and are always available), and the payload carries every enabled pack's skill metadata (name, description, version, pack, reference filenames) plus skillRoot on stdio sessions (remote sessions omit it — there the fallback below is the loader)
+- Use huaweicloud_retrieve_skill to load a full SKILL.md only when the files are out of reach or the location is unknown — the gated, telemetry-bearing, portable fallback remote sessions rely on (its stdio payload also carries skillRoot, so one fallback call heals the path for the rest of the session)
 - Use huaweicloud_auth_init to switch credentials at runtime when different accounts co-exist in the same session
 - If no built-in skill matches, consult huaweicloud-capability-discovery for external marketplace options
 - Use huaweicloud_list_regions before creating regional resources

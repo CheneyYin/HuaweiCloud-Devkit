@@ -50,6 +50,16 @@ interface ListSkillsPayload {
   skillRoot?: string;
 }
 
+interface RetrieveSkillPayload {
+  ok: boolean;
+  name: string;
+  version: string | number;
+  description: string;
+  content: string;
+  references: Array<{ filename: string; content: string }>;
+  skillRoot?: string;
+}
+
 interface ToolErrorPayload {
   ok: boolean;
   error: string;
@@ -213,6 +223,76 @@ test('huaweicloud_list_skills pack filter returns exactly the pack\u2019s skills
   );
   assert.equal(result.skills[0]!.pack, 'obs');
   assert.ok(result.skills[0]!.description.length > 0, 'huawei-obs description must parse');
+});
+
+// The retrieve fallback self-heals the load path: whichever tool the agent
+// calls first, a stdio session learns the tree location, so the NEXT skill
+// can be a direct read. Same three-part pin list_skills holds: seam present,
+// seam absent, real wiring.
+test('huaweicloud_retrieve_skill discloses skillRoot on the stdio seam so the fallback self-heals', async () => {
+  const result = (await callTool(
+    'huaweicloud_retrieve_skill',
+    { name: 'huawei-vpc' },
+    { onPacksChanged: () => {} },
+  )) as RetrieveSkillPayload;
+  assert.equal(result.ok, true);
+  assert.equal(result.name, 'huawei-vpc');
+  assert.ok(result.content.includes('name: huawei-vpc'), 'the payload must carry the SKILL.md body');
+  assert.ok(isAbsolute(result.skillRoot ?? ''), 'stdio sessions disclose the tree location as an absolute path');
+  assert.ok(
+    existsSync(join(result.skillRoot ?? '', 'huawei-vpc', 'SKILL.md')),
+    'skillRoot must locate the retrieved tree',
+  );
+});
+
+test('huaweicloud_retrieve_skill withholds skillRoot on surfaces without session state', async () => {
+  // No opts mirrors the stateless remote's call shape: the key itself is
+  // withheld — absence is the guard, same doctrine as list_skills.
+  const result = (await callTool('huaweicloud_retrieve_skill', { name: 'huawei-vpc' })) as RetrieveSkillPayload;
+  assert.equal(result.ok, true);
+  assert.equal('skillRoot' in result, false, 'skillRoot must be absent without the stdio seam');
+});
+
+test('huaweicloud_retrieve_skill discloses skillRoot through the real stdio wiring', async () => {
+  // End-to-end on the disclosing side: a live stdio session constructs the
+  // server with runtimePacks, so the registerOne callOpts seam must deliver
+  // the field — the same anti-rewiring guarantee the list_skills variant
+  // holds, now guarding the retrieve path too.
+  const { server, transport } = await createLinkedDevkitServers({ runtimePacks: true });
+  const client = new Client({ name: 'pack-meta-test', version: '0.0.0' });
+  try {
+    await client.connect(transport);
+    const result = (await client.callTool({
+      name: 'huaweicloud_retrieve_skill',
+      arguments: { name: 'huawei-vpc' },
+    })) as ClientToolResult;
+    assert.equal(result.isError, false);
+    const payload = JSON.parse(result.content[0].text) as { ok: boolean; skillRoot?: string };
+    assert.equal(payload.ok, true);
+    assert.ok(isAbsolute(payload.skillRoot ?? ''), 'the stdio wiring must deliver an absolute skillRoot');
+    assert.ok(
+      existsSync(join(payload.skillRoot ?? '', 'huawei-vpc', 'SKILL.md')),
+      'skillRoot must locate the retrieved tree',
+    );
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test('the contradictory remote-plus-runtimePacks construction is refused, not cautioned', async () => {
+  // The one-axis guarantee: instructions honesty keys on remoteSurface while
+  // the payload skillRoot seams key on the onPacksChanged seam registerOne
+  // attaches from runtimePacks. A remote that also carried runtime pack
+  // toggling would publish the server host's absolute install path through
+  // every list_skills/retrieve_skill payload on an unauthenticated face
+  // while its instructions claimed withholding — so the factory makes that
+  // combination unrepresentable, the same fail-loud doctrine as a bogus
+  // DEVKIT_PACKS.
+  await assert.rejects(
+    createLinkedDevkitServers({ runtimePacks: true, remoteSurface: true }),
+    /contradictory construction: remoteSurface and runtimePacks are mutually exclusive/,
+  );
 });
 
 test('huaweicloud_list_skills on a valid zero-skill pack returns an empty catalog', async () => {

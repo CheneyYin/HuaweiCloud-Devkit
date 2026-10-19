@@ -62,12 +62,14 @@ function classifyHcloud(text) {
 // no MCP-side telemetry path. Service skills are server data disclosed over
 // MCP and never installed natively, so their retrieval telemetry rides
 // trackSkillRetrieve inside huaweicloud_retrieve_skill. Direct reads via the
-// skillRoot the stdio list_skills payload discloses are observable only as
-// catalog calls (tool:huaweicloud_list_skills), never as which skill file
-// was consumed — the same blind spot native loads have, by design. The six
-// core meta-skills are additionally installed as native copies
-// (system-prompt disclosure), and those native loads produce no telemetry by
-// design.
+// skillRoot the stdio server instructions state at initialize (and the
+// list_skills payload carries) are observable only as catalog calls within
+// telemetry (tool:huaweicloud_list_skills) — the instructions emission
+// itself is trace-file-only (the e2e seam), never a telemetry event — and
+// neither channel shows which skill file was consumed; the same blind spot
+// native loads have, by design. The six core meta-skills are additionally
+// installed as native copies (system-prompt disclosure), and those native
+// loads produce no telemetry by design.
 
 function getHooks() {
   return {

@@ -58,11 +58,14 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // MCP tools (list_packs / pack_info / list_skills / retrieve_skill /
 // search_docs); list_skills also carries the tree's location (skillRoot,
 // stdio sessions only) so a same-machine agent can read the files with its
-// own tools. The installer separately places the six core meta-skills as
+// own tools, and the stdio server instructions state the same location at
+// initialize (mcp-protocol.ts instructionsFor) so the direct read needs no
+// catalog detour. The installer separately places the six core meta-skills as
 // native copies in directory-loading agents (setup-cli's PAYLOAD_TARGETS
 // sync) — that placement lives in setup-cli, and this module never probes
-// agent-native dirs.
-const SKILLS_ROOT = join(__dirname, '..', 'skills');
+// agent-native dirs. Exported for the instruction builder, which resolves
+// the path at runtime (never baked at build time) from this same constant.
+export const SKILLS_ROOT = join(__dirname, '..', 'skills');
 
 // Re-exported for the existing test importers (test/tools.test.ts); the
 // tool handlers below (retrieve_skill, search_docs) consume the local
@@ -184,7 +187,7 @@ const TOOL_DEFINITIONS_LITERALS = [
   {
     name: 'huaweicloud_retrieve_skill',
     description:
-      "Retrieve one Huawei Cloud skill by exact name (e.g. huawei-ecs, huawei-vpc, huawei-obs, huawei-sandbox). Returns the full SKILL.md content plus its reference files (each reference body capped at 4000 characters). Service skills are server data — never installed into an agent's own skill directory — and this tool is their fallback loader for sessions whose file tools cannot reach the tree: the DEVKIT_PACKS-gated, telemetry-bearing path remote sessions rely on. When the session's huaweicloud_list_skills payload carries skillRoot and your file tools can reach it, prefer reading <skillRoot>/<name>/SKILL.md and its references/ directly — untruncated, and only the file you need. The six core meta-skills (huaweicloud-*) are additionally disclosed as native skill copies on directory-loading agents; this tool serves them identically everywhere, so it stays the portable fallback. Browse the catalog first with huaweicloud_list_skills; candidates also come from huaweicloud_service_catalog, huaweicloud_search_docs, or huaweicloud_list_packs.",
+      "Retrieve one Huawei Cloud skill by exact name (e.g. huawei-ecs, huawei-vpc, huawei-obs, huawei-sandbox) — the fallback loader, not the default. When the skills tree location is already known (stdio server instructions state it at initialize; huaweicloud_list_skills and this tool's own stdio payloads carry it as skillRoot) and your file tools can reach it, read <skillRoot>/<name>/SKILL.md and its references/ directly instead — untruncated, and only the file you need. Use this tool only when the tree is out of reach or its location is unknown. Returns the full SKILL.md content plus its reference files (each reference body capped at 4000 characters) and, on stdio sessions, skillRoot so the next skill can be a direct read. Service skills are server data — never installed into an agent's own skill directory — and this is the owner-pack-gated (a trimmed pack's skills are refused with remediation), telemetry-bearing path remote sessions rely on. The six core meta-skills (huaweicloud-*) are additionally disclosed as native skill copies on directory-loading agents; this tool serves them identically everywhere, so it stays the portable fallback. Browse the catalog first with huaweicloud_list_skills; candidates also come from huaweicloud_service_catalog, huaweicloud_search_docs, or huaweicloud_list_packs.",
   },
   {
     name: 'huaweicloud_list_regions',
@@ -308,7 +311,7 @@ const TOOL_DEFINITIONS_LITERALS = [
   {
     name: 'huaweicloud_list_skills',
     description:
-      'List the metadata of every pack-owned skill in one call — name, description, version, owning pack, and reference filenames — so the agent can browse the catalog and pick a skill before paying for huaweicloud_retrieve_skill (which returns the full SKILL.md plus every reference body). The payload also carries skillRoot, the absolute location of the skills tree (stdio sessions only): on a same-machine install, that is the default load path — read <skillRoot>/<name>/SKILL.md and the references/ files with your own file tools the way you explore native skills — untruncated, and only the reference you need (the root uses host-native separators; a huaweicloud_search_docs source\u2019s skills/ prefix is this same root). Remote sessions omit skillRoot (the path lives on the server host) — fall back to huaweicloud_retrieve_skill there. Covers the huawei-* service/domain skills of enabled non-core packs; skills of packs disabled through DEVKIT_PACKS are omitted, and the six core meta-skills (huaweicloud-*) are excluded by design: directory-loading agents disclose them natively in the system prompt, and huaweicloud_retrieve_skill serves them everywhere. Optional pack filter takes a pack id from huaweicloud_list_packs.',
+      'List the metadata of every pack-owned skill in one call — name, description, version, owning pack, and reference filenames — the effective catalog: which skills are ENABLED is pack-gated (the operator\u2019s DEVKIT_PACKS posture — a stdio agent session can toggle packs at runtime, see the server instructions), so a huawei-* service skill absent from this list belongs to a trimmed pack; treat it as unavailable and confirm with the user before enabling anything (the six huaweicloud-* meta-skills never appear in the list and are always available — see the exclusion note below). Browse it to pick a skill before paying for huaweicloud_retrieve_skill (which returns the full SKILL.md plus every reference body). On stdio sessions the payload also carries skillRoot, the absolute location of the skills tree — the same location the server instructions state at initialize — for direct reads: <skillRoot>/<name>/SKILL.md and the references/ files with your own file tools, untruncated and only the file you need (the root uses host-native separators; a huaweicloud_search_docs source\u2019s skills/ prefix is this same root). Remote sessions omit skillRoot (the path lives on the server host) — load skills with huaweicloud_retrieve_skill there. Covers the huawei-* service/domain skills of enabled non-core packs, and the six core meta-skills (huaweicloud-*) are excluded by design: directory-loading agents disclose them natively in the system prompt, and huaweicloud_retrieve_skill serves them everywhere. Optional pack filter takes a pack id from huaweicloud_list_packs.',
   },
   {
     name: 'huaweicloud_packs_configure',
@@ -559,7 +562,7 @@ async function dispatchTool(name: ToolName, args: ToolArgs, opts: CallToolOption
       return searchDocs(args.query || '', args.topic || 'all');
     case 'huaweicloud_retrieve_skill':
       trackSkillRetrieve(args.name || '');
-      return retrieveSkill(args.name || '');
+      return retrieveSkill(args.name || '', opts);
     case 'huaweicloud_get_regional_availability':
       return getRegionalAvailability(args.service || '', args.region || '');
     case 'huaweicloud_explain_error':
@@ -1206,7 +1209,7 @@ async function searchDocs(query: string, topic: string = 'all') {
   return { ok: true, query: q, topic, count: results.length, results: results.slice(0, 10) };
 }
 
-async function retrieveSkill(name: string) {
+async function retrieveSkill(name: string, opts: CallToolOptions = {}) {
   const skillName = String(name || '').trim();
   if (!skillName) return { ok: false, error: 'Skill name is required.' };
   // Boundary guard: the name joins a filesystem path in this handler, so
@@ -1252,7 +1255,21 @@ async function retrieveSkill(name: string) {
   const frontmatter = parseSkillFrontmatter(content);
   const version: string | number = frontmatter.version ?? 1;
   const description = frontmatter.description ?? '';
-  return { ok: true, name: skillName, version, description, content, references };
+  // The same stdio seam listSkills uses: a retrieve that already happened
+  // (the fallback path) still teaches the caller where the tree lives, so
+  // the NEXT skill can be a direct read. Withheld on the stateless remote
+  // for the same reason listSkills withholds it — a host path there is
+  // pure leakage with no utility.
+  const stdioSession = Boolean(opts.onPacksChanged);
+  return {
+    ok: true,
+    name: skillName,
+    version,
+    description,
+    content,
+    references,
+    ...(stdioSession ? { skillRoot: SKILLS_ROOT } : {}),
+  };
 }
 
 async function getRegionalAvailability(service: string, region: string) {
