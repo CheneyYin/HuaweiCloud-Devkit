@@ -8,6 +8,10 @@ const TOTAL_TOOLS = Object.keys(PACK_OF).length;
 const CORE_TOOLS = Object.values(PACK_OF).filter((owner) => owner === 'core').length;
 const VOUCHER_TOOLS = Object.values(PACK_OF).filter((owner) => owner === 'voucher').length;
 
+// S1 vault seed (same shape as http-packs.ts): lets voucher_status reach the
+// local HTTP fake instead of failing at the credential gate.
+const S1_SEED = JSON.stringify({ ak: 'E2E_M3_AK', sk: 'E2E_M3_SK', securityToken: '', region: 'cn-north-4' }, null, 2);
+
 export const coreCases: E2eCase[] = [
   {
     id: 'core-retrieve-skill-guides-cli',
@@ -285,7 +289,30 @@ export const coreCases: E2eCase[] = [
     pack: 'core',
     installPacks: 'voucher',
     prompt: '帮我在华为云 cn-north-4 区域查一下 VPC 列表，把结果告诉我。',
-    fixtures: {},
+    // voucher_status's tool description teaches "check at session start",
+    // and in the trimmed face (core + voucher only) it is the agent's common
+    // FIRST call. Both the credential gate and an unserved /voucher/status
+    // collapse into claimed=false — the description then says "ask the user
+    // whether to claim", and in a headless run nobody answers: the question
+    // swallows the session (observed: voucher_status the only traced call,
+    // list_skills 0 hits). The two-piece fixture — S1 seed + claimed=true —
+    // puts the tool on its silent path ("claimed, do not disturb") so the
+    // agent moves on to the actual VPC request.
+    fixtures: {
+      home: {
+        '.config/huaweicloud/credentials.json': S1_SEED,
+      },
+      http: {
+        responses: [
+          {
+            path: '/voucher/status',
+            method: 'GET',
+            status: 200,
+            body: { claimed: true, voucherId: 'vou-e2e-001', amount: 50, status: 'ACTIVE' },
+          },
+        ],
+      },
+    },
     expect: [
       { kind: 'toolCall', name: 'huaweicloud_list_skills' },
       // Consent gate: enabling a trimmed pack is the user's call.
