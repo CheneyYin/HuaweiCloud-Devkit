@@ -242,6 +242,141 @@ test('classifyHcloudArgs unwraps shell-wrapped hcloud write commands (#650 D4-16
   }
 });
 
+test('Windows script wrappers (cmd / powershell / pwsh) keep wrapped writes denied (#731/#760)', () => {
+  const denied = [
+    // Quoted one-argument payloads, every spelling family.
+    'cmd /c "hcloud ECS DeleteServers --server.id=1"',
+    'cmd.exe /c "hcloud ECS DeleteServers --server.id=1"',
+    'C:\\Windows\\System32\\cmd.exe /c "hcloud ECS DeleteServers --server.id=1"',
+    'powershell -Command "hcloud ECS DeleteServers --server.id=1"',
+    'powershell -command "hcloud ECS DeleteServers --server.id=1"',
+    'powershell.exe -Command "hcloud OBS rm obs://bucket/obj"',
+    'pwsh -Command "hcloud ECS CreateServers --flavor=x"',
+    // Unquoted payloads: both shells take the ENTIRE remainder, so the
+    // joined line classifies (not a truncation artifact).
+    'cmd /k hcloud ECS DeleteServers --server.id=1',
+    'powershell -c hcloud ECS DeleteServers --server.id=1',
+    'pwsh.exe -c hcloud CCE DeleteCluster --cluster_id=x',
+    // Option regions before the script flag — the canonical PowerShell
+    // spelling and cmd's robust-quoting idioms; unbounded and order-free
+    // (any option count, unlisted value-taking options); `//c` Git-Bash,
+    // glued `/c"…"`, colon-attached payloads; the positional command
+    // binding; drive-qualified bins and path-qualified prefixes.
+    'powershell -NoProfile -Command "hcloud ECS DeleteServers --server.id=1"',
+    'powershell -ExecutionPolicy Bypass -Command "hcloud ECS DeleteServers"',
+    'powershell -WindowStyle Hidden -Command "hcloud ECS DeleteServers"',
+    'powershell -com "hcloud ECS DeleteServers"',
+    'powershell -Command:hcloud ECS DeleteServers',
+    'powershell -Command:"hcloud ECS DeleteServers --server.id=1"',
+    'powershell -c"hcloud ECS DeleteServers"',
+    'cmd /c"hcloud ECS DeleteServers" --x=1',
+    'cmd /d /c hcloud ECS DeleteServers --server.id=1',
+    'cmd /s /c "hcloud ECS DeleteServers --server.id=1"',
+    'cmd //c "hcloud ECS DeleteServers --server.id=1"',
+    'cmd /c"hcloud ECS DeleteServers --server.id=1"',
+    'cmd /q /d /e:on /f:on /v:on /a /u /s /x /c hcloud ECS DeleteServers --server.id=1',
+    'powershell hcloud ECS DeleteServers --server.id=1',
+    'powershell -NoProfile hcloud ECS DeleteServers --server.id=1',
+    'C:\\hcloud.exe ECS DeleteServers --server.id=1',
+    'd:hcloud.exe ECS DeleteServers --server.id=1',
+    'cmd /c "C:\\Tools\\hcloud.exe ECS DeleteServers --server.id=1"',
+    '/usr/bin/sudo -u root hcloud ECS DeleteServers --server.id=1',
+    '/usr/bin/SUDO hcloud ECS DeleteServers --server.id=1',
+    'timeout 1.5 hcloud ECS DeleteServers --server.id=1',
+    'cmd /c start "t" hcloud ECS DeleteServers --server.id=1',
+    'cmd /c start "t" C:\\hcloud.exe ECS DeleteServers',
+    'bash -c "cmd /c \\"hcloud ECS DeleteServers\\""',
+    'bash -c "powershell -Command \\"hcloud ECS DeleteServers\\""',
+    // Compound inner scripts and wrapper nesting.
+    'cmd /c "hcloud ECS ListServers; hcloud ECS DeleteServers --server.id=1"',
+    'powershell -Command "echo hi; hcloud ECS DeleteServers --server.id=1"',
+    'cmd /c "bash -c \'hcloud ECS DeleteServers\'"',
+    // cmd.exe launch builtins re-base onto the child; PowerShell's
+    // call-operator scriptblock, glued and spaced.
+    'cmd /c start hcloud ECS DeleteServers --server.id=1',
+    'cmd /c start /b hcloud ECS DeleteServers',
+    'cmd /c call hcloud ECS DeleteServers',
+    'powershell -Command "& {hcloud ECS DeleteServers}"',
+    'powershell -Command "& { hcloud ECS DeleteServers }"',
+    // Quote-mangled wrapper heads classify like quote-mangled bins.
+    'cm\'d\' /c "hcloud ECS DeleteServers"',
+    'powers\'hell\' -Command "hcloud ECS DeleteServers"',
+    // Path-qualified wrappers after separators and with compound payloads.
+    'echo x; C:\\Windows\\System32\\cmd.exe /c "hcloud ECS DeleteServers"',
+    'echo hi && C:\\Windows\\System32\\cmd.exe /c "hcloud ECS DeleteServers"',
+    'C:\\Windows\\System32\\cmd.exe /c "echo hi; hcloud ECS DeleteServers"',
+    // Composed with a command-position prefix.
+    'sudo cmd /c "hcloud ECS DeleteServers"',
+    'sudo powershell -NoProfile -Command "hcloud ECS DeleteServers"',
+  ];
+  for (const cmd of denied) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd);
+    assert.equal(result.risk, 'write', cmd);
+  }
+  // Wrapped reads stay allowed — over-broad unwrapping must not regress.
+  const allowed = [
+    'cmd /c "hcloud ECS ListServers"',
+    'cmd /k hcloud ECS ListServers',
+    'powershell -Command "hcloud ECS ListServers"',
+    'pwsh -c hcloud ECS ListServers',
+    'powershell -NoProfile -Command "hcloud ECS ListServers"',
+    'powershell -WindowStyle Hidden -Command "hcloud ECS ListServers"',
+    'powershell hcloud ECS ListServers',
+    'cmd /c start /wait hcloud ECS ListServers',
+  ];
+  for (const cmd of allowed) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'allow', cmd);
+    assert.equal(result.risk, 'read_only', cmd);
+  }
+  // Degenerate and non-script forms take no inline command; the
+  // positional binding only runs commands, and non-hcloud positional
+  // payloads stay allowed. The encoded payload is a documented residual
+  // (opaque to a text gate).
+  for (const cmd of [
+    'cmd',
+    'cmd /c',
+    'cmd /c "echo hi"',
+    'powershell -File deploy.ps1',
+    'powershell Get-Process',
+    'powershell',
+    'powershell -EncodedCommand aGNsb3VkIEVDUyBEZWxldGVTZXJ2ZXJz',
+    'start notepad file.txt',
+    'see the hcloud docs here',
+    'echo "hcloud ECS DeleteServers"',
+  ]) {
+    assert.equal(classifyTextCommand(cmd).decision, 'allow', cmd);
+  }
+  // The argv face unwraps the same way.
+  const argvResult = classifyHcloudArgs(['cmd', '/c', 'hcloud ECS DeleteServers --server.id=1']);
+  assert.equal(argvResult.decision, 'deny');
+  assert.equal(argvResult.risk, 'write');
+  // POSIX escapes still eat backslashes outside drive paths (the
+  // preservation is scoped to `X:` words).
+  assert.equal(classifyTextCommand('hcloud ECS DeleteServers --filter=g\\et').decision, 'deny');
+});
+
+test('unquoted bash -c payloads truncate to bare hcloud and deny fail-closed', () => {
+  // Real bash passes only the next argument to -c (`ECS Delete…` become
+  // $0/$1) — but the flattened form is indistinguishable from the quoted
+  // original (`bash -c "hcloud ECS Delete…"`), so the script word being
+  // a bin re-joins the tail and classifies the whole command
+  // (fail-closed: deny either way, now as the write it flattens).
+  const result = classifyTextCommand('bash -c hcloud ECS DeleteServers --server.id=1');
+  assert.equal(result.decision, 'deny');
+  assert.equal(result.risk, 'write');
+  // The nested bare-hcloud shape (a script whose continuation line is
+  // just the bin) denies the same way.
+  const nested = classifyTextCommand("bash -c 'echo; hcloud' && echo done");
+  assert.equal(nested.decision, 'deny');
+  assert.equal(nested.risk, 'invalid');
+  // A bare trailing `hcloud` mention never routes into classification.
+  for (const cmd of ['hcloud', 'sudo hcloud', 'hcloud --', 'echo hcloud']) {
+    assert.equal(classifyTextCommand(cmd).decision, 'allow', cmd);
+  }
+});
+
 test('classifyHcloudArgs detects hcloud write commands mid-concatenation (#650 review)', () => {
   const concatenated = [
     ['bash', '-c', 'echo x; hcloud ECS CreateServers --flavor=x'],

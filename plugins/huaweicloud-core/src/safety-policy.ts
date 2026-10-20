@@ -27,6 +27,7 @@ export interface ClassifyOptions {
   rawCommand?: string;
   skipRiskRules?: boolean;
   _segmentDepth?: number;
+  _narrowRouted?: boolean;
 }
 
 // An absent field normalizes to [] (older policies). A field that is present
@@ -287,7 +288,8 @@ function isScriptCommandHead(args: string[], idx: number): boolean {
     const flag = idx + 1 < args.length ? String(args[idx + 1]) : '';
     return /^-[a-z]*c$/i.test(flag) && idx + 2 < args.length;
   }
-  return s === 'eval' && idx + 1 < args.length;
+  if (s === 'eval' && idx + 1 < args.length) return true;
+  return windowsScriptArgAt(args, idx) !== null;
 }
 
 // Where the wrapper's grammar model says the CHILD starts, judged from a
@@ -405,9 +407,11 @@ const SHELL_FIRST_TOKENS = new Set([
 // wrappers and control keywords (sudo unwraps below; nohup/env/time/timeout/
 // watch/nice/stdbuf/setsid/ionice prefix real invocations; do/then follow
 // loop/if bodies while if/while/until/case/{ HEAD them; exec/command/eval
-// dispatch the command), plus VAR=VALUE assignments (`env HW_REGION=x
-// hcloud …`). Stripping them lets the hcloud-leading check see the actual
-// command token.
+// dispatch the command), plus cmd.exe's launch builtins start/call (the
+// unwrapped Windows payload `start /b hcloud …` re-bases onto the child),
+// the PowerShell/cmd control vocabulary (see the inline block), and
+// VAR=VALUE assignments (`env HW_REGION=x hcloud …`). Stripping them lets
+// the hcloud-leading check see the actual command token.
 const COMMAND_POSITION_PREFIXES = new Set([
   'sudo',
   'nohup',
@@ -416,6 +420,7 @@ const COMMAND_POSITION_PREFIXES = new Set([
   'do',
   'then',
   'elif',
+  'elseif',
   'else',
   'xargs',
   'if',
@@ -433,6 +438,30 @@ const COMMAND_POSITION_PREFIXES = new Set([
   'stdbuf',
   'setsid',
   'ionice',
+  'start',
+  'call',
+  // PowerShell scriptblock control grammar (try/catch/finally, begin/
+  // process/end, switch/default, foreach/%, where, function/filter) and
+  // cmd `if`-condition words (defined/exist/not/errorlevel): a wrapper
+  // payload headed by these runs its body, so the re-base must see
+  // through them. None is a plausible bare POSIX program name.
+  'try',
+  'catch',
+  'finally',
+  'begin',
+  'process',
+  'end',
+  'switch',
+  'default',
+  'foreach',
+  'where',
+  'function',
+  'filter',
+  'defined',
+  'exist',
+  'not',
+  'errorlevel',
+  '%',
 ]);
 // Value-taking single-letter flags PER PREFIX (`sudo -u root`, `nice -n 5`,
 // `xargs -I {}`, `stdbuf -o0` attached). A shared set over-stripped:
@@ -463,6 +492,9 @@ const PREFIX_FLAGS_WITH_VALUE = new Map<string, ReadonlySet<string>>([
   ['stdbuf', new Set(['-o', '-e', '-i'])],
   ['env', new Set(['-u', '--unset'])],
   ['timeout', new Set(['--signal', '-s', '-k', '--kill-after'])],
+  // cmd.exe's `start` takes slash flags (`/b /wait /min …`); `/d <path>`
+  // carries a value.
+  ['start', new Set(['/d'])],
 ]);
 // Leading redirection tokens (`2>/dev/null cmd`, `<in cmd`, `2>&1 cmd`)
 // occupy the command position without being the command.
@@ -480,10 +512,146 @@ function isFlagOrDuration(token: string): boolean {
   return token.startsWith('-') || /^\d*\.?\d+[smh]?$/i.test(token);
 }
 
+// Windows script-taking wrappers (`cmd /c "hcloud …"`, `cmd /k …`,
+// `powershell -Command|-c "hcloud …"`, `pwsh …`, plus .exe, path-qualified,
+// `//c` (Git-Bash path-mangling), glued `/c"…"`, and quote-mangled
+// spellings): like `bash -c`, the payload arrives as ONE argument and must
+// be re-tokenized before classification (#731/#760 parity with main).
+// Both shells accept OPTIONS before the script flag — the canonical
+// PowerShell spelling is `-NoProfile -Command`, cmd takes `/d /s /v:on`
+// before `/c` — so the option region is scanned without a count cap or a
+// closed option set (PowerShell binds every token before -Command to an
+// option; cmd skips slash switches). PowerShell ALSO accepts the command
+// as the first POSITIONAL argument (`powershell hcloud ECS ListServers`
+// binds -Command positionally), covered by a second pass that skips the
+// KNOWN value-taking options' values — an unknown future value-option
+// makes its value look positional, which matches the real shell's own
+// binding. `-File`/`-EncodedCommand` are terminal (no inline command;
+// encoded payloads are a documented residual). Bare `cmd` (no /c//k)
+// takes no inline script — null, never a guess.
+const WINDOWS_CMD_NAMES = ['cmd', 'cmd.exe'];
+const WINDOWS_PS_NAMES = ['powershell', 'powershell.exe', 'pwsh', 'pwsh.exe'];
+const POWERSHELL_VALUE_OPTIONS = new Set([
+  '-executionpolicy',
+  '-outputformat',
+  '-inputformat',
+  '-workingdirectory',
+  '-windowstyle',
+  '-version',
+  '-configurationname',
+  '-psconsolefile',
+  '-settingsfile',
+  '-custompipename',
+]);
+const POWERSHELL_TERMINAL_OPTIONS = new Set(['-file', '-encodedcommand', '-enc']);
+// `-Command` in every unambiguous abbreviation (-c, -co, … -command),
+// with the payload attached via a colon OR a directly-glued quote
+// (`-Command:hcloud …`, `-Command"hcloud …"`, `-c'…'` — PowerShell accepts
+// parameter-glued values in all three spellings). Case-insensitive with
+// the payload captured from the ORIGINAL token (service names keep case).
+const POWERSHELL_COMMAND_FLAG = /^-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?(?:(["':])(.*))?$/i;
+// cmd's script switches tolerate `//c` (Git-Bash path conversion) and a
+// glued payload (`/c"hcloud …`); case-insensitive for the same reason.
+// ReactOS also honors `/r` as a script flag — included fail-closed.
+const CMD_SCRIPT_FLAG = /^\/+([ckr])(.*)$/i;
+
+function windowsScriptArgAt(args: string[], idx: number): string | null {
+  const payload = windowsScriptArgAtRaw(args, idx);
+  // cmd/PS glue braces to commands without whitespace (`try{hcloud …`,
+  // `}finally{`); the POSIX vocabulary is word-exact, so braces are spaced
+  // at the single extraction chokepoint every consumer shares — but ONLY
+  // at command-grammar positions: `{` preceded by start/whitespace/
+  // word-char/`)`/`}`, and `}` followed by a letter. `={`/`:{`/`[`-glued
+  // and value-internal braces (`--cli-jsonInput={x:1}`) keep the token
+  // whole so argv service/operation positions do not shift.
+  if (payload === null) return null;
+  return payload.replace(/(^|[\sA-Za-z0-9)}])\{/g, '$1 { ').replace(/\}(?=[A-Za-z])/g, '} ');
+}
+
+function windowsScriptArgAtRaw(args: string[], idx: number): string | null {
+  const head = String(args[idx] ?? '');
+  const isCmd = matchesBinName(head, WINDOWS_CMD_NAMES);
+  const isPs = !isCmd && matchesBinName(head, WINDOWS_PS_NAMES);
+  if (!isCmd && !isPs) return null;
+  const payloadOf = (j: number, glued: string | null): string | null => {
+    // The GLUED fragment keeps its edge-quote strip (carved from a word
+    // token). The REST tokens join with plain spaces — a cmd / powershell
+    // payload is a COMMAND LINE — and the joined payload's `\"` pairs
+    // (span-internal escapes from the original quoting) are RESOLVED so
+    // the re-tokenization regroups `\"hcloud …\"` into a proper span
+    // instead of a glued `\"hcloud` word that binds bash -c to one token
+    // and drops its argv.
+    const strip = (s: string): string => s.replace(/^['"]|['"]$/g, '');
+    const resolve = (s: string): string => s.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+    const rest = args.slice(j + 1).map(String);
+    if (glued !== null) {
+      const g = strip(glued);
+      return resolve(rest.length ? `${g} ${rest.join(' ')}` : g);
+    }
+    return rest.length ? resolve(rest.join(' ')) : null;
+  };
+  if (isCmd) {
+    for (let j = idx + 1; j < args.length; j++) {
+      const tok = String(args[j]).toLowerCase();
+      if (!tok.startsWith('/')) {
+        // Real cmd SKIPS non-switch junk before /c|/k (Wine and ReactOS
+        // both scan past anything not starting with `/`) — bailing here
+        // would launder `cmd foo /c hcloud <write>`; junk is skipped.
+        continue;
+      }
+      const m = String(args[j]).match(CMD_SCRIPT_FLAG);
+      if (m) return payloadOf(j, m[2] === '' ? null : (m[2] ?? null));
+    }
+    return null;
+  }
+  // PowerShell, pass 1: the -Command flag (or a terminal option) anywhere
+  // after the head — option order is free, every earlier token is an
+  // option or its value. The payload may be colon- or quote-glued to the
+  // flag itself.
+  for (let j = idx + 1; j < args.length; j++) {
+    const tok = String(args[j]).toLowerCase();
+    if (POWERSHELL_TERMINAL_OPTIONS.has(tok)) return null;
+    const m = String(args[j]).match(POWERSHELL_COMMAND_FLAG);
+    if (m) {
+      if (m[2] === undefined) return payloadOf(j, null);
+      // An empty attached value (`-Command:` with nothing after the
+      // colon) is the same real argv as the bare flag — PowerShell treats
+      // the trailing arguments as the command — so it must not bail the
+      // whole wrapper (the `-Command:""` spelling already denies).
+      if (m[2] === '') return payloadOf(j, null);
+      const attached = m[2].replace(/^['"]|['"]$/g, '');
+      const rest = args.slice(j + 1).map(String);
+      const resolve = (s: string): string => s.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+      return resolve(rest.length ? `${attached} ${rest.join(' ')}` : attached);
+    }
+  }
+  // Pass 2: no flag — the first positional argument IS the command
+  // (powershell.exe binds position 0 to -Command). Known value-taking
+  // options consume their value first.
+  let j = idx + 1;
+  while (j < args.length) {
+    const tok = String(args[j]).toLowerCase();
+    if (POWERSHELL_TERMINAL_OPTIONS.has(tok)) return null;
+    if (tok.startsWith('-')) {
+      j++;
+      if (POWERSHELL_VALUE_OPTIONS.has(tok) && j < args.length && !String(args[j]).toLowerCase().startsWith('-')) {
+        j++;
+      }
+      continue;
+    }
+    return payloadOf(j - 1, null);
+  }
+  return null;
+}
+
 function skipPrefixArguments(prefix: string, tokens: string[]): string[] {
   const valueFlags = PREFIX_FLAGS_WITH_VALUE.get(prefix) ?? new Set<string>();
   let rest = tokens;
-  while (rest.length > 0 && isFlagOrDuration(String(rest[0]))) {
+  while (
+    rest.length > 0 &&
+    (isFlagOrDuration(String(rest[0])) ||
+      ((prefix === 'start' || prefix === 'call') && String(rest[0]).startsWith('/')))
+  ) {
     const flag = String(rest[0]);
     rest = rest.slice(1);
     if (!flag.includes('=') && valueFlags.has(flag) && rest.length > 0) {
@@ -498,41 +666,234 @@ function isEnvAssignment(token: string): boolean {
 }
 
 // One spelling of the hcloud bin-token predicate. The token is normalized
-// first — stripping a leading `$(`/backtick and any quote/backslash
-// characters — because the tokenizer keeps mid-token quoting (`hclou'd'`,
-// `$(hcloud`) while the shell still executes the canonical bin.
+// first — stripping a leading `$(`/backtick/`{`/`&`/`@` (the cmd
+// echo-suppression sigil) and any quote/backslash characters — because the
+// tokenizer keeps mid-token quoting (`hclou'd'`, `$(hcloud`, the
+// PowerShell call-operator's glued `&{hcloud`, cmd's `@hcloud`) while the
+// shell still executes the canonical bin. The RAW token is checked FIRST
+// (before backslash stripping) so a Windows drive-qualified bin
+// (`C:\hcloud.exe`) keeps its separators — the same dual raw+normalized
+// doctrine matchesBinName applies to wrapper heads.
+// obsutil write subcommands (module scope — shared by the OBS
+// classification and the xargs feeder pre-filter).
+const OBSUTIL_WRITES = new Set([
+  'mb',
+  'cp',
+  'mv',
+  'rm',
+  'delete',
+  'mkdir',
+  'sync',
+  'restore',
+  'chattri',
+  'bucketpolicy',
+  'lifecycle',
+  'cors',
+  'website',
+  'sign',
+  'share-add',
+  'share-update',
+  'share-rm',
+]);
+
+// Peel a trailing glued redirection (with its operand) off a token:
+// `hcloud>out`, `OBS>&2` — bash still runs the bin with the service.
+function peelGluedRedirect(token: string): string {
+  return token.replace(/>{1,2}[^>;&|]*$/, '').replace(/>&\d+$/, '');
+}
+
 function isHcloudToken(token: string): boolean {
-  const t = token
-    .toLowerCase()
-    .replace(/^[$(`]+/, '')
-    .replace(/['"\\`$]/g, '');
-  return t === 'hcloud' || t.endsWith('/hcloud') || t.endsWith('\\hcloud') || t === 'hcloud.exe';
+  // Trailing shell-operator runs (`hcloud>`, `hcloud;`, `hcloud|`) and
+  // glued redirect-with-operand (`hcloud>out`) attach to the bin in a
+  // single token — bash still runs the bin.
+  const raw = peelGluedRedirect(
+    String(token)
+      .toLowerCase()
+      .replace(/^[$(`{&@<.]+/, '')
+      .replace(/[>;&|]+$/, ''),
+  );
+  if (
+    raw === 'hcloud' ||
+    raw === 'hcloud.exe' ||
+    raw.endsWith('/hcloud') ||
+    raw.endsWith('\\hcloud') ||
+    raw.endsWith('/hcloud.exe') ||
+    raw.endsWith('\\hcloud.exe') ||
+    /^[a-z]:hcloud(\.exe)?$/.test(raw)
+  ) {
+    return true;
+  }
+  // Quote-mangled Windows paths (`C:\hclou"d".exe`, the call operator's
+  // `&('C:\hcloud.exe')`): strip quotes and wrapping parens but KEEP
+  // backslashes before the path-suffix/drive-relative checks.
+  const noQuotes = raw.replace(/['"()]/g, '');
+  if (
+    noQuotes !== raw &&
+    (noQuotes.endsWith('\\hcloud') || noQuotes.endsWith('\\hcloud.exe') || /^[a-z]:hcloud(\.exe)?$/.test(noQuotes))
+  ) {
+    return true;
+  }
+  // Fully normalized: the PowerShell call operator on a parenthesized
+  // string literal (`&('hcloud')`, `.('hcloud')`) peels its wrapping
+  // punctuation to the canonical bin.
+  const t = raw.replace(/['"\\`$()]/g, '');
+  return t === 'hcloud' || t === 'hcloud.exe' || t.endsWith('/hcloud');
+}
+
+// Unwrap with the windows-payload context exposed: the segment scanner
+// needs to know the stream passed through a cmd/powershell payload (every
+// LATER hcloud occurrence in a brace-grammar payload is a live command
+// site, and `}` is not a segment separator).
+function unwrapWithWindowsFlag(args: string[]): { stream: string[]; windowsPayload: boolean } {
+  let windowsPayload = false;
+  const stream = unwrapCore(args, (entered) => {
+    if (entered) windowsPayload = true;
+  });
+  return { stream, windowsPayload };
+}
+
+// cmd/PS payload words glue shell separators to the bin (`x&&hcloud`,
+// `ListServers}catch{hcloud`): split candidate tokens on separator runs
+// before the head checks, re-basing to the piece bin + the pieces and
+// tokens that follow. Tokens carrying quote characters are NOT split —
+// their separators are quote-protected argument VALUES
+// (`--description='a;hcloud;DeleteServers'`), not live command sites.
+function hcloudPieceAt(tokens: string[], i: number): string[] | null {
+  const tok = String(tokens[i] ?? '');
+  let stream: string[];
+  if (isHcloudToken(tok)) {
+    stream = tokens.slice(i).map(String);
+  } else {
+    if (/['"]/.test(tok)) return null;
+    const pieces = tok.split(/[;&|]+/).filter(Boolean);
+    const at = pieces.findIndex((p) => isHcloudToken(p));
+    if (at < 0) return null;
+    stream = [...pieces.slice(at).map(String), ...tokens.slice(i + 1).map(String)];
+  }
+  // Drop pure-closer tokens that follow the bin (`.( 'hcloud' )`
+  // tokenizes the `)` standalone) — they would occupy the service slot
+  // and mask the operation behind them.
+  let k = 1;
+  while (k < stream.length && /^[)\]}]+$/.test(String(stream[k]))) k++;
+  return stream.slice(0, 1).concat(stream.slice(k));
 }
 
 function unwrapShellAndWrappers(args: string[]): string[] {
+  return unwrapCore(args, null);
+}
+
+function unwrapCore(args: string[], onWindowsPayload: ((entered: boolean) => void) | null): string[] {
   let current = args;
+  // Set once a Windows wrapper payload has been entered: from then on, a
+  // stall at grammar the POSIX vocabulary cannot strip (cmd `if defined X
+  // …`, PS `try { … } catch { … }` — `}` is not a segment separator)
+  // re-bases to the first hcloud bin with a following token — the same
+  // fail-closed doctrine the skill-quality-cli REMAINDER walk applies to
+  // unknown flag grammar.
+  let inWindowsPayload = false;
   // Depth-capped: shell wrappers do not nest arbitrarily, and a malicious
   // input cannot loop here because every branch strictly shrinks `current`.
   for (let depth = 0; depth < 10; depth++) {
     if (!current.length) return current;
     const first = String(current[0]).toLowerCase();
     const isShell = SHELL_FIRST_TOKENS.has(first);
-    if (isShell && String(current[1]).toLowerCase() === '-c' && current[2]) {
-      current = splitSimpleCommand(current[2]);
+    // `-c`, `-lc`, `-xc` … any option cluster ending in c takes the
+    // script. The script argument CAME from inside a quoted span — its
+    // `\"` pairs are span-internal escapes, resolved HERE (at the
+    // consumption point). When the script is ITSELF a wrapper head
+    // (`bash -c bash -c '…'` — the flattened join of the real
+    // `bash -c "bash -c '…'"` nesting), the tail tokens are concatenated
+    // and unwrapping continues: the quoted original nests, so the
+    // flattened form classifies the same way (fail-closed).
+    if (isShell && /^-[a-z]*c$/i.test(String(current[1] ?? '')) && current[2]) {
+      const scriptTokens = splitSimpleCommand(String(current[2]).replace(/\\"/g, '"').replace(/\\\\/g, '\\'));
+      const scriptHead = String(scriptTokens[0] ?? '').toLowerCase();
+      const headIsWrapperish =
+        SHELL_FIRST_TOKENS.has(scriptHead) ||
+        scriptHead === 'eval' ||
+        COMMAND_POSITION_PREFIXES.has(scriptHead) ||
+        windowsScriptArgAt(scriptTokens, 0) !== null ||
+        isHcloudToken(String(scriptTokens[0] ?? ''));
+      if (headIsWrapperish) {
+        current = [...scriptTokens, ...current.slice(3).map(String)];
+        continue;
+      }
+      current = scriptTokens;
       continue;
     }
-    // eval takes the command as ONE (quoted) argument — re-tokenize it like
-    // bash -c.
+    // eval takes the command as ONE (quoted) argument — re-tokenize it
+    // like bash -c. Real eval CONCATENATES all its arguments and
+    // evaluates the joined string, so the remaining arguments are always
+    // part of the command (an unquoted `eval cmd /c "hcloud …"` runs the
+    // write; dropping the tail would launder it).
     if (first === 'eval' && current[1]) {
-      current = splitSimpleCommand(current[1]);
+      const scriptTokens = splitSimpleCommand(String(current[1]).replace(/\\"/g, '"').replace(/\\\\/g, '\\'));
+      current = [...scriptTokens, ...current.slice(2).map(String)];
+      continue;
+    }
+    // bash/PS function definitions: the NAME follows the keyword before
+    // the body (`function f { hcloud … }`) — strip keyword + name.
+    if ((first === 'function' || first === 'filter') && current.length > 2) {
+      current = current.slice(2);
+      continue;
+    }
+    // Windows script wrappers carry the command as ONE argument too:
+    // `cmd /c "hcloud …"` / `powershell -Command "hcloud …"`.
+    const winScript = windowsScriptArgAt(current, 0);
+    if (winScript !== null) {
+      current = splitSimpleCommand(winScript);
+      inWindowsPayload = true;
+      onWindowsPayload?.(true);
       continue;
     }
     if (isRedirectionToken(String(current[0]))) {
       current = current.slice(1);
       continue;
     }
-    if (COMMAND_POSITION_PREFIXES.has(first) || COMMAND_POSITION_PREFIXES.has(basenameOf(String(current[0])))) {
-      current = skipPrefixArguments(first, current.slice(1));
+    if (
+      COMMAND_POSITION_PREFIXES.has(first) ||
+      COMMAND_POSITION_PREFIXES.has(basenameOf(String(current[0])).toLowerCase())
+    ) {
+      // Locator carve-out: `where hcloud`, `if exist hcloud` probe the
+      // bin's PRESENCE (cmd builtins) — a bare bin with no argv is the
+      // probe shape, not a command; stripping the locator would hit the
+      // empty-args fail-closed and deny a read-only lookup.
+      if (
+        (first === 'where' || first === 'exist' || first === 'defined') &&
+        current.length === 2 &&
+        isHcloudToken(String(current[1] ?? ''))
+      ) {
+        break;
+      }
+      // cmd.exe's `start` consumes an optional quoted TITLE before the
+      // child (`start "t" hcloud …`); quoting is lost in the token stream,
+      // so when the token after start's flags is not itself a command head
+      // and the one after it is, the title is skipped (fail-closed toward
+      // the child interpretation).
+      if (basenameOf(String(current[0])).toLowerCase() === 'start') {
+        const afterFlags = skipPrefixArguments('start', current.slice(1));
+        if (afterFlags.length > 1) {
+          const isHeadish = (tokens: string[], at: number): boolean => {
+            const tok = String(tokens[at] ?? '').toLowerCase();
+            return (
+              isHcloudToken(String(tokens[at] ?? '')) ||
+              windowsScriptArgAt(tokens, at) !== null ||
+              COMMAND_POSITION_PREFIXES.has(tok) ||
+              SHELL_FIRST_TOKENS.has(tok) ||
+              tok === 'eval'
+            );
+          };
+          if (!isHeadish(afterFlags, 0) && isHeadish(afterFlags, 1)) {
+            current = afterFlags.slice(1);
+            continue;
+          }
+        }
+      }
+      // The (lowercased) basename resolves the prefix key for
+      // skipPrefixArguments too: a path-qualified `/usr/bin/sudo -u root
+      // hcloud …` (any letter case) must consult sudo's value-flag grammar,
+      // not an unknown-prefix empty set.
+      current = skipPrefixArguments(basenameOf(String(current[0])).toLowerCase(), current.slice(1));
       continue;
     }
     if (isEnvAssignment(first)) {
@@ -548,6 +909,16 @@ function unwrapShellAndWrappers(args: string[]): string[] {
     if (sqcChild) {
       current = sqcChild;
       continue;
+    }
+    if (inWindowsPayload && !isHcloudToken(String(current[0] ?? ''))) {
+      for (let i = 1; i < current.length; i++) {
+        const pieceStream = hcloudPieceAt(current, i);
+        if (pieceStream !== null && pieceStream.length > 1) {
+          current = pieceStream;
+          break;
+        }
+      }
+      if (isHcloudToken(String(current[0] ?? ''))) continue;
     }
     break;
   }
@@ -569,10 +940,13 @@ function commandOperation(args: unknown): { service: string; operation: string; 
   const stripped = stripExecutable(Array.isArray(args) ? args.map((arg) => String(arg)) : [])
     .map(String)
     .filter(Boolean);
+  const nonFlags = stripped.filter((arg) => !arg.startsWith('-')).map((arg) => peelGluedRedirect(arg));
   if (stripped[0]?.toLowerCase() === 'configure') {
-    return { service: 'configure', operation: stripped[1] || '', args: stripped };
+    // nonFlags slot: a flag between `configure` and its subcommand
+    // (`hcloud configure --cli-region=x show`) must not mask the
+    // credential-gate operation.
+    return { service: 'configure', operation: nonFlags[1] ?? nonFlags[0] ?? '', args: stripped };
   }
-  const nonFlags = stripped.filter((arg) => !arg.startsWith('-'));
   return {
     service: nonFlags[0] || '',
     operation: nonFlags[1] || nonFlags[0] || '',
@@ -633,7 +1007,15 @@ function applyRawCommandRiskRules(base: RiskDecision, command: string, options: 
 // while a heredoc body or a newline-joined script still classifies per
 // command. Substitution boundaries (`$(`, `<(`, backtick, `)`) split too,
 // so `cat <(hcloud …)` and `case x in a) hcloud …` reach classification.
-export function splitShellSegments(text: string): string[] {
+// A word that began as a Windows drive prefix (`X:` or `X:\…`): every
+// backslash inside it is a path separator, never a POSIX escape. The
+// opening quote is stripped so the check works inside quoted spans.
+function isWindowsPathWord(current: string): boolean {
+  const lastWord = current.slice(current.lastIndexOf(' ') + 1).replace(/^['"]/, '');
+  return /^[A-Za-z]:$/.test(lastWord) || /^[A-Za-z]:[\\/]/.test(lastWord);
+}
+
+export function splitShellSegments(text: string, sepsOut?: string[]): string[] {
   const separators = new Set([';', '&', '|', '\n', '\r', ')']);
   const segments: string[] = [];
   let current = '';
@@ -655,6 +1037,7 @@ export function splitShellSegments(text: string): string[] {
         if (heredocLine.trim() === heredocDelim) {
           heredocDelim = null;
           segments.push(current);
+          sepsOut?.push('\n');
           current = '';
         }
         heredocLine = '';
@@ -667,6 +1050,10 @@ export function splitShellSegments(text: string): string[] {
     if (quote !== null) {
       current += ch;
       if (ch === '\\') {
+        // Backslash escapes the next char — BOTH chars stay in the segment
+        // (the base append above already keeps the backslash), so the
+        // downstream escape-aware tokenizer can regroup the span
+        // (`bash -c "cmd /c \"hcloud …\""`).
         if (i + 1 < text.length) current += text[i + 1]!;
         i += 2;
         continue;
@@ -677,8 +1064,10 @@ export function splitShellSegments(text: string): string[] {
     }
     if (ch === '\\') {
       // Backslash escapes the next char; \<newline> is a line continuation —
-      // the joined command must NOT be split.
-      if (i + 1 < text.length) current += text[i + 1]!;
+      // the joined command must NOT be split. A Windows drive path
+      // (`C:\Windows\…`) keeps its backslashes for the same reason as the
+      // quoted branch above.
+      if (i + 1 < text.length) current += (isWindowsPathWord(current) ? ch : '') + text[i + 1]!;
       i += 2;
       continue;
     }
@@ -690,18 +1079,28 @@ export function splitShellSegments(text: string): string[] {
     }
     if (ch === '$' && text[i + 1] === '(') {
       segments.push(current);
+      sepsOut?.push('$(');
       current = '';
       i += 2;
       continue;
     }
     if (ch === '<' && text[i + 1] === '(') {
       segments.push(current);
+      sepsOut?.push('<(');
+      current = '';
+      i += 2;
+      continue;
+    }
+    if (ch === '>' && text[i + 1] === '(') {
+      segments.push(current);
+      sepsOut?.push('>(');
       current = '';
       i += 2;
       continue;
     }
     if (ch === '`') {
       segments.push(current);
+      sepsOut?.push('`');
       current = '';
       i++;
       continue;
@@ -717,6 +1116,7 @@ export function splitShellSegments(text: string): string[] {
         continue;
       }
       segments.push(current);
+      sepsOut?.push(ch);
       current = '';
       i++;
       continue;
@@ -732,7 +1132,14 @@ export function splitShellSegments(text: string): string[] {
         i === 0 || /\s/.test(prev) || separators.has(prev) || prev === '"' || prev === "'" || /\d/.test(prev);
       if (atWordStart) {
         let j = i + 2;
-        while (text[j] === '-') j++;
+        let sawDash = false;
+        while (text[j] === '-') {
+          sawDash = true;
+          j++;
+        }
+        // bash allows whitespace between the operator and the delimiter
+        // (`<< EOF`).
+        while (text[j] === ' ' || text[j] === '\t') j++;
         // An optional quote pair around the delimiter.
         let delimQuote = '';
         if (text[j] === '"' || text[j] === "'") {
@@ -740,25 +1147,71 @@ export function splitShellSegments(text: string): string[] {
           j++;
         }
         let delim = '';
-        while (j < text.length && isWordChar(text[j]!)) {
-          delim += text[j]!;
+        // A backslash-escaped delimiter (`<<\EOF`) and a `$`-prefixed one
+        // (`<<$EOF`, `<<${EOF}`) open heredocs too — the escaped/expanded
+        // word is the delimiter bash waits for; fail-closed, the raw word
+        // serves (it never matches a body line, so the remainder unions
+        // into the feeder).
+        if (text[j] === '\\') {
           j++;
+          while (j < text.length && isWordChar(text[j]!)) {
+            delim += text[j]!;
+            j++;
+          }
+          if (!delim) delim = '\\';
+        } else if (text[j] === '$') {
+          delim += '$';
+          j++;
+          if (text[j] === '{') {
+            delim += '{';
+            j++;
+          }
+          while (j < text.length && isWordChar(text[j]!)) {
+            delim += text[j]!;
+            j++;
+          }
+          if (delim.endsWith('{')) {
+            if (text[j] === '}') {
+              delim += '}';
+              j++;
+            } else {
+              delim = '';
+            }
+          }
+        } else {
+          while (j < text.length && isWordChar(text[j]!)) {
+            delim += text[j]!;
+            j++;
+          }
+          if (!delim && j < text.length && !/\s/.test(text[j]!) && text[j] !== '"' && text[j] !== "'") {
+            // A punctuation-leading delimiter (`<< -EOF`, `<< .D`) —
+            // bash's delimiter is the entire following word; fail-closed,
+            // the raw punctuation word serves.
+            while (j < text.length && !/\s/.test(text[j]!) && text[j] !== '"' && text[j] !== "'") {
+              delim += text[j]!;
+              j++;
+            }
+          }
+        }
+        if (!delim && (delimQuote || sawDash)) {
+          // An empty quoted (`<< ""`) or dash-only (`<< -`) delimiter —
+          // never matches a body line, so the remainder is body: a
+          // fail-closed sentinel delimiter.
+          delim = '\u0000heredoc-sentinel';
         }
         const closed = delimQuote === '' || text[j] === delimQuote;
         if (delim && closed) {
+          // Render the marker (operator, dashes, quote, delimiter) and
+          // align i to the scan position j — the spaced forms
+          // double-consumed the last delimiter char.
           current += '<<';
-          i += 2;
-          while (text[i] === '-') {
-            current += '-';
-            i++;
-          }
+          for (let k2 = i + 2; text[k2] === '-'; k2++) current += '-';
           if (delimQuote) {
             quote = delimQuote as '"' | "'";
             current += delimQuote;
-            i++;
           }
           current += delim;
-          i += delim.length;
+          i = j;
           pendingHeredoc = delim;
           continue;
         }
@@ -768,7 +1221,21 @@ export function splitShellSegments(text: string): string[] {
     i++;
   }
   segments.push(current);
-  return segments.map((segment) => segment.trim()).filter(Boolean);
+  sepsOut?.push('');
+  if (!sepsOut) return segments.map((segment) => segment.trim()).filter(Boolean);
+  // Keep sepsOut aligned when empty segments are filtered out.
+  const trimmed = segments.map((segment) => segment.trim());
+  const kept: string[] = [];
+  const keptSeps: string[] = [];
+  for (let i = 0; i < trimmed.length; i++) {
+    if (trimmed[i]) {
+      kept.push(trimmed[i]!);
+      keptSeps.push(sepsOut[i] ?? '');
+    }
+  }
+  sepsOut.length = 0;
+  sepsOut.push(...keptSeps);
+  return kept;
 }
 
 // Find hcloud-leading command segments: quote/heredoc-aware splitting
@@ -779,19 +1246,46 @@ export function splitShellSegments(text: string): string[] {
 // re-scanned (depth-capped); (b) an `xargs hcloud …` segment draws its
 // arguments from the PRECEDING piped segment, so those tokens are merged
 // in as candidate operation words.
-function findHcloudCommandSegments(text: unknown, depth = 0): string[][] {
-  const scannerSegments = splitShellSegments(String(text));
+function findHcloudCommandSegments(text: unknown, depth = 0, inheritedFeeder: string[] | null = null): string[][] {
+  const segmentSeps: string[] = [];
+  const scannerSegments = splitShellSegments(String(text), segmentSeps);
   const out: string[][] = [];
   const scriptOf = (tokens: string[]): string | null => {
     if (!tokens.length) return null;
     const first = String(tokens[0] || '').toLowerCase();
     const base = basenameOf(String(tokens[0] || '')).toLowerCase();
     const shellLike = SHELL_FIRST_TOKENS.has(first) || (base !== first && SHELL_FIRST_TOKENS.has(base));
-    // `-c`, `-lc`, `-xc` … any option cluster ending in c takes the script.
+    // `-c`, `-lc`, `-xc` … any option cluster ending in c takes the
+    // script; the script argument's `\"` pairs are span-internal escapes,
+    // resolved at this consumption point. When the script word is ITSELF
+    // a bin or wrapper head (`bash -c hcloud ECS …` — the flattened join
+    // of the real `bash -c "hcloud ECS …"`), the tail tokens belong to
+    // the same command: return them joined, or the nested scan sees a
+    // bare bin and hits the empty-args guard on a legitimate read.
     const isScriptFlag = /^-[a-z]*c$/i.test(String(tokens[1] || ''));
-    if (shellLike && isScriptFlag && tokens[2]) return String(tokens[2]);
-    if (first === 'eval' && tokens[1]) return String(tokens[1]);
-    return null;
+    const resolveSpan = (s: string): string => String(s).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+    if (shellLike && isScriptFlag && tokens[2]) {
+      const script = resolveSpan(tokens[2]);
+      const scriptHeadTok = splitSimpleCommand(script)[0];
+      const headIsCommandish =
+        isHcloudToken(String(scriptHeadTok ?? '')) ||
+        SHELL_FIRST_TOKENS.has(String(scriptHeadTok ?? '').toLowerCase()) ||
+        String(scriptHeadTok ?? '').toLowerCase() === 'eval' ||
+        COMMAND_POSITION_PREFIXES.has(String(scriptHeadTok ?? '').toLowerCase());
+      if (headIsCommandish && tokens.length > 3) {
+        return [script, ...tokens.slice(3).map(String)].join(' ');
+      }
+      return script;
+    }
+    // eval evaluates the JOIN of all its arguments — the script string is
+    // the whole tail, not just the first word.
+    if (first === 'eval' && tokens[1]) {
+      return tokens
+        .slice(1)
+        .map((t) => resolveSpan(t))
+        .join(' ');
+    }
+    return windowsScriptArgAt(tokens, 0);
   };
   for (let s = 0; s < scannerSegments.length; s++) {
     const tokens = splitSimpleCommand(scannerSegments[s]!);
@@ -800,8 +1294,16 @@ function findHcloudCommandSegments(text: unknown, depth = 0): string[][] {
     // are live commands. Wrapper unwrapping runs to a FIXPOINT (an sqc
     // child that is itself a secret-exec or sqc invocation reaches its
     // innermost script too) — one level per wrapper kind would miss
-    // same-wrapper compositions with compound inner scripts.
-    if (depth < 4) {
+    // same-wrapper compositions with compound inner scripts. The depth
+    // budget is 16: adversarial nests five-plus deep genuinely execute
+    // (`bash -c` × 5 around `hcloud x; hcloud <write>`), and beyond the
+    // budget the unwrap path re-tokenizes WITHOUT re-splitting `;` — the
+    // write launders. Bounded by input length, each level consumes a
+    // wrapper token. The budget (18) sits one level past the Linux
+    // executability ceiling (~17 levels before MAX_ARG_STRLEN bites);
+    // larger inputs are stopped by the length cap at classification
+    // entry.
+    if (depth < 18) {
       const candidates: string[][] = [tokens];
       let cursor = tokens;
       for (let n = 0; n < 4; n++) {
@@ -810,22 +1312,158 @@ function findHcloudCommandSegments(text: unknown, depth = 0): string[][] {
         candidates.push(next);
         cursor = next;
       }
+      // A command-position prefix in front of a shell head
+      // (`sudo bash -c "echo Delete | xargs hcloud ECS"`) hides the
+      // script from scriptOf's head check — probe PAST the prefixes (and
+      // their value flags) so the nested segment/feeder semantics fire.
+      let probe = tokens;
+      for (let d = 0; d < 10; d++) {
+        const probeHead = String(probe[0] ?? '').toLowerCase();
+        const probeBase = basenameOf(String(probe[0] ?? '')).toLowerCase();
+        const isEnvAssignmentToken = /^[A-Za-z_][A-Za-z0-9_]*=/.test(String(probe[0] ?? ''));
+        if (
+          !COMMAND_POSITION_PREFIXES.has(probeHead) &&
+          !COMMAND_POSITION_PREFIXES.has(probeBase) &&
+          !isEnvAssignmentToken
+        ) {
+          break;
+        }
+        probe = isEnvAssignmentToken ? probe.slice(1) : skipPrefixArguments(probeBase || probeHead, probe.slice(1));
+        candidates.push(probe);
+      }
       for (const candidate of candidates) {
         const nested = scriptOf(candidate);
         if (nested !== null) {
-          out.push(...findHcloudCommandSegments(nested, depth + 1));
+          // The nested script's stdin is THIS segment's stdin: a piped
+          // context feeds it, so the outer feeder threads down — an
+          // xargs inside the script inherits the OUTER pipe
+          // (`echo Delete | bash -c 'true; xargs hcloud ECS'`).
+          const nestedFeeder = s > 0 ? splitSimpleCommand(scannerSegments[s - 1]!).slice(1) : inheritedFeeder;
+          out.push(...findHcloudCommandSegments(nested, depth + 1, nestedFeeder));
         }
       }
     }
-    const unwrapped = unwrapShellAndWrappers(tokens);
+    const { stream: unwrappedRaw, windowsPayload } = unwrapWithWindowsFlag(tokens);
+    // A wrapper payload headed by xargs (`cmd /c "xargs hcloud ECS"` —
+    // the child inherits the pipe and appends the feeder): strip the bin
+    // so the hcloud-leading check and the feeder merge both engage.
+    const isXargsHead = (() => {
+      const t = String(unwrappedRaw[0] ?? '').toLowerCase();
+      return t === 'xargs' || basenameOf(String(unwrappedRaw[0] ?? '')).toLowerCase() === 'xargs';
+    })();
+    const unwrapped = isXargsHead ? unwrappedRaw.slice(1) : unwrappedRaw;
     if (!isHcloudToken(String(unwrapped[0] || ''))) continue;
     // xargs feed: the preceding segment's non-command tokens become argv
     // AFTER the segment's own arguments (xargs appends stdin to the tail).
-    const hadXargs = tokens.some(
-      (token) => String(token).toLowerCase() === 'xargs' || basenameOf(String(token)).toLowerCase() === 'xargs',
-    );
-    if (hadXargs && s > 0) {
-      const feeder = splitSimpleCommand(scannerSegments[s - 1]!).slice(1);
+    // xargs is detected on the PRE-unwrap segment tokens AND the
+    // unwrapped stream: inside a quoted windows payload the whole
+    // command is one token, and only the unwrapped head exposes the
+    // `xargs` bin (`echo Delete | cmd /c "xargs hcloud ECS"` — the child
+    // inherits the pipe and executes the merged write). A span token
+    // whose FIRST word is xargs counts too.
+    const isXargsToken = (token: unknown): boolean => {
+      const t = String(token).toLowerCase();
+      if (t === 'xargs' || basenameOf(String(token)).toLowerCase() === 'xargs') return true;
+      if (/\s/.test(String(token))) {
+        const firstWord = splitSimpleCommand(String(token))[0];
+        return String(firstWord ?? '').toLowerCase() === 'xargs';
+      }
+      return false;
+    };
+    const hadXargs = tokens.some((t) => isXargsToken(t)) || unwrappedRaw.some((t) => isXargsToken(t));
+    // Trailing redirection feeders: a herestring's words (`<<< Delete`)
+    // and a `<`-terminated segment's NEXT segment (`< <(echo Delete)` —
+    // the substitution split leaves the words in the following segment)
+    // are INLINE-visible feeder content, same standard as the pipe.
+    const herestringAt = tokens.findIndex((t) => /^0*<{3,}/.test(String(t)));
+    // A heredoc marker (`<<EOF`, `<<-EOF`, `<< EOF`) — the body words are
+    // stdin feeder content for the xargs-bearing opening segment.
+    const heredocAt = tokens.findIndex((t) => /^0*<<-?(?!<)/.test(String(t)));
+    const trailingRedirect = /<\s*$/.test(scannerSegments[s] ?? '') && s + 1 < scannerSegments.length;
+    if (hadXargs && (s > 0 || inheritedFeeder !== null || herestringAt >= 0 || heredocAt >= 0 || trailingRedirect)) {
+      // The feeder is the UNION of every visible source: the pipeline
+      // WALK-BACK (through control headers, group braces, and argless
+      // pass-through filters — the pipe's data reaches the xargs body
+      // through them: `echo Delete | if true; then xargs hcloud ECS; fi`;
+      // a `;`-separated consuming command stops the walk), the inherited
+      // outer pipe (the script's stdin), herestring words, and
+      // redirection-substitution words. Union is fail-closed: any
+      // write-shaped word reaching the argv denies.
+      const controlHeadWords = new Set([
+        'if',
+        'while',
+        'until',
+        'for',
+        'case',
+        'then',
+        'do',
+        'else',
+        'elif',
+        'fi',
+        'done',
+        'esac',
+        '{',
+        '}',
+        '(',
+        ')',
+        '!',
+      ]);
+      const passThroughBins = new Set(['cat', 'sort', 'tee', 'head', 'tail', 'uniq', 'wc', 'tr']);
+      const walkBackFeeder = (): string[] => {
+        const words: string[] = [];
+        let k = s - 1;
+        while (k >= 0) {
+          const segToks = splitSimpleCommand(scannerSegments[k]!);
+          const headTok = String(segToks[0] ?? '').toLowerCase();
+          const args = segToks.slice(1).map(String);
+          const isCtrl = controlHeadWords.has(headTok) || (passThroughBins.has(headTok) && args.length === 0);
+          const sepAfter = segmentSeps[k] ?? '';
+          const sepBefore = k > 0 ? (segmentSeps[k - 1] ?? '') : '';
+          // `)` (substitution/subshell body) and `>(` (process
+          // substitution) flow like `|` — the substituted data reaches
+          // the pipe (`cat <(echo Delete) | xargs hcloud ECS`).
+          const flows = sepAfter === '|' || sepAfter === ')' || sepAfter === '>(';
+          if (!isCtrl && !flows) {
+            // A consuming command not pipe-connected to the xargs segment
+            // (`echo Delete | true; xargs …`): no stdin flow.
+            if (k === s - 1) return words;
+            break;
+          }
+          words.push(...args);
+          if (!isCtrl && sepBefore !== '|' && sepBefore !== ')' && sepBefore !== '>(') break;
+          k -= 1;
+        }
+        return words;
+      };
+      // xargs splits stdin on IFS: a QUOTED feeder token carries
+      // multiple words (`echo "ECS DeleteServers" | xargs hcloud` runs
+      // `hcloud ECS DeleteServers`) — expand every feeder token into its
+      // whitespace-separated words.
+      const expandWords = (tokens: string[]): string[] =>
+        tokens.flatMap((t) =>
+          String(t)
+            .split(/\s+/)
+            .filter(Boolean)
+            .map((w) => w.replace(/^['"]|['"]$/g, '')),
+        );
+      let feeder = expandWords([...walkBackFeeder(), ...(inheritedFeeder ?? [])]);
+      if (herestringAt >= 0 && /^0*<{3,}$/.test(String(tokens[herestringAt]))) {
+        // A BARE `<<<` marker: the following tokens are the payload. A
+        // GLUED marker (`<<<"OBS rm"` tokenizes as `<<<"OBS` + `rm"`) is
+        // handled by the redirect-marker branch below — running both
+        // would duplicate the payload words.
+        feeder = [...feeder, ...expandWords(tokens.slice(herestringAt + 1).map(String))];
+      }
+      if (trailingRedirect) {
+        feeder = [
+          ...feeder,
+          ...expandWords(
+            splitSimpleCommand(scannerSegments[s + 1]!)
+              .slice(1)
+              .map(String),
+          ),
+        ];
+      }
       // Placeholders: the literal {} / % runs AND the declared -I/--replace
       // value (any replstr spelling) — stdin tokens fill those positions.
       const replstr = (() => {
@@ -845,11 +1483,80 @@ function findHcloudCommandSegments(text: unknown, depth = 0): string[][] {
           .slice(1)
           .filter((token) => /^[{}%]+$/.test(String(token)) || (replstr !== null && String(token) === replstr)),
       );
-      const ownArgs = unwrapped.slice(1).filter((token) => !placeholders.has(token));
+      // Redirection tokens are not argv — input (`<<<`, `<`, glued
+      // `<<<Delete`), output (`>`, `>>`, `2>`, `1>`, `>&2`, `2>&1`), and
+      // heredoc markers (`<<EOF`, `<< EOF`) — and the words after a
+      // herestring/heredoc already joined the feeder. Keep them out of
+      // the own-args or they occupy the operation slot
+      // (`echo Delete | xargs hcloud ECS > /dev/null`).
+      const isRedirectToken = (t: string): boolean =>
+        t === '<' ||
+        /^0+$/.test(t) ||
+        /^0+<$/.test(t) ||
+        /^(?:\d*)>+<?&?/.test(t) ||
+        /^0*<{3,}/.test(t) ||
+        /^0*<<-?(?!<)/.test(t);
+      const redirAt = unwrapped.slice(1).findIndex((token) => isRedirectToken(String(token)));
+      const ownTail = redirAt < 0 ? unwrapped.slice(1) : unwrapped.slice(1, redirAt + 1);
+      // A glued herestring payload (`<<<Delete`) and a heredoc body
+      // (words between the marker and the delimiter) join the feeder.
+      if (redirAt >= 0) {
+        const marker = String(unwrapped[redirAt + 1] ?? '');
+        const restTokens = unwrapped.slice(redirAt + 2).map(String);
+        if (/^0*<{3,}/.test(marker)) {
+          feeder = [...feeder, ...expandWords([marker.replace(/^0*<{3,}/, ''), ...restTokens])];
+        } else if (/^0*<<-?/.test(marker)) {
+          // Glued delimiter (`<<EOF`): the body runs until the delimiter
+          // word repeats; spaced (`<<` + delim token): skip the declared
+          // delimiter token first.
+          const delim = marker.replace(/^0*<<-?/, '');
+          const body = delim
+            ? restTokens.slice(
+                0,
+                restTokens.findIndex((t, i) => t === delim && i > 0),
+              )
+            : restTokens.slice(
+                1,
+                restTokens.findIndex((t, i) => t === restTokens[0] && i > 0),
+              );
+          feeder = [...feeder, ...(body.length ? body : restTokens)];
+        }
+      }
+      const ownArgs = ownTail.filter((token) => !placeholders.has(token));
       out.push([String(unwrapped[0]), ...ownArgs, ...feeder]);
+      // Fail-closed per-word candidates: any single feeder word that
+      // lands in the operation slot as the first appended argv word
+      // (xargs appends stdin in order — `echo y && xargs hcloud ECS`
+      // with an outer pipe feeds Delete behind the benign y). Only
+      // write-prefixed words materialize candidates — a full-candidates
+      // loop re-classifies each word against the whole payload and goes
+      // quadratic on large legitimate feeders.
+      for (const word of feeder) {
+        const w = String(word).toLowerCase();
+        if (
+          hasWritePrefix(String(word), DEFAULT_POLICY) ||
+          OBSUTIL_WRITES.has(w) ||
+          (DEFAULT_POLICY.blockedConfigureSubcommands ?? []).includes(w)
+        ) {
+          out.push([String(unwrapped[0]), ...ownArgs, String(word)]);
+        }
+      }
       continue;
     }
     out.push(unwrapped);
+    // A windows payload's brace grammar makes every LATER hcloud
+    // occurrence a live command site (`try { read } finally { write }` —
+    // `}` is not a segment separator, so the blocks stay one segment):
+    // classify each further bin + following words as its own segment,
+    // including bins GLUED to separator runs (`ListServers}catch{hcloud`).
+    if (windowsPayload) {
+      for (let i = 1; i < unwrapped.length; i++) {
+        const pieceStream = hcloudPieceAt(unwrapped, i);
+        if (pieceStream !== null && pieceStream.length > 1) {
+          out.push(pieceStream);
+        }
+      }
+    }
   }
   return out;
 }
@@ -875,11 +1582,28 @@ export function classifyHcloudArgs(args: unknown, options: ClassifyOptions = {})
         results[0]!
       );
     }
+    // A routed TEXT with no hcloud-leading segment is an orphan: prose
+    // mentioning hcloud, a quoted package-name argument (`pip install
+    // "hcloud"`), redirection remnants. The argv face's orphan
+    // classification is a documented TS/py drift — text calls allow;
+    // direct argv calls (tools, tests) and the segment recursion keep
+    // the fallthrough classifier below.
+    if (options.rawCommand !== undefined) {
+      return applyCommandRiskRules(
+        {
+          decision: 'allow',
+          risk: 'not_huaweicloud',
+          reason: 'No Huawei Cloud safety rule matched.',
+        },
+        unwrappedTokens,
+        options,
+      );
+    }
   }
   const { service, operation, args: normalizedArgs } = commandOperation(args);
   const joined = normalizedArgs.join(' ');
 
-  if (!normalizedArgs.length) {
+  if (!normalizedArgs.length && options._narrowRouted !== false) {
     return {
       decision: 'deny',
       risk: 'invalid',
@@ -964,28 +1688,10 @@ export function classifyHcloudArgs(args: unknown, options: ClassifyOptions = {})
     };
   }
 
-  const obsutilWrites = [
-    'mb',
-    'cp',
-    'mv',
-    'rm',
-    'delete',
-    'mkdir',
-    'sync',
-    'restore',
-    'chattri',
-    'bucketpolicy',
-    'lifecycle',
-    'cors',
-    'website',
-    'sign',
-    'share-add',
-    'share-update',
-    'share-rm',
-  ];
+  const obsutilWrites = OBSUTIL_WRITES;
   const obsutilReads = ['ls', 'stat', 'cat', 'help', 'version'];
   const isObs = service.toLowerCase() === 'obs';
-  const isObsWrite = isObs && obsutilWrites.includes(operation);
+  const isObsWrite = isObs && obsutilWrites.has(operation);
   const isObsRead = isObs && obsutilReads.includes(operation);
   if (isObsWrite && !options.allowWrites) {
     return {
@@ -1070,9 +1776,19 @@ export function classifyHcloudArgs(args: unknown, options: ClassifyOptions = {})
 }
 
 function splitSimpleCommand(command: unknown): string[] {
+  // Double-quoted spans honor backslash escapes (`\"` nests quotes — the
+  // canonical bash way to embed a Windows wrapper, `bash -c "cmd /c
+  // \"hcloud …\""`); single-quoted spans do not (POSIX: no escapes inside
+  // single quotes). A single-quote span's closer is OPTIONAL — an
+  // unterminated `'…` runs to the end of the string as one token
+  // (mirroring the py tokenizer) so malformed-but-nested payloads keep
+  // their grouping; a double-quote span REQUIRES its closer so a glued
+  // Windows flag (`cmd /c"hcloud …` with the closing quote stranded on
+  // the last argument) re-tokenizes per-word with the leading quote
+  // stripped by the edge replace.
   return (
     String(command)
-      .match(/"[^"]*"|'[^']*'|\S+/g)
+      .match(/"(?:[^"\\]|\\.)*"|'[^']*'?|\S+/g)
       ?.map((part) => part.replace(/^['"]|['"]$/g, '')) || []
   );
 }
@@ -1118,6 +1834,22 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
   const policy = options.policy || DEFAULT_POLICY;
   const text = asText(command || '');
   const shadowText = stripShellQuotes(text);
+
+  // Length cap: a routed payload past 256 KiB cannot execute through any
+  // wrapper chain (MAX_ARG_STRLEN), and classifying pathological nests
+  // at that size costs minutes — a hook DoS. Denied fail-closed instead.
+  if (text.length > 262_144) {
+    if (
+      /(^|[^a-z0-9.-])hcloud(\.exe)?[\s)\]}'"]/i.test(shadowText) ||
+      /(^|[^a-z0-9.-])hcloud(\.exe)?[\s)\]}'"]/i.test(text)
+    ) {
+      return {
+        decision: 'deny',
+        risk: 'invalid',
+        reason: 'Command payload too large to classify safely; denied fail-closed.',
+      };
+    }
+  }
 
   // Raw, shadow, and path-normalized forms (shared with the MCP file gate):
   // a quote pair inside the path (`~/.config/huawei'cloud/secrets'/.master-
@@ -1281,9 +2013,28 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
   // Routing on the shadow with a boundary class that admits `/`, `(`, and
   // backtick before the bin: path-qualified (`/usr/bin/hcloud`) and
   // substituted (`$(hcloud …)`) invocations must reach classification, not
-  // just whitespace-preceded bare names.
-  if (/(^|[^a-z0-9.-])hcloud(\.exe)?\s+/i.test(shadowText)) {
-    return classifyHcloudArgs(splitSimpleCommand(text), { ...options, rawCommand: text });
+  // just whitespace-preceded bare names. The bin's TAIL accepts closers
+  // (`&('hcloud')`, `(hcloud)`) as well as whitespace. The RAW text is
+  // tested too: the shadow strips quotes and backslashes, which GLUES the
+  // bin into the preceding word (`cmd /c"hcloud …`, `C:\hcloud.exe …`)
+  // and defeats the boundary class there, while the raw text still
+  // carries the boundary character itself. A BROAD tail (also `;`, `&`,
+  // `|`, `>`, and end-of-string) routes `… | xargs hcloud;` /
+  // `xargs hcloud>` — py's per-segment gate denies those; the empty-args
+  // fail-closed stays gated on the NARROW tail so the pinned bare
+  // `hcloud` / `sudo hcloud` allows survive.
+  const narrowRouted =
+    /(^|[^a-z0-9.-])hcloud(\.exe)?[\s)\]}'"]/i.test(shadowText) ||
+    /(^|[^a-z0-9.-])hcloud(\.exe)?[\s)\]}'"]/i.test(text);
+  const broadRouted =
+    /(^|[^a-z0-9.-])hcloud(\.exe)?([\s)\]}'";&|>]|$)/i.test(shadowText) ||
+    /(^|[^a-z0-9.-])hcloud(\.exe)?([\s)\]}'";&|>]|$)/i.test(text);
+  if (broadRouted) {
+    return classifyHcloudArgs(splitSimpleCommand(text), {
+      ...options,
+      rawCommand: text,
+      _narrowRouted: narrowRouted,
+    });
   }
 
   return applyRawCommandRiskRules(

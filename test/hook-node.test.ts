@@ -101,3 +101,30 @@ test('node hook allows safe commands with empty stdout', () => {
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.trim(), '');
 });
+
+test('node hook denies Windows-script-wrapped hcloud writes (#731/#760)', () => {
+  // Whichever module the wrapper loads (compiled dist/ when present —
+  // stale dist fails this test on purpose — or the src/ fallback in a raw
+  // checkout) must carry the wrapper unwrap. The mjs face is the third
+  // enforcement layer: TS classifier and the py hook are pinned by the
+  // hook-parity battery; this pins the Node entry point itself.
+  const denied = [
+    'cmd /c "hcloud ECS DeleteServers --server.id=1"',
+    'powershell -NoProfile -Command "hcloud ECS DeleteServers --server.id=1"',
+    'C:\\Windows\\System32\\cmd.exe /c "hcloud ECS DeleteServers"',
+    'cmd /c start /b hcloud ECS DeleteServers --server.id=1',
+  ];
+  for (const command of denied) {
+    const result = runHook({ tool_name: 'Bash', tool_input: { command } });
+    assert.equal(result.status, 0, `${command}: ${result.stderr}`);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.hookSpecificOutput.permissionDecision, 'deny', command);
+    assert.match(output.hookSpecificOutput.permissionDecisionReason, /write|plan|approv/i, command);
+  }
+  // Wrapped reads stay allowed through the mjs face too.
+  for (const command of ['cmd /c "hcloud ECS ListServers"', 'powershell -Command "hcloud ECS ListServers"']) {
+    const result = runHook({ tool_name: 'Bash', tool_input: { command } });
+    assert.equal(result.status, 0, `${command}: ${result.stderr}`);
+    assert.equal(result.stdout.trim(), '', command);
+  }
+});
