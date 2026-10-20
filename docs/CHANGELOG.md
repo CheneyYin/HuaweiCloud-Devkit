@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- docs(huawei-ecs): large-user_data JSON-file path (--skeleton / --cli-jsonInput / --dryrun) + anti-pattern warning against abandoning the MCP approval channel (#964)
+
 ## 1.1.10-next.0 (2026-10-20)
 
 - chore: sync README beta badge to 1.1.10

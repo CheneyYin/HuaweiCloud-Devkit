@@ -195,6 +195,18 @@ test('huawei-iam skill documents the validated primary-account judgment rule (#9
   assert.match(quickRef, /assumed-agency/);
 });
 
+test('huawei-ecs create-instance documents the large-user_data JSON-file path (#964)', () => {
+  const body = readFileSync(join(pluginRoot, 'skills', 'huawei-ecs', 'references', 'create-instance.md'), 'utf8');
+  // The oversized-parameter escape hatch: file-based params keep the MCP approval channel.
+  assert.match(body, /--cli-jsonInput/);
+  assert.match(body, /body\.server\.user_data/);
+  // The three global flags are absent from operation-level --help, so naming them is HELPFUL knowledge.
+  assert.match(body, /--skeleton/);
+  assert.match(body, /--dryrun/);
+  // The observed anti-pattern (abandoning MCP tools for a direct shell call) must be called out.
+  assert.match(body, /do NOT abandon the MCP channel/i);
+});
+
 test('skills with references have non-empty reference files', () => {
   const skillsDir = join(pluginRoot, 'skills');
   const skillNames = readdirSync(skillsDir).filter((name) => existsSync(join(skillsDir, name, 'SKILL.md')));
