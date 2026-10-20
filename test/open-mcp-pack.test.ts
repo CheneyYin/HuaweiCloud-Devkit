@@ -329,7 +329,23 @@ test('gateway resolution prefers OPENMCP_BIN, then disk, then uvx', () => {
     envUvxOnly.PATH = [binDir, join(process.env.SystemRoot, 'System32'), '/usr/bin'].join(delimiter);
   }
   const viaUvx = resolveGatewayCommand(envUvxOnly) as GatewayCommand;
-  assert.equal(viaUvx.command, fakeUvx, 'with nothing on disk, uvx is the fallback');
+  // where.exe answers with the LONG path form (...\runneradmin\...) even
+  // when the PATH entry it found the file under carries the 8.3 short form
+  // (...\RUNNER~1\... — what os.tmpdir() hands back on GitHub runners):
+  // the PATH tier's command string is verbatim where.exe output, so pin
+  // the resolved FILE, not the string form. realpathSync.native (libuv's
+  // GetFinalPathNameByHandleW) expands short names; the plain JS
+  // realpathSync does not. POSIX keeps exact string equality — tmpdir
+  // never mangles there and the filesystem is case-sensitive.
+  if (process.platform === 'win32') {
+    assert.equal(
+      realpathSync.native(viaUvx.command).toLowerCase(),
+      realpathSync.native(fakeUvx).toLowerCase(),
+      'with nothing on disk, uvx is the fallback',
+    );
+  } else {
+    assert.equal(viaUvx.command, fakeUvx, 'with nothing on disk, uvx is the fallback');
+  }
   assert.deepEqual(viaUvx.argsPrefix, ['huaweicloud-open-mcp']);
 
   // A persistent install in ~/.local/bin outranks the uvx fallback.
