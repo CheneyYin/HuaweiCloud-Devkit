@@ -89,7 +89,7 @@ jobs:
         os: [ubuntu-24.04, ubuntu-24.04-arm, windows-latest]
         node: ['22', '24']
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -99,6 +99,10 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+      # skills/ and dist/ are gitignored build artifacts on this bloodline —
+      # the test suite (structure.test.ts) and validate both read the
+      # generated tree, so build first (the floor job models this shape).
+      - run: npm run build
       - run: npm test
       - run: npm run validate
 

@@ -175,6 +175,22 @@ export default [
     },
   },
   {
+    // The safety hook is a runtime entry point over BUILT output: it prefers
+    // the compiled dist/ module and falls back to the TypeScript source.
+    // dist/ is a gitignored build artifact (never present on a fresh
+    // checkout), so resolution-based rules cannot see the target — the
+    // '../src/safety-policy.ts' fallback branch stays checked by
+    // import/no-unresolved (resolver extensions include .ts).
+    // n/no-missing-import has no pattern-ignore option (allowModules covers
+    // bare module names only), so it is off here and import-x carries the
+    // resolution gate for this file.
+    files: ['plugins/huaweicloud-core/hooks/huaweicloud-safety.mjs'],
+    rules: {
+      'import/no-unresolved': ['error', { ignore: ['^node:', '^\\.\\./dist/'] }],
+      'n/no-missing-import': 'off',
+    },
+  },
+  {
     files: ['plugins/huaweicloud-core/src/ws-exec/hwlink-*'],
     rules: {
       'unicorn/prefer-number-is-safe-integer': 'off',
