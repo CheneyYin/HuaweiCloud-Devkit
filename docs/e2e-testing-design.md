@@ -1,7 +1,9 @@
 # E2E Testing Design (agent-level suite)
 
 The suite lives in `test/e2e/`, gated by `E2E_ENABLE=1` (`npm run test:e2e`),
-and runs nightly plus on demand. It is the mechanism-verification tier of the
+and runs in CI on three lanes: nightly on v2, every push to v2, and an
+opt-in `run-e2e` label for same-repo PRs into v2 (never in the required PR
+gate). It is the mechanism-verification tier of the
 agent-level test story; the real-cloud guidance tier is
 `test/huaweicloud-agent-toolkit-test/` (see Division of labor below).
 
@@ -123,8 +125,10 @@ are never copied. Local config: gitignored `test/e2e/.env`.
   Covering it needs a product seam (an `HUAWEICLOUD_MARKETPLACE_INDEX`-style
   override); until one lands, this tool has no E2E case.
 - **LLM cost/latency**: a single case takes 1 to 4 min with an attempts cap
-  of 2. A full run covers all 28 cases and measures about 40 min wall clock
-  (first-attempt passes). Failures attach every recording to the JSON report
+  of 2. A full run covers all 31 cases and measures about 40 min wall clock
+  (first-attempt passes; the per-attempt budget caps sum to 147 min
+  single-pass / 294 min worst case, which the CI job timeout of 330 min
+  covers). Failures attach every recording to the JSON report
   for offline triage.
 
 ## Division of labor: this suite vs the nightly real-cloud harness
@@ -148,7 +152,7 @@ group and killed tree-wide on timeout; a startup sweep removes stale
 `selfcheck` subcommand proves the full chain (tarball → install → MCP server
 → callTool → fakes) without the LLM.
 
-Nightly (`.github/workflows/e2e-nightly.yml`): the only required repository
+CI (`.github/workflows/e2e-nightly.yml`): the only required repository
 setting is the `E2E_TEST_MODEL_APIKEY` secret. Provider/model/baseURL default
 to the committed values in the workflow (mirroring `test/e2e/.env`'s
 non-secret model config — maas / modelarts / glm-5.2 at the time of writing)
@@ -157,3 +161,12 @@ on a missing secret. opencode is pinned to the version the suite was verified
 against (an upgrade is an explicit suite event). Local runs read the
 gitignored `test/e2e/.env` instead; the report records agent/model/version
 per run so drift between the two sources is visible, not silent.
+
+The workflow file must stay byte-identical on main and v2, and a drift-guard
+step inside the run fails loud on skew: schedule and dispatch events read
+main's registered copy (schedule only fires from the default branch) and
+check out v2 — the suite's bloodline — while push and pull_request events
+read the pushed ref's own copy. PR runs are opt-in via the `run-e2e` label
+(same-repo PRs only; fork PRs skip, they cannot see the secret), and a
+labeled PR re-runs on every synchronize. Concurrency is job-level so runs
+skipped by the label guard never cancel an in-flight suite.
