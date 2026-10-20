@@ -207,6 +207,19 @@ test('huawei-ecs create-instance documents the large-user_data JSON-file path (#
   assert.match(body, /do NOT abandon the MCP channel/i);
 });
 
+test('huawei-ecs troubleshooting covers volume-type sellout and RHEL-family firewalld (#971)', () => {
+  const body = readFileSync(join(pluginRoot, 'skills', 'huawei-ecs', 'references', 'troubleshooting.md'), 'utf8');
+  // A: Ecs.0044 must be a distinct row from Ecs.0319 (volume type vs flavor capacity).
+  assert.match(body, /Ecs\.0044/);
+  assert.match(body, /root_volume\.volumetype/);
+  // B: the firewalld section must cover the RHEL family (not just EulerOS), record the
+  // unverified Rocky observation honestly, and point at the no-SSH cloud-init recovery path.
+  assert.match(body, /RHEL 系/);
+  assert.match(body, /Rocky/);
+  assert.match(body, /根因未验证/);
+  assert.match(body, /无需登录实例|cloud-init/);
+});
+
 test('skills with references have non-empty reference files', () => {
   const skillsDir = join(pluginRoot, 'skills');
   const skillNames = readdirSync(skillsDir).filter((name) => existsSync(join(skillsDir, name, 'SKILL.md')));
