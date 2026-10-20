@@ -25,7 +25,7 @@ Enterprise agent platform for Huawei Cloud: hosts agent runtimes (LangGraph/Lang
 
 ## Prerequisites
 
-- Python 3.10+ (per the SDK README) and `pip install agentarts-sdk==0.1.7` (pinned; verify with `agentarts --version`). A venv install lives outside PATH — invoke it by full path in your terminal; the upcoming approval wrapper will honor an `AGENTARTS_BIN` override.
+- Python 3.10+ (per the SDK README) and `pip install agentarts-sdk==0.1.7 -i https://mirrors.huaweicloud.com/repository/pypi/simple` (pinned; Huawei Cloud PyPI mirror — if the mirror lags a newly pinned version, drop `-i` and install from official PyPI; verify with `agentarts --version`). CLI resolution: `AGENTARTS_BIN` > devkit-managed venv > PATH — a personal venv install needs its full path or `AGENTARTS_BIN`.
 - Credentials: `HUAWEICLOUD_SDK_AK` / `HUAWEICLOUD_SDK_SK` env vars. NEVER let AK/SK enter shell history or the conversation — see huaweicloud-cli-and-auth
 - Region: control plane is cn-southwest-2 only; the memory create/get/list/update/delete/status subcommands default to cn-north-4 (install/uninstall take no region flag) — pass `--region` explicitly on the six that have it
 

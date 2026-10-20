@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 
-import { resolveAgentartsCommand, pinnedSdkVersion } from './agentarts-cli.mjs';
+import { AGENTARTS_SDK_MIRROR, resolveAgentartsCommand, pinnedSdkVersion } from './agentarts-cli.mjs';
 
 const VERSION_OUTPUT_RE = /^agentarts version:\s*(\S+)/m;
 
@@ -105,11 +105,11 @@ export function checkAgentarts(options = {}) {
   if (!cli.installed) {
     warnings.push('agentarts CLI not found');
     nextSteps.push(
-      `pip install agentarts-sdk==${cli.pinned || 'the pinned version'} (set AGENTARTS_BIN when installed outside PATH)`,
+      `pip install agentarts-sdk==${cli.pinned || 'the pinned version'} -i ${AGENTARTS_SDK_MIRROR} (set AGENTARTS_BIN when installed outside PATH)`,
     );
   } else if (cli.pinned && cli.versionMatches === false) {
     warnings.push(`agentarts ${cli.version} != pinned ${cli.pinned}`);
-    nextSteps.push(`pip install agentarts-sdk==${cli.pinned}`);
+    nextSteps.push(`pip install agentarts-sdk==${cli.pinned} -i ${AGENTARTS_SDK_MIRROR}`);
   }
   if (cli.installed && !python.ok) {
     warnings.push(

@@ -1129,6 +1129,8 @@ test('huawei-agentarts skill ships with routing floor and core registry wiring',
   }
   // Pinned SDK version is stated (D17) and hook-enforced tiers are documented.
   assert.match(body, /agentarts-sdk==0\.1\.7/);
+  // The taught install command carries the Huawei Cloud PyPI mirror (PR5).
+  assert.match(body, /mirrors\.huaweicloud\.com\/repository\/pypi\/simple/);
   assert.match(body, /AGENTARTS_BIN/);
   assert.match(body, /HUAWEICLOUD_SDK_AK/);
   assert.match(body, /cn-north-4/);
@@ -1244,19 +1246,19 @@ test('tool count is never hardcoded in AGENTS.md (TOOL_DEFINITIONS.length is the
 
 test('the agentarts trio registers and the shared approval store backs both wrappers', async () => {
   const { TOOL_DEFINITIONS, callTool } = await import('../plugins/huaweicloud-core/src/tools.mjs');
-  const names = TOOL_DEFINITIONS.map((t) => t.name);
+  const names = new Set(TOOL_DEFINITIONS.map((t) => t.name));
   for (const name of [
     'huaweicloud_agentarts_plan_cli_command',
     'huaweicloud_agentarts_run_readonly_command',
     'huaweicloud_agentarts_run_approved_command',
   ]) {
-    assert.ok(names.includes(name), `tools.mjs missing ${name}`);
+    assert.ok(names.has(name), `tools.mjs missing ${name}`);
   }
   // tools.mjs must stay a thin registration site: the definitions come from
   // the agentarts module, not duplicated inline.
   const { AGENTARTS_TOOL_DEFINITIONS } = await import('../plugins/huaweicloud-core/src/agentarts-cli.mjs');
   assert.equal(
-    AGENTARTS_TOOL_DEFINITIONS.filter((def) => names.includes(def.name)).length,
+    AGENTARTS_TOOL_DEFINITIONS.filter((def) => names.has(def.name)).length,
     AGENTARTS_TOOL_DEFINITIONS.length,
   );
   assert.equal(typeof callTool, 'function');

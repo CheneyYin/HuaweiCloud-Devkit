@@ -201,6 +201,7 @@ test('python hook blocks agentarts cloud-write commands (policy-driven floor)', 
     'bash -c "agentarts destroy"',
     "agen'tarts destroy",
     'echo ok; agentarts launch',
+    '/home/u/.config/huaweicloud/agentarts-venv/bin/agentarts launch',
   ];
   for (const command of cases) {
     const result = runEvaluate('Bash', { command });
@@ -221,6 +222,9 @@ test('python hook allows agentarts local/read-only commands and blocks SDK env v
     'agentarts gateway list',
     'echo agentarts is a CLI',
     'pip install agentarts-sdk==0.1.7',
+    'pip install agentarts-sdk==0.1.7 -i https://mirrors.huaweicloud.com/repository/pypi/simple',
+    'npx huaweicloud-devkit install-agentarts',
+    '/home/u/.config/huaweicloud/agentarts-venv/bin/agentarts --version',
   ]) {
     const result = runEvaluate('Bash', { command });
     if (pythonUnavailable(result)) return;
@@ -232,6 +236,27 @@ test('python hook allows agentarts local/read-only commands and blocks SDK env v
   assert.equal(denied.status, 0);
   const reason = JSON.parse(denied.stdout);
   assert.equal(typeof reason, 'string', 'SDK_SK echo should be blocked');
+});
+
+test('python hook credential file patterns match paths, not *.huaweicloud.com domains (PR5)', () => {
+  for (const command of [
+    'pip install agentarts-sdk==0.1.7 -i https://mirrors.huaweicloud.com/repository/pypi/simple',
+    'curl -fsSL https://mirrors.huaweicloud.com/nodejs/v24.19.0/node-v24.19.0-linux-arm64.tar.gz -o node.tar.gz',
+    'npm config set registry https://mirrors.huaweicloud.com/repository/npm/',
+  ]) {
+    const result = runEvaluate('Bash', { command });
+    if (pythonUnavailable(result)) return;
+    assert.equal(result.status, 0, command);
+    assert.equal(JSON.parse(result.stdout), null, `${command} should be allowed`);
+  }
+  for (const command of ['cat ~/.huaweicloud/credentials', 'ls ~/.huaweicloud', 'cat ~/.hcloud/config.json']) {
+    const result = runEvaluate('Bash', { command });
+    if (pythonUnavailable(result)) return;
+    assert.equal(result.status, 0, command);
+    const reason = JSON.parse(result.stdout);
+    assert.equal(typeof reason, 'string', `${command} should be blocked`);
+    assert.match(reason, /credential/i, command);
+  }
 });
 
 test('python hook mirrors agentarts launcher/path/chained vectors and eager-flag allows', () => {

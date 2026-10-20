@@ -19,8 +19,8 @@
     "sk"
   ],
   "credentialFilePatterns": [
-    "\\.hcloud",
-    "\\.huaweicloud",
+    "\\.hcloud(?![.\\w])",
+    "\\.huaweicloud(?![.\\w])",
     "hcloud[/\\\\](config|credentials)",
     "huaweicloud[/\\\\](config|credentials)",
     "\\.agentarts_config",

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 
 import {
@@ -10,6 +10,9 @@ import {
   runAgentartsApprovedCommand,
   AGENTARTS_TOOL_DEFINITIONS,
   callAgentartsTool,
+  resolveAgentartsCommand,
+  agentartsVenvDir,
+  agentartsVenvBin,
 } from '../plugins/huaweicloud-core/src/agentarts-cli.mjs';
 import { createApprovalToken } from '../plugins/huaweicloud-core/src/hcloud-cli.mjs';
 import { callTool } from '../plugins/huaweicloud-core/src/tools.mjs';
@@ -290,7 +293,7 @@ test('tool definitions register and dispatch through callTool', async () => {
   await withIsolation(async () => {
     assert.equal(AGENTARTS_TOOL_DEFINITIONS.length, 3);
     const names = AGENTARTS_TOOL_DEFINITIONS.map((t) => t.name);
-    assert.deepEqual(names.sort(), [
+    assert.deepEqual(names.sort((a, b) => a.localeCompare(b)), [
       'huaweicloud_agentarts_plan_cli_command',
       'huaweicloud_agentarts_run_approved_command',
       'huaweicloud_agentarts_run_readonly_command',
@@ -414,4 +417,47 @@ test('runs without devkit credentials fail closed with a clear pointer (env-or-f
     assert.equal(approved.code, 'NO_DEVKIT_CREDENTIALS');
     assert.match(approved.detail, /huaweicloud_auth_init/);
   });
+});
+
+test('resolveAgentartsCommand resolves AGENTARTS_BIN > devkit venv > PATH', () => {
+  // Own env management (not withIsolation): the resolution chain must be
+  // observable with AGENTARTS_BIN unset, which withIsolation never does.
+  const home = mkdtempSync(join(tmpdir(), 'agentarts-resolve-'));
+  const previousHome = process.env.HUAWEICLOUD_HOME;
+  const previousBin = process.env.AGENTARTS_BIN;
+  process.env.HUAWEICLOUD_HOME = home;
+  delete process.env.AGENTARTS_BIN;
+  const pathFallback = process.platform === 'win32' ? 'agentarts.exe' : 'agentarts';
+  try {
+    // No venv under the scratch devkit home: PATH fallback.
+    assert.equal(resolveAgentartsCommand(), pathFallback);
+
+    // A half-built venv (directory exists, CLI binary missing) never
+    // shadows PATH.
+    mkdirSync(agentartsVenvDir(), { recursive: true });
+    assert.equal(resolveAgentartsCommand(), pathFallback);
+
+    // The CLI binary in the devkit venv shadows PATH: the pinned
+    // devkit-managed install beats an arbitrary PATH version.
+    const venvBin = agentartsVenvBin();
+    mkdirSync(dirname(venvBin), { recursive: true });
+    writeFileSync(venvBin, 'stub', { mode: 0o755 });
+    assert.equal(resolveAgentartsCommand(), venvBin);
+
+    // The env override beats everything (e2e scratch venvs, user installs).
+    process.env.AGENTARTS_BIN = '/opt/custom/agentarts';
+    assert.equal(
+      resolveAgentartsCommand(),
+      process.platform === 'win32' ? '/opt/custom/agentarts.exe' : '/opt/custom/agentarts',
+    );
+    // An explicit value already ending in .exe is never double-suffixed.
+    process.env.AGENTARTS_BIN = 'C:\\tools\\agentarts.exe';
+    assert.equal(resolveAgentartsCommand(), 'C:\\tools\\agentarts.exe');
+  } finally {
+    if (previousHome === undefined) delete process.env.HUAWEICLOUD_HOME;
+    else process.env.HUAWEICLOUD_HOME = previousHome;
+    if (previousBin === undefined) delete process.env.AGENTARTS_BIN;
+    else process.env.AGENTARTS_BIN = previousBin;
+    rmSync(home, { recursive: true, force: true });
+  }
 });

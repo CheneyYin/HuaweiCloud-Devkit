@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -56,6 +57,28 @@ export function pinnedSdkVersion() {
   }
 }
 
+// The Huawei Cloud PyPI mirror behind every taught install command and the
+// devkit-managed install (agentarts-sdk ships on PyPI; the mirror is the
+// restricted-network-friendly default, same posture as the README's npm
+// mirror guidance, with the same lag caveat: fall back to official PyPI
+// when the mirror lacks a newly pinned version). Single canonical literal —
+// validate-package.mjs pins the skills' `-i <url>` literals against it.
+export const AGENTARTS_SDK_MIRROR = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
+
+// The devkit-managed venv (provisioned by `npx huaweicloud-devkit
+// install-agentarts`). Lives under the devkit state root, NOT ~/.huaweicloud
+// — that directory is the hooks' credentialFilePatterns namespace.
+export function agentartsVenvDir() {
+  return join(process.env.HUAWEICLOUD_HOME || homedir(), '.config', 'huaweicloud', 'agentarts-venv');
+}
+
+export function agentartsVenvBin() {
+  return join(
+    agentartsVenvDir(),
+    process.platform === 'win32' ? join('Scripts', 'agentarts.exe') : join('bin', 'agentarts'),
+  );
+}
+
 const agentartsApprovals = createApprovalTokenStore('agentarts');
 
 // Measured non-interactive requirements (PR0 fixtures):
@@ -91,9 +114,20 @@ function scrubPositionalSecrets(args) {
   return scrubbed;
 }
 
+// CLI resolution priority: AGENTARTS_BIN env > the devkit-managed venv >
+// PATH 'agentarts'. The env override stays the escape hatch (e2e scratch
+// venvs, user-managed installs); the venv probe makes the devkit-managed
+// pinned install shadow an arbitrary PATH version (the doctor compares
+// against the same pin). The probe tests the CLI BINARY, not the venv
+// directory — a half-built venv never shadows PATH.
 export function resolveAgentartsCommand() {
-  const bin = process.env.AGENTARTS_BIN || 'agentarts';
-  return process.platform === 'win32' && !bin.toLowerCase().endsWith('.exe') ? `${bin}.exe` : bin;
+  const explicit = process.env.AGENTARTS_BIN;
+  if (explicit) {
+    return process.platform === 'win32' && !explicit.toLowerCase().endsWith('.exe') ? `${explicit}.exe` : explicit;
+  }
+  const venvBin = agentartsVenvBin();
+  if (existsSync(venvBin)) return venvBin;
+  return process.platform === 'win32' ? 'agentarts.exe' : 'agentarts';
 }
 
 // Classification is delegated to resolveAgentartsTier (safety-policy.mjs) —
@@ -359,7 +393,7 @@ async function runAgentarts(canonicalArgs, classification, options = {}) {
     child.on('error', (error) => {
       finish({
         ok: false,
-        error: `Failed to launch ${executable}: ${error.message}. Is agentarts-sdk installed (pip install agentarts-sdk==${pinnedSdkVersion() || 'the pinned version'}) and AGENTARTS_BIN set when outside PATH?`,
+        error: `Failed to launch ${executable}: ${error.message}. Is agentarts-sdk installed (pip install agentarts-sdk==${pinnedSdkVersion() || 'the pinned version'} -i ${AGENTARTS_SDK_MIRROR}; AGENTARTS_BIN points at a non-PATH install)?`,
       });
     });
     child.on('close', (code) => {
