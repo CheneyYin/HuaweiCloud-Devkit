@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 
@@ -293,9 +293,15 @@ test('a call racing child death fails fast instead of crashing the server', asyn
 // persistent install (~/.local/bin or PATH) → the uvx fallback, which runs
 // the gateway with no persistent install at all.
 test('gateway resolution prefers OPENMCP_BIN, then disk, then uvx', () => {
+  // Platform-correct fixture shapes: stub executables carry the win32 .exe
+  // suffix the resolution chain (and where.exe's PATHEXT matching) probe
+  // for, PATH uses the platform delimiter, and the env dict pins BOTH home
+  // vars (platformHome reads USERPROFILE on win32, HOME on unix).
+  const exeSuffix = process.platform === 'win32' ? '.exe' : '';
   const direct = resolveGatewayCommand({
     OPENMCP_BIN: fakeSidecar,
     HOME: '/nonexistent',
+    USERPROFILE: 'C:\\nonexistent',
     PATH: '/usr/bin',
   }) as GatewayCommand;
   assert.equal(direct.command, fakeSidecar);
@@ -303,9 +309,16 @@ test('gateway resolution prefers OPENMCP_BIN, then disk, then uvx', () => {
 
   const home = fixtureDir('openmcp-res-home-');
   const binDir = fixtureDir('openmcp-res-bin-');
-  const fakeUvx = join(binDir, 'uvx');
+  const fakeUvx = join(binDir, `uvx${exeSuffix}`);
   writeFileSync(fakeUvx, `#!/bin/sh\nshift\nexec "${process.execPath}" "${fakeSidecar}" "$@"\n`, { mode: 0o755 });
-  const envUvxOnly = { HOME: home, PATH: `/usr/bin:${binDir}` };
+  const envUvxOnly = {
+    HOME: home,
+    USERPROFILE: home,
+    PATH: `/usr/bin${delimiter}${binDir}`,
+    // where.exe resolves bare names through PATHEXT; a minimal env dict
+    // does not inherit it, so pin the standard set explicitly.
+    ...(process.platform === 'win32' ? { PATHEXT: '.COM;.EXE;.BAT;.CMD' } : {}),
+  };
   const viaUvx = resolveGatewayCommand(envUvxOnly) as GatewayCommand;
   assert.equal(viaUvx.command, fakeUvx, 'with nothing on disk, uvx is the fallback');
   assert.deepEqual(viaUvx.argsPrefix, ['huaweicloud-open-mcp']);
@@ -313,7 +326,7 @@ test('gateway resolution prefers OPENMCP_BIN, then disk, then uvx', () => {
   // A persistent install in ~/.local/bin outranks the uvx fallback.
   const localBin = join(home, '.local', 'bin');
   mkdirSync(localBin, { recursive: true });
-  const installed = join(localBin, 'huaweicloud-open-mcp');
+  const installed = join(localBin, `huaweicloud-open-mcp${exeSuffix}`);
   writeFileSync(installed, `#!/bin/sh\nexec "${process.execPath}" "${fakeSidecar}" "$@"\n`, { mode: 0o755 });
   const viaDisk = resolveGatewayCommand(envUvxOnly) as GatewayCommand;
   assert.equal(viaDisk.command, installed);

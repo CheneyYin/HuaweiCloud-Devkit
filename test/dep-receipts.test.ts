@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 
 import {
@@ -314,7 +314,12 @@ test('lock: same-process re-entry recurses instead of deadlocking', () => {
 // Each contender records its enter/leave timestamps; the sections must
 // not overlap.
 test('lock: two contenders against a dead lock never overlap critical sections', async () => {
-  const receiptsModule = fileURLToPath(new URL('../plugins/huaweicloud-core/src/dep/receipts.ts', import.meta.url));
+  // The contenders import this module from argv: a file:// URL, not a
+  // native path — POSIX tolerates absolute-path import specifiers, win32
+  // does not, and the URL form is the one portable specifier.
+  const receiptsModule = pathToFileURL(
+    fileURLToPath(new URL('../plugins/huaweicloud-core/src/dep/receipts.ts', import.meta.url)),
+  ).href;
   const contenderScript = `
 const mod = await import(process.argv[1]);
 const fs = await import('node:fs');
@@ -391,7 +396,11 @@ mod.withDepLock(() => {
 // the slow contender sleeps between its re-read and its rename — the
 // stall the round-11 probe injected artificially, here deterministic.
 test("lock: a stalled contender does not steal the winner's fresh claim", async () => {
-  const receiptsModule = fileURLToPath(new URL('../plugins/huaweicloud-core/src/dep/receipts.ts', import.meta.url));
+  // file:// URL for the same win32-import-specifier reason as the
+  // two-contenders test above.
+  const receiptsModule = pathToFileURL(
+    fileURLToPath(new URL('../plugins/huaweicloud-core/src/dep/receipts.ts', import.meta.url)),
+  ).href;
   const fastScript = `
 const mod = await import(process.argv[1]);
 const fs = await import('node:fs');
