@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.10-next.0 (2026-10-20)
+
+- chore: sync README beta badge to 1.1.10
+- chore: set version override to 1.1.10 for next preview release
+- fix(sandbox): upload_file auto-creates remote parent dir + honest local-path errors
+- [1024活动第二批] 修复沙箱部署链路假成功/假告警与错误码映射缺口，补强 ECS/沙箱/IAC 技能文档踩坑指引 (#935) (#937)
+- style: prettier table alignment for #954 files (CI format)
+- chore: sync AGENTS.md tool count (39 -> 43) and changelog for #954
+- fix(safety): stop misclassifying STS GetCallerIdentity as credential exposure
+- docs(iam): primary-account judgment rule in skill + quick-ref
+- feat(iam): add huaweicloud_check_account_type tool
+- fix(safety): close tokenization bypasses in command classifier (#927) (#928)
+
 ## Unreleased
 
 - fix(sandbox): upload_file auto-creates the remote parent directory and reports honest local-path errors (#953)
