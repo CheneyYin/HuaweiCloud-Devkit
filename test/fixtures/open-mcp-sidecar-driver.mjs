@@ -6,8 +6,12 @@
 import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-process.env.OPENMCP_BIN = new URL('./fake-open-mcp-sidecar.mjs', import.meta.url).pathname;
+// fileURLToPath, not URL.pathname: on win32 pathname keeps its leading slash
+// (/D:/a/...), which no fs call resolves to the real file — the fake sidecar
+// would silently fall out of the env tier and the spawn would miss.
+process.env.OPENMCP_BIN = fileURLToPath(new URL('./fake-open-mcp-sidecar.mjs', import.meta.url));
 // Pin the state home so the policy provisioning this spawn triggers lands
 // in scratch, not the real user config tree.
 const home = join(tmpdir(), `openmcp-driver-home-${process.pid}`);

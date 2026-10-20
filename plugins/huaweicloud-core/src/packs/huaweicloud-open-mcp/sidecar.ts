@@ -374,11 +374,22 @@ async function spawnSidecar(): Promise<OpenMcpSidecar> {
       for (const dir of scratchCwds) removeScratchCwd(dir);
     });
   }
-  const child = spawn(gateway.command, [...gateway.argsPrefix, ...plan.args], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-    windowsHide: true,
-    cwd: scratchCwd,
-  });
+  // A JS entry (OPENMCP_BIN pointed at a .mjs/.js/.cjs file — the test
+  // fixture's shape, or any script-style install) must run under the
+  // current Node, not be exec'd directly: win32 CreateProcess only runs PE
+  // images and Node reports EFTYPE for the script file, while POSIX merely
+  // tolerates it via the shebang. Extension detection only — the catalog's
+  // real installs are native entry points (pip/pipx/uv shims), never .js.
+  const isJsEntry = /\.(?:mjs|cjs|js)$/i.test(gateway.command);
+  const child = spawn(
+    isJsEntry ? process.execPath : gateway.command,
+    isJsEntry ? [gateway.command, ...gateway.argsPrefix, ...plan.args] : [...gateway.argsPrefix, ...plan.args],
+    {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+      cwd: scratchCwd,
+    },
+  );
   child.on('close', () => removeScratchCwd(scratchCwd));
   stats.spawns += 1;
   stats.lastPid = child.pid ?? null;

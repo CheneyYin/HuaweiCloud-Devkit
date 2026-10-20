@@ -1,4 +1,5 @@
 import { PACK_OF } from '../../../plugins/huaweicloud-core/src/packs/registry.ts';
+import { S1_SEED, VOUCHER_CLAIMED_RESPONSE } from './http-packs.ts';
 import type { E2eCase } from '../types.ts';
 
 // Roster facts derive from PACK_OF (the product's ownership truth), never a
@@ -7,10 +8,6 @@ import type { E2eCase } from '../types.ts';
 const TOTAL_TOOLS = Object.keys(PACK_OF).length;
 const CORE_TOOLS = Object.values(PACK_OF).filter((owner) => owner === 'core').length;
 const VOUCHER_TOOLS = Object.values(PACK_OF).filter((owner) => owner === 'voucher').length;
-
-// S1 vault seed (same shape as http-packs.ts): lets voucher_status reach the
-// local HTTP fake instead of failing at the credential gate.
-const S1_SEED = JSON.stringify({ ak: 'E2E_M3_AK', sk: 'E2E_M3_SK', securityToken: '', region: 'cn-north-4' }, null, 2);
 
 export const coreCases: E2eCase[] = [
   {
@@ -303,14 +300,7 @@ export const coreCases: E2eCase[] = [
         '.config/huaweicloud/credentials.json': S1_SEED,
       },
       http: {
-        responses: [
-          {
-            path: '/voucher/status',
-            method: 'GET',
-            status: 200,
-            body: { claimed: true, voucherId: 'vou-e2e-001', amount: 50, status: 'ACTIVE' },
-          },
-        ],
+        responses: [VOUCHER_CLAIMED_RESPONSE],
       },
     },
     expect: [
