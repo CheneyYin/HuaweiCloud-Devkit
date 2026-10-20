@@ -74,6 +74,17 @@ const pkgVersion = readInstalledVersion() || '0.0.0';
 // (lib/opencode-permission-seam.ts owns the contract) — so direct reads
 // stop prompting; the teaching here stays true on every harness
 // regardless of config.
+// Trimmed-posture rule shared by every instruction form. The observed
+// failure (e2e core-free-choice-trimmed-availability, twice-stable): with
+// huaweicloud-cli trimmed, the model skipped the catalog entirely and ran
+// read-only `hcloud` commands straight from the shell — every taught
+// surface covered the skill/MCP layers, none stated that the unavailability
+// is about the CAPABILITY, so the raw-shell path looked permitted. This
+// clause closes that gap on the one surface guaranteed to reach the model
+// (the initialize handshake).
+const TRIMMED_CAPABILITY_RULE =
+  "That unavailability is about the capability, not just the skill text or the MCP tools: a trimmed pack's services are unavailable through every execution path, including hcloud commands run directly from your shell — never silently proceed that way; confirm with the user instead. ";
+
 export function instructionsFor(remote: boolean, runtimePacks = false): string {
   if (remote) {
     return (
@@ -83,6 +94,7 @@ export function instructionsFor(remote: boolean, runtimePacks = false): string {
       'so huaweicloud_retrieve_skill is the loader — the fallback that applies to every skill here. ' +
       'Which skills are ENABLED is pack-gated (the operator controls pack posture); ' +
       'a huawei-* service skill absent from the catalog belongs to a trimmed pack; treat it as unavailable. ' +
+      TRIMMED_CAPABILITY_RULE +
       'Route Huawei Cloud tasks through the huaweicloud-core skill; browse packs with huaweicloud_list_packs.'
     );
   }
@@ -96,6 +108,7 @@ export function instructionsFor(remote: boolean, runtimePacks = false): string {
   return (
     `Skill loading: the skills tree lives at ${SKILLS_ROOT} (stdio session). ` +
     enablement +
+    TRIMMED_CAPABILITY_RULE +
     `To load a skill, attempt the direct read first: read ${SKILLS_ROOT}/<name>/SKILL.md and the references/ files you need with your file tools — untruncated and selective. ` +
     'Do not pre-check reachability and do not call huaweicloud_retrieve_skill before attempting — the attempt itself is the check. ' +
     'If a direct read of the tree fails or is denied, load the skill with huaweicloud_retrieve_skill instead — it needs no file access. ' +

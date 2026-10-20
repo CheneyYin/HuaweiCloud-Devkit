@@ -282,6 +282,18 @@ export const coreCases: E2eCase[] = [
     // truth check is pinned to the taught line (list_skills);
     // list_packs/pack_info are equally honest discovery, so a real-model
     // flake here relaxes to any of the three as the same deliberate edit.
+    // History (2026-10-20, twice-stable across attempts): after the voucher
+    // hook was fixed, the model skipped the catalog entirely and ran
+    // read-only hcloud straight from the shell (3 calls, output-format
+    // retry shape) — every taught surface covered the skill/MCP layers,
+    // none the raw-shell path. Fixed in the product's taught surface, not
+    // here: TRIMMED_CAPABILITY_RULE in mcp-protocol.ts now states that a
+    // trimmed pack's unavailability is about the capability on every
+    // execution path. If this case goes red AGAIN with shell hcloud calls,
+    // the taught surface is being ignored — escalate the teaching (e.g. the
+    // huaweicloud-cli-and-auth skill) or reconsider the case's model fit;
+    // do not relax the hcloud max:0 pin (it is this case's reason to
+    // exist).
     id: 'core-free-choice-trimmed-availability',
     pack: 'core',
     installPacks: 'voucher',

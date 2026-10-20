@@ -311,14 +311,23 @@ test('gateway resolution prefers OPENMCP_BIN, then disk, then uvx', () => {
   const binDir = fixtureDir('openmcp-res-bin-');
   const fakeUvx = join(binDir, `uvx${exeSuffix}`);
   writeFileSync(fakeUvx, `#!/bin/sh\nshift\nexec "${process.execPath}" "${fakeSidecar}" "$@"\n`, { mode: 0o755 });
-  const envUvxOnly = {
+  // A stripped env breaks the where.exe lookup CHILD on win32: libuv's
+  // spawn resolves the executable through the passed env's PATH first
+  // (src/win/process.c: find_path(env) before the parent-PATH fallback),
+  // and a minimal PATH holds neither where.exe's System32 home nor the
+  // system roots — the spawn dies ENOENT and the fallback tier sees null.
+  // Carry SystemRoot and put System32 on PATH; the fake bin dir stays
+  // FIRST so where.exe's first uvx hit remains the fake.
+  const envUvxOnly: NodeJS.ProcessEnv = {
     HOME: home,
     USERPROFILE: home,
     PATH: `/usr/bin${delimiter}${binDir}`,
-    // where.exe resolves bare names through PATHEXT; a minimal env dict
-    // does not inherit it, so pin the standard set explicitly.
-    ...(process.platform === 'win32' ? { PATHEXT: '.COM;.EXE;.BAT;.CMD' } : {}),
   };
+  if (process.platform === 'win32' && process.env.SystemRoot) {
+    envUvxOnly.PATHEXT = '.COM;.EXE;.BAT;.CMD';
+    envUvxOnly.SystemRoot = process.env.SystemRoot;
+    envUvxOnly.PATH = [binDir, join(process.env.SystemRoot, 'System32'), '/usr/bin'].join(delimiter);
+  }
   const viaUvx = resolveGatewayCommand(envUvxOnly) as GatewayCommand;
   assert.equal(viaUvx.command, fakeUvx, 'with nothing on disk, uvx is the fallback');
   assert.deepEqual(viaUvx.argsPrefix, ['huaweicloud-open-mcp']);
