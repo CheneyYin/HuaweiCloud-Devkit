@@ -143,6 +143,59 @@ for (const file of walk(join(pluginRoot, 'skills')).concat(walk(join(pluginRoot,
 }
 console.log(`Validated KooCLI version pairing: ${kooCliVersion}.`);
 
+// AgentArts SDK pin: package.json declares the paired version, the shared
+// safety/policy.json carries the same pin (so every install layout — repo,
+// npm dependency, per-agent copies — can resolve it), and every
+// `agentarts-sdk==<semver>` literal in skills AND src must match, so the
+// taught install command, the doctor soft-warn, and the wrapper's failure
+// hints can never drift apart.
+const agentartsSdkVersion = pkg.agentartsSdkVersion;
+assert.match(
+  agentartsSdkVersion ?? '',
+  /^\d+\.\d+\.\d+$/,
+  'package.json must declare an "agentartsSdkVersion" semver (e.g. "0.1.7")',
+);
+const policyJson = JSON.parse(readFileSync(join(pluginRoot, 'safety', 'policy.json'), 'utf8'));
+assert.equal(
+  policyJson.agentartsSdkVersion,
+  agentartsSdkVersion,
+  'safety/policy.json agentartsSdkVersion must equal the package.json pin (the policy file is the install-layout-resilient source)',
+);
+for (const file of walk(join(pluginRoot, 'skills')).concat(walk(join(pluginRoot, 'src')))) {
+  const text = readFileSync(file, 'utf8');
+  for (const m of text.matchAll(/agentarts-sdk==(\d+\.\d+\.\d+)/g)) {
+    if (m[1] !== agentartsSdkVersion) {
+      assert.fail(`${file}: pins agentarts-sdk==${m[1]}, expected ==${agentartsSdkVersion}`);
+    }
+  }
+}
+console.log(`Validated AgentArts SDK pin: ${agentartsSdkVersion}.`);
+
+// AgentArts SDK mirror parity (PR5): src/agentarts-cli.mjs owns the canonical
+// AGENTARTS_SDK_MIRROR literal (runtime hints interpolate the constant, so
+// template strings never carry the URL); the skills teach the URL as a
+// literal. Assert the constant is the canonical Huawei Cloud PyPI mirror and
+// every `-i <url>` taught in the agentarts skill equals it, so a mirror edit
+// can never leave the taught commands behind.
+const AGENTARTS_MIRROR_CANONICAL = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
+const agentartsCliSource = readFileSync(join(pluginRoot, 'src', 'agentarts-cli.mjs'), 'utf8');
+const mirrorLiteral = /AGENTARTS_SDK_MIRROR\s*=\s*'([^']+)'/.exec(agentartsCliSource);
+assert.ok(mirrorLiteral, 'src/agentarts-cli.mjs must define AGENTARTS_SDK_MIRROR as a single-quoted literal');
+assert.equal(
+  mirrorLiteral[1],
+  AGENTARTS_MIRROR_CANONICAL,
+  'AGENTARTS_SDK_MIRROR must equal the canonical Huawei Cloud PyPI mirror',
+);
+for (const file of walk(join(pluginRoot, 'skills', 'huawei-agentarts'))) {
+  const text = readFileSync(file, 'utf8');
+  for (const m of text.matchAll(/-i (https:\/\/[^\s`)\]]+)/g)) {
+    if (m[1] !== AGENTARTS_MIRROR_CANONICAL) {
+      assert.fail(`${file}: teaches pip index ${m[1]}, expected the canonical mirror`);
+    }
+  }
+}
+console.log(`Validated AgentArts SDK mirror: ${AGENTARTS_MIRROR_CANONICAL}.`);
+
 const readmePaths = [join(root, 'README.md'), join(root, 'README.zh-CN.md')];
 
 readmePaths.forEach((path) => {

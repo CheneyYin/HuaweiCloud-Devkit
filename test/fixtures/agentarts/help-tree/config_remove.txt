@@ -1,0 +1,15 @@
+                                                                                
+ Usage: agentarts config remove [OPTIONS] {name}                                
+                                                                                
+ Remove an agent configuration.                                                 
+                                                                                
+ Examples:                                                                      
+ agentarts config remove myagent                                                
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    name      <str>  Agent name to remove [required]                        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

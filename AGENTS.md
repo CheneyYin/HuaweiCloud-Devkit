@@ -24,7 +24,7 @@ This is an **agent guidance + safety package**, not a service encyclopedia. Six 
 ```
 plugins/huaweicloud-core/
   skills/           ← 6 meta-skills + service skills
-  src/              ← Node.js MCP server (stdio/remote JSON-RPC, 43 tools in tools.mjs)
+  src/              ← Node.js MCP server (stdio/remote JSON-RPC; tool definitions live in tools.mjs)
   safety/           ← shared policy.json + risk rules
   hooks/            ← PreToolUse hook (Node huaweicloud-safety.mjs, wired via hooks.json; .py variant kept for compatibility)
   .codex-plugin/    ← Codex plugin manifest
@@ -42,7 +42,7 @@ Also in the repo:
 
 - `bin/setup.cjs` — interactive installer (`huaweicloud-devkit`); dispatches to each agent's plugin dir.
 - `integrations/` — per-agent adapter configs (opencode, dsh, hermes, workbuddy, atomcode), separate from the plugin.
-- `src/tools.mjs` — 39 MCP tool definitions (hcloud CLI, hooks, catalog, auth, sandbox, voucher, update). `src/mcp-server-remote.mjs` — remote (HTTP) transport alongside stdio.
+- `src/tools.mjs` — MCP tool definitions (hcloud CLI, hooks, catalog, auth, sandbox, voucher, update, agentarts; the authoritative count is `TOOL_DEFINITIONS.length` — never hardcode it in docs). `src/mcp-server-remote.mjs` — remote (HTTP) transport alongside stdio. `src/agentarts-cli.mjs` — the agentarts approval wrapper (tool definitions + handlers, consumed by tools.mjs). `src/approval-tokens.mjs` — shared approval-token machinery for every CLI wrapper.
 - `src/setup-cli.mjs` — KooCLI install/doctor logic; honors `HCLOUD_BIN`.
 - `scripts/*.mjs` — validation, version sync, packaging, release helpers.
 - `.superpowers/` + `docs/superpowers/` — planning/spec workflow used for larger changes.

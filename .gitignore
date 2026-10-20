@@ -25,3 +25,6 @@ docs/mcp-remote-transport.md
 
 # Project-level CodeArts config written by installs/tests can leak into repo root
 .codeartsdoer/
+
+# AgentArts E2E scratch environment (venv, isolated HOME, project sandboxes)
+.e2e-home/

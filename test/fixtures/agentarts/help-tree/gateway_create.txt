@@ -1,0 +1,31 @@
+                                                                                
+ Usage: agentarts gateway create [OPTIONS]                                      
+                                                                                
+ Create a new gateway                                                           
+                                                                                
+ Examples:                                                                      
+ agentarts gateway create --name my-gateway --description "My Gateway"          
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --name                          -n      <str>  Gateway name                  │
+│ --description                   -d      <str>  Gateway description           │
+│ --protocol-type                         <str>  Protocol type (default: mcp)  │
+│                                                [default: mcp]                │
+│ --authorizer-type                       <str>  Authorizer type (default:     │
+│                                                iam)                          │
+│                                                [default: iam]                │
+│ --agency-name                           <str>  Agency name                   │
+│ --authorizer-configuration              <str>  Authorizer configuration      │
+│                                                (JSON format)                 │
+│ --protocol-configuration                <str>  Protocol configuration (JSON  │
+│                                                format)                       │
+│ --log-delivery-configuration            <str>  Log delivery configuration    │
+│                                                (JSON format)                 │
+│ --outbound-network-configurat…          <str>  Outbound network              │
+│                                                configuration (JSON format)   │
+│ --tags                                  <str>  Resource tags (JSON format)   │
+│ --skip-ssl-verification         -k             Skip SSL certificate          │
+│                                                verification                  │
+│ --help                                         Show this message and exit.   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -1,5 +1,6 @@
 {
   "version": "0.1.0",
+  "agentartsSdkVersion": "0.1.7",
   "secretKeyNamePatterns": [
     "access[_-]?key",
     "secret[_-]?key",
@@ -13,14 +14,17 @@
     "private[_-]?key",
     "user[_-]?data",
     "metadata",
+    "api[_-]?key",
     "ak",
     "sk"
   ],
   "credentialFilePatterns": [
-    "\\.hcloud",
-    "\\.huaweicloud",
+    "\\.hcloud(?![.\\w])",
+    "\\.huaweicloud(?![.\\w])",
     "hcloud[/\\\\](config|credentials)",
-    "huaweicloud[/\\\\](config|credentials)"
+    "huaweicloud[/\\\\](config|credentials)",
+    "\\.agentarts_config",
+    "\\.env"
   ],
   "blockedConfigureSubcommands": ["show", "get", "list", "export", "init"],
   "blockedSecretOperations": ["ShowSecret", "ShowSecretVersion", "DownloadSecret", "GetSecretValue"],
@@ -75,5 +79,72 @@
     "huaweicloud_sandbox_connect",
     "huaweicloud_sandbox_credentials",
     "huaweicloud_sandbox_upload_file"
-  ]
+  ],
+  "agentartsCommandPolicy": {
+    "aliases": {
+      "deploy": "launch",
+      "configure": "config"
+    },
+    "defaultTier": "approved",
+    "commands": {
+      "init": { "tier": "local" },
+      "dev": { "tier": "local" },
+      "config": {
+        "tier": "approved",
+        "labels": ["credential-guard"],
+        "subcommands": {
+          "list": { "tier": "approved", "labels": ["credential-guard"] },
+          "set-default": { "tier": "approved", "labels": ["credential-guard"] },
+          "get": { "tier": "approved", "labels": ["credential-guard"] },
+          "set": { "tier": "approved", "labels": ["credential-guard"] },
+          "remove": { "tier": "approved", "labels": ["credential-guard"] },
+          "set-env": { "tier": "approved", "labels": ["credential-guard"] },
+          "remove-env": { "tier": "approved", "labels": ["credential-guard"] },
+          "list-env": { "tier": "approved", "labels": ["credential-guard"] }
+        }
+      },
+      "launch": { "tier": "approved", "labels": ["billing"] },
+      "destroy": { "tier": "approved", "labels": ["irreversible"] },
+      "invoke": { "tier": "approved", "labels": ["execute"] },
+      "memory": {
+        "tier": "approved",
+        "subcommands": {
+          "list": { "tier": "readonly" },
+          "get": { "tier": "readonly" },
+          "status": { "tier": "readonly" },
+          "create": { "tier": "blocked" },
+          "update": { "tier": "blocked" },
+          "delete": { "tier": "blocked" },
+          "install": { "tier": "approved", "labels": ["host-trust"] },
+          "uninstall": { "tier": "approved", "labels": ["host-trust"] }
+        }
+      },
+      "gateway": {
+        "tier": "approved",
+        "subcommands": {
+          "get": { "tier": "readonly" },
+          "list": { "tier": "readonly" },
+          "get-target": { "tier": "readonly" },
+          "list-targets": { "tier": "readonly" },
+          "create": { "tier": "approved", "labels": ["billing"] },
+          "update": { "tier": "approved", "labels": ["billing"] },
+          "delete": { "tier": "approved", "labels": ["irreversible"] },
+          "create-target": { "tier": "approved", "labels": ["billing", "credential-guard"] },
+          "update-target": { "tier": "approved", "labels": ["billing", "credential-guard"] },
+          "delete-target": { "tier": "approved", "labels": ["irreversible"] }
+        }
+      },
+      "runtime": {
+        "tier": "approved",
+        "subcommands": {
+          "invoke": { "tier": "approved", "labels": ["execute"] },
+          "exec-command": { "tier": "approved", "labels": ["rce"] },
+          "upload-files": { "tier": "approved", "labels": ["data-exfil"] },
+          "download-files": { "tier": "approved", "labels": ["local-write"] },
+          "start-session": { "tier": "approved", "labels": ["execute"] },
+          "stop-session": { "tier": "approved", "labels": ["execute"] }
+        }
+      }
+    }
+  }
 }

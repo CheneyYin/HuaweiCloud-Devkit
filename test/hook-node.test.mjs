@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import test from 'node:test';
 
 const hookPath = join(process.cwd(), 'plugins', 'huaweicloud-core', 'hooks', 'huaweicloud-safety.mjs');
@@ -64,4 +65,60 @@ test('node hook allows safe commands with empty stdout', () => {
 
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.trim(), '');
+});
+
+test('node hook fails safe when safety/policy.json is missing or corrupt', () => {
+  const pluginRoot = join(process.cwd(), 'plugins', 'huaweicloud-core');
+  for (const scenario of ['missing', 'corrupt', 'empty', 'emptylist', 'wrongtype', 'arraytype']) {
+    const tmp = mkdtempSync(join(tmpdir(), 'hw-hook-failsafe-'));
+    const dest = join(tmp, 'huaweicloud-core');
+    cpSync(pluginRoot, dest, { recursive: true, filter: (src) => !src.startsWith(join(pluginRoot, 'telemetry')) });
+    const policyDest = join(dest, 'safety', 'policy.json');
+    if (scenario === 'missing') {
+      rmSync(policyDest);
+    } else if (scenario === 'empty') {
+      writeFileSync(policyDest, '{}');
+    } else if (scenario === 'emptylist') {
+      writeFileSync(
+        policyDest,
+        JSON.stringify({
+          credentialFilePatterns: ['\\.hcloud'],
+          blockedSecretOperations: ['ShowSecret'],
+          writeOperationPrefixes: [],
+          agentartsCommandPolicy: {},
+        }),
+      );
+    } else if (scenario === 'wrongtype') {
+      writeFileSync(
+        policyDest,
+        JSON.stringify({
+          credentialFilePatterns: ['\\.hcloud'],
+          blockedSecretOperations: ['ShowSecret'],
+          writeOperationPrefixes: ['Delete'],
+          agentartsCommandPolicy: 'approved',
+        }),
+      );
+    } else if (scenario === 'arraytype') {
+      writeFileSync(
+        policyDest,
+        JSON.stringify({
+          credentialFilePatterns: ['\\.hcloud'],
+          blockedSecretOperations: ['ShowSecret'],
+          writeOperationPrefixes: ['Delete'],
+          agentartsCommandPolicy: ['approved'],
+        }),
+      );
+    } else {
+      writeFileSync(policyDest, '{not valid json');
+    }
+    const result = spawnSync(process.execPath, [join(dest, 'hooks', 'huaweicloud-safety.mjs')], {
+      input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'agentarts launch' } }),
+      encoding: 'utf8',
+    });
+    rmSync(tmp, { recursive: true, force: true });
+    assert.equal(result.status, 0, `${scenario}: hook must not crash through (allow) — ${result.stderr}`);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.hookSpecificOutput.permissionDecision, 'deny', scenario);
+    assert.match(output.hookSpecificOutput.permissionDecisionReason, /failed to load/i, scenario);
+  }
 });

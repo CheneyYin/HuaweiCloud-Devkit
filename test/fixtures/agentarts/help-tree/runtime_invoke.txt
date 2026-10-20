@@ -1,0 +1,63 @@
+                                                                                
+ Usage: agentarts runtime invoke [OPTIONS] {payload}                            
+                                                                                
+ Invoke agent with JSON payload.                                                
+                                                                                
+ Two invoke modes are supported:                                                
+ - cloud (default): Invoke AgentArts runtime on Huawei Cloud                    
+ - local: Invoke local Docker container                                         
+                                                                                
+ The payload must be a valid JSON string.                                       
+                                                                                
+ Configuration Requirement for --custom-path:                                   
+     Using --custom-path requires url_match_type=PREFIX_MATCH to be configured  
+ on the deployed agent.                                                         
+     You can configure it in two ways:                                          
+     1. Set url_match_type=PREFIX_MATCH in .agentarts_config.yaml and redeploy  
+ with 'agentarts deploy'                                                        
+     2. Update the configuration directly on Huawei Cloud AgentArts console     
+                                                                                
+ Example configuration in .agentarts_config.yaml:                               
+     runtime:                                                                   
+       invoke_config:                                                           
+         url_match_type: PREFIX_MATCH                                           
+                                                                                
+ Examples:                                                                      
+     agentarts invoke '{"message": "hello"}'                                    
+     agentarts invoke '{"message": "hello"}' --agent myagent                    
+     agentarts invoke '{"message": "hello"}' --mode local --port 8080           
+     agentarts invoke '{"message": "test"}' --session my-session-123            
+     agentarts invoke '{"message": "test"}' --user-id my-user-id                
+     agentarts invoke '{"message": "test"}' --custom-path stream                
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    payload      <str>  JSON payload to send to the agent (e.g.,            │
+│                          '{"message": "hello"}')                             │
+│                          [required]                                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --agent                  -a       <str>  Agent name (uses default if not     │
+│                                          specified for cloud mode)           │
+│ --mode                   -m       <str>  Invoke mode: 'local' for Docker     │
+│                                          container, 'cloud' for AgentArts    │
+│                                          runtime (default)                   │
+│                                          [default: cloud]                    │
+│ --region                 -r       <str>  Huawei Cloud region (for cloud      │
+│                                          mode)                               │
+│ --port                   -p       <int>  Local port (for local mode,         │
+│                                          default: 8080)                      │
+│ --endpoint               -e       <str>  Endpoint name                       │
+│ --session                -s       <str>  Session ID for stateful agents      │
+│ --bearer-token           -bt      <str>  Bearer token for authentication     │
+│ --timeout                         <int>  Request timeout in seconds          │
+│                                          (default: 900)                      │
+│                                          [default: 900]                      │
+│ --skip-ssl-verification  -k              Skip SSL certificate verification   │
+│ --user-id                -u       <str>  User ID for OAuth2 outbound         │
+│                                          credentials                         │
+│ --custom-path                     <str>  Custom path appended to             │
+│                                          /invocations (e.g., 'stream' ->     │
+│                                          /invocations/stream)                │
+│ --help                                   Show this message and exit.         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

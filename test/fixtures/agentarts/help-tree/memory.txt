@@ -1,0 +1,19 @@
+                                                                                
+ Usage: agentarts memory [OPTIONS] COMMAND [ARGS]...                            
+                                                                                
+ Memory Space management commands                                               
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ create     Create a Memory Space.                                            │
+│ get        Get Space details.                                                │
+│ list       List Spaces.                                                      │
+│ update     Update a Space.                                                   │
+│ delete     Delete a Space.                                                   │
+│ status     Check the status of a Memory Space.                               │
+│ install    Install the AgentArts Memory plugin for a supported AI agent.     │
+│ uninstall  Uninstall an AgentArts Memory plugin.                             │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

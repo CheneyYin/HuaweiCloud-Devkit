@@ -1,0 +1,20 @@
+                                                                                
+ Usage: agentarts config get [OPTIONS] [key]                                    
+                                                                                
+ Get configuration value or agent details.                                      
+                                                                                
+ If no key is provided, prints the full agent configuration.                    
+                                                                                
+ Examples:                                                                      
+     agentarts config get                                                       
+     agentarts config get base.region                                           
+     agentarts config get base.region --agent myagent                           
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   key      <str>  Configuration key (dot notation, e.g., base.region)        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --agent  -a      <str>  Agent name                                           │
+│ --help                  Show this message and exit.                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

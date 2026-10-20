@@ -1,0 +1,73 @@
+                                                                                
+ Usage: agentarts runtime upload-files [OPTIONS]                                
+                                                                                
+ Upload files to runtime (cloud only).                                          
+                                                                                
+ Configuration Requirement:                                                     
+     This command requires file transfer to be enabled on the deployed agent.   
+     You can enable it in two ways:                                             
+     1. Set file_transfer_config.enabled=true in .agentarts_config.yaml and     
+ redeploy with 'agentarts deploy'                                               
+     2. Update the configuration directly on Huawei Cloud AgentArts console     
+                                                                                
+ Example configuration in .agentarts_config.yaml:                               
+     runtime:                                                                   
+       invoke_config:                                                           
+         file_transfer_config:                                                  
+           enabled: true                                                        
+                                                                                
+ Examples:                                                                      
+     # Single file (uploaded to default /tmp/)                                  
+     agentarts runtime upload-files --agent myagent --session <session-id> -f   
+ file1.txt                                                                      
+                                                                                
+     # Multiple files (use -f multiple times)                                   
+     agentarts runtime upload-files --agent myagent --session <session-id> -f   
+ file1.txt -f file2.txt                                                         
+                                                                                
+     # Specify remote directory path (must end with '/')                        
+     agentarts runtime upload-files --agent myagent --session <session-id> -f   
+ file1.txt -f file2.txt -p /app/data/                                           
+                                                                                
+     # With custom permissions                                                  
+     agentarts runtime upload-files --agent myagent --session <session-id> -f   
+ script.sh --file-mode 0755                                                     
+                                                                                
+     # With custom file owner                                                   
+     agentarts runtime upload-files --agent myagent --session <session-id> -f   
+ data.txt --file-user-id 1001 --file-group-id 1001                              
+                                                                                
+     # With OAuth user ID                                                       
+     agentarts runtime upload-files --agent myagent --session <session-id> -f   
+ data.txt --user-id oauth-user-123                                              
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --agent                  -a       <str>  Agent name                          │
+│ --session                -s       <str>  Session ID                          │
+│ --files                  -f       <str>  Local file path to upload. Can be   │
+│                                          specified multiple times for        │
+│                                          multiple files                      │
+│ --path                   -p       <str>  Remote directory path to upload     │
+│                                          files to. Must end with '/' (e.g.,  │
+│                                          /tmp/). Default: /tmp/ — /tmp is    │
+│                                          writable in most container images,  │
+│                                          unlike /home/user which many images │
+│                                          restrict.                           │
+│                                          [default: /tmp/]                    │
+│ --file-user-id                    <int>  File owner user ID (default: 1000)  │
+│ --file-group-id                   <int>  File owner group ID (default: 1000) │
+│ --file-mode              -m       <str>  File permissions in octal (default: │
+│                                          0644)                               │
+│ --bearer-token           -bt      <str>  Bearer token for authentication     │
+│ --region                 -r       <str>  Region name                         │
+│ --endpoint               -e       <str>  Endpoint name                       │
+│ --skip-ssl-verification  -k              Skip SSL certificate verification   │
+│ --user-id                -u       <str>  User ID for OAuth2 outbound         │
+│                                          credentials (used in OAuth          │
+│                                          authentication flow)                │
+│ --timeout                         <int>  Request timeout in seconds          │
+│                                          (default: 900)                      │
+│                                          [default: 900]                      │
+│ --help                                   Show this message and exit.         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -1,0 +1,38 @@
+                                                                                
+ Usage: agentarts memory update [OPTIONS] {space_id}                            
+                                                                                
+ Update a Space.                                                                
+                                                                                
+ Uses AK/SK authentication via environment variables.                           
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    space_id      <str>  Space ID [required]                                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --ttl                    -t               <int>  Message TTL in hours        │
+│ --description            -d               <str>  Space description           │
+│ --extract-idle                            <int>  Memory extraction idle time │
+│                                                  in seconds                  │
+│ --extract-tokens                          <int>  Memory extraction max       │
+│                                                  tokens                      │
+│ --extract-messages                        <int>  Memory extraction max       │
+│                                                  messages                    │
+│ --strategies             -s               <str>  Built-in memory strategies  │
+│                                                  (comma-separated)           │
+│ --tags                                    <str>  Tags in format              │
+│                                                  'key1=value1,key2=value2'   │
+│ --public                     --private           Enable/disable public       │
+│                                                  access                      │
+│ --vpc-id                                  <str>  Private VPC ID (requires    │
+│                                                  subnet-id)                  │
+│ --subnet-id                               <str>  Private subnet ID (requires │
+│                                                  vpc-id)                     │
+│ --region                 -r               <str>  Region name (default:       │
+│                                                  cn-north-4)                 │
+│ --output                 -o               <str>  Output format: table, json  │
+│                                                  [default: table]            │
+│ --skip-ssl-verification                          Skip SSL certificate        │
+│                                                  verification                │
+│ --help                                           Show this message and exit. │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

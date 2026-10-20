@@ -290,6 +290,14 @@ It listens on `127.0.0.1:9528` by default. Then connect with a remote config (op
 npx --yes huaweicloud-devkit install-hcloud
 ```
 
+### Install AgentArts SDK (optional)
+
+```bash
+npx --yes huaweicloud-devkit install-agentarts
+```
+
+Installs the pinned `agentarts-sdk` into a devkit-owned venv (`~/.config/huaweicloud/agentarts-venv`) via the Huawei Cloud PyPI mirror, falling back to official PyPI when the mirror lags. Your Python environment is never touched, and the SDK is only needed for agent hosting workflows.
+
 ### Configure Credentials
 
 ```bash

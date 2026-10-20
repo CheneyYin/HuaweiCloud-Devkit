@@ -1,0 +1,23 @@
+                                                                                
+ Usage: agentarts gateway update [OPTIONS] {gateway_id}                         
+                                                                                
+ Update an existing gateway                                                     
+                                                                                
+ Examples:                                                                      
+ agentarts gateway update 123 --description "Updated description"               
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    gateway_id      <str>  Gateway ID [required]                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --description                 -d      <str>  Gateway description             │
+│ --protocol-configuration              <str>  Protocol configuration (JSON    │
+│                                              format)                         │
+│ --log-delivery-configuration          <str>  Log delivery configuration      │
+│                                              (JSON format)                   │
+│ --tags                                <str>  Resource tags (JSON format)     │
+│ --skip-ssl-verification       -k             Skip SSL certificate            │
+│                                              verification                    │
+│ --help                                       Show this message and exit.     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

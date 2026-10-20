@@ -1,0 +1,42 @@
+                                                                                
+ Usage: agentarts memory create [OPTIONS] {name}                                
+                                                                                
+ Create a Memory Space.                                                         
+                                                                                
+ Uses AK/SK authentication via environment variables:                           
+ - HUAWEICLOUD_SDK_AK: Access Key                                               
+ - HUAWEICLOUD_SDK_SK: Secret Key                                               
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    name      <str>  Space name, required (1-128 characters) [required]     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --ttl                    -t               <int>  Message TTL in hours        │
+│                                                  [default: 168]              │
+│ --description            -d               <str>  Space description           │
+│ --extract-idle                            <int>  Memory extraction idle time │
+│                                                  in seconds                  │
+│ --extract-tokens                          <int>  Memory extraction max       │
+│                                                  tokens                      │
+│ --extract-messages                        <int>  Memory extraction max       │
+│                                                  messages                    │
+│ --strategies             -s               <str>  Built-in memory strategies  │
+│                                                  (comma-separated)           │
+│ --tags                                    <str>  Tags in format              │
+│                                                  'key1=value1,key2=value2'   │
+│ --public                     --private           Enable/disable public       │
+│                                                  access                      │
+│                                                  [default: public]           │
+│ --vpc-id                                  <str>  Private VPC ID (requires    │
+│                                                  subnet-id)                  │
+│ --subnet-id                               <str>  Private subnet ID (requires │
+│                                                  vpc-id)                     │
+│ --region                 -r               <str>  Region name (default:       │
+│                                                  cn-north-4)                 │
+│ --output                 -o               <str>  Output format: table, json  │
+│                                                  [default: table]            │
+│ --skip-ssl-verification  -k                      Skip SSL certificate        │
+│                                                  verification                │
+│ --help                                           Show this message and exit. │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

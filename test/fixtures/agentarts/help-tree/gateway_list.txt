@@ -1,0 +1,27 @@
+                                                                                
+ Usage: agentarts gateway list [OPTIONS]                                        
+                                                                                
+ List gateways                                                                  
+                                                                                
+ Examples:                                                                      
+ agentarts gateway list --limit 10                                              
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --name                           <str>  Gateway name                         │
+│ --status                         <str>  Gateway status                       │
+│ --gateway-id                     <str>  Gateway ID                           │
+│ --tag-key-exists                 <str>  Tag key exists filter                │
+│                                         (comma-separated)                    │
+│ --tag-key-matches                <str>  Tag key matches filter               │
+│                                         (comma-separated)                    │
+│ --tag-value-matches              <str>  Tag value matches filter             │
+│                                         (comma-separated)                    │
+│ --tag-match-policy               <str>  Tag match policy (ALL/ANY)           │
+│ --limit                          <int>  Limit for pagination (default: 50,   │
+│                                         min: 1, max: 100)                    │
+│ --offset                         <int>  Offset for pagination (default: 0,   │
+│                                         min: 0, max: 100000)                 │
+│ --skip-ssl-verification  -k             Skip SSL certificate verification    │
+│ --help                                  Show this message and exit.          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

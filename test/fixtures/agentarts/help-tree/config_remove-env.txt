@@ -1,0 +1,17 @@
+                                                                                
+ Usage: agentarts config remove-env [OPTIONS] {key}                             
+                                                                                
+ Remove an environment variable from an agent.                                  
+                                                                                
+ Examples:                                                                      
+ agentarts config remove-env HUAWEICLOUD_SDK_AK                                 
+ agentarts config remove-env MY_VAR --agent myagent                             
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    key      <str>  Environment variable name to remove [required]          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --agent  -a      <str>  Agent name                                           │
+│ --help                  Show this message and exit.                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

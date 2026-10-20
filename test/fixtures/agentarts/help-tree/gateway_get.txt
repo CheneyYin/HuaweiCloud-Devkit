@@ -1,0 +1,16 @@
+                                                                                
+ Usage: agentarts gateway get [OPTIONS] {gateway_id}                            
+                                                                                
+ Get details of a gateway                                                       
+                                                                                
+ Examples:                                                                      
+ agentarts gateway get 123                                                      
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    gateway_id      <str>  Gateway ID [required]                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --skip-ssl-verification  -k        Skip SSL certificate verification         │
+│ --help                             Show this message and exit.               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

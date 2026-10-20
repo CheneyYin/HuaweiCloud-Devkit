@@ -22,6 +22,9 @@ import { resolveAndApplyProjectId } from './auth/project-id.mjs';
 import { SUPPORTED_AGENT_TARGETS } from './auth/agent-registration.mjs';
 import { fingerprint, readKooCliProfiles, resolveManagedProfile } from './auth/reconcile.mjs';
 import { redactSecrets } from './safety-policy.mjs';
+import { checkAgentarts, probeAgentarts } from './agentarts-doctor.mjs';
+import { AGENTARTS_SDK_MIRROR, agentartsVenvBin, pinnedSdkVersion } from './agentarts-cli.mjs';
+import { installAgentartsSdk, removeAgentartsVenv } from './agentarts-install.mjs';
 import {
   globalCredentialsPath,
   readGlobalCredentials,
@@ -3662,6 +3665,30 @@ async function cmdInstall() {
     process.exit(1);
   }
 
+  // AgentArts SDK (optional dependency): explicit opt-in only — the
+  // --with-agentarts flag here, or the dedicated install-agentarts
+  // subcommand (its consent is running the command — the install-hcloud
+  // pattern). Deliberately NO interactive prompt inside cmdInstall: a
+  // second prompt after the agent-selection readline loses pre-fed input
+  // in scripted PTY sessions (measured: any gap past the answer callback
+  // drops the pending tty line), and expect/CI-driven installs must not
+  // block on an unanswerable question.
+  if (process.argv.includes('--with-agentarts')) {
+    reportAgentartsInstall(installAgentartsSdk());
+  } else if (!existsSync(agentartsVenvBin())) {
+    // No flag: one advisory hint, never a prompt.
+    const agentartsProbe = probeAgentarts();
+    if (!agentartsProbe.installed) {
+      console.log(
+        '\n  \x1b[33mAgentArts (optional): agent hosting workflows need the SDK — run: npx huaweicloud-devkit install-agentarts\x1b[0m',
+      );
+    } else if (agentartsProbe.versionMatches === false) {
+      console.log(
+        `\n  \x1b[33mAgentArts: ${agentartsProbe.version} != pinned ${agentartsProbe.pinned} — run: npx huaweicloud-devkit install-agentarts\x1b[0m`,
+      );
+    }
+  }
+
   console.log(`\n\x1b[32mInstallation complete!\x1b[0m`);
   console.log(
     `\x1b[1m\x1b[36m  首次使用插件可领取一张华为云代金券（一人一次），可直接对您的agent说：帮我领取一张华为云代金券\x1b[0m`,
@@ -3859,6 +3886,12 @@ function removeKooCliWithMessage() {
   }
 }
 
+function removeAgentartsVenvWithMessage() {
+  const result = removeAgentartsVenv();
+  if (result.removed) console.log(`  AgentArts venv removed (${result.dir}).`);
+  else console.log('  AgentArts venv not found (nothing to remove).');
+}
+
 function removeObsConfigWithMessage() {
   const removed = removeObsConfig();
   if (removed.length) {
@@ -3872,27 +3905,34 @@ async function promptGlobalCleanup() {
   const hasFlag = (name) => process.argv.includes(name);
   const cleanKocli = hasFlag('--clean-kocli') || hasFlag('--clean-global');
   const cleanObs = hasFlag('--clean-obs') || hasFlag('--clean-global');
+  const cleanAgentarts = hasFlag('--clean-agentarts') || hasFlag('--clean-global');
 
   // Interactive terminal: ask the user for each account-level tool.
-  if (!cleanKocli && !cleanObs && process.stdin.isTTY && process.stdout.isTTY) {
+  if (!cleanKocli && !cleanObs && !cleanAgentarts && process.stdin.isTTY && process.stdout.isTTY) {
     console.log('\n  —— 全局凭据库已清除，是否一并删除账号级工具？——');
     const kocliAnswer = await readLineQuestion('  是否一并删除 KooCLI (hcloud)？(y/N) ');
     const obsAnswer = await readLineQuestion('  是否一并删除 OBS 配置 (~/.obsutilconfig)？(y/N) ');
+    const agentartsAnswer = await readLineQuestion(
+      '  是否一并删除 AgentArts venv (~/.config/huaweicloud/agentarts-venv)？(y/N) ',
+    );
     if (/^\s*y\s*$/i.test(kocliAnswer)) removeKooCliWithMessage();
     else console.log('  KooCLI kept.');
     if (/^\s*y\s*$/i.test(obsAnswer)) removeObsConfigWithMessage();
     else console.log('  OBS config kept.');
+    if (/^\s*y\s*$/i.test(agentartsAnswer)) removeAgentartsVenvWithMessage();
+    else console.log('  AgentArts venv kept.');
     return;
   }
 
   // Explicit flags: delete deterministically, without prompting.
   if (cleanKocli) removeKooCliWithMessage();
   if (cleanObs) removeObsConfigWithMessage();
+  if (cleanAgentarts) removeAgentartsVenvWithMessage();
 
   // No flag and non-interactive: keep them and surface the option.
-  if (!cleanKocli && !cleanObs) {
+  if (!cleanKocli && !cleanObs && !cleanAgentarts) {
     console.log(
-      `\n\x1b[33m已保留 KooCLI 与 OBS 配置（全局凭据库已删除）。如需一并清理，请使用 --clean-kocli / --clean-obs / --clean-global flag，或在交互终端重新执行全局卸载。\x1b[0m`,
+      `\n\x1b[33m已保留 KooCLI、OBS 配置与 AgentArts venv（全局凭据库已删除）。如需一并清理，请使用 --clean-kocli / --clean-obs / --clean-agentarts / --clean-global flag，或在交互终端重新执行全局卸载。\x1b[0m`,
     );
   }
 }
@@ -4089,6 +4129,23 @@ async function cmdDoctor() {
     existsSync(hookNodePath) && hookConfigUsesNode && !hookConfigUsesPython,
     'hooks/hooks.json should invoke node hooks/huaweicloud-safety.mjs, not python3',
   );
+
+  // AgentArts (optional dependency — advisory checks, never fail the run)
+  const agentarts = checkAgentarts();
+  if (agentarts.ok) {
+    console.log(`  \x1b[32m[PASS]\x1b[0m AgentArts CLI ${agentarts.cli.version} (pinned ${agentarts.cli.pinned})`);
+    pass++;
+  } else if (agentarts.cli.installed) {
+    for (const warning of agentarts.warnings) {
+      console.log(`  \x1b[33m[WARN]\x1b[0m AgentArts: ${warning}`);
+      warn++;
+    }
+    for (const step of agentarts.nextSteps) console.log(`      → ${step}`);
+  } else {
+    console.log('  \x1b[33m[WARN]\x1b[0m AgentArts CLI not installed (optional — agent hosting workflows need it)');
+    warn++;
+    console.log(`      → ${agentarts.nextSteps[0] || 'pip install agentarts-sdk'}`);
+  }
 
   // MCP config — check OpenCode, Codex Desktop, CodeArts, WorkBuddy, and DSH
   let mcpConfigured = false;
@@ -4572,6 +4629,39 @@ async function confirm(msg) {
       ok(a.toLowerCase() === 'y' || a.toLowerCase() === 'yes');
     });
   });
+}
+
+// Console reporting for installAgentartsSdk results, shared by the
+// install-agentarts subcommand and the cmdInstall opt-in step.
+function reportAgentartsInstall(result) {
+  if (result.ok) {
+    console.log(`  \x1b[32mAgentArts CLI installed\x1b[0m: ${result.cliBin}`);
+    console.log(
+      `  Pinned agentarts-sdk==${result.pinned}${result.usedMirror ? ' (Huawei Cloud PyPI mirror)' : ' (official PyPI — mirror unavailable)'}`,
+    );
+    console.log('\n  First-run note: the FIRST agentarts invocation (even --version) writes ~/.bashrc,');
+    console.log('  ~/.bash_completions/, ~/.agentarts/, and ~/.huaweicloud/application_id (a telemetry');
+    console.log('  UUID sent in every request User-Agent) — expected SDK behavior.');
+    console.log('\n  Long-running MCP servers cache the CLI probe: if the toolkit still reports the CLI');
+    console.log('  as missing, restart the agent session (or run doctor in a fresh terminal).');
+    return true;
+  }
+  console.log(`  \x1b[31mAgentArts install failed at "${result.step}"\x1b[0m: ${result.reason}`);
+  if (result.step === 'python') {
+    console.log('  → Install Python 3.10+, then re-run: npx huaweicloud-devkit install-agentarts');
+  } else {
+    console.log(
+      `  → Manual fallback: pip install agentarts-sdk==${pinnedSdkVersion() || '<pinned version>'} -i ${AGENTARTS_SDK_MIRROR}`,
+    );
+  }
+  return false;
+}
+
+async function cmdInstallAgentarts() {
+  console.log(BANNER);
+  console.log('Installing AgentArts SDK (optional dependency)...\n');
+  const ok = reportAgentartsInstall(installAgentartsSdk());
+  if (!ok) process.exitCode = 1;
 }
 
 async function cmdInstallHcloud() {
@@ -5303,6 +5393,9 @@ async function main() {
     case 'install-hcloud':
       await cmdInstallHcloud();
       break;
+    case 'install-agentarts':
+      await cmdInstallAgentarts();
+      break;
     case 'auth':
       await cmdAuth();
       break;
@@ -5331,6 +5424,7 @@ async function main() {
       console.log('  status       Show installation status');
       console.log('  doctor       Self-check: hcloud, MCP, skills, auth');
       console.log('  install-hcloud  Show KooCLI install commands for your OS');
+      console.log('  install-agentarts  Install the pinned agentarts-sdk into a devkit-owned venv (optional)');
       console.log('  auth         Manage unified auth: init | sync | status | reconcile');
       console.log('  proxy        Manage proxy config: init | show | clear');
       console.log('  version      Print CLI version and installed plugin version per agent');
@@ -5343,9 +5437,11 @@ async function main() {
       console.log(
         '  --opencode-mcp-era v1|v2   Force OpenCode MCP config form (v1 legacy flat, v2 native mcp.servers)',
       );
+      console.log('  --with-agentarts  (with: install) also install the pinned agentarts-sdk (non-interactive opt-in)');
       console.log('  --clean-kocli   (with: uninstall --target all) also remove KooCLI');
       console.log('  --clean-obs     (with: uninstall --target all) also remove OBS config');
-      console.log('  --clean-global  (with: uninstall --target all) also remove KooCLI + OBS config');
+      console.log('  --clean-agentarts  (with: uninstall --target all) also remove the agentarts venv');
+      console.log('  --clean-global  (with: uninstall --target all) also remove KooCLI + OBS config + agentarts venv');
       console.log('\nExamples:');
       console.log('  npx huaweicloud-devkit install');
       console.log('  npx huaweicloud-devkit install --target codex');

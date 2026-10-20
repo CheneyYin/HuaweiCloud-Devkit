@@ -1,0 +1,25 @@
+                                                                                
+ Usage: agentarts runtime start-session [OPTIONS]                               
+                                                                                
+ Start runtime session (cloud only).                                            
+                                                                                
+ Returns a session ID that can be used for subsequent operations.               
+                                                                                
+ Examples:                                                                      
+     agentarts runtime start-session --agent myagent                            
+     agentarts runtime start-session -a myagent -r cn-southwest-2               
+     agentarts runtime start-session -a myagent -bt <bearer-token>              
+     agentarts runtime start-session -a myagent -e myendpoint                   
+     agentarts runtime start-session -a myagent --skip-ssl-verification         
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --agent                  -a       <str>  Agent name                          │
+│ --region                 -r       <str>  Region name                         │
+│ --bearer-token           -bt      <str>  Bearer token for authentication     │
+│ --endpoint               -e       <str>  Endpoint name                       │
+│ --skip-ssl-verification  -k              Skip SSL certificate verification   │
+│ --user-id                -u       <str>  User ID for OAuth2 outbound         │
+│                                          credentials                         │
+│ --help                                   Show this message and exit.         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
