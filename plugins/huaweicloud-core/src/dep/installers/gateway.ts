@@ -1,6 +1,5 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, rmSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import {
@@ -10,7 +9,7 @@ import {
   type DepUninstallResult,
   type ResolvedUninstallContext,
 } from '../receipts.ts';
-import { lookupOnPath } from '../../lib/dep-resolve.ts';
+import { lookupOnPath, platformHome } from '../../lib/dep-resolve.ts';
 
 // The open-mcp-gateway installer module: the package-manager tier chain
 // (uv → pipx → pip3 --user), the tier receipts that make uninstall
@@ -38,8 +37,7 @@ export interface GatewayInstallResult {
 
 function findHostTool(name: string, env: NodeJS.ProcessEnv = process.env): string | null {
   const exeSuffix = process.platform === 'win32' ? '.exe' : '';
-  const home = process.platform === 'win32' ? homedir() : env.HOME || homedir();
-  const local = join(home, '.local', 'bin', `${name}${exeSuffix}`);
+  const local = join(platformHome(env), '.local', 'bin', `${name}${exeSuffix}`);
   return existsSync(local) ? local : lookupOnPath(name, env);
 }
 

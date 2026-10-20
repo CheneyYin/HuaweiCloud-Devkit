@@ -111,7 +111,9 @@ test('store: set/get round-trips through the keyfile tier', () => {
   assert.equal(read.version, 1);
   assert.equal(existsSync(join(root, '.master-key')), true);
   const mode = statSync(join(root, '.master-key')).mode & 0o777;
-  assert.equal(mode, 0o600);
+  // POSIX-only: Windows reports any writable file as 0o666 — there is no
+  // chmod to tighten, so the 0600 contract is unenforceable there.
+  if (process.platform !== 'win32') assert.equal(mode, 0o600);
 });
 
 test('store: idempotent set keeps the version; rotation increments it', () => {
@@ -388,7 +390,7 @@ test('store: secret files keep 0600 permissions', () => {
   const root = freshRoot();
   vaultSet('secret://user/perm', 'v', undefined, opts(root));
   const mode = statSync(join(root, 'user', 'perm.json')).mode & 0o777;
-  assert.equal(mode, 0o600);
+  if (process.platform !== 'win32') assert.equal(mode, 0o600);
   chmodSync(join(root, 'user', 'perm.json'), 0o600);
 });
 

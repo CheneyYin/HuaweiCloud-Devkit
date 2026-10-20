@@ -14,6 +14,8 @@ import {
 
 const TRACE_ENV = 'HUAWEICLOUD_DEVKIT_TRACE';
 
+const isWin = process.platform === 'win32';
+
 function withTracePath(fn: (path: string) => void) {
   const dir = fixtureDir('call-trace-');
   const path = join(dir, 'trace.jsonl');
@@ -193,7 +195,10 @@ test('unset env means no file is written', () => {
 test('trace file is created 0600 and best-effort on unwritable paths', () => {
   withTracePath((path) => {
     recordToolCall('x', {}, true);
-    assert.equal(statSync(path).mode & 0o777, 0o600);
+    assert.ok(existsSync(path), 'the trace file is created');
+    // The 0600 contract is POSIX-only: Windows has no chmod, and Node there
+    // reports any writable file as 0o666 regardless of the create mode.
+    if (!isWin) assert.equal(statSync(path).mode & 0o777, 0o600);
   });
   // An impossible path must not throw — tracing never fails a tool call.
   const dir = fixtureDir('call-trace-');

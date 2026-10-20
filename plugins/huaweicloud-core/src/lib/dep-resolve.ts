@@ -18,8 +18,8 @@ import type { DependencyResolution } from './dependency-model.ts';
 //             findHcloudBin / resolveGatewayCommand rule: a stale override
 //             falls through instead of breaking every spawn)
 //   candidate platform candidates, '~'-prefixed ones expanded against the
-//             platform home (win32 homedir(); unix env.HOME || homedir() —
-//             the hermetic-test convention, now the one rule)
+//             platform home (win32 env.USERPROFILE, unix env.HOME — each
+//             with a homedir() fallback; the hermetic-test convention)
 //   path      PATH lookup via where.exe (win32) / sh -c 'command -v'
 //             (otherwise), ~5s timeout, the caller's env passed through
 //   fallback  run <command> <argsPrefix...> with no persistent install: the
@@ -39,8 +39,13 @@ export interface ResolvedDependency {
   tier: ResolutionTier;
 }
 
-function platformHome(env: NodeJS.ProcessEnv): string {
-  return process.platform === 'win32' ? homedir() : env.HOME || homedir();
+// Mirrors os.homedir()'s per-platform env var but reads the CALLER's env:
+// USERPROFILE on win32, HOME on unix. Hermetic tests redirect home through
+// the env they pass, and spawn-time resolution must agree with the home the
+// child process would compute for itself — resolving the parent's real home
+// while spawning into a redirected one splits the two.
+export function platformHome(env: NodeJS.ProcessEnv): string {
+  return process.platform === 'win32' ? env.USERPROFILE || homedir() : env.HOME || homedir();
 }
 
 // Candidates are documented as places the binary itself lives, so the

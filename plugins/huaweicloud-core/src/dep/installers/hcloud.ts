@@ -15,6 +15,7 @@ import {
   type ResolvedUninstallContext,
 } from '../receipts.ts';
 import { DEPENDENCIES } from '../../lib/dependency-model.ts';
+import { platformHome } from '../../lib/dep-resolve.ts';
 
 // The hcloud (KooCLI) installer module: everything the host may do to one
 // dependency's lifecycle — install (download/extract/place/PATH), the
@@ -298,7 +299,7 @@ export async function installKooCli(opts: { tty: boolean }): Promise<boolean> {
 // is user-writable JSON, so its recorded path is untrusted input at this
 // boundary — a forged receipt must never aim sudo at an arbitrary file.
 function hcloudInstallLandingSites(env: NodeJS.ProcessEnv): ReadonlySet<string> {
-  const home = process.platform === 'win32' ? homedir() : env.HOME || homedir();
+  const home = platformHome(env);
   const sites = new Set<string>();
   const candidates =
     process.platform === 'win32'
