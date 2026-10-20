@@ -44,6 +44,22 @@ function fakeKeychainSpawn(stored: { b64?: string } = {}, failureStderr?: string
     options: { input?: Buffer | string },
   ): { status: number | null; stdout: string; stderr: string } => {
     const input = options.input === undefined ? '' : Buffer.from(options.input).toString('utf8');
+    if (process.platform === 'win32') {
+      // The Windows PasswordVault contract (custody.ts windowsRead/Write):
+      // powershell.exe -Command - reads the script from stdin; exit 3 is
+      // the vault answering with no item, exit 2 a real failure.
+      if (input.includes('RetrieveAll')) {
+        if (failureStderr !== undefined) return { status: 2, stdout: '', stderr: failureStderr };
+        if (stored.b64 === undefined) return { status: 3, stdout: '', stderr: '' };
+        return { status: 0, stdout: `${stored.b64}\n`, stderr: '' };
+      }
+      if (input.includes('ConvertTo-SecureString')) {
+        const match = input.match(/-String '([^']+)'/);
+        if (match) stored.b64 = match[1]!;
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      return { status: 2, stdout: '', stderr: `unexpected script: ${input.slice(0, 80)}` };
+    }
     if (args[0] === 'lookup') {
       if (failureStderr !== undefined) return { status: 1, stdout: '', stderr: failureStderr };
       // The secret-tool contract: a silent non-zero exit is not-found.
@@ -111,7 +127,9 @@ test('store: set/get round-trips through the keyfile tier', () => {
   assert.equal(read.version, 1);
   assert.equal(existsSync(join(root, '.master-key')), true);
   const mode = statSync(join(root, '.master-key')).mode & 0o777;
-  assert.equal(mode, 0o600);
+  // POSIX-only: Windows reports any writable file as 0o666 — there is no
+  // chmod to tighten, so the 0600 contract is unenforceable there.
+  if (process.platform !== 'win32') assert.equal(mode, 0o600);
 });
 
 test('store: idempotent set keeps the version; rotation increments it', () => {
@@ -388,7 +406,7 @@ test('store: secret files keep 0600 permissions', () => {
   const root = freshRoot();
   vaultSet('secret://user/perm', 'v', undefined, opts(root));
   const mode = statSync(join(root, 'user', 'perm.json')).mode & 0o777;
-  assert.equal(mode, 0o600);
+  if (process.platform !== 'win32') assert.equal(mode, 0o600);
   chmodSync(join(root, 'user', 'perm.json'), 0o600);
 });
 

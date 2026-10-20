@@ -80,6 +80,7 @@ test('dep-resolve: a missing envBin falls through to the platform candidates', (
   const resolved = resolveDependencyCommand(gatewayResolution, {
     OPENMCP_BIN: join(home, 'does-not-exist'),
     HOME: home,
+    USERPROFILE: home,
     PATH: '/usr/bin',
   });
   assert.deepEqual(resolved, { command: candidate, argsPrefix: [], tier: 'candidate' });
@@ -89,7 +90,7 @@ test('dep-resolve: a persistent install under a fake HOME resolves as candidate'
   const home = tempHome();
   const candidate = join(home, '.local', 'bin', `huaweicloud-open-mcp${exeSuffix}`);
   writeExecutable(candidate);
-  const resolved = resolveDependencyCommand(gatewayResolution, { HOME: home, PATH: '/usr/bin' });
+  const resolved = resolveDependencyCommand(gatewayResolution, { HOME: home, USERPROFILE: home, PATH: '/usr/bin' });
   assert.deepEqual(resolved, { command: candidate, argsPrefix: [], tier: 'candidate' });
 });
 
@@ -115,14 +116,14 @@ test('dep-resolve: the fallback command is probed in ~/.local/bin before PATH', 
   const home = tempHome();
   const localUvx = join(home, '.local', 'bin', `uvx${exeSuffix}`);
   writeExecutable(localUvx);
-  const resolved = resolveDependencyCommand(gatewayResolution, { HOME: home, PATH: '/usr/bin' });
+  const resolved = resolveDependencyCommand(gatewayResolution, { HOME: home, USERPROFILE: home, PATH: '/usr/bin' });
   assert.deepEqual(resolved, { command: localUvx, argsPrefix: ['huaweicloud-open-mcp'], tier: 'fallback' });
 });
 
 test('dep-resolve: nothing anywhere resolves to null', () => {
   const home = tempHome();
   const emptyPath = fixtureDir('dep-provision-empty-');
-  const resolved = resolveDependencyCommand(gatewayResolution, { HOME: home, PATH: emptyPath });
+  const resolved = resolveDependencyCommand(gatewayResolution, { HOME: home, USERPROFILE: home, PATH: emptyPath });
   assert.equal(resolved, null);
 });
 
@@ -332,7 +333,9 @@ test('provisioning: a failing dependency is isolated and reported, the loop cont
 
 function emptyPathEnv(home: string): Record<string, string> {
   const emptyPath = fixtureDir('dep-provision-empty-');
-  return { HOME: home, PATH: emptyPath };
+  // USERPROFILE carries the hermetic home on win32 (platformHome reads it
+  // there, HOME on unix); setting both keeps one helper platform-neutral.
+  return { HOME: home, USERPROFILE: home, PATH: emptyPath };
 }
 
 function hcloudReceiptAt(path: string): DepReceipt {
@@ -550,7 +553,7 @@ for (const tier of ['uv', 'pipx', 'pip3'] as const) {
     const home = tempHome();
     const dir = join(home, 'deps');
     writeReceipt(gatewayReceiptWithTier(tier), dir);
-    const tool = join(home, '.local', 'bin', tier);
+    const tool = join(home, '.local', 'bin', `${tier}${exeSuffix}`);
     writeExecutable(tool);
     const calls: Array<{ command: string; args: readonly string[] }> = [];
     const result = uninstallDependency('open-mcp-gateway', noTargets, {
@@ -587,7 +590,7 @@ test('the forced uninstall shape skips the pack-requirement gate the gated shape
   const home = tempHome();
   const dir = join(home, 'deps');
   writeReceipt(gatewayReceiptWithTier('uv'), dir);
-  writeExecutable(join(home, '.local', 'bin', 'uv'));
+  writeExecutable(join(home, '.local', 'bin', `uv${exeSuffix}`));
   const requiring: DepUninstallTargets = {
     enabledPacks: new Set<PackId>(['huaweicloud-open-mcp']),
     carriers: [{ label: 'OpenCode', packs: new Set<PackId>(['huaweicloud-open-mcp']) }],
@@ -643,7 +646,7 @@ test('uninstall gateway treats a failed tier uninstall with no remaining binary 
   const home = tempHome();
   const dir = join(home, 'deps');
   writeReceipt(gatewayReceiptWithTier('pipx'), dir);
-  writeExecutable(join(home, '.local', 'bin', 'pipx'));
+  writeExecutable(join(home, '.local', 'bin', `pipx${exeSuffix}`));
   const result = uninstallDependency('open-mcp-gateway', noTargets, {
     receiptsDir: dir,
     env: emptyPathEnv(home),
@@ -661,7 +664,7 @@ test('uninstall gateway keeps the receipt when the tier uninstall fails and a bi
   const gatewayBin = join(home, '.local', 'bin', `huaweicloud-open-mcp${exeSuffix}`);
   writeExecutable(gatewayBin);
   writeReceipt(gatewayReceiptWithTier('pip3'), dir);
-  writeExecutable(join(home, '.local', 'bin', 'pip3'));
+  writeExecutable(join(home, '.local', 'bin', `pip3${exeSuffix}`));
   const result = uninstallDependency('open-mcp-gateway', noTargets, {
     receiptsDir: dir,
     env: emptyPathEnv(home),

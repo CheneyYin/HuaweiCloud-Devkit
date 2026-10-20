@@ -218,7 +218,11 @@ test('secret CLI: get rejects both destinations together and enforces 0600 on ex
   const get = runSecret(home, ['get', 'secret://e2e/mode', '--file', looseTarget]);
   assert.equal(get.status, 0, get.stderr);
   const mode = statSync(looseTarget).mode & 0o777;
-  assert.equal(mode, 0o600, 'a pre-existing 0644 target must be tightened, not just reported as 0600');
+  // POSIX-only tightening contract: Windows has no chmod, a writable file
+  // always reports 0o666 there.
+  if (process.platform !== 'win32') {
+    assert.equal(mode, 0o600, 'a pre-existing 0644 target must be tightened, not just reported as 0600');
+  }
 });
 
 test('auth reconcile exits 1 on an unresolvable S1 ref, before any interactive prompt', () => {

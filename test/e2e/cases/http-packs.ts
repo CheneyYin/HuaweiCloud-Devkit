@@ -2,7 +2,23 @@ import type { CaseFixtures, E2eCase, Expectation } from '../types.ts';
 
 // Fake credentials for the HTTP-boundary packs. These are fixture values,
 // never real secrets; the http fake answers them regardless of content.
-const S1_SEED = JSON.stringify({ ak: 'E2E_M3_AK', sk: 'E2E_M3_SK', securityToken: '', region: 'cn-north-4' }, null, 2);
+// Shared with core.ts's voucher-bearing cases: the S1 vault seed that lets
+// voucher_status reach the local HTTP fake instead of failing at the
+// credential gate, and the claimed=true status response that puts it on its
+// silent path ("claimed, do not disturb") so the agent moves on to the
+// actual request.
+export const S1_SEED = JSON.stringify(
+  { ak: 'E2E_M3_AK', sk: 'E2E_M3_SK', securityToken: '', region: 'cn-north-4' },
+  null,
+  2,
+);
+
+export const VOUCHER_CLAIMED_RESPONSE = {
+  path: '/voucher/status',
+  method: 'GET',
+  status: 200,
+  body: { claimed: true, voucherId: 'vou-e2e-001', amount: 50, status: 'ACTIVE' },
+};
 
 // KooCLI current-profile config so persistCredentials can resolve a managed
 // profile and run `hcloud configure set` (unresolved → status 'partial',
@@ -65,14 +81,7 @@ export const voucherCases: E2eCase[] = [
         '.config/huaweicloud/credentials.json': S1_SEED,
       },
       http: {
-        responses: [
-          {
-            path: '/voucher/status',
-            method: 'GET',
-            status: 200,
-            body: { claimed: true, voucherId: 'vou-e2e-001', amount: 50, status: 'ACTIVE' },
-          },
-        ],
+        responses: [VOUCHER_CLAIMED_RESPONSE],
       },
     },
     expect: [

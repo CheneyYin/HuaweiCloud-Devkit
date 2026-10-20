@@ -323,19 +323,28 @@ process.exit(0);
 // Home isolation for probes that resolve through os.homedir() (codex-desktop
 // payload dir, hermes layout). os.homedir() reads $HOME at call time, so
 // pointing HOME at a temp dir keeps these process-private; USERPROFILE is
-// redirected alongside it for Windows runs.
+// redirected alongside it for Windows runs. XDG_CONFIG_HOME must be scrubbed
+// too: the opencode probe's xdgConfigHome() resolver prefers an absolute
+// XDG_CONFIG_HOME over $HOME/.config, so an ambient value (e.g. a CI env)
+// silently splits the probe's read root away from the HOME this helper
+// redirects — the same hardening agent-install.test.ts applies for child
+// processes.
 function withAgentHome(fn: (home: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), 'huaweicloud-agent-home-'));
   const prevHome = process.env.HOME;
   const prevProfile = process.env.USERPROFILE;
+  const prevXdgConfig = process.env.XDG_CONFIG_HOME;
   process.env.HOME = dir;
   if (prevProfile !== undefined) process.env.USERPROFILE = dir;
+  delete process.env.XDG_CONFIG_HOME;
   try {
     return fn(dir);
   } finally {
     if (prevHome === undefined) delete process.env.HOME;
     else process.env.HOME = prevHome;
     if (prevProfile !== undefined) process.env.USERPROFILE = prevProfile;
+    if (prevXdgConfig === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = prevXdgConfig;
     rmSync(dir, { recursive: true, force: true });
   }
 }

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 import test from 'node:test';
 
@@ -10,7 +10,10 @@ import test from 'node:test';
 // transport-selection regression cannot download from a test run.
 process.env.HUAWEICLOUD_SKIP_HCLOUD_PREINSTALL = '1';
 
-const root = new URL('..', import.meta.url).pathname;
+// fileURLToPath, not URL.pathname: on win32 pathname keeps its leading slash
+// (/D:/a/...), and joining that back into pathToFileURL yields the
+// double-drive-letter file URL (D:/D:/...) every import then fails on.
+const root = fileURLToPath(new URL('..', import.meta.url));
 const srcDir = join(root, 'plugins', 'huaweicloud-core', 'src');
 const serverPath = join(srcDir, 'mcp-server.ts');
 

@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 
@@ -293,9 +293,15 @@ test('a call racing child death fails fast instead of crashing the server', asyn
 // persistent install (~/.local/bin or PATH) → the uvx fallback, which runs
 // the gateway with no persistent install at all.
 test('gateway resolution prefers OPENMCP_BIN, then disk, then uvx', () => {
+  // Platform-correct fixture shapes: stub executables carry the win32 .exe
+  // suffix the resolution chain (and where.exe's PATHEXT matching) probe
+  // for, PATH uses the platform delimiter, and the env dict pins BOTH home
+  // vars (platformHome reads USERPROFILE on win32, HOME on unix).
+  const exeSuffix = process.platform === 'win32' ? '.exe' : '';
   const direct = resolveGatewayCommand({
     OPENMCP_BIN: fakeSidecar,
     HOME: '/nonexistent',
+    USERPROFILE: 'C:\\nonexistent',
     PATH: '/usr/bin',
   }) as GatewayCommand;
   assert.equal(direct.command, fakeSidecar);
@@ -303,17 +309,49 @@ test('gateway resolution prefers OPENMCP_BIN, then disk, then uvx', () => {
 
   const home = fixtureDir('openmcp-res-home-');
   const binDir = fixtureDir('openmcp-res-bin-');
-  const fakeUvx = join(binDir, 'uvx');
+  const fakeUvx = join(binDir, `uvx${exeSuffix}`);
   writeFileSync(fakeUvx, `#!/bin/sh\nshift\nexec "${process.execPath}" "${fakeSidecar}" "$@"\n`, { mode: 0o755 });
-  const envUvxOnly = { HOME: home, PATH: `/usr/bin:${binDir}` };
+  // A stripped env breaks the where.exe lookup CHILD on win32: libuv's
+  // spawn resolves the executable through the passed env's PATH first
+  // (src/win/process.c: find_path(env) before the parent-PATH fallback),
+  // and a minimal PATH holds neither where.exe's System32 home nor the
+  // system roots — the spawn dies ENOENT and the fallback tier sees null.
+  // Carry SystemRoot and put System32 on PATH; the fake bin dir stays
+  // FIRST so where.exe's first uvx hit remains the fake.
+  const envUvxOnly: NodeJS.ProcessEnv = {
+    HOME: home,
+    USERPROFILE: home,
+    PATH: `/usr/bin${delimiter}${binDir}`,
+  };
+  if (process.platform === 'win32' && process.env.SystemRoot) {
+    envUvxOnly.PATHEXT = '.COM;.EXE;.BAT;.CMD';
+    envUvxOnly.SystemRoot = process.env.SystemRoot;
+    envUvxOnly.PATH = [binDir, join(process.env.SystemRoot, 'System32'), '/usr/bin'].join(delimiter);
+  }
   const viaUvx = resolveGatewayCommand(envUvxOnly) as GatewayCommand;
-  assert.equal(viaUvx.command, fakeUvx, 'with nothing on disk, uvx is the fallback');
+  // where.exe answers with the LONG path form (...\runneradmin\...) even
+  // when the PATH entry it found the file under carries the 8.3 short form
+  // (...\RUNNER~1\... — what os.tmpdir() hands back on GitHub runners):
+  // the PATH tier's command string is verbatim where.exe output, so pin
+  // the resolved FILE, not the string form. realpathSync.native (libuv's
+  // GetFinalPathNameByHandleW) expands short names; the plain JS
+  // realpathSync does not. POSIX keeps exact string equality — tmpdir
+  // never mangles there and the filesystem is case-sensitive.
+  if (process.platform === 'win32') {
+    assert.equal(
+      realpathSync.native(viaUvx.command).toLowerCase(),
+      realpathSync.native(fakeUvx).toLowerCase(),
+      'with nothing on disk, uvx is the fallback',
+    );
+  } else {
+    assert.equal(viaUvx.command, fakeUvx, 'with nothing on disk, uvx is the fallback');
+  }
   assert.deepEqual(viaUvx.argsPrefix, ['huaweicloud-open-mcp']);
 
   // A persistent install in ~/.local/bin outranks the uvx fallback.
   const localBin = join(home, '.local', 'bin');
   mkdirSync(localBin, { recursive: true });
-  const installed = join(localBin, 'huaweicloud-open-mcp');
+  const installed = join(localBin, `huaweicloud-open-mcp${exeSuffix}`);
   writeFileSync(installed, `#!/bin/sh\nexec "${process.execPath}" "${fakeSidecar}" "$@"\n`, { mode: 0o755 });
   const viaDisk = resolveGatewayCommand(envUvxOnly) as GatewayCommand;
   assert.equal(viaDisk.command, installed);

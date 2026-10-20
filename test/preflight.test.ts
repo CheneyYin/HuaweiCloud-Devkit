@@ -82,7 +82,11 @@ test('the install log is opened as a ready fd with 0600 and append semantics', (
     writeSync(fd, 'line\n');
     closeSync(fd);
     const mode = statSync(kooCliInstallLogPath()).mode & 0o777;
-    assert.equal(mode, 0o600, `log mode ${mode.toString(8)} must be 0600`);
+    // POSIX-only: Windows reports a writable file as 0o666 — no chmod to
+    // enforce 0600 there.
+    if (process.platform !== 'win32') {
+      assert.equal(mode, 0o600, `log mode ${mode.toString(8)} must be 0600`);
+    }
     assert.equal(readFileSync(kooCliInstallLogPath(), 'utf8'), 'line\n');
     const again = openKooCliInstallLog();
     writeSync(again, 'second\n');

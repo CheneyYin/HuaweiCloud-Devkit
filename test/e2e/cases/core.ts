@@ -1,4 +1,5 @@
 import { PACK_OF } from '../../../plugins/huaweicloud-core/src/packs/registry.ts';
+import { S1_SEED, VOUCHER_CLAIMED_RESPONSE } from './http-packs.ts';
 import type { E2eCase } from '../types.ts';
 
 // Roster facts derive from PACK_OF (the product's ownership truth), never a
@@ -281,11 +282,39 @@ export const coreCases: E2eCase[] = [
     // truth check is pinned to the taught line (list_skills);
     // list_packs/pack_info are equally honest discovery, so a real-model
     // flake here relaxes to any of the three as the same deliberate edit.
+    // History (2026-10-20, twice-stable across attempts): after the voucher
+    // hook was fixed, the model skipped the catalog entirely and ran
+    // read-only hcloud straight from the shell (3 calls, output-format
+    // retry shape) — every taught surface covered the skill/MCP layers,
+    // none the raw-shell path. Fixed in the product's taught surface, not
+    // here: TRIMMED_CAPABILITY_RULE in mcp-protocol.ts now states that a
+    // trimmed pack's unavailability is about the capability on every
+    // execution path. If this case goes red AGAIN with shell hcloud calls,
+    // the taught surface is being ignored — escalate the teaching (e.g. the
+    // huaweicloud-cli-and-auth skill) or reconsider the case's model fit;
+    // do not relax the hcloud max:0 pin (it is this case's reason to
+    // exist).
     id: 'core-free-choice-trimmed-availability',
     pack: 'core',
     installPacks: 'voucher',
     prompt: '帮我在华为云 cn-north-4 区域查一下 VPC 列表，把结果告诉我。',
-    fixtures: {},
+    // voucher_status's tool description teaches "check at session start",
+    // and in the trimmed face (core + voucher only) it is the agent's common
+    // FIRST call. Both the credential gate and an unserved /voucher/status
+    // collapse into claimed=false — the description then says "ask the user
+    // whether to claim", and in a headless run nobody answers: the question
+    // swallows the session (observed: voucher_status the only traced call,
+    // list_skills 0 hits). The two-piece fixture — S1 seed + claimed=true —
+    // puts the tool on its silent path ("claimed, do not disturb") so the
+    // agent moves on to the actual VPC request.
+    fixtures: {
+      home: {
+        '.config/huaweicloud/credentials.json': S1_SEED,
+      },
+      http: {
+        responses: [VOUCHER_CLAIMED_RESPONSE],
+      },
+    },
     expect: [
       { kind: 'toolCall', name: 'huaweicloud_list_skills' },
       // Consent gate: enabling a trimmed pack is the user's call.

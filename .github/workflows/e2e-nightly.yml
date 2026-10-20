@@ -2,16 +2,40 @@ name: e2e-nightly
 
 # Agent-level E2E suite (test/e2e/): a real opencode run with a real LLM
 # drives the tarball-installed devkit against the fake Huawei Cloud
-# boundary. Runs OUTSIDE the PR gate by design — cost and latency belong in
-# the nightly lane. The ONLY required repository setting is the secret
-# E2E_TEST_MODEL_APIKEY (a dedicated E2E key, never a personal auth file);
-# provider/model/baseURL default to the committed values (mirroring
-# test/e2e/.env's non-secret model config) and stay overridable via the
-# E2E_TEST_PROVIDER_ID / E2E_TEST_PROVIDER_BASEURL / E2E_TEST_MODEL vars.
+# boundary. Real-LLM cost and latency keep it out of npm test and out of
+# the REQUIRED PR gate; the trigger lanes below are accepted-cost
+# exceptions, not required checks.
+#
+# Lanes (this file must stay byte-identical on main and v2 — the
+# drift-guard step fails the run on skew once both copies exist; a
+# missing main copy is the bootstrap window: it warns and passes):
+#   - nightly cron: schedule events only fire from the default branch,
+#     so main's registered copy owns the cron and checks out v2 — the
+#     suite's bloodline (main itself carries no test/e2e).
+#   - push to v2: full suite on every direct push (accepted LLM cost).
+#   - PR into v2, same-repo only: opt-in via the `run-e2e` label; commits
+#     pushed to a labeled PR (synchronize) re-run it automatically. Fork
+#     PRs skip — they cannot see E2E_TEST_MODEL_APIKEY.
+#   - workflow_dispatch: always tests v2 (operator intent = the nightly).
+#
+# The only required repository setting is the secret E2E_TEST_MODEL_APIKEY
+# (a dedicated E2E key, never a personal auth file); provider/model/baseURL
+# default to the committed values (mirroring test/e2e/.env's non-secret
+# model config) and stay overridable via the E2E_TEST_PROVIDER_ID /
+# E2E_TEST_PROVIDER_BASEURL / E2E_TEST_MODEL vars.
+#
+# End of life: 'v2' is hardcoded below. When v2 retires (merged and
+# deleted), the trunk checkout fails loud — retarget it in the same
+# change that deletes the branch, on BOTH copies.
 
 on:
   schedule:
     - cron: '0 19 * * *' # 03:00 Asia/Shanghai
+  push:
+    branches: [v2]
+  pull_request:
+    types: [labeled, synchronize]
+    branches: [v2]
   workflow_dispatch: {}
 
 permissions:
@@ -19,10 +43,40 @@ permissions:
 
 jobs:
   e2e:
+    if: >-
+      github.event_name != 'pull_request' ||
+      ((github.event.action == 'synchronize' || github.event.label.name == 'run-e2e') &&
+      contains(github.event.pull_request.labels.*.name, 'run-e2e') &&
+      github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    # Job-level on purpose: a run whose `if` is false (any other label, an
+    # unlabeled synchronize) must never join the group — workflow-level
+    # cancel-in-progress would cancel the in-flight suite before the job
+    # `if` is evaluated. Trunk lanes (push/schedule/dispatch) serialize in
+    # one group, newest wins; each PR lane is independent.
+    concurrency:
+      group: ${{ github.event_name == 'pull_request' && format('e2e-pr-{0}', github.event.pull_request.number) || 'e2e-trunk' }}
+      cancel-in-progress: true
+    # 31 cases, attempts cap 2, per-attempt budget caps sum to 147 min
+    # single-pass / 294 min worst case, plus npm ci + npm pack + install.
+    timeout-minutes: 330
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Trunk lanes (schedule/dispatch) test v2 — the suite's bloodline;
+          # push and PR lanes test the ref that triggered them.
+          ref: ${{ (github.event_name == 'push' || github.event_name == 'pull_request') && github.ref || 'v2' }}
+      - name: Drift guard (main and v2 copies must stay identical)
+        run: |
+          git fetch --depth=1 origin main
+          if ! git cat-file -e 'origin/main:.github/workflows/e2e-nightly.yml' 2>/dev/null; then
+            echo "::warning::main has no e2e-nightly.yml yet (bootstrap window) — land the identical file on main to register the nightly cron. Drift checking is strict once both copies exist."
+            exit 0
+          fi
+          if ! git diff --quiet origin/main -- .github/workflows/e2e-nightly.yml; then
+            echo "::error::e2e-nightly.yml differs between this ref and main. Workflow changes must land on BOTH branches (main first, then v2): cron/dispatch read main's copy; push/PR read the pushed ref's copy."
+            exit 1
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -49,15 +103,12 @@ jobs:
           E2E_PROVIDER_ID: ${{ vars.E2E_TEST_PROVIDER_ID || 'maas' }}
           E2E_PROVIDER_BASEURL: ${{ vars.E2E_TEST_PROVIDER_BASEURL || 'https://api.modelarts-maas.com/openai/v1' }}
           E2E_MODEL: ${{ vars.E2E_TEST_MODEL || 'glm-5.2' }}
-        # The workflow file ships to main ahead of the suite branch so
-        # GitHub registers it (discovery/dispatch/cron all read the default
-        # branch). On refs where the suite is not merged yet, fail loud as
-        # a no-op instead of erroring on a missing script.
+        # Every lane resolves to a ref that carries the suite (v2 is the
+        # suite's bloodline; PR merge refs sit on it) — a missing test:e2e
+        # here means someone broke it, so fail loud instead of a green
+        # no-op.
         run: |
-          if ! grep -q '"test:e2e"' package.json; then
-            echo "test:e2e is not defined on this ref — the E2E suite is not merged here yet; nothing to run."
-            exit 0
-          fi
+          grep -q '"test:e2e"' package.json || { echo "::error::test:e2e is not defined on the checked-out ref — the E2E lanes require the suite."; exit 1; }
           npm run test:e2e
       - name: Upload E2E report
         if: always()

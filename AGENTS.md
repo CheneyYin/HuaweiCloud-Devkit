@@ -17,7 +17,11 @@ npm run badge:sync       # rewrite README beta badge to the next stable version
 npm run smoke:agents     # pre-release smoke: pack → install tarball → per-agent install + MCP roundtrip
 npm run test:e2e         # agent-level E2E (real opencode + LLM): gated by E2E_ENABLE=1, reads gitignored
                          #   test/e2e/.env for the model config; 1-4 min per case, attempts cap 2 —
-                         #   NEVER in npm test or the PR gate; selfcheck subcommand runs chain-only
+                         #   NEVER in npm test or the required PR gate. CI lanes (see
+                         #   .github/workflows/e2e-nightly.yml): nightly cron on v2, push-to-v2, and an
+                         #   opt-in run-e2e label for same-repo v2 PRs; that file must stay byte-identical
+                         #   on main and v2 (drift-guarded — land main first, then v2). selfcheck
+                         #   subcommand runs chain-only
 node --test test/structure.test.ts    # single test file
 node --test test/real-agents.test.ts  # real opencode/codex lifecycle (needs the CLIs on PATH; CI: DEVKIT_REAL_AGENT_TESTS=1)
 node ./scripts/validate-package.mjs   # validation alone
