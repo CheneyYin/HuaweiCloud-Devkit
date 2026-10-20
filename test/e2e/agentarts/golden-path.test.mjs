@@ -27,12 +27,13 @@ import test from 'node:test';
 //   - the E2E account fingerprint equals the machine's configured devkit
 //     account → hard abort (the isolation invariant, via the toolkit's own
 //     redacted fingerprint machinery);
-//   - pre-existing e2e-aa-* memory-space leftovers → abort (adopt-or-abort).
+//   - pre-existing e2e-aa-* memory-space OR agent leftovers → abort (adopt-or-abort; the agent sweep runs through the PR7 list-agents SDK tool — 0.1.7 has no list CLI command).
 // Convergence: a failure anywhere after deploy triggers a FINALLY-DESTROY
 // (best-effort, recorded in the report), and the 0600 report is ALWAYS
-// written — success or failure. Known blind spot: 0.1.7 has no list-agents
-// command, so the pre-sweep covers memory spaces only; leftover deployed
-// agents are handled by the finally-destroy, not the sweep.
+// written — success or failure. The PR4 blind spot (no agent listing, so
+// leftovers were finally-destroy-only) is closed by the PR7 list-agents
+// tool: the pre-sweep covers agents too, and destroy is verified by list
+// disappearance, not just exit output.
 // Design contract: docs/agentarts-pr0-findings.md + the E2E review rounds.
 
 const GATE = process.env.AGENTARTS_E2E === '1';
@@ -130,6 +131,7 @@ test(
     const artifacts = {};
     let planAgentartsCommand;
     let runAgentartsApprovedCommand;
+    let listAgentartsAgents;
 
     try {
       // ---- S0: preflight -------------------------------------------------
@@ -213,7 +215,7 @@ test(
         // Pre-sweep (adopt-or-abort): no e2e-aa-* memory-space leftovers, and
         // the scratch home must NOT contain a credentials profile (the
         // measured auth chain would silently authenticate from one).
-        const { runAgentartsReadonlyCommand } = await import(
+        const { runAgentartsReadonlyCommand, listAgentartsAgents } = await import(
           join(WORKTREE, 'plugins', 'huaweicloud-core', 'src', 'agentarts-cli.mjs')
         );
         const { setRuntimeCredentials } = await import(
@@ -236,18 +238,52 @@ test(
           [],
           `pre-existing e2e-aa-* memory leftovers found — adopt or delete them first: ${leftovers.join(', ')}`,
         );
+
+        // Agent pre-sweep (adopt-or-abort, e2e-aa- prefixed only — the
+        // account's pre-existing agents are not ours to touch) through the
+        // PR7 list-agents SDK tool. The same calls carry the S0 adjudication
+        // items: SDK-default pagination semantics, the agent dict's field
+        // shape, and the agent_name fuzzy-filter miss behavior.
+        const agentsDefault = await listAgentartsAgents({});
+        assert.equal(
+          agentsDefault.ok,
+          true,
+          `preflight list-agents failed: ${agentsDefault.stderr || agentsDefault.error}`,
+        );
+        const agentsSweep = await listAgentartsAgents({ limit: 100 });
+        assert.equal(agentsSweep.ok, true, `sweep list-agents failed: ${agentsSweep.stderr || agentsSweep.error}`);
+        const agentNames = (agentsSweep.agents || []).map((a) => String(a?.name || '')).filter(Boolean);
+        const agentLeftovers = agentNames.filter((n) => n.startsWith('e2e-aa-'));
+        assert.deepEqual(
+          agentLeftovers,
+          [],
+          `pre-existing e2e-aa-* agent leftovers found — adopt or delete them first: ${agentLeftovers.join(', ')}`,
+        );
+        const fuzzyMiss = await listAgentartsAgents({ agent_name: agentName });
+        assert.equal(fuzzyMiss.ok, true);
+        const sampleAgentKeys = agentsDefault.agents?.[0]
+          ? Object.keys(agentsDefault.agents[0]).sort((a, b) => a.localeCompare(b))
+          : [];
         assert.equal(
           existsSync(join(scratch, '.huaweicloud', 'credentials')),
           false,
           'scratch home must not carry a credentials profile (silent-auth isolation)',
         );
-        return { scratch, projDir, memorySpaces: names.length };
+        return {
+          scratch,
+          projDir,
+          memorySpaces: names.length,
+          agentsDefaultPage: agentsDefault.count,
+          agentsSweepCount: agentsSweep.count,
+          fuzzyMissCount: fuzzyMiss.count,
+          sampleAgentKeys,
+        };
       });
 
       const { runAgentartsReadonlyCommand } = await import(
         join(WORKTREE, 'plugins', 'huaweicloud-core', 'src', 'agentarts-cli.mjs')
       );
-      ({ planAgentartsCommand, runAgentartsApprovedCommand } = await import(
+      ({ planAgentartsCommand, runAgentartsApprovedCommand, listAgentartsAgents } = await import(
         join(WORKTREE, 'plugins', 'huaweicloud-core', 'src', 'agentarts-cli.mjs')
       ));
 
@@ -267,7 +303,17 @@ test(
         const gateways = await runAgentartsReadonlyCommand(['gateway', 'list']);
         artifacts['S3-gateway-list'] = `${gateways.stdout}\n${gateways.stderr || ''}`;
         assert.equal(gateways.ok, true);
-        return { memoryListOk: list.ok, gatewayListOk: gateways.ok };
+        // The PR7 SDK-API listing rides the same readonly cloud proof.
+        const agents = await listAgentartsAgents({});
+        artifacts['S3-list-agents'] = JSON.stringify({ ok: agents.ok, count: agents.count });
+        assert.equal(agents.ok, true, `list-agents failed: ${agents.stderr || agents.error}`);
+        assert.ok(Array.isArray(agents.agents), 'list-agents must return a parsed agents array');
+        return {
+          memoryListOk: list.ok,
+          gatewayListOk: gateways.ok,
+          listAgentsOk: agents.ok,
+          listAgentsCount: agents.count,
+        };
       });
 
       // ---- S5: golden path -------------------------------------------------
@@ -404,6 +450,16 @@ test(
       await stage('S5-launch-deploy', async () => {
         const result = await approvedRun(['launch'], { timeoutMs: 600_000 });
         assert.equal(result.ok, true, `launch failed: ${(result.stderr || result.error || '').slice(0, 2000)}`);
+        // The deployed agent is listed (SDK API). Listing may lag runtime
+        // creation like invoke readiness does — small retry window.
+        let listed = false;
+        for (let attempt = 0; attempt < 3 && !listed; attempt += 1) {
+          const check = await listAgentartsAgents({ agent_name: agentName });
+          assert.equal(check.ok, true, `post-launch list-agents failed: ${check.stderr || check.error}`);
+          listed = (check.agents || []).some((a) => a?.name === agentName);
+          if (!listed && attempt < 2) await new Promise((r) => setTimeout(r, 10_000));
+        }
+        assert.ok(listed, `deployed agent ${agentName} not found in the runtime list`);
         return { durationMs: result.durationMs };
       });
 
@@ -435,6 +491,24 @@ test(
         const result = await approvedRun(['destroy', '--yes'], { timeoutMs: 300_000 });
         assert.equal(result.ok, true, `destroy failed: ${(result.stderr || result.error || '').slice(0, 2000)}`);
         deployed = false;
+        // Clean-teardown contract, closed from list output (not just exit
+        // output): the runtime disappears from the list. Eventual
+        // consistency gets a retry window; a destroy that reports success
+        // while the runtime stays listed is the silent-failure class this
+        // e2e exists to catch.
+        let gone = false;
+        let lastDetail = '';
+        for (let attempt = 0; attempt < 3 && !gone; attempt += 1) {
+          const check = await listAgentartsAgents({ agent_name: agentName });
+          if (check.ok) {
+            gone = !(check.agents || []).some((a) => a?.name === agentName);
+            lastDetail = gone ? '' : 'still listed';
+          } else {
+            lastDetail = `list-agents failed: ${check.stderr || check.error}`;
+          }
+          if (!gone && attempt < 2) await new Promise((r) => setTimeout(r, 10_000));
+        }
+        assert.ok(gone, `agent ${agentName} not gone after destroy — ${lastDetail}`);
         return {};
       });
 

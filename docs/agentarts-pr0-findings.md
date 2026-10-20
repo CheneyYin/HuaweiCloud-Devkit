@@ -27,6 +27,16 @@ fixture 捕获环境: `COLUMNS=80 NO_COLOR=1` 非 TTY 重定向，共 43 个文�
 - `gateway`(10): `create` `update` `delete` `get` `list` `create-target` `update-target` `delete-target` `get-target` `list-targets`
 - `runtime`(6): `invoke` `exec-command` `upload-files` `download-files` `start-session` `stop-session`
 
+**注意: CLI 没有 agent 运行时列表命令**（43 fixture 全量证实）。PR7 起由 `huaweicloud_agentarts_list_agents` 工具补此空缺，走 SDK Python API。
+
+## SDK API 面（PR7 实测，钉版 venv 源码）
+
+- `RuntimeClient.get_agents(agent_name, offset=1, limit=10, **extra)`【源码】走 `GET /v1/core/runtimes`；信封键 `items` 或 `agents` 或裸列表，SDK 侧三兼容，返回 agent dict 列表。`find_agent_by_name` 为 EXACT 匹配同端点。
+- 控制面认证 = AK/SK 签名（`open_ak_sk=True`，SDK-HMAC-SHA256），凭据走 env 链——wrapper 的 `HUAWEICLOUD_SDK_AK/SK` 注入直接可用，无需 bearer token【源码 http_client.py】。
+- 区域 env 链（`HUAWEICLOUD_SDK_REGION` 等）不在 wrapper 子进程白名单内 → 工具必须显式传 region；`get_control_plane_endpoint(region)` 构造 `https://agentarts.<region>.myhuaweicloud.com`【源码 constant.py】。
+- 工具契约（与 CLI runner 的两点刻意差异）: (1) 参数作为**独立 argv 元素**（`python -c <snippet> <json>`，snippet 读 `sys.argv[1]` 后 `json.loads`）——JSON 串不是 Python 字面量（true/false/null），织入代码会在未来布尔参数上静默漂移;(2) snippet 退出码是我们自己的契约（0 成功 / 3 模块缺失→换 python 候选 / 1 失败），`detectFailure` 签名嗅探保留为第二防御层。python 候选链: 解析出路径的 CLI 同级 python（venv/AGENTARTS_BIN）> PATH `python3`/`python`。
+- 分页默认**省略不传**（SDK `offset=1, limit=10` 与 gateway 的 0 基分页相悖，方向未实测）——SDK 缺省是唯一真源，S0 全默认实测后再裁决。
+
 ## 分类表修正（fixture 驱动）
 
 - registry 键: `launch`(含 deploy 别名)、`config`(含 configure 别名)。
@@ -81,3 +91,4 @@ fixture 捕获环境: `COLUMNS=80 NO_COLOR=1` 非 TTY 重定向，共 43 个文�
 - deploy → invoke → destroy 全链路与计时。
 - 审批计数基线核验（config/deploy/invoke/destroy = 4）。
 - 【新增】`file_transfer_config`/`url_match_type` 部署后可变性（陷阱 7 的冲突裁决）。
+- 【PR7 新增】list-agents 真机裁决: 信封键与 agent dict 字段形状、SDK 全默认分页语义（offset=1 基准与返回条数）、`agent_name` 模糊过滤行为、destroy 后列表消失的最终一致性窗口。

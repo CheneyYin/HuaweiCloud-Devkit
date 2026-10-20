@@ -522,6 +522,152 @@ export async function runAgentartsApprovedCommand(args = {}) {
   };
 }
 
+// List agent runtimes: an SDK-only capability. The 0.1.7 CLI has NO list
+// command (the 43 help fixtures prove it), so this runs an inline snippet
+// through the python that owns the resolved agentarts CLI. Two contracts
+// differ from the CLI runners, both deliberate:
+// - Parameters travel as a SEPARATE argv element (sys.argv[1]) parsed with
+//   json.loads — never woven into code. A JSON string is not a Python
+//   literal (true/false/null), so weaving would silently corrupt any
+//   future boolean/null parameter.
+// - The snippet's exit codes are OURS and trustworthy (the CLI's exit-0
+//   failure trap does not apply to code we control): 0 = success,
+//   3 = agentarts module missing (advance to the next python candidate),
+//   1 = failure. detectFailure still runs as the second defense layer.
+const LIST_AGENTS_SNIPPET = [
+  'import json, sys',
+  'try:',
+  '    from agentarts.sdk.service.runtime_client import RuntimeClient',
+  '    from agentarts.sdk.utils.constant import get_control_plane_endpoint',
+  '    params = json.loads(sys.argv[1])',
+  '    client = RuntimeClient(control_endpoint=get_control_plane_endpoint(params.get("region")))',
+  '    kwargs = {}',
+  '    if params.get("agent_name"):',
+  '        kwargs["agent_name"] = params["agent_name"]',
+  '    if params.get("limit") is not None:',
+  '        kwargs["limit"] = params["limit"]',
+  '    if params.get("offset") is not None:',
+  '        kwargs["offset"] = params["offset"]',
+  '    agents = client.get_agents(**kwargs)',
+  '    print(json.dumps(agents, ensure_ascii=False))',
+  'except ModuleNotFoundError:',
+  '    print("AGENTARTS_SDK_MISSING", file=sys.stderr)',
+  '    sys.exit(3)',
+  'except Exception as error:',
+  '    print("{}: {}".format(type(error).__name__, error), file=sys.stderr)',
+  '    sys.exit(1)',
+].join('\n');
+
+// Python candidates for the snippet: the sibling python of a path-resolved
+// CLI first (the devkit venv's or AGENTARTS_BIN's own interpreter — the
+// one that certainly has the SDK when the CLI resolved from there), then
+// the PATH fallbacks. A bare PATH-resolved CLI has no sibling; an activated
+// venv's bin dir is already on PATH, so python3 resolves to it there.
+export function pythonCandidatesForAgentarts() {
+  const resolved = resolveAgentartsCommand();
+  const candidates = [];
+  if (resolved.includes('/') || resolved.includes('\\')) {
+    candidates.push(join(dirname(resolved), process.platform === 'win32' ? 'python.exe' : 'python'));
+  }
+  candidates.push(process.platform === 'win32' ? 'python' : 'python3');
+  if (process.platform !== 'win32') candidates.push('python');
+  return [...new Set(candidates)];
+}
+
+function runPythonSnippet(candidate, args, childEnv, timeoutMs) {
+  return new Promise((resolve) => {
+    const child = spawn(candidate, args, {
+      shell: false,
+      windowsHide: true,
+      env: childEnv,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (outcome) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(outcome);
+    };
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      finish({ exitCode: null, stdout, stderr, timedOut: true });
+    }, timeoutMs);
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8');
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString('utf8');
+    });
+    child.on('error', (error) => finish({ exitCode: null, stdout, stderr, spawnError: error }));
+    child.on('close', (code) => finish({ exitCode: code, stdout, stderr }));
+  });
+}
+
+// Read-only agent listing through the SDK API. Env-or-fail, allowlist child
+// env, redaction, and the readonly timeout are the same contracts as the
+// CLI readonly runner; only the executable (python, not the CLI) and the
+// exit-code contract (ours, see LIST_AGENTS_SNIPPET) differ.
+export async function listAgentartsAgents(params = {}, options = {}) {
+  if (options.injectCredentials !== false && !hasInjectableCredentials()) {
+    return missingCredentialError();
+  }
+  // The request carries ONLY what the caller passed (plus region, which the
+  // wrapper must supply: the SDK's region env chain is not in the allowlist
+  // child env). Omitted pagination keys keep the SDK defaults as the single
+  // source of truth — the server-side base is unmeasured, so guessing one
+  // here would weld the guess into every call.
+  const request = { region: params.region || 'cn-southwest-2' };
+  if (params.agent_name) request.agent_name = String(params.agent_name);
+  if (params.limit !== undefined && params.limit !== null) request.limit = Number(params.limit);
+  if (params.offset !== undefined && params.offset !== null) request.offset = Number(params.offset);
+  const jsonArg = JSON.stringify(request);
+
+  const childEnv = buildChildEnv(options);
+  const timeoutMs = options.timeoutMs ?? READONLY_TIMEOUT_MS;
+  const args = ['-c', LIST_AGENTS_SNIPPET, jsonArg];
+  const runCandidate = options.runCandidate || ((candidate) => runPythonSnippet(candidate, args, childEnv, timeoutMs));
+
+  for (const candidate of pythonCandidatesForAgentarts()) {
+    const result = await runCandidate(candidate, args);
+    const moduleMissing =
+      result.exitCode === 3 || /ModuleNotFoundError|AGENTARTS_SDK_MISSING/.test(result.stderr || '');
+    // Only "this python cannot run the SDK" advances the chain. A candidate
+    // that found the SDK and failed (auth, network, API error) is FINAL —
+    // retrying on a different interpreter would only mask the real error.
+    if (result.spawnError || moduleMissing) continue;
+    const failed = result.timedOut || result.exitCode !== 0 || detectFailure(result.stdout || '', result.stderr || '');
+    let agents = null;
+    if (!failed) {
+      try {
+        const parsed = JSON.parse(result.stdout);
+        agents = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.items) ? parsed.items : null;
+      } catch {
+        agents = null;
+      }
+    }
+    return {
+      ok: !failed,
+      service: 'AgentArts',
+      operation: 'list-agents (SDK API; no CLI command in 0.1.7)',
+      executable: candidate,
+      exitCode: result.exitCode,
+      failureDetected: failed,
+      agents,
+      count: Array.isArray(agents) ? agents.length : null,
+      stdout: redactSecrets(result.stdout || ''),
+      stderr: redactSecrets(result.stderr || ''),
+      ...(result.timedOut ? { timedOut: true, error: `agentarts list timed out after ${timeoutMs} ms.` } : {}),
+    };
+  }
+  return {
+    ok: false,
+    error: `No python candidate could import agentarts (tried: ${pythonCandidatesForAgentarts().join(', ')}). Install the SDK: npx huaweicloud-devkit install-agentarts (or pip install agentarts-sdk==${pinnedSdkVersion() || 'the pinned version'} -i ${AGENTARTS_SDK_MIRROR}).`,
+  };
+}
+
 // Tool surface: definitions and handlers exported so tools.mjs stays a thin
 // registration site (the definitions spread into TOOL_DEFINITIONS, the
 // dispatch delegates here).
@@ -590,6 +736,24 @@ export const AGENTARTS_TOOL_DEFINITIONS = [
       },
     },
   },
+  {
+    name: 'huaweicloud_agentarts_list_agents',
+    description:
+      'List AgentArts agent runtimes (read-only, no approval needed) via the pinned agentarts-sdk Python API — agentarts 0.1.7 has NO list CLI command, so this is the only in-toolkit path (degraded path: the console). Returns agents[] parsed from the SDK response. Params: region (default cn-southwest-2, the only control-plane region), agent_name (fuzzy filter), limit/offset (pagination — omit to keep the SDK defaults, the single source of truth).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        region: {
+          type: 'string',
+          description: 'Control-plane region. Defaults to cn-southwest-2 (the only control-plane region).',
+        },
+        agent_name: { type: 'string', description: 'Fuzzy agent-name filter (SDK get_agents agent_name).' },
+        limit: { type: 'number', description: 'Page size. Omit to use the SDK default.' },
+        offset: { type: 'number', description: 'Pagination offset. Omit to use the SDK default.' },
+        timeoutMs: { type: 'number', description: 'Optional timeout in milliseconds. Defaults to 60000.' },
+      },
+    },
+  },
 ];
 
 export async function callAgentartsTool(name, rawArgs = {}) {
@@ -603,6 +767,8 @@ export async function callAgentartsTool(name, rawArgs = {}) {
       });
     case 'huaweicloud_agentarts_run_approved_command':
       return runAgentartsApprovedCommand(rawArgs);
+    case 'huaweicloud_agentarts_list_agents':
+      return listAgentartsAgents(rawArgs, { timeoutMs: rawArgs.timeoutMs });
     default:
       throw new Error(`Unknown agentarts tool: ${name}`);
   }

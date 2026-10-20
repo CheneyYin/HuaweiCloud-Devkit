@@ -13,6 +13,7 @@ import {
   resolveAgentartsCommand,
   agentartsVenvDir,
   agentartsVenvBin,
+  listAgentartsAgents,
 } from '../plugins/huaweicloud-core/src/agentarts-cli.mjs';
 import { createApprovalToken } from '../plugins/huaweicloud-core/src/hcloud-cli.mjs';
 import { callTool } from '../plugins/huaweicloud-core/src/tools.mjs';
@@ -291,11 +292,12 @@ test('approved run never writes stdin (prompts EOF-abort, no blind y)', async ()
 
 test('tool definitions register and dispatch through callTool', async () => {
   await withIsolation(async () => {
-    assert.equal(AGENTARTS_TOOL_DEFINITIONS.length, 3);
+    assert.equal(AGENTARTS_TOOL_DEFINITIONS.length, 4);
     const names = AGENTARTS_TOOL_DEFINITIONS.map((t) => t.name);
     assert.deepEqual(
       names.sort((a, b) => a.localeCompare(b)),
       [
+        'huaweicloud_agentarts_list_agents',
         'huaweicloud_agentarts_plan_cli_command',
         'huaweicloud_agentarts_run_approved_command',
         'huaweicloud_agentarts_run_readonly_command',
@@ -419,6 +421,176 @@ test('runs without devkit credentials fail closed with a clear pointer (env-or-f
     assert.equal(approved.status, 'rejected');
     assert.equal(approved.code, 'NO_DEVKIT_CREDENTIALS');
     assert.match(approved.detail, /huaweicloud_auth_init/);
+  });
+});
+
+test('list agents runs the stub sibling python, passes argv-as-data, and parses the list', async () => {
+  await withIsolation(async ({ home }) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // A stub python BESIDE the stub CLI: prints a JSON array, echoes the
+    // json argv element ($3: $1=-c $2=snippet $3=json) to stderr so the
+    // data-channel contract is asserted with a real spawn.
+    const stubPython = join(home, 'python');
+    writeFileSync(
+      stubPython,
+      ['#!/bin/bash', 'echo \'[{"name":"demo-agent","status":"RUNNING"}]\'', 'echo "JSONARG=$3" >&2', ''].join('\n'),
+      { encoding: 'utf8', mode: 0o755 },
+    );
+    chmodSync(stubPython, 0o755);
+    const result = await listAgentartsAgents({});
+    assert.equal(result.ok, true);
+    assert.equal(result.executable, stubPython);
+    assert.equal(result.count, 1);
+    assert.equal(result.agents[0].name, 'demo-agent');
+    // The JSON request is a SEPARATE argv element — never woven into the snippet.
+    assert.match(result.stderr, /^JSONARG=\{"region":"cn-southwest-2"\}$/m);
+    assert.doesNotMatch(JSON.stringify(result), /AKVALUE123|SKVALUE456/);
+  });
+});
+
+test('list agents exit-code contract: ours, with detectFailure as the second layer', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // exit 1 with valid stdout is a failure, and a runnable candidate's
+    // failure is FINAL (the chain does not advance).
+    const calls = [];
+    let result = await listAgentartsAgents(
+      {},
+      {
+        runCandidate: async (candidate) => {
+          calls.push(candidate);
+          return { exitCode: 1, stdout: '[]', stderr: 'ValueError: boom' };
+        },
+      },
+    );
+    assert.equal(result.ok, false);
+    assert.equal(result.failureDetected, true);
+    assert.equal(result.exitCode, 1);
+    assert.equal(calls.length, 1);
+    // exit 0 with a traceback on stderr still fails (second defense layer).
+    result = await listAgentartsAgents(
+      {},
+      {
+        runCandidate: async () => ({
+          exitCode: 0,
+          stdout: '[{"name":"x"}]',
+          stderr: 'Traceback (most recent call last):',
+        }),
+      },
+    );
+    assert.equal(result.ok, false);
+    assert.equal(result.failureDetected, true);
+    // exit 0 + clean output parses; stdout that is not JSON degrades to agents:null.
+    result = await listAgentartsAgents(
+      {},
+      {
+        runCandidate: async () => ({ exitCode: 0, stdout: '[{"name":"x"},{"name":"y"}]', stderr: '' }),
+      },
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.count, 2);
+    result = await listAgentartsAgents(
+      {},
+      {
+        runCandidate: async () => ({ exitCode: 0, stdout: 'not json', stderr: '' }),
+      },
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.agents, null);
+    assert.equal(result.count, null);
+  });
+});
+
+test('list agents pagination omission and explicit params shape the JSON arg', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    let seenArgs;
+    const capture = async (candidate, args) => {
+      seenArgs = args;
+      return { exitCode: 0, stdout: '[]', stderr: '' };
+    };
+    // Omitted params never reach the request — SDK defaults stay the single
+    // source of truth.
+    await listAgentartsAgents({}, { runCandidate: capture });
+    assert.deepEqual(JSON.parse(seenArgs[2]), { region: 'cn-southwest-2' });
+    assert.equal(seenArgs[0], '-c');
+    assert.ok(seenArgs[1].includes('get_agents'));
+    // Explicit params all travel.
+    await listAgentartsAgents({ agent_name: 'demo', limit: 100, offset: 2 }, { runCandidate: capture });
+    assert.deepEqual(JSON.parse(seenArgs[2]), { region: 'cn-southwest-2', agent_name: 'demo', limit: 100, offset: 2 });
+    // Region override travels too.
+    await listAgentartsAgents({ region: 'cn-north-4' }, { runCandidate: capture });
+    assert.deepEqual(JSON.parse(seenArgs[2]), { region: 'cn-north-4' });
+  });
+});
+
+test('list agents advances python candidates only on module-missing or spawn errors', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // exit 3 (module missing) on the first candidate, success on the next.
+    let result = await listAgentartsAgents(
+      {},
+      {
+        runCandidate: async (candidate) =>
+          candidate.endsWith('python3')
+            ? { exitCode: 0, stdout: '[{"name":"z"}]', stderr: '' }
+            : { exitCode: 3, stdout: '', stderr: 'AGENTARTS_SDK_MISSING' },
+      },
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.count, 1);
+    // ModuleNotFoundError text in stderr (not our exit code) also advances.
+    result = await listAgentartsAgents(
+      {},
+      {
+        runCandidate: async (candidate) =>
+          candidate.endsWith('python3')
+            ? { exitCode: 0, stdout: '[]', stderr: '' }
+            : { exitCode: 1, stdout: '', stderr: 'ModuleNotFoundError: No module named ' },
+      },
+    );
+    assert.equal(result.ok, true);
+    // ENOENT (spawnError) advances as well.
+    result = await listAgentartsAgents(
+      {},
+      {
+        runCandidate: async (candidate) =>
+          candidate.endsWith('python3')
+            ? { exitCode: 0, stdout: '[]', stderr: '' }
+            : { exitCode: null, stdout: '', stderr: '', spawnError: new Error('spawn ENOENT') },
+      },
+    );
+    assert.equal(result.ok, true);
+    // Every candidate module-missing: install guidance, not a traceback dump.
+    result = await listAgentartsAgents(
+      {},
+      {
+        runCandidate: async () => ({ exitCode: 3, stdout: '', stderr: 'AGENTARTS_SDK_MISSING' }),
+      },
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.error, /install-agentarts/);
+    assert.match(result.error, /tried:/);
+  });
+});
+
+test('list agents fails closed without devkit credentials and dispatches through callTool', async () => {
+  await withIsolation(async ({ home }) => {
+    // Env-or-fail: the wrapper never falls back to unmanaged profile auth.
+    const rejected = await listAgentartsAgents({});
+    assert.equal(rejected.ok, false);
+    assert.match(rejected.error, /huaweicloud_auth_init/);
+    assert.match(rejected.error, /never falls back to unmanaged profile/);
+
+    // callTool dispatch reaches the same runner (stub sibling python).
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const stubPython = join(home, 'python');
+    writeFileSync(stubPython, '#!/bin/bash\necho "[]"\n', { encoding: 'utf8', mode: 0o755 });
+    chmodSync(stubPython, 0o755);
+    const viaTool = await callTool('huaweicloud_agentarts_list_agents', {});
+    assert.equal(viaTool.ok, true);
+    assert.equal(viaTool.count, 0);
+    assert.deepEqual(viaTool.agents, []);
   });
 });
 

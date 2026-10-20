@@ -1134,6 +1134,8 @@ test('huawei-agentarts skill ships with routing floor and core registry wiring',
   assert.match(body, /agentarts-sdk==0\.1\.7/);
   // The taught install command carries the Huawei Cloud PyPI mirror (PR5).
   assert.match(body, /mirrors\.huaweicloud\.com\/repository\/pypi\/simple/);
+  // The SDK-API list tool is taught as the only runtime-listing path (PR7).
+  assert.match(body, /huaweicloud_agentarts_list_agents/);
   assert.match(body, /AGENTARTS_BIN/);
   assert.match(body, /HUAWEICLOUD_SDK_AK/);
   assert.match(body, /cn-north-4/);

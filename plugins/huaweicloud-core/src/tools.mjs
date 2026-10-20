@@ -1198,6 +1198,7 @@ export async function callTool(name, rawArgs = {}, opts = {}) {
     case 'huaweicloud_agentarts_plan_cli_command':
     case 'huaweicloud_agentarts_run_readonly_command':
     case 'huaweicloud_agentarts_run_approved_command':
+    case 'huaweicloud_agentarts_list_agents':
       return callAgentartsTool(name, args);
     case 'huaweicloud_show_profile_redacted':
       return showProfileRedacted(args.profile);

@@ -35,6 +35,7 @@ Enterprise agent platform for Huawei Cloud: hosts agent runtimes (LangGraph/Lang
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | local (Bash allowed)    | `--help` `--version` `init` `dev`                                                                                                            | Fine to run; `dev` is a long-running server the agent manages                                                                                                                       |
 | readonly (Bash allowed) | `memory list/get/status`, `gateway get/list/get-target/list-targets`                                                                         | `huaweicloud_agentarts_run_readonly_command` (credential injection + redaction)                                                                                                     |
+| readonly (SDK API only) | agent runtime listing — NO CLI command exists in 0.1.7                                                                                       | `huaweicloud_agentarts_list_agents` (degraded path: the console)                                                                                                                    |
 | approved (Bash blocked) | `launch`/`deploy`, `destroy`, `invoke`, `config` family, `runtime` family, `memory install/uninstall`, `gateway create/update/delete` family | `huaweicloud_agentarts_plan_cli_command` → present the exact command to the user → `huaweicloud_agentarts_run_approved_command` on explicit approval; otherwise the user's terminal |
 | blocked (this release)  | `memory create/update/delete`                                                                                                                | Memory scenario deferred; user terminal only                                                                                                                                        |
 
@@ -43,6 +44,7 @@ Enterprise agent platform for Huawei Cloud: hosts agent runtimes (LangGraph/Lang
 - `huaweicloud_agentarts_plan_cli_command` — classify + canonicalize (adds `--yes` where measured-safe) without executing; returns the approval token for approved-tier writes
 - `huaweicloud_agentarts_run_readonly_command` — read-only execution with runtime credential injection and output redaction
 - `huaweicloud_agentarts_run_approved_command` — approved-tier execution bound to the plan's exact args and token
+- `huaweicloud_agentarts_list_agents` — read-only agent runtime listing via the SDK Python API (0.1.7 has no list CLI command); region defaults to cn-southwest-2, optional agent_name fuzzy filter, omit limit/offset to keep SDK pagination defaults
 
 See references/cli-workflows.md for the golden path and the full trap list.
 

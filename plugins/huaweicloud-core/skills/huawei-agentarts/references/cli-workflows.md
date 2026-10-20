@@ -59,9 +59,16 @@ huaweicloud_agentarts_run_readonly_command
   ["memory","status","--space-id","<space-id>","--region","cn-southwest-2"]
   ["gateway","list"]
   ["gateway","get-target","<gateway-id>","<target-id>"]
+
+huaweicloud_agentarts_list_agents (SDK API — 0.1.7 has NO list CLI command)
+  {}                                  → all agents, SDK default pagination
+  { "agent_name": "demo" }            → fuzzy name filter
+  { "limit": 100 }                    → explicit page size when sweeping
 ```
 
-Use `--output json` for machine parsing (default is a rich table).
+Use `--output json` for machine parsing (default is a rich table). The
+list-agents tool returns `agents[]` already parsed; omit `limit`/`offset`
+unless sweeping — the SDK defaults are the single source of truth.
 
 ## Wrapper Rules (why some commands hard-stop)
 
