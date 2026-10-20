@@ -45,5 +45,12 @@ test('hcloud probe classifies executable not found', () => {
   assert.equal(result.installed, false);
   assert.equal(result.ok, false);
   assert.equal(result.errorCode, 'HCLOUD_NOT_FOUND');
-  assert.match(hcloudProbeNextStep(result), /install KooCLI/i);
+  // The friendly first-use hint: background auto-install may be running,
+  // fixed install dirs are picked up on the next call (no restart), and
+  // the install log path is quoted for support escalation.
+  assert.match(hcloudProbeNextStep(result), /install-hcloud/);
+  assert.match(hcloudProbeNextStep(result), /Background auto-install/);
+  assert.match(hcloudProbeNextStep(result), /no agent restart needed/);
+  assert.match(hcloudProbeNextStep(result), /koocli-install\.log/);
+  assert.doesNotMatch(hcloudProbeNextStep(result), /restart the agent/i);
 });

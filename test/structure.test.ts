@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -432,10 +432,7 @@ test('skill SKILL.md files meet minimum content quality bar', () => {
     'huaweicloud-api-and-sdk',
     'huaweicloud-safety',
     'huaweicloud-troubleshooting',
-    'huawei-deployment',
     'huawei-getting-started',
-    'huawei-apig',
-    'huawei-gaussdb',
   ]);
 
   for (const name of skillNames) {
@@ -446,22 +443,52 @@ test('skill SKILL.md files meet minimum content quality bar', () => {
   }
 });
 
-test('huawei-deployment skill uses verified KooCLI service and operation names', () => {
-  const body = readFileSync(join(pluginRoot, 'skills', 'huawei-deployment', 'SKILL.md'), 'utf8');
+test('huawei-cloud-deployment-task-management skill uses verified KooCLI service and operation names', () => {
+  // S4 adoption: the corpus pins, re-derived from main's verified skill
+  // (KooCLI 7.2.12). The legacy thin skill's --app_id / DeleteApplication
+  // match pins were dropped — those tokens now appear only inside the
+  // sunset/replacement notes naming the new-model equivalents.
+  // APIGW.0301 IS taught (the auth-failure row); Deploy.00016902 /
+  // DEV-12-50002 are the project-scope / parameter errors, not auth.
+  const body = readSource(
+    join('src', 'packs', 'huaweicloud-cli', 'skills', 'huawei-cloud-deployment-task-management', 'SKILL.md'),
+  );
   assert.match(body, /CodeArtsDeploy/);
   assert.match(body, /StartDeployTask/);
   assert.match(body, /ListAllApp/);
+  assert.match(body, /CreateDeployTaskByTemplate/);
   assert.match(body, /DeleteDeployTask/);
   assert.match(body, /Deploy\.00016902/);
+  assert.match(body, /DEV-12-50002/);
   assert.match(body, /APIGW\.0301/);
-  assert.match(body, /--app_id/);
-  assert.match(body, /DeleteApplication/);
-  assert.match(body, /deprecated since 2024-09-30/);
+  assert.match(body, /不支持的服务名称:CloudDeploy/);
+  assert.match(body, /sunset after 2024-09-30/);
   assert.doesNotMatch(body, /--application_id/);
+  assert.doesNotMatch(body, /--app_name/);
   assert.doesNotMatch(body, /\bStartTask\b/);
   assert.doesNotMatch(body, /\bListTasks\b/);
   assert.doesNotMatch(body, /\bCreateTask\b/);
   assert.doesNotMatch(body, /\bDeleteTask\b/);
+});
+
+test('every serviceCatalog route names a skill a pack actually owns', () => {
+  // The S-series adoption loop twice shipped a staged tree whose routeMap
+  // still pointed at a deleted legacy skill (S5/S6 reviews caught the
+  // unstaged-rename class). The routing data lives inline in tools.ts's
+  // serviceCatalog, so the guard scans the source and cross-checks every
+  // `skills: ['...']` entry against the pack registry's union.
+  const known = new Set(PACKS.flatMap((pack) => pack.skills));
+  const source = readSource(join('src', 'tools.ts'));
+  const routed = [...source.matchAll(/skills: \[([^\]]+)\]/g)].flatMap((m) =>
+    m[1]!
+      .split(',')
+      .map((s) => s.trim().replace(/^['"]|['"]$/g, ''))
+      .filter(Boolean),
+  );
+  assert.ok(routed.length > 20, `expected a substantive routeMap, found ${routed.length} entries`);
+  for (const name of routed) {
+    assert.ok(known.has(name), `serviceCatalog routes to "${name}" which no pack owns (stale rename?)`);
+  }
 });
 
 test('skills with references have non-empty reference files', () => {
@@ -790,6 +817,53 @@ test('telemetry hooks never classify skill-tool loads', () => {
   }
 });
 
+test('proxy nginx template listens on targetPort, not the stale listenPort (#738)', () => {
+  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
+
+  // The proxy template must reference ${targetPort} (the auto-incremented port),
+  // not ${listenPort} (the original requested port which may be occupied).
+  const proxyBlock = sessionManager.match(/proxy: `server \{[\s\S]*?\}`/);
+  assert.ok(proxyBlock, 'proxy nginx template block not found');
+  assert.match(proxyBlock[0], /listen \$\{targetPort\}/);
+  assert.doesNotMatch(proxyBlock[0], /listen \$\{listenPort\}/);
+});
+
+test('effectiveNodePort for proxy resolves via the pure resolveProxyNodePort helper on targetPort (#738)', () => {
+  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
+
+  // effectiveNodePort must track the resolved targetPort so the Node app and
+  // nginx stay in sync after auto-increment, and the resolution must be
+  // extractable into a pure, unit-testable function.
+  const nodePortBlock = sessionManager.match(
+    /const effectiveNodePort =[\s\S]*?resolveProxyNodePort\(nodePort, targetPort[^;]*;[\s\S]*?\n\s*: undefined;/,
+  );
+  assert.ok(nodePortBlock, 'effectiveNodePort block not found');
+  const block = nodePortBlock[0];
+  assert.match(block, /resolveProxyNodePort\(nodePort, targetPort/);
+  assert.doesNotMatch(block, /nodePort !== listenPort/);
+
+  const helper = sessionManager.match(/export async function resolveProxyNodePort\([\s\S]*?\n\}/);
+  assert.ok(helper, 'resolveProxyNodePort helper not found');
+  assert.match(helper[0], /nodePort && nodePort !== nginxListenPort \? nodePort : nginxListenPort \+ 1/);
+  assert.match(helper[0], /candidate === nginxListenPort \|\| \(await isPortInUse\(candidate\)\)/);
+});
+
+test('port conflict and drift warnings use the unified logic for all nginx types (#738)', () => {
+  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
+
+  // The #736 stopgap formatProxyPortWarning must stay retired; proxy gets the
+  // same conflict/drift warnings as spa/static.
+  assert.doesNotMatch(sessionManager, /formatProxyPortWarning/);
+  assert.match(sessionManager, /formatPortConflictWarning\(basePort, targetPort\)/);
+  assert.match(sessionManager, /formatPortDriftWarning\(basePort, targetPort\)/);
+  assert.doesNotMatch(sessionManager, /nginxType !== 'proxy'\s*\?\s*formatPortDriftWarning/);
+});
+
+test('deploy_nginx warnings are joined with the pipe separator (#738)', () => {
+  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
+  assert.match(sessionManager, /\.join\(' \| '\)/);
+});
+
 test('devbridge uses the valid `list` command, not the non-existent `ls`', () => {
   const sandbox = readFileSync(
     join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'SKILL.md'),
@@ -851,16 +925,28 @@ test('devbridge 0.2.x flow: auth capability probe, version detection, in-place u
   assert.doesNotMatch(sandbox, /Login needs --huaweicloud/);
   assert.match(sandbox, /Never expose tunnel details/);
 
-  // Auth must be decided by probing the binary's capability, not by the version string —
-  // image builds retain AK/SK (auto), release builds accept only API Key.
+  // Auth is a verified three-tier waterfall (keyring → AK/SK → api-key file);
+  // the preferred path is the expose_tunnel tool, the manual script is the
+  // fallback. The probe vocabulary is DB_AUTH_MODE modes, not AUTH_MODE.
   assert.match(sandbox, /auth login --help 2>&1 \| grep -q -- '--access-key'/);
-  assert.match(sandbox, /AUTH_MODE=AKSK_SUPPORTED/);
-  assert.match(sandbox, /AUTH_MODE=API_KEY_ONLY/);
+  assert.match(sandbox, /hwcloud keyring get HW_DEVBRIDGE_API_KEY 2>&1/);
+  assert.match(sandbox, /devbridge_"\*\)|devbridge_\*\)/);
+  assert.match(sandbox, /API_KEY_KEYRING/);
+  assert.match(sandbox, /AKSK_SUPPORTED/);
+  assert.match(sandbox, /API_KEY_FILE/);
+  assert.match(sandbox, /NO_CREDENTIAL/);
+  assert.match(
+    sandbox,
+    /--security-token "\$HW_SECURITY_TOKEN"/,
+    'STS credentials must carry the security token or the gateway rejects with 401 APIGW.0301',
+  );
   assert.match(
     sandbox,
     /auth login --access-key "\$HW_ACCESS_KEY" --secret-key "\$HW_SECRET_KEY"/,
     'image-build branch must teach the direct AK/SK login',
   );
+  assert.match(sandbox, /huaweicloud_sandbox_expose_tunnel/);
+  assert.match(sandbox, /attempts/);
 
   // The API Key guidance (release-build branch) must survive, incl. version detection
   // and the in-place upgrade.
@@ -894,8 +980,9 @@ test('devbridge 0.2.x flow: auth capability probe, version detection, in-place u
     assert.doesNotMatch(sidecopy, /devbridge ls\b/);
     assert.doesNotMatch(sidecopy, /https:\/\/<id>-<port>\.cn-north-4-bridge/);
     assert.match(sidecopy, /auth login --help 2>&1 \| grep -q -- '--access-key'/);
-    assert.match(sidecopy, /AUTH_MODE=AKSK_SUPPORTED/);
-    assert.match(sidecopy, /AUTH_MODE=API_KEY_ONLY/);
+    assert.match(sidecopy, /API_KEY_KEYRING/);
+    assert.match(sidecopy, /AKSK_SUPPORTED/);
+    assert.match(sidecopy, /NO_CREDENTIAL/);
     assert.match(sidecopy, /auth login --api-key "\$HW_API_KEY"/);
     assert.match(sidecopy, /devbridge-s2\.hwtunnel\.com/);
     assert.match(sidecopy, /\/tmp\/hw_api_key/);
@@ -1477,7 +1564,7 @@ test('sandbox timeout defaults stay single-sourced (no raw numeric fallbacks)', 
   const src = readSource(join('src', 'packs', 'sandbox', 'tools.ts'));
   assert.doesNotMatch(src, /args\.timeout_ms \|\| \d/, 'handler fallbacks must read SANDBOX_TIMEOUT_MS');
   const fallbacks = src.match(/args\.timeout_ms \|\| SANDBOX_TIMEOUT_MS\.\w+/g);
-  assert.equal(fallbacks?.length ?? 0, 6, 'six tool handlers apply the shared defaults');
+  assert.equal(fallbacks?.length ?? 0, 7, 'seven tool handlers apply the shared defaults');
 });
 
 test('setup-cli.ts supports the version command', () => {
@@ -1596,15 +1683,15 @@ test('update pack registers version-update tools; registry carries the central d
 
 test('eight packs register their tools; the central map dispatches them', () => {
   // Same contract as the update pack, asserted for the packs materialized
-  // after P4: sandbox (11), auth (5), obs (2), voucher (2), discovery (3),
+  // after P4: sandbox (12), auth (5), obs (2), voucher (3), discovery (3),
   // huaweicloud-open-mcp (3), huaweicloud-cli (7), secrets (3). Their
   // handlers reach callTool only through the PACK_TOOL_HANDLERS merge in
   // packs/registry.ts.
   const packs = [
-    { id: 'sandbox', tools: SANDBOX_TOOLS, count: 11 },
+    { id: 'sandbox', tools: SANDBOX_TOOLS, count: 12 },
     { id: 'auth', tools: AUTH_TOOLS, count: 5 },
     { id: 'obs', tools: OBS_TOOLS, count: 2 },
-    { id: 'voucher', tools: VOUCHER_TOOLS, count: 2 },
+    { id: 'voucher', tools: VOUCHER_TOOLS, count: 3 },
     { id: 'discovery', tools: DISCOVERY_TOOLS, count: 3 },
     { id: 'huaweicloud-open-mcp', tools: HUAWEICLOUD_OPEN_MCP_TOOLS, count: 3 },
     { id: 'huaweicloud-cli', tools: HUAWEICLOUD_CLI_TOOLS, count: 7 },
@@ -2204,6 +2291,11 @@ test('the safety skill documents the secret vault and its reference is not a dea
   assert.match(reference, /secret exec --env/);
   assert.match(reference, /secret get/);
   assert.match(reference, /NOT defend/);
+  // The skill-quality-cli wrapper-unwrap residual is documented here too:
+  // variable-indirection and alternate-entry spellings are the seam gaps.
+  assert.match(reference, /skill-quality-cli/);
+  assert.match(reference, /python3 -m skill_quality_cli/);
+  assert.match(reference, /cli_entry\.py/);
 });
 
 test('auth reconcile propagates through syncAuth (the seam-tested fan-out)', () => {
@@ -2254,3 +2346,192 @@ test('no conflict-marker residue survives in tracked text files (prettier-launde
   }
   assert.deepEqual(offenders, [], 'conflict-marker residue found');
 });
+
+test('adopted huawei-cloud-* skills teach the optional wrapper and the approval write path', () => {
+  // The adopted corpus (main's 1.1.8 huawei-cloud-* skills) ships with a
+  // mandatory-wrapper doctrine and a network-facing quality CLI. The v2
+  // adoption rulings flip both: the wrapper is OPTIONAL (bare hcloud is
+  // equivalent; the safety seam classifies both), and the shipped scripts
+  // carry no telemetry/network/download surface. Every adopted skill's
+  // SKILL.md must carry the two teaching notes, and its scripts must be
+  // the normalized forms.
+  const adopted = [
+    'huawei-cloud-apig-instance-management',
+    'huawei-cloud-cts-trace-management',
+    'huawei-cloud-dds-dcs-instance-management',
+    'huawei-cloud-deployment-task-management',
+    'huawei-cloud-dew-key-management',
+    'huawei-cloud-gaussdb-instance-management',
+    'huawei-cloud-smn-dms-message',
+    'huawei-cloud-waf-aad-rule-management',
+  ];
+  const cliRoot = join(pluginRoot, 'src', 'packs', 'huaweicloud-cli', 'skills');
+  const present = listSkillDirs(join(pluginRoot, 'skills'));
+  for (const name of adopted) {
+    if (!present.includes(name)) continue; // not adopted yet (S-series in flight)
+    const skillDir = join(cliRoot, name);
+    const skill = readSource(join('src', 'packs', 'huaweicloud-cli', 'skills', name, 'SKILL.md'));
+    assert.match(skill, /wrapper is OPTIONAL/i, `${name}: optional-wrapper note missing`);
+    assert.match(
+      skill,
+      /huaweicloud_plan_cli_command[\s\S]{0,120}huaweicloud_run_approved_command/,
+      `${name}: approval write-path routing note missing`,
+    );
+    // The repo-wide service-skill mandate (AGENTS.md): parameters are
+    // discovered via --help, not hardcoded. S3 dropped it silently — the
+    // guard now pins it for every name on the adopted list (extend the
+    // list when adopting a new skill). Two family forms count: the S2/S3
+    // blockquote ("Always run `hcloud SVC <Operation> ... --help` before
+    // constructing a command") and the S1 list-item phrasing ("Always
+    // discover parameters with `hcloud SVC <Operation> --help` before
+    // executing").
+    assert.match(
+      skill,
+      /Always (run|discover)[^\n]{0,80}`hcloud [A-Za-z|]+ <Operation>[^\n]{0,80}--help` before/,
+      `${name}: --help-first discovery mandate missing`,
+    );
+    // Doctrine bans across SKILL.md, every reference, AND every template —
+    // the mandate and the reporting doctrine were removed by ruling, not
+    // reworded. templates/ joined the sweep with S2 (cts): the first adopted
+    // skill to ship templates carried dead v1-framework write-gating notes
+    // there (ALLOW_WRITES + allow_writes.yaml — no such file exists in v2;
+    // the approval chain is the devkit's), caught only by hand.
+    const doctrineFiles = [
+      join(skillDir, 'SKILL.md'),
+      ...readdirSync(join(skillDir, 'references')).map((f) => join(skillDir, 'references', f)),
+    ];
+    const templatesDir = join(skillDir, 'templates');
+    if (existsSync(templatesDir)) {
+      doctrineFiles.push(...readdirSync(templatesDir).map((f) => join(templatesDir, f)));
+    }
+    for (const file of doctrineFiles) {
+      const text = readFileSync(file, 'utf8');
+      for (const banned of [
+        /MUST be wrapped/i,
+        /mandatory rule/i,
+        /strictly forbidden/i,
+        /Quality telemetry is collected/i,
+        /SKILL_QUALITY_REPORT/,
+        /cli_reporting/,
+        /skillsapi\.developer\.myhuaweicloud\.com/,
+        /urlretrieve/,
+        /allow_writes/i,
+        /Quality reporting is delivered/i,
+        /hard-binds a report/i,
+        /installed by `scripts\/ensure_cli\.sh`/i,
+      ]) {
+        assert.doesNotMatch(text, banned, `${name}/${file.split(/[/\\]/).pop()}: banned doctrine ${banned}`);
+      }
+    }
+    // The normalized script pair (no reporting module, no network).
+    const ensurePath = join(cliRoot, name, 'scripts', 'ensure_cli.sh');
+    const ensure = readFileSync(ensurePath, 'utf8');
+    assert.match(ensure, /OPTIONAL/i, `${name}: ensure_cli.sh must frame the wrapper as optional`);
+    assert.doesNotMatch(ensure, />> ~\/\.bashrc/, `${name}: ensure_cli.sh must not persist PATH`);
+    assert.doesNotMatch(ensure, /ln -sf/, `${name}: ensure_cli.sh must not symlink into system dirs`);
+    const entry = readFileSync(join(cliRoot, name, 'scripts', 'cli', 'cli_entry.py'), 'utf8');
+    assert.match(entry, /ALLOWED_COMMANDS = \("hcloud",\)/, `${name}: whitelist missing`);
+    for (const banned of ['urlretrieve', 'urllib.request', 'skillsapi.developer.myhuaweicloud.com', 'cli_reporting']) {
+      assert.ok(!entry.includes(banned), `${name}: cli_entry.py must not reference ${banned}`);
+    }
+    assert.ok(
+      !existsSync(join(cliRoot, name, 'scripts', 'cli', 'cli_reporting.py')),
+      `${name}: cli_reporting.py must not ship`,
+    );
+  }
+  // The normalized script pair is shared verbatim across every adopted
+  // skill and ships non-executable (it is invoked via `bash` / `python3`)
+  // — a copy that drifts in content OR file mode fails here (S2's
+  // ensure_cli.sh file-mode fork was the first such silent drift).
+  const reference: string | undefined = adopted.find((name) => present.includes(name));
+  if (reference) {
+    for (const rel of ['scripts/ensure_cli.sh', 'scripts/cli/cli_entry.py']) {
+      const referenceText: string = readFileSync(join(cliRoot, reference, rel), 'utf8');
+      for (const name of adopted) {
+        if (!present.includes(name)) continue;
+        if (process.platform !== 'win32') {
+          assert.equal(
+            statSync(join(cliRoot, name, rel)).mode & 0o111,
+            0,
+            `${name}/${rel} must ship non-executable (invoked via bash/python3)`,
+          );
+        }
+        if (name === reference) continue;
+        assert.equal(
+          readFileSync(join(cliRoot, name, rel), 'utf8'),
+          referenceText,
+          `${name}/${rel} must stay byte-identical to ${reference}/${rel}`,
+        );
+      }
+    }
+    // The scripts directory carries EXACTLY the family pair — main's corpus
+    // shipped extra wrappers (gaussdb_cli.sh region-injector/reporter,
+    // smn_dms_skill.py engine, install_cli.sh deployer) whose doctrine the
+    // adoption rulings strip; a stray script in any adopted skill fails here
+    // (S6's gaussdb_cli.sh drop is the precedent).
+    for (const name of adopted) {
+      if (!present.includes(name)) continue;
+      assert.ok(
+        existsSync(join(cliRoot, name, 'scripts')),
+        `${name}/scripts must exist with the family pair (ensure_cli.sh + cli/cli_entry.py)`,
+      );
+      assert.deepEqual(
+        readdirSync(join(cliRoot, name, 'scripts')).sort((a, b) => a.localeCompare(b)),
+        ['cli', 'ensure_cli.sh'],
+        `${name}/scripts must contain exactly the family pair (ensure_cli.sh + cli/cli_entry.py)`,
+      );
+      assert.deepEqual(
+        readdirSync(join(cliRoot, name, 'scripts', 'cli')).sort((a, b) => a.localeCompare(b)),
+        ['cli_entry.py'],
+        `${name}/scripts/cli must contain exactly cli_entry.py`,
+      );
+    }
+  }
+});
+
+test(
+  'the normalized skill-quality-cli wrapper dispatches run and enforces the whitelist (executing probe)',
+  {
+    skip:
+      !existsSync(
+        join(
+          pluginRoot,
+          'src',
+          'packs',
+          'huaweicloud-cli',
+          'skills',
+          'huawei-cloud-apig-instance-management',
+          'scripts',
+          'cli',
+          'cli_entry.py',
+        ),
+      ) || spawnSync('python3', ['--version']).error !== undefined,
+  },
+  () => {
+    const entry = join(
+      pluginRoot,
+      'src',
+      'packs',
+      'huaweicloud-cli',
+      'skills',
+      'huawei-cloud-apig-instance-management',
+      'scripts',
+      'cli',
+      'cli_entry.py',
+    );
+    // version: dispatch reaches the subcommand (the argparse dest must not
+    // collide with the REMAINDER positional).
+    const version = spawnSync('python3', [entry, 'version'], { encoding: 'utf8', timeout: 30_000 });
+    assert.equal(version.status, 0, version.stderr);
+    assert.match(version.stdout, /skill-quality-cli/);
+    // run: whitelist rejects a non-hcloud child with exit 2 (dispatch +
+    // validation both reachable).
+    const rejected = spawnSync('python3', [entry, 'run', '--', 'ls'], { encoding: 'utf8', timeout: 30_000 });
+    assert.equal(rejected.status, 2, rejected.stderr);
+    assert.match(rejected.stderr, /not allowed by the wrapper whitelist/);
+    // self-check: local sanity summary.
+    const check = spawnSync('python3', [entry, 'self-check'], { encoding: 'utf8', timeout: 30_000 });
+    assert.equal(check.status, 0, check.stderr);
+    assert.match(check.stdout, /network: none|no network/i);
+  },
+);

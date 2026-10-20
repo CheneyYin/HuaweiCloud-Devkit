@@ -263,6 +263,10 @@ const TOOL_DEFINITIONS_LITERALS = [
     description: packDescription('huaweicloud_sandbox_deploy_check'),
   },
   {
+    name: 'huaweicloud_sandbox_expose_tunnel',
+    description: packDescription('huaweicloud_sandbox_expose_tunnel'),
+  },
+  {
     name: 'huaweicloud_sandbox_check_user',
     description: packDescription('huaweicloud_sandbox_check_user'),
   },
@@ -285,6 +289,10 @@ const TOOL_DEFINITIONS_LITERALS = [
   {
     name: 'huaweicloud_voucher_claim',
     description: packDescription('huaweicloud_voucher_claim'),
+  },
+  {
+    name: 'huaweicloud_competition_voucher_claim',
+    description: packDescription('huaweicloud_competition_voucher_claim'),
   },
   {
     name: 'huaweicloud_check_update',
@@ -631,11 +639,15 @@ function serviceCatalog(intent: string = '') {
       skills: ['huawei-cce'],
       services: ['CCE', 'SWR'],
     },
-    { keywords: ['apig', 'api gateway', 'publish', 'throttle'], skills: ['huawei-apig'], services: ['APIG'] },
+    {
+      keywords: ['apig', 'api gateway', 'publish', 'throttle'],
+      skills: ['huawei-cloud-apig-instance-management'],
+      services: ['APIG'],
+    },
     { keywords: ['rds', 'mysql', 'postgresql', 'database', 'db'], skills: ['huawei-rds'], services: ['RDS'] },
     {
       keywords: ['gaussdb', 'distributed', 'sharding', 'opengauss'],
-      skills: ['huawei-gaussdb'],
+      skills: ['huawei-cloud-gaussdb-instance-management'],
       services: ['GaussDB'],
     },
     {
@@ -645,7 +657,7 @@ function serviceCatalog(intent: string = '') {
     },
     {
       keywords: ['dew', 'secret', 'kms', 'encrypt', 'decrypt', 'certificate', 'csms'],
-      skills: ['huawei-dew'],
+      skills: ['huawei-cloud-dew-key-management'],
       services: ['CSMS', 'KMS'],
     },
     {
@@ -660,12 +672,12 @@ function serviceCatalog(intent: string = '') {
     },
     {
       keywords: ['waf', 'aad', 'ddos', 'firewall', 'web protection'],
-      skills: ['huawei-waf-aad'],
+      skills: ['huawei-cloud-waf-aad-rule-management'],
       services: ['WAF', 'AAD'],
     },
     {
-      keywords: ['smn', 'dms', 'notification', 'message', 'kafka', 'rabbitmq'],
-      skills: ['huawei-smn-dms'],
+      keywords: ['smn', 'dms', 'notification', 'message', 'kafka', 'rabbitmq', 'rocketmq'],
+      skills: ['huawei-cloud-smn-dms-message'],
       services: ['SMN', 'DMS'],
     },
     {
@@ -673,11 +685,15 @@ function serviceCatalog(intent: string = '') {
       skills: ['huawei-cloud-eye'],
       services: ['CES'],
     },
-    { keywords: ['cts', 'audit', 'trace', 'tracker'], skills: ['huawei-cts'], services: ['CTS'] },
+    {
+      keywords: ['cts', 'audit', 'trace', 'tracker'],
+      skills: ['huawei-cloud-cts-trace-management'],
+      services: ['CTS'],
+    },
     { keywords: ['cbr', 'backup', 'restore', 'vault', 'snapshot'], skills: ['huawei-cbr'], services: ['CBR'] },
     {
       keywords: ['deployment', 'deploy', 'ci/cd', 'pipeline', 'release'],
-      skills: ['huawei-deployment'],
+      skills: ['huawei-cloud-deployment-task-management'],
       services: ['CloudDeploy'],
     },
     {
@@ -701,7 +717,7 @@ function serviceCatalog(intent: string = '') {
     },
     {
       keywords: ['dds', 'dcs', 'mongodb', 'redis', 'memcached', 'cache', 'document db'],
-      skills: ['huawei-dds-dcs'],
+      skills: ['huawei-cloud-dds-dcs-instance-management'],
       services: ['DDS', 'DCS'],
     },
     {

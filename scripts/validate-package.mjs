@@ -151,6 +151,26 @@ for (const file of walk(join(pluginRoot, 'skills')).concat(walk(join(pluginRoot,
       assert.fail(`${file}: download URL pins cli/${m[1]}, expected cli/${kooCliVersion}`);
     }
     assert.doesNotMatch(line, /hwcloudcli\.obs\.cn-north-1/, `${file}: stale hwcloudcli endpoint`);
+    // The one-liner script is the only allowed cli/latest form, and it lives on
+    // the hdn-koocli bucket (S3 review caught a 404 wrong-bucket URL that all
+    // three earlier checks let through). The trigger anchors on URLs that end
+    // in the script so a doc link beside a mere mention is not flagged; the
+    // KOO_CLI_BASE constant is pinned directly because the installer assembles
+    // its URL from it (no literal URL on that line).
+    if (/https?:\/\/\S*hcloud_install\.sh/.test(line)) {
+      assert.match(
+        line,
+        /cn-north-4-hdn-koocli\.obs\.cn-north-4\.myhuaweicloud\.com\/cli\/(latest|\d+\.\d+\.\d+)\/hcloud_install\.sh/,
+        `${file}: hcloud_install.sh URL must use the hdn-koocli bucket`,
+      );
+    }
+    if (/KOO_CLI_BASE\s*=/.test(line) && /https?:\/\//.test(line)) {
+      assert.match(
+        line,
+        /https:\/\/cn-north-4-hdn-koocli\.obs\.cn-north-4\.myhuaweicloud\.com\/cli/,
+        `${file}: KOO_CLI_BASE must point at the hdn-koocli bucket`,
+      );
+    }
   }
 }
 console.log(`Validated KooCLI version pairing: ${kooCliVersion}.`);

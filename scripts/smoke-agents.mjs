@@ -34,6 +34,7 @@ function cleanEnv(extra = {}) {
   // Clear ambient overrides BEFORE merging the caller's extra, so a caller
   // can re-pin what it needs (the officeace row sets OFFICE_CLAW_CONFIG_ROOT).
   const env = { ...process.env };
+  env.HUAWEICLOUD_SKIP_HCLOUD_PREINSTALL = '1';
   // The installer honors these ambient overrides (XDG-aware opencode root,
   // CODEX_HOME cache cleanup, per-agent home dirs, devkit-owned state); an
   // ambient value would push fake-HOME installs into real state.

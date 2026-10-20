@@ -88,6 +88,25 @@ const INTENT_TABLE: IntentRow[] = [
     run: () => ({ stdout: DEPLOY_CHECK_ALL_PASS }),
   },
   {
+    // exposeTunnel's auth waterfall. Anchored on its EXACT first line —
+    // the double-quoted PATH export is unique to the probe script (the
+    // connect flow's PATH export is unquoted) — and MUST sit above the
+    // generic `export-path` row or the probe would match it and answer
+    // empty stdout (authMode '' → ok:false UNKNOWN, silently wrong).
+    intent: 'devbridge-auth-probe',
+    pattern: /^export PATH="\$HOME\/\.huawei\/bin:\$PATH"$/,
+    run: () => ({ stdout: DEVBRIDGE_AUTH_KEYRING_STDOUT }),
+  },
+  {
+    // exposeTunnel's expose script AND its retry-cleanup blob — the latter
+    // is a single ;-joined line whose prefix is the same pkill, so the
+    // anchor must NOT be $-terminated. Synthesizes a healthy tunnel
+    // answer for both callers.
+    intent: 'devbridge-expose-script',
+    pattern: /^pkill -f "devbridge host" 2>\/dev\/null \|\| true/,
+    run: () => ({ stdout: DEVBRIDGE_EXPOSE_OK_STDOUT }),
+  },
+  {
     intent: 'echo',
     pattern: /^echo\s+(.*)$/,
     run: (m) => ({ stdout: `${m[1]}\n` }),
@@ -242,6 +261,19 @@ export const DEPLOY_CHECK_ALL_PASS = [
   'SCORE:6/6',
   'TUNNEL_URL:https://e2e-tunnel-1-8080.devbridge-s2.hwtunnel.com',
   'VERDICT:COMPLETE',
+].join('\n');
+
+// The devbridge auth/expose vocabularies the fake synthesizes — pinned the
+// same both-ways contract through parseDevbridgeAuthOutput /
+// parseDevbridgeExposeOutput in test/ws-exec-protocol.test.ts.
+export const DEVBRIDGE_AUTH_KEYRING_STDOUT = ['DB_AUTH_MODE=API_KEY_KEYRING'].join('\n');
+
+export const DEVBRIDGE_EXPOSE_OK_STDOUT = [
+  'DB_HOST_LOG=',
+  'Tunnel URL: https://e2e-tunnel-1-8080.devbridge-s2.hwtunnel.com',
+  'DB_TUNNEL_URL=https://e2e-tunnel-1-8080.devbridge-s2.hwtunnel.com',
+  'DB_HTTP_CODE=200',
+  'DB_QUOTA_ERROR=0',
 ].join('\n');
 
 // The client's ready command embeds the nonce as the printf argument

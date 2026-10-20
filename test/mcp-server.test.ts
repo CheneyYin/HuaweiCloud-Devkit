@@ -6,6 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { isAbsolute, join } from 'node:path';
 import test from 'node:test';
 
+// Never let the spawned stdio server kick off a REAL background KooCLI
+// install from inside a test run (cold-cache boxes would download).
+process.env.HUAWEICLOUD_SKIP_HCLOUD_PREINSTALL = '1';
+
 const root = fileURLToPath(new URL('..', import.meta.url));
 const serverPath = join(root, 'plugins', 'huaweicloud-core', 'src', 'mcp-server.ts');
 

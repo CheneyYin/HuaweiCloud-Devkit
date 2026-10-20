@@ -60,6 +60,43 @@ export function loadPolicy(path: string = policyPath): Policy {
 
 const DEFAULT_POLICY = loadPolicy();
 
+// The secret-read vocabulary for the TEXT faces (joined args, raw text,
+// quote-stripped shadow) is DERIVED from policy.blockedSecretOperations —
+// the same source the py hook compiles SECRET_READ_RE from — so the layers
+// share one vocabulary by construction instead of by editing discipline.
+// Only entries that are a prefix of another entry (ShowSecret is a stem of
+// ShowSecretVersion) get boundary guards: the stem must not substring-match
+// longer operations or stem-containing resource names (ShowSecretsConfig,
+// showsecret-demo), while self-specific entries keep substring semantics so
+// quote-mangled shadows (download'secret') stay denied in both layers.
+// Empty-string entries are dropped; an empty list yields a NEVER-MATCHING
+// pattern so an absent/emptied field degrades like the py layer (which
+// skips the gate entirely) instead of matching everything.
+export function deriveSecretOperationAlternation(ops: readonly string[]): string {
+  const entries = ops.filter((op) => op !== '');
+  if (entries.length === 0) return '(?!)';
+  return entries
+    .map((op) => {
+      const l = op.toLowerCase();
+      // Identity compares the ORIGINAL strings (matching the py closure)
+      // so case-variant duplicate entries cannot silently change guard
+      // semantics in one layer only.
+      const isStem = entries.some((other) => other !== op && other.toLowerCase().startsWith(l));
+      const escaped = l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return isStem ? `(?<![A-Za-z0-9._/-])${escaped}(?![A-Za-z0-9._/-])` : escaped;
+    })
+    .join('|');
+}
+
+const SECRET_OP_ALTERNATION = deriveSecretOperationAlternation(DEFAULT_POLICY.blockedSecretOperations);
+// Joined-args face: static value-shape extras plus the derived entries.
+const SECRET_ARGS_RE = new RegExp(`secret[_-]?string|secret[_-]?binary|${SECRET_OP_ALTERNATION}`, 'i');
+// Raw-text face: derived entries plus the static value-shape extras.
+const SECRET_TEXT_RE = new RegExp(`${SECRET_OP_ALTERNATION}|secret_string|secret_binary`, 'i');
+// Shadow face: derived entries only — the py layer has no secret_string
+// vocabulary, so carrying the static extras here would split the layers.
+const SECRET_SHADOW_RE = new RegExp(SECRET_OP_ALTERNATION, 'i');
+
 function regexFrom(pattern: string): RegExp {
   return new RegExp(pattern, 'i');
 }
@@ -136,25 +173,8 @@ export function redactSecrets(value: unknown, policy: Policy = DEFAULT_POLICY): 
 // `--` boundary (npm's own separator legitimately precedes the bin:
 // `npx -- huaweicloud-devkit …`).
 function unwrapSecretExecWrapper(args: string[]): string[] | null {
-  const isDevkitBin = (token: string): boolean => {
-    // npx version specs (@latest, @2.3.0) are stripped before matching.
-    const base = token.toLowerCase().split('@')[0]!;
-    const names = [
-      'huaweicloud-devkit',
-      'huaweicloud-devkit.js',
-      'huaweicloud-devkit.cjs',
-      'huaweicloud-devkit.mjs',
-      'huaweicloud-devkit.ts',
-      'huaweicloud-devkit.exe',
-      'setup-cli.js',
-      'setup-cli.mjs',
-      'setup-cli.ts',
-      'setup.cjs',
-    ];
-    return names.some((name) => base === name || base.endsWith(`/${name}`) || base.endsWith(`\\${name}`));
-  };
   for (let i = 0; i + 2 < args.length; i++) {
-    if (!isDevkitBin(String(args[i]))) continue;
+    if (!matchesBinName(String(args[i]), DEVKIT_BIN_NAMES)) continue;
     // npm's own separator may sit between the bin and the subcommand
     // (`npm exec huaweicloud-devkit -- secret exec …`); skipping `--`
     // tokens here is safe — the devkit CLI itself takes no `--` before its
@@ -166,6 +186,202 @@ function unwrapSecretExecWrapper(args: string[]): string[] | null {
     const dd = args.indexOf('--', j + 2);
     if (dd < 0 || dd + 1 >= args.length) continue;
     return args.slice(dd + 1);
+  }
+  return null;
+}
+
+// Shared bin-token normalization for the wrapper seams. A trailing
+// @version spec (npx pkg@latest) is stripped — but never a path segment
+// (/opt/sqc@old/bin keeps its @). Leading `$(` / `$` runs are stripped
+// (substitution heads; a bare `$bin` variable is the known fail-closed
+// corner — isHcloudToken has the same property). Quote/backslash/dollar
+// mangling is normalized because the tokenizer keeps mid-token quoting
+// while the shell still executes the canonical bin (`skill'-'quality'-'cli`).
+// `<` is deliberately NOT stripped: a `<hcloud` token is a redirection, and
+// matching one as "the hcloud child" manufactures a child the classifier
+// then has to rescue — the segment splitter consumes live `<(` before
+// tokenization, so nothing real reaches the predicate with a leading `<`.
+function normalizeBinToken(token: string): string {
+  return String(token)
+    .toLowerCase()
+    .replace(/@[^/\\]*$/, '')
+    .replace(/^[$(]+/, '')
+    .replace(/['"`$\\]/g, '');
+}
+
+// Bin-name matching tries BOTH the raw token (Windows `\`-qualified paths
+// keep their separators — normalizing first would strip them and dead-code
+// every `\\name` branch) and the normalized form (POSIX quote/escape
+// mangling — `skill\-quality\-cli`).
+function matchesBinName(token: string, names: readonly string[]): boolean {
+  const raw = String(token)
+    .toLowerCase()
+    .replace(/@[^/\\]*$/, '');
+  const norm = normalizeBinToken(token);
+  return names.some(
+    (n) =>
+      raw === n ||
+      raw.endsWith(`/${n}`) ||
+      raw.endsWith(`\\${n}`) ||
+      norm === n ||
+      norm.endsWith(`/${n}`) ||
+      norm.endsWith(`\\${n}`),
+  );
+}
+
+const DEVKIT_BIN_NAMES = [
+  'huaweicloud-devkit',
+  'huaweicloud-devkit.js',
+  'huaweicloud-devkit.cjs',
+  'huaweicloud-devkit.mjs',
+  'huaweicloud-devkit.ts',
+  'huaweicloud-devkit.exe',
+  'setup-cli.js',
+  'setup-cli.mjs',
+  'setup-cli.ts',
+  'setup.cjs',
+] as const;
+
+const SKQ_BIN_NAMES = ['skill-quality-cli', 'skill-quality-cli.exe', 'skill-quality-cli.bin'] as const;
+
+// The `skill-quality-cli run` wrapper the adopted huawei-cloud-* service
+// skills teach: hcloud commands ride behind it so quality reporting can
+// attribute the run. Unwrapped so the embedded hcloud child keeps the
+// classification bare hcloud would get — the wrapper must not launder the
+// write gate (same doctrine as the secret-exec seam). Bin spellings match
+// bare, path-qualified, .exe (pip Windows shims) and .bin (the ELF tier
+// the installer deploys), normalized for quote mangling. Between the bin
+// and `run`, `-`-prefixed tokens (npm's `--`, the --no-auto-upgrade
+// global, any flag we do not know) are skipped until the `run` token; a
+// non-flag token there is a different subcommand — abort. The child
+// separator decision lives INSIDE the flag walk: a bare `--` while still
+// scanning flags ends the scan (everything after is the verbatim child,
+// leading `--`s stripped the way argparse strips them); the first
+// non-flag token ends it the same way. Known value-carrying flags
+// (--skill-name/--session-id/--json) skip their value token; when that
+// value token is itself an hcloud bin, the child starts AT the hcloud
+// token (wrapper-ambiguous — the deny composes). When the no-separator
+// walk yields a child whose head is NOT an hcloud bin but an hcloud bin
+// token sits later in the tail, the flag grammar was unknown to us (an
+// unrecognized value flag consumed the head) — the child starts at that
+// hcloud token instead, for the same reason. The scan covers EVERY token
+// (a wrapper bin earlier in the line only skips that position) — so prose
+// that mentions a wrapped write, and heredoc/quoted data quoting one,
+// also deny; that is the seam's inherited doctrine, deliberately.
+const SKQ_VALUE_FLAGS = new Set(['--skill-name', '--session-id', '--json']);
+
+function isHcloudBinToken(token: string): boolean {
+  const t = normalizeBinToken(token);
+  return t === 'hcloud' || t.endsWith('/hcloud') || t === 'hcloud.exe';
+}
+
+// A shell/eval token that actually heads a SCRIPT command (bash -c
+// <script>, eval <script>) — the re-base targets for the wrapper fallbacks.
+// A bare `bash deploy.sh` (no -c) is NOT a script head: re-basing to it
+// would feed the script filename into operation classification.
+function isScriptCommandHead(args: string[], idx: number): boolean {
+  const s = String(args[idx]).toLowerCase();
+  const base = basenameOf(s);
+  const shellLike = SHELL_FIRST_TOKENS.has(s) || (base !== s && SHELL_FIRST_TOKENS.has(base));
+  if (shellLike) {
+    const flag = idx + 1 < args.length ? String(args[idx + 1]) : '';
+    return /^-[a-z]*c$/i.test(flag) && idx + 2 < args.length;
+  }
+  return s === 'eval' && idx + 1 < args.length;
+}
+
+// Where the wrapper's grammar model says the CHILD starts, judged from a
+// value-slot: a token index (the grammar child head — an hcloud bin or a
+// script head reached through the wrapper's own flag grammar; the re-base
+// composes the deny from there), -1 (a `--` separator is still reachable —
+// the separator's child is authoritative and the walk continues to the
+// `--` branch), or -2 (the flag region ends at a non-child token — the
+// slot re-base stands, fail closed). A script-head slot IS the child
+// (bash -c <script> / eval <script>) — handled by the caller, never here.
+function grammarChildAt(args: string[], from: number): number {
+  let n = from;
+  while (n < args.length) {
+    const t = String(args[n]);
+    if (t === '--') return -1;
+    if (!t.startsWith('-')) break;
+    if (!t.includes('=') && SKQ_VALUE_FLAGS.has(t.toLowerCase())) {
+      n += 2;
+      continue;
+    }
+    n++;
+  }
+  if (n >= args.length) return -1;
+  const t = String(args[n]);
+  if (isHcloudBinToken(t) || isScriptCommandHead(args, n)) return n;
+  return -2;
+}
+
+function unwrapSkillQualityCli(args: string[]): string[] | null {
+  for (let i = 0; i + 1 < args.length; i++) {
+    if (!matchesBinName(args[i]!, SKQ_BIN_NAMES)) continue;
+    let j = i + 1;
+    while (j < args.length && String(args[j]).startsWith('-')) j++;
+    if (j >= args.length) continue;
+    if (normalizeBinToken(String(args[j])) !== 'run') {
+      // A non-flag token before `run` is either a different subcommand or
+      // an unknown value-carrying flag's VALUE occupying the position —
+      // the same laundering shape the post-run fallback closes. Fail
+      // closed ONLY when a real child follows the hcloud bin: a trailing
+      // lone `hcloud` token is a subcommand argument, not a child.
+      const hcloudBeforeRun = args.findIndex((t, idx) => idx > j && isHcloudBinToken(String(t)));
+      if (hcloudBeforeRun > 0 && hcloudBeforeRun + 1 < args.length) return args.slice(hcloudBeforeRun);
+      continue;
+    }
+    let k = j + 1;
+    while (k < args.length) {
+      const tok = String(args[k]);
+      if (tok === '--') {
+        let s = k + 1;
+        while (s < args.length && String(args[s]) === '--') s++;
+        if (s < args.length) return args.slice(s);
+        break;
+      }
+      if (tok.startsWith('-')) {
+        k++;
+        if (!tok.includes('=') && SKQ_VALUE_FLAGS.has(tok.toLowerCase()) && k < args.length) {
+          // Wrapper-ambiguous value slot — the shell cannot tell whether
+          // the flag consumed the token, so the worst-case parse controls:
+          // a script-head slot IS the child UNLESS the wrapper's `--`
+          // separator directly follows (then the separator's child is
+          // authoritative); an hcloud slot resolves through the grammar
+          // model — grammar child (deny composes from there), separator
+          // (authoritative — the walk continues), or slot re-base (fail
+          // closed); never when the token is trailing (a value, not a
+          // child).
+          const slotIsHcloud = isHcloudBinToken(String(args[k]));
+          const slotIsScript = isScriptCommandHead(args, k);
+          if ((slotIsHcloud || slotIsScript) && k + 1 < args.length) {
+            if (slotIsScript) {
+              if (String(args[k + 1]) !== '--') return args.slice(k);
+            } else {
+              const grammarChild = grammarChildAt(args, k + 1);
+              if (grammarChild === -2) return args.slice(k);
+              if (grammarChild >= 0) return args.slice(grammarChild);
+            }
+          }
+          k++;
+        }
+        continue;
+      }
+      // REMAINDER walk: the child head must be an hcloud bin for the
+      // wrapper to be hcloud-bearing; anything else means unknown flag
+      // grammar — fall back to the first hcloud bin with a following
+      // token (a lone trailing hcloud is an argument, not a child), then
+      // to the first script command head (bash -c / eval children
+      // classify exactly like their `--`-separated twins), then to the
+      // verbatim child.
+      if (isHcloudBinToken(tok)) return args.slice(k);
+      const hcloudAt = args.findIndex((t, idx) => idx > k && isHcloudBinToken(String(t)));
+      if (hcloudAt > 0 && hcloudAt + 1 < args.length) return args.slice(hcloudAt);
+      const scriptAt = args.findIndex((t, idx) => idx > k && isScriptCommandHead(args, idx));
+      if (scriptAt > 0) return args.slice(scriptAt);
+      return args.slice(k);
+    }
   }
   return null;
 }
@@ -326,6 +542,11 @@ function unwrapShellAndWrappers(args: string[]): string[] {
     const secretExecChild = unwrapSecretExecWrapper(current);
     if (secretExecChild) {
       current = secretExecChild;
+      continue;
+    }
+    const sqcChild = unwrapSkillQualityCli(current);
+    if (sqcChild) {
+      current = sqcChild;
       continue;
     }
     break;
@@ -576,9 +797,20 @@ function findHcloudCommandSegments(text: unknown, depth = 0): string[][] {
     const tokens = splitSimpleCommand(scannerSegments[s]!);
     // Nested scripts, BEFORE any unwrapping flattens them: a quoted
     // `bash -c`/`eval` argument is itself a command line whose separators
-    // are live commands; the secret-exec wrapper's child may be one.
+    // are live commands. Wrapper unwrapping runs to a FIXPOINT (an sqc
+    // child that is itself a secret-exec or sqc invocation reaches its
+    // innermost script too) — one level per wrapper kind would miss
+    // same-wrapper compositions with compound inner scripts.
     if (depth < 4) {
-      for (const candidate of [tokens, unwrapSecretExecWrapper(tokens) ?? []]) {
+      const candidates: string[][] = [tokens];
+      let cursor = tokens;
+      for (let n = 0; n < 4; n++) {
+        const next = unwrapSecretExecWrapper(cursor) ?? unwrapSkillQualityCli(cursor);
+        if (!next) break;
+        candidates.push(next);
+        cursor = next;
+      }
+      for (const candidate of candidates) {
         const nested = scriptOf(candidate);
         if (nested !== null) {
           out.push(...findHcloudCommandSegments(nested, depth + 1));
@@ -701,7 +933,7 @@ export function classifyHcloudArgs(args: unknown, options: ClassifyOptions = {})
     };
   }
 
-  if (/secret[_-]?string|secret[_-]?binary|showsecretversion|getsecretvalue/i.test(joined)) {
+  if (SECRET_ARGS_RE.test(joined)) {
     return {
       decision: 'deny',
       risk: 'secret',
@@ -962,7 +1194,7 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
   // `-devkit` suffix so the devkit bin name does not feed the family token;
   // `export -p` and `declare`/`typeset` are dump forms of the same class.
   const CRED_ENV_NAMES =
-    '(?:HUAWEICLOUD(?!-devkit)|HWC_|HCLOUD_|OS_|HW_(?:ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY))';
+    '(?:HUAWEICLOUD(?!-devkit)|HWC_|HCLOUD_|OS_|HW_(?:ACCESS_KEY|SECRET_KEY|SECRET_ACCESS_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY))';
   if (
     /(^|\s)(env|printenv|export\s+-p|declare|typeset|set|Get-ChildItem\s+Env:|gci\s+Env:|dir\s+Env:)(?![A-Za-z0-9_-])/i.test(
       shadowText,
@@ -998,7 +1230,9 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
 
   // Credential variable references bypass the env-command gate above: HW_ is
   // the plugin's own documented credential prefix (HW_ACCESS_KEY/HW_SECRET_KEY/
-  // HW_SECURITY_TOKEN), and `echo $HW_SECRET_KEY` / `printenv HW_ACCESS_KEY`
+  // HW_SECURITY_TOKEN), cloud environments also expose the AWS-style
+  // HUAWEICLOUD_SECRET_ACCESS_KEY spelling (#770), and `echo $HW_SECRET_KEY` /
+  // `printenv HW_ACCESS_KEY`
   // previously fell through to allow (#650 D4-2).
   //
   // The negative lookbehind exempts literal-NAME references — backslash-escaped
@@ -1016,10 +1250,10 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
   // wrongly exempted that.
   const unSingleQuoted = text.replace(/'[^']*'/g, '');
   if (
-    /(?<!['\\])\$\{?(?:HUAWEICLOUD|HWC|HW|OS)_(?:ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY)/i.test(
+    /(?<!['\\])\$\{?(?:HUAWEICLOUD|HWC|HW|OS)_(?:ACCESS_KEY|SECRET_KEY|SECRET_ACCESS_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY)/i.test(
       unSingleQuoted,
     ) ||
-    /(?:^|\s)printenv\s+.*(?:HUAWEICLOUD|HWC|HW|OS)_(?:ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY)/i.test(
+    /(?:^|\s)printenv\s+.*(?:HUAWEICLOUD|HWC|HW|OS)_(?:ACCESS_KEY|SECRET_KEY|SECRET_ACCESS_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY)/i.test(
       shadowText,
     )
   ) {
@@ -1030,20 +1264,26 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
     };
   }
 
+  // Secret-retrieval vocabulary on the raw text AND the quote-stripped
+  // shadow — the py hook searches both (a quote-mangled `show'secret'`
+  // token is still a secret read), so the layers must agree. This check
+  // runs BEFORE the hcloud routing return so a compound payload with
+  // mangled vocabulary in a non-hcloud trailing segment (py's whole-payload
+  // shadow) cannot slip past the TS face.
+  if (SECRET_TEXT_RE.test(text) || SECRET_SHADOW_RE.test(shadowText)) {
+    return {
+      decision: 'deny',
+      risk: 'secret',
+      reason: 'Direct secret value retrieval patterns are blocked.',
+    };
+  }
+
   // Routing on the shadow with a boundary class that admits `/`, `(`, and
   // backtick before the bin: path-qualified (`/usr/bin/hcloud`) and
   // substituted (`$(hcloud …)`) invocations must reach classification, not
   // just whitespace-preceded bare names.
   if (/(^|[^a-z0-9.-])hcloud(\.exe)?\s+/i.test(shadowText)) {
     return classifyHcloudArgs(splitSimpleCommand(text), { ...options, rawCommand: text });
-  }
-
-  if (/ShowSecretVersion|GetSecretValue|secret_string|secret_binary/i.test(text)) {
-    return {
-      decision: 'deny',
-      risk: 'secret',
-      reason: 'Direct secret value retrieval patterns are blocked.',
-    };
   }
 
   return applyRawCommandRiskRules(

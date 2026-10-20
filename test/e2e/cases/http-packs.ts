@@ -292,6 +292,26 @@ function wsSandboxFixtures(): CaseFixtures {
 
 export const wsSandboxCases: E2eCase[] = [
   {
+    // expose_tunnel: the verdict lands in the tool RESULT, so the honest
+    // gates are script DELIVERY and recognition on the ws channel plus
+    // toolCall ok — the output grammar is pinned cross-tier in
+    // ws-exec-protocol.test.ts (fake synthesis ↔ parseDevbridge*Output).
+    id: 'sandbox-expose-tunnel',
+    pack: 'sandbox',
+    prompt:
+      '连接华为云沙箱(不需要配置 git 仓库),然后用 huaweicloud_sandbox_expose_tunnel 把端口 8080 暴露成公网 URL(先用 deploy_nginx 的 port 字段规则,这里直接用 8080)。把返回的公网 URL 告诉我。',
+    fixtures: wsSandboxFixtures(),
+    expect: [
+      CONNECT_POST,
+      { kind: 'toolCall', name: 'huaweicloud_sandbox_expose_tunnel', ok: true },
+      { kind: 'ws', intent: 'devbridge-auth-probe', times: { min: 1, max: 1 } },
+      { kind: 'ws', intent: 'devbridge-expose-script', times: { min: 1, max: 2 } },
+    ],
+    softExpect: [{ kind: 'agentSays', text: { any: ['devbridge-s2.hwtunnel.com', 'e2e-tunnel-1'] } }],
+    budget: { timeoutMs: 420_000, attempts: 2 },
+  },
+
+  {
     id: 'sandbox-exec-one-shot-ws',
     pack: 'sandbox',
     prompt:

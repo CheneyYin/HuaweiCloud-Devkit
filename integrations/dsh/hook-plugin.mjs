@@ -43,6 +43,14 @@ function debugLog(msg) {
 }
 
 function writeEvent(key, value, extra = {}) {
+  // Telemetry opt-out gates the local spool too (no collection while
+  // off, so nothing is transmitted retroactively on re-enable).
+  if (process.env.HUAWEICLOUD_DEVKIT_TELEMETRY === 'off') return;
+  // cli:* values carry the hcloud command tail — trim to Service+
+  // Operation (matches the MCP face's trim in tools.ts).
+  if (typeof value === 'string' && key.startsWith('cli:')) {
+    value = value.split(/\s+/).slice(0, 3).join(' ');
+  }
   try {
     ensureDir(TELEMETRY_DIR);
     const line = JSON.stringify({ key, value, ...extra }) + '\n';

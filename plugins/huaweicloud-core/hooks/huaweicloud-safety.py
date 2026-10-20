@@ -12,6 +12,7 @@ plugin hooks.
 """
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -40,9 +41,25 @@ def load_policy():
         cred_patterns = policy.get("credentialFilePatterns", [])
         if cred_patterns:
             CONFIG_FILE_RE = re.compile("|".join(cred_patterns), re.I)
-        blocked_secrets = policy.get("blockedSecretOperations", [])
+        blocked_secrets = [op for op in policy.get("blockedSecretOperations", []) if op != ""]
         if blocked_secrets:
-            SECRET_READ_RE = re.compile("|".join(re.escape(op) for op in blocked_secrets), re.I)
+            # Only entries that are a PREFIX of another entry (ShowSecret is
+            # a stem of ShowSecretVersion) get boundary guards, so the stem
+            # does not substring-match longer operations or stem-containing
+            # resource names (ShowSecretsConfig, showsecret-demo). The
+            # self-specific entries stay unguarded: their substring
+            # semantics on the quote-stripped shadow must match the TS
+            # layer's unguarded alternatives or the layers drift.
+            def _secret_pattern(op):
+                pattern = re.escape(op)
+                is_stem = any(
+                    other != op and other.lower().startswith(op.lower()) for other in blocked_secrets
+                )
+                if is_stem:
+                    pattern = r"(?<![A-Za-z0-9._/-])" + pattern + r"(?![A-Za-z0-9._/-])"
+                return pattern
+
+            SECRET_READ_RE = re.compile("|".join(_secret_pattern(op) for op in blocked_secrets), re.I)
         blocked_configure = policy.get("blockedConfigureSubcommands", [])
         if blocked_configure:
             global BLOCKED_CONFIGURE_SUBCOMMANDS
@@ -65,7 +82,7 @@ def load_policy():
 load_policy()
 
 ENV_DUMP_RE = re.compile(
-    r"(^|\s)(env|printenv|export\s+-p|declare|typeset|set|Get-ChildItem\s+Env:|gci\s+Env:|dir\s+Env:)(?![A-Za-z0-9_-]).*(HUAWEICLOUD(?!-devkit)|HWC_|HCLOUD_|OS_|HW_(?:ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY))",
+    r"(^|\s)(env|printenv|export\s+-p|declare|typeset|set|Get-ChildItem\s+Env:|gci\s+Env:|dir\s+Env:)(?![A-Za-z0-9_-]).*(HUAWEICLOUD(?!-devkit)|HWC_|HCLOUD_|OS_|HW_(?:ACCESS_KEY|SECRET_KEY|SECRET_ACCESS_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY))",
     re.I,
 )
 HCLOUD_RE = re.compile(r"(^|\s)hcloud(\.exe)?\s+", re.I)
@@ -75,13 +92,13 @@ READ_OPERATION_RE = re.compile(r"\b(List|Show|Get|Describe|NovaList|NovaShow)\w*
 # command. The negative lookbehind exempts backslash-escaped or single-quoted
 # names (the shell never expands those), so this stays on RAW text.
 CRED_EXPANSION_RE = re.compile(
-    r"(?<!['\\])\$\{?(?:HUAWEICLOUD|HWC|HW|OS)_(?:ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY)",
+    r"(?<!['\\])\$\{?(?:HUAWEICLOUD|HWC|HW|OS)_(?:ACCESS_KEY|SECRET_KEY|SECRET_ACCESS_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY)",
     re.I,
 )
 # printenv with a bare credential name: a command-name gate, so it runs on
 # the quote-stripped shadow (quoting a command name does not stop it).
 PRINTENV_CRED_RE = re.compile(
-    r"(^|\s)printenv\s+.*(?:HUAWEICLOUD|HWC|HW|OS)_(?:ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY)",
+    r"(^|\s)printenv\s+.*(?:HUAWEICLOUD|HWC|HW|OS)_(?:ACCESS_KEY|SECRET_KEY|SECRET_ACCESS_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY)",
     re.I,
 )
 
@@ -122,12 +139,19 @@ def allow():
 
 
 def record_cli_event(text):
+    # Telemetry opt-out gates the local spool too (no collection while
+    # off, so nothing is transmitted retroactively on re-enable).
+    if os.environ.get("HUAWEICLOUD_DEVKIT_TELEMETRY") == "off":
+        return
     m = HCLOUD_RE.search(text)
     if not m:
         return
     rest = text[m.end():].strip()
     parts = rest.split()
     cmd = " ".join(p for p in parts if not p.startswith("--") and not p.startswith("-") and "=" not in p)
+    # Trim to Service+Operation: no file paths / bucket names ride along
+    # (matches the MCP face's trim in tools.ts).
+    cmd = " ".join(cmd.split()[:2])
     if not cmd:
         return
     is_read = bool(READ_OPERATION_RE.search(cmd))
@@ -259,8 +283,7 @@ REVEAL_PAIR_RE = re.compile(r"(?:^|\s)secret\s+get\b", re.I)
 
 
 def _is_devkit_bin(token):
-    base = token.lower().split("@")[0]
-    return any(base == n or base.endswith("/" + n) or base.endswith("\\" + n) for n in DEVKIT_BIN_NAMES)
+    return _matches_bin_name(token, DEVKIT_BIN_NAMES)
 
 
 def _unwrap_secret_exec(tokens):
@@ -281,6 +304,146 @@ def _unwrap_secret_exec(tokens):
             continue
         if dd + 1 < len(tokens):
             return tokens[dd + 1:]
+    return None
+
+
+SKQ_VALUE_FLAGS = {"--skill-name", "--session-id", "--json"}
+SKQ_BIN_NAMES = ("skill-quality-cli", "skill-quality-cli.exe", "skill-quality-cli.bin")
+
+
+def _normalize_bin_token(token):
+    """Strip a trailing @version spec (never a path segment), leading $/$(
+    runs, and quote/backslash/dollar mangling the tokenizer preserves but
+    the shell removes. `<` is deliberately NOT stripped: a `<hcloud` token
+    is a redirection, not an hcloud invocation."""
+    base = str(token).lower()
+    base = re.sub(r"@[^/\\]*$", "", base)
+    base = re.sub(r"^[$(]+", "", base)
+    return re.sub(r"['\"`$\\]", "", base)
+
+
+def _matches_bin_name(token, names):
+    """Try BOTH the raw token (Windows \\-qualified paths keep their
+    separators) and the normalized form (POSIX quote/escape mangling)."""
+    raw = re.sub(r"@[^/\\]*$", "", str(token).lower())
+    norm = _normalize_bin_token(token)
+    return any(
+        raw == n or raw.endswith("/" + n) or raw.endswith("\\" + n) or norm == n or norm.endswith("/" + n) or norm.endswith("\\" + n)
+        for n in names
+    )
+
+
+def _is_hcloud_bin(token):
+    t = _normalize_bin_token(token)
+    return t == "hcloud" or t.endswith("/hcloud") or t == "hcloud.exe"
+
+
+def _is_script_command_head(tokens, idx):
+    """A shell/eval token that actually heads a SCRIPT command (bash -c
+    <script>, eval <script>) — the re-base target for the wrapper
+    fallbacks. A bare `bash deploy.sh` (no -c) is NOT a script head."""
+    s = str(tokens[idx]).lower()
+    base = basename_of(s)
+    shell_like = s in SHELL_FIRST or (base != s and base in SHELL_FIRST)
+    if shell_like:
+        flag = str(tokens[idx + 1]) if idx + 1 < len(tokens) else ""
+        return bool(re.match(r"^-[a-z]*c$", flag, re.I)) and idx + 2 < len(tokens)
+    return s == "eval" and idx + 1 < len(tokens)
+
+
+def _grammar_child_at(tokens, start):
+    """Where the wrapper's grammar model says the CHILD starts, judged from
+    a value-slot: a token index (grammar child head — hcloud bin or script
+    head reached through the wrapper's own flag grammar; the re-base
+    composes the deny from there), -1 (a `--` separator is still reachable
+    — the separator's child is authoritative and the walk continues), or
+    -2 (the flag region ends at a non-child token — the slot re-base
+    stands, fail closed). A script-head slot IS the child — handled by the
+    caller, never here."""
+    n = start
+    while n < len(tokens):
+        t = str(tokens[n])
+        if t == "--":
+            return -1
+        if not t.startswith("-"):
+            break
+        if "=" not in t and t.lower() in SKQ_VALUE_FLAGS:
+            n += 2
+            continue
+        n += 1
+    if n >= len(tokens):
+        return -1
+    if _is_hcloud_bin(tokens[n]) or _is_script_command_head(tokens, n):
+        return n
+    return -2
+
+
+def _unwrap_skill_quality(tokens):
+    """Mirror of the TS unwrapSkillQualityCli: `skill-quality-cli run
+    [flags] [--] <child>` — bare/path-qualified/.exe/.bin bins (quote
+    mangled too), unknown -prefixed tokens skipped before `run`, the
+    separator decision INSIDE the flag walk, and REMAINDER fallbacks to
+    the first hcloud bin (with a following token) or script command head
+    when the flag grammar is unknown. The wrapper must not launder the
+    write gate."""
+    for i in range(len(tokens) - 1):
+        if not _matches_bin_name(tokens[i], SKQ_BIN_NAMES):
+            continue
+        j = i + 1
+        while j < len(tokens) and str(tokens[j]).startswith("-"):
+            j += 1
+        if j >= len(tokens):
+            continue
+        if _normalize_bin_token(tokens[j]) != "run":
+            # A non-flag token before `run`: different subcommand or an
+            # unknown value flag's VALUE — fail closed only when a real
+            # child follows the hcloud bin (a lone trailing hcloud token is
+            # a subcommand argument, not a child).
+            for idx in range(j + 1, len(tokens) - 1):
+                if _is_hcloud_bin(tokens[idx]):
+                    return tokens[idx:]
+            continue
+        k = j + 1
+        while k < len(tokens):
+            tok = str(tokens[k])
+            if tok == "--":
+                s = k + 1
+                while s < len(tokens) and str(tokens[s]) == "--":
+                    s += 1
+                if s < len(tokens):
+                    return tokens[s:]
+                break
+            if tok.startswith("-"):
+                k += 1
+                if "=" not in tok and tok.lower() in SKQ_VALUE_FLAGS and k < len(tokens):
+                    # Wrapper-ambiguous value slot — worst-case parse
+                    # controls: a script-head slot IS the child UNLESS the
+                    # wrapper's `--` directly follows; an hcloud slot
+                    # resolves through the grammar model.
+                    slot_is_hcloud = _is_hcloud_bin(tokens[k])
+                    slot_is_script = _is_script_command_head(tokens, k)
+                    if (slot_is_hcloud or slot_is_script) and k + 1 < len(tokens):
+                        if slot_is_script:
+                            if str(tokens[k + 1]) != "--":
+                                return tokens[k:]
+                        else:
+                            grammar_child = _grammar_child_at(tokens, k + 1)
+                            if grammar_child == -2:
+                                return tokens[k:]
+                            if grammar_child >= 0:
+                                return tokens[grammar_child:]
+                    k += 1
+                continue
+            if _is_hcloud_bin(tok):
+                return tokens[k:]
+            for idx in range(k + 1, len(tokens) - 1):
+                if _is_hcloud_bin(tokens[idx]):
+                    return tokens[idx:]
+            for idx in range(k + 1, len(tokens)):
+                if _is_script_command_head(tokens, idx):
+                    return tokens[idx:]
+            # No hcloud bin or script head in the tail: the verbatim child.
+            return tokens[k:]
     return None
 
 
@@ -342,6 +505,10 @@ def hcloud_leading_segment(tokens):
             tokens = tokens[1:]
             continue
         child = _unwrap_secret_exec(tokens)
+        if child is not None:
+            tokens = child
+            continue
+        child = _unwrap_skill_quality(tokens)
         if child is not None:
             tokens = child
             continue
@@ -478,9 +645,21 @@ def hcloud_write_blocked(text, depth=0):
     segments = split_shell_segments(text)
     for s, segment in enumerate(segments):
         tokens = split_tokens(segment)
-        # Nested scripts, BEFORE unwrapping flattens them.
+        # Nested scripts, BEFORE unwrapping flattens them. Wrapper
+        # unwrapping runs to a FIXPOINT (same-wrapper compositions with
+        # compound inner scripts reach their innermost script too).
         if depth < 4:
-            for candidate in (tokens, _unwrap_secret_exec(tokens) or []):
+            candidates = [tokens]
+            cursor = tokens
+            for _ in range(4):
+                nxt = _unwrap_secret_exec(cursor)
+                if nxt is None:
+                    nxt = _unwrap_skill_quality(cursor)
+                if nxt is None:
+                    break
+                candidates.append(nxt)
+                cursor = nxt
+            for candidate in candidates:
                 nested = _script_of(candidate)
                 if nested is not None and hcloud_write_blocked(nested, depth + 1):
                     return True
@@ -527,7 +706,7 @@ def _script_of(tokens):
     first = tokens[0].lower()
     base = basename_of(tokens[0]).lower()
     shell_like = first in SHELL_FIRST or (base != first and base in SHELL_FIRST)
-    if shell_like and re.match(r"^-[a-z]*c$", tokens[1], re.I) and len(tokens) > 2:
+    if shell_like and len(tokens) > 2 and re.match(r"^-[a-z]*c$", tokens[1], re.I):
         return tokens[2]
     if first == "eval" and len(tokens) > 1:
         return tokens[1]

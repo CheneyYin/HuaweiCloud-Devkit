@@ -231,6 +231,19 @@ test('python hook blocks quoted credential dumps ($HW_ family parity with TS)', 
   expectHookDecision("echo '$HW_SECRET_KEY is literal'", 'allow');
 });
 
+test('python hook blocks SECRET_ACCESS_KEY spellings and ShowSecret (parity with TS)', () => {
+  expectHookDecision('echo $HUAWEICLOUD_SECRET_ACCESS_KEY', 'deny');
+  expectHookDecision('echo ${HUAWEICLOUD_SECRET_ACCESS_KEY}', 'deny');
+  expectHookDecision('printenv HWC_SECRET_ACCESS_KEY', 'deny');
+  expectHookDecision('env | grep HW_SECRET_ACCESS_KEY', 'deny');
+  expectHookDecision('hcloud CSMS ShowSecret --secret_name prod/db', 'deny');
+  // The ShowSecret token is boundary-guarded in the py layer too: longer
+  // operation names and stem-containing values are not secret reads.
+  expectHookDecision('hcloud CSMS ShowSecretList', 'allow');
+  expectHookDecision('hcloud CSMS ListSecrets --secret_name=showsecret-demo', 'allow');
+  expectHookDecision('hcloud KMS ShowKey', 'allow');
+});
+
 test('python hook: positional write gate, newline payloads, and OBS writes', () => {
   const denyCases = [
     'hcloud ECS ListServers\nhcloud ECS CreateServers --server.name=x',

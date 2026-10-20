@@ -17,6 +17,7 @@ const TIMEOUT_TOOLS: Array<[SandboxToolName, number]> = [
   ['huaweicloud_sandbox_upload_project', SANDBOX_TIMEOUT_MS.upload_project],
   ['huaweicloud_sandbox_deploy_nginx', SANDBOX_TIMEOUT_MS.deploy_nginx],
   ['huaweicloud_sandbox_deploy_check', SANDBOX_TIMEOUT_MS.deploy_check],
+  ['huaweicloud_sandbox_expose_tunnel', SANDBOX_TIMEOUT_MS.expose_tunnel],
 ];
 
 test('sandbox schema text documents the handler timeout defaults', () => {

@@ -339,6 +339,54 @@ npx --yes huaweicloud-devkit proxy clear   # 删除代理配置
 
 环境变量 `HTTPS_PROXY`、`HTTP_PROXY`、`NO_PROXY` 优先级高于文件配置——可使用 `proxy show` 查看最终生效的设置。
 
+## 遥测
+
+HuaweiCloud DevKit 收集**匿名**遥测数据，以了解使用模式并改进插件。遥测**默认开启**。
+
+### 收集哪些数据
+
+- **安装 ID** — 基于机器指纹（主机名 + MAC 地址 + OS 类型 + home 目录）生成的 SHA-256 哈希。原始值不会被发送或存储。
+- **用户哈希** — 服务端生成的用户标识哈希（由华为云后端 `check-user` / `generatorUserIDHash` API 生成）。本地缓存后随每次事件发送，非本地 PII 派生。
+- **插件版本** — 已安装的 `huaweicloud-devkit` 版本。
+- **Agent harness** — 正在运行的 AI 编码助手（如 `opencode`、`codex`、`codearts`）。
+- **Agent 版本** — Agent 版本号。
+- **OS 类型和版本** — 如 `Linux`、`Darwin`、`Windows_NT`。
+- **Capability** — 事件触发方式：`mcp`（MCP 工具调用）或 `cli`（CLI 命令），由事件 key 派生。
+- **事件类型** — 发生了什么，如 `plugin:install`（安装）、`plugin:first_use`（首次使用）、`dau:active_today`（日活）、`tool:<工具名>`（工具调用）、`skill:retrieve`（技能加载）、`sandbox:connect`（沙箱连接）。
+- **事件值** — 简短的脱敏字符串（最长 255 字符，换行符/制表符已清除）。工具事件通常为 `1`；技能加载事件为技能名称；CLI 事件为截断后的 `hcloud <Service> <Operation>` 命令摘要——不包含任何参数、路径或值。
+
+### **不**收集哪些数据
+
+- 不收集 AK/SK、访问密钥或任何凭据
+- 不收集用户输入、提示词或代码内容
+- 不收集 IP 地址
+- 不收集个人可识别信息（PII）
+- 不收集文件路径或项目名称
+
+### 数据如何传输
+
+MCP 工具事件在内存中排队；CLI 事件先暂存于本地文件（插件目录下的 `telemetry/hook-events.jsonl`）并在下一轮刷新时摄取。事件每 60 秒批量（每批最多 100 条）通过 HTTP POST 发送到华为云遥测端点。传输过程遵循你的代理配置。发送失败最多重试 3 次后丢弃。
+
+### 禁用遥测（Opt-Out）
+
+设置环境变量：
+
+```bash
+export HUAWEICLOUD_DEVKIT_TELEMETRY=off
+```
+
+设置为 `off` 后，不会收集或传输任何遥测事件。
+
+### 调试模式
+
+如需记录遥测活动以供排查：
+
+```bash
+export HUAWEICLOUD_DEVKIT_DEBUG=true
+```
+
+调试日志写入插件的 `telemetry/telemetry-debug.log` 文件。
+
 ## 功能特性
 
 - **引导式云操作** — Agent 获得 20+ 常用华为云服务的分步操作指引（ECS、OBS、VPC、RDS、GaussDB、FunctionGraph、APIG、CCE 等）
@@ -346,7 +394,7 @@ npx --yes huaweicloud-devkit proxy clear   # 删除代理配置
 - **执行前风险检查** — 公网暴露、凭证泄露、破坏性操作在执行前即被拦截
 - **区域感知** — 自动发现可用区域，创建资源前检查服务可用性
 - **沙箱（DevStation）** — 临时云端运行环境，部署 Web 应用并即刻获得公网预览地址
-- **能力包（50 个 MCP 工具）** — 内置十个能力包（core 12 个工具；huaweicloud-cli 承载 20 个服务技能外加 7 个 KooCLI 执行工具；sandbox、auth、obs、voucher、update、discovery、huaweicloud-open-mcp、secrets 合计其余 31 个）。huaweicloud-open-mcp 包经本地 huaweicloud-open-mcp 网关代理华为云全量 OpenAPI 目录，统一走一个泛型调用工具（`huaweicloud_gateway_call`：search_apis → list_apis → get_api 发现链，execute_api 由网关 policy engine 把关同意；网关可用 pip 或 uv 安装，PATH 上有 `uvx` 即无需持久安装）。用 `huaweicloud_list_packs` → `huaweicloud_pack_info` 发现能力包，用 `huaweicloud_list_skills` 一次调用浏览有效技能目录（每个已启用包的技能名称、描述、版本与引用文件名；stdio 会话的载荷还携带 `skillRoot`——技能树绝对路径；哪些技能**已启用**由 pack 开关决定且可在运行时变化，不在目录里的 `huawei-*` 服务技能属于被裁剪的包——六个 `huaweicloud-*` 元技能按设计不进目录、始终可用），同机安装默认直读 `<skillRoot>/<name>/SKILL.md` 与 `references/`（stdio 会话的 MCP 服务器 instructions 在 initialize 即给出树路径，仅为了开始读取无需先调目录；教学行为是动作优先——先尝试直读，尝试本身就是可达性检查，不做预判），直读失败/被拒时才回退 `huaweicloud_retrieve_skill`（该工具无需文件权限），绝不反复请求。（受门控、带遥测、remote 面依赖的可移植回退路径，其 stdio 载荷同样携带 `skillRoot`；六个核心元技能在目录加载型 agent 上额外以原生副本安装以获得系统提示可见性）。可用 `DEVKIT_PACKS` 裁剪启用面（逗号分隔的包 id，如 `DEVKIT_PACKS=core,sandbox`）；未设置即全量启用，未知 id 启动即报错，core（包元数据、安全与发现面）始终强制包含——裁剪 huaweicloud-cli 会同时移除 CLI 执行面及其审批工具。stdio 会话内可用 `huaweicloud_packs_configure` 即时开关能力包（仅会话内生效，刷新后的工具列表立即推给 agent，重启会话即回到操作者姿态；无状态 remote 面不提供该工具）。安装后可用 `npx huaweicloud-devkit packs status | enable <ids> | disable <ids> | all [--target <agent>]` 持久管理启用面：该命令直接改写各已安装 agent MCP 配置里的 `DEVKIT_PACKS`（安装期 `--packs` 不会覆盖已有值），重启会话后生效。
+- **能力包（52 个 MCP 工具）** — 内置十个能力包（core 12 个工具；huaweicloud-cli 承载 20 个服务技能外加 7 个 KooCLI 执行工具；sandbox、auth、obs、voucher、update、discovery、secrets、huaweicloud-open-mcp 合计其余 33 个）。huaweicloud-open-mcp 包经本地 huaweicloud-open-mcp 网关代理华为云全量 OpenAPI 目录，统一走一个泛型调用工具（`huaweicloud_gateway_call`：search_apis → list_apis → get_api 发现链，execute_api 由网关 policy engine 把关同意；网关可用 pip 或 uv 安装，PATH 上有 `uvx` 即无需持久安装）。用 `huaweicloud_list_packs` → `huaweicloud_pack_info` 发现能力包，用 `huaweicloud_list_skills` 一次调用浏览有效技能目录（每个已启用包的技能名称、描述、版本与引用文件名；stdio 会话的载荷还携带 `skillRoot`——技能树绝对路径；哪些技能**已启用**由 pack 开关决定且可在运行时变化，不在目录里的 `huawei-*` 服务技能属于被裁剪的包——六个 `huaweicloud-*` 元技能按设计不进目录、始终可用），同机安装默认直读 `<skillRoot>/<name>/SKILL.md` 与 `references/`（stdio 会话的 MCP 服务器 instructions 在 initialize 即给出树路径，仅为了开始读取无需先调目录；教学行为是动作优先——先尝试直读，尝试本身就是可达性检查，不做预判），直读失败/被拒时才回退 `huaweicloud_retrieve_skill`（该工具无需文件权限），绝不反复请求。（受门控、带遥测、remote 面依赖的可移植回退路径，其 stdio 载荷同样携带 `skillRoot`；六个核心元技能在目录加载型 agent 上额外以原生副本安装以获得系统提示可见性）。可用 `DEVKIT_PACKS` 裁剪启用面（逗号分隔的包 id，如 `DEVKIT_PACKS=core,sandbox`）；未设置即全量启用，未知 id 启动即报错，core（包元数据、安全与发现面）始终强制包含——裁剪 huaweicloud-cli 会同时移除 CLI 执行面及其审批工具。stdio 会话内可用 `huaweicloud_packs_configure` 即时开关能力包（仅会话内生效，刷新后的工具列表立即推给 agent，重启会话即回到操作者姿态；无状态 remote 面不提供该工具）。安装后可用 `npx huaweicloud-devkit packs status | enable <ids> | disable <ids> | all [--target <agent>]` 持久管理启用面：该命令直接改写各已安装 agent MCP 配置里的 `DEVKIT_PACKS`（安装期 `--packs` 不会覆盖已有值），重启会话后生效。
 
 Harness 权限说明（工作目录外的技能树读取）：上文的通用教学行为是直读失败/被拒时回退 `huaweicloud_retrieve_skill`，绝不反复请求。OpenCode 安装器会写入持久权限缝（对技能树 glob 的 external_directory allow + edit deny）；其他 harness 上若弹窗困扰，操作者可在其自身配置里预授权技能树。权限缝的真实语义：allow 覆盖一切带路径工具（含 bash——被 allow 的外部目录继承工作区默认），bash 介导的树写入也不再询问，edit deny 只罩编辑工具族；技能树每次安装/更新都会再生，devkit 的 PreToolUse hook 仍拒绝 hcloud 写操作。
 

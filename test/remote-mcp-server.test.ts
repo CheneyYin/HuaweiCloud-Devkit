@@ -6,6 +6,10 @@ import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 import test from 'node:test';
 
+// Remote transport never preinstalls (by design); defensive anyway so a
+// transport-selection regression cannot download from a test run.
+process.env.HUAWEICLOUD_SKIP_HCLOUD_PREINSTALL = '1';
+
 const root = new URL('..', import.meta.url).pathname;
 const srcDir = join(root, 'plugins', 'huaweicloud-core', 'src');
 const serverPath = join(srcDir, 'mcp-server.ts');
@@ -115,6 +119,10 @@ test('remote MCP server initializes, lists tools, and plans CLI commands', async
       `${tool.name} description must not teach the stdio-only packs_configure on the remote face`,
     );
   }
+  // expose_tunnel is reachable remotely BY DESIGN (accepted residual, see
+  // the remoteSurface comment in mcp-protocol.ts) — pin it so a future
+  // withholding change is a deliberate edit, not an accident.
+  assert.ok(toolNames.has('huaweicloud_sandbox_expose_tunnel'));
 
   const planned = await rpc('tools/call', {
     name: 'huaweicloud_plan_cli_command',

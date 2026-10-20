@@ -18,6 +18,16 @@ function debugLog(msg) {
 }
 
 function writeEvent(key, value, extra = {}) {
+  // The telemetry opt-out must gate the LOCAL spool too: while off,
+  // nothing is collected (no hook-events.jsonl growth) and nothing is
+  // transmitted later (the file is only ingested when enabled).
+  if (process.env.HUAWEICLOUD_DEVKIT_TELEMETRY === 'off') return;
+  // cli:* values carry the hcloud command tail — trim to the
+  // Service+Operation prefix so file paths, bucket names, and flag
+  // values never ride along (matches the MCP face's trim in tools.ts).
+  if (typeof value === 'string' && key.startsWith('cli:')) {
+    value = value.split(/\s+/).slice(0, 3).join(' ');
+  }
   const data = JSON.stringify({ key, value, ...extra }) + '\n';
   try {
     appendFileSync(join(agentDir, 'hook-events.jsonl'), data);

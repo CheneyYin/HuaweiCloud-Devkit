@@ -16,25 +16,28 @@ Domain expertise for billing queries (BSS). Covers cost tracking, bill details, 
 
 ## Critical Warnings
 
-| Trap                                      | Why                                                                                                                                                                                                                                                                                                                                                           |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Bills delayed ~24h                        | Yesterday's costs may not appear until the next day                                                                                                                                                                                                                                                                                                           |
-| BSS Admin role needed                     | IAM user must have BSS Administrator or Finance role                                                                                                                                                                                                                                                                                                          |
-| Currency conversion varies                | Cross-region costs use daily exchange rates                                                                                                                                                                                                                                                                                                                   |
-| Region fixed to cn-north-1                | BSS operations only support `--cli-region=cn-north-1` in KooCLI. This is a KooCLI metadata limitation — the billing data itself covers all regions.                                                                                                                                                                                                           |
-| English catalog missing BSS               | `Unsupported service: BSS` under the default `en` language is a KooCLI catalog gap, not a missing service. devkit detects it and advises the supported fix `hcloud configure set --cli-lang=cn` (switch is global-only; KooCLI has no per-command `--cli-lang` flag). Running with Chinese mode from the start (see Prerequisites) avoids the issue entirely. |
-| `缺少必填参数 cli-domain-id` / APIGW.0301 | Invalid credentials — KooCLI can't resolve the account-id                                                                                                                                                                                                                                                                                                     | Re-run `npx huaweicloud-devkit auth init` |
+| Trap                                  | Why                                                                                                                                                                                                                                                                                                                                                           |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bills delayed ~24h                    | Yesterday's costs may not appear until the next day                                                                                                                                                                                                                                                                                                           |
+| BSS Admin role needed                 | IAM user must have BSS Administrator or Finance role                                                                                                                                                                                                                                                                                                          |
+| Currency conversion varies            | Cross-region costs use daily exchange rates                                                                                                                                                                                                                                                                                                                   |
+| Region fixed to cn-north-1            | BSS operations only support `--cli-region=cn-north-1` in KooCLI. This is a KooCLI metadata limitation — the billing data itself covers all regions.                                                                                                                                                                                                           |
+| English catalog missing BSS           | `Unsupported service: BSS` under the default `en` language is a KooCLI catalog gap, not a missing service. devkit detects it and advises the supported fix `hcloud configure set --cli-lang=cn` (switch is global-only; KooCLI has no per-command `--cli-lang` flag). Running with Chinese mode from the start (see Prerequisites) avoids the issue entirely. |
+| Partner vs Customer-level APIs        | BSS splits operations by caller identity. Customer-level APIs (`ShowCustomerAccountBalances`, `ListCustomerBillsFeeRecords`, `ListCustomerCouponChangeRecords`) work with a normal IAM user. Partner-level APIs (`ListQuotaCoupons`, `ListSubCustomerCoupons`) require a partner/dealer identity.                                                             |
+| APIGW.0301 is identity, not domain-id | `APIGW.0301: invalid x-security-token` on a BSS Partner-level API means the caller identity is not a partner — a customer credential is rejected. This is NOT a missing `cli-domain-id` and NOT invalid AK/SK. Switch to the Customer-level API below that matches the current identity.                                                                      |
 
 ## Common Workflows
 
-| Task                 | Operation                                                              |
-| -------------------- | ---------------------------------------------------------------------- |
-| List costs           | `ListCosts --cli-region=cn-north-1 --project_id=<p>`                   |
-| List customer bills  | `ListCustomerBillsFeeRecords --cli-region=cn-north-1 --project_id=<p>` |
-| List resource usage  | `ListResourceUsage --cli-region=cn-north-1 --project_id=<p>`           |
-| List sub-customers   | `ListConsumeSubCustomers --cli-region=cn-north-1 --project_id=<p>`     |
-| Show account balance | `ShowCustomerAccountBalances --cli-region=cn-north-1`                  |
-| List conversions     | `ListConversions --cli-region=cn-north-1 --project_id=<p>`             |
+| Task                       | Identity | Operation                                                              |
+| -------------------------- | -------- | ---------------------------------------------------------------------- |
+| List costs                 | Customer | `ListCosts --cli-region=cn-north-1 --project_id=<p>`                   |
+| List customer bills        | Customer | `ListCustomerBillsFeeRecords --cli-region=cn-north-1 --project_id=<p>` |
+| Show account balance       | Customer | `ShowCustomerAccountBalances --cli-region=cn-north-1`                  |
+| List coupon change records | Customer | `ListCustomerCouponChangeRecords --cli-region=cn-north-1`              |
+| List resource usage        | Customer | `ListResourceUsage --cli-region=cn-north-1 --project_id=<p>`           |
+| List conversions           | Customer | `ListConversions --cli-region=cn-north-1 --project_id=<p>`             |
+| List sub-customers         | Partner  | `ListConsumeSubCustomers --cli-region=cn-north-1 --project_id=<p>`     |
+| List quota coupons         | Partner  | `ListQuotaCoupons --cli-region=cn-north-1` (APIGW.0301 for customers)  |
 
 Discover exact parameters with `--help` before executing any command. All BSS operations are read-only.
 

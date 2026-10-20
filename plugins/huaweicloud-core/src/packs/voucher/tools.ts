@@ -1,6 +1,10 @@
 import { z } from 'zod';
 
-import { hdkitVoucherStatus, hdkitVoucherClaim } from '../../lib/hdkit/hdkitservice-api.ts';
+import {
+  hdkitVoucherStatus,
+  hdkitVoucherClaim,
+  hdkitCompetitionVoucherClaim,
+} from '../../lib/hdkit/hdkitservice-api.ts';
 import type { PackToolDefinition, LooseToolSchema } from '../../lib/pack-types.ts';
 import type { CallToolOptions, ToolArgs } from '../../tools.ts';
 
@@ -12,6 +16,10 @@ async function handleVoucherStatus(args: ToolArgs = {}, _opts: CallToolOptions =
 
 async function handleVoucherClaim(args: ToolArgs = {}, _opts: CallToolOptions = {}) {
   return await hdkitVoucherClaim(args.domain_id);
+}
+
+async function handleCompetitionVoucherClaim(args: ToolArgs = {}, _opts: CallToolOptions = {}) {
+  return await hdkitCompetitionVoucherClaim(args.domain_id);
 }
 
 const voucherStatusSchema = z.looseObject({
@@ -42,6 +50,13 @@ export const VOUCHER_TOOLS = [
     schema: voucherClaimSchema,
     handler: handleVoucherClaim,
   },
+  {
+    name: 'huaweicloud_competition_voucher_claim',
+    description:
+      '领取华为开发者大赛·小红书skill创新赛专属华为云代金券。前置条件：用户已完成该赛事报名（后端自动校验，未报名返回 code=HDKIT_NOT_SIGNED_UP）。仅当用户明确要求领取该赛事代金券时调用，不要主动提示。重复领取会返回已领取。',
+    schema: voucherClaimSchema,
+    handler: handleCompetitionVoucherClaim,
+  },
 ] as const satisfies readonly PackToolDefinition[];
 
 export type VoucherToolName = (typeof VOUCHER_TOOLS)[number]['name'];
@@ -52,6 +67,7 @@ export type VoucherToolName = (typeof VOUCHER_TOOLS)[number]['name'];
 export const VOUCHER_TOOL_SCHEMAS: Readonly<Record<VoucherToolName, LooseToolSchema>> = {
   huaweicloud_voucher_status: voucherStatusSchema,
   huaweicloud_voucher_claim: voucherClaimSchema,
+  huaweicloud_competition_voucher_claim: voucherClaimSchema,
 };
 
 // Dispatch map merged into PACK_TOOL_HANDLERS in packs/registry.ts. Typed over
@@ -60,4 +76,5 @@ export const VOUCHER_TOOL_SCHEMAS: Readonly<Record<VoucherToolName, LooseToolSch
 export const VOUCHER_TOOL_HANDLERS: Readonly<Record<VoucherToolName, PackToolDefinition['handler']>> = {
   huaweicloud_voucher_status: handleVoucherStatus,
   huaweicloud_voucher_claim: handleVoucherClaim,
+  huaweicloud_competition_voucher_claim: handleCompetitionVoucherClaim,
 };

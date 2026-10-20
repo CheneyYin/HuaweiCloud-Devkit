@@ -36,7 +36,7 @@ after(() => {
   fs.rmSync(hermeticHome, { recursive: true, force: true });
 });
 
-const { hdkitConnect, hdkitVoucherStatus, hdkitVoucherClaim } =
+const { hdkitConnect, hdkitVoucherStatus, hdkitVoucherClaim, hdkitCompetitionVoucherClaim } =
   await import('../plugins/huaweicloud-core/src/lib/hdkit/hdkitservice-api.ts');
 const { clearRuntimeCredentials } = await import('../plugins/huaweicloud-core/src/auth/credentials.ts');
 
@@ -177,6 +177,44 @@ test('voucher status does NOT include remediation for non-CRED_INVALID errors', 
     assert.equal(result.claimed, false);
     assert.equal(result.code, 'HDKIT_INTERNAL');
     assert.equal(result.remediation, undefined);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('competition voucher claim posts to the competition endpoint and passes through errors', async () => {
+  const originalFetch = global.fetch;
+  const calls: string[] = [];
+  global.fetch = async (url, opts) => {
+    calls.push(`${String(url)} ${(opts as { method?: string }).method ?? ''}`);
+    return new Response(JSON.stringify({ code: 'HDKIT_NOT_SIGNED_UP', message: '未报名该赛事' }), {
+      status: 403,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  try {
+    const result = (await hdkitCompetitionVoucherClaim('some-domain')) as VoucherResult;
+    assert.equal(result.claimed, false);
+    assert.equal(result.code, 'HDKIT_NOT_SIGNED_UP');
+    assert.match(result.message, /HDKIT_NOT_SIGNED_UP/);
+    assert.ok(
+      calls.length === 1 && calls[0]!.includes('/competition/voucher/claim') && calls[0]!.endsWith('POST'),
+      `expected one POST to competition/voucher/claim, got: ${calls.join(', ')}`,
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('competition voucher claim carries its own fallback message on network failure', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => {
+    throw new Error('socket hang up');
+  };
+  try {
+    const result = (await hdkitCompetitionVoucherClaim()) as VoucherResult;
+    assert.equal(result.claimed, false);
+    assert.match(result.message ?? '', /Competition voucher service unavailable|socket hang up/);
   } finally {
     global.fetch = originalFetch;
   }

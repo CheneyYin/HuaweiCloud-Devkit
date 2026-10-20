@@ -345,6 +345,54 @@ Configures HTTP/HTTPS proxy for connections to Huawei Cloud services (e.g. enter
 
 Environment variables `HTTPS_PROXY`, `HTTP_PROXY`, and `NO_PROXY` take precedence over the file configuration — use `proxy show` to inspect the effective settings.
 
+## Telemetry
+
+HuaweiCloud DevKit collects **anonymous** telemetry to understand usage patterns and improve the plugin. Telemetry is **enabled by default**.
+
+### What We Collect
+
+- **Installation ID** — a SHA-256 hash derived from a machine fingerprint (hostname + MAC address + OS type + home directory). The raw values are never sent or stored.
+- **User hash** — a server-generated user identifier hash (produced by the Huawei Cloud backend `check-user` / `generatorUserIDHash` API). It is cached locally and sent with every event; it is not derived from any local PII.
+- **Plugin version** — the installed `huaweicloud-devkit` version.
+- **Agent harness** — which AI coding agent is running (e.g. `opencode`, `codex`, `codearts`).
+- **Agent version** — the agent's version string.
+- **OS type and version** — e.g. `Linux`, `Darwin`, `Windows_NT`.
+- **Capability** — how the event was triggered: `mcp` (MCP tool invocation) or `cli` (CLI command), derived from the event key.
+- **Event type** — what happened, e.g. `plugin:install`, `plugin:first_use`, `dau:active_today` (daily active), `tool:<tool_name>`, `skill:retrieve`, `sandbox:connect`.
+- **Event value** — a short sanitized string (max 255 chars, newlines/tabs stripped). For tool events this is typically `1`; for skill retrieval it is the skill name; for CLI events it is the trimmed `hcloud <Service> <Operation>` command summary — arguments, paths, and values are never included.
+
+### What We Do **Not** Collect
+
+- No AK/SK, access keys, or any credentials
+- No user input, prompts, or code content
+- No IP addresses
+- No personally identifiable information (PII)
+- No file paths or project names
+
+### How Data Is Transmitted
+
+MCP-tool events are queued in memory; CLI events are staged in a local file (`telemetry/hook-events.jsonl` under the plugin directory) and ingested on the next flush. Events are sent in batches (up to 100 events per batch) via HTTP POST to Huawei Cloud's telemetry endpoint every 60 seconds. Transmission respects your proxy configuration. Failed requests are retried up to 3 times, then dropped.
+
+### Disable Telemetry (Opt-Out)
+
+Set the environment variable:
+
+```bash
+export HUAWEICLOUD_DEVKIT_TELEMETRY=off
+```
+
+When set to `off`, no telemetry events are collected or transmitted.
+
+### Debug Mode
+
+To log telemetry activity for troubleshooting:
+
+```bash
+export HUAWEICLOUD_DEVKIT_DEBUG=true
+```
+
+Debug logs are written to the plugin's `telemetry/telemetry-debug.log` file.
+
 ## What It Does
 
 - **Guided cloud operations** — agents get step-by-step guidance for 20+ commonly used Huawei Cloud services (ECS, OBS, VPC, RDS, GaussDB, FunctionGraph, APIG, CCE, and more)
@@ -352,7 +400,7 @@ Environment variables `HTTPS_PROXY`, `HTTP_PROXY`, and `NO_PROXY` take precedenc
 - **Pre-execution risk checks** — public exposure, credential leaks, and destructive operations are caught before they run
 - **Regional awareness** — auto-discovers available regions and checks service availability before creating resources
 - **Sandbox (DevStation)** — temporary cloud runtime for web app deployment with instant public URL preview
-- **Capability packs (50 MCP tools)** — the devkit ships ten packs (core 12 tools; huaweicloud-cli carries the 20 service skills plus the 7 KooCLI execution tools; sandbox, auth, obs, voucher, update, discovery, huaweicloud-open-mcp, secrets for the rest). The huaweicloud-open-mcp pack proxies Huawei Cloud's full OpenAPI catalog through the local huaweicloud-open-mcp gateway with one generic call tool (`huaweicloud_gateway_call`: search_apis → list_apis → get_api discovery, execute_api with gateway-engine-gated consent; install the gateway with pip or uv, or just have `uvx` on PATH — no persistent install needed). Discover packs with `huaweicloud_list_packs` → `huaweicloud_pack_info`, browse the effective skill catalog with `huaweicloud_list_skills` (every enabled pack's skills with name, description, version, and reference filenames in one call, plus `skillRoot` — the tree's absolute location; which skills are ENABLED is pack-gated and can change at runtime, so a `huawei-*` service skill absent from the catalog belongs to a trimmed pack — the six `huaweicloud-*` meta-skills never appear in it and are always available), read the skill files directly under `skillRoot` on a same-machine install (the stdio server instructions state the location at initialize, so no catalog call is needed just to start reading; the taught policy is action-first — attempt the direct read, the attempt itself is the reachability check), and fall back to `huaweicloud_retrieve_skill` only when the attempted read fails or is denied — the taught reaction is falling back (the loader needs no file access), never repeatedly requesting. (the gated, telemetry-bearing, portable fallback, whose stdio payload also carries `skillRoot`; the six core meta-skills are additionally installed as native skill copies on directory-loading agents for system-prompt visibility). Trim the surface with `DEVKIT_PACKS` (comma-separated pack ids, e.g. `DEVKIT_PACKS=core,sandbox`); unset means all packs, unknown ids fail fast at startup, and core (pack meta, safety and discovery surface) is always included — trimming huaweicloud-cli removes the CLI execution face and its approval tools together. In a live stdio agent session, `huaweicloud_packs_configure` enables or disables packs on the spot (session-scoped; the refreshed tool list is pushed to the agent, and restarting the session restores the operator posture; the stateless remote surface does not carry it). Manage the surface persistently after install with `npx huaweicloud-devkit packs status | enable <ids> | disable <ids> | all [--target <agent>]`: the command rewrites `DEVKIT_PACKS` inside every installed agent's MCP config (the install-time `--packs` flag never overwrites an existing value), and the change takes effect on the agent's next session restart.
+- **Capability packs (52 MCP tools)** — the devkit ships ten packs (core 12 tools; huaweicloud-cli carries the 20 service skills plus the 7 KooCLI execution tools; sandbox, auth, obs, voucher, update, discovery, secrets, huaweicloud-open-mcp for the rest). The huaweicloud-open-mcp pack proxies Huawei Cloud's full OpenAPI catalog through the local huaweicloud-open-mcp gateway with one generic call tool (`huaweicloud_gateway_call`: search_apis → list_apis → get_api discovery, execute_api with gateway-engine-gated consent; install the gateway with pip or uv, or just have `uvx` on PATH — no persistent install needed). Discover packs with `huaweicloud_list_packs` → `huaweicloud_pack_info`, browse the effective skill catalog with `huaweicloud_list_skills` (every enabled pack's skills with name, description, version, and reference filenames in one call, plus `skillRoot` — the tree's absolute location; which skills are ENABLED is pack-gated and can change at runtime, so a `huawei-*` service skill absent from the catalog belongs to a trimmed pack — the six `huaweicloud-*` meta-skills never appear in it and are always available), read the skill files directly under `skillRoot` on a same-machine install (the stdio server instructions state the location at initialize, so no catalog call is needed just to start reading; the taught policy is action-first — attempt the direct read, the attempt itself is the reachability check), and fall back to `huaweicloud_retrieve_skill` only when the attempted read fails or is denied — the taught reaction is falling back (the loader needs no file access), never repeatedly requesting. (the gated, telemetry-bearing, portable fallback, whose stdio payload also carries `skillRoot`; the six core meta-skills are additionally installed as native skill copies on directory-loading agents for system-prompt visibility). Trim the surface with `DEVKIT_PACKS` (comma-separated pack ids, e.g. `DEVKIT_PACKS=core,sandbox`); unset means all packs, unknown ids fail fast at startup, and core (pack meta, safety and discovery surface) is always included — trimming huaweicloud-cli removes the CLI execution face and its approval tools together. In a live stdio agent session, `huaweicloud_packs_configure` enables or disables packs on the spot (session-scoped; the refreshed tool list is pushed to the agent, and restarting the session restores the operator posture; the stateless remote surface does not carry it). Manage the surface persistently after install with `npx huaweicloud-devkit packs status | enable <ids> | disable <ids> | all [--target <agent>]`: the command rewrites `DEVKIT_PACKS` inside every installed agent's MCP config (the install-time `--packs` flag never overwrites an existing value), and the change takes effect on the agent's next session restart.
 
 Harness permission notes (skill-tree reads outside the workspace): the taught reaction above is universal — when a direct read fails or is denied, fall back to `huaweicloud_retrieve_skill`, never repeatedly request. The OpenCode installer writes a persistent permission seam (external_directory allow + edit deny over the tree globs); on other harnesses the operator can pre-allow the tree in the harness's own config if prompts bother them. Honest semantics for the seam: the allow covers every path-taking tool including bash (an allowed external directory inherits workspace defaults), so shell-mediated writes to the tree stop asking too — the edit deny governs only the edit tools; the tree is regenerated on every install/update, and the devkit's PreToolUse hook still denies hcloud writes.
 

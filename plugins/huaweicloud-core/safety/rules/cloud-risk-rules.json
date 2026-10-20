@@ -36,7 +36,7 @@
           },
           {
             "field": "text",
-            "regex": "(HUAWEICLOUD(?!-devkit)|HWC_|HCLOUD_|OS_|HW_(?:ACCESS_KEY|SECRET_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY))"
+            "regex": "(HUAWEICLOUD(?!-devkit)|HWC_|HCLOUD_|OS_|HW_(?:ACCESS_KEY|SECRET_KEY|SECRET_ACCESS_KEY|SECURITY_TOKEN|API_KEY|VAULT_MASTER_KEY))"
           }
         ]
       },
@@ -53,7 +53,7 @@
         "any": [
           {
             "field": "text",
-            "regex": "(ShowSecretVersion|DownloadSecret|GetSecretValue)"
+            "regex": "(ShowSecretVersion|(?<![A-Za-z0-9._/-])ShowSecret(?![A-Za-z0-9._/-])|DownloadSecret|GetSecretValue|(?<![A-Za-z0-9._/-])DecryptData(?![A-Za-z0-9._/-])|DecryptDatakey|DownloadAccessPointPrivateKey|DeriveSharedSecret|CreateRsaDatakeyPair|CreateEcDatakeyPair)"
           },
           {
             "field": "text",
@@ -63,6 +63,23 @@
       },
       "message": "The command appears to retrieve plaintext secret values.",
       "remediation": "Use runtime secret references, user-side inspection, or redacted metadata checks instead of returning secret values to the agent."
+    },
+    {
+      "id": "hwc-command-adminpass-exposure",
+      "title": "Plaintext adminPass exposure",
+      "category": "secret",
+      "severity": "warn",
+      "stages": ["artifact", "deploy_plan"],
+      "match": {
+        "any": [
+          {
+            "field": "text",
+            "regex": "(adminPass|admin_pass|admin-password)"
+          }
+        ]
+      },
+      "message": "The artifact or plan contains a plaintext adminPass parameter. The password may be exposed in version control, logs, or agent context.",
+      "remediation": "Use userData cloud-init, KMS/CSMS secret references, or encrypted password injection instead of embedding adminPass as plaintext in deployment files."
     },
     {
       "id": "hwc-command-sts-credential",
@@ -78,8 +95,8 @@
           }
         ]
       },
-      "message": "此操作将返回临时 AK/SK 和 SecurityToken。注意敏感数据保密，不要将凭证输出到日志或分享给第三方。",
-      "remediation": "临时凭证仅用于当前会话，使用完毕后及时销毁，不要持久化存储。"
+      "message": "\u6b64\u64cd\u4f5c\u5c06\u8fd4\u56de\u4e34\u65f6 AK/SK \u548c SecurityToken\u3002\u6ce8\u610f\u654f\u611f\u6570\u636e\u4fdd\u5bc6\uff0c\u4e0d\u8981\u5c06\u51ed\u8bc1\u8f93\u51fa\u5230\u65e5\u5fd7\u6216\u5206\u4eab\u7ed9\u7b2c\u4e09\u65b9\u3002",
+      "remediation": "\u4e34\u65f6\u51ed\u8bc1\u4ec5\u7528\u4e8e\u5f53\u524d\u4f1a\u8bdd\uff0c\u4f7f\u7528\u5b8c\u6bd5\u540e\u53ca\u65f6\u9500\u6bc1\uff0c\u4e0d\u8981\u6301\u4e45\u5316\u5b58\u50a8\u3002"
     },
     {
       "id": "hwc-command-encoded-shell-exec",
@@ -199,6 +216,23 @@
       },
       "message": "The change appears to grant broad administrator permissions.",
       "remediation": "Use least-privilege service actions, resource constraints, and short-lived credentials for generated application workflows."
+    },
+    {
+      "id": "hwc-iam-highrisk-write",
+      "title": "High-risk IAM write operation",
+      "category": "iam",
+      "severity": "warn",
+      "stages": ["command"],
+      "match": {
+        "any": [
+          {
+            "field": "text",
+            "regex": "hcloud(?:\\.exe)?\\s+IAM\\s+(?:Keystone)?(?:Create|Update|Attach|Detach|Delete|Associate|Disassociate)\\w*(?:User|Group|Policy|Role|Agency|Token)\\w*"
+          }
+        ]
+      },
+      "message": "This hcloud command creates or modifies IAM principals (users, policies, roles, or agencies). These operations can grant elevated privileges.",
+      "remediation": "Confirm the principal name, scope, and attached permissions with the user before creating IAM users, policies, roles, or agencies."
     },
     {
       "id": "hwc-destructive-delete-force",
@@ -335,6 +369,27 @@
       "remediation": "Use small preview defaults, explicit quotas, budget labels, and user approval before creating high-cost resources."
     },
     {
+      "id": "hwc-command-secret-in-arg",
+      "title": "Plaintext secret in command argument",
+      "category": "secret",
+      "severity": "warn",
+      "stages": ["command"],
+      "match": {
+        "all": [
+          {
+            "field": "text",
+            "regex": "\\bhcloud\\b"
+          },
+          {
+            "field": "text",
+            "regex": "--(?:[A-Za-z0-9_.-]*[._-])?(?:admin(?:Pass|[_-]pass)|passwd|password|secret(?:[_-]?key)?|access[_-]?key|token|ak|sk)\\b\\s*[=:]\\s*[^\\s<][^\\s<>\"']"
+          }
+        ]
+      },
+      "message": "The command passes a plaintext password or secret as a direct CLI argument, which may leak into shell history, logs, or process listings.",
+      "remediation": "Use environment variables, DEW secret references, or interactive prompts instead of passing secrets as command-line arguments."
+    },
+    {
       "id": "hwc-sandbox-destructive-command",
       "title": "Destructive command in sandbox terminal",
       "category": "destructive",
@@ -356,7 +411,7 @@
           },
           {
             "field": "text",
-            "regex": ":\\\\(\\\\)\\\\{[^}]*\\\\|[^}]*&[^}]*\\\\}[^;]*;:"
+            "regex": ":\\s*\\(\\s*\\)\\s*\\{[^}|]{0,64}\\|[^}|&]{0,64}&[^}|]{0,64}\\}[^;]{0,64};\\s*:"
           },
           {
             "field": "text",

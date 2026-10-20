@@ -252,7 +252,11 @@ export function createDevkitMcpServer({
   // plaintext into ~/.obsutilconfig and the KooCLI profile), and the OBS
   // config fan-out. Ref-consuming sandbox calls remain callable there
   // (values go to the sandbox service, not the caller); that read-seam
-  // residual is accepted, loopback-bound, and documented.
+  // residual is accepted, loopback-bound, and documented. sandbox_
+  // expose_tunnel joins the same accepted residual deliberately: it opens
+  // a PUBLIC tunnel URL on the operator's sandbox (not a read), bounded by
+  // the server host's own hdkit credentials — same posture as its exec/
+  // deploy siblings, and the connect-before-expose requirement.
   const REMOTE_WITHHELD_LOCAL_WRITERS = new Set([
     'huaweicloud_secret_set',
     'huaweicloud_secret_delete',

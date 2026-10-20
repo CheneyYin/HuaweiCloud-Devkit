@@ -56,7 +56,7 @@
     "postinstall": "node ./bin/dsh-postinstall.cjs"
   },
   "dependencies": {
-    "undici": "^8.10.0"
+    "undici": "^8.12.2"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

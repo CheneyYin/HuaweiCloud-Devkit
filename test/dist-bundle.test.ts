@@ -5,6 +5,10 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
+// The spawned bundle must not kick off a REAL background KooCLI install
+// from inside a test run.
+process.env.HUAWEICLOUD_SKIP_HCLOUD_PREINSTALL = '1';
+
 const root = fileURLToPath(new URL('..', import.meta.url));
 const distDir = join(root, 'plugins', 'huaweicloud-core', 'dist');
 const distServer = join(distDir, 'mcp-server.js');
