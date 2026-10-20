@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.10-next.2 (2026-10-20)
+
+- docs(huawei-ecs): large-user_data JSON-file path — keep the MCP approval channel
+
 ## Unreleased
 
 - docs(huawei-ecs): large-user_data JSON-file path (--skeleton / --cli-jsonInput / --dryrun) + anti-pattern warning against abandoning the MCP approval channel (#964)
