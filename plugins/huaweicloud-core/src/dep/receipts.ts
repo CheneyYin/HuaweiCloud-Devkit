@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -290,25 +290,69 @@ function acquireLock(dir: string, takeoverMs: number = LOCK_TAKEOVER_MS): void {
   const lock = lockDirPath(dir);
   const deadline = Date.now() + takeoverMs;
   for (;;) {
+    // Identity of the directory THIS iteration creates at the lock path —
+    // the claim is only complete once the pid file lands in THAT directory.
+    // Round-9 (CI, live-reproduced under CPU load): a past-deadline rival
+    // takes the empty dir over between the mkdir and the pid write, and the
+    // preempted creator then either threw ENOENT out of withDepLock
+    // (crashing the caller — the observed [0,1]) or its write landed in the
+    // rival's REPLACEMENT dir, overwriting the rival's pid and letting both
+    // processes hold at once (the observed overlaps). The identity re-stat
+    // after the write closes both: a directory that is no longer the one we
+    // created means the claim was lost — re-contend instead of entering the
+    // section. ino + birthtimeMs together discriminate a recycled-inode
+    // replacement (same ino, later birth time); on filesystems reporting
+    // neither (some Windows/network mounts) the check degrades to a no-op
+    // and only the ENOENT catch below remains.
     try {
       mkdirSync(lock);
       // Written into our OWN directory after the atomic claim: no other
       // process ever sees this file half-written, and no other process ever
       // writes it. The mkdir alone is the claim; the pid file is the
       // attribution takeovers judge on.
+      const claimed = statSync(lock);
       writeFileSync(join(lock, LOCK_PID_FILE), `${process.pid}\n`);
+      const rechecked = statSync(lock);
+      if (rechecked.ino !== claimed.ino || rechecked.birthtimeMs !== claimed.birthtimeMs) {
+        sleepSync(LOCK_POLL_MS);
+        continue;
+      }
       return;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const code = (error as NodeJS.ErrnoException).code;
+      // EEXIST: the path is held, contend for it below. ENOENT: our fresh
+      // claim was taken over (renamed away) before the pid write could land
+      // — a lost claim, never a crash. Anything else is a real error.
+      if (code !== 'EEXIST' && code !== 'ENOENT') throw error;
     }
     const holder = readHolderPid(dir);
+    // A live holder is waited out for as long as ITS OWN claim is younger
+    // than the takeover window — the claim's age, not this waiter's
+    // patience, is the wedgedness truth. Measuring the window on the
+    // waiter's clock (the old `Date.now() < deadline` here) misjudges a
+    // claim that STARTED after the waiter's deadline expired — the round-9
+    // overlap, live-reproduced under CPU load: two past-deadline
+    // contenders, the second seizing the first's fresh claim mid-section.
+    // The pid file is written once, at claim time, so its mtime is the
+    // claim's birth certificate; an unreadable one means the holder state
+    // just changed — re-read on the next poll, never seize on stale data.
+    if (holder !== null && isPidAlive(holder)) {
+      let claimIsFresh = true;
+      try {
+        claimIsFresh = Date.now() - statSync(join(lock, LOCK_PID_FILE)).mtimeMs < takeoverMs;
+      } catch {
+        // pid file vanished between the read and this stat: the holder
+        // state changed underneath — treat as fresh so the next poll
+        // re-reads instead of judging on stale data.
+      }
+      if (claimIsFresh) {
+        sleepSync(LOCK_POLL_MS);
+        continue;
+      }
+    }
     // An empty directory (holder mid-create, microseconds) is unknown and
     // never stealable — wait it out; a crashed creator's empty dir is
     // reclaimed only past the takeover window below.
-    if (holder !== null && isPidAlive(holder) && Date.now() < deadline) {
-      sleepSync(LOCK_POLL_MS);
-      continue;
-    }
     if (holder === null && Date.now() < deadline) {
       sleepSync(LOCK_POLL_MS);
       continue;
