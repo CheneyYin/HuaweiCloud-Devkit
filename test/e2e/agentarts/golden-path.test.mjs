@@ -490,12 +490,13 @@ test(
       await stage('S5-destroy', async () => {
         const result = await approvedRun(['destroy', '--yes'], { timeoutMs: 300_000 });
         assert.equal(result.ok, true, `destroy failed: ${(result.stderr || result.error || '').slice(0, 2000)}`);
-        deployed = false;
         // Clean-teardown contract, closed from list output (not just exit
         // output): the runtime disappears from the list. Eventual
         // consistency gets a retry window; a destroy that reports success
         // while the runtime stays listed is the silent-failure class this
-        // e2e exists to catch.
+        // e2e exists to catch. deployed stays TRUE until the disappearance
+        // is verified — a still-listed residue must reach the finally-destroy
+        // cleanup, not just fail the stage.
         let gone = false;
         let lastDetail = '';
         for (let attempt = 0; attempt < 3 && !gone; attempt += 1) {
@@ -509,6 +510,7 @@ test(
           if (!gone && attempt < 2) await new Promise((r) => setTimeout(r, 10_000));
         }
         assert.ok(gone, `agent ${agentName} not gone after destroy — ${lastDetail}`);
+        deployed = false;
         return {};
       });
 
