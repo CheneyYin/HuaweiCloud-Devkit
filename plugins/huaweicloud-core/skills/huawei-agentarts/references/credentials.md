@@ -23,9 +23,12 @@ ALLOWLIST child environment (PATH, HOME, locale, proxy) and injects
 `HUAWEICLOUD_SDK_CREDENTIALS_FILE`) → cloud metadata (last, 3s+3s). Two
 consequences:
 
-- Without env vars the CLI can silently authenticate from a profile file —
-  the wrapper's injection REPLACES, so commands run with exactly the
-  credentials the devkit holds.
+- Without devkit credentials the wrapper REJECTS the run outright (the
+  env-or-fail contract): a clear error pointing at `huaweicloud_auth_init`,
+  never a silent profile hit. When credentials ARE held, injection
+  REPLACES, so commands run with exactly the credentials the devkit holds
+  (and the profile chain is neutralized via
+  HUAWEICLOUD_SDK_CREDENTIALS_FILE=/dev/null as defense in depth).
 - A metadata 404 warning in output means env AND profile both failed — it is
   a failure signature, not noise.
 

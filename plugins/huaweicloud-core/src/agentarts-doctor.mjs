@@ -1,61 +1,28 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-import { resolveAgentartsCommand } from './agentarts-cli.mjs';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-function pinnedSdkVersion() {
-  const pkg = JSON.parse(readFileSync(join(__dirname, '..', '..', '..', 'package.json'), 'utf8'));
-  return pkg.agentartsSdkVersion || null;
-}
+import { resolveAgentartsCommand, pinnedSdkVersion } from './agentarts-cli.mjs';
 
 const VERSION_OUTPUT_RE = /^agentarts version:\s*(\S+)/m;
 
+// Process-level probe cache: the CLI's install state does not change within
+// a server process, and an uncached probe would add a Python interpreter
+// cold-start (and a worst-case 5s hang) to every auth_status call.
+let cachedProbe = null;
+
 // Probe the agentarts CLI: resolve AGENTARTS_BIN || PATH, run `--version`
 // (local metadata, no cloud call), and compare against the pinned
-// agentartsSdkVersion from package.json. Mirrors the hcloud probe contract:
+// agentartsSdkVersion (resolved by pinnedSdkVersion — policy.json first,
+// package.json fallback, never throws). Mirrors the hcloud probe contract:
 // structured result, never throws.
 export function probeAgentarts(options = {}) {
+  if (cachedProbe && !options.force) return cachedProbe;
   const executable = resolveAgentartsCommand();
-  const timeoutMs = options.timeoutMs ?? 10_000;
+  const timeoutMs = options.timeoutMs ?? 5_000;
+  let result;
   try {
-    const result = spawnSync(executable, ['--version'], { encoding: 'utf8', timeout: timeoutMs, windowsHide: true });
-    if (result.error) {
-      return {
-        installed: false,
-        executable,
-        reason: 'not-found',
-        version: null,
-        versionMatches: null,
-        pinned: pinnedSdkVersion(),
-      };
-    }
-    const match = VERSION_OUTPUT_RE.exec(`${result.stdout}\n${result.stderr}`);
-    if (!match) {
-      return {
-        installed: true,
-        executable,
-        reason: 'version-unreadable',
-        version: null,
-        versionMatches: null,
-        pinned: pinnedSdkVersion(),
-      };
-    }
-    const version = match[1];
-    const pinned = pinnedSdkVersion();
-    return {
-      installed: true,
-      executable,
-      reason: null,
-      version,
-      versionMatches: pinned ? version === pinned : null,
-      pinned,
-    };
+    result = spawnSync(executable, ['--version'], { encoding: 'utf8', timeout: timeoutMs, windowsHide: true });
   } catch {
-    return {
+    cachedProbe = {
       installed: false,
       executable,
       reason: 'probe-failed',
@@ -63,7 +30,42 @@ export function probeAgentarts(options = {}) {
       versionMatches: null,
       pinned: pinnedSdkVersion(),
     };
+    return cachedProbe;
   }
+  if (result.error) {
+    cachedProbe = {
+      installed: false,
+      executable,
+      reason: 'not-found',
+      version: null,
+      versionMatches: null,
+      pinned: pinnedSdkVersion(),
+    };
+    return cachedProbe;
+  }
+  const match = VERSION_OUTPUT_RE.exec(`${result.stdout}\n${result.stderr}`);
+  if (!match) {
+    cachedProbe = {
+      installed: true,
+      executable,
+      reason: 'version-unreadable',
+      version: null,
+      versionMatches: null,
+      pinned: pinnedSdkVersion(),
+    };
+    return cachedProbe;
+  }
+  const version = match[1];
+  const pinned = pinnedSdkVersion();
+  cachedProbe = {
+    installed: true,
+    executable,
+    reason: null,
+    version,
+    versionMatches: pinned ? version === pinned : null,
+    pinned,
+  };
+  return cachedProbe;
 }
 
 function probePython() {
@@ -103,7 +105,7 @@ export function checkAgentarts(options = {}) {
   if (!cli.installed) {
     warnings.push('agentarts CLI not found');
     nextSteps.push(
-      `pip install agentarts-sdk==${cli.pinned || '0.1.7'} (set AGENTARTS_BIN when installed outside PATH)`,
+      `pip install agentarts-sdk==${cli.pinned || 'the pinned version'} (set AGENTARTS_BIN when installed outside PATH)`,
     );
   } else if (cli.pinned && cli.versionMatches === false) {
     warnings.push(`agentarts ${cli.version} != pinned ${cli.pinned}`);

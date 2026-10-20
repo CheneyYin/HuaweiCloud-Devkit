@@ -1,5 +1,6 @@
 {
   "version": "0.1.0",
+  "agentartsSdkVersion": "0.1.7",
   "secretKeyNamePatterns": [
     "access[_-]?key",
     "secret[_-]?key",

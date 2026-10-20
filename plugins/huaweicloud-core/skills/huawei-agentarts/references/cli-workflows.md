@@ -31,7 +31,8 @@ Every command shape here is fixture-verified against agentarts-sdk 0.1.7
    → present → run_approved (docker build + SWR push + runtime create)
 5. huaweicloud_agentarts_plan_cli_command
    args: ["invoke","{\"message\":\"hello\"}"]              → approved (execute)
-   → present → run_approved (default 900s timeout)
+   → present → run_approved (wrapper default 900s; the CLI's own request
+   timeout is also 900s)
 6. huaweicloud_agentarts_plan_cli_command
    args: ["destroy"]                                       → approved; the plan
    canonicalizes to `destroy --yes` (non-interactive) — approve THAT form
@@ -59,14 +60,14 @@ Use `--output json` for machine parsing (default is a rich table).
 
 ## Wrapper Rules (why some commands hard-stop)
 
-| Shape                              | Wrapper behavior                                                                                                                                                                      |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--bearer-token` / `-bt` anywhere  | Rejected at plan: argv is process-list visible                                                                                                                                        |
-| bare `agentarts config`            | Hard stop: interactive wizard                                                                                                                                                         |
-| `gateway delete` / `delete-target` | Hard stop: typer.confirm, NO skip flag exists — user terminal only                                                                                                                    |
-| `memory install`/`uninstall`       | Plan requires an explicit target (hermes, claude, codex, opencode, openclaw) AND `--yes`; it writes credentials into the host agent's config — a user decision, never agent-initiated |
-| `memory create`/`update`/`delete`  | Blocked this release (memory scenario ships later) — user terminal                                                                                                                    |
-| `destroy`                          | Plan appends `--yes` (measured non-interactive flag); approval binds to that form                                                                                                     |
+| Shape                              | Wrapper behavior                                                                                                                                                                                           |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--bearer-token` / `-bt` anywhere  | Rejected at plan: argv is process-list visible                                                                                                                                                             |
+| bare `agentarts config`            | Hard stop: interactive wizard                                                                                                                                                                              |
+| `gateway delete` / `delete-target` | Hard stop: typer.confirm, NO skip flag exists — user terminal only                                                                                                                                         |
+| `memory install`/`uninstall`       | Plan requires an explicit target (hermes, claude, codex, opencode, openclaw) — the plan canonicalizes `--yes`; it writes credentials into the host agent's config — a user decision, never agent-initiated |
+| `memory create`/`update`/`delete`  | Blocked this release (memory scenario ships later) — user terminal                                                                                                                                         |
+| `destroy`                          | Plan appends `--yes` (measured non-interactive flag); approval binds to that form                                                                                                                          |
 
 ## Exit Codes Lie
 
@@ -115,6 +116,12 @@ via a scratch HOME.
 - `config set-env` is the documented way to persist
   `HUAWEICLOUD_SDK_AK`-style credentials into the yaml: treat the whole
   config family as credential-bearing (approved tier).
+
+## Wrapper Timeout Defaults (measured)
+
+`launch` 600s (the docker build dominates: ~2-3 min measured), `destroy`
+300s, the invoke family 900s (upload/download included), everything else
+120s. Override per call with `timeoutMs`.
 
 ## runtime Family (data plane)
 

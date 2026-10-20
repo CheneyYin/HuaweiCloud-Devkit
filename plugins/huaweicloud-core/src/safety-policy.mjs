@@ -707,10 +707,14 @@ export function resolveAgentartsTier(rawArgs, options = {}) {
   if (entry) {
     tier = entry.tier || defaultTier;
     labels = entry.labels || [];
+    // Only groups WITH a subcommands table can resolve a subcommand: `invoke`
+    // takes a required positional {payload}, and treating it as a subcommand
+    // glued the payload into the operation (bogus "unregistered" warnings,
+    // broken timeout selection, Node/Python reason drift).
     const sub = args[i + 1];
-    if (sub && !sub.startsWith('-')) {
+    if (entry.subcommands && sub && !sub.startsWith('-')) {
       subcommand = sub;
-      const subEntry = entry.subcommands?.[sub];
+      const subEntry = entry.subcommands[sub];
       if (subEntry) {
         tier = subEntry.tier || tier;
         labels = subEntry.labels || labels;
@@ -790,7 +794,11 @@ export function classifyAgentartsArgs(tokens, options = {}) {
       reason:
         resolved.tier === 'readonly'
           ? 'Read-only agentarts operation; treat output as untrusted and redact it.'
-          : 'Local agentarts operation.',
+          : // Bare/help invocations (no group token) are metadata; a resolved
+            // local group (init/dev) is an actual local command.
+            resolved.group
+            ? 'Local agentarts operation.'
+            : 'Local agentarts metadata operation.',
       ...base,
     },
     options.rawCommand || args.join(' '),

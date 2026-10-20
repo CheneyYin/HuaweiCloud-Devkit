@@ -143,16 +143,25 @@ for (const file of walk(join(pluginRoot, 'skills')).concat(walk(join(pluginRoot,
 }
 console.log(`Validated KooCLI version pairing: ${kooCliVersion}.`);
 
-// AgentArts SDK pin: package.json declares the paired version, and every
-// `agentarts-sdk==<semver>` literal in the skills must match it, so the
-// taught install command and the doctor soft-warn can never drift apart.
+// AgentArts SDK pin: package.json declares the paired version, the shared
+// safety/policy.json carries the same pin (so every install layout — repo,
+// npm dependency, per-agent copies — can resolve it), and every
+// `agentarts-sdk==<semver>` literal in skills AND src must match, so the
+// taught install command, the doctor soft-warn, and the wrapper's failure
+// hints can never drift apart.
 const agentartsSdkVersion = pkg.agentartsSdkVersion;
 assert.match(
   agentartsSdkVersion ?? '',
   /^\d+\.\d+\.\d+$/,
   'package.json must declare an "agentartsSdkVersion" semver (e.g. "0.1.7")',
 );
-for (const file of walk(join(pluginRoot, 'skills'))) {
+const policyJson = JSON.parse(readFileSync(join(pluginRoot, 'safety', 'policy.json'), 'utf8'));
+assert.equal(
+  policyJson.agentartsSdkVersion,
+  agentartsSdkVersion,
+  'safety/policy.json agentartsSdkVersion must equal the package.json pin (the policy file is the install-layout-resilient source)',
+);
+for (const file of walk(join(pluginRoot, 'skills')).concat(walk(join(pluginRoot, 'src')))) {
   const text = readFileSync(file, 'utf8');
   for (const m of text.matchAll(/agentarts-sdk==(\d+\.\d+\.\d+)/g)) {
     if (m[1] !== agentartsSdkVersion) {

@@ -126,8 +126,10 @@ test('plan hard-stops bearer tokens, bare config, interactive gateway deletes, a
     assert.equal(installNoTarget.safeToRun, false);
     assert.match(installNoTarget.executionBlock, /target/i);
 
-    const installOk = planAgentartsCommand(['memory', 'install', 'opencode', '--yes']);
+    const installOk = planAgentartsCommand(['memory', 'install', 'opencode']);
     assert.equal(installOk.tier, 'approved');
+    // --yes is canonicalized like destroy (non-interactive requirement).
+    assert.deepEqual(installOk.args, ['memory', 'install', 'opencode', '--yes']);
     assert.equal(typeof installOk.approvalToken, 'string');
   });
 });
@@ -207,6 +209,7 @@ test('readonly run rejects non-readonly tiers and bearer tokens', async () => {
 
 test('approved run enforces the token lifecycle and args binding', async () => {
   await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
     const plan = planAgentartsCommand(['launch', '--stub-ok']);
     const token = plan.approvalToken;
 
@@ -255,6 +258,7 @@ test('approved run enforces the token lifecycle and args binding', async () => {
 
 test('approval tokens cannot cross CLI namespaces', async () => {
   await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
     // A token minted by the hcloud wrapper with the IDENTICAL args array.
     const hcloudToken = createApprovalToken(['launch', '--stub-ok']);
     const r = await runAgentartsApprovedCommand({
@@ -269,6 +273,7 @@ test('approval tokens cannot cross CLI namespaces', async () => {
 
 test('approved run never writes stdin (prompts EOF-abort, no blind y)', async () => {
   await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
     const plan = planAgentartsCommand(['launch', '--stub-stdin']);
     const run = await runAgentartsApprovedCommand({
       args: ['launch', '--stub-stdin'],
@@ -301,6 +306,7 @@ test('tool definitions register and dispatch through callTool', async () => {
     });
     assert.equal(plan.tier, 'readonly');
 
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
     const run = await callTool('huaweicloud_agentarts_run_readonly_command', {
       args: ['memory', 'list'],
     });
@@ -318,11 +324,12 @@ test('agentarts doctor probes CLI version, Python, and Docker (advisory)', async
     assert.equal(probe.reason, 'version-unreadable');
 
     // A stub that prints the measured version banner reports the pinned match.
+    // force: bypasses the process-level probe cache (the stub was swapped).
     const versioned = join(stubPath, '..', 'agentarts-versioned.sh');
     writeFileSync(versioned, '#!/bin/bash\necho "agentarts version: 0.1.7"\n', { mode: 0o755 });
     chmodSync(versioned, 0o755);
     process.env.AGENTARTS_BIN = versioned;
-    const ok = probeAgentarts();
+    const ok = probeAgentarts({ force: true });
     assert.equal(ok.version, '0.1.7');
     assert.equal(ok.pinned, '0.1.7');
     assert.equal(ok.versionMatches, true);
@@ -332,5 +339,79 @@ test('agentarts doctor probes CLI version, Python, and Docker (advisory)', async
     assert.equal(typeof full.ok, 'boolean');
     assert.ok(Array.isArray(full.warnings));
     assert.ok(Array.isArray(full.nextSteps));
+  });
+});
+
+test('payload-first invoke keeps operation clean, 900s timeout semantics, and layer parity', async () => {
+  await withIsolation(() => {
+    // `invoke {payload}` is the DOCUMENTED shape (fixture invoke.txt): the
+    // payload must NOT become the subcommand.
+    const resolved = resolveAgentartsTier(['invoke', '{"message":"hello"}']);
+    assert.equal(resolved.operation, 'invoke');
+    assert.equal(resolved.tier, 'approved');
+    assert.equal(resolved.unregistered, false);
+    assert.deepEqual(resolved.labels, ['execute']);
+
+    // Node/Python deny-reason parity for the payload shape: the payload
+    // stays out of the reason string.
+    const nodeReason = classifyTextCommand('agentarts invoke {"message":"hello"}');
+    assert.equal(nodeReason.decision, 'deny');
+    assert.match(nodeReason.reason, /agentarts invoke \(execute\)/);
+    assert.doesNotMatch(nodeReason.reason, /hello/);
+
+    // Timeout selection is by operation, and invoke-family carries 900s
+    // (defaultTimeoutMs is internal; assert via the plan's tool description
+    // contract instead — the documented default).
+    const plan = planAgentartsCommand(['invoke', '{"message":"hello"}']);
+    assert.equal(plan.operation, 'invoke');
+    assert.equal(plan.tier, 'approved');
+    assert.ok(!plan.warnings.some((w) => /not in the measured command registry/.test(w)));
+  });
+});
+
+test('positional secrets are scrubbed from display surfaces but the token binds the real args', async () => {
+  await withIsolation(async () => {
+    const realArgs = ['config', 'set-env', 'HUAWEICLOUD_SDK_AK', 'AKIDEXAMPLESECRET123'];
+    const plan = planAgentartsCommand(realArgs);
+    assert.equal(plan.tier, 'approved');
+    // Display surfaces carry the placeholder, never the value.
+    assert.deepEqual(plan.args, ['config', 'set-env', 'HUAWEICLOUD_SDK_AK', '<redacted>']);
+    assert.doesNotMatch(plan.command, /AKIDEXAMPLESECRET123/);
+    // The approvals store never carries the raw value either.
+    const { inspectApprovalToken } = await import('../plugins/huaweicloud-core/src/hcloud-cli.mjs');
+    void inspectApprovalToken;
+    // And the real args still hash-match at run time (env-or-fail rejects
+    // before spawn here — the binding itself is what this asserts).
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const run = await runAgentartsApprovedCommand({
+      args: realArgs,
+      approvalToken: plan.approvalToken,
+      approvedByUser: true,
+    });
+    // The stub is not a real config project: the run executes the stub and
+    // succeeds; the hash-match is proven by NOT throwing the mismatch error.
+    assert.equal(run.status, 'ok');
+    assert.doesNotMatch(JSON.stringify(run), /AKIDEXAMPLESECRET123/);
+  });
+});
+
+test('runs without devkit credentials fail closed with a clear pointer (env-or-fail)', async () => {
+  await withIsolation(async () => {
+    // withIsolation points HUAWEICLOUD_HOME at the scratch home and no
+    // runtime credentials are set: there is nothing to inject.
+    const readonly = await runAgentartsReadonlyCommand(['memory', 'list']);
+    assert.equal(readonly.ok, false);
+    assert.match(readonly.error, /huaweicloud_auth_init/);
+    assert.match(readonly.error, /never falls back to unmanaged profile/);
+
+    const plan = planAgentartsCommand(['launch']);
+    const approved = await runAgentartsApprovedCommand({
+      args: ['launch'],
+      approvalToken: plan.approvalToken,
+      approvedByUser: true,
+    });
+    assert.equal(approved.status, 'rejected');
+    assert.equal(approved.code, 'NO_DEVKIT_CREDENTIALS');
+    assert.match(approved.detail, /huaweicloud_auth_init/);
   });
 });

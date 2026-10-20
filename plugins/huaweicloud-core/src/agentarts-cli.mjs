@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { redactSecrets, resolveAgentartsTier } from './safety-policy.mjs';
 import { getProxySettings } from './proxy/proxy-config.mjs';
@@ -14,13 +15,46 @@ import { createApprovalTokenStore } from './approval-tokens.mjs';
 // classification and the traps handled here are recorded in
 // docs/agentarts-pr0-findings.md (agentarts-sdk 0.1.7).
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
 const READONLY_TIMEOUT_MS = 60_000;
+// Measured per-operation approved-tier defaults (PR0 D11 + the e2e run):
+// launch's docker build dominates (~2-3 min), destroy is a control-plane
+// delete (~10s but leave headroom), the invoke family carries the CLI's own
+// 900s request timeout, everything else is quick control-plane I/O.
+const OPERATION_TIMEOUT_MS = {
+  launch: 600_000,
+  destroy: 300_000,
+  invoke: 900_000,
+  'runtime invoke': 900_000,
+  'runtime upload-files': 900_000,
+  'runtime download-files': 900_000,
+};
 const DEFAULT_APPROVED_TIMEOUT_MS = 120_000;
-// invoke-family CLIs default to a 900s request timeout themselves; the
-// wrapper must not cut them off first.
-const INVOKE_TIMEOUT_MS = 900_000;
 const LARGE_OUTPUT_THRESHOLD = 50_000;
 const OUTPUT_DIR = join('/tmp', 'huaweicloud-devkit');
+
+// The pinned agentarts-sdk version. Primary source: safety/policy.json
+// (agentartsSdkVersion) — that file ships with src/ in EVERY install layout
+// (repo, npm dependency, and the per-agent copies setup makes). Fallback:
+// the repo/package.json field. Never throws: an unresolvable pin degrades to
+// null (doctor warns, wrapper hints say "the pinned version").
+export function pinnedSdkVersion() {
+  try {
+    const policy = JSON.parse(readFileSync(join(__dirname, '..', 'safety', 'policy.json'), 'utf8'));
+    if (typeof policy.agentartsSdkVersion === 'string' && policy.agentartsSdkVersion) {
+      return policy.agentartsSdkVersion;
+    }
+  } catch {
+    /* fall through to the package.json candidate */
+  }
+  try {
+    const pkg = JSON.parse(readFileSync(join(__dirname, '..', '..', '..', 'package.json'), 'utf8'));
+    return typeof pkg.agentartsSdkVersion === 'string' ? pkg.agentartsSdkVersion : null;
+  } catch {
+    return null;
+  }
+}
 
 const agentartsApprovals = createApprovalTokenStore('agentarts');
 
@@ -34,15 +68,28 @@ const agentartsApprovals = createApprovalTokenStore('agentarts');
 //   required.
 // - `--bearer-token`/`-bt` exists on 7 commands; argv is process-list
 //   visible, so the wrapper rejects it outright (env-var auth only).
-const NON_INTERACTIVE_GROUPS = new Set(['destroy']);
+const NON_INTERACTIVE_GROUPS = new Set(['destroy', 'memory install', 'memory uninstall']);
 const INTERACTIVE_BLOCKED_SUBCOMMANDS = new Set(['gateway delete', 'gateway delete-target']);
 const MEMORY_INSTALL_TARGETS = new Set(['hermes', 'claude', 'codex', 'opencode', 'openclaw']);
-const INVOKE_TIMEOUT_OPERATIONS = new Set([
-  'invoke',
-  'runtime invoke',
-  'runtime upload-files',
-  'runtime download-files',
-]);
+
+// A positional value whose PRECEDING token names a secret (config set-env
+// HUAWEICLOUD_SDK_AK <value>) must be scrubbed in every display/storage
+// surface — redactSecrets only covers key[:=]value shapes. Mirrors the
+// hcloud wrapper's redactArgsWithObs technique.
+const SECRET_KEY_NAME_RE = /(?:api[_-]?key|access[_-]?key|secret[_-]?key|token|credential|password|passwd|ak|sk)$/i;
+
+function scrubPositionalSecrets(args) {
+  const scrubbed = [...args];
+  for (let i = 1; i < scrubbed.length; i += 1) {
+    const prev = String(scrubbed[i - 1]);
+    const flagMatch = prev.match(/^--?([A-Za-z0-9_.-]+)(?:=(.*))?$/);
+    const name = flagMatch ? flagMatch[1] : prev;
+    if (SECRET_KEY_NAME_RE.test(name) && scrubbed[i] !== '<redacted>') {
+      scrubbed[i] = '<redacted>';
+    }
+  }
+  return scrubbed;
+}
 
 export function resolveAgentartsCommand() {
   const bin = process.env.AGENTARTS_BIN || 'agentarts';
@@ -127,16 +174,22 @@ export function planAgentartsCommand(rawArgs, options = {}) {
   const hardStop = blocked || bareConfig || missingTarget;
 
   const canonicalArgs = hardStop ? providedArgs : canonicalizeArgs(providedArgs, classification);
-  const command = [executable, ...canonicalArgs].map((arg) => quoteShellArg(arg)).join(' ');
   const notes = planningGuidance(classification, canonicalArgs);
+  // Display/storage surfaces are POSITIONAL-SCRUBBED on top of redactSecrets:
+  // `config set-env HUAWEICLOUD_SDK_AK <value>` must not carry the raw value
+  // into the transcript or approvals.json. The approval token binds to the
+  // REAL canonical args; re-supply the real values at run time (replace
+  // <redacted> placeholders).
+  const displayArgs = scrubPositionalSecrets(redactSecrets(canonicalArgs));
+  const command = [executable, ...displayArgs].map((arg) => quoteShellArg(arg)).join(' ');
 
   const plan = {
     ok: true,
     service: 'AgentArts',
     executable,
-    args: redactSecrets(canonicalArgs),
-    command: redactSecrets(command),
-    executableBlock: redactSecrets(command),
+    args: displayArgs,
+    command,
+    executableBlock: command,
     tier: classification.tier,
     labels: classification.labels,
     operation: classification.operation,
@@ -180,14 +233,18 @@ export function planAgentartsCommand(rawArgs, options = {}) {
 
 // Allowlist-style child environment: NEVER spread process.env (ambient
 // variables, including stray credentials, must not leak into the child), and
-// inject HUAWEICLOUD_SDK_AK/SK from the devkit runtime credential state when
-// present — injection replaces, not adds.
+// inject HUAWEICLOUD_SDK_AK/SK from the devkit runtime credential state —
+// injection replaces, not adds. TLS trust anchors ride along with the proxy
+// vars (a MITM proxy without its CA bundle turns into confusing TLS errors).
 function buildChildEnv(options = {}) {
   const env = {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
     LANG: process.env.LANG,
     TERM: process.env.TERM,
+    SSL_CERT_FILE: process.env.SSL_CERT_FILE,
+    SSL_CERT_DIR: process.env.SSL_CERT_DIR,
+    REQUESTS_CA_BUNDLE: process.env.REQUESTS_CA_BUNDLE,
   };
   if (process.platform === 'win32') {
     env.SystemRoot = process.env.SystemRoot;
@@ -208,11 +265,17 @@ function buildChildEnv(options = {}) {
     if (creds?.ak && creds?.sk) {
       env.HUAWEICLOUD_SDK_AK = creds.ak;
       env.HUAWEICLOUD_SDK_SK = creds.sk;
+    } else {
+      // The measured auth chain is env → ~/.huaweicloud/credentials profile
+      // → metadata: without injected env vars the CLI silently authenticates
+      // from an unmanaged profile file (possibly a different account). The
+      // wrapper contract is env-or-fail — never an accidental profile hit.
+      env.HUAWEICLOUD_SDK_CREDENTIALS_FILE = '/dev/null';
     }
   }
   // Drop empty entries so spawn does not pass empty-string variables.
   for (const key of Object.keys(env)) {
-    if (env[key] === undefined) delete env[key];
+    if (env[key] === undefined || env[key] === '') delete env[key];
   }
   return env;
 }
@@ -244,8 +307,7 @@ function saveLargeOutput(rawStdout) {
 }
 
 function defaultTimeoutMs(classification) {
-  if (INVOKE_TIMEOUT_OPERATIONS.has(classification.operation)) return INVOKE_TIMEOUT_MS;
-  return DEFAULT_APPROVED_TIMEOUT_MS;
+  return OPERATION_TIMEOUT_MS[classification.operation] ?? DEFAULT_APPROVED_TIMEOUT_MS;
 }
 
 function quoteShellArg(arg) {
@@ -297,7 +359,7 @@ async function runAgentarts(canonicalArgs, classification, options = {}) {
     child.on('error', (error) => {
       finish({
         ok: false,
-        error: `Failed to launch ${executable}: ${error.message}. Is agentarts-sdk installed (pip install agentarts-sdk==0.1.7) and AGENTARTS_BIN set when outside PATH?`,
+        error: `Failed to launch ${executable}: ${error.message}. Is agentarts-sdk installed (pip install agentarts-sdk==${pinnedSdkVersion() || 'the pinned version'}) and AGENTARTS_BIN set when outside PATH?`,
       });
     });
     child.on('close', (code) => {
@@ -317,6 +379,27 @@ async function runAgentarts(canonicalArgs, classification, options = {}) {
   });
 }
 
+// The env-or-fail credential contract: without devkit credentials the CLI
+// would silently authenticate from ~/.huaweicloud/credentials (measured auth
+// chain) — possibly a different account. Reject with a clear pointer
+// instead of an accidental profile hit or a raw auth traceback.
+function missingCredentialError() {
+  return {
+    ok: false,
+    error:
+      'No devkit credentials available for agentarts (HUAWEICLOUD_SDK_AK/SK injection). Run huaweicloud_auth_init first, or execute the command in your own terminal — the wrapper never falls back to unmanaged profile files.',
+  };
+}
+
+function hasInjectableCredentials() {
+  try {
+    const creds = resolveCredentialsWithRuntime({ allowMissing: true });
+    return Boolean(creds?.ak && creds?.sk);
+  } catch {
+    return false;
+  }
+}
+
 export async function runAgentartsReadonlyCommand(rawArgs, options = {}) {
   const providedArgs = (Array.isArray(rawArgs) ? rawArgs : []).map(String);
   if (argvContainsBearerToken(providedArgs)) {
@@ -334,6 +417,9 @@ export async function runAgentartsReadonlyCommand(rawArgs, options = {}) {
             : 'This command is not available through the wrapper in this release.'
       }`,
     };
+  }
+  if (options.injectCredentials !== false && !hasInjectableCredentials()) {
+    return missingCredentialError();
   }
   const result = await runAgentarts(providedArgs, classification, options);
   return { service: 'AgentArts', operation: classification.operation, tier: 'readonly', ...result };
@@ -371,7 +457,7 @@ export async function runAgentartsApprovedCommand(args = {}) {
     const redactedProvided = JSON.stringify(redactSecrets(providedArgs));
     if (redactedStored !== redactedProvided) {
       throw new Error(
-        'Provided args do not match the approved plan. Use the exact args from the plan (the plan already carries the non-interactive flags the wrapper will execute).',
+        'Provided args do not match the approved plan. Use the args you planned; if the plan shows <redacted> placeholders for secrets, replace them with the actual values (the plan already carries the non-interactive flags the wrapper will execute).',
       );
     }
   }
@@ -383,6 +469,11 @@ export async function runAgentartsApprovedCommand(args = {}) {
       code: 'PLAN_NO_LONGER_EXECUTABLE',
       detail: plan.executionBlock || plan.error || `tier changed to ${plan.tier}`,
     };
+  }
+
+  const credentialError = missingCredentialError();
+  if (hasInjectableCredentials() === false) {
+    return { status: 'rejected', code: 'NO_DEVKIT_CREDENTIALS', detail: credentialError.error };
   }
 
   const result = await runAgentarts(providedArgs, plan, {
@@ -458,7 +549,8 @@ export const AGENTARTS_TOOL_DEFINITIONS = [
         },
         timeoutMs: {
           type: 'number',
-          description: 'Optional timeout in milliseconds. Defaults to 120000 (900000 for invoke-family).',
+          description:
+            'Optional timeout in milliseconds. Defaults: 600000 for launch (docker build), 300000 for destroy, 900000 for the invoke family, 120000 otherwise.',
         },
         cwd: { type: 'string', description: 'Optional working directory.' },
       },
