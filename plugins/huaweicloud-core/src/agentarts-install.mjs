@@ -23,11 +23,7 @@ const PIP_TIMEOUT_MS = 300_000;
 
 export function installAgentartsSdk(options = {}) {
   const run =
-    options.run ||
-    ((file, args, spawnOptions) => {
-      const result = spawnSync(file, args, { ...spawnOptions, windowsHide: true });
-      return result;
-    });
+    options.run || ((file, args, spawnOptions) => spawnSync(file, args, { ...spawnOptions, windowsHide: true }));
   const python = options.python || probePython();
   if (!python.installed || !python.ok) {
     return {

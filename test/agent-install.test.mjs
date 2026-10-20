@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
@@ -496,6 +496,32 @@ test('codex target does not crash without Codex CLI', () => {
     assert.match(res.stdout, /Codex CLI not found/);
     assert.doesNotMatch(res.stdout, /Installation complete/);
     assert.ok(!existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins', '.installed')));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('--with-agentarts without Python reports the manual fallback and stays advisory', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
+  try {
+    // node+npm on PATH (node's own bin dir), python3 deliberately absent so
+    // installAgentartsSdk stops at the python gate without network access.
+    const res = spawnSync(process.execPath, [setupCli, 'install', '--target', 'opencode', '--with-agentarts'], {
+      cwd,
+      env: makeEnv(home, { PATH: dirname(process.execPath) }),
+      encoding: 'utf8',
+      timeout: 120000,
+    });
+    // The agent install succeeded; the optional SDK failure is advisory
+    // (loud output, exit 0) — the ensureHermesMcpSdk precedent.
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.stdout, /AgentArts install failed at "python"/);
+    assert.match(res.stdout, /Install Python 3\.10\+, then re-run: npx huaweicloud-devkit install-agentarts/);
+    assert.match(res.stdout, /Installation complete!/);
+    assert.ok(existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins', '.installed')), 'opencode installed');
+    assert.ok(!existsSync(join(home, '.config', 'huaweicloud', 'agentarts-venv')), 'no venv without Python');
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
