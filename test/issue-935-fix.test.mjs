@@ -194,6 +194,20 @@ test('huaweicloud_explain_error maps Ecs.0319 to AZ-capacity guidance (#935 A3)'
   assert.match(text, /replacement|替代|ListFlavors/, 'must suggest switching the flavor and retrying');
 });
 
+test('huaweicloud_explain_error maps Ecs.0044 to volume-type sellout guidance (#971 A)', async () => {
+  const result = await callTool('huaweicloud_explain_error', {
+    service: 'ECS',
+    errorCode: 'Ecs.0044',
+    message: 'the volumeType [SATA] is sellout in az[cn-north-4a]',
+  });
+  const text = JSON.stringify(result);
+  assert.match(text, /Ecs\.0044/);
+  assert.match(text, /volume type|volumetype/i, 'must name the volume-type root cause');
+  assert.match(text, /root_volume\.volumetype/, 'must direct at the exact parameter to change');
+  assert.match(text, /Ecs\.0319/, 'must distinguish from the flavor-capacity error Ecs.0319');
+  assert.match(text, /NovaListAvailabilityZones/, 'must offer the AZ-switch alternative');
+});
+
 test('huaweicloud_explain_error maps Ecs.0067 to cash-balance/recharge guidance (#935 A3)', async () => {
   const result = await callTool('huaweicloud_explain_error', {
     service: 'ECS',
