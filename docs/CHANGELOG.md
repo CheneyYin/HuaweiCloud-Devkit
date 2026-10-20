@@ -6,6 +6,8 @@
 
 ## Unreleased
 
+- fix(huawei-ecs): Ecs.0044 volume-type sellout mapping + RHEL-family firewalld coverage with no-SSH recovery path (#971)
+- fix(safety): admin-port deny remediation now points at /32 egress-IP rules and the cloud-init no-SSH path (#971)
 - docs(huawei-ecs): large-user_data JSON-file path (--skeleton / --cli-jsonInput / --dryrun) + anti-pattern warning against abandoning the MCP approval channel (#964)
 
 ## 1.1.10-next.0 (2026-10-20)
