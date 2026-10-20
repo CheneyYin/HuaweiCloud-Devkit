@@ -57,6 +57,36 @@ project-local yaml, and `launch` ships that yaml (including
 - 0.1.7 trap: `config set-env`/`remove-env` CRASH on basic-template projects
   (null env list) — edit the yaml directly in that case.
 
+## Injecting a secret without putting it in argv
+
+`config set-env KEY VALUE` puts the secret in the process argument list and in
+the agent transcript. To set `runtime.environment_variables[].value` without
+argv exposure, edit the project YAML through the YAML library:
+
+- read the secret from a file the user controls (`chmod 600`, e.g.
+  `/tmp/maas_key.txt`), from stdin, or from an env var the agent already holds;
+- `yaml.safe_load` the config → set the value → `yaml.safe_dump` to a temp file
+  → `os.replace` into place (atomic) → `chmod 600` the config;
+- verify by re-parsing and comparing the value, printing only a boolean/length
+  (never the secret), and exit non-zero on mismatch.
+
+Do NOT edit the YAML with line/`sed`-style surgery: values containing `#`, a
+colon-space sequence, or a leading YAML indicator character corrupt the file,
+and a layout change becomes a silent no-op. Do NOT `export` the secret (shell
+history + transcript).
+
+## Build context leak (COPY . . bakes the secret into the image)
+
+`launch` builds with `docker build ... .` from the project dir, so the project
+`.agentarts_config.yaml` — now holding the secret — is inside the build context.
+The generated Dockerfile ends with `COPY . .`, which copies it into an image
+layer that is then PUSHED TO SWR. The runtime receives env vars from the CLI's
+parsed YAML, not from the image, so the file is not needed inside the image:
+
+- add `.agentarts_config.yaml` (and any local helper scripts) to `.dockerignore`;
+- if a secret was ever deployed before this was in place, **rotate it** — the
+  earlier image is already in the registry.
+
 ## Memory data-plane key (next release)
 
 The per-Space `HUAWEICLOUD_SDK_MEMORY_API_KEY` (returned once at creation)

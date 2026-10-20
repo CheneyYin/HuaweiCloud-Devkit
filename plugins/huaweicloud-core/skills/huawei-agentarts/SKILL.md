@@ -46,10 +46,13 @@ Enterprise agent platform for Huawei Cloud: hosts agent runtimes (LangGraph/Lang
 - `huaweicloud_agentarts_run_approved_command` — approved-tier execution bound to the plan's exact args and token
 - `huaweicloud_agentarts_list_agents` — read-only agent runtime listing via the SDK Python API (0.1.7 has no list CLI command); region defaults to cn-southwest-2, optional agent_name fuzzy filter, omit limit/offset to keep SDK pagination defaults
 
-See references/cli-workflows.md for the golden path and the full trap list.
+See references/cli-workflows.md for the golden path and the full trap list, references/credentials.md for secret injection and the build-context leak, and references/langchain-maas-runbook.md for a worked LangChain + MaaS deploy (mirror-first, mainland-China).
 
 ## Hard Rules
 
+- **Mirror-first (mainland-China default).** Pull Docker base images through a mirror (`docker.m.daocloud.io`) and retag to the canonical name; install/point pip at the Huawei Cloud mirror (`https://mirrors.huaweicloud.com/repository/pypi/simple`, fallback `https://repo.huaweicloud.com/...` on `429`). Fall back to docker.io/pypi.org only when a mirror is unavailable. See `references/cli-workflows.md` for the pre-warm recipe.
+- **Keep `launch` inside the MCP client timeout (~300s).** `launch` builds on the local Docker daemon; a China-network build without pre-warming (base image + pip mirror + `.dockerignore`) can exceed the timeout, returning JSON-RPC `-32001` with lost output and an orphaned build container. Pre-warm first; treat `-32001` as "build too slow", check `docker ps -a` for an orphan and clean it up.
+- **Never place a secret in a file inside the build context.** `COPY . .` bakes it into the image and `launch` pushes that image to SWR. Exclude `.agentarts_config.yaml` (and helper scripts) via `.dockerignore`; the runtime receives env vars from the CLI's YAML, not from the image. See `references/credentials.md`.
 - `--bearer-token`/`-bt` on ANY command is forbidden — argv is process-list visible. Env-var auth only.
 - The CLI can FAIL with exit code 0 (prints a traceback, still exits 0). Parse output, never trust exit codes.
 - First run of any agentarts command writes `~/.bashrc`, `~/.bash_completions/`, `~/.agentarts/.completion_shown`, and `~/.huaweicloud/application_id` (a telemetry UUID sent in every request's User-Agent). Warn the user before first use.
@@ -58,14 +61,18 @@ See references/cli-workflows.md for the golden path and the full trap list.
 
 ## Measured Traps
 
-| Trap                                                                         | Fix                                                                                                  |
-| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `init` prompts for region and aborts on EOF                                  | Always pass `-n <name> -t <template> -r <region>`                                                    |
-| Bare `agentarts config` is an interactive wizard                             | Always use a subcommand (`config set`, `config get`, …)                                              |
-| `config set` rewrites the yaml destructively                                 | Comments stripped, keys reordered, defaults materialized                                             |
-| `destroy` prompts; `gateway delete`/`delete-target` prompt with NO skip flag | Use `destroy --yes`; gateway deletes go to the user terminal                                         |
-| `invoke` default timeout is 900s                                             | Budget time accordingly                                                                              |
-| `config set-env` crashes on basic-template projects                          | 0.1.7 SDK bug (null env list); `config remove-env` crashes the same way — edit yaml directly instead |
+| Trap                                                                         | Fix                                                                                                                                                          |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `init` prompts for region and aborts on EOF                                  | Always pass `-n <name> -t <template> -r <region>`                                                                                                            |
+| Bare `agentarts config` is an interactive wizard                             | Always use a subcommand (`config set`, `config get`, …)                                                                                                      |
+| `config set` rewrites the yaml destructively                                 | Comments stripped, keys reordered, defaults materialized                                                                                                     |
+| `destroy` prompts; `gateway delete`/`delete-target` prompt with NO skip flag | Use `destroy --yes`; gateway deletes go to the user terminal                                                                                                 |
+| `invoke` default timeout is 900s                                             | Budget time accordingly                                                                                                                                      |
+| `config set-env` crashes on basic-template projects                          | 0.1.7 SDK bug (null env list); `config remove-env` crashes the same way — edit yaml directly instead                                                         |
+| `init -p <dir>` treats `<dir>` as a PARENT, not the project dir              | Project lands at `<dir>/<name>` (so `-p x -n x` nests `x/x`); pass `-p` = parent, or omit `-p` and run in the parent dir                                     |
+| `dev` runs in the CLI's OWN venv (no framework deps)                         | langchain/langgraph/google-adk templates raise `ModuleNotFoundError`; smoke-test with the project venv instead (recipe in cli-workflows.md)                  |
+| `destroy`/`invoke` outside the project dir fail / need the right flag        | There is no `--agent-id`; the flag is `--agent <name>` (or run from the dir holding `.agentarts_config.yaml`)                                                |
+| `config`/`init` REGENERATE `Dockerfile` from a template (no pip mirror)      | A hand-patched mirror in the Dockerfile is silently reverted on the next `config`/deploy; encode it as `ARG PIP_INDEX_URL` and re-apply in the pre-warm step |
 
 ## Cross-Skill References
 

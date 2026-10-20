@@ -24,10 +24,18 @@ Every command shape here is fixture-verified against agentarts-sdk 0.1.7
 ## Golden Path (deploy an agent)
 
 ```
-1. agentarts init -n <name> -t basic -r cn-southwest-2
-   (local tier — run via Bash; -r is REQUIRED, init prompts and aborts on EOF)
-2. agentarts dev --port 8080      (local tier — background server; poll
-   GET /ping until healthy, then kill; no wrapper involvement)
+1. agentarts init -n <name> -t <basic|langchain|langgraph|google-adk> -r cn-southwest-2
+   (local tier — run via Bash; -r is REQUIRED, init prompts and aborts on EOF.
+   NOTE: -p <dir> is a PARENT dir — the project lands at <dir>/<name>, so
+   `-p foo -n foo` nests foo/foo. Omit -p to create ./<name> in cwd.)
+2. (basic template) agentarts dev --port 8080  (local tier — background server;
+   poll GET /ping until healthy, then kill; no wrapper involvement)
+   (framework templates: `agentarts dev` cannot import framework deps — see
+   "Framework Templates and `agentarts dev`" below and use the project venv.)
+2b. PRE-WARM (mirror-first; keeps launch inside the ~300s client timeout):
+   - base image via mirror + retag (see "Restricted Networks" below)
+   - add .dockerignore (.venv/ __pycache__/ .git/ .agentarts_config.yaml + helpers)
+   - ensure the Dockerfile pip step uses a mirror (ARG PIP_INDEX_URL=...)
 3. huaweicloud_agentarts_plan_cli_command
    args: ["config","set","base.region","cn-southwest-2"]   → approved
    → present command to user → run_approved_command
@@ -43,6 +51,47 @@ Every command shape here is fixture-verified against agentarts-sdk 0.1.7
    canonicalizes to `destroy --yes` (non-interactive) — approve THAT form
    → present → run_approved
 ```
+
+## Framework Templates and `agentarts dev`
+
+`agentarts dev` imports the entrypoint in the CLI's OWN interpreter (the
+devkit/managed venv), after `sys.path.insert(0, cwd)`. It does NOT use a
+project venv, so `langchain` / `langgraph` / `google-adk` templates raise
+`ModuleNotFoundError` (measured: `No module named 'langchain_core'`), and its
+failure hint (`pip install -e .`) is misleading.
+
+To smoke-test a framework template locally, run the same ASGI app from the
+project venv and load env from the config:
+
+```python
+# local_dev.py — run as: cd <project> && .venv/bin/python local_dev.py
+import os, sys
+from pathlib import Path
+import yaml
+HERE = Path(__file__).resolve().parent
+cfg = yaml.safe_load((HERE / ".agentarts_config.yaml").read_text())
+agent = cfg.get("default_agent") or next(iter(cfg["agents"]))
+for e in cfg["agents"][agent]["runtime"].get("environment_variables", []):
+    if e.get("value") is not None:
+        os.environ[e["key"]] = str(e["value"])
+sys.path.insert(0, str(HERE))
+from agent import app          # noqa: E402
+import uvicorn                 # noqa: E402
+uvicorn.run(app, host="127.0.0.1", port=8081)
+```
+
+Caveat: this uses the project venv's Python/resolved deps, which can differ
+from the image (`python:3.10-slim`). Treat a green local run as a smoke test,
+not proof the container works; the cloud `invoke` is the real verification.
+
+## Error Signatures (parse output; exit codes lie)
+
+| Signature                                  | Meaning                                                                                         |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `ModuleNotFoundError: No module named ...` | framework dep absent from the CLI venv during `dev` — use the project-venv recipe above         |
+| JSON-RPC `-32001` on `launch`              | build exceeded the MCP client timeout (~300s); output lost — check `docker ps -a` for an orphan |
+| `Namespace does not exists`                | first-run SWR org/repo auto-create (benign, followed by `Created ...`)                          |
+| `- ERROR -` / `Failed to ...` / `× ERROR:` | operation failure despite exit 0 (see huaweicloud-safety)                                       |
 
 Pre-deploy yaml: `file_transfer_config.enabled` and
 `invoke_config.url_match_type` defaults (`false` / `ACCURATE_MATCH`) must be
@@ -91,21 +140,37 @@ echo: no data-plane endpoint, auth failure), and `Error building image:`
 (deploy-stage docker build failure). Treat any `failureDetected: true` or
 `ok: false` as failure regardless of `exitCode`.
 
-## Restricted Networks (e2e-measured)
+## Restricted Networks — mirror-first (mainland-China default)
 
-`launch` builds `FROM python:3.10-slim` and the generated Dockerfile
-pip-installs from pypi.org directly. Where docker.io / pypi.org are
-unreachable:
+`launch` builds `FROM python:3.10-slim` on the LOCAL Docker daemon and the
+generated Dockerfile pip-installs from pypi.org directly. On a China host,
+mirror BOTH layers before launch (do not wait for a failure):
 
-- Pre-pull the base image from a reachable mirror and retag it
-  (`docker pull docker.1ms.run/library/python:3.10-slim && docker tag …
-python:3.10-slim`) — `FROM` then resolves locally.
-- Add a pip index to the Dockerfile's pip line
-  (`-i https://mirrors.huaweicloud.com/repository/pypi/simple`).
+- Base image — pull via a mirror and retag to the canonical name so `FROM`
+  resolves locally:
+  `docker pull docker.m.daocloud.io/library/python:3.10-slim && docker tag docker.m.daocloud.io/library/python:3.10-slim python:3.10-slim`
+  (a daemon-level `registry-mirrors` entry in `/etc/docker/daemon.json` is the
+  cleaner default but needs sudo; the pull+retag works without it.)
+- pip — point the build at the Huawei Cloud mirror via an overridable ARG in
+  the Dockerfile:
+  `ARG PIP_INDEX_URL=https://mirrors.huaweicloud.com/repository/pypi/simple`
+  then `ENV PIP_INDEX_URL=${PIP_INDEX_URL}` (pip reads it automatically).
+  Do NOT hardcode `-i <mirror>` inline: `agentarts config`/`init` REGENERATE
+  the Dockerfile from a template with no mirror and will revert an inline edit.
+  If the mirror returns `429`, use `https://repo.huaweicloud.com/repository/pypi/simple`.
+- Add `.dockerignore` (`.venv/`, `__pycache__/`, `.git/`, `.agentarts_config.yaml`,
+  helper scripts): smaller context, and it keeps the secret out of the image.
+
+Why it matters beyond speed: the MCP client timeout is ~300s (opencode sets
+`timeout: 300000` on the devkit server), while the wrapper allows `launch` 600s.
+A cold build pulling from docker.io/pypi.org can exceed the client window,
+returning JSON-RPC `-32001` with lost output and an ORPHANED build container
+(the wrapper's own SIGKILL timer never fires because the client already gave
+up). Pre-warming keeps `launch` well inside the window.
 
 Runtime readiness after launch is asynchronous: an immediate invoke can
-fail with "could not get access_endpoint" — retry after ~20s. The
-docker build dominates deploy time (~2–3 min measured).
+fail with "could not get access_endpoint" — retry after ~20s. With mirrors
+warm, the docker build dominates deploy time (~1.5–3 min measured).
 
 ## First-run HOME Writes
 
