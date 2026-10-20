@@ -10,9 +10,11 @@ Every command shape here is fixture-verified against agentarts-sdk 0.1.7
 - `pip install agentarts-sdk==0.1.7 -i https://mirrors.huaweicloud.com/repository/pypi/simple`
   (verify: `agentarts --version` prints "agentarts version: 0.1.7"). The
   Huawei Cloud PyPI mirror is the default; if it lags a newly pinned
-  version, drop `-i` and install from official PyPI. CLI resolution:
-  `AGENTARTS_BIN` > devkit-managed venv > PATH — a personal venv install
-  must be invoked by full path, or pointed to by `AGENTARTS_BIN`.
+  version, drop `-i` and install from official PyPI. Or run
+  `npx huaweicloud-devkit install-agentarts` (devkit-owned venv,
+  auto-resolved). CLI resolution: `AGENTARTS_BIN` > devkit-managed venv >
+  PATH — a personal venv install must be invoked by full path, or pointed
+  to by `AGENTARTS_BIN`.
 - Credentials are injected by the wrapper tools from the devkit runtime
   credential state (`huaweicloud_auth_init`). NEVER export AK/SK manually —
   see `huaweicloud-cli-and-auth`.

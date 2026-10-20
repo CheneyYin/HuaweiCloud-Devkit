@@ -733,6 +733,9 @@ test('classifyTextCommand allows agentarts local and read-only commands', () => 
     'pip install agentarts-sdk==0.1.7', // not in command position
     'pip install agentarts-sdk==0.1.7 -i https://mirrors.huaweicloud.com/repository/pypi/simple', // mirror form (PR5)
     'npx huaweicloud-devkit install-agentarts', // PR6-taught remediation; npx is not a hook launcher word — pinned so a locator edit cannot silently break the taught fix path
+    'npx --yes huaweicloud-devkit install-agentarts', // README-taught form
+    'npx huaweicloud-devkit install --with-agentarts', // PR6 opt-in flag form
+    'npx huaweicloud-devkit uninstall --target all --clean-agentarts', // PR6 cleanup flag form
     '/home/u/.config/huaweicloud/agentarts-venv/bin/agentarts --version', // devkit venv full path, local metadata
     'echo agentarts is a CLI', // natural-language mention
     'see agentarts docs for details',

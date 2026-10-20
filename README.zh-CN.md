@@ -286,6 +286,14 @@ npx --yes huaweicloud-devkit-mcp --transport remote
 npx --yes huaweicloud-devkit install-hcloud
 ```
 
+### 安装 AgentArts SDK（可选）
+
+```bash
+npx --yes huaweicloud-devkit install-agentarts
+```
+
+把钉版的 `agentarts-sdk` 装进 devkit 自有 venv（`~/.config/huaweicloud/agentarts-venv`），默认走华为云 PyPI 镜像，镜像滞后时自动回退官方源。不会触碰你的 Python 环境；只有智能体托管工作流需要它。
+
 ### 配置凭据
 
 ```bash

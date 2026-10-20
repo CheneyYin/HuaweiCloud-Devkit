@@ -224,6 +224,9 @@ test('python hook allows agentarts local/read-only commands and blocks SDK env v
     'pip install agentarts-sdk==0.1.7',
     'pip install agentarts-sdk==0.1.7 -i https://mirrors.huaweicloud.com/repository/pypi/simple',
     'npx huaweicloud-devkit install-agentarts',
+    'npx --yes huaweicloud-devkit install-agentarts',
+    'npx huaweicloud-devkit install --with-agentarts',
+    'npx huaweicloud-devkit uninstall --target all --clean-agentarts',
     '/home/u/.config/huaweicloud/agentarts-venv/bin/agentarts --version',
   ]) {
     const result = runEvaluate('Bash', { command });

@@ -393,7 +393,7 @@ async function runAgentarts(canonicalArgs, classification, options = {}) {
     child.on('error', (error) => {
       finish({
         ok: false,
-        error: `Failed to launch ${executable}: ${error.message}. Is agentarts-sdk installed (pip install agentarts-sdk==${pinnedSdkVersion() || 'the pinned version'} -i ${AGENTARTS_SDK_MIRROR}; AGENTARTS_BIN points at a non-PATH install)?`,
+        error: `Failed to launch ${executable}: ${error.message}. Install the SDK: npx huaweicloud-devkit install-agentarts (or pip install agentarts-sdk==${pinnedSdkVersion() || 'the pinned version'} -i ${AGENTARTS_SDK_MIRROR}; AGENTARTS_BIN points at a non-PATH install).`,
       });
     });
     child.on('close', (code) => {

@@ -68,7 +68,9 @@ export function probeAgentarts(options = {}) {
   return cachedProbe;
 }
 
-function probePython() {
+// Exported for installAgentartsSdk (the installer gates on the same
+// Python 3.10+ requirement before creating the venv).
+export function probePython() {
   const bin = process.platform === 'win32' ? 'python' : 'python3';
   try {
     const result = spawnSync(bin, ['--version'], { encoding: 'utf8', timeout: 10_000, windowsHide: true });
@@ -104,12 +106,13 @@ export function checkAgentarts(options = {}) {
   const nextSteps = [];
   if (!cli.installed) {
     warnings.push('agentarts CLI not found');
+    nextSteps.push('npx huaweicloud-devkit install-agentarts');
     nextSteps.push(
-      `pip install agentarts-sdk==${cli.pinned || 'the pinned version'} -i ${AGENTARTS_SDK_MIRROR} (set AGENTARTS_BIN when installed outside PATH)`,
+      `pip install agentarts-sdk==${cli.pinned || 'the pinned version'} -i ${AGENTARTS_SDK_MIRROR} (manual; set AGENTARTS_BIN when installed outside PATH)`,
     );
   } else if (cli.pinned && cli.versionMatches === false) {
     warnings.push(`agentarts ${cli.version} != pinned ${cli.pinned}`);
-    nextSteps.push(`pip install agentarts-sdk==${cli.pinned} -i ${AGENTARTS_SDK_MIRROR}`);
+    nextSteps.push('npx huaweicloud-devkit install-agentarts');
   }
   if (cli.installed && !python.ok) {
     warnings.push(

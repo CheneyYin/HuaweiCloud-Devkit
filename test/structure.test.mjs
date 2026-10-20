@@ -1117,8 +1117,11 @@ test('huawei-agentarts skill ships with routing floor and core registry wiring',
   assert.doesNotMatch(body, /TODO|\[TODO/i);
   // Zero dead ends: every referenced skill directory must exist (the
   // huawei- sweep misses huaweicloud-* meta-skill names, so both patterns run).
+  // `huaweicloud-devkit` is the npx PACKAGE name (taught install commands),
+  // not a skill directory — excluded.
   const referenced = new Set();
   for (const match of body.matchAll(/huawei-[a-z0-9-]+|huaweicloud-[a-z0-9-]+/g)) {
+    if (match[0] === 'huaweicloud-devkit') continue;
     referenced.add(match[0]);
   }
   for (const name of referenced) {

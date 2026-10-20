@@ -652,12 +652,17 @@ test(
       const res = runAutoPty(home, cwd, 'install', '1\n');
       assert.equal(res.status, 0, res.stderr);
       assert.match(res.stdout, /Installing HuaweiCloud DevKit to opencode/);
+      // No interactive prompt in cmdInstall (PR6 decision): the opt-in is
+      // --with-agentarts / install-agentarts; the completion carries the hint.
+      assert.doesNotMatch(res.stdout, /Also install the AgentArts SDK/);
+      assert.match(res.stdout, /install-agentarts/);
       assert.ok(
         existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins', '.installed')),
         'opencode installed',
       );
       assert.ok(!existsSync(join(home, '.workbuddy', 'huaweicloud-plugins', '.installed')), 'workbuddy not installed');
       assert.doesNotMatch(res.stdout, /\[WorkBuddy\]/);
+      assert.ok(!existsSync(join(home, '.config', 'huaweicloud', 'agentarts-venv')), 'agentarts venv must not exist');
     } finally {
       rmSync(home, { recursive: true, force: true });
       rmSync(cwd, { recursive: true, force: true });

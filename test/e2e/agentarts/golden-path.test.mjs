@@ -41,6 +41,13 @@ const WORKTREE = join(import.meta.dirname, '..', '..', '..');
 const SCRATCH_ROOT = join(WORKTREE, '.e2e-home');
 const AGENTARTS_BIN = join(SCRATCH_ROOT, 'venv', 'bin', 'agentarts');
 
+// Pin the wrapper stages to the scratch venv: the wrapper resolves
+// AGENTARTS_BIN > devkit venv > PATH, and without this pin the S3/S5
+// wrapper runs would silently depend on machine PATH state (the
+// isolation gap found in the PR5 review — direct spawns above already
+// used the constant; the wrapper path did not).
+process.env.AGENTARTS_BIN = AGENTARTS_BIN;
+
 function parseCreds() {
   const raw = readFileSync(CREDS_PATH, 'utf8');
   const creds = {};
