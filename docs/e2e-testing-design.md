@@ -163,10 +163,15 @@ gitignored `test/e2e/.env` instead; the report records agent/model/version
 per run so drift between the two sources is visible, not silent.
 
 The workflow file must stay byte-identical on main and v2, and a drift-guard
-step inside the run fails loud on skew: schedule and dispatch events read
-main's registered copy (schedule only fires from the default branch) and
-check out v2 — the suite's bloodline — while push and pull_request events
-read the pushed ref's own copy. PR runs are opt-in via the `run-e2e` label
-(same-repo PRs only; fork PRs skip, they cannot see the secret), and a
-labeled PR re-runs on every synchronize. Concurrency is job-level so runs
-skipped by the label guard never cancel an in-flight suite.
+step inside the run fails loud on skew once both copies exist — a missing
+main copy is the bootstrap window (warn and pass). Land workflow changes
+main first, then v2: main-side landings trigger no automatic lane (the cron
+reads main's copy but fires once a night), while the v2-side push lane runs
+immediately and goes green against the already-landed main copy. Schedule
+and dispatch events read main's registered copy (schedule only fires from
+the default branch) and check out v2 — the suite's bloodline — while push
+and pull_request events read the pushed ref's own copy. PR runs are opt-in
+via the `run-e2e` label (same-repo PRs only; fork PRs skip, they cannot see
+the secret), and a labeled PR re-runs on every synchronize. Concurrency is
+job-level so runs skipped by the label guard never cancel an in-flight
+suite.

@@ -7,7 +7,8 @@ name: e2e-nightly
 # exceptions, not required checks.
 #
 # Lanes (this file must stay byte-identical on main and v2 — the
-# drift-guard step fails the run on skew):
+# drift-guard step fails the run on skew once both copies exist; a
+# missing main copy is the bootstrap window: it warns and passes):
 #   - nightly cron: schedule events only fire from the default branch,
 #     so main's registered copy owns the cron and checks out v2 — the
 #     suite's bloodline (main itself carries no test/e2e).
@@ -68,8 +69,12 @@ jobs:
       - name: Drift guard (main and v2 copies must stay identical)
         run: |
           git fetch --depth=1 origin main
+          if ! git cat-file -e 'origin/main:.github/workflows/e2e-nightly.yml' 2>/dev/null; then
+            echo "::warning::main has no e2e-nightly.yml yet (bootstrap window) — land the identical file on main to register the nightly cron. Drift checking is strict once both copies exist."
+            exit 0
+          fi
           if ! git diff --quiet origin/main -- .github/workflows/e2e-nightly.yml; then
-            echo "::error::e2e-nightly.yml differs between this ref and main (or is missing on main). Workflow changes must land on BOTH branches: cron/dispatch read main's copy; push/PR read the pushed ref's copy."
+            echo "::error::e2e-nightly.yml differs between this ref and main. Workflow changes must land on BOTH branches (main first, then v2): cron/dispatch read main's copy; push/PR read the pushed ref's copy."
             exit 1
           fi
       - uses: actions/setup-node@v4
