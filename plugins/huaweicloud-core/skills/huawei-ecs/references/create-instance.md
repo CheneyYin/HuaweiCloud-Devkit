@@ -129,6 +129,33 @@ SCRIPT
 hcloud ECS CreateServers ... --server.user_data=$user_data
 ```
 
+#### Large user_data: pass via JSON file, do NOT abandon the MCP channel
+
+The inline form above works only while the base64 blob fits the tool-call parameter limit (a few KB). The API itself accepts user_data up to **32KB before encoding** (`--server.user_data` in `hcloud ECS CreateServers --help`) — so a full bootstrap script (22KB base64 observed in the wild) is well within the API limit but **cannot be handed through a single MCP tool call**. When that happens, keep the MCP approval channel (plan → approve → run) and move the parameters to a local JSON file instead:
+
+```bash
+# 1. Generate the API parameter skeleton (writes a JSON file into the CURRENT directory):
+hcloud ECS CreateServers --skeleton
+#    -> ECS_CreateServers_<region>-<timestamp>.json, structured as header / path / body.
+#    user_data lives at body.server.user_data (base64-encoded, same as inline).
+
+# 2. Fill in the real values (name/flavorRef/imageRef/nics/... and body.server.user_data),
+#    keep only the fields you actually use, then execute with the file:
+
+hcloud ECS CreateServers --cli-region=<region> --cli-jsonInput=./ECS_CreateServers_<region>-<timestamp>.json
+
+# 3. Optional pre-flight: --dryrun validates and prints the request payload WITHOUT creating anything:
+hcloud ECS CreateServers --cli-region=<region> --cli-jsonInput=./<file>.json --dryrun
+```
+
+`--cli-jsonInput` / `--skeleton` / `--dryrun` are **global flags — they are NOT listed in operation-level `--help` output** (only in `hcloud --help`), so agents routinely miss them.
+
+> **Anti-pattern (observed in the wild, #964)**: when the base64 blob exceeded the tool parameter limit, the agent dropped the MCP tools entirely and ran `hcloud` directly in a shell — which also silently bypassed the plan → approve → run approval layer. The JSON-file path above keeps oversized parameters on the approved channel. Never abandon the MCP wrapper just because one parameter is too long.
+>
+> **Skeleton side effect**: `--skeleton` writes its JSON file to the current working directory (it does not print to stdout). Clean it up or keep it as the record of what was created.
+
+The security and recovery notes below apply to user_data in general (inline or JSON-file form):
+
 > **Security**: Never embed secrets (passwords, AK/SK, tokens) in user_data. It is stored unencrypted and readable from within the instance via IMDS. Fetch secrets at boot from DEW/CSMS instead.
 >
 > **Debugging**: If the script didn't run, check `/var/log/cloud-init-output.log` on the instance.
