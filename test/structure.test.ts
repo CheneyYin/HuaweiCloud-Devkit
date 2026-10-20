@@ -751,6 +751,35 @@ test('server instructions carry the three-form skillRoot disclosure contract', (
   assert.match(remote, /huaweicloud_list_skills/, 'the remote form must name the effective-catalog tool');
   assert.match(remote, /fallback/, 'the remote form must frame retrieve_skill as the loader');
   assert.match(remote, /huawei-\* service skill absent/, 'the remote form keeps the scoped absence rule');
+
+  // The trimmed-capability rule rides EVERY form (measured failure,
+  // e2e core-free-choice-trimmed-availability, 2026-10-20, twice-stable
+  // across attempts): with huaweicloud-cli trimmed the model skipped the
+  // catalog and ran read-only hcloud commands straight from the shell —
+  // the taught surfaces covered the skill/MCP layers, so the raw-shell
+  // path looked permitted. The clause pins that unavailability is about
+  // the capability on every execution path, shell included.
+  for (const [label, form] of [
+    ['full', full],
+    ['bare', bare],
+    ['remote', remote],
+  ] as const) {
+    assert.match(
+      form,
+      /unavailability is about the capability/,
+      `the ${label} form must scope unavailability to the capability itself`,
+    );
+    assert.match(
+      form,
+      /including hcloud commands run directly from your shell/,
+      `the ${label} form must close the raw-shell bypass path`,
+    );
+    assert.match(
+      form,
+      /never silently proceed that way; confirm with the user instead/,
+      `the ${label} form must demand confirmation over silent bypass`,
+    );
+  }
   assert.doesNotMatch(
     remote,
     /huaweicloud_packs_configure/,
