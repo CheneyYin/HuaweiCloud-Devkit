@@ -1,47 +1,35 @@
 # Changelog
 
-## 1.1.9 (2026-10-18)
+## 1.1.10-next.2 (2026-10-20)
 
-- chore: advance main to 1.1.9-next.3 (prepare 1.1.9 stable release) (#949)
-- chore(release): 1.1.8
-- chore: merge dev into main for 1.1.8 release (#892)
-- chore(release): 1.1.7
-- chore: merge dev into main for 1.1.7 release (#812)
-- chore(release): 1.1.6 (#796)
-- style: prettier normalize plugin manifests
-- chore(release): 1.1.6
-- chore(release): 1.1.5
-- chore: sync README beta badge to v1.1.5
-- chore: version override for 1.1.5 stable release
-- chore(release): 1.1.4
-- chore(release): 1.1.3 (#620)
-- chore: advance main to 1.1.3-next.4 (business keeps dev; prepare stable 1.1.3) (#619)
-- test(update-check): decouple upgrade-tag logic from repo package.json version
-- chore(release): 1.1.2
-- test: resolve structure.test.mjs to dev version (union-merge artifact)
-- chore(release): 1.1.1 (#515)
-- chore: merge dev into main for 1.1.1 stable release (#513)
-- chore: add dsh.bundle manifest for DSH plugin ecosystem
-- chore(release): 1.1.0 (#440)
-- chore: merge dev into main for 1.1.0 release (#438)
-- chore: version override for 1.1.0 stable release (#433)
-- docs: add Huawei Cloud npm mirror recommendation for China users
-- chore(release): 1.0.2
-- style: prettier format fix
-- feat: v1.0.2 stable - merge all dev changes
-- fix(release): update release trigger to workflow_dispatch and main push only
-- feat(release): sync release workflow to main, seed manifest with 1.0.1
-- fix(release): retire the live Publish Dev workflow on main
-- fix(release): restore full publish flow with quoted step names
-- fix(release): probe publish job with environment only
-- fix(release): probe without job outputs and needs.outputs wiring
-- fix(release): restore full tag-gated publish logic
-- fix(release): reduce npm-publish workflow to minimal probe
-- fix(release): drop workflow_dispatch inputs, derive dist-tag from the tag version
-- fix(release): rename publish workflow to npm-publish to recover a fresh workflow_dispatch index
-- fix(release): add pack-verify script to main
-- fix(release): sync ci.yml with pack verification to main
-- fix(release): add tag-gated Publish workflow to main so workflow_dispatch works from tags
+- docs(huawei-ecs): large-user_data JSON-file path — keep the MCP approval channel
+
+## Unreleased
+
+- fix(huawei-ecs): Ecs.0044 volume-type sellout mapping + RHEL-family firewalld coverage with no-SSH recovery path (#971)
+- fix(safety): admin-port deny remediation now points at /32 egress-IP rules and the cloud-init no-SSH path (#971)
+- docs(huawei-ecs): large-user_data JSON-file path (--skeleton / --cli-jsonInput / --dryrun) + anti-pattern warning against abandoning the MCP approval channel (#964)
+
+## 1.1.10-next.0 (2026-10-20)
+
+- chore: sync README beta badge to 1.1.10
+- chore: set version override to 1.1.10 for next preview release
+- fix(sandbox): upload_file auto-creates remote parent dir + honest local-path errors
+- [1024活动第二批] 修复沙箱部署链路假成功/假告警与错误码映射缺口，补强 ECS/沙箱/IAC 技能文档踩坑指引 (#935) (#937)
+- style: prettier table alignment for #954 files (CI format)
+- chore: sync AGENTS.md tool count (39 -> 43) and changelog for #954
+- fix(safety): stop misclassifying STS GetCallerIdentity as credential exposure
+- docs(iam): primary-account judgment rule in skill + quick-ref
+- feat(iam): add huaweicloud_check_account_type tool
+- fix(safety): close tokenization bypasses in command classifier (#927) (#928)
+
+## Unreleased
+
+- fix(sandbox): upload_file auto-creates the remote parent directory and reports honest local-path errors (#953)
+- feat(iam): huaweicloud_check_account_type tool — one-shot primary/sub-account judgment via GetCallerIdentity + KeystoneListAuthDomains, rule username == domainName (#954)
+- docs(iam): primary-account judgment rule + disproved-rules exclusions in huawei-iam skill (#954)
+- fix(safety): stop misclassifying STS GetCallerIdentity as temporary-credential exposure (#954)
+- chore: correct stale MCP tool count in AGENTS.md (39 → 43)
 
 ## 1.1.9-next.3 (2026-10-18)
 
@@ -61,47 +49,6 @@
 - fix(auth): unify onboarding guidance + error surface — root-cause fix for #900 (#905)
 - docs(huawei-obs): document OBS Content-Disposition forced-download trap from real test (#899)
 - docs(voucher): add HDKIT_COMPETITION_NOT_CONFIGURED UX row for competition voucher
-
-## 1.1.8 (2026-10-12)
-
-- chore: merge dev into main for 1.1.8 release (#892)
-- chore(release): 1.1.7
-- chore: merge dev into main for 1.1.7 release (#812)
-- chore(release): 1.1.6 (#796)
-- style: prettier normalize plugin manifests
-- chore(release): 1.1.6
-- chore(release): 1.1.5
-- chore: sync README beta badge to v1.1.5
-- chore: version override for 1.1.5 stable release
-- chore(release): 1.1.4
-- chore(release): 1.1.3 (#620)
-- chore: advance main to 1.1.3-next.4 (business keeps dev; prepare stable 1.1.3) (#619)
-- test(update-check): decouple upgrade-tag logic from repo package.json version
-- chore(release): 1.1.2
-- test: resolve structure.test.mjs to dev version (union-merge artifact)
-- chore(release): 1.1.1 (#515)
-- chore: merge dev into main for 1.1.1 stable release (#513)
-- chore: add dsh.bundle manifest for DSH plugin ecosystem
-- chore(release): 1.1.0 (#440)
-- chore: merge dev into main for 1.1.0 release (#438)
-- chore: version override for 1.1.0 stable release (#433)
-- docs: add Huawei Cloud npm mirror recommendation for China users
-- chore(release): 1.0.2
-- style: prettier format fix
-- feat: v1.0.2 stable - merge all dev changes
-- fix(release): update release trigger to workflow_dispatch and main push only
-- feat(release): sync release workflow to main, seed manifest with 1.0.1
-- fix(release): retire the live Publish Dev workflow on main
-- fix(release): restore full publish flow with quoted step names
-- fix(release): probe publish job with environment only
-- fix(release): probe without job outputs and needs.outputs wiring
-- fix(release): restore full tag-gated publish logic
-- fix(release): reduce npm-publish workflow to minimal probe
-- fix(release): drop workflow_dispatch inputs, derive dist-tag from the tag version
-- fix(release): rename publish workflow to npm-publish to recover a fresh workflow_dispatch index
-- fix(release): add pack-verify script to main
-- fix(release): sync ci.yml with pack verification to main
-- fix(release): add tag-gated Publish workflow to main so workflow_dispatch works from tags
 
 ## 1.1.8-next.3 (2026-10-12)
 
