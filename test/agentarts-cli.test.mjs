@@ -293,11 +293,14 @@ test('tool definitions register and dispatch through callTool', async () => {
   await withIsolation(async () => {
     assert.equal(AGENTARTS_TOOL_DEFINITIONS.length, 3);
     const names = AGENTARTS_TOOL_DEFINITIONS.map((t) => t.name);
-    assert.deepEqual(names.sort((a, b) => a.localeCompare(b)), [
-      'huaweicloud_agentarts_plan_cli_command',
-      'huaweicloud_agentarts_run_approved_command',
-      'huaweicloud_agentarts_run_readonly_command',
-    ]);
+    assert.deepEqual(
+      names.sort((a, b) => a.localeCompare(b)),
+      [
+        'huaweicloud_agentarts_plan_cli_command',
+        'huaweicloud_agentarts_run_approved_command',
+        'huaweicloud_agentarts_run_readonly_command',
+      ],
+    );
     // The schema must not expose a stdin passthrough (the hcloud trio's
     // latent hole is not inherited).
     for (const def of AGENTARTS_TOOL_DEFINITIONS) {
