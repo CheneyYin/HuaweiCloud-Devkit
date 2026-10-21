@@ -155,6 +155,9 @@ test('codex prepareHome creates the directory codex refuses to resolve', () => {
   assert.ok(existsSync(codexHome), 'prepareHome must create CODEX_HOME before install spawns codex');
   assert.equal(installVars?.https_proxy, 'http://127.0.0.1:9', 'prepareHome must arm the install-leg egress block');
   assert.equal(installVars?.HTTPS_PROXY, 'http://127.0.0.1:9');
+  // The capability flag: flipping it to true would run the two installPacks
+  // cases on codex with a silently unapplied posture (misattributed reds).
+  assert.equal(codexDriver.supportsInstallPacks, false, 'the codex target has no --packs write path');
 });
 
 test('the env loader merges mcp-env.json over the stripped child env and execs the server', async () => {

@@ -49,6 +49,9 @@ const LOADER_SOURCE = [
   "const envFile = join(dirname(process.argv[1]), 'mcp-env.json');",
   "const extra = JSON.parse(readFileSync(envFile, 'utf8'));",
   "const child = spawn(process.execPath, [server], { env: { ...process.env, ...extra }, stdio: 'inherit' });",
+  // Signal death flattens to exit 0 deliberately: the runner kills the
+  // whole detached process group on timeout/abort (bypassing handlers
+  // anyway), and MCP clients observe stdio close either way.
   "child.on('exit', (code) => process.exit(code ?? 0));",
   "process.on('SIGTERM', () => child.kill('SIGTERM'));",
   '',
@@ -137,9 +140,10 @@ function mergeConfigToml(home: string, serverJs: string): void {
   // as the only server.
   const pluginHeader = `[plugins."${getCodexPluginName()}@${getMarketplaceName()}"]`;
   let content = existing;
-  const headerAt = content.split('\n').findIndex((line) => line.trim() === pluginHeader);
+  const lines = content.split('\n');
+  const headerAt = lines.findIndex((line) => line.trim() === pluginHeader);
+  const anyPluginsTable = lines.some((line) => line.trim().startsWith('[plugins.'));
   if (headerAt >= 0) {
-    const lines = content.split('\n');
     let disabled = false;
     for (let i = headerAt + 1; i < lines.length; i++) {
       const line = lines[i]!;
@@ -161,6 +165,13 @@ function mergeConfigToml(home: string, serverJs: string): void {
       throw new Error(`could not disable the plugin registration under ${pluginHeader} — installer output drift?`);
     }
     content = lines.join('\n');
+  } else if (anyPluginsTable) {
+    // Header-shape drift (re-quoted, re-serialized, renamed table): the
+    // plugin is registered under a spelling this surgery cannot find, which
+    // is the same silent double-registration failure mode as above.
+    throw new Error(
+      `a [plugins.] table exists but the expected header ${pluginHeader} was not found — installer output drift?`,
+    );
   }
   // Top-level keys must precede every table header, so they are prepended;
   // our own tables are appended after the installer's marketplace/plugin
@@ -263,10 +274,12 @@ export const codexDriver: AgentDriver = {
       // The local base mirrors the real base's pathname, so codex requests
       // <pathname>/responses and the proxy's origin + req.url reconstructs
       // the real endpoint — a gateway mounted under a path prefix works. A
-      // path-less base yields no trailing slash (a // route would 404).
+      // path-less base yields no trailing slash (a // route would 404), and
+      // trailing slashes on the configured base are stripped for the same
+      // reason.
       const configPath = join(homeDir, '.codex', 'config.toml');
       const configured = readFileSync(configPath, 'utf8');
-      const pathname = base.pathname === '/' ? '' : base.pathname;
+      const pathname = base.pathname === '/' ? '' : base.pathname.replace(/\/+$/, '');
       const withProxy = configured.replaceAll(PROXY_BASE_PLACEHOLDER, `http://127.0.0.1:${proxy.port}${pathname}`);
       writeFileSync(configPath, withProxy, 'utf8');
       run = await runHeadlessAgent(
@@ -288,12 +301,12 @@ export const codexDriver: AgentDriver = {
           // install none, so the escape target is absent there. Local runs on
           // such machines carry that documented residual.
           //
-          // non_prefixed_mcp_tool_names stays OFF (measured): enabling it
-          // makes codex load the plugin-declared server BESIDE ours, and
-          // same-named tool calls dispatch to the plugin copy — spawned bare
-          // from its .mcp.json, without the loader, so no trace, no
-          // toolsListChanged disclosure, and no fake-boundary env reach it
-          // and every recording silently vanishes while results look green.
+          // non_prefixed_mcp_tool_names stays OFF: the measured
+          // amplification (loading the plugin-declared server beside ours,
+          // with the recording-loss consequences above) predates the
+          // plugin-disable fix — the flag is a second rail behind the
+          // disabled registration, not an independently measured hazard in
+          // the current posture.
           '-s',
           'danger-full-access',
           '-c',

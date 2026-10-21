@@ -100,7 +100,10 @@ files are never copied. Local config: gitignored `test/e2e/.env`.
 - **Windows**: compatible by construction (5-var home recipe, execPath shim,
   single-point case-insensitive env merge, npm.cmd, matcher normalization),
   but executed on Linux only. Windows behavior is unverified until a Windows
-  runner exists. open-mcp cases skip on win32 with a recorded reason
+  runner exists. The codex driver is Linux-stricter still: its spawn of the
+  bare `codex` binary cannot resolve npm's `.cmd` shim on win32, so the
+  codex leg cannot even probe there until a shell-aware resolution lands.
+  open-mcp cases skip on win32 with a recorded reason
   (`OPENMCP_BIN` resolution is path-only — no args-prefix seam; add
   `OPENMCP_BIN_ARGS_JSON` to lift).
 - **Order sensitivity**: `hashArgs` keeps string-array order (product
@@ -137,8 +140,9 @@ files are never copied. Local config: gitignored `test/e2e/.env`.
   ~18.6k base tokens per model turn — timing extrapolated pending the
   first nightly. Per-attempt budget caps sum to 147 min single-pass /
   294 min worst case for opencode (139/278 for codex), which the CI job
-  timeout of 330 min per leg covers. Failures attach every recording to
-  the JSON report for offline triage.
+  timeout of 330 min per leg covers. Failures attach per-attempt summaries
+  (recorded call lists, transcripts, verdict evidence) to the JSON report
+  for offline triage.
 
 ## The codex driver
 
@@ -180,8 +184,9 @@ mechanics that differ from opencode, all measured:
   so the escape target is absent there; local runs on machines with one
   carry this documented residual.
 - **Egress-block residual.** The proxy env vars are model-visible; the
-  recorded transcript is scrubbed of the E2E key values, but ambient host
-  secrets a model reads and echoes are out of scope (local-run residual).
+  whole serialized report (transcripts, hcloud argv, expectation evidence)
+  passes the scrub for the two E2E key values, but ambient host secrets a
+  model reads and echoes are out of scope (local-run residual).
 - **finalText** comes from codex's `-o` file with no stdout fallback: the
   transcript carries prompts, commands, and reasoning, so keyword matches
   against it would pass cases the model turn never completed.

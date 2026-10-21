@@ -2564,3 +2564,39 @@ test(
     assert.match(check.stdout, /network: none|no network/i);
   },
 );
+
+test('agent CLI pins stay in lockstep across ci.yml and e2e-nightly.yml', () => {
+  // The codex and opencode pins are a two-file obligation (the real-agent
+  // lane and the e2e matrix leg must test the same binaries); nothing else
+  // fails on divergence, so this pin makes the obligation mechanical.
+  const ci = readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
+  const nightly = readFileSync(join(root, '.github', 'workflows', 'e2e-nightly.yml'), 'utf8');
+  const extract = (text: string, pkg: string): string[] =>
+    [...text.matchAll(new RegExp(`${pkg}@(\\d+\\.\\d+\\.\\d+)`, 'g'))].map((m) => m[1]!);
+  for (const pkg of ['opencode-ai', '@openai/codex']) {
+    const ciPins = extract(ci, pkg);
+    const nightlyPins = extract(nightly, pkg);
+    assert.ok(ciPins.length > 0, `${pkg} must stay pinned in ci.yml`);
+    assert.ok(nightlyPins.length > 0, `${pkg} must stay pinned in e2e-nightly.yml`);
+    for (const pin of nightlyPins) {
+      assert.ok(
+        ciPins.includes(pin),
+        `${pkg}@${pin} (e2e-nightly.yml) has no matching pin in ci.yml — the agent CLI pins are a two-file event`,
+      );
+    }
+  }
+});
+
+test('the e2e driver echo and the workflow grep agree on the contract', () => {
+  // runner.ts prints "[runner] driver <id> ..."; the workflow greps the
+  // same shape so an E2E_AGENT wiring miss fails loud. A rename on either
+  // side must touch both — this pin enforces the agreement.
+  const runner = readFileSync(join(root, 'test', 'e2e', 'runner.ts'), 'utf8');
+  const nightly = readFileSync(join(root, '.github', 'workflows', 'e2e-nightly.yml'), 'utf8');
+  assert.match(runner, /\[runner\] driver \$\{driver\.id\}/, 'the runner must keep echoing the resolved driver id');
+  assert.match(
+    nightly,
+    /grep -q "\\\[runner\\\] driver \$\{\{ matrix\.agent \}\}"/,
+    'the workflow must keep grepping the driver echo',
+  );
+});

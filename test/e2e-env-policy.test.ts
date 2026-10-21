@@ -2,7 +2,38 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { buildCaseEnv, FIXED_ENV_OVERRIDES, STRIP_ENV_KEYS, homeOverrides } from './e2e/env-policy.ts';
+import { buildCaseEnv, FIXED_ENV_OVERRIDES, STRIP_ENV_KEYS, homeOverrides, scrubSecrets } from './e2e/env-policy.ts';
+
+// Frozen content floor: these keys MUST stay strippable. The loop-driven
+// part below covers additions and the strip mechanism, but iterating the
+// same exported list on both sides cannot catch REMOVALS — deleting any of
+// these from STRIP_ENV_KEYS would otherwise pass the whole suite while a
+// host value leaks into every session.
+const FROZEN_STRIP_FLOOR = [
+  'http_proxy',
+  'https_proxy',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'all_proxy',
+  'ALL_PROXY',
+  'HW_ACCESS_KEY',
+  'HW_SECRET_KEY',
+  'HW_SECURITY_TOKEN',
+  'HW_REGION',
+  'HUAWEICLOUD_REGION',
+  'HCLOUD_CONFIG_PATH',
+  'HCLOUD_OBS_CONFIG_PATH',
+  'DSH_HOME',
+  'ATOMCODE_HOME',
+  'HERMES_HOME',
+  'HUAWEICLOUD_DEVKIT_HOME',
+  'OFFICE_CLAW_CONFIG_ROOT',
+  'OPENCODE_CONFIG_DIR',
+  'OPENCODE_CONFIG',
+  'OPENCODE_TEST_HOME',
+  'DEVKIT_PACKS',
+  'HUAWEICLOUD_OPENCODE_PERMISSION_SEAM',
+];
 
 function hostileProcessEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
@@ -25,6 +56,20 @@ test('buildCaseEnv strips every STRIP_ENV_KEYS entry case-insensitively', () => 
   for (const key of STRIP_ENV_KEYS) {
     assert.equal(env[key], undefined, `${key} must not survive the trim`);
   }
+  for (const key of FROZEN_STRIP_FLOOR) {
+    assert.ok(
+      STRIP_ENV_KEYS.includes(key as (typeof STRIP_ENV_KEYS)[number]),
+      `${key} vanished from STRIP_ENV_KEYS — a deliberate contract edit needs this test updated with it`,
+    );
+    assert.equal(env[key], undefined, `${key} must not survive the trim`);
+  }
+  // Exhaustive by construction: the floor must cover every strip key, so a
+  // future addition fails here until the floor grows with it.
+  assert.equal(
+    FROZEN_STRIP_FLOOR.length,
+    STRIP_ENV_KEYS.length,
+    'FROZEN_STRIP_FLOOR and STRIP_ENV_KEYS have diverged — grow the floor with the list',
+  );
   // Case-insensitivity spot-checks beyond the canonical spellings.
   assert.equal(env.hw_secret_key, undefined, 'lowercase hw_secret_key must not survive the trim');
   // HUAWEICLOUD_HOME and CODEX_HOME are not strippable keys, but the home
@@ -89,5 +134,25 @@ test('STRIP_ENV_KEYS and FIXED_ENV_OVERRIDES stay disjoint', () => {
   const strip = new Set(STRIP_ENV_KEYS.map((key) => key.toLowerCase()));
   for (const key of Object.keys(FIXED_ENV_OVERRIDES)) {
     assert.equal(strip.has(key.toLowerCase()), false, `${key} appears in both layers`);
+  }
+});
+
+test('scrubSecrets replaces both key spellings and skips short values', () => {
+  const savedKey = process.env.E2E_APIKEY;
+  const savedAlt = process.env.E2E_TEST_API_KEY;
+  try {
+    process.env.E2E_APIKEY = 'sk-primary-key-value';
+    process.env.E2E_TEST_API_KEY = 'sk-alternate-key-value';
+    const transcript = 'stdout mentions sk-primary-key-value and also sk-alternate-key-value plus a short one abcdefg';
+    const scrubbed = scrubSecrets(transcript);
+    assert.ok(!scrubbed.includes('sk-primary-key-value'), 'the primary spelling must be scrubbed');
+    assert.ok(!scrubbed.includes('sk-alternate-key-value'), 'the alternate spelling must be scrubbed');
+    assert.ok(scrubbed.includes('abcdefg'), 'short values must survive (over-eager scrubbing mangles text)');
+    assert.ok(scrubbed.includes('[redacted]'));
+  } finally {
+    if (savedKey === undefined) delete process.env.E2E_APIKEY;
+    else process.env.E2E_APIKEY = savedKey;
+    if (savedAlt === undefined) delete process.env.E2E_TEST_API_KEY;
+    else process.env.E2E_TEST_API_KEY = savedAlt;
   }
 });

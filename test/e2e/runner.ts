@@ -13,7 +13,7 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-import { buildCaseEnv } from './env-policy.ts';
+import { buildCaseEnv, scrubSecrets } from './env-policy.ts';
 import {
   evaluateCase,
   type CaseVerdict,
@@ -289,21 +289,6 @@ function runInstall(
   if (res.status !== 0) {
     throw new Error(`install failed (exit ${res.status}): ${String(res.stderr || res.stdout).slice(0, 400)}`);
   }
-}
-
-// Session-env secret values an agent could echo into its transcript
-// (printenv and friends). The report is an uploaded CI artifact, so the
-// known key values are replaced before recording. Applied to the
-// transcript and the hcloud argv strings; expectation evidence built by
-// the evaluator from the same argv is the accepted residual (a leak there
-// requires a case whose expected flag value equals the key).
-function scrubSecrets(text: string): string {
-  let scrubbed = text;
-  for (const key of ['E2E_APIKEY', 'E2E_TEST_API_KEY']) {
-    const value = process.env[key];
-    if (value && value.length >= 8) scrubbed = scrubbed.replaceAll(value, '[redacted]');
-  }
-  return scrubbed;
 }
 
 function readHcloudLog(home: string): { argv: string[] }[] {
@@ -886,7 +871,9 @@ async function main(): Promise<void> {
         failures++;
         out(`  FAIL  ${caseDef.id}${verdict.liveness ? '' : ' (liveness: no boundary activity recorded)'}`);
         for (const v of verdict.expectations) {
-          if (!v.pass) out(`    expectation failed: ${JSON.stringify(v.expectation)} — ${v.evidence}`);
+          // The console evidence rides the CI job log (the workflow tees
+          // runner stdout), so it scrubs like the report artifact.
+          if (!v.pass) out(`    expectation failed: ${JSON.stringify(v.expectation)} — ${scrubSecrets(v.evidence)}`);
         }
       }
     }
@@ -895,7 +882,10 @@ async function main(): Promise<void> {
     rmSync(tarball, { force: true });
   }
   const reportPath = join(reportDir, `report-${Date.now()}.json`);
-  writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf8');
+  // The whole serialized report passes the scrub: per-attempt transcripts,
+  // hcloud argv, and the evaluator's expectation evidence (which embeds
+  // raw argv and tool args) all land in this uploaded CI artifact.
+  writeFileSync(reportPath, scrubSecrets(JSON.stringify(report, null, 2)), 'utf8');
   out(`[runner] ${selected.length - failures}/${selected.length} cases passed. Report: ${reportPath}`);
   process.exitCode = failures > 0 ? 1 : 0;
 }

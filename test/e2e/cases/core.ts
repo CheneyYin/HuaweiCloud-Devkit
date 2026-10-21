@@ -42,8 +42,13 @@ export const coreCases: E2eCase[] = [
       { kind: 'toolCall', name: 'huaweicloud_retrieve_skill', args: { name: 'huawei-vpc' } },
       {
         kind: 'hcloud',
+        // No flag pin — the prompt states the region in prose and does not
+        // embed a command, so the flag-name choice is model-authored (the
+        // rule: flag pins only where the prompt pins the flag, e.g.
+        // core-approval-positive's embedded command, or the product authors
+        // the flag name, e.g. the auth case's configure-set sync). Measured:
+        // the opencode leg writes --cli-region, the codex leg --region.
         head: ['VPC', 'ListVpcs'],
-        flags: { 'cli-region': 'cn-north-4' },
         times: { min: 1, max: 3 },
       },
       { kind: 'disclosure', event: 'toolsList', toolCount: TOTAL_TOOLS },

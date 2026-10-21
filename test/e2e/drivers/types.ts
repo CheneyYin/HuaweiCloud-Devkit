@@ -1,6 +1,6 @@
-// The agent-switching seam. One adapter (opencode) ships today; the
-// interface exists because switchability is a stated hard constraint, and
-// every case stays written against it. Drivers own exactly the agent
+// The agent-switching seam. Two adapters ship today (opencode, codex);
+// the interface exists because switchability is a stated hard constraint,
+// and every case stays written against it. Drivers own exactly the agent
 // knowledge: binary resolution, config/env shape, spawn shape, final-text
 // extraction. The runner owns install, seams, evaluation — drivers cannot
 // shadow seams (env-policy merge order).

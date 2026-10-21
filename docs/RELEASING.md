@@ -125,7 +125,7 @@ Steps:
 
    ```powershell
    npm run test:e2e
-   $env:E2E_AGENT = "codex"; npm run test:e2e
+   $env:E2E_AGENT = 'codex'; try { npm run test:e2e } finally { Remove-Item Env:E2E_AGENT }
    ```
 
 8. Publish to the `next` tag:

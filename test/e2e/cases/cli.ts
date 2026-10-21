@@ -32,8 +32,12 @@ export const cliCases: E2eCase[] = [
     expect: [
       {
         kind: 'hcloud',
+        // No flag pin — the prompt states the region in prose, so the
+        // flag-name choice is model-authored (flag pins only
+        // where the prompt pins the flag or the product authors the flag
+        // name). Measured across legs: opencode writes
+        // --cli-region, codex --region.
         head: ['VPC', 'ListSecurityGroups'],
-        flags: { 'cli-region': 'cn-north-4' },
         times: { min: 1, max: 3 },
       },
     ],

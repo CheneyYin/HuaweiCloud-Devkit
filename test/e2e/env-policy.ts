@@ -115,3 +115,17 @@ export function buildCaseEnv(input: BuildCaseEnvInput): NodeJS.ProcessEnv {
   for (const key of input.relaxFixed ?? []) delete env[key];
   return env;
 }
+
+// Session-env secret values an agent could echo into its transcript
+// (printenv and friends). The report is an uploaded CI artifact, so the
+// known key values are replaced before anything is recorded or serialized.
+// Short values are skipped: scrubbing an 8-char-or-less string would mangle
+// ordinary transcript text.
+export function scrubSecrets(text: string): string {
+  let scrubbed = text;
+  for (const key of ['E2E_APIKEY', 'E2E_TEST_API_KEY']) {
+    const value = process.env[key];
+    if (value && value.length >= 8) scrubbed = scrubbed.replaceAll(value, '[redacted]');
+  }
+  return scrubbed;
+}

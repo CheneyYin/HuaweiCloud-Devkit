@@ -34,3 +34,6 @@ logs/
 
 # E2E agent-suite reports (E2E_REPORT-style output, never committed)
 .e2e-results/
+
+# Local agent decision-trail logs (show-me-your-work); never commit them
+.audit/
