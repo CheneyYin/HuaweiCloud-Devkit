@@ -14,14 +14,17 @@ Enterprise agent platform for Huawei Cloud: hosts agent runtimes (LangGraph/Lang
 
 ## Scenario Routing
 
-| Workload                                   | Route to                                       | Why                                                        |
-| ------------------------------------------ | ---------------------------------------------- | ---------------------------------------------------------- |
-| Host/deploy an agent workload (production) | AgentArts (here)                               | Runtime hosting, memory, gateway, observability            |
-| Free quick preview of a web app            | huawei-sandbox                                 | Sandbox previews web apps, not agent workloads             |
-| Web app / API / static site hosting        | huawei-functiongraph / huawei-ecs / huawei-obs | Not agent runtimes                                         |
-| Model training / inference                 | huawei-modelarts                               | ModelArts is the ML platform, AgentArts the agent platform |
+| Workload                                                       | Route to                                         | Why                                                                             |
+| -------------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------- |
+| Host/deploy an agent workload (production)                     | AgentArts (here)                                 | Runtime hosting, memory, gateway, observability                                 |
+| Managed Agents（托管智能体）                                   | AgentArts console — not measured by this toolkit | Console-only workflow; the 0.1.7 CLI surface has no such commands (43 fixtures) |
+| 外部智能体观测评估 (external agent observability & evaluation) | AgentArts console — not measured by this toolkit | Console-only workflow; the 0.1.7 CLI surface has no such commands (43 fixtures) |
+| 低代码编排 (low-code orchestration)                            | AgentArts console — not measured by this toolkit | Console-only workflow; the 0.1.7 CLI surface has no such commands (43 fixtures) |
+| Free quick preview of a web app                                | huawei-sandbox                                   | Sandbox previews web apps, not agent workloads                                  |
+| Web app / API / static site hosting                            | huawei-functiongraph / huawei-ecs / huawei-obs   | Not agent runtimes                                                              |
+| Model training / inference                                     | huawei-modelarts                                 | ModelArts is the ML platform, AgentArts the agent platform                      |
 
-`deploy an agent` is NOT a web-app hosting target: the Deployment Target Options web gate does not apply — route here directly.
+`deploy an agent` is NOT a web-app hosting target: the Deployment Target Options web gate does not apply — route here directly. The four product usage modes (the console-only three above plus self-hosted runtime code, this skill's path) are documented at https://support.huaweicloud.com/productdesc-agentarts/agentarts_03_0002.html — only the CLI/SDK paths in this skill are measured by this toolkit.
 
 ## Prerequisites
 

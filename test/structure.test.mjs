@@ -1270,6 +1270,17 @@ test('cli-workflows.md teaches gateway provisioning, session lifecycle, and the 
   assert.doesNotMatch(body, /TODO/i);
 });
 
+test('SKILL.md routes the console-only product modes (PR10)', () => {
+  const body = readFileSync(join(pluginRoot, 'skills', 'huawei-agentarts', 'SKILL.md'), 'utf8');
+  assert.match(body, /Managed Agents/);
+  assert.match(body, /低代码编排/);
+  assert.match(body, /观测评估|observability/i);
+  assert.match(body, /not measured by this toolkit/);
+  assert.match(body, /productdesc-agentarts/);
+  // Console-only rows must not invent CLI commands (pure console wording).
+  assert.doesNotMatch(body, /`agentarts (managed|lowcode|orchestrat)/i);
+});
+
 test('tool count is never hardcoded in AGENTS.md (TOOL_DEFINITIONS.length is the source)', () => {
   const agents = readFileSync(join(root, 'AGENTS.md'), 'utf8');
   assert.doesNotMatch(agents, /\b\d+ (MCP )?tool definitions/, 'AGENTS.md hardcodes a tool count');
