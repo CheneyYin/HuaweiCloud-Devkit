@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
@@ -49,6 +49,13 @@ async function withIsolation(fn) {
         '  *" --stub-stdin "*)',
         '    if read -t 2 line; then echo "STDIN_LEAK: $line" >&2; exit 1; fi',
         '    echo "OK"',
+        '    exit 0;;',
+        '  *" --stub-key "*)',
+        '    echo "2026-10-21 INFO creating space"',
+        '    echo \'{"id": "space-e2e-001", "api_key": "KEY_ONETIME_abc123", "name": "s"}\'',
+        '    exit 0;;',
+        '  *" memory create "*)',
+        '    echo \'{"id": "space-e2e-002", "api_key": "KEY_ONETIME_xyz789", "name": "s"}\'',
         '    exit 0;;',
         '  *)',
         '    echo \'{"items":[]}\'',
@@ -101,10 +108,12 @@ test('plan classifies tiers, normalizes aliases, and canonicalizes destroy', asy
     assert.equal(local.tier, 'local');
     assert.match(local.executionBlock, /Bash/i);
 
-    const blocked = planAgentartsCommand(['memory', 'create', '--name', 'x']);
-    assert.equal(blocked.tier, 'blocked');
-    assert.match(blocked.executionBlock, /deferred/i);
-    assert.equal(blocked.approvalToken, undefined);
+    // PR11: memory create is approved, canonicalized to --output json (the
+    // only branch that prints the one-time api_key).
+    const memoryCreate = planAgentartsCommand(['memory', 'create', '--name', 'x']);
+    assert.equal(memoryCreate.tier, 'approved');
+    assert.deepEqual(memoryCreate.args, ['memory', 'create', '--name', 'x', '--output', 'json']);
+    assert.equal(typeof memoryCreate.approvalToken, 'string');
   });
 });
 
@@ -205,6 +214,7 @@ test('readonly run rejects non-readonly tiers and bearer tokens', async () => {
     assert.match(approved.error, /run_approved/);
     const blocked = await runAgentartsReadonlyCommand(['memory', 'create']);
     assert.equal(blocked.ok, false);
+    assert.match(blocked.error, /run_approved/);
     const bearer = await runAgentartsReadonlyCommand(['memory', 'list', '--bearer-token', 'x']);
     assert.equal(bearer.ok, false);
     assert.match(bearer.error, /bearer-token/i);
@@ -591,6 +601,111 @@ test('list agents fails closed without devkit credentials and dispatches through
     assert.equal(viaTool.ok, true);
     assert.equal(viaTool.count, 0);
     assert.deepEqual(viaTool.agents, []);
+  });
+});
+
+test('plan canonicalizes memory create/delete and rejects non-json output (PR11)', async () => {
+  await withIsolation(() => {
+    // create: --output json appended, token binds to the canonical form.
+    const create = planAgentartsCommand(['memory', 'create', 'x']);
+    assert.equal(create.tier, 'approved');
+    assert.deepEqual(create.args, ['memory', 'create', 'x', '--output', 'json']);
+    assert.match(create.command, /--output json/);
+    assert.equal(typeof create.approvalToken, 'string');
+    // Explicit forms are never double-appended.
+    for (const explicit of [
+      ['memory', 'create', 'x', '--output', 'json'],
+      ['memory', 'create', 'x', '-o', 'json'],
+      ['memory', 'create', 'x', '--output=json'],
+    ]) {
+      assert.deepEqual(planAgentartsCommand(explicit).args, explicit);
+    }
+    // An explicit non-json --output is a plan-level rejection (the one-time
+    // api_key would be permanently lost — no argv surgery on bound args).
+    const rejected = planAgentartsCommand(['memory', 'create', 'x', '--output', 'table']);
+    assert.equal(rejected.ok, false);
+    assert.match(rejected.error, /json/);
+    assert.match(rejected.error, /api_key|one-time/i);
+    const rejectedShort = planAgentartsCommand(['memory', 'create', 'x', '-o', 'table']);
+    assert.equal(rejectedShort.ok, false);
+
+    // delete: --force appended (NOT --yes — the measured flag), never both.
+    const del = planAgentartsCommand(['memory', 'delete', 'space-1']);
+    assert.equal(del.tier, 'approved');
+    assert.deepEqual(del.args, ['memory', 'delete', 'space-1', '--force']);
+    assert.ok(!del.args.includes('--yes'));
+    assert.deepEqual(del.labels, ['irreversible']);
+    const delShort = planAgentartsCommand(['memory', 'delete', 'space-1', '-f']);
+    assert.deepEqual(delShort.args, ['memory', 'delete', 'space-1', '-f']);
+    assert.ok(!delShort.args.includes('--yes'));
+
+    // update: approved, no canonical flag (fixture shows none).
+    const update = planAgentartsCommand(['memory', 'update', 'space-1', '--name', 'y']);
+    assert.equal(update.tier, 'approved');
+    assert.deepEqual(update.args, ['memory', 'update', 'space-1', '--name', 'y']);
+  });
+});
+
+test('approved memory create captures the one-time key to a 0600 file, payload stays redacted', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const plan = planAgentartsCommand(['memory', 'create', 'x']);
+    const run = await runAgentartsApprovedCommand({
+      args: ['memory', 'create', 'x', '--output', 'json'],
+      approvalToken: plan.approvalToken,
+      approvedByUser: true,
+    });
+    assert.equal(run.status, 'ok');
+    assert.equal(run.ok, true);
+    // The key file exists, is 0600, under the scratch state root, and holds
+    // the RAW key.
+    assert.equal(run.spaceId, 'space-e2e-002');
+    const keyFile = run.memoryApiKeyFile;
+    assert.match(keyFile, /agentarts-memory-api-key-space-e2e-002\.txt$/);
+    assert.equal(statSync(keyFile).mode & 0o777, 0o600);
+    assert.equal(readFileSync(keyFile, 'utf8').trim(), 'KEY_ONETIME_xyz789');
+    // The returned payload NEVER carries the raw key (trap (a): extraction
+    // happened pre-redaction, but only the path flows out).
+    assert.doesNotMatch(JSON.stringify(run), /KEY_ONETIME_xyz789/);
+    assert.match(run.stdout, /<redacted>/);
+    // The token binds to the canonical form: non-canonical args mismatch.
+    const plan2 = planAgentartsCommand(['memory', 'create', 'x']);
+    await assert.rejects(
+      runAgentartsApprovedCommand({
+        args: ['memory', 'create', 'x'],
+        approvalToken: plan2.approvalToken,
+        approvedByUser: true,
+      }),
+      /do not match the approved plan/i,
+    );
+  });
+});
+
+test('key extraction survives noisy stdout; failure writes no key file', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // The --stub-key variant prepends a log line before the JSON — the
+    // regex fallback path must still capture the key.
+    const plan = planAgentartsCommand(['memory', 'create', 'x', '--stub-key']);
+    const run = await runAgentartsApprovedCommand({
+      args: ['memory', 'create', 'x', '--stub-key', '--output', 'json'],
+      approvalToken: plan.approvalToken,
+      approvedByUser: true,
+    });
+    assert.equal(run.ok, true);
+    assert.equal(readFileSync(run.memoryApiKeyFile, 'utf8').trim(), 'KEY_ONETIME_abc123');
+
+    // A failed create writes no key file and surfaces no capture fields.
+    const failPlan = planAgentartsCommand(['memory', 'create', 'x', '--stub-traceback']);
+    const failRun = await runAgentartsApprovedCommand({
+      args: ['memory', 'create', 'x', '--stub-traceback', '--output', 'json'],
+      approvalToken: failPlan.approvalToken,
+      approvedByUser: true,
+    });
+    assert.equal(failRun.status, 'ok');
+    assert.equal(failRun.ok, false);
+    assert.equal(failRun.memoryApiKeyFile, undefined);
+    assert.equal(failRun.spaceId, undefined);
   });
 });
 

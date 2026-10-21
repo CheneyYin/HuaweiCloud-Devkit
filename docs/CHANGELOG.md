@@ -6,7 +6,18 @@
 
 ## Unreleased
 
+- fix(huawei-ecs): Ecs.0044 volume-type sellout mapping + RHEL-family firewalld coverage with no-SSH recovery path (#971)
+- fix(safety): admin-port deny remediation now points at /32 egress-IP rules and the cloud-init no-SSH path (#971)
 - docs(huawei-ecs): large-user_data JSON-file path (--skeleton / --cli-jsonInput / --dryrun) + anti-pattern warning against abandoning the MCP approval channel (#964)
+- feat(agentarts): measured CLI fixtures + adjudication record + routing skill + policy-driven hook floor for both hook layers (PR0-PR1)
+- feat(agentarts): approval wrapper, shared token store, plan/readonly/approved tool trio, doctor + SDK version pin, gated real-cloud e2e golden path (PR2-PR4)
+- feat(agentarts): Huawei Cloud PyPI mirror teaching + devkit-venv resolution chain + mirror guardrails; root fix — credentialFilePatterns matched *.huaweicloud.com domains, now path-component semantics (PR5)
+- feat(agentarts): opt-in install-agentarts — devkit-owned venv, venv-local pip, mirror fallback, never executes the CLI during install; --with-agentarts / --clean-agentarts wiring (PR6)
+- feat(agentarts): list-agents SDK tool — runtime listing the 0.1.7 CLI cannot do (argv-as-data + trustworthy exit codes; e2e agent pre-sweep + list-verified teardown) (PR7)
+- docs(agentarts): scenario-1 deployment runbook (LangChain → MaaS → AgentArts, mirror-first) + build-context leak, MCP-timeout pre-warm, argv-free secret injection, framework-template dev recipe (PR8)
+- docs(agentarts): gateway provisioning + runtime session workflows in cli-workflows.md — IAM agency auto-create side effect, exec-command no-shell semantics, CLI 60s vs wrapper 120s timeout interplay (PR9)
+- docs(agentarts): scenario routing for the console-only product modes (Managed Agents / observability & evaluation / low-code orchestration) with not-measured markers (PR10)
+- feat(agentarts): memory lifecycle unblock — per-operation canonical flags (--force/--output json), one-time api_key captured pre-redaction to a 0600 state-root file, policy flip with the irreversible label, python-hook gate-order drift fix (PR11)
 
 ## 1.1.10-next.0 (2026-10-20)
 

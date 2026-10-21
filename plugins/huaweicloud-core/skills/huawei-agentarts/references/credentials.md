@@ -87,10 +87,28 @@ parsed YAML, not from the image, so the file is not needed inside the image:
 - if a secret was ever deployed before this was in place, **rotate it** — the
   earlier image is already in the registry.
 
-## Memory data-plane key (next release)
+## Memory data-plane key (measured lifecycle, PR11)
 
-The per-Space `HUAWEICLOUD_SDK_MEMORY_API_KEY` (returned once at creation)
-is out of scope this release — `memory create/update/delete` are blocked.
-When the memory scenario ships, the key's lifecycle will follow the same
-runtime-injection pattern as AK/SK. Echoing
-`$HUAWEICLOUD_SDK_MEMORY_API_KEY` is already hook-blocked.
+`memory create` authenticates on the CONTROL plane (AK/SK via the
+wrapper's env injection) and returns a ONE-TIME data-plane `api_key`. Only
+the `--output json` branch prints it (the table branch prints Space
+ID/Status and the key is lost forever), so the wrapper canonicalizes
+create to `--output json` and REJECTS an explicit non-json `--output` at
+plan time. Lifecycle:
+
+- On a successful create the wrapper captures the key from the raw
+  (pre-redaction) output and writes it to
+  `~/.config/huaweicloud/agentarts-memory-api-key-<space_id>.txt`
+  (0600, honors `HUAWEICLOUD_HOME`). The returned payload stays redacted
+  and carries only `memoryApiKeyFile` (the path, never the key).
+- The user reads the file directly for the data plane. Reading it via
+  Bash is hook-blocked (credentialFilePatterns matches the
+  `~/.huaweicloud`-adjacent state path) — that is defense in depth, not
+  an error; the agent must never `cat` it into the transcript.
+- Data-plane consumption: the `HUAWEICLOUD_SDK_MEMORY_API_KEY`
+  environment variable (or the SDK's `api_key` parameter) — inject it the
+  same argv-free way as any other secret (see the yaml recipe above);
+  echoing `$HUAWEICLOUD_SDK_MEMORY_API_KEY` is hook-blocked.
+- `memory delete --force` is irreversible (deletes the space and its
+  sessions/messages/memories); the wrapper canonicalizes `--force` and
+  the approval carries the `irreversible` label.

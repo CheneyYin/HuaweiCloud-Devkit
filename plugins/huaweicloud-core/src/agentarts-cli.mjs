@@ -85,13 +85,25 @@ const agentartsApprovals = createApprovalTokenStore('agentarts');
 // - `destroy` prompts Confirm.ask unless --yes/-y.
 // - `memory install/uninstall` prompt for platform selection when target is
 //   omitted and for confirmation unless --yes; target must be explicit.
+// - `memory delete` prompts unless --force/-f (NOT --yes — a different flag).
+// - `memory create --output json` is REQUIRED for the one-time api_key to be
+//   printed at all (the table branch prints only Space ID/Status, losing the
+//   key permanently — commands.py:121-131).
 // - `gateway delete`/`delete-target` prompt with NO skip flag at all — the
 //   wrapper hard-stops and points at the user terminal.
 // - bare `agentarts config` is an interactive wizard — a subcommand is
 //   required.
 // - `--bearer-token`/`-bt` exists on 7 commands; argv is process-list
 //   visible, so the wrapper rejects it outright (env-var auth only).
-const NON_INTERACTIVE_GROUPS = new Set(['destroy', 'memory install', 'memory uninstall']);
+// Per-operation canonical flags: what to append when the caller omitted it,
+// and how to detect an explicit occurrence (never double-append).
+const CANONICAL_FLAGS = new Map([
+  ['destroy', { append: ['--yes'], present: [/^(--yes|-y)$/] }],
+  ['memory install', { append: ['--yes'], present: [/^(--yes|-y)$/] }],
+  ['memory uninstall', { append: ['--yes'], present: [/^(--yes|-y)$/] }],
+  ['memory delete', { append: ['--force'], present: [/^(--force|-f)$/] }],
+  ['memory create', { append: ['--output', 'json'], present: [/^(--output|-o)(=|$)/] }],
+]);
 const INTERACTIVE_BLOCKED_SUBCOMMANDS = new Set(['gateway delete', 'gateway delete-target']);
 const MEMORY_INSTALL_TARGETS = new Set(['hermes', 'claude', 'codex', 'opencode', 'openclaw']);
 
@@ -138,13 +150,41 @@ export function resolveAgentartsCommand() {
 const classifyAgentartsInvocation = resolveAgentartsTier;
 
 // Canonicalize args into the exact form the wrapper would execute: append
-// the measured non-interactive flag where one exists and is safe (--yes for
-// destroy). The approval token binds to THESE args, so what the user approves
-// is what runs.
+// the measured per-operation flag set where the caller omitted it. The
+// approval token binds to THESE args, so what the user approves is what
+// runs. memory create is special: `--output json` is the ONLY branch that
+// prints the one-time api_key, so an explicit NON-json --output is a
+// plan-level rejection (same posture as --bearer-token), not a rewrite —
+// rewriting bound approval args is argv surgery the token hash cannot
+// survive.
 function canonicalizeArgs(rawArgs, classification) {
   const args = (Array.isArray(rawArgs) ? rawArgs : []).map(String);
-  if (NON_INTERACTIVE_GROUPS.has(classification.operation) && !args.some((a) => /^(--yes|-y)$/.test(a))) {
-    return [...args, '--yes'];
+  const rule = CANONICAL_FLAGS.get(classification.operation);
+  if (!rule) return args;
+  if (classification.operation === 'memory create') {
+    const explicit = args.find((a) => rule.present[0].test(a));
+    if (
+      explicit !== undefined &&
+      !/^(--output|-o)(=?)json$/i.test(explicit.replace(/\s+/g, '')) &&
+      !/^(-o|--output)$/i.test(explicit)
+    ) {
+      return null;
+    }
+    if (explicit !== undefined) {
+      // `--output json` / `-o json` present (value may be the next token) —
+      // but a bare `-o`/`--output` with a non-json NEXT token also fails.
+      const idx = args.indexOf(explicit);
+      const inline = explicit.includes('=');
+      if (!inline) {
+        const value = args[idx + 1];
+        if (value === undefined || !/^json$/i.test(value)) return null;
+      }
+    }
+    if (explicit !== undefined) return args;
+    return [...args, '--output', 'json'];
+  }
+  if (!args.some((a) => rule.present.some((re) => re.test(a)))) {
+    return [...args, ...rule.append];
   }
   return args;
 }
@@ -208,6 +248,16 @@ export function planAgentartsCommand(rawArgs, options = {}) {
   const hardStop = blocked || bareConfig || missingTarget;
 
   const canonicalArgs = hardStop ? providedArgs : canonicalizeArgs(providedArgs, classification);
+  if (canonicalArgs === null) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      executable,
+      args: redactSecrets(providedArgs),
+      error:
+        'Rejected: memory create with a non-json --output permanently loses the one-time api_key (the table branch prints only Space ID/Status). Re-run with --output json (or omit it — the wrapper canonicalizes to json).',
+    };
+  }
   const notes = planningGuidance(classification, canonicalArgs);
   // Display/storage surfaces are POSITIONAL-SCRUBBED on top of redactSecrets:
   // `config set-env HUAWEICLOUD_SDK_AK <value>` must not carry the raw value
@@ -253,14 +303,17 @@ export function planAgentartsCommand(rawArgs, options = {}) {
   }
 
   if (classification.tier === 'blocked') {
-    plan.executionBlock =
-      'Memory-space create/update/delete are deferred to the next toolkit release (the memory scenario ships later); run them in your own terminal if needed.';
+    // Kept for custom policies: the stock policy no longer blocks any
+    // command (PR11 unblocked memory create/update/delete).
+    plan.executionBlock = `${classification.operation} is blocked by toolkit policy in this release — run it in your own terminal if needed.`;
     return plan;
   }
 
   if (classification.tier === 'approved' || classification.tier === 'unknown') {
     plan.approvalToken = agentartsApprovals.create(canonicalArgs);
-    plan.approvalGuidance = `Cloud write (${classification.labels.join(', ') || 'billing'}). Present the exact command to the user; on explicit approval, call huaweicloud_agentarts_run_approved_command with these args and the approvalToken. Otherwise the user runs it in their own terminal.`;
+    plan.approvalGuidance = `Cloud write${
+      classification.labels.length ? ` (${classification.labels.join(', ')})` : ''
+    }. Present the exact command to the user; on explicit approval, call huaweicloud_agentarts_run_approved_command with these args and the approvalToken. Otherwise the user runs it in their own terminal.`;
   }
   return plan;
 }
@@ -400,17 +453,86 @@ async function runAgentarts(canonicalArgs, classification, options = {}) {
       // Exit code is deliberately ignored: 0.1.7 returns 0 on failure.
       const failed = detectFailure(stdout, stderr);
       const largeOutputFile = saveLargeOutput(stdout);
+      // memory create: capture the ONE-TIME api_key from the RAW stdout —
+      // BEFORE redactSecrets runs (the redacted payload would only ever
+      // yield <redacted>). Written to a 0600 file under the devkit state
+      // root; the payload carries only the path, never the key.
+      const memoryApiKey = failed ? null : extractMemoryApiKey(stdout, classification.operation);
+      if (memoryApiKey) {
+        try {
+          mkdirSync(dirname(memoryApiKey.file), { recursive: true });
+          writeFileSync(memoryApiKey.file, `${memoryApiKey.apiKey}\n`, { encoding: 'utf8', mode: 0o600 });
+        } catch {
+          // The create itself succeeded; a failed key capture must not flip
+          // the outcome — surface it via the note below instead.
+        }
+      }
+      // redactSecrets only masks `key[:=]value` SHAPES — a JSON body like
+      // {"api_key": "K"} is a plain string to it and would leak the raw key
+      // in stdout. A successful memory create carries exactly that shape, so
+      // the captured key is scrubbed from the text explicitly before the
+      // generic redaction pass.
+      const payloadStdout =
+        memoryApiKey && stdout.includes(memoryApiKey.apiKey)
+          ? stdout.split(memoryApiKey.apiKey).join('<redacted>')
+          : stdout;
       finish({
         ok: !failed,
         exitCode: code,
-        stdout: redactSecrets(stdout),
+        stdout: redactSecrets(payloadStdout),
         stderr: redactSecrets(stderr),
         failureDetected: failed,
         durationMs: Date.now() - startedAt,
         ...(largeOutputFile ? { largeOutputFile } : {}),
+        ...(memoryApiKey
+          ? {
+              spaceId: memoryApiKey.spaceId,
+              memoryApiKeyFile: memoryApiKey.file,
+              memoryApiKeyNote: `One-time data-plane API key saved (0600): ${memoryApiKey.file}. It is never printed — the user reads the file directly (data-plane env: HUAWEICLOUD_SDK_MEMORY_API_KEY).`,
+            }
+          : {}),
       });
     });
   });
+}
+
+// Extract the one-time memory api_key (+ space id) from a successful
+// `memory create --output json` stdout. Dual-path defense: JSON.parse the
+// trimmed output first (rich print_json should emit clean JSON), fall back
+// to the same regex style the e2e uses for memory list (real output can
+// carry log noise around the payload).
+function extractMemoryApiKey(rawStdout, operation) {
+  if (operation !== 'memory create') return null;
+  const text = String(rawStdout || '');
+  let apiKey = null;
+  let spaceId = null;
+  try {
+    const parsed = JSON.parse(text.trim());
+    if (parsed && typeof parsed === 'object') {
+      apiKey = typeof parsed.api_key === 'string' ? parsed.api_key : null;
+      spaceId = typeof parsed.id === 'string' ? parsed.id : null;
+    }
+  } catch {
+    /* fall through to the regex path */
+  }
+  if (!apiKey) {
+    const keyMatch = /"api_key"\s*:\s*"([^"]+)"/.exec(text);
+    if (keyMatch) apiKey = keyMatch[1];
+  }
+  if (!spaceId) {
+    // Fallback regex: match the TOP-LEVEL "id" key only (quoted boundary
+    // rejects suffixed keys like "api_key_id"/"agency_id" — those are the
+    // realistic collision sources in a noisy create response).
+    const idMatch = /(?<![_a-zA-Z])"id"\s*:\s*"([^"]+)"/.exec(text);
+    if (idMatch) spaceId = idMatch[1];
+  }
+  if (!apiKey || !spaceId) return null;
+  const stateRoot = process.env.HUAWEICLOUD_HOME || homedir();
+  return {
+    apiKey,
+    spaceId,
+    file: join(stateRoot, '.config', 'huaweicloud', `agentarts-memory-api-key-${spaceId}.txt`),
+  };
 }
 
 // The env-or-fail credential contract: without devkit credentials the CLI
@@ -675,7 +797,7 @@ export const AGENTARTS_TOOL_DEFINITIONS = [
   {
     name: 'huaweicloud_agentarts_plan_cli_command',
     description:
-      'Classify and plan an agentarts CLI command (agentarts-sdk, Huawei Cloud AgentArts) without executing it. Returns the tier (local/readonly/approved/blocked), canonical args (non-interactive flags included), warnings, and an approvalToken for approved-tier cloud writes.',
+      'Classify and plan an agentarts CLI command (agentarts-sdk, Huawei Cloud AgentArts) without executing it. Returns the tier (local/readonly/approved/blocked), canonical args (per-operation non-interactive flags included: destroy/memory install/uninstall append --yes, memory delete appends --force, memory create canonicalizes to --output json so its one-time api_key is printed), warnings, and an approvalToken for approved-tier cloud writes. memory create with an explicit non-json --output is rejected at plan (the key would be permanently lost).',
     inputSchema: {
       type: 'object',
       required: ['args'],
@@ -709,7 +831,7 @@ export const AGENTARTS_TOOL_DEFINITIONS = [
   {
     name: 'huaweicloud_agentarts_run_approved_command',
     description:
-      'Run an approved-tier agentarts command only after the exact command has been shown and explicitly approved by the user. stdin is never written; interactive-only commands (gateway delete) are hard-stopped.',
+      'Run an approved-tier agentarts command only after the exact command has been shown and explicitly approved by the user. stdin is never written; interactive-only commands (gateway delete) are hard-stopped. memory create: the one-time data-plane api_key is captured from the raw output to a 0600 file under the devkit state root — the returned payload stays redacted and carries memoryApiKeyFile (the path, never the key).',
     inputSchema: {
       type: 'object',
       required: ['args', 'approvalToken', 'approvedByUser'],

@@ -207,6 +207,19 @@ test('huawei-ecs create-instance documents the large-user_data JSON-file path (#
   assert.match(body, /do NOT abandon the MCP channel/i);
 });
 
+test('huawei-ecs troubleshooting covers volume-type sellout and RHEL-family firewalld (#971)', () => {
+  const body = readFileSync(join(pluginRoot, 'skills', 'huawei-ecs', 'references', 'troubleshooting.md'), 'utf8');
+  // A: Ecs.0044 must be a distinct row from Ecs.0319 (volume type vs flavor capacity).
+  assert.match(body, /Ecs\.0044/);
+  assert.match(body, /root_volume\.volumetype/);
+  // B: the firewalld section must cover the RHEL family (not just EulerOS), record the
+  // unverified Rocky observation honestly, and point at the no-SSH cloud-init recovery path.
+  assert.match(body, /RHEL 系/);
+  assert.match(body, /Rocky/);
+  assert.match(body, /根因未验证/);
+  assert.match(body, /无需登录实例|cloud-init/);
+});
+
 test('skills with references have non-empty reference files', () => {
   const skillsDir = join(pluginRoot, 'skills');
   const skillNames = readdirSync(skillsDir).filter((name) => existsSync(join(skillsDir, name, 'SKILL.md')));
@@ -1139,6 +1152,15 @@ test('huawei-agentarts skill ships with routing floor and core registry wiring',
   assert.match(body, /AGENTARTS_BIN/);
   assert.match(body, /HUAWEICLOUD_SDK_AK/);
   assert.match(body, /cn-north-4/);
+  // PR11: memory create/update/delete are approved (no blocked row remains)
+  // and the one-time-key trap + file capture is taught.
+  assert.doesNotMatch(body, /blocked \(this release\)/);
+  assert.match(body, /memory create\/update\/delete/);
+  assert.match(body, /agentarts-memory-api-key/);
+  assert.doesNotMatch(body, /TODO/i);
+  const creds = readFileSync(join(skillDir, 'references', 'credentials.md'), 'utf8');
+  assert.match(creds, /agentarts-memory-api-key/);
+  assert.match(creds, /0600/);
 
   // Core skill routes agent workloads and declares the gate exemption (D15).
   const core = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-core', 'SKILL.md'), 'utf8');
@@ -1159,7 +1181,9 @@ test('huawei-agentarts skill ships with routing floor and core registry wiring',
   for (const group of ['init', 'dev', 'config', 'launch', 'destroy', 'invoke', 'memory', 'gateway', 'runtime']) {
     assert.ok(agentarts.commands[group], `agentartsCommandPolicy missing group: ${group}`);
   }
-  assert.equal(agentarts.commands.memory.subcommands.create.tier, 'blocked');
+  assert.equal(agentarts.commands.memory.subcommands.create.tier, 'approved');
+  assert.equal(agentarts.commands.memory.subcommands.update.tier, 'approved');
+  assert.equal(agentarts.commands.memory.subcommands.delete.tier, 'approved');
   assert.equal(agentarts.commands.memory.subcommands.list.tier, 'readonly');
   assert.equal(agentarts.commands.gateway.subcommands.delete.tier, 'approved');
 
@@ -1241,6 +1265,31 @@ test('agentarts SKILL.md and references only mention registered commands', () =>
       }
     }
   }
+});
+
+test('cli-workflows.md teaches gateway provisioning, session lifecycle, and the exec-command timeout interplay (PR9)', () => {
+  const body = readFileSync(join(pluginRoot, 'skills', 'huawei-agentarts', 'references', 'cli-workflows.md'), 'utf8');
+  assert.match(body, /## Gateway Provisioning/);
+  assert.match(body, /## Runtime Sessions/);
+  // The timeout interplay is the PR9 core fact: CLI 60s vs wrapper 120s vs max 3600.
+  assert.match(body, /--timeout/);
+  assert.match(body, /60s/);
+  assert.match(body, /120s/);
+  assert.match(body, /3600/);
+  // The IAM-agency auto-create side effect is taught (SDK source, not yet cloud-measured).
+  assert.match(body, /AgentArtsCoreGateway/);
+  assert.doesNotMatch(body, /TODO/i);
+});
+
+test('SKILL.md routes the console-only product modes (PR10)', () => {
+  const body = readFileSync(join(pluginRoot, 'skills', 'huawei-agentarts', 'SKILL.md'), 'utf8');
+  assert.match(body, /Managed Agents/);
+  assert.match(body, /低代码编排/);
+  assert.match(body, /观测评估|observability/i);
+  assert.match(body, /not measured by this toolkit/);
+  assert.match(body, /productdesc-agentarts/);
+  // Console-only rows must not invent CLI commands (pure console wording).
+  assert.doesNotMatch(body, /`agentarts (managed|lowcode|orchestrat)/i);
 });
 
 test('tool count is never hardcoded in AGENTS.md (TOOL_DEFINITIONS.length is the source)', () => {

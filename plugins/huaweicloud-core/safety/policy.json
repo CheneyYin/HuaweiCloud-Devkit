@@ -87,62 +87,162 @@
     },
     "defaultTier": "approved",
     "commands": {
-      "init": { "tier": "local" },
-      "dev": { "tier": "local" },
+      "init": {
+        "tier": "local"
+      },
+      "dev": {
+        "tier": "local"
+      },
       "config": {
         "tier": "approved",
         "labels": ["credential-guard"],
         "subcommands": {
-          "list": { "tier": "approved", "labels": ["credential-guard"] },
-          "set-default": { "tier": "approved", "labels": ["credential-guard"] },
-          "get": { "tier": "approved", "labels": ["credential-guard"] },
-          "set": { "tier": "approved", "labels": ["credential-guard"] },
-          "remove": { "tier": "approved", "labels": ["credential-guard"] },
-          "set-env": { "tier": "approved", "labels": ["credential-guard"] },
-          "remove-env": { "tier": "approved", "labels": ["credential-guard"] },
-          "list-env": { "tier": "approved", "labels": ["credential-guard"] }
+          "list": {
+            "tier": "approved",
+            "labels": ["credential-guard"]
+          },
+          "set-default": {
+            "tier": "approved",
+            "labels": ["credential-guard"]
+          },
+          "get": {
+            "tier": "approved",
+            "labels": ["credential-guard"]
+          },
+          "set": {
+            "tier": "approved",
+            "labels": ["credential-guard"]
+          },
+          "remove": {
+            "tier": "approved",
+            "labels": ["credential-guard"]
+          },
+          "set-env": {
+            "tier": "approved",
+            "labels": ["credential-guard"]
+          },
+          "remove-env": {
+            "tier": "approved",
+            "labels": ["credential-guard"]
+          },
+          "list-env": {
+            "tier": "approved",
+            "labels": ["credential-guard"]
+          }
         }
       },
-      "launch": { "tier": "approved", "labels": ["billing"] },
-      "destroy": { "tier": "approved", "labels": ["irreversible"] },
-      "invoke": { "tier": "approved", "labels": ["execute"] },
+      "launch": {
+        "tier": "approved",
+        "labels": ["billing"]
+      },
+      "destroy": {
+        "tier": "approved",
+        "labels": ["irreversible"]
+      },
+      "invoke": {
+        "tier": "approved",
+        "labels": ["execute"]
+      },
       "memory": {
         "tier": "approved",
         "subcommands": {
-          "list": { "tier": "readonly" },
-          "get": { "tier": "readonly" },
-          "status": { "tier": "readonly" },
-          "create": { "tier": "blocked" },
-          "update": { "tier": "blocked" },
-          "delete": { "tier": "blocked" },
-          "install": { "tier": "approved", "labels": ["host-trust"] },
-          "uninstall": { "tier": "approved", "labels": ["host-trust"] }
+          "list": {
+            "tier": "readonly"
+          },
+          "get": {
+            "tier": "readonly"
+          },
+          "status": {
+            "tier": "readonly"
+          },
+          "create": {
+            "tier": "approved"
+          },
+          "update": {
+            "tier": "approved"
+          },
+          "delete": {
+            "tier": "approved",
+            "labels": ["irreversible"]
+          },
+          "install": {
+            "tier": "approved",
+            "labels": ["host-trust"]
+          },
+          "uninstall": {
+            "tier": "approved",
+            "labels": ["host-trust"]
+          }
         }
       },
       "gateway": {
         "tier": "approved",
         "subcommands": {
-          "get": { "tier": "readonly" },
-          "list": { "tier": "readonly" },
-          "get-target": { "tier": "readonly" },
-          "list-targets": { "tier": "readonly" },
-          "create": { "tier": "approved", "labels": ["billing"] },
-          "update": { "tier": "approved", "labels": ["billing"] },
-          "delete": { "tier": "approved", "labels": ["irreversible"] },
-          "create-target": { "tier": "approved", "labels": ["billing", "credential-guard"] },
-          "update-target": { "tier": "approved", "labels": ["billing", "credential-guard"] },
-          "delete-target": { "tier": "approved", "labels": ["irreversible"] }
+          "get": {
+            "tier": "readonly"
+          },
+          "list": {
+            "tier": "readonly"
+          },
+          "get-target": {
+            "tier": "readonly"
+          },
+          "list-targets": {
+            "tier": "readonly"
+          },
+          "create": {
+            "tier": "approved",
+            "labels": ["billing"]
+          },
+          "update": {
+            "tier": "approved",
+            "labels": ["billing"]
+          },
+          "delete": {
+            "tier": "approved",
+            "labels": ["irreversible"]
+          },
+          "create-target": {
+            "tier": "approved",
+            "labels": ["billing", "credential-guard"]
+          },
+          "update-target": {
+            "tier": "approved",
+            "labels": ["billing", "credential-guard"]
+          },
+          "delete-target": {
+            "tier": "approved",
+            "labels": ["irreversible"]
+          }
         }
       },
       "runtime": {
         "tier": "approved",
         "subcommands": {
-          "invoke": { "tier": "approved", "labels": ["execute"] },
-          "exec-command": { "tier": "approved", "labels": ["rce"] },
-          "upload-files": { "tier": "approved", "labels": ["data-exfil"] },
-          "download-files": { "tier": "approved", "labels": ["local-write"] },
-          "start-session": { "tier": "approved", "labels": ["execute"] },
-          "stop-session": { "tier": "approved", "labels": ["execute"] }
+          "invoke": {
+            "tier": "approved",
+            "labels": ["execute"]
+          },
+          "exec-command": {
+            "tier": "approved",
+            "labels": ["rce"]
+          },
+          "upload-files": {
+            "tier": "approved",
+            "labels": ["data-exfil"]
+          },
+          "download-files": {
+            "tier": "approved",
+            "labels": ["local-write"]
+          },
+          "start-session": {
+            "tier": "approved",
+            "labels": ["execute"]
+          },
+          "stop-session": {
+            "tier": "approved",
+            "labels": ["execute"]
+          }
         }
       }
     }

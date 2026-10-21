@@ -415,6 +415,17 @@ def evaluate(tool_name, tool_input):
         return "safety policy failed to load; blocking this action (fail-safe)."
     if SECRET_READ_RE and SECRET_READ_RE.search(text):
         return "direct secret value retrieval would put plaintext secrets into the agent context."
+    # The agentarts gate runs BEFORE the generic cloud-risk rules: the
+    # agentarts reason points at the approved-tooling path (the actionable
+    # remediation), while a generic rule would mask it — Node layer's
+    # classifyTextCommand orders the same way (agentarts_write wins over
+    # evaluateCommandRisk). PR11 caught the drift via
+    # `agentarts memory delete --force` hitting the generic
+    # force-deletion rule first.
+    if tool_name in ("Bash", "terminal"):
+        agentarts_reason = agentarts_block_reason(text)
+        if agentarts_reason:
+            return agentarts_reason
     denied_rule = first_denied_command_rule(text)
     if denied_rule:
         return f"{denied_rule.get('message')} Remediation: {denied_rule.get('remediation')}"
@@ -446,10 +457,6 @@ def evaluate(tool_name, tool_input):
                     )
                 if HCLOUD_RE.search(segment) and WRITE_OPERATION_RE.search(segment) and not READ_OPERATION_RE.search(segment):
                     return "unapproved Huawei Cloud write operations must be planned first and explicitly approved by the user."
-    if tool_name in ("Bash", "terminal"):
-        agentarts_reason = agentarts_block_reason(text)
-        if agentarts_reason:
-            return agentarts_reason
 
     return None
 
