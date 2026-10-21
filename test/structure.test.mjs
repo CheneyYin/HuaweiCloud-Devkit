@@ -1152,6 +1152,15 @@ test('huawei-agentarts skill ships with routing floor and core registry wiring',
   assert.match(body, /AGENTARTS_BIN/);
   assert.match(body, /HUAWEICLOUD_SDK_AK/);
   assert.match(body, /cn-north-4/);
+  // PR11: memory create/update/delete are approved (no blocked row remains)
+  // and the one-time-key trap + file capture is taught.
+  assert.doesNotMatch(body, /blocked \(this release\)/);
+  assert.match(body, /memory create\/update\/delete/);
+  assert.match(body, /agentarts-memory-api-key/);
+  assert.doesNotMatch(body, /TODO/i);
+  const creds = readFileSync(join(skillDir, 'references', 'credentials.md'), 'utf8');
+  assert.match(creds, /agentarts-memory-api-key/);
+  assert.match(creds, /0600/);
 
   // Core skill routes agent workloads and declares the gate exemption (D15).
   const core = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-core', 'SKILL.md'), 'utf8');
@@ -1172,7 +1181,9 @@ test('huawei-agentarts skill ships with routing floor and core registry wiring',
   for (const group of ['init', 'dev', 'config', 'launch', 'destroy', 'invoke', 'memory', 'gateway', 'runtime']) {
     assert.ok(agentarts.commands[group], `agentartsCommandPolicy missing group: ${group}`);
   }
-  assert.equal(agentarts.commands.memory.subcommands.create.tier, 'blocked');
+  assert.equal(agentarts.commands.memory.subcommands.create.tier, 'approved');
+  assert.equal(agentarts.commands.memory.subcommands.update.tier, 'approved');
+  assert.equal(agentarts.commands.memory.subcommands.delete.tier, 'approved');
   assert.equal(agentarts.commands.memory.subcommands.list.tier, 'readonly');
   assert.equal(agentarts.commands.gateway.subcommands.delete.tier, 'approved');
 

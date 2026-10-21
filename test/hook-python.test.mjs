@@ -196,6 +196,7 @@ test('python hook blocks agentarts cloud-write commands (policy-driven floor)', 
     'agentarts config set base.region cn-southwest-2',
     'agentarts memory install opencode --yes',
     'agentarts memory create --name x',
+    'agentarts memory delete <id> --force',
     'agentarts runtime exec-command "pip install pandas" --agent a --session s',
     'agentarts newsubcommand --foo',
     'bash -c "agentarts destroy"',
@@ -210,6 +211,11 @@ test('python hook blocks agentarts cloud-write commands (policy-driven floor)', 
     const reason = JSON.parse(result.stdout);
     assert.equal(typeof reason, 'string', `${command} should be blocked`);
     assert.match(reason, /agentarts/i, command);
+    if (/memory (create|delete)/.test(command)) {
+      // PR11: memory trio is approved in the policy — the floor denies as a
+      // cloud write for approved tooling, never as "deferred".
+      assert.match(reason, /cloud write|approved tooling/i, command);
+    }
   }
 });
 

@@ -173,14 +173,14 @@ pass `--session` to exec-command/invoke/upload/download; stop with
 
 ## Wrapper Rules (why some commands hard-stop)
 
-| Shape                              | Wrapper behavior                                                                                                                                                                                           |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--bearer-token` / `-bt` anywhere  | Rejected at plan: argv is process-list visible                                                                                                                                                             |
-| bare `agentarts config`            | Hard stop: interactive wizard                                                                                                                                                                              |
-| `gateway delete` / `delete-target` | Hard stop: typer.confirm, NO skip flag exists — user terminal only                                                                                                                                         |
-| `memory install`/`uninstall`       | Plan requires an explicit target (hermes, claude, codex, opencode, openclaw) — the plan canonicalizes `--yes`; it writes credentials into the host agent's config — a user decision, never agent-initiated |
-| `memory create`/`update`/`delete`  | Blocked this release (memory scenario ships later) — user terminal                                                                                                                                         |
-| `destroy`                          | Plan appends `--yes` (measured non-interactive flag); approval binds to that form                                                                                                                          |
+| Shape                              | Wrapper behavior                                                                                                                                                                                                             |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--bearer-token` / `-bt` anywhere  | Rejected at plan: argv is process-list visible                                                                                                                                                                               |
+| bare `agentarts config`            | Hard stop: interactive wizard                                                                                                                                                                                                |
+| `gateway delete` / `delete-target` | Hard stop: typer.confirm, NO skip flag exists — user terminal only                                                                                                                                                           |
+| `memory install`/`uninstall`       | Plan requires an explicit target (hermes, claude, codex, opencode, openclaw) — the plan canonicalizes `--yes`; it writes credentials into the host agent's config — a user decision, never agent-initiated                   |
+| `memory create`/`update`/`delete`  | Approved (PR11). create canonicalizes to `--output json` and captures the one-time api_key to a 0600 file (payload stays redacted — see credentials.md); delete canonicalizes `--force` and carries the `irreversible` label |
+| `destroy`                          | Plan appends `--yes` (measured non-interactive flag); approval binds to that form                                                                                                                                            |
 
 ## Exit Codes Lie
 

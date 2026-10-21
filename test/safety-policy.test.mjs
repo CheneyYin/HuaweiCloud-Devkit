@@ -688,7 +688,7 @@ test('classifyTextCommand gates agentarts cloud-write commands (policy-driven ho
     'agentarts config set-env HUAWEICLOUD_SDK_AK dummy',
     'agentarts memory install opencode --yes',
     'agentarts memory uninstall opencode',
-    'agentarts memory create --name x', // blocked tier this release
+    'agentarts memory create --name x', // approved tier (PR11) — the Bash floor still denies cloud writes
     'agentarts memory update <id> --name y',
     'agentarts memory delete <id> --force',
     'agentarts runtime exec-command "pip install pandas" --agent a --session s',
@@ -714,6 +714,12 @@ test('classifyTextCommand gates agentarts cloud-write commands (policy-driven ho
     assert.match(result.reason, /agentarts/i, cmd);
     assert.equal(result.service, 'AgentArts', cmd);
   }
+  // PR11: the memory trio flipped to approved in the policy — the Bash floor
+  // still denies them as cloud writes (approved tooling only), never as
+  // "deferred" anymore.
+  const memoryCreate = classifyTextCommand('agentarts memory create --name x');
+  assert.equal(memoryCreate.risk, 'agentarts_write');
+  assert.doesNotMatch(memoryCreate.reason, /deferred/i);
 });
 
 test('classifyTextCommand allows agentarts local and read-only commands', () => {
