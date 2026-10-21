@@ -18,11 +18,12 @@ function hostileProcessEnv(): NodeJS.ProcessEnv {
     DEVKIT_PACKS: 'core',
     HUAWEICLOUD_HOME: '/real/devkit-home',
     HUAWEICLOUD_OPENCODE_PERMISSION_SEAM: 'off',
+    CODEX_HOME: '/real/codex-home',
     HOME: '/real/home',
   };
 }
 
-test('buildCaseEnv strips every hostile key case-insensitively', () => {
+test('buildCaseEnv strips every STRIP_ENV_KEYS entry case-insensitively', () => {
   const env = buildCaseEnv({ processEnv: hostileProcessEnv(), home: '/tmp/h' });
   for (const key of [
     'http_proxy',
@@ -37,13 +38,14 @@ test('buildCaseEnv strips every hostile key case-insensitively', () => {
   ]) {
     assert.equal(env[key], undefined, `${key} must not survive the trim`);
   }
-  // HUAWEICLOUD_HOME is stripped from the process env and then legitimately
-  // relocated by the home layer — it must point at the throwaway home.
+  // HUAWEICLOUD_HOME and CODEX_HOME are not strippable keys, but the home
+  // layer relocates both — a host-set codex home must never survive.
   assert.equal(env.HUAWEICLOUD_HOME, '/tmp/h');
+  assert.equal(env.CODEX_HOME, join('/tmp/h', '.codex'));
   assert.equal(env.PATH, '/usr/bin');
 });
 
-test('buildCaseEnv relocates the home with the five-variable recipe plus XDG', () => {
+test('buildCaseEnv relocates the home with the full homeOverrides recipe', () => {
   const home = '/tmp/hwc-e2e-home';
   const env = buildCaseEnv({
     processEnv: { ...hostileProcessEnv(), XDG_CONFIG_HOME: '/host/xdg-config' },
@@ -61,6 +63,7 @@ test('buildCaseEnv relocates the home with the five-variable recipe plus XDG', (
   assert.equal(env.XDG_DATA_HOME, join(home, '.local', 'share'));
   assert.equal(env.XDG_STATE_HOME, join(home, '.local', 'state'));
   assert.equal(env.XDG_CACHE_HOME, join(home, '.cache'));
+  assert.equal(env.CODEX_HOME, join(home, '.codex'));
 });
 
 test('buildCaseEnv applies every fixed posture override', () => {
