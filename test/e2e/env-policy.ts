@@ -26,7 +26,17 @@ export const STRIP_ENV_KEYS: readonly string[] = [
   'HUAWEICLOUD_REGION',
   'HCLOUD_CONFIG_PATH',
   'HCLOUD_OBS_CONFIG_PATH',
+  // Ambient agent-home overrides (real-agents sandboxEnv precedent): a
+  // host value would redirect the installer, the spawned server, or the
+  // opencode config root out of the throwaway home.
   'DSH_HOME',
+  'ATOMCODE_HOME',
+  'HERMES_HOME',
+  'HUAWEICLOUD_DEVKIT_HOME',
+  'OFFICE_CLAW_CONFIG_ROOT',
+  'OPENCODE_CONFIG_DIR',
+  'OPENCODE_CONFIG',
+  'OPENCODE_TEST_HOME',
   // Pack posture rides the install --packs channel; env must stay unset so
   // the runner controls the only delivery path per case.
   'DEVKIT_PACKS',

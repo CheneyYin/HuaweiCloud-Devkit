@@ -5,39 +5,28 @@ import test from 'node:test';
 import { buildCaseEnv, FIXED_ENV_OVERRIDES, STRIP_ENV_KEYS, homeOverrides } from './e2e/env-policy.ts';
 
 function hostileProcessEnv(): NodeJS.ProcessEnv {
-  return {
+  const env: NodeJS.ProcessEnv = {
     PATH: '/usr/bin',
     Path: '/win/bin',
-    http_proxy: 'http://corp-proxy:8080',
-    HTTPS_PROXY: 'http://corp-proxy:8080',
-    HW_ACCESS_KEY: 'REAL_AK',
-    hw_secret_key: 'REAL_SK',
-    HW_SECURITY_TOKEN: 'REAL_STS',
-    HW_REGION: 'cn-north-4',
-    HCLOUD_CONFIG_PATH: '/real/.hcloud',
-    DEVKIT_PACKS: 'core',
-    HUAWEICLOUD_HOME: '/real/devkit-home',
-    HUAWEICLOUD_OPENCODE_PERMISSION_SEAM: 'off',
-    CODEX_HOME: '/real/codex-home',
     HOME: '/real/home',
+    CODEX_HOME: '/real/codex-home',
+    HUAWEICLOUD_HOME: '/real/devkit-home',
+    XDG_CONFIG_HOME: '/host/xdg-config',
   };
+  // Every strippable key carries a hostile value: the pin must fail on any
+  // drive-by edit to the strip list, not just the spot-checked spellings.
+  for (const key of STRIP_ENV_KEYS) env[key] = '/hostile';
+  env.hw_secret_key = '/hostile-lowercase';
+  return env;
 }
 
 test('buildCaseEnv strips every STRIP_ENV_KEYS entry case-insensitively', () => {
   const env = buildCaseEnv({ processEnv: hostileProcessEnv(), home: '/tmp/h' });
-  for (const key of [
-    'http_proxy',
-    'HTTPS_PROXY',
-    'HW_ACCESS_KEY',
-    'hw_secret_key',
-    'HW_SECURITY_TOKEN',
-    'HW_REGION',
-    'HCLOUD_CONFIG_PATH',
-    'DEVKIT_PACKS',
-    'HUAWEICLOUD_OPENCODE_PERMISSION_SEAM',
-  ]) {
+  for (const key of STRIP_ENV_KEYS) {
     assert.equal(env[key], undefined, `${key} must not survive the trim`);
   }
+  // Case-insensitivity spot-checks beyond the canonical spellings.
+  assert.equal(env.hw_secret_key, undefined, 'lowercase hw_secret_key must not survive the trim');
   // HUAWEICLOUD_HOME and CODEX_HOME are not strippable keys, but the home
   // layer relocates both — a host-set codex home must never survive.
   assert.equal(env.HUAWEICLOUD_HOME, '/tmp/h');
