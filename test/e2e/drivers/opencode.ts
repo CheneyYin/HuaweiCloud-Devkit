@@ -22,12 +22,12 @@ import { opencodeSeamVersionSupported } from '../../../plugins/huaweicloud-core/
 // seam's pure module (no drift when the floor moves), and the probe spawn
 // pins XDG_CONFIG_HOME to a throwaway dir — opencode initializes its config
 // root on every run, and the probe must not touch the developer's real one.
-function opencodeVersionSupported(): { ok: boolean; detail: string } {
+function opencodeVersionSupported(): { ok: boolean; detail: string; version: string | null } {
   let probeRoot: string;
   try {
     probeRoot = mkdtempSync(join(tmpdir(), 'devkit-e2e-opencode-'));
   } catch {
-    return { ok: false, detail: 'could not create a probe temp dir' };
+    return { ok: false, version: null, detail: 'could not create a probe temp dir' };
   }
   try {
     const r = spawnSync('opencode', ['--version'], {
@@ -40,10 +40,11 @@ function opencodeVersionSupported(): { ok: boolean; detail: string } {
     if (!opencodeSeamVersionSupported(version)) {
       return {
         ok: false,
+        version,
         detail: `opencode ${version ?? '(unparsable: ' + (out.trim() || 'no output') + ')'} predates the measured permission-seam floor`,
       };
     }
-    return { ok: true, detail: `opencode ${version}` };
+    return { ok: true, version, detail: `opencode ${version}` };
   } finally {
     try {
       rmSync(probeRoot, { recursive: true, force: true });
@@ -62,25 +63,37 @@ function opencodeConfigFile(home: string): string {
 export const opencodeDriver: AgentDriver = {
   id: 'opencode',
   installTarget: 'opencode',
+  supportsInstallPacks: true,
 
   probe(): DriverProbe {
     const command = resolveCommand('opencode');
     if (!command) {
-      return { ok: false, detail: 'opencode binary not found on PATH', command: null };
+      return { ok: false, detail: 'opencode binary not found on PATH', command: null, version: null };
     }
     const version = opencodeVersionSupported();
     if (!version.ok) {
-      return { ok: false, command, detail: `${version.detail} — the free-choice skill cases need the permission seam` };
+      return {
+        ok: false,
+        command,
+        version: version.version,
+        detail: `${version.detail} — the free-choice skill cases need the permission seam`,
+      };
     }
     const { missing, apiKeyVar } = requiredModelEnv();
     if (missing.length > 0) {
       return {
         ok: false,
         command,
+        version: version.version,
         detail: `missing environment: ${missing.join(', ')}. Set a dedicated E2E key (never the real auth file) plus provider/model pins.`,
       };
     }
-    return { ok: true, command, detail: `opencode ready, ${version.detail} (auth via ${apiKeyVar})` };
+    return {
+      ok: true,
+      command,
+      version: version.version,
+      detail: `opencode ready, ${version.detail} (auth via ${apiKeyVar})`,
+    };
   },
 
   prepare(ctx: DriverContext): NodeJS.ProcessEnv {

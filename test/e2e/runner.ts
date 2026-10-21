@@ -26,7 +26,8 @@ import { HttpFake } from './http-fake.ts';
 import { WsFake } from './ws-fake/hwlink-server.ts';
 import type { E2eCase, Expectation } from './types.ts';
 import { opencodeDriver } from './drivers/opencode.ts';
-import type { AgentDriver } from './drivers/types.ts';
+import { codexDriver } from './drivers/codex.ts';
+import type { AgentDriver, DriverId } from './drivers/types.ts';
 import { cliCases } from './cases/cli.ts';
 import { coreCases } from './cases/core.ts';
 import { authCases, sandboxCases, voucherCases, wsSandboxCases } from './cases/http-packs.ts';
@@ -39,7 +40,7 @@ const fakeHcloud = fileURLToPath(new URL('../fixtures/fake-hcloud.ts', import.me
 const fakeOpenMcp = fileURLToPath(new URL('../fixtures/fake-open-mcp-sidecar.mjs', import.meta.url));
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const TEMP_PREFIX = 'hwc-e2e-';
-const DRIVERS: Record<string, AgentDriver> = { opencode: opencodeDriver };
+const DRIVERS: Record<DriverId, AgentDriver> = { opencode: opencodeDriver, codex: codexDriver };
 const ALL_CASES: E2eCase[] = [
   ...cliCases,
   ...coreCases,
@@ -269,8 +270,15 @@ function readTrace(home: string): { toolCalls: TraceToolCall[]; disclosures: Tra
   return { toolCalls, disclosures };
 }
 
-function runInstall(bin: string, home: string, workdir: string, env: NodeJS.ProcessEnv, installPacks?: string): void {
-  const args = ['install', '--target', 'opencode'];
+function runInstall(
+  bin: string,
+  home: string,
+  workdir: string,
+  env: NodeJS.ProcessEnv,
+  installTarget: string,
+  installPacks?: string,
+): void {
+  const args = ['install', '--target', installTarget];
   if (installPacks) args.push('--packs', installPacks);
   const res = spawnSync(process.execPath, [bin, ...args], {
     cwd: workdir,
@@ -281,6 +289,21 @@ function runInstall(bin: string, home: string, workdir: string, env: NodeJS.Proc
   if (res.status !== 0) {
     throw new Error(`install failed (exit ${res.status}): ${String(res.stderr || res.stdout).slice(0, 400)}`);
   }
+}
+
+// Session-env secret values an agent could echo into its transcript
+// (printenv and friends). The report is an uploaded CI artifact, so the
+// known key values are replaced before recording. Applied to the
+// transcript and the hcloud argv strings; expectation evidence built by
+// the evaluator from the same argv is the accepted residual (a leak there
+// requires a case whose expected flag value equals the key).
+function scrubSecrets(text: string): string {
+  let scrubbed = text;
+  for (const key of ['E2E_APIKEY', 'E2E_TEST_API_KEY']) {
+    const value = process.env[key];
+    if (value && value.length >= 8) scrubbed = scrubbed.replaceAll(value, '[redacted]');
+  }
+  return scrubbed;
 }
 
 function readHcloudLog(home: string): { argv: string[] }[] {
@@ -318,21 +341,30 @@ async function runCase(
   };
   const maxAttempts = Math.max(1, caseDef.budget.attempts);
 
+  // Recorded skips resolve once, before any attempt spends budget: platform
+  // exclusion, or a packs-posture channel the driver's install target does
+  // not implement (the codex CLI owns that target's MCP config; a silently
+  // unapplied posture would misattribute a toolsList mismatch).
+  const skipReason =
+    caseDef.unsupportedPlatforms?.find((p) => p.platform === process.platform)?.reason ??
+    (caseDef.installPacks && !driver.supportsInstallPacks
+      ? `installPacks rides the install --packs channel, which the ${driver.id} target does not implement`
+      : undefined);
+  if (skipReason) {
+    return {
+      verdict: {
+        caseId: caseDef.id,
+        pass: true,
+        liveness: true,
+        expectations: [],
+        soft: [],
+      },
+      recordings: lastRecordings,
+      report: { attempts: [], skipped: { reason: skipReason } } satisfies CaseRunReport,
+    };
+  }
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    if (caseDef.unsupportedPlatforms?.some((p) => p.platform === process.platform)) {
-      const skip = caseDef.unsupportedPlatforms.find((p) => p.platform === process.platform)!;
-      return {
-        verdict: {
-          caseId: caseDef.id,
-          pass: true,
-          liveness: true,
-          expectations: [],
-          soft: [],
-        },
-        recordings: lastRecordings,
-        report: { attempts: [], skipped: { reason: skip.reason } } satisfies CaseRunReport,
-      };
-    }
     const home = mkdtempSync(join(tmpdir(), `${TEMP_PREFIX}home-`));
     const workdir = mkdtempSync(join(tmpdir(), `${TEMP_PREFIX}work-`));
     const wsFake = caseDef.fixtures.ws ? new WsFake() : null;
@@ -357,14 +389,20 @@ async function runCase(
       const pathShimDir = installPathShim(home);
       const scriptPath = caseDef.fixtures.hcloud ? join(home, 'hcloud-script.json') : null;
       if (scriptPath) writeFileSync(scriptPath, JSON.stringify(caseDef.fixtures.hcloud), 'utf8');
+      // Some agents refuse to resolve a home that does not exist yet, and
+      // the install spawns their CLI — the pre-install hook runs before it
+      // and may contribute install-env vars (the codex egress block, which
+      // must cover the install-time catalog-sync spawns too).
+      const installDriverVars = driver.prepareHome?.(home) ?? {};
       // Install first — driver.prepare() merges the model/provider config
       // into the config file the installer just wrote, so it must run after.
       const installEnv = buildCaseEnv({
         processEnv: process.env,
         home,
+        driverVars: installDriverVars,
         seamVars: seamVars(home, scriptPath, kooCliVersion, httpFake, caseDef.fixtures, pathShimDir),
       });
-      runInstall(bin, home, workdir, installEnv, caseDef.installPacks);
+      runInstall(bin, home, workdir, installEnv, driver.installTarget, caseDef.installPacks);
       const env = buildCaseEnv({
         processEnv: process.env,
         home,
@@ -414,15 +452,18 @@ async function runCase(
       attempts.push({
         attempt,
         exitCode: run.exitCode,
-        hcloudCalls: recordings.hcloud.map((c) => c.argv.join(' ')),
+        hcloudCalls: recordings.hcloud.map((c) => scrubSecrets(c.argv.join(' '))),
         httpCalls: recordings.http.map((h) => `${h.method} ${h.path}`),
         gatewayCalls: recordings.gateway.map((g) => `${g.method}${g.tool ? `:${g.tool}` : ''}`),
         wsCalls: recordings.ws.map(
           (conn) =>
             `conn(source=${conn.source ?? 'n/a'}): ${conn.commands.map((c) => c.intent).join(',') || '(no commands)'}`,
         ),
-        stdout: run.stdout.slice(0, 8000),
-        stderr: run.stderr.slice(0, 4000),
+        // The recorded transcript can echo anything the agent printed; the
+        // model keys ride the session env (both legs), so their values are
+        // scrubbed before the report exists — the report is a CI artifact.
+        stdout: scrubSecrets(run.stdout).slice(0, 8000),
+        stderr: scrubSecrets(run.stderr).slice(0, 4000),
         verdict,
       });
       if (verdict.pass) break;
@@ -497,7 +538,7 @@ async function selfcheck(bin: string, kooCliVersion: string): Promise<boolean> {
         home,
         seamVars: seamVars(home, null, kooCliVersion, httpFake, {}, installPathShim(home)),
       });
-      runInstall(bin, home, home, env);
+      runInstall(bin, home, home, env, 'opencode');
       const server = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js');
       if (!existsSync(server)) {
         out(`[selfcheck] FAIL installed server missing: ${server}`);
@@ -773,7 +814,7 @@ async function main(): Promise<void> {
   }
   const args = process.argv.slice(2);
   const driverId = process.env.E2E_AGENT || 'opencode';
-  const driver = DRIVERS[driverId];
+  const driver = DRIVERS[driverId as DriverId];
   if (!driver) {
     out(`[runner] unknown E2E_AGENT "${driverId}" (available: ${Object.keys(DRIVERS).join(', ')})`);
     process.exitCode = 2;
@@ -802,6 +843,11 @@ async function main(): Promise<void> {
     process.exitCode = 2;
     return;
   }
+  // Startup echo of the resolved driver (and version) — the matrix CI leg
+  // (a separate, drift-guarded workflow change in this series) will grep
+  // this so a wiring miss cannot pass as a green duplicate of the other
+  // leg; until it lands, the echo is informational.
+  out(`[runner] driver ${driver.id}${probe.version ? ` (${probe.version})` : ''}: ${probe.detail}`);
   sweepStaleTempDirs();
 
   const selected = args.length > 0 ? ALL_CASES.filter((c) => args.includes(c.id)) : ALL_CASES;
@@ -825,6 +871,7 @@ async function main(): Promise<void> {
       model: process.env.E2E_MODEL || null,
       provider: process.env.E2E_PROVIDER_ID || null,
       devkitVersion: pkg.version,
+      agentVersion: probe.version,
     },
     cases: [] as unknown[],
   };
