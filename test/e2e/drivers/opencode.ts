@@ -1,37 +1,16 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 
 import type { AgentDriver, DriverContext, DriverProbe, RunRequest, RunResult } from './types.ts';
+import { requiredModelEnv, resolveCommand, runHeadlessAgent } from './shared.ts';
 import { opencodeSeamVersionSupported } from '../../../plugins/huaweicloud-core/src/lib/opencode-permission-seam.ts';
 
 // opencode adapter. Auth is a dedicated E2E key injected via env
 // (E2E_APIKEY or E2E_TEST_API_KEY) — real auth files are never copied into
 // throwaway dirs. Model and provider are pinned per run so nightly failures
 // are attributable (model drift is a suite event, not a mystery).
-const APIKEY_ENV_VARS = ['E2E_APIKEY', 'E2E_TEST_API_KEY'] as const;
-
-function apiKeyEnvVar(): string | null {
-  for (const key of APIKEY_ENV_VARS) {
-    if (process.env[key]) return key;
-  }
-  return null;
-}
-
-function requiredEnv(): { missing: string[]; apiKeyVar: string } {
-  const apiKeyVar = apiKeyEnvVar();
-  const apiKeyVarFinal = apiKeyVar ?? 'E2E_APIKEY';
-  const missing = ['E2E_PROVIDER_ID', 'E2E_PROVIDER_BASEURL', 'E2E_MODEL'].filter((key) => !process.env[key]);
-  if (!apiKeyVar) missing.push(APIKEY_ENV_VARS.join(' or '));
-  return { missing, apiKeyVar: apiKeyVarFinal };
-}
-
-function resolveCommand(name: string): string | null {
-  const direct = spawnSync(name, ['--version'], { encoding: 'utf8', timeout: 10_000 });
-  if (direct.status === 0 || direct.stdout) return name;
-  return null;
-}
 
 // The free-choice skill cases exercise the direct-read default, which needs
 // the installer's permission seam to land (outside-workspace reads are
@@ -93,7 +72,7 @@ export const opencodeDriver: AgentDriver = {
     if (!version.ok) {
       return { ok: false, command, detail: `${version.detail} — the free-choice skill cases need the permission seam` };
     }
-    const { missing, apiKeyVar } = requiredEnv();
+    const { missing, apiKeyVar } = requiredModelEnv();
     if (missing.length > 0) {
       return {
         ok: false,
@@ -108,7 +87,7 @@ export const opencodeDriver: AgentDriver = {
     const providerId = process.env.E2E_PROVIDER_ID!;
     const baseURL = process.env.E2E_PROVIDER_BASEURL!;
     const model = process.env.E2E_MODEL!;
-    const apiKeyVar = requiredEnv().apiKeyVar;
+    const apiKeyVar = requiredModelEnv().apiKeyVar;
     const apiKey = process.env[apiKeyVar];
     const configPath = opencodeConfigFile(ctx.home);
     mkdirSync(dirname(configPath), { recursive: true });
@@ -154,56 +133,7 @@ export const opencodeDriver: AgentDriver = {
   },
 
   async runPrompt(req: RunRequest): Promise<RunResult> {
-    return new Promise<RunResult>((resolveRun) => {
-      const child = spawn('opencode', ['run', req.prompt], {
-        cwd: req.cwd,
-        env: req.env,
-        detached: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      let stdout = '';
-      let stderr = '';
-      let settled = false;
-      child.stdout.on('data', (chunk) => {
-        stdout += chunk;
-      });
-      child.stderr.on('data', (chunk) => {
-        stderr += chunk;
-      });
-      const finish = (exitCode: number | null) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolveRun({
-          exitCode,
-          stdout,
-          stderr,
-          finalText: stdout.trim() ? stdout : null,
-        });
-      };
-      const timer = setTimeout(() => {
-        try {
-          if (child.pid) process.kill(-child.pid, 'SIGKILL');
-        } catch {
-          // the tree may already be gone
-        }
-      }, req.timeoutMs);
-      req.signal.addEventListener(
-        'abort',
-        () => {
-          try {
-            if (child.pid) process.kill(-child.pid, 'SIGKILL');
-          } catch {
-            // best-effort tree teardown
-          }
-        },
-        { once: true },
-      );
-      child.on('error', (err) => {
-        stderr += String(err);
-        finish(null);
-      });
-      child.on('close', (code) => finish(code));
-    });
+    const { exitCode, stdout, stderr } = await runHeadlessAgent('opencode', ['run', req.prompt], req);
+    return { exitCode, stdout, stderr, finalText: stdout.trim() ? stdout : null };
   },
 };
