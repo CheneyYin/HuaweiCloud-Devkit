@@ -843,10 +843,9 @@ async function main(): Promise<void> {
     process.exitCode = 2;
     return;
   }
-  // Startup echo of the resolved driver (and version) — the matrix CI leg
-  // (a separate, drift-guarded workflow change in this series) will grep
-  // this so a wiring miss cannot pass as a green duplicate of the other
-  // leg; until it lands, the echo is informational.
+  // Startup echo of the resolved driver (and version) — the matrix CI legs
+  // grep this (load-bearing, not informational) so a wiring miss cannot
+  // pass as a green duplicate of the other leg.
   out(`[runner] driver ${driver.id}${probe.version ? ` (${probe.version})` : ''}: ${probe.detail}`);
   sweepStaleTempDirs();
 

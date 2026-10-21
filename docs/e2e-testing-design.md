@@ -1,18 +1,20 @@
 # E2E Testing Design (agent-level suite)
 
 The suite lives in `test/e2e/`, gated by `E2E_ENABLE=1` (`npm run test:e2e`),
-and runs in CI on three lanes: nightly on v2, every push to v2, and an
-opt-in `run-e2e` label for same-repo PRs into v2 (never in the required PR
-gate). It is the mechanism-verification tier of the
-agent-level test story; the real-cloud guidance tier is
-`test/huaweicloud-agent-toolkit-test/` (see Division of labor below).
+and runs in CI on three lanes as a two-driver matrix (`E2E_AGENT` selects
+the leg, default opencode): nightly on v2, every push to v2, and an opt-in
+`run-e2e` label for same-repo PRs into v2 (never in the required PR gate).
+It is the mechanism-verification tier of the agent-level test story; the
+real-cloud guidance tier is `test/huaweicloud-agent-toolkit-test/` (see
+Division of labor below).
 
 ## What is under test
 
 The devkit's **observable outbound behavior** after a real tarball install,
-driven by a real, unmocked code agent (opencode headless, real LLM). The
-agent layer is never mocked; the Huawei Cloud boundary is fully fake but
-recording. Assertion surfaces:
+driven by a real, unmocked code agent (opencode or codex headless, real
+LLM) against the fake Huawei Cloud boundary. The agent layer is never
+mocked; the Huawei Cloud boundary is fully fake but recording. Cases are
+driver-agnostic data: every assertion surface works for both legs.
 
 | Channel                            | Seam                                                                                                      | Owner                                                       |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
@@ -77,17 +79,21 @@ object per line, two discriminated shapes, `v: 1`:
 `test/e2e/env-policy.ts` is the single env assembly point (pin test:
 `test/e2e-env-policy.test.ts`). Merge order is fixed: trimmed process env →
 throwaway-home relocation (HOME/USERPROFILE/HOMEDRIVE/HOMEPATH/
-HUAWEICLOUD_HOME + XDG_*) → driver vars → seam vars → fixed posture
-overrides. Stripped: all six proxy spellings, `HW_*` credentials, KooCLI
-config paths, `DEVKIT_PACKS` (posture rides `install --packs` only).
+HUAWEICLOUD_HOME + XDG_* + CODEX_HOME) → driver vars → seam vars →
+case env → fixed posture overrides. Stripped: all six proxy spellings,
+`HW_*` credentials, KooCLI config paths, `DEVKIT_PACKS` (posture rides
+`install --packs` only), and the ambient agent-home override family
+(`OPENCODE_CONFIG`, `HUAWEICLOUD_DEVKIT_HOME`, `ATOMCODE_HOME`,
+`HERMES_HOME`, and siblings — the real-agents sandboxEnv precedent).
 Pinned: `HUAWEICLOUD_DEVKIT_TELEMETRY=off`, `HUAWEICLOUD_DEVKIT_SKIP_UPDATE=1`,
 `HUAWEICLOUD_INJECT_STS_CMD=0`, `NO_PROXY` for localhost. The HTTP boundary
 env vars point at the local fake for EVERY case — scripted or not — so no
 request can leave the machine (unknown paths answer 404 fast).
 
 Auth: a dedicated E2E API key via env (`E2E_APIKEY` / `E2E_TEST_API_KEY`),
-written into the throwaway home's opencode auth.json (0600). Real auth files
-are never copied. Local config: gitignored `test/e2e/.env`.
+written into the throwaway home's opencode auth.json (0600; the codex leg
+delivers it through its env_key + mcp-env.json path instead). Real auth
+files are never copied. Local config: gitignored `test/e2e/.env`.
 
 ## Known boundaries
 
@@ -125,11 +131,65 @@ are never copied. Local config: gitignored `test/e2e/.env`.
   Covering it needs a product seam (an `HUAWEICLOUD_MARKETPLACE_INDEX`-style
   override); until one lands, this tool has no E2E case.
 - **LLM cost/latency**: a single case takes 1 to 4 min with an attempts cap
-  of 2. A full run covers all 31 cases and measures about 40 min wall clock
-  (first-attempt passes; the per-attempt budget caps sum to 147 min
-  single-pass / 294 min worst case, which the CI job timeout of 330 min
-  covers). Failures attach every recording to the JSON report
-  for offline triage.
+  of 2. A full opencode leg covers all 31 cases and measured ~34-40 min
+  wall clock (first-attempt passes); the codex leg covers 29 cases plus 2
+  recorded skips (the installPacks channel has no codex write path) with
+  ~18.6k base tokens per model turn — timing extrapolated pending the
+  first nightly. Per-attempt budget caps sum to 147 min single-pass /
+  294 min worst case for opencode (139/278 for codex), which the CI job
+  timeout of 330 min per leg covers. Failures attach every recording to
+  the JSON report for offline triage.
+
+## The codex driver
+
+`test/e2e/drivers/codex.ts`, spike-validated on codex-cli 0.162.1. The
+mechanics that differ from opencode, all measured:
+
+- **Server declaration.** An enabled plugin's `.mcp.json` server loads
+  BESIDE any `mcp_servers` entry, and same-named tool calls dispatch
+  nondeterministically to either — the plugin copy runs the real payload
+  but is spawned bare, so its calls leave no trace and no fake-log
+  recordings. The driver disables the plugin registration in config.toml
+  (fail-loud on installer-output drift) and declares the installed
+  plugin-cache server itself (`mcp_servers.hwc`): the payload under test
+  stays the tarball-installed one, and the sole server is instrumented.
+- **MCP child env.** codex strips MCP children to login vars plus the
+  server's config env block. The full merged case env is delivered through
+  a loader script fed by a per-attempt `mcp-env.json` written by runPrompt
+  from `req.env`.
+- **Model wire.** codex 0.162.1 is responses-only (chat hard-removed), so
+  the provider must serve the Responses wire. A local shaping proxy
+  (driver-owned, ephemeral port) strips the two request shapes the gateway
+  rejects (`function_call.namespace`, array-form
+  `function_call_output.output`) and mirrors the provider base URL's
+  pathname so path-prefixed gateways reconstruct correctly. The
+  `E2E_CODEX_PROXY_DUMP=<file>` knob dumps the shaped wire for triage.
+  Auth rides the config.toml `env_key` naming `E2E_APIKEY` (the driver
+  bridges the `E2E_TEST_API_KEY` spelling); the value reaches the MCP
+  child via the 0600 mcp-env.json inside the throwaway home.
+- **Posture.** danger-full-access: plain workspace-write denies every MCP
+  tool call under exec's never-approval, and `--approve-for-me`'s guardian
+  review dials an OpenAI model slug a custom gateway 404s. The trust level
+  matches the opencode leg (equally unsandboxed headless). The env-level
+  egress block (`https_proxy` to a closed port, both install and run envs)
+  kills codex's startup curated-plugins catalog clone (~100 MB from github
+  per fresh home) and every other codex https egress.
+- **Escape residual (local runs only).** A model can unset the proxy vars
+  and call the host's real hcloud by absolute path — measured, including
+  reading the host's real credentials. CI runners install no real hcloud,
+  so the escape target is absent there; local runs on machines with one
+  carry this documented residual.
+- **Egress-block residual.** The proxy env vars are model-visible; the
+  recorded transcript is scrubbed of the E2E key values, but ambient host
+  secrets a model reads and echoes are out of scope (local-run residual).
+- **finalText** comes from codex's `-o` file with no stdout fallback: the
+  transcript carries prompts, commands, and reasoning, so keyword matches
+  against it would pass cases the model turn never completed.
+
+The two `installPacks` cases record a skip on the codex leg (the codex
+install target is managed by the codex CLI and has no `--packs` write
+path — the runner resolves the capability skip before any attempt spends
+budget).
 
 ## Division of labor: this suite vs the nightly real-cloud harness
 
@@ -154,13 +214,19 @@ group and killed tree-wide on timeout; a startup sweep removes stale
 
 CI (`.github/workflows/e2e-nightly.yml`): the only required repository
 setting is the `E2E_TEST_MODEL_APIKEY` secret. Provider/model/baseURL default
-to the committed values in the workflow (mirroring `test/e2e/.env`'s
-non-secret model config — maas / modelarts / glm-5.2 at the time of writing)
-and stay overridable via the `E2E_TEST_*` vars; the preflight step fails fast
-on a missing secret. opencode is pinned to the version the suite was verified
-against (an upgrade is an explicit suite event). Local runs read the
-gitignored `test/e2e/.env` instead; the report records agent/model/version
-per run so drift between the two sources is visible, not silent.
+to the committed values in the workflow (an OpenAI-compatible gateway
+serving BOTH wire shapes the legs need — chat for opencode, responses for
+codex — plus glm-5.2, the model both legs share for verdict comparability)
+and stay overridable via the `E2E_TEST_*` vars; a provider swap must keep
+the responses route or the codex leg fails at its first model call
+(measured: maas has no responses route). The preflight step fails fast on a
+missing secret. Both agent CLIs are pinned to the versions the suite was
+verified against (an upgrade is an explicit suite event; the codex pin is
+shared with ci.yml's real-agent lane). Local runs read the gitignored
+`test/e2e/.env` instead; the report records agent/model/agentVersion per
+run so drift between the two sources is visible, not silent. Each leg's
+run step greps the runner's driver echo so an `E2E_AGENT` wiring miss
+fails loud instead of passing as a green duplicate of the other driver.
 
 The workflow file must stay byte-identical on main and v2, and a drift-guard
 step inside the run fails loud on skew once both copies exist — a missing
@@ -174,4 +240,16 @@ and pull_request events read the pushed ref's own copy. PR runs are opt-in
 via the `run-e2e` label (same-repo PRs only; fork PRs skip, they cannot see
 the secret), and a labeled PR re-runs on every synchronize. Concurrency is
 job-level so runs skipped by the label guard never cancel an in-flight
-suite.
+suite; each matrix leg (opencode, codex) serializes in its own group with
+`fail-fast` off so a red leg never cancels its sibling's report.
+
+Bootstrap closure (measured 2026-10-21: main has never carried the file,
+so the nightly cron is dormant — schedule fires only from the default
+branch). The first main landing activates the nightly as a two-leg matrix
+(~80 min LLM per night) and arms the strict drift guard. While the window
+is open the guard is lenient, so the safe sequence for THIS landing is:
+merge the v2 PR (carrying code plus the workflow), validate the matrix on
+the PR ref via the `run-e2e` label, then land the byte-identical workflow
+on main — the cron activates against a v2 that already matches, so no
+skew window exists. The steady-state main-first rule applies once both
+copies exist.
