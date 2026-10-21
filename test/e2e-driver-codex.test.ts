@@ -106,10 +106,17 @@ test('codex prepare merges config.toml with top-level keys before any table head
     assert.ok(at >= 0 && at < firstTable, `${key} must precede the first table header`);
   }
   // The installer-written tables survive between the prepended keys and the
-  // appended driver tables.
+  // appended driver tables, and the plugin registration is disabled — an
+  // enabled plugin's .mcp.json server would load beside ours and capture
+  // nondeterministic same-name dispatch (measured: recordings vanish).
   assert.match(content, new RegExp(`\\[marketplaces\\.${getMarketplaceName()}\\]`));
   assert.match(content, /source_type = "local"/);
   assert.match(content, /\[plugins\./);
+  assert.match(
+    content,
+    new RegExp(`\\[plugins\\."${getCodexPluginName()}@${getMarketplaceName()}"\\][^\\[]*enabled = false`),
+    'the plugin registration must end up disabled inside its table',
+  );
   assert.match(content, /model = "glm-5\.2"/);
   assert.match(content, /web_search = "disabled"/);
   assert.match(content, /env_key = "E2E_APIKEY"/);

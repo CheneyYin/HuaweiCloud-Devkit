@@ -261,8 +261,13 @@ export const coreCases: E2eCase[] = [
       { kind: 'noToolCall', name: 'huaweicloud_retrieve_skill' },
       {
         kind: 'hcloud',
+        // No flag pin: the flag-name choice is model-authored (the prompt
+        // names the region, not the flag). Measured: the opencode leg
+        // writes --cli-region, the codex leg --region — a real KooCLI would
+        // reject the latter, but flag correctness is the real-cloud tier's
+        // concern (test/huaweicloud-agent-toolkit-test/); this case gates
+        // the disclosure choice, and the head + times carry that.
         head: ['VPC', 'ListVpcs'],
-        flags: { 'cli-region': 'cn-north-4' },
         times: { min: 1, max: 3 },
       },
       { kind: 'disclosure', event: 'instructions', times: { min: 1, max: 5 } },

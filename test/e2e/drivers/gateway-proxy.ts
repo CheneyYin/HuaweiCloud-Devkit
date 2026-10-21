@@ -1,4 +1,10 @@
 import http from 'node:http';
+import { appendFileSync } from 'node:fs';
+
+// Optional wire dump (E2E_CODEX_PROXY_DUMP=<file>): one JSON line per
+// request (the shaped body) — the diagnostic for model-wire questions.
+// Read per request so a value from test/e2e/.env (loaded in main, after
+// module evaluation) also works.
 
 // The OpenAI-compatible gateway the E2E model config points at rejects two
 // request shapes codex 0.162.1 emits on the responses wire: the `namespace`
@@ -88,6 +94,14 @@ export function startGatewayProxy(upstreamOrigin: string): Promise<GatewayProxy>
         delete headers['content-length'];
         delete headers.connection;
         const shaped = req.method === 'POST' && body ? shapeForGateway(body) : body;
+        const dumpFile = process.env.E2E_CODEX_PROXY_DUMP;
+        if (dumpFile && shaped) {
+          try {
+            appendFileSync(dumpFile, JSON.stringify({ url: req.url, body: JSON.parse(shaped) }) + '\n');
+          } catch {
+            // the dump is best-effort diagnostics
+          }
+        }
         const upstream = await fetch(`${upstreamOrigin}${req.url}`, {
           method: req.method,
           headers,

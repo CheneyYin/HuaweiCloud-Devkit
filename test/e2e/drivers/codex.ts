@@ -9,10 +9,12 @@ import { requiredModelEnv, runHeadlessAgent } from './shared.ts';
 import type { AgentDriver, DriverContext, DriverProbe, RunRequest, RunResult } from './types.ts';
 
 // codex adapter, spike-validated on codex-cli 0.162.1 (2026-10-21):
-// - `codex exec` never loads plugin-declared MCP servers, so the driver
-//   declares the installed plugin-cache server itself in config.toml
-//   (mcp_servers.hwc) — the payload under test stays the tarball-installed
-//   one, only the declaration channel moves to the driver.
+// - An enabled plugin's .mcp.json server loads BESIDE any mcp_servers entry
+//   (two namespaces, nondeterministic same-name dispatch — measured), so the
+//   driver disables the plugin registration in config.toml and declares the
+//   installed plugin-cache server itself (mcp_servers.hwc): the payload
+//   under test stays the tarball-installed one, and the one instrumented
+//   server carries the full seam env.
 // - codex strips the environment of MCP children down to login vars plus the
 //   server's config env block, so the runner-owned session env is delivered
 //   through a loader the server command wraps (mcp-env.json, written per
@@ -20,8 +22,10 @@ import type { AgentDriver, DriverContext, DriverProbe, RunRequest, RunResult } f
 // - The gateway shaping proxy sits on the model wire; see gateway-proxy.ts.
 // - exec refuses non-git workdirs without --skip-git-repo-check, reads
 //   stdin when it is an open pipe (the shared spawn ignores stdin), and
-//   needs -s danger-full-access plus shell_environment_policy.inherit=all
-//   so unprompted out-of-workspace reads and the PATH hcloud shim work.
+//   needs -s danger-full-access (the sandboxed postures are unusable on a
+//   custom gateway — see the runPrompt rationale) plus
+//   shell_environment_policy.inherit=all so the PATH hcloud shim reaches
+//   shell children.
 // - No permission-seam floor: that doctrine is opencode-only; the version is
 //   parsed and reported so drift against the CI pin stays visible.
 
@@ -122,6 +126,42 @@ function mergeConfigToml(home: string, serverJs: string): void {
   const configPath = join(home, '.codex', 'config.toml');
   const existing = existsSync(configPath) ? readFileSync(configPath, 'utf8') : '';
   const model = process.env.E2E_MODEL!;
+  // The installer leaves the plugin enabled, and an enabled plugin's
+  // .mcp.json server loads BESIDE ours (measured: two namespaces in the
+  // model request, mcp__<plugin> and mcp__hwc). Same-named tool calls then
+  // dispatch nondeterministically to the plugin copy — spawned bare from
+  // its .mcp.json with no loader, so no trace, no toolsListChanged
+  // disclosure, and no fake-boundary env reach it: recordings silently
+  // vanish while results look green. Disabling the plugin registration
+  // keeps the cache (the payload under test) and leaves mcp_servers.hwc
+  // as the only server.
+  const pluginHeader = `[plugins."${getCodexPluginName()}@${getMarketplaceName()}"]`;
+  let content = existing;
+  const headerAt = content.split('\n').findIndex((line) => line.trim() === pluginHeader);
+  if (headerAt >= 0) {
+    const lines = content.split('\n');
+    let disabled = false;
+    for (let i = headerAt + 1; i < lines.length; i++) {
+      const line = lines[i]!;
+      if (line.trim().startsWith('[')) break;
+      if (line.trim() === 'enabled = false') {
+        disabled = true;
+        break;
+      }
+      if (line.trim() === 'enabled = true') {
+        lines[i] = line.replace('enabled = true', 'enabled = false');
+        disabled = true;
+        break;
+      }
+    }
+    // A present-but-unflipped plugin table means the installer's output
+    // shape drifted — silently keeping the plugin enabled would reintroduce
+    // the nondeterministic double registration this surgery exists to kill.
+    if (!disabled) {
+      throw new Error(`could not disable the plugin registration under ${pluginHeader} — installer output drift?`);
+    }
+    content = lines.join('\n');
+  }
   // Top-level keys must precede every table header, so they are prepended;
   // our own tables are appended after the installer's marketplace/plugin
   // entries (a fresh throwaway home per attempt guarantees no prior merge).
@@ -152,7 +192,7 @@ function mergeConfigToml(home: string, serverJs: string): void {
     'env = { HUAWEICLOUD_AGENT_TOOLKIT_MODE = "local" }',
     '',
   ].join('\n');
-  writeFileSync(configPath, `${head}${existing.trimEnd()}\n${tail}`, 'utf8');
+  writeFileSync(configPath, `${head}${content.trimEnd()}\n${tail}`, 'utf8');
 }
 
 export const codexDriver: AgentDriver = {
@@ -234,6 +274,26 @@ export const codexDriver: AgentDriver = {
         [
           'exec',
           '--skip-git-repo-check',
+          // danger-full-access is the working posture on a custom gateway:
+          // the sandboxed postures are not usable here — plain workspace-write
+          // denies every MCP tool call under exec's never-approval (measured),
+          // and --approve-for-me routes approvals through a guardian model
+          // call that dials an OpenAI model slug the gateway 404s (measured;
+          // mutually exclusive with -s besides). The trust level matches the
+          // opencode leg, whose headless runs are equally unsandboxed. The
+          // env-level egress block and the PATH shim are cooperation-level
+          // defenses; the measured escape route (a model that unsets the
+          // proxy vars and calls the host's real hcloud by absolute path)
+          // exists only on machines that have a real hcloud — CI runners
+          // install none, so the escape target is absent there. Local runs on
+          // such machines carry that documented residual.
+          //
+          // non_prefixed_mcp_tool_names stays OFF (measured): enabling it
+          // makes codex load the plugin-declared server BESIDE ours, and
+          // same-named tool calls dispatch to the plugin copy — spawned bare
+          // from its .mcp.json, without the loader, so no trace, no
+          // toolsListChanged disclosure, and no fake-boundary env reach it
+          // and every recording silently vanishes while results look green.
           '-s',
           'danger-full-access',
           '-c',
