@@ -440,7 +440,7 @@ test('retrieve_skill returns the full multi-line description, quote-stripped', a
   );
   assert.deepEqual(
     result.references.map((ref) => ref.filename),
-    ['create-instance.md', 'evs.md', 'flavors.md', 'hc-activity.md', 'troubleshooting.md'],
+    ['create-instance.md', 'evs.md', 'flavors.md', 'hc-activity.md', 'troubleshooting.md', 'windows-ssh.md'],
     'references list in the same deterministic order list_skills serves',
   );
 });

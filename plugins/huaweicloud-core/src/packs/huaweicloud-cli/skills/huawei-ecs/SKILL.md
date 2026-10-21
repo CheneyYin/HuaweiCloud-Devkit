@@ -124,6 +124,10 @@ ssh -o StrictHostKeyChecking=accept-new -i <key> root@<eip> 'dnf install -y ngin
 
 > If SCP blocks SSH, use cloud-init `--server.user_data` for full deployment instead. See `references/create-instance.md` §Bootstrap.
 
+### Windows Login / Upload (standard paths)
+
+Windows has NO working `sshpass` — password automation must go through paramiko; key automation uses the built-in OpenSSH `ssh`/`scp`. The first `Connection refused` on a fresh instance is usually just sshd not ready (retry with backoff before debugging the SG/EIP); a `Permission denied` while the server log shows "accepts key" is the local passphrase trap (`-N '""'` sets a literal `""` passphrase). Full standard paths — sshd-ready retry, paramiko login/upload, and the cloud-init public-key injection path (KooCLI has no `ImportKeypair`): `references/windows-ssh.md`.
+
 ## Deleting Instances
 
 - Show the user the exact command and get explicit approval before running
@@ -190,4 +194,5 @@ For Flexus X, use standard ECS CreateServers flow with `x1.*` flavors. For Flexu
 - ECS Docs: https://support.huaweicloud.com/ecs/
 - Flavor specs: references/flavors.md
 - Create instance: references/create-instance.md
+- Windows SSH login/upload: references/windows-ssh.md
 - HC活动 ECS+Nginx部署: references/hc-activity.md

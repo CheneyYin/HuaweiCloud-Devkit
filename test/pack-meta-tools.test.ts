@@ -165,6 +165,7 @@ test('huaweicloud_list_skills catalogs the enabled non-core skills with parsed d
     'flavors.md',
     'hc-activity.md',
     'troubleshooting.md',
+    'windows-ssh.md',
   ]);
   assert.ok(isAbsolute(result.skillRoot ?? ''), 'stdio sessions disclose the tree location as an absolute path');
   assert.ok(

@@ -15,8 +15,8 @@ When the developer asks to **deploy / host / publish / 上线 / 部署 / 发布 
 Use the `question` tool and present, in this exact order:
 
 1. **沙箱 (Sandbox)** — temporary runtime, instant preview URL (recommended for quick preview)
-2. **OBS 静态托管** — long-term static hosting + CDN + custom domain
-3. **ECS** — server-based hosting
+2. **OBS 静态托管** — long-term static hosting + CDN + custom domain. **Remind the developer: a custom domain (域名) must be prepared in advance — the default OBS endpoint does not support HTTPS for static hosting**
+3. **ECS** — server-based hosting. **Remind the developer: ECS must be paired with an EIP (弹性公网IP) for public access — extra billing applies**
 4. **CCE** — container-based hosting
 
 Hard rules:
@@ -24,6 +24,7 @@ Hard rules:
 - **NEVER infer or default the target** when it is unstated. Calling `huaweicloud_sandbox_connect` before this choice is made is a violation.
 - Only skip the question when: (a) the developer already named a target (e.g. "部署到 ECS", "用 OBS"), or (b) the developer explicitly asked for a temporary / sandbox / preview runtime.
 - "部署到华为云" / "deploy to Huawei Cloud" / "上线" alone is NOT a named target — still run the gate.
+- Include the OBS domain reminder and the ECS EIP pairing reminder in the options as presented.
 - After the choice: sandbox → continue with this skill; OBS → `huawei-obs`; ECS → `huawei-ecs` / `huawei-iac`; CCE → `huawei-cce`.
 
 ## Overview
@@ -147,6 +148,8 @@ Setup is a **plugin-side preflight** — the developer should be asked a questio
 
    If `source /tmp/hw_creds.sh` returns empty, the credentials injection may not have completed — re-run `huaweicloud_sandbox_credentials`.
 
+   **DevBridge API Key 前置引导（before expose, not mid-expose）**: the address-generation service (DevBridge 0.2.x) requires an API Key. Recent sandbox images auto-acquire one from the platform keyring — but if the sandbox was created on an older image (cannot auto-acquire), prepare the key at THIS stage instead of being interrupted halfway through the expose flow: create it once at https://devstation.connect.huaweicloud.com/space/devbridge/apikey (value shown only once, `devbridge_` prefix), hand it over via `export HW_API_KEY=<key>` locally (preferred) or paste it in the conversation for the `api_key` param, then run `huaweicloud_sandbox_credentials`. Full why/where/how guide: [Step 1, NO_CREDENTIAL branch](#step-1-authenticate--verified-waterfall-keyring-first).
+
 8. **Execute commands**: use `huaweicloud_sandbox_exec_with_session` for interactive work (cd, env setup), or `huaweicloud_sandbox_exec_one_shot` for long-running builds/installs. See [Tool Selection Guide](#tool-selection-guide).
 9. **Upload project** (if deploying local code): `huaweicloud_sandbox_upload_project` to transfer a local project directory into `/workspace/<name>` — uses HTTP tunnel, much faster than base64 for multi-file projects. Use `huaweicloud_sandbox_upload_file` for single files.
 10. **Expose the deployed app and return the public URL**: set up a public access link for the app port and give the URL to the developer as the final result (see "Expose the deployed app (public URL)") — this step uses an internal tunnel mechanism that must never be mentioned to the developer
@@ -220,6 +223,11 @@ curl -s -o /workspace/<repo>/<file> https://<bucket>.obs.<region>.myhuaweicloud.
 
 Expose a deployed web app to a public URL and return that URL to the developer.
 
+### Workspace URL vs public share link (401 trap — do not confuse them)
+
+- The sandbox **workspace URL** (`https://<port>-<container_id>.workspace.developer.huaweicloud.com/`) is **authenticated**: opening it directly (or sharing it with someone who is not logged in) returns **401 Unauthorized**. A 401 here does NOT mean the port failed to expose — never debug it as an exposure failure.
+- A **publicly shareable address is ONLY the DevBridge tunnel URL** (`https://<id>-<port>.devbridge-s2.hwtunnel.com`, produced in Step 2 below). Public sharing must go through the DevBridge tunnel — never hand the workspace URL to the developer as the deployment result link.
+
 **User-facing language rule**: the tunnel mechanism below is an internal implementation detail. Never mention "DevBridge", "tunnel", or the tunnel CLI to the developer. Tell the developer only: "正在生成访问地址..." while exposing, then hand over the final URL.
 
 ### Step 0: Ensure DevBridge CLI 0.2.x (install or upgrade in place)
@@ -249,6 +257,24 @@ if ! bash /tmp/devbridge-install.sh -s -u "https://gitcode.com/CloudDeveloperDep
   bash /tmp/devbridge-install.sh -s   # fallback: GitHub (baked-in URL)
 fi
 export PATH="$HOME/.huawei/bin:$PATH"   # PREPEND (session shells do not re-source ~/.bashrc)
+# Layer 3 (both installer paths failed): direct GitHub release tar.gz.
+# Asset naming is fixed: devbridge_linux_arm64_<version>-release.tar.gz (the sandbox
+# is Linux aarch64). If DB_TARGET is empty the installer download itself failed —
+# resolve the latest tag from the GitHub releases API first. The PREPEND above runs
+# FIRST so `command -v` can see a freshly installed ~/.huawei/bin binary — otherwise
+# Layer 3 would needlessly re-download after a successful install.
+if ! command -v devbridge >/dev/null 2>&1; then
+  [ -z "$DB_TARGET" ] && DB_TARGET=$(curl -fsSL --http1.1 --retry 2 --max-time 60 \
+    https://api.github.com/repos/huaweicloud/devspace-devbridge/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)
+  mkdir -p "$HOME/.huawei/bin"
+  curl -fsSL --http1.1 --retry 3 --retry-all-errors --max-time 180 \
+    "https://github.com/huaweicloud/devspace-devbridge/releases/download/${DB_TARGET}/devbridge_linux_arm64_${DB_TARGET}.tar.gz" \
+    -o /tmp/devbridge.tar.gz \
+    && rm -rf /tmp/devbridge-pkg && mkdir -p /tmp/devbridge-pkg \
+    && tar -xzf /tmp/devbridge.tar.gz -C /tmp/devbridge-pkg \
+    && install -m 0755 /tmp/devbridge-pkg/devbridge "$HOME/.huawei/bin/devbridge"
+  export PATH="$HOME/.huawei/bin:$PATH"
+fi
 devbridge version                     # must print 0.2.x-release
 
 # Remove the stale image-installed binary so only ONE version remains.

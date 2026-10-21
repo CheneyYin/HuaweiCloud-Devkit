@@ -8,8 +8,8 @@
 3. Bulk upload        → hcloud OBS cp <build-dir>/ obs://<bucket>/ -r -f -flat -acl=public-read
 4. Set bucket ACL     → hcloud OBS chattri obs://<bucket> -acl=public-read
 5. Set object ACLs    → hcloud OBS chattri obs://<bucket>/ -r -f -acl=public-read
-6. Configure website  → REST API (KooCLI OBS lacks this feature)
-7. Verify             → curl http://<bucket>.obs-website.<region>.myhuaweicloud.com
+6. Configure website  → huaweicloud_obs_set_website_config tool (KooCLI OBS lacks the command; the plugin tool wraps the REST API with AWS4 signing)
+7. Verify             → GET with headers: curl -s -D - -o /dev/null http://<bucket>.obs-website.<region>.myhuaweicloud.com (see common-pitfalls.md #899 — a bare 200 can still download instead of render)
 ```
 
 ## Step-by-Step (Vue/Vite Example)
@@ -37,7 +37,7 @@ hcloud OBS chattri obs://my-static-site/ -r -f -acl=public-read
 #   Console → OBS → Bucket → Basic Settings → Static Website Hosting
 
 # 6. Verify
-curl http://my-static-site.obs-website.cn-north-4.myhuaweicloud.com
+curl -s -D - -o /dev/null http://my-static-site.obs-website.cn-north-4.myhuaweicloud.com   # GET with headers (#899): a bare 200 can download instead of render
 ```
 
 ## Key Gotchas
@@ -51,4 +51,4 @@ curl http://my-static-site.obs-website.cn-north-4.myhuaweicloud.com
 - **Use `-flat` for root files**: Without `-flat`, `dist/` becomes `bucket/dist/` prefix. Static sites need files at bucket root.
 - **Objects don't inherit bucket ACL**: Setting bucket to public-read does NOT make individual objects public. You must also set object-level ACL with `chattri obs://<bucket>/ -r -f -acl=public-read` or use `-acl=public-read` during upload.
 - **`mb` may return a non-zero exit code even on success**: `hcloud OBS mb` occasionally exits with code 6 (or other non-zero) while the bucket is actually created — the output still contains a request id and subsequent `cp`/`chattri` succeed. Judge success by the response text (request id) and confirm with `hcloud OBS ls` / `stat obs://<bucket>`, NOT the exit code alone. `mb` is idempotent, so re-issuing the same bucket name is harmless.
-- **Website endpoint is eventually consistent (~1 min)**: after `PUT /?website` returns 200, the website endpoint (`http://<bucket>.obs-website.<region>.myhuaweicloud.com`) may return 404 `NoSuchWebsiteConfiguration` for up to ~1 minute. This is propagation delay, NOT a configuration failure. Verify immediately via the object URL (`https://<bucket>.obs.<region>.myhuaweicloud.com/index.html`, works before the website endpoint), then poll the website endpoint with a short backoff until it returns 200 before reporting success.
+- **Website endpoint is eventually consistent (~1 min)**: after `PUT /?website` returns 200, the website endpoint (`http://<bucket>.obs-website.<region>.myhuaweicloud.com`) may return 404 `NoSuchWebsiteConfiguration` for up to ~1 minute. This is propagation delay, NOT a configuration failure. Verify immediately via the object URL (`https://<bucket>.obs.<region>.myhuaweicloud.com/index.html`, works before the website endpoint), then poll the website endpoint with a short backoff until it returns 200 before reporting success. **A 200 is necessary but NOT sufficient (#899)**: on post-2022 buckets the GET is force-injected `Content-Disposition: attachment` — the page downloads instead of rendering. Browser-level verification (or `curl -s -D -` + header inspection) is the only success criterion; see common-pitfalls.md.

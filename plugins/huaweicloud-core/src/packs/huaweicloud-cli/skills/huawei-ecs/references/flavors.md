@@ -55,3 +55,25 @@ A flavor can be `normal` globally but `abandon` in specific AZs. Selecting an `a
 
 1. Switch to a different AZ: `hcloud ECS NovaListAvailabilityZones --cli-region=<region>`
 2. Or switch to a different flavor family (e.g., `at7` → `ac7`)
+
+## Conflict rule: `cond:operation:status` vs `cond:operation:az` (#922)
+
+The two fields can contradict each other (实测：`kc2.small.2` with `cond:operation:status=abandon` while
+`cond:operation:az=cn-north-4a(normal)`). **The AZ-level field (`cond:operation:az`) WINS for the target AZ**:
+
+| Global `status`     | Target AZ in `cond:operation:az`              | Verdict                                                                                                             |
+| ------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `normal`            | `<az>(normal)`                                | Usable in that AZ                                                                                                   |
+| `abandon`/`sellout` | `<az>(normal)`                                | **Usable in that AZ** — the AZ-level field wins; do not refuse to order just because the global status says abandon |
+| `normal`            | `<az>(sellout)` / `<az>(abandon)` / AZ absent | NOT usable in that AZ — pick another AZ or flavor                                                                   |
+
+Decision procedure:
+
+1. Find the target AZ entry in `cond:operation:az` (e.g. `cn-north-4a(normal)`).
+2. If the entry exists for the target AZ, its parenthesized state decides — ignore the global `cond:operation:status`.
+3. If the target AZ has no entry, fall back to the global `cond:operation:status` (only `normal` is usable).
+
+Note: flavor availability is only half of the check — an image TYPE mismatch fails independently with
+**`Ecs.0707 the product does not exist`** (market-type images fail with KunPeng flavors like `kc2.small.2`;
+switch to a gold-type image or a compatible flavor, e.g. `s6.medium.2` + gold). The `huaweicloud_explain_error`
+error map covers `Ecs.0707` with the full combination-troubleshooting procedure.

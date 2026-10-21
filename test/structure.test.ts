@@ -508,15 +508,121 @@ test('skills with references have non-empty reference files', () => {
   }
 });
 
-test('web/static-site deployment intent offers target options with sandbox first, not OBS default', () => {
+test('huawei-obs teaches the Content-Disposition trap and the website-config tool (#899)', () => {
+  const pitfalls = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'obs', 'skills', 'huawei-obs', 'references', 'common-pitfalls.md'),
+    'utf8',
+  );
+  assert.match(pitfalls, /Content-Disposition 强制下载陷阱（2022-01-01 后创建的桶）/);
+  assert.match(pitfalls, /attachment.*强制注入/s);
+  assert.match(pitfalls, /HEAD.*误导/s);
+  assert.match(pitfalls, /自定义域名 \+ CDN（\+ header 配置 inline）是\*\*必要条件/);
+  assert.match(pitfalls, /obsutil 元数据大小写陷阱/);
+  assert.match(pitfalls, /x-amz-meta-content-disposition/);
+  // The MCP tool is now the FIRST listed path for static-website config.
+  assert.match(pitfalls, /huaweicloud_obs_set_website_config`（插件内置/);
+
+  const staticSite = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'obs', 'skills', 'huawei-obs', 'references', 'static-website.md'),
+    'utf8',
+  );
+  assert.match(staticSite, /huaweicloud_obs_set_website_config tool/);
+});
+
+test('huawei-ecs carries the windows-ssh reference and the ssh-keygen passphrase fix', () => {
+  const skill = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'huaweicloud-cli', 'skills', 'huawei-ecs', 'SKILL.md'),
+    'utf8',
+  );
+  assert.match(skill, /Windows Login \/ Upload \(standard paths\)/);
+  assert.match(skill, /references\/windows-ssh\.md/);
+  assert.ok(
+    existsSync(
+      join(pluginRoot, 'src', 'packs', 'huaweicloud-cli', 'skills', 'huawei-ecs', 'references', 'windows-ssh.md'),
+    ),
+    'windows-ssh.md must exist',
+  );
+
+  const create = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'huaweicloud-cli', 'skills', 'huawei-ecs', 'references', 'create-instance.md'),
+    'utf8',
+  );
+  // bash uses -N ''; PowerShell uses --% + -N "" — no COMMAND line carries
+  // -N '""' (the trap comment names it, commands never use it).
+  assert.match(create, /-N ''/);
+  assert.match(create, /ssh-keygen --% -t rsa -b 2048 -f \.\\<name> -N ""/);
+  for (const line of create.split('\n')) {
+    if (/^\s*ssh-keygen/.test(line)) {
+      assert.doesNotMatch(line, /-N '""'/, `command line must not set a literal passphrase: ${line.trim()}`);
+    }
+  }
+
+  const flavors = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'huaweicloud-cli', 'skills', 'huawei-ecs', 'references', 'flavors.md'),
+    'utf8',
+  );
+  assert.match(flavors, /cond:operation:status` vs `cond:operation:az/);
+  assert.match(flavors, /\*\*The AZ-level field \(`cond:operation:az`\) WINS for the target AZ\*\*/);
+  assert.match(flavors, /Ecs\.0707/);
+});
+
+test('huawei-iac stage 5 intercepts orders the balance cannot cover (#922)', () => {
+  const iac = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'huaweicloud-cli', 'skills', 'huawei-iac', 'SKILL.md'),
+    'utf8',
+  );
+  assert.match(iac, /前置拦截（实测 #922）：估算成本 > 余额（含余额为 0）时 STOP/);
+  assert.match(iac, /resume from stage 5 with the SAME configuration/);
+  assert.match(iac, /never walk a known-doomed order/);
+  assert.match(iac, /the gate INTERCEPTS before the order/);
+});
+
+test('huawei-sandbox carries the tunnel contract, the 401 trap, and the Step 0/1 hardening', () => {
+  const sandbox = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'SKILL.md'),
+    'utf8',
+  );
+  // Workspace URL vs public share link (401 trap).
+  assert.match(sandbox, /Workspace URL vs public share link \(401 trap — do not confuse them\)/);
+  assert.match(sandbox, /returns \*\*401 Unauthorized\*\*/);
+  assert.match(sandbox, /A \*\*publicly shareable address is ONLY the DevBridge tunnel URL\*\*/);
+  // Step 0 Layer 3: direct GitHub release tar.gz.
+  assert.match(sandbox, /Layer 3 \(both installer paths failed\): direct GitHub release tar\.gz/);
+  assert.match(sandbox, /api\.github\.com\/repos\/huaweicloud\/devspace-devbridge\/releases\/latest/);
+  // API-Key 前置引导 at the credentials step.
+  assert.match(sandbox, /DevBridge API Key 前置引导（before expose, not mid-expose）/);
+});
+
+test('huawei-voucher covers HDKIT_COMPETITION_NOT_CONFIGURED', () => {
+  const voucher = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'voucher', 'skills', 'huawei-voucher', 'SKILL.md'),
+    'utf8',
+  );
+  assert.match(voucher, /HDKIT_COMPETITION_NOT_CONFIGURED/);
+  assert.match(voucher, /服务端活动参数未配置/);
+  assert.match(voucher, /告知赛事代金券暂未开放，稍后再试/);
+});
+
+test('web/static-site deployment intent offers target options with sandbox first, not OBS default (#918)', () => {
+  // #918: the gate is now MANDATORY on all four surfaces — the options must be
+  // presented via the `question` tool, never inferred; static-hosting/CDN
+  // intent cannot bypass the obs gate; the sandbox option carries the OBS
+  // custom-domain reminder and the ECS EIP pairing reminder.
   const core = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-core', 'SKILL.md'), 'utf8');
-  assert.match(core, /Deployment Target Options/);
-  assert.match(core, /Sandbox \(DevStation\) — recommended/);
-  assert.match(core, /NEVER default to a single service such as OBS/);
+  assert.match(core, /Deployment Target Options \(MANDATORY GATE — do not skip\)/);
+  assert.match(core, /via the `question` tool \(the host agent's interactive-question tool/);
+  assert.match(core, /NEVER infer or default the target/);
+  assert.match(core, /is NOT a named target — still run the gate/);
+  assert.match(core, /custom domain \(域名\) must be prepared/);
+  assert.match(core, /EIP \(弹性公网IP\) for public access — extra billing/);
 
   const obs = readFileSync(join(pluginRoot, 'src', 'packs', 'obs', 'skills', 'huawei-obs', 'SKILL.md'), 'utf8');
   assert.match(obs, /Routing Guard: Deploy vs Store/);
-  assert.match(obs, /do NOT default to OBS/);
+  assert.match(obs, /via the `question` tool/);
+  assert.match(obs, /NEVER infer or default the target/);
+  // The static-hosting/CDN intent bypass is CLOSED: only a named target or a
+  // question-gate selection proceeds.
+  assert.match(obs, /cannot bypass the gate/);
   assert.match(obs, /① huawei-sandbox \(recommended\)/);
 
   const sandbox = readFileSync(
@@ -525,10 +631,12 @@ test('web/static-site deployment intent offers target options with sandbox first
   );
   assert.match(sandbox, /present options, sandbox first/i);
   assert.match(sandbox, /建议优先部署到沙箱/);
+  assert.match(sandbox, /需提前准备好自定义域名/);
+  assert.match(sandbox, /需搭配弹性公网IP\/EIP/);
 
   const discovery = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-capability-discovery', 'SKILL.md'), 'utf8');
-  assert.match(discovery, /Deployment Target Options/);
-  assert.match(discovery, /do NOT default to OBS/);
+  assert.match(discovery, /Deployment Target Options \(MANDATORY — use the `question` tool\)/);
+  assert.match(discovery, /NEVER infer or default the target/);
 });
 
 test('core meta-skills teach the skillRoot direct read as the default with retrieve_skill as the fallback', () => {
