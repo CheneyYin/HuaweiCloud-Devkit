@@ -6,6 +6,7 @@ import path from 'node:path';
 
 const { getProxyDispatcher, clearProxyDispatcherCache, PROXY_TLS_OPTIONS } =
   await import('../plugins/huaweicloud-core/src/proxy/proxy-agent.ts');
+const { getProxySettings, shouldBypassProxy } = await import('../plugins/huaweicloud-core/src/proxy/proxy-config.ts');
 
 // The resolver reads BOTH spellings of each variable (proxy-config.ts:
 // process.env.HTTPS_PROXY || process.env.https_proxy), so a test premise
@@ -39,6 +40,20 @@ function setProxyEnv(https = '', http = '', noProxy = '') {
   }
 }
 
+// The three spelling tests share one teardown shape: env restore, home
+// restore, dispatcher-cache clear, temp home removal.
+function teardownProxyTest(
+  saved: Record<string, string | undefined>,
+  savedHome: string | undefined,
+  tmpHome: string,
+): void {
+  restoreProxyEnv(saved);
+  if (savedHome === undefined) delete process.env.HUAWEICLOUD_HOME;
+  else process.env.HUAWEICLOUD_HOME = savedHome;
+  clearProxyDispatcherCache();
+  fs.rmSync(tmpHome, { recursive: true, force: true });
+}
+
 function restoreProxyEnv(saved: Record<string, string | undefined>) {
   for (const key of PROXY_ENV_KEYS) {
     if (saved[key] === undefined) delete process.env[key];
@@ -65,11 +80,7 @@ test('getProxyDispatcher returns undefined when no proxy is configured', async (
     const dispatcher = await getProxyDispatcher('https://devkit.huaweicloud.com/rest/');
     assert.equal(dispatcher, undefined);
   } finally {
-    restoreProxyEnv(saved);
-    if (savedHome === undefined) delete process.env.HUAWEICLOUD_HOME;
-    else process.env.HUAWEICLOUD_HOME = savedHome;
-    clearProxyDispatcherCache();
-    fs.rmSync(tmpHome, { recursive: true, force: true });
+    teardownProxyTest(saved, savedHome, tmpHome);
   }
 });
 
@@ -111,11 +122,7 @@ test(
       assert.deepEqual(captured.proxyTls, { rejectUnauthorized: false });
       assert.deepEqual(captured.requestTls, { rejectUnauthorized: false });
     } finally {
-      restoreProxyEnv(saved);
-      if (savedHome === undefined) delete process.env.HUAWEICLOUD_HOME;
-      else process.env.HUAWEICLOUD_HOME = savedHome;
-      clearProxyDispatcherCache();
-      fs.rmSync(tmpHome, { recursive: true, force: true });
+      teardownProxyTest(saved, savedHome, tmpHome);
     }
   },
 );
@@ -154,11 +161,7 @@ test(
       assert.ok(captured, 'expected ProxyAgent to be constructed from the lowercase spelling');
       assert.equal(captured.uri, 'http://lower.proxy:8080');
     } finally {
-      restoreProxyEnv(saved);
-      if (savedHome === undefined) delete process.env.HUAWEICLOUD_HOME;
-      else process.env.HUAWEICLOUD_HOME = savedHome;
-      clearProxyDispatcherCache();
-      fs.rmSync(tmpHome, { recursive: true, force: true });
+      teardownProxyTest(saved, savedHome, tmpHome);
     }
   },
 );
@@ -200,11 +203,64 @@ test(
       assert.ok(captured, 'expected ProxyAgent to be constructed from the uppercase spelling');
       assert.equal(captured.uri, 'http://upper.proxy:8080');
     } finally {
-      restoreProxyEnv(saved);
-      if (savedHome === undefined) delete process.env.HUAWEICLOUD_HOME;
-      else process.env.HUAWEICLOUD_HOME = savedHome;
-      clearProxyDispatcherCache();
-      fs.rmSync(tmpHome, { recursive: true, force: true });
+      teardownProxyTest(saved, savedHome, tmpHome);
     }
   },
 );
+
+// ── no_proxy CIDR matching (main 1.1.9 port) ────────────────────────────────
+
+test('no_proxy CIDR patterns match literal IPv4/IPv6 hosts (incl. mapped forms)', async () => {
+  const { getProxyDispatcher } = await import('../plugins/huaweicloud-core/src/proxy/proxy-agent.ts');
+  const cases: Array<[string, string, boolean]> = [
+    // IPv4 host vs IPv4 CIDR — inside and outside.
+    ['10.0.0.5', '10.0.0.0/8', true],
+    ['10.1.2.3', '10.0.0.0/8', true],
+    ['11.0.0.1', '10.0.0.0/8', false],
+    ['192.168.1.20', '192.168.1.0/24', true],
+    ['192.168.2.20', '192.168.1.0/24', false],
+    // /0 matches everything; /32 exactly one.
+    ['8.8.8.8', '0.0.0.0/0', true],
+    ['8.8.8.8', '8.8.8.8/32', true],
+    ['8.8.8.9', '8.8.8.8/32', false],
+    // IPv4-mapped IPv6 host vs IPv4 CIDR.
+    ['::ffff:10.0.0.5', '10.0.0.0/8', true],
+    ['::ffff:11.0.0.1', '10.0.0.0/8', false],
+    // IPv4-mapped CIDR base vs IPv4 host (the mapped base parses as a 32-bit rule).
+    ['10.0.0.5', '::ffff:10.0.0.0/8', true],
+    ['11.0.0.5', '::ffff:10.0.0.0/8', false],
+    // IPv6 host vs IPv6 CIDR.
+    ['2001:db8::1', '2001:db8::/32', true],
+    ['2001:db9::1', '2001:db8::/32', false],
+    ['fe80::1', 'fe80::/10', true],
+    ['::1', '::1/128', true],
+    ['::2', '::1/128', false],
+    // Hostnames never match CIDRs.
+    ['example.com', '10.0.0.0/8', false],
+    // Malformed patterns never crash and never match.
+    ['10.0.0.5', '10.0.0.0/33', false],
+    ['10.0.0.5', '10.0.0.0/abc', false],
+    ['2001:db8::1', '2001:db8::/129', false],
+  ];
+  for (const [host, pattern, expectBypass] of cases) {
+    const bypass = shouldBypassProxy(host, [pattern]);
+    assert.equal(bypass, expectBypass, `host=${host} pattern=${pattern} expected bypass=${expectBypass}`);
+    // End-to-end agreement: a bypassed target yields no dispatcher. Bracketed
+    // IPv6 URLs exercise the URL-hostname normalization (brackets stripped,
+    // hex-mapped forms translated).
+    if (expectBypass) {
+      process.env.HTTPS_PROXY = 'http://proxy.invalid:8080';
+      process.env.HTTP_PROXY = 'http://proxy.invalid:8080';
+      process.env.NO_PROXY = pattern;
+      try {
+        const target = host.includes(':') ? `http://[${host}]:443/` : `http://${host}:443/`;
+        const dispatcher = await getProxyDispatcher(target);
+        assert.equal(dispatcher, undefined, `host=${host} pattern=${pattern} must bypass the proxy`);
+      } finally {
+        delete process.env.HTTPS_PROXY;
+        delete process.env.HTTP_PROXY;
+        delete process.env.NO_PROXY;
+      }
+    }
+  }
+});

@@ -665,3 +665,109 @@ test('G: explain_error surfaces CREDENTIAL_EXPIRED first when temp STS has expir
     }
   }
 });
+
+// Hermetic fake hcloud for list_operations (honors --help/help, exits 0) with
+// the HCLOUD_BIN pair set around the body and restored either way.
+async function withFakeHcloudForList(fn: () => Promise<void>): Promise<void> {
+  const dir = fixtureDir('tools-list-ops-');
+  const script = join(dir, 'fake-hcloud.mjs');
+  writeFileSync(script, `console.log('operations: ListX ShowX CreateX'); process.exit(0);`, 'utf8');
+  const prevBin = process.env.HCLOUD_BIN;
+  const prevArgs = process.env.HCLOUD_BIN_ARGS_JSON;
+  process.env.HCLOUD_BIN = process.execPath;
+  process.env.HCLOUD_BIN_ARGS_JSON = JSON.stringify([script]);
+  try {
+    await fn();
+  } finally {
+    if (prevBin === undefined) delete process.env.HCLOUD_BIN;
+    else process.env.HCLOUD_BIN = prevBin;
+    if (prevArgs === undefined) delete process.env.HCLOUD_BIN_ARGS_JSON;
+    else process.env.HCLOUD_BIN_ARGS_JSON = prevArgs;
+  }
+}
+
+// ── list_operations aggregate fan-out + Chinese intent keywords ─────────────
+
+test('list_operations fans DMS/DEW out to their KooCLI sub-services', async () => {
+  await withFakeHcloudForList(async () => {
+    for (const [aggregate, subs] of [
+      ['DMS', ['Kafka', 'RabbitMQ', 'RocketMQ']],
+      ['DEW', ['KMS', 'CSMS']],
+    ] as const) {
+      const result = (await callTool('huaweicloud_list_operations', {
+        service: aggregate,
+        maxRetries: 0,
+        timeoutMs: 30000,
+      })) as {
+        service: string;
+        aggregate: boolean;
+        aggregatedFrom: string[];
+        subServices: Array<{ subService: string; command: string }>;
+      };
+      assert.equal(result.aggregate, true, `${aggregate} is an aggregate name`);
+      assert.deepEqual(result.aggregatedFrom, [...subs]);
+      assert.deepEqual(
+        result.subServices.map((s) => s.subService),
+        [...subs],
+      );
+      for (const sub of result.subServices) {
+        assert.match(sub.command, new RegExp(`^hcloud ${sub.subService} --help$`));
+      }
+    }
+  });
+});
+
+test('list_operations carries BSS identity notes (Customer vs Partner API split)', async () => {
+  await withFakeHcloudForList(async () => {
+    const result = (await callTool('huaweicloud_list_operations', {
+      service: 'BSS',
+      maxRetries: 0,
+      timeoutMs: 30000,
+    })) as {
+      identityNotes: Array<{ identity: string; apis: string[]; note: string }>;
+    };
+    assert.ok(Array.isArray(result.identityNotes) && result.identityNotes.length === 2);
+    const partner = result.identityNotes.find((n) => n.identity.includes('Partner'));
+    assert.ok(partner, 'the Partner-level class is present');
+    assert.ok(partner!.apis.includes('ListQuotaCoupons'));
+    assert.match(partner!.note, /NOT bad AK\/SK or a missing cli-domain-id/);
+  });
+});
+
+async function assertSkillForIntent(intent: string, expectedSkill: string): Promise<void> {
+  const result = (await callTool('huaweicloud_service_catalog', { intent })) as {
+    recommendedSkills?: string[];
+  };
+  assert.ok(
+    (result.recommendedSkills ?? []).includes(expectedSkill),
+    `intent "${intent}" must route to ${expectedSkill}, got ${JSON.stringify(result.recommendedSkills)}`,
+  );
+}
+
+test('serviceCatalog routes Chinese intent keywords to the right skills', async () => {
+  const cases: Array<[string, string]> = [
+    ['弹性云服务器怎么创建', 'huawei-ecs'],
+    ['申请一个弹性公网IP', 'huawei-vpc'],
+    ['对象存储静态托管', 'huawei-obs'],
+    ['函数工作流触发器配置', 'huawei-functiongraph'],
+    ['关系型数据库高可用', 'huawei-rds'],
+    ['访问密钥在哪里管理', 'huawei-iam'],
+    ['密钥管理服务加密', 'huawei-cloud-dew-key-management'],
+    ['查询账单计费明细', 'huawei-billing'],
+    ['配置监控告警', 'huawei-cloud-eye'],
+    ['查看审计追踪记录', 'huawei-cloud-cts-trace-management'],
+    ['创建备份存储库', 'huawei-cbr'],
+    ['文档数据库连接', 'huawei-cloud-dds-dcs-instance-management'],
+    ['负载均衡监听器', 'huawei-vpc'],
+  ];
+  for (const [intent, expectedSkill] of cases) {
+    await assertSkillForIntent(intent, expectedSkill);
+  }
+});
+
+test('serviceCatalog: slash-bearing keywords (ak/sk, ci/cd) match via the phrase path', async () => {
+  // Same routing contract as the Chinese-intent test above, exercised through
+  // the shared assertSkillForIntent helper to avoid duplicating its loop.
+  await assertSkillForIntent('configure AK/SK credentials', 'huawei-iam');
+  await assertSkillForIntent('ci/cd pipeline for deployment', 'huawei-cloud-deployment-task-management');
+});

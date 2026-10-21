@@ -81,3 +81,17 @@ hcloud VPC CreateSecurityGroupRule \
 ```
 
 > SG is stateful — return traffic auto-allowed. Network ACL is stateless — need both directions.
+
+## ELB (Elastic Load Balance) Pointers
+
+ELB listeners/load balancers are network-adjacent (the VPC skill owns the
+underlying network objects), but this skill has no ELB operation coverage. For
+ELB tasks:
+
+1. Run `hcloud ELB --help` to discover the operation set (CreateLoadBalancer,
+   CreateListener, CreatePool, CreateMember, ...), then the per-operation
+   `--help` for exact parameters.
+2. ELB health-check and listener configs are API-shaped (nested objects) —
+   prefer `--cli-jsonInput=<file>` for complex params.
+3. An ELB needs a VPC subnet and (for public listeners) an EIP bound to the
+   load balancer — the VPC/EIP commands above apply.

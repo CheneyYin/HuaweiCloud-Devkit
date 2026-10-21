@@ -338,7 +338,8 @@ export function detectFramework(projectPath: string): FrameworkDetection | null 
   if (
     existsSync(join(projectPath, 'next.config.js')) ||
     existsSync(join(projectPath, 'next.config.mjs')) ||
-    existsSync(join(projectPath, 'next.config.ts'))
+    existsSync(join(projectPath, 'next.config.ts')) ||
+    existsSync(join(projectPath, 'next.config.cjs'))
   ) {
     return frameworkResult(FRAMEWORKS.nextjs, pm, projectPath);
   }
@@ -346,7 +347,9 @@ export function detectFramework(projectPath: string): FrameworkDetection | null 
   if (
     existsSync(join(projectPath, 'nuxt.config.js')) ||
     existsSync(join(projectPath, 'nuxt.config.mjs')) ||
-    existsSync(join(projectPath, 'nuxt.config.ts'))
+    existsSync(join(projectPath, 'nuxt.config.ts')) ||
+    existsSync(join(projectPath, 'nuxt.config.cjs')) ||
+    existsSync(join(projectPath, 'nuxt.config.mts'))
   ) {
     return frameworkResult(FRAMEWORKS.nuxt, pm, projectPath);
   }
@@ -371,7 +374,8 @@ export function detectFramework(projectPath: string): FrameworkDetection | null 
   if (
     existsSync(join(projectPath, 'docusaurus.config.js')) ||
     existsSync(join(projectPath, 'docusaurus.config.ts')) ||
-    existsSync(join(projectPath, 'docusaurus.config.mjs'))
+    existsSync(join(projectPath, 'docusaurus.config.mjs')) ||
+    existsSync(join(projectPath, 'docusaurus.config.cjs'))
   ) {
     return frameworkResult(FRAMEWORKS.docusaurus, pm, projectPath);
   }
@@ -392,7 +396,9 @@ export function detectFramework(projectPath: string): FrameworkDetection | null 
   if (
     existsSync(join(projectPath, 'vite.config.js')) ||
     existsSync(join(projectPath, 'vite.config.mjs')) ||
-    existsSync(join(projectPath, 'vite.config.ts'))
+    existsSync(join(projectPath, 'vite.config.ts')) ||
+    existsSync(join(projectPath, 'vite.config.cjs')) ||
+    existsSync(join(projectPath, 'vite.config.mts'))
   ) {
     return frameworkResult(FRAMEWORKS.vite, pm, projectPath);
   }
@@ -401,6 +407,9 @@ export function detectFramework(projectPath: string): FrameworkDetection | null 
     return frameworkResult(FRAMEWORKS.vueCli, pm, projectPath);
   }
 
+  // CRA heuristic — main 1.1.9's exact block (6-dep union, public/index.html
+  // OR root index.html). The upstream react-scripts tighten (9481ba2) applies
+  // to the deps+src FALLBACK below, not to this shape.
   if (
     'react-scripts' in deps ||
     'react' in deps ||
@@ -414,8 +423,43 @@ export function detectFramework(projectPath: string): FrameworkDetection | null 
     }
   }
 
-  if (existsSync(join(projectPath, 'index.html'))) {
+  if (
+    existsSync(join(projectPath, 'index.html')) ||
+    existsSync(join(projectPath, 'public', 'index.html')) ||
+    existsSync(join(projectPath, 'src', 'index.html'))
+  ) {
     return frameworkResult(FRAMEWORKS.static, pm, projectPath);
+  }
+
+  // Deps + src-entry fallback: a framework dependency with a src/ entry but
+  // no config file — vue → vue-cli, react-scripts → CRA, svelte/solid → vite.
+  // CRA here is react-scripts ONLY (the upstream tighten).
+  if (pkg) {
+    const entryPoints = [
+      'src/main.js',
+      'src/main.ts',
+      'src/main.jsx',
+      'src/main.tsx',
+      'src/App.vue',
+      'src/app.vue',
+      'src/main.vue',
+      'src/index.js',
+      'src/index.ts',
+      'src/index.jsx',
+      'src/index.tsx',
+    ];
+    const hasEntry = entryPoints.some((p) => existsSync(join(projectPath, p)));
+    if (hasEntry) {
+      if ('vue' in deps || '@vue/cli-service' in deps) {
+        return frameworkResult(FRAMEWORKS.vueCli, pm, projectPath);
+      }
+      if ('react-scripts' in deps) {
+        return frameworkResult(FRAMEWORKS.cra, pm, projectPath);
+      }
+      if ('svelte' in deps || 'solid-js' in deps) {
+        return frameworkResult(FRAMEWORKS.vite, pm, projectPath);
+      }
+    }
   }
 
   return null;

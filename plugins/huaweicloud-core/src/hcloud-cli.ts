@@ -623,10 +623,15 @@ function runHcloudOnce(plan: HcloudPlanWithArgs, options: HcloudRunOptions): Pro
       child.kill('SIGTERM');
       forceTimer = setTimeout(() => child.kill('SIGKILL'), forceKillAfterMs);
       settleTimer = setTimeout(() => {
+        // Same shape the close-path TIMEOUT and SPAWN_ERROR results carry:
+        // exitCode/signal are always present (null when unknown — the child
+        // never reported a close event on this backstop path).
         finish({
           ok: false,
           code: 'TIMEOUT',
           error: `hcloud command timed out after ${timeoutMs} ms.`,
+          exitCode: null,
+          signal: null,
           stdout: redactOutput(stdout),
           stderr: redactOutput(stderr),
           plan,
@@ -645,6 +650,8 @@ function runHcloudOnce(plan: HcloudPlanWithArgs, options: HcloudRunOptions): Pro
         ok: false,
         code: 'SPAWN_ERROR',
         error: error.message,
+        exitCode: null,
+        signal: null,
         plan,
       });
     });
@@ -676,11 +683,41 @@ function runHcloudOnce(plan: HcloudPlanWithArgs, options: HcloudRunOptions): Pro
         });
         return;
       }
+      // #921: two ok-gate holes that surfaced from live testing are closed here:
+      //   1. exit code 0 but the output carries a KooCLI parameter error (e.g.
+      //      `--delete_ip` instead of `--delete_publicip`) — the command never
+      //      executed; report ok:false with a PARAM_ERROR errorCode.
+      //   2. non-zero exit code with "successfully" in the output — the old
+      //      broad regex flagged ANY failure mentioning "successfully". It is
+      //      narrowed to OBS obsutil-style commands (which are known to return
+      //      non-zero exit codes on success, #57) AND require the output to
+      //      carry no error indicators.
+      const combined = `${stdout}${stderr}`;
+      const paramError = combined.match(
+        /\[?(?:ERROR|USE_ERROR)\]?[: ]*(?:unknown parameter|unknown option|incorrect (?:option|switch|parameter)|invalid (?:parameter|argument)|参数不存在|参数错误|无效的参数)[^\n]*/i,
+      );
+      if (paramError) {
+        finish({
+          ok: false,
+          exitCode: code,
+          signal,
+          errorCode: 'PARAM_ERROR',
+          errorMessage: paramError[0]?.trim() ?? '',
+          stdout: redactOutput(stdout),
+          stderr: redactOutput(stderr),
+          plan,
+        });
+        return;
+      }
+      const isObsCommand = /^obs\b/i.test(String(plan.rawArgs?.[0] || ''));
+      const successText = /successfully/i.test(combined);
+      // Zero-count summaries are not errors: obsutil batch output routinely
+      // prints "Failed count: 0" / "失败数量: 0" lines even on full success —
+      // strip them before scanning for real error indicators.
+      const summaryText = combined.replace(/(?:failed|失败)(?:\s*(?:count|数量)?\s*[:=]?\s*0)\b/gi, '');
+      const errorIndicators = /error|failed|失败|invalid|not found|denied|拒绝/i.test(summaryText);
       finish({
-        ok:
-          code === 0 ||
-          (code !== 0 &&
-            /successfully|succ?ess.*\[200\]|create bucket successfully|upload successfully/i.test(stdout + stderr)),
+        ok: code === 0 || (isObsCommand && successText && !errorIndicators),
         exitCode: code,
         signal,
         stdout: redactOutput(stdout),

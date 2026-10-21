@@ -93,10 +93,80 @@ const SERVICE_EXAMPLES: Record<string, { list: string; create: string; show: str
   DCS: { list: 'DCS ListInstances', create: 'DCS CreateInstance', show: 'DCS ShowInstance' },
 };
 
+// DMS and DEW are Huawei Cloud aggregate service names that do not exist as
+// single KooCLI service identifiers. Each maps to real KooCLI sub-services.
+const AGGREGATE_SERVICE_MAP: Record<string, string[]> = {
+  DMS: ['Kafka', 'RabbitMQ', 'RocketMQ'],
+  DEW: ['KMS', 'CSMS'],
+};
+
+// Identity-class notes per service. BSS leads: its operations are split between
+// Customer-level APIs (work with a normal IAM user) and Partner-level APIs
+// (only valid for a partner/dealer identity). Calling a Partner-level API with a
+// customer credential returns APIGW.0301 even when AK/SK are perfectly valid —
+// the common false-positive diagnosis is "cli-domain-id missing".
+const SERVICE_IDENTITY_NOTES: Record<string, Array<{ identity: string; apis: string[]; note: string }>> = {
+  BSS: [
+    {
+      identity: 'Customer-level (normal IAM user)',
+      apis: [
+        'ShowCustomerAccountBalances',
+        'ListCustomerBillsFeeRecords',
+        'ListCustomerCouponChangeRecords',
+        'ListResourceUsage',
+        'ListCosts',
+      ],
+      note: 'Work with a normal IAM user that has BSS Administrator or Finance role.',
+    },
+    {
+      identity: 'Partner-level (partner/dealer only)',
+      apis: ['ListQuotaCoupons', 'ListSubCustomerCoupons', 'ListSubCustomerBillDetail'],
+      note: 'APIGW.0301 here means the caller identity is not a partner — NOT bad AK/SK or a missing cli-domain-id.',
+    },
+  ],
+};
+
 async function listOperations(service: string | undefined, options: { timeoutMs?: number } = {}) {
   const serviceName = String(service || '').trim();
   if (!/^[A-Za-z][A-Za-z0-9-]{1,63}$/.test(serviceName)) {
     throw new Error('service must be a KooCLI service name such as ECS, VPC, IMS, OBS, RDS, or CDN.');
+  }
+  const upperName = serviceName.toUpperCase();
+  const subServices = AGGREGATE_SERVICE_MAP[upperName];
+  if (subServices && subServices.length) {
+    // Aggregate fan-out: return each sub-service's operations instead of failing
+    // on the aggregate name directly (DMS/DEW do not exist as KooCLI services).
+    const results = await Promise.all(
+      subServices.map(async (sub) => {
+        let result = await runHcloud([sub, '--help'], {
+          timeoutMs: options.timeoutMs,
+          maxRetries: 0,
+        });
+        if (!result.ok) {
+          result = await runHcloud([sub, 'help'], {
+            timeoutMs: options.timeoutMs,
+            maxRetries: 0,
+          });
+        }
+        return {
+          subService: sub,
+          command: `hcloud ${sub} --help`,
+          examples: SERVICE_EXAMPLES[sub.toUpperCase()] || {
+            note: `No cached examples for ${sub}. Use the help text above to discover available operations.`,
+          },
+          result,
+        };
+      }),
+    );
+    return {
+      service: serviceName,
+      aggregate: true,
+      aggregatedFrom: subServices,
+      selectionRule:
+        'DMS/DEW are aggregate service names. Use each sub-service help text below to select the exact KooCLI operation name.',
+      identityNotes: SERVICE_IDENTITY_NOTES[upperName] || null,
+      subServices: results,
+    };
   }
   const isObs = /^obs$/i.test(serviceName);
   const svc = isObs ? 'obs' : serviceName;
@@ -114,8 +184,10 @@ async function listOperations(service: string | undefined, options: { timeoutMs?
   return {
     service: serviceName,
     command: isObs ? 'hcloud obs help' : `hcloud ${svc} --help`,
-    selectionRule: 'Use this help text to select the exact KooCLI operation name before planning any service command.',
-    examples: SERVICE_EXAMPLES[serviceName.toUpperCase()] || {
+    selectionRule:
+      'Use this help text to select the exact KooCLI operation name before planning any service command. After selecting an operation, run "hcloud <Service> <Operation> --help" to confirm exact parameter names before constructing the command.',
+    identityNotes: SERVICE_IDENTITY_NOTES[upperName] || null,
+    examples: SERVICE_EXAMPLES[upperName] || {
       note: `No cached examples for ${serviceName}. Use the help text above to discover available operations.`,
     },
     result,

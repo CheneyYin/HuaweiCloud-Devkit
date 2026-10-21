@@ -865,3 +865,121 @@ test('tombstones age out: an aged tombstone inspects as not_found, not already_c
     assert.ok(!(token in map), 'the aged tombstone is pruned by the mint');
   });
 });
+
+// ── #921: CLI ok-judgment holes ─────────────────────────────────────────────
+
+test('#921: exit 0 with a KooCLI parameter error reports ok:false with PARAM_ERROR', async () => {
+  const script = fakeHcloudScript(`
+console.error("[USE_ERROR]: unknown parameter delete_ip");
+process.exit(0);
+`);
+  const result = await runHcloud(['ECS', 'ListServersDetails', '--delete_ip=x'], {
+    executable: process.execPath,
+    executableArgs: [script],
+  });
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.ok, false, 'a parameter error must never read as success');
+  assert.equal(result.errorCode, 'PARAM_ERROR');
+  assert.match(result.errorMessage ?? '', /unknown parameter delete_ip/);
+});
+
+test('#921: exit 0 with a Chinese parameter error is caught too', async () => {
+  const script = fakeHcloudScript(`
+console.error("[USE_ERROR]: 参数错误: 不正确的参数 delete_ip");
+process.exit(0);
+`);
+  const result = await runHcloud(['ECS', 'ListServersDetails'], {
+    executable: process.execPath,
+    executableArgs: [script],
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.errorCode, 'PARAM_ERROR');
+});
+
+test('#921: "successfully" heuristic applies ONLY to OBS commands without error indicators', async () => {
+  // Non-OBS command, non-zero exit, "successfully" in output: NOT ok.
+  const nonObs = fakeHcloudScript(`
+console.log("Warning: fallback succeeded but 3 objects were NOT deleted successfully");
+process.exit(1);
+`);
+  const bad = await runHcloud(['ECS', 'ListServersDetails', '--limit=1'], {
+    executable: process.execPath,
+    executableArgs: [nonObs],
+  });
+  assert.equal(bad.exitCode, 1);
+  assert.equal(bad.ok, false, 'a failing non-OBS command mentioning "successfully" must not pass');
+
+  // OBS obsutil-style command: known to exit non-zero on success (#57).
+  const obs = fakeHcloudScript(`
+console.log("List bucket objects successfully");
+process.exit(1);
+`);
+  const good = await runHcloud(['obs', 'ls', 'obs://bucket/'], {
+    executable: process.execPath,
+    executableArgs: [obs],
+  });
+  assert.equal(good.ok, true, 'OBS success output with a non-zero exit stays ok');
+
+  // OBS command with an error indicator: NOT ok.
+  const obsErr = fakeHcloudScript(`
+console.log("List bucket objects successfully");
+console.error("error: 2 objects failed");
+process.exit(1);
+`);
+  const bad2 = await runHcloud(['obs', 'ls', 'obs://bucket/'], {
+    executable: process.execPath,
+    executableArgs: [obsErr],
+  });
+  assert.equal(bad2.ok, false, 'OBS output carrying error indicators must not pass');
+});
+
+test('#921: timeout and spawn-error results carry exitCode/signal fields', async () => {
+  // Timeout path (from the existing timeout test's shape, now asserting the
+  // exitCode/signal fields exist).
+  const script = fakeHcloudScript('setTimeout(() => {}, 10_000);');
+  const result = await runHcloud(['ECS', 'ListServersDetails'], {
+    executable: process.execPath,
+    executableArgs: [script],
+    timeoutMs: 300,
+  });
+  assert.equal(result.code, 'TIMEOUT');
+  // The close-path TIMEOUT carries the child's exitCode/signal (or null on
+  // the settle backstop) — the fields must always be present.
+  assert.equal('exitCode' in result, true, 'timeout results must carry exitCode');
+  assert.equal('signal' in result, true, 'timeout results must carry signal');
+});
+
+test('#921 D3-B7: spawn-error results carry exitCode:null, signal:null, and the SPAWN_ERROR code', async () => {
+  const result = await runHcloud(['ECS', 'ListServersDetails'], {
+    executable: '/nonexistent/hcloud-binary-xyz',
+    maxRetries: 0,
+  });
+  assert.equal(result.code, 'SPAWN_ERROR');
+  assert.equal('exitCode' in result, true, 'spawn-error results must carry exitCode');
+  assert.equal(result.exitCode, null);
+  assert.equal(result.signal, null);
+});
+
+test('#921 residual: obsutil zero-count summaries do not veto a successful OBS run', async () => {
+  const obs = fakeHcloudScript(`
+console.log("List bucket objects successfully");
+console.log("Failed count: 0");
+process.exit(1);
+`);
+  const result = await runHcloud(['obs', 'ls', 'obs://bucket/'], {
+    executable: process.execPath,
+    executableArgs: [obs],
+  });
+  assert.equal(result.ok, true, 'a "Failed count: 0" summary line is not an error');
+
+  const obsRealFail = fakeHcloudScript(`
+console.log("List bucket objects successfully");
+console.log("Failed count: 2");
+process.exit(1);
+`);
+  const failed = await runHcloud(['obs', 'ls', 'obs://bucket/'], {
+    executable: process.execPath,
+    executableArgs: [obsRealFail],
+  });
+  assert.equal(failed.ok, false, 'a non-zero failure count still vetoes');
+});
