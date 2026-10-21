@@ -37,6 +37,12 @@ fixture 捕获环境: `COLUMNS=80 NO_COLOR=1` 非 TTY 重定向，共 43 个文�
 - 工具契约（与 CLI runner 的两点刻意差异）: (1) 参数作为**独立 argv 元素**（`python -c <snippet> <json>`，snippet 读 `sys.argv[1]` 后 `json.loads`）——JSON 串不是 Python 字面量（true/false/null），织入代码会在未来布尔参数上静默漂移;(2) snippet 退出码是我们自己的契约（0 成功 / 3 模块缺失→换 python 候选 / 1 失败），`detectFailure` 签名嗅探保留为第二防御层。python 候选链: 解析出路径的 CLI 同级 python（venv/AGENTARTS_BIN）> PATH `python3`/`python`。
 - 分页默认**省略不传**（SDK `offset=1, limit=10` 与 gateway 的 0 基分页相悖，方向未实测）——SDK 缺省是唯一真源，S0 全默认实测后再裁决。
 
+## install-agentarts 实测（PR6 工具，A2 补测 2026-10-21）
+
+- 从零创建路径【实测，aarch64 Linux + Python 3.12.3 + 真网络】: `HUAWEICLOUD_HOME=<scratch> node bin/setup.cjs install-agentarts` 38s 完成，全部 63 个包经华为云镜像真实下载（`Downloading …mirrors.huaweicloud.com/repository/pypi/packages/…`，零官方源回退），venv 153M，`agentarts --version` 输出钉版横幅 `agentarts version: 0.1.7`，`resolveAgentartsCommand()` 在 `HUAWEICLOUD_HOME` 覆盖下正确解析 scratch venv。
+- 幂等收敛路径【实测】: 对已存在的 153M venv 重跑 `install-agentarts`，`python -m venv` 覆盖无错、pip 报全部 already satisfied（钉版 `==0.1.7` 经镜像确认）、exit 0；doctor 报 `[PASS] AgentArts CLI 0.1.7 (pinned 0.1.7)`。
+- 残留 open item: Windows（win32 python/venv/`Scripts\agentarts.exe` 路径）与真正裸机 HOME（本机首跑 HOME 写入已物化，无法区分新写入）仍无真机记录。
+
 ## 分类表修正（fixture 驱动）
 
 - registry 键: `launch`(含 deploy 别名)、`config`(含 configure 别名)。
