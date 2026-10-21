@@ -9,6 +9,7 @@
     "cordis.patch.yml",
     "bin",
     ".agents",
+    "rules",
     "plugins/huaweicloud-core",
     "!plugins/huaweicloud-core/src/packs/*/skills",
     "!plugins/huaweicloud-core/skills.new-*",

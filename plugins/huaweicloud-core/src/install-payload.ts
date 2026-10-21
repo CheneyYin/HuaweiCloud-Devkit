@@ -119,7 +119,40 @@ export function copyDir(src: string, dest: string): void {
 // so every install and update path must place the tree next to the server
 // it deploys (the native sync rides the same PAYLOAD_TARGETS table from
 // the dispatch layer).
+const AGENT_RULES_FILE = 'huawei-agent-rules.mdc';
+
+// #758 (D4-23): ship the agent rules file with the server payload. The file
+// had content and tests but ZERO install references — copyServerPayload only
+// shipped dist/safety/skills, so no installed agent ever saw it. Injecting
+// here (the one shared payload seam) covers every install/update call site
+// main enumerated one by one. Convergence mirrors the skills seam: the rules
+// dir is wholly devkit-owned — the file is remove-then-copied AND the dir is
+// pruned of names the source no longer ships, so a replaced OR retired rules
+// file can never linger. A missing source aborts loud — the skills-tree
+// precedent: a silent skip is exactly the invisibility this unit exists to
+// remove.
+function injectAgentRules(pluginDest: string): void {
+  const rulesSrcDir = join(PLUGIN_ROOT, 'rules');
+  const rulesSrc = join(rulesSrcDir, AGENT_RULES_FILE);
+  if (!existsSync(rulesSrc)) {
+    throw new Error(
+      `agent rules file missing at ${rulesSrc} — the payload cannot ship without it. ` +
+        'Restore it from source control (git restore rules/huawei-agent-rules.mdc) or reinstall the package.',
+    );
+  }
+  const rulesDestDir = join(pluginDest, 'rules');
+  mkdirSync(rulesDestDir, { recursive: true });
+  const rulesDest = join(rulesDestDir, AGENT_RULES_FILE);
+  rmSync(rulesDest, { force: true });
+  copyFileVerified(rulesSrc, rulesDest);
+  const staleRules = pruneStale(rulesDestDir, rulesSrcDir);
+  console.log(`  Agent Rules -> ${rulesDest}${staleRules > 0 ? ` (removed ${staleRules} stale)` : ''}`);
+}
+
 export function copyServerPayload(pluginDest: string, opts: { skipDist?: boolean } = {}): void {
+  // Rules first: its missing-source abort must fire BEFORE any payload bytes
+  // land, so a broken source never leaves a half-updated plugin dir.
+  injectAgentRules(pluginDest);
   if (!opts.skipDist) {
     const distSrc = join(PLUGIN_ROOT, 'dist');
     // A missing dist/ must abort like a missing skills tree below: copyDir's

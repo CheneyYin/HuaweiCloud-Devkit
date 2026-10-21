@@ -145,6 +145,7 @@ test('dsh install copies skills, MCP server, safety policy, and patch row', () =
     );
     assert.ok(existsSync(join(dshHome, 'skills', '.huaweicloud-devkit-native.json')));
     const pluginDir = join(dshHome, 'huaweicloud-plugins');
+    assert.ok(existsSync(join(pluginDir, 'rules', 'huawei-agent-rules.mdc')), 'dsh payload carries the agent rules');
     assert.ok(existsSync(join(pluginDir, 'dist', 'mcp-server.js')));
     assert.ok(existsSync(join(pluginDir, 'dist', 'tools.js')));
     assert.ok(existsSync(join(pluginDir, 'safety', 'policy.json')));

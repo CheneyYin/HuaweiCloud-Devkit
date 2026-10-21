@@ -121,6 +121,7 @@ test('officeace install copies skills, MCP server, and safety policy', () => {
     assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
     assert.ok(existsSync(join(pd, 'dist', 'tools.js')));
     assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
+    assert.ok(existsSync(join(pd, 'rules', 'huawei-agent-rules.mdc')), '#758 agent rules');
     assert.equal(
       JSON.parse(readFileSync(join(pd, 'package.json'), 'utf8')).version,
       pkg.version,

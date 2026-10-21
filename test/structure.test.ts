@@ -574,6 +574,24 @@ test('core meta-skills teach the skillRoot direct read as the default with retri
   );
 });
 
+test('agent rules file ships with the server payload (#758 D4-23)', () => {
+  const setup = readSource(join('src', 'setup-cli.ts'));
+  const pkg = readFileSync(join(root, 'package.json'), 'utf8');
+
+  // The rules file had content and tests but zero install references — the
+  // injection rides copyServerPayload (the one shared payload seam, covering
+  // every install/update call site), with remove-then-copy convergence and a
+  // loud abort when the source is missing (the silent-skip is the bug class).
+  assert.match(setup, /function injectAgentRules\(pluginDest: string\): void/);
+  assert.match(setup, /injectAgentRules\(pluginDest\);\n {2}if \(!opts\.skipDist\)/);
+  assert.match(setup, /const AGENT_RULES_FILE = 'huawei-agent-rules\.mdc';/);
+  assert.match(setup, /rmSync\(rulesDest, \{ force: true \}\);/);
+  assert.match(setup, /copyFileVerified\(rulesSrc, rulesDest\)/);
+  assert.match(setup, /agent rules file missing at/);
+  // And the npm tarball actually carries it (the files allowlist).
+  assert.match(pkg, /"rules",/);
+});
+
 test('agent rules file carries the skillRoot direct-read teaching', () => {
   // The rules file is agent-loaded copy with no other guard coverage; this
   // presence pin keeps its skillRoot teaching from silently vanishing in a
@@ -1064,6 +1082,23 @@ test('retrieve_skill description frames the fallback, not the default', () => {
     /it needs no file access/,
     'the description must state the loader needs no file access beside the trigger',
   );
+});
+
+test('skill-tracker carries the V1/V2 dual export (#758 follow-up)', () => {
+  const tracker = readFileSync(join(root, 'integrations', 'opencode', 'hooks', 'skill-tracker.js'), 'utf8');
+  // OpenCode 2.x reads id + setup(ctx) and registers hooks on the context
+  // domains; V1 reads server(). One default object serves both loaders.
+  assert.match(tracker, /async function setupV2\(ctx\)/);
+  assert.match(tracker, /ctx\.tool\.hook\('execute\.before'/);
+  assert.match(tracker, /async server\(\)/);
+  assert.match(tracker, /Plugin\.define\(/);
+  // The lazy define keeps a V1 host without @opencode/plugin loadable.
+  assert.match(tracker, /let Plugin = \{ define: \(def\) => def \};/);
+  // Doctrine (guarded above): setupV2 registers ONLY the bash classifier —
+  // no ctx.event.subscribe skill-read channel.
+  assert.match(tracker, /event\?\.tool !== 'bash'/);
+  assert.match(tracker, /trackBashCommand\(/);
+  assert.doesNotMatch(tracker, /ctx\.event\.subscribe/);
 });
 
 test('telemetry hooks never classify skill-tool loads', () => {

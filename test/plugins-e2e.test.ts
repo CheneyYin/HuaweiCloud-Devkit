@@ -274,6 +274,10 @@ for (const target of targets) {
       const pluginDir = target.pluginsDir(home);
       assert.ok(existsSync(join(pluginDir, 'dist', 'mcp-server.js')), `${target.name}: mcp-server.js installed`);
       assert.ok(existsSync(join(pluginDir, 'safety', 'policy.json')), `${target.name}: safety policy installed`);
+      assert.ok(
+        existsSync(join(pluginDir, 'rules', 'huawei-agent-rules.mdc')),
+        `${target.name}: agent rules installed`,
+      );
       assert.ok(existsSync(join(pluginDir, '.installed')), `${target.name}: .installed marker present`);
       assert.ok(countSkills(target.skillsDir(home)) >= 6, `${target.name}: expected >= 6 skills`);
       assert.ok(target.hasServer(target.configPath(home)), `${target.name}: MCP server registered`);

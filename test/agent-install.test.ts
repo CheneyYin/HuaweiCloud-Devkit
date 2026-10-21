@@ -236,6 +236,15 @@ interface HermesAllowlist {
   approvals?: Array<{ event?: string; command?: string }>;
 }
 
+// The server payload every target ships through copyServerPayload: dist,
+// safety, skills, and (since #758) the agent rules file.
+function assertServerPayload(pd: string): void {
+  assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
+  assert.ok(existsSync(join(pd, 'dist', 'tools.js')));
+  assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
+  assert.ok(existsSync(join(pd, 'rules', 'huawei-agent-rules.mdc')));
+}
+
 test('opencode install creates skills, MCP server, and safety policy', () => {
   const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
   const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
@@ -245,9 +254,7 @@ test('opencode install creates skills, MCP server, and safety policy', () => {
     assert.match(res.stdout, /\[OpenCode\]/);
     assert.match(res.stdout, /Installation complete/);
     const pd = join(home, '.config', 'opencode', 'huaweicloud-plugins');
-    assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
-    assert.ok(existsSync(join(pd, 'dist', 'tools.js')));
-    assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
+    assertServerPayload(pd);
     assert.ok(existsSync(join(pd, '.installed')));
     assert.equal(pluginVersion(pd), pkg.version);
     assertNativeCoreDisclosure(join(home, '.config', 'opencode', 'skills'), pd);
@@ -709,9 +716,7 @@ test('workbuddy install creates skills, MCP server, and safety policy', () => {
     assert.match(res.stdout, /Installation complete/);
     const pd = join(home, '.workbuddy', 'huaweicloud-plugins');
     assertNativeCoreDisclosure(join(home, '.workbuddy', 'skills'), pd);
-    assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
-    assert.ok(existsSync(join(pd, 'dist', 'tools.js')));
-    assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
+    assertServerPayload(pd);
     assert.equal(pluginVersion(pd), pkg.version);
   } finally {
     rmSync(home, { recursive: true, force: true });
@@ -797,9 +802,7 @@ test('codex-desktop install creates skills, MCP server, and safety policy', () =
     assert.match(res.stdout, /Installation complete/);
     assert.ok(countSkills(join(home, 'plugins', 'huaweicloud-devkit', 'skills')) >= 6);
     const pd = join(home, 'plugins', 'huaweicloud-devkit');
-    assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
-    assert.ok(existsSync(join(pd, 'dist', 'tools.js')));
-    assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
+    assertServerPayload(pd);
     assert.equal(pluginVersion(pd), pkg.version);
     // The status section this target lacked for months: both surfaces it
     // owns (plugin dir payload + marketplace registration) must report in.
@@ -858,9 +861,7 @@ test('openclaw install creates skills, MCP server, and safety policy in .agents'
     assert.match(res.stdout, /Installation complete/);
     const pd = join(home, '.agents', 'huaweicloud-plugins');
     assertNativeCoreDisclosure(join(home, '.agents', 'skills'), pd);
-    assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
-    assert.ok(existsSync(join(pd, 'dist', 'tools.js')));
-    assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
+    assertServerPayload(pd);
     assert.ok(existsSync(join(pd, '.installed')));
     assert.equal(pluginVersion(pd), pkg.version);
   } finally {
@@ -894,8 +895,7 @@ test('hermes install creates skills, MCP server, and safety policy', () => {
     assert.match(res.stdout, /Installation complete/);
     const pd = join(home, '.hermes', 'huaweicloud-plugins');
     assertNativeCoreDisclosure(join(home, '.hermes', 'skills'), pd);
-    assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
-    assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
+    assertServerPayload(pd);
     assert.equal(pluginVersion(pd), pkg.version);
     const allowlistPath = join(home, '.hermes', 'shell-hooks-allowlist.json');
     assert.ok(existsSync(allowlistPath), 'shell hook allowlist must be written on install');
@@ -958,9 +958,7 @@ test('atomcode install creates skills, MCP server, and safety policy', () => {
     assert.match(res.stdout, /Installation complete/);
     const pd = join(home, '.atomcode', 'huaweicloud-plugins');
     assertNativeCoreDisclosure(join(home, '.atomcode', 'skills'), pd);
-    assert.ok(existsSync(join(pd, 'dist', 'mcp-server.js')));
-    assert.ok(existsSync(join(pd, 'dist', 'tools.js')));
-    assert.ok(existsSync(join(pd, 'safety', 'policy.json')));
+    assertServerPayload(pd);
     assert.equal(pluginVersion(pd), pkg.version);
     const mcpCfg = JSON.parse(readFileSync(join(home, '.atomcode', 'mcp.json'), 'utf8'));
     assert.equal(mcpCfg.mcpServers['huaweicloud-devkit'].command, 'node');
