@@ -14,6 +14,7 @@ import { homedir } from 'node:os';
 import { asText } from '../lib/as-text.ts';
 import { resolveSecretValue } from '../lib/secret-vault/store.ts';
 import { asRecord } from '../lib/as-record.ts';
+import { buildOnboardingSteps, makeError, type GuidanceStep } from './error-table.ts';
 
 // The credential vault is JSON on disk shaped like this. Fields stay `unknown`
 // until a typeof/Array.isArray guard surfaces a string, because the file (and
@@ -321,7 +322,8 @@ export function writeObsConfig(credentials: WriteObsConfigInput = {}): { path: s
   const sk = asText(credentials.sk || '');
   const securityToken = asText(credentials.securityToken || '');
   if (!region || !ak || !sk) {
-    throw new Error('region, ak, and sk are required to write OBS config');
+    // #900: unified error shape from the shared ERROR_TABLE.
+    throw makeError('HDKIT_CRED_REGION_MISSING');
   }
   const path = obsConfigPath();
   const endpoint = asText(credentials.endpoint || `https://obs.${region}.myhuaweicloud.com`);
@@ -387,43 +389,25 @@ export function resolveCredentials(options: ResolveCredentialsOptions = {}): Res
 
   if (!ak || !sk) {
     if (options.allowMissing) return null;
-    const err = new Error(
-      'Huawei Cloud credentials are not configured. Run "npx huaweicloud-devkit auth init" or set HW_ACCESS_KEY/HW_SECRET_KEY.',
-    ) as CredentialError;
-    err.code = 'HDKIT_CRED_MISSING';
-    // Lightweight onboarding hint. HDKIT_CRED_MISSING fires when no credential
-    // resolved: with env empty/masked and S1 absent, the scenario is 3 by
-    // default. Scenario 4 (import a config-provided account) is only reachable
-    // in the narrow case where CodeArts S4 offers real creds that the resolver
-    // still couldn't adopt (e.g. CODEARTS_PROJECT_DIR set but the marker dir is
-    // absent). Full guidance comes from getAuthStatus(); keep this branch cheap.
+    // #900: unified guidance — one steps builder shared with computeOnboarding,
+    // and the error shape from the single ERROR_TABLE. Zero IO beyond the
+    // readCodeArtsCredentials() probe we already do for scenario routing.
     const codeartsCreds = readCodeArtsCredentials();
     const injectedAvailable = present(codeartsCreds?.ak) && present(codeartsCreds?.sk);
+    const codearts = isCodeArtsContext();
+    const err = makeError('HDKIT_CRED_MISSING') as MissingCredentialError;
     err.onboarding = injectedAvailable
       ? {
           scenario: 4,
           reason: 'import-injected',
           message: '检测到配置中已有有效账号,可导入为正式凭证。',
-          steps: isCodeArtsContext()
-            ? [{ action: 'auth_switch', args: { mode: 'mcp-config', action: 'persist' }, label: '导入配置中的账号' }]
-            : [
-                {
-                  action: 'auth_switch',
-                  args: { mode: 'import', action: 'persist' },
-                  label: '通过 creds-import.json 导入',
-                },
-              ],
+          steps: buildOnboardingSteps(4, { codearts }),
         }
       : {
           scenario: 3,
           reason: 's1-missing',
           message: '未配置华为云凭证,需要完成登录后才能使用云能力。',
-          steps: isCodeArtsContext()
-            ? [
-                { action: 'write-import', target: join(homedir(), '.config', 'huaweicloud', 'creds-import.json') },
-                { action: 'auth_switch', args: { mode: 'import', action: 'persist' } },
-              ]
-            : [{ action: 'auth-init', args: {} }],
+          steps: buildOnboardingSteps(3, { codearts }),
         };
     throw err;
   }
@@ -435,13 +419,11 @@ interface OnboardingHint {
   scenario: number;
   reason: string;
   message: string;
-  steps: Array<Record<string, unknown>>;
+  steps: Array<Record<string, unknown> | GuidanceStep>;
 }
 
-interface CredentialError extends Error {
-  code?: string;
-  onboarding?: OnboardingHint;
-}
+// The table error plus the resolver's onboarding hint (#900 shape union).
+type MissingCredentialError = ReturnType<typeof makeError> & { onboarding?: OnboardingHint };
 
 let _parentCwd: string | null | undefined = undefined;
 
@@ -456,7 +438,10 @@ export function getParentCwd(): string | null {
   }
 }
 
-function isCodeArtsContext(): boolean {
+// Shared with service.ts's computeOnboarding (#900): the codearts flag must
+// select the identical builder variant on the resolver failure path and the
+// status path — one detector, both call sites.
+export function isCodeArtsContext(): boolean {
   return (
     existsSync(join(process.cwd(), '.codeartsdoer')) ||
     existsSync(join(homedir(), '.codeartsdoer')) ||

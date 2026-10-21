@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { runHcloud, planHcloudCommand, type HcloudRunResult } from '../../hcloud-cli.ts';
-import { hcloudProbeNextStep, probeHcloud, type ProbeHcloudOptions } from '../../hcloud-probe.ts';
+import { hcloudProbeNextStep, hcloudProbeRaw, probeHcloud, type ProbeHcloudOptions } from '../../hcloud-probe.ts';
 import { redactSecrets } from '../../safety-policy.ts';
 import { asText } from '../../lib/as-text.ts';
 import { consumeApprovalToken, hashArgs } from '../../lib/approval-tokens.ts';
@@ -33,6 +33,8 @@ export async function runVersionCheck(options: ProbeHcloudOptions = {}) {
     installedVersion: result.installedVersion || undefined,
     versionMismatch: Boolean(result.versionMismatch),
     nextStep: hcloudProbeNextStep(result),
+    // #900: verbose English guidance lives only in this side-channel.
+    raw: hcloudProbeRaw(result),
     authHint:
       'If hcloud is installed but commands fail with "配置文件中不存在配置项", run `npx huaweicloud-devkit auth init` outside agent chat to configure credentials.',
   };

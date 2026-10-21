@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 
+import { errorFromTable } from './auth/error-table.ts';
 import { compareVersion, getKooCliVersion, parseHcloudVersion } from './koocli-version.ts';
 import { redactSecrets } from './safety-policy.ts';
 import { DEPENDENCIES } from './lib/dependency-model.ts';
@@ -160,7 +161,12 @@ export function probeHcloud(options: ProbeHcloudOptions = {}) {
   };
 }
 
-export function hcloudProbeNextStep(probe: HcloudProbeClassification): string {
+// #900 (issue comment Required 1): every not-ready probe state routes through
+// the shared ERROR_TABLE.HDKIT_KOOCLI_NOT_READY so nextStep is always a
+// directly executable command (d11-41-nextstep-actionable). The verbose
+// English guidance is preserved verbatim in hcloudProbeRaw() — a docs/debug
+// side-channel — and must never leak back into the top-level nextStep.
+export function hcloudProbeRaw(probe: HcloudProbeClassification): string {
   if (probe.status === 'ok')
     return 'Use huaweicloud_show_profile_redacted to inspect the active KooCLI profile safely.';
   if (probe.status === 'version_mismatch') {
@@ -179,4 +185,18 @@ export function hcloudProbeNextStep(probe: HcloudProbeClassification): string {
     );
   }
   return 'Install Huawei Cloud KooCLI: npx huaweicloud-devkit install-hcloud. Configure credentials outside the agent conversation.';
+}
+
+export function hcloudProbeNextStep(probe: HcloudProbeClassification): string {
+  if (probe.status === 'ok') return 'huaweicloud_show_profile_redacted';
+  const detail =
+    probe.status === 'version_mismatch'
+      ? `版本不匹配(已装 ${probe.installedVersion ?? '未知'},插件配套 ${probe.requiredVersion ?? '未知'})`
+      : probe.status === 'sandbox_home_failure'
+        ? '无法解析用户主目录'
+        : probe.status === 'privacy_pending'
+          ? '隐私协议待同意'
+          : '';
+  const e = errorFromTable('HDKIT_KOOCLI_NOT_READY', detail);
+  return e.nextStep;
 }

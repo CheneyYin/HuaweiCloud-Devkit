@@ -26,7 +26,7 @@ import {
   writeObsConfig,
 } from '../plugins/huaweicloud-core/src/auth/credentials.ts';
 import { fingerprint, runHcloudConfigure, scanState } from '../plugins/huaweicloud-core/src/auth/reconcile.ts';
-import { syncAuth, type SyncAuthResult } from '../plugins/huaweicloud-core/src/auth/service.ts';
+import { syncAuth, getAuthStatus, type SyncAuthResult } from '../plugins/huaweicloud-core/src/auth/service.ts';
 import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
 
 // Deterministic-tier seam: disable the once-per-session first-assertion
@@ -39,6 +39,10 @@ process.env.HUAWEICLOUD_VENDOR_CHALLENGE = 'off';
 
 const FAKE_HCLOUD = fileURLToPath(new URL('./fixtures/fake-hcloud.ts', import.meta.url));
 const FAKE_HCLOUD_FAIL = fileURLToPath(new URL('./fixtures/fake-hcloud-fail-config.ts', import.meta.url));
+const FAKE_HCLOUD_FAIL_PROJECT_ID = fileURLToPath(
+  new URL('./fixtures/fake-hcloud-fail-project-id.ts', import.meta.url),
+);
+const FAKE_HCLOUD_PRIVACY = fileURLToPath(new URL('./fixtures/fake-hcloud-privacy.ts', import.meta.url));
 
 const ENV_KEYS = [
   'HUAWEICLOUD_HOME',
@@ -174,8 +178,13 @@ test('04 syncAuth is rejected (R10) while runtime credentials are active', () =>
     setRuntimeCredentials('E2E4_RT_AK', 'E2E4_RT_SK');
     const res = syncAuth('all');
     assert.equal(res.ok, false);
-    assert.match(res.error, /R10/);
-    assert.match(res.error, /auto-sync suppressed/);
+    // #900: the unified ERROR_TABLE shape — messageZh carries the Chinese
+    // verdict, action is executable, and no internal codename (R10) leaks.
+    assert.equal(res.code, 'HDKIT_SYNC_SKIPPED_RUNTIME');
+    assert.match(res.messageZh ?? '', /运行时凭证生效,自动同步已跳过。/);
+    assert.equal(res.action, 'huaweicloud_auth_switch action=clear');
+    assert.equal(res.nextStep, res.action);
+    assert.doesNotMatch(res.error, /R10/);
   });
 });
 
@@ -216,7 +225,10 @@ test('06 auth_switch temporary activates runtime; auth_sync is then rejected (R1
 
     const sync = (await callTool('huaweicloud_auth_sync', { target: 'all' })) as SyncAuthResult;
     assert.equal(sync.ok, false);
-    assert.match(sync.error, /R10/);
+    // #900: the table shape — Chinese messageZh, executable action, no codename.
+    assert.equal(sync.code, 'HDKIT_SYNC_SKIPPED_RUNTIME');
+    assert.match(sync.messageZh ?? '', /运行时凭证生效,自动同步已跳过。/);
+    assert.doesNotMatch(sync.error, /R10/);
   });
 });
 
@@ -444,7 +456,10 @@ test('15 active runtime shows in scanState and suppresses auto-write (R10)', () 
 
     const res = syncAuth('all');
     assert.equal(res.ok, false);
-    assert.match(res.error, /R10/);
+    // #900: the table shape replaces the old "suppressed (R10)" English string.
+    assert.equal(res.code, 'HDKIT_SYNC_SKIPPED_RUNTIME');
+    assert.match(res.messageZh ?? '', /运行时凭证生效,自动同步已跳过。/);
+    assert.doesNotMatch(res.error, /R10/);
   });
 });
 
@@ -543,7 +558,61 @@ test('20 syncAuth returns ok:false and skips .last_sync when S2 configure fails'
     const res = syncAuth('all');
     assert.equal(res.ok, false);
     assert.ok(res.error, 'failure must carry an error message');
+    // Non-projectId configure failure: the table's KOOCLI_NOT_READY action
+    // would advise reinstalling a CLI the probe just passed — action follows
+    // the survivor's auth-init refresh verb instead (coherent remediation).
+    assert.equal(res.code, 'HDKIT_KOOCLI_NOT_READY');
+    assert.equal(res.action, 'npx huaweicloud-devkit auth init');
+    assert.match(res.nextStep ?? '', /real terminal/);
     assert.equal(existsSync(lastSyncPath()), false, 'no .last_sync marker may be stamped when S2 sync failed');
+  });
+});
+
+test('20b #900: configure failure with project_id stderr routes to HDKIT_PROJECT_ID_MISSING', () => {
+  withTempHome((dir) => {
+    setFakeHcloud(join(dir, 'hcloud.log'), FAKE_HCLOUD_FAIL_PROJECT_ID);
+    writeFakeKooCli('deploy', [
+      { name: 'deploy', accessKeyId: 'E2E20B_OLD_AK', secretAccessKey: 'E2E20B_OLD_SK', region: 'cn-north-4' },
+    ]);
+    writeGlobalCredentials({ ak: 'E2E20B_AK', sk: 'E2E20B_SK', region: 'cn-north-4' });
+
+    const res = syncAuth('all');
+    assert.equal(res.ok, false);
+    // The projectIdCause heuristic: stderr mentions project id → the table's
+    // project-id entry, with the executable configure action as nextStep.
+    assert.equal(res.code, 'HDKIT_PROJECT_ID_MISSING');
+    assert.match(res.messageZh ?? '', /KooCLI 配置缺少 project_id/);
+    assert.match(res.messageZh ?? '', /invalid project id for region/);
+    assert.equal(res.action, 'hcloud configure set --cli-project-id=<id>');
+    assert.equal(res.nextStep, res.action);
+    assert.ok(res.obs?.configured, 'OBS was already written before the configure step');
+  });
+});
+
+test('20c #900: a not-ready probe routes to HDKIT_KOOCLI_NOT_READY with raw side-channel', () => {
+  withTempHome((dir) => {
+    setFakeHcloud(join(dir, 'hcloud.log'), FAKE_HCLOUD_PRIVACY);
+    writeFakeKooCli('deploy', [
+      { name: 'deploy', accessKeyId: 'E2E20C_OLD_AK', secretAccessKey: 'E2E20C_OLD_SK', region: 'cn-north-4' },
+    ]);
+    writeGlobalCredentials({ ak: 'E2E20C_AK', sk: 'E2E20C_SK', region: 'cn-north-4' });
+
+    const res = syncAuth('all');
+    assert.equal(res.ok, false);
+    assert.equal(res.code, 'HDKIT_KOOCLI_NOT_READY');
+    assert.match(res.messageZh ?? '', /隐私协议待同意/);
+    // Top-level nextStep is the executable table action; the verbose
+    // English guidance (accept the agreement in a real terminal) is raw-only.
+    assert.equal(res.nextStep, 'npx huaweicloud-devkit install-hcloud');
+    assert.match(res.raw ?? '', /privacy agreement/i);
+    assert.match(res.raw ?? '', /real terminal/);
+
+    // getAuthStatus surfaces the same composition: executable kooCliNextStep
+    // plus the verbose kooCliRaw side-channel.
+    const status = getAuthStatus('all');
+    assert.equal(status.kooCliStatus, 'privacy_pending');
+    assert.equal(status.kooCliNextStep, 'npx huaweicloud-devkit install-hcloud');
+    assert.match(status.kooCliRaw ?? '', /privacy agreement/i);
   });
 });
 

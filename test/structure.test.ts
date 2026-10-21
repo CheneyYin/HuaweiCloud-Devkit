@@ -1839,6 +1839,57 @@ test('hermes restart hints, unix auto-install in dep/installers/hcloud, grouped 
   assert.match(setup, /已安装: /);
 });
 
+test('auth/error-table is a zod-free, IO-free, sibling-free leaf (#900)', () => {
+  const leaf = readSource(join('src', 'auth', 'error-table.ts'));
+  // The leaf must import node builtins ONLY — it compiles into both the
+  // zod-free setup-cli graph and the zod-bearing mcp-server graph.
+  const imports = leaf.split('\n').filter((line) => line.startsWith('import '));
+  assert.ok(imports.length >= 1, 'expected the node: builtin imports');
+  for (const line of imports) {
+    assert.match(line, /from 'node:/, `error-table.ts must import node builtins only: ${line}`);
+  }
+  // No relative imports of ANY depth (the leaf contract), no zod, no IO of any
+  // kind (denylist widened past the obvious fs/spawn/fetch calls).
+  assert.doesNotMatch(leaf, /from '\.\.?\//, 'error-table.ts must not import auth/ siblings');
+  assert.doesNotMatch(leaf, /from 'zod'/);
+  assert.doesNotMatch(
+    leaf,
+    /\b(readFileSync|writeFileSync|appendFileSync|existsSync|spawnSync|execSync|fetch|netConnect|readdirSync|statSync|rmSync|readFile|writeFile)\(/,
+  );
+});
+
+test('ERROR_TABLE carries the #900 code set with executable actions', () => {
+  const leaf = readSource(join('src', 'auth', 'error-table.ts'));
+  for (const code of [
+    'HDKIT_CRED_MISSING',
+    'HDKIT_CRED_INVALID',
+    'HDKIT_CRED_FORBIDDEN',
+    'HDKIT_CRED_REGION_MISSING',
+    'HDKIT_KOOCLI_NOT_READY',
+    'HDKIT_PROJECT_ID_MISSING',
+    'HDKIT_SYNC_SKIPPED_RUNTIME',
+    'HDKIT_CRED_UNEXPECTED',
+  ]) {
+    assert.match(leaf, new RegExp(`^  ${code}: \\{`, 'm'), `${code} must be a table key`);
+  }
+  // CREDENTIAL_EXPIRED is the hcloud runner's result code for expired
+  // platform-injected STS, NOT an onboarding/table state — it must stay out.
+  assert.doesNotMatch(leaf, /CREDENTIAL_EXPIRED:\s*\{/);
+  // Every action is a directly executable command, not English prose.
+  for (const action of [
+    'npx huaweicloud-devkit auth init',
+    'npx huaweicloud-devkit auth status',
+    'hcloud IAM KeystoneListProjects --cli-region=<region>',
+    'hcloud configure set --cli-region=<region>',
+    'npx huaweicloud-devkit install-hcloud',
+    'hcloud configure set --cli-project-id=<id>',
+    'huaweicloud_auth_switch action=clear',
+    'hcloud <Service> <Op> --cli-debug=true',
+  ]) {
+    assert.ok(leaf.includes(`action: '${action}'`), `action must stay executable: ${action}`);
+  }
+});
+
 test('dependency provisioning: new modules stay unbundled; setup-cli delegates', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
   const codeartsSandbox = readSource(join('src', 'codearts-sandbox.ts'));
@@ -1860,6 +1911,16 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
     .filter((name) => name.endsWith('.ts'))
     .sort((a, b) => a.localeCompare(b));
   assert.ok(vaultModules.length >= 3, `expected the secret-vault module family, found: ${vaultModules.join(', ')}`);
+  // And for the auth subsystem (#900 error-table port): src/auth/* is kept
+  // zod-free BY POLICY — six of the seven modules also compile into the
+  // unbundled setup-cli graph (setup-cli.ts imports them directly), and the
+  // seventh (credential-validator) is reachable only from the bundled
+  // mcp-server graph, where zod exists but the subsystem stays uniform with
+  // the rest. Walking the whole tree keeps either graph safe.
+  const authModules = (readdirSync(join(pluginRoot, 'src', 'auth'), { recursive: true }) as string[])
+    .filter((name) => name.endsWith('.ts'))
+    .sort((a, b) => a.localeCompare(b));
+  assert.ok(authModules.length >= 7, `expected the auth module family, found: ${authModules.join(', ')}`);
   // These compile into the unbundled dist/setup-cli.js graph, where only
   // undici exists at runtime: no zod, no SDK, ever.
   const guarded = [
@@ -1867,6 +1928,7 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
     ...vaultModules.map(
       (name) => [`src/lib/secret-vault/${name}`, readSource(join('src', 'lib', 'secret-vault', name))] as const,
     ),
+    ...authModules.map((name) => [`src/auth/${name}`, readSource(join('src', 'auth', name))] as const),
     ['src/codearts-sandbox.ts', codeartsSandbox] as const,
     ['src/lib/dep-resolve.ts', depResolve] as const,
     ['src/targets.ts', targetsModule] as const,
@@ -2492,6 +2554,14 @@ test('doctor renders the pack-binary section from the dependency model', () => {
   // The dedicated hcloud block stays the explicit plugin-level rule, never
   // derived from the dependency graph (see the section's comment).
   assert.match(setupCli, /check\('hcloud CLI installed'/, 'the dedicated hcloud check is untouched');
+  // #900: the executable table action must never travel alone in the CLI
+  // surfaces — the state-correct verbose guidance (hcloudProbeRaw) rides
+  // alongside in doctor's FAIL/WARN blocks and the install banner. This
+  // wiring was dropped once; a source pin keeps it from regressing again.
+  assert.ok(
+    (setupCli.match(/hcloudProbeRaw\(hcloudProbe\)/g) ?? []).length >= 5,
+    'doctor + install banner must print hcloudProbeRaw next to every not-ready action',
+  );
 });
 
 test('dependency model: catalog keyed by id, kinds pin the process model', () => {

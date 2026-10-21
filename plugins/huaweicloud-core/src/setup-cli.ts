@@ -97,7 +97,7 @@ import { readAgentDelta, saveAgentDelta, takeAgentDelta, purgeBackup } from './m
 import { isUsableOfficeaceRoot, readOfficeaceRootMarker, writeOfficeaceRootMarker } from './officeace-paths.ts';
 import { queryDistTagsFetch, determineTarget, semverCompare } from './update-check.ts';
 import { getKooCliVersion, compareVersion, kooCliDownloadBase } from './koocli-version.ts';
-import { findHcloudBin, hcloudProbeNextStep, probeHcloud } from './hcloud-probe.ts';
+import { findHcloudBin, hcloudProbeNextStep, hcloudProbeRaw, probeHcloud } from './hcloud-probe.ts';
 import { asText } from './lib/as-text.ts';
 import { asRecord } from './lib/as-record.ts';
 import { skillTreeEquals } from './lib/skill-tree.ts';
@@ -3280,10 +3280,14 @@ async function cmdInstall(): Promise<void> {
   if (!hcloudProbe.ok) {
     if (hcloudProbe.status === 'sandbox_home_failure') {
       console.log(`\n\x1b[33mKooCLI (hcloud) detected, but cannot run in this sandbox.`);
-      console.log(`  ${hcloudProbeNextStep(hcloudProbe)}\x1b[0m`);
+      // #900: the table action is executable but generic; the state-correct
+      // guidance (HCLOUD_BIN / real-terminal checks) rides in the raw channel.
+      console.log(`  ${hcloudProbeNextStep(hcloudProbe)}`);
+      console.log(`  ${hcloudProbeRaw(hcloudProbe)}\x1b[0m`);
     } else {
       console.log(`\n\x1b[33mKooCLI (hcloud) is not ready.`);
-      console.log(`  ${hcloudProbeNextStep(hcloudProbe)}\x1b[0m`);
+      console.log(`  ${hcloudProbeNextStep(hcloudProbe)}`);
+      console.log(`  ${hcloudProbeRaw(hcloudProbe)}\x1b[0m`);
     }
   } else {
     console.log(`\nKooCLI (hcloud) detected.`);
@@ -4506,14 +4510,22 @@ async function cmdDoctor(): Promise<void> {
   const hcloudBin = hcloudProbe.executable;
   const hcloudOk = hcloudProbe.ok;
   check('hcloud CLI installed', hcloudProbe.installed, hcloudProbeNextStep(hcloudProbe));
+  if (!hcloudProbe.installed) {
+    // #900: the table action is executable but generic; the state-correct
+    // guidance (background auto-install may be running — retry shortly, no
+    // agent restart, install log path) rides in the raw channel.
+    console.log(`        ${hcloudProbeRaw(hcloudProbe)}`);
+  }
   if (hcloudProbe.status === 'sandbox_home_failure') {
     warn++;
     console.log(`  \x1b[33m[WARN]\x1b[0m hcloud cannot resolve the Windows user home in this agent sandbox.`);
     console.log(`        ${hcloudProbeNextStep(hcloudProbe)}`);
+    console.log(`        ${hcloudProbeRaw(hcloudProbe)}`);
   } else if (hcloudProbe.status === 'privacy_pending') {
     warn++;
     console.log(`  \x1b[33m[WARN]\x1b[0m KooCLI privacy agreement is pending.`);
     console.log(`        ${hcloudProbeNextStep(hcloudProbe)}`);
+    console.log(`        ${hcloudProbeRaw(hcloudProbe)}`);
   }
 
   const kooCliTarget = getKooCliVersion();

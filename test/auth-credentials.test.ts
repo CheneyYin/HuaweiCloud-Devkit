@@ -10,6 +10,7 @@ import {
   clearRuntimeCredentials,
   getParentCwd,
   globalCredentialsPath,
+  isCodeArtsContext,
   obsConfigPath,
   parseStsExpiry,
   pickDevkitMcpServer,
@@ -24,7 +25,8 @@ import {
   writeObsConfig,
 } from '../plugins/huaweicloud-core/src/auth/credentials.ts';
 import { getAgentRegistrationStatuses } from '../plugins/huaweicloud-core/src/auth/agent-registration.ts';
-import { getAuthStatus, syncAuth } from '../plugins/huaweicloud-core/src/auth/service.ts';
+import { getAuthStatus, syncAuth, computeOnboarding } from '../plugins/huaweicloud-core/src/auth/service.ts';
+import { buildOnboardingSteps } from '../plugins/huaweicloud-core/src/auth/error-table.ts';
 
 const isWin = process.platform === 'win32';
 
@@ -153,7 +155,8 @@ test('resolveCredentials prefers environment and falls back to vault', () => {
     delete process.env.HW_SECRET_KEY;
 
     rmSync(globalCredentialsPath(), { force: true });
-    assert.throws(() => resolveCredentials({}), /auth init/);
+    // #900: HDKIT_CRED_MISSING now carries the unified Chinese messageZh.
+    assert.throws(() => resolveCredentials({}), /未配置华为云凭证/);
     assert.ok(!home.includes('\0'));
   });
 });
@@ -953,4 +956,91 @@ test('pickDevkitMcpServer is order-independent and returns null for empty/non-ob
   assert.equal(pickDevkitMcpServer({}), null);
   assert.equal(pickDevkitMcpServer(null), null);
   assert.equal(pickDevkitMcpServer(undefined), null);
+});
+
+// ── #900 failure-path regression guards (ported from main's guidance tests) ──
+
+interface ThrownCredentialError extends Error {
+  code?: string;
+  messageZh?: string;
+  action?: string;
+  nextStep?: string;
+  onboarding?: { scenario: number; reason: string; message: string; steps: unknown[] };
+}
+
+function resolveCredentialsThrowing(): ThrownCredentialError {
+  try {
+    resolveCredentials();
+  } catch (error) {
+    return error as ThrownCredentialError;
+  }
+  throw new Error('expected resolveCredentials to throw HDKIT_CRED_MISSING');
+}
+
+test('#900: failure-path onboarding steps come from the shared guidance builder (scenario 3)', () => {
+  withTempHome(() => {
+    clearRuntimeCredentials();
+    const thrown = resolveCredentialsThrowing();
+    assert.equal(thrown.code, 'HDKIT_CRED_MISSING');
+    assert.ok(thrown.onboarding);
+    assert.equal(thrown.onboarding.scenario, 3);
+    // THE guard: same steps as the pure builder. The codearts flag is derived
+    // from the same context detector the failure path uses.
+    assert.deepEqual(
+      thrown.onboarding.steps,
+      buildOnboardingSteps(3, { codearts: isCodeArtsContext() }),
+      'failure path must use the single steps builder',
+    );
+  });
+});
+
+test('#900: failure-path error carries unified shape (messageZh Chinese + executable action)', () => {
+  withTempHome(() => {
+    clearRuntimeCredentials();
+    const thrown = resolveCredentialsThrowing();
+    assert.equal(thrown.code, 'HDKIT_CRED_MISSING');
+    assert.match(thrown.message, /[\u4e00-\u9fff]/, 'top-level message must be Chinese');
+    assert.ok(!/Huawei Cloud credentials are not configured/.test(thrown.message));
+    assert.equal(thrown.messageZh, thrown.message);
+    assert.equal(thrown.action, 'npx huaweicloud-devkit auth init');
+    assert.equal(thrown.nextStep, thrown.action);
+  });
+});
+
+// #900 cross-path drift guard — both paths consume the same builder
+// (buildOnboardingSteps in error-table.ts): the failure path inside
+// resolveCredentials and the status path inside computeOnboarding. This was
+// the exact drift #900 reported (the status path hand-built a different step
+// vocabulary than the failure path); the deepEqual below asserts they stay
+// identical.
+test('#900: failure-path steps equal status-path steps for scenario 3 (same source)', () => {
+  withTempHome(() => {
+    clearRuntimeCredentials();
+    const thrown = resolveCredentialsThrowing();
+    assert.equal(thrown.code, 'HDKIT_CRED_MISSING');
+    const status = computeOnboarding({ credentials: null, reconciled: { hasRuntime: false } });
+    assert.equal(status.scenario, 3);
+    assert.deepEqual(thrown.onboarding?.steps, status.steps, 'failure path and status path must be identical');
+  });
+});
+
+// The codearts axis of the #900 drift guard: both paths must select the SAME
+// builder variant when the CodeArts marker dir exists — a regression that
+// pins codearts:false on either path passes the plain-env drift test above.
+test('#900: failure-path steps equal status-path steps for scenario 3 in CodeArts context', () => {
+  withCodeArtsHome((artsHome) => {
+    mkdirSync(join(artsHome, '.codeartsdoer'), { recursive: true });
+    withTempHome(() => {
+      clearRuntimeCredentials();
+      assert.equal(isCodeArtsContext(), true, 'precondition: the marker dir must select the codearts variant');
+      const thrown = resolveCredentialsThrowing();
+      assert.equal(thrown.code, 'HDKIT_CRED_MISSING');
+      assert.equal(thrown.onboarding?.scenario, 3);
+      const status = computeOnboarding({ credentials: null, reconciled: { hasRuntime: false } });
+      assert.equal(status.scenario, 3);
+      assert.deepEqual(thrown.onboarding?.steps, status.steps, 'codearts variants must stay identical too');
+      // And the variant is genuinely the codearts one (write-import present).
+      assert.ok(thrown.onboarding?.steps.some((s) => (s as { action?: string }).action === 'write-import'));
+    });
+  });
 });

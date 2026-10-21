@@ -60,7 +60,11 @@ test('runVersionCheck returns installed:false and errorCode on ENOENT', async ()
   const result = await runVersionCheck({ executable: 'nonexistent-hcloud-xyz' });
   assert.equal(result.installed, false);
   assert.equal(result.errorCode, 'HCLOUD_NOT_FOUND');
-  assert.match(result.nextStep, /HCLOUD_BIN/);
+  // #900: top-level nextStep is executable; verbose guidance moved to raw.
+  assert.match(result.nextStep, /^(npx |hcloud )/);
+  assert.equal(result.nextStep, 'npx huaweicloud-devkit install-hcloud');
+  assert.match(result.raw, /koocli-install\.log/);
+  assert.doesNotMatch(result.nextStep, /restart the agent/i);
 });
 
 test('runVersionCheck reports versionMismatch when installed version differs from kooCliVersion', async () => {
@@ -77,7 +81,9 @@ test('runVersionCheck reports versionMismatch when installed version differs fro
   assert.equal(result.installedVersion, '7.0.0');
   assert.equal(result.kooCliVersion, getKooCliVersion());
   assert.equal(result.versionMismatch, true);
-  assert.match(result.nextStep, /version mismatch/i);
+  // #900: executable top-level nextStep; English detail only in raw.
+  assert.match(result.nextStep, /^npx /);
+  assert.match(result.raw, /version mismatch/i);
 });
 
 test('runVersionCheck reports no versionMismatch when installed version matches kooCliVersion', async () => {

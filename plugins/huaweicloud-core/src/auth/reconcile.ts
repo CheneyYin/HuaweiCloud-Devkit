@@ -12,6 +12,7 @@ import {
   readLastSync,
   resolveCredentialsWithRuntime,
 } from './credentials.ts';
+import { errorFromTable } from './error-table.ts';
 import { resolveHcloudCommand } from '../hcloud-probe.ts';
 import { redactSecrets } from '../safety-policy.ts';
 import { asText } from '../lib/as-text.ts';
@@ -36,6 +37,11 @@ export interface KooCliProfiles {
 
 export interface KooCliProfilesError {
   error: string;
+  // #900: unified shape from the shared ERROR_TABLE (auth/error-table.ts).
+  code?: string;
+  messageZh?: string;
+  action?: string;
+  nextStep?: string;
 }
 
 export type KooCliProfilesResult = KooCliProfiles | KooCliProfilesError;
@@ -110,7 +116,12 @@ export function isManualModified(path: string): boolean {
 
 export function readKooCliProfiles(): KooCliProfilesResult {
   const configPath = kooCliConfigPath();
-  if (!existsSync(configPath)) return { error: 'KooCLI config not found' };
+  if (!existsSync(configPath)) {
+    // #900: bare string replaced by the unified ERROR_TABLE shape; the old
+    // English text survives only as the distinguishing detail argument.
+    const e = errorFromTable('HDKIT_KOOCLI_NOT_READY', 'KooCLI config not found');
+    return { error: e.messageZh, code: e.code, messageZh: e.messageZh, action: e.action, nextStep: e.nextStep };
+  }
   try {
     const raw = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
     const current = asText(raw.current || 'default');
@@ -140,7 +151,9 @@ export function readKooCliProfiles(): KooCliProfilesResult {
       }),
     };
   } catch {
-    return { error: 'KooCLI config parse failed' };
+    // #900: bare string replaced by the unified ERROR_TABLE shape.
+    const e = errorFromTable('HDKIT_KOOCLI_NOT_READY', 'KooCLI config parse failed');
+    return { error: e.messageZh, code: e.code, messageZh: e.messageZh, action: e.action, nextStep: e.nextStep };
   }
 }
 

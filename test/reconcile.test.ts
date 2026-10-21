@@ -93,7 +93,13 @@ test('readKooCliProfiles handles missing config', () => {
   withTempHome(() => {
     const res = readKooCliProfiles();
     assert.ok('error' in res);
-    assert.equal(res.error, 'KooCLI config not found');
+    // #900: the error surface is the unified ERROR_TABLE shape — the old
+    // English text survives only as the distinguishing detail argument.
+    assert.equal(res.code, 'HDKIT_KOOCLI_NOT_READY');
+    assert.match(res.messageZh ?? '', /KooCLI\(hcloud\)未安装或未就绪。\(KooCLI config not found\)/);
+    assert.equal(res.action, 'npx huaweicloud-devkit install-hcloud');
+    assert.equal(res.nextStep, 'npx huaweicloud-devkit install-hcloud');
+    assert.equal(res.error, res.messageZh);
   });
 });
 
