@@ -119,6 +119,58 @@ Use `--output json` for machine parsing (default is a rich table). The
 list-agents tool returns `agents[]` already parsed; omit `limit`/`offset`
 unless sweeping — the SDK defaults are the single source of truth.
 
+## Gateway Provisioning
+
+```
+1. plan ["gateway","create","--name","<name>"]              → approved (billing)
+   → present → run_approved
+   (omit --name and the CLI generates gateway-<random8>;
+    omit --agency-name and the SDK auto-creates the IAM agency
+    "AgentArtsCoreGateway" — a 409 (already exists) is tolerated and the
+    create continues; SDK source, not yet cloud-measured)
+2. verify: readonly ["gateway","list"] / ["gateway","get","<gateway-id>"]
+3. plan ["gateway","create-target","<gateway-id>",
+         "--target-configuration","<json>"]                  → approved
+   (--target-configuration is REQUIRED; its JSON shape is not documented
+    in help — do not invent it, run the command's own --help or use the
+    console)
+4. verify: ["gateway","get-target","<gateway-id>","<target-id>"] /
+   ["gateway","list-targets","<gateway-id>"]  (list pagination: --limit
+   default 50, --offset default 0)
+```
+
+Deletion: `gateway delete` / `delete-target` have NO skip flag
+(typer.confirm) — the wrapper hard-stops them; the user runs them in their
+own terminal. `--outbound-network-configuration` (JSON) defaults to unset
+client-side; the server-side default for the unset case is not documented
+in help — treat the network posture as a real decision, not an assumed
+default.
+
+## Runtime Sessions (data plane)
+
+All runtime subcommands are approved-tier. `exec-command` runs arbitrary
+commands inside the deployed agent's sandbox (rce); `upload-files` moves
+local files to the cloud (data-exfil); `download-files --recursive` can
+pull whole directories (local-write); the invoke family (invoke /
+runtime invoke / upload / download) carries 900s wrapper timeouts.
+
+`exec-command` shell semantics (fixture-measured): the backend runs the
+command as a Docker exec-form JSON array — NO shell by default, so
+operators (`>`, `|`, `;`, `&&`, `$()`) are not interpreted; when shell
+operators are present the CLI auto-wraps as `["sh","-c","<command>"]`;
+quote the whole command to pass it literally.
+
+Timeout interplay for `exec-command` (the part that bites): the CLI's own
+`--timeout` defaults to 60s (max 3600), while the wrapper's default for
+exec-command is 120s. For anything long-running, raise BOTH: pass
+`--timeout <seconds>` in args and `timeoutMs` of roughly
+`(<seconds> + 30) × 1000` to the run tool — otherwise either the CLI
+aborts at 60s or the wrapper SIGKILLs a still-legitimate request at 120s.
+
+Session lifecycle: `start-session --agent <name>` returns the session id;
+pass `--session` to exec-command/invoke/upload/download; stop with
+`stop-session` even on failure paths.
+
 ## Wrapper Rules (why some commands hard-stop)
 
 | Shape                              | Wrapper behavior                                                                                                                                                                                           |
@@ -198,13 +250,5 @@ via a scratch HOME.
 
 `launch` 600s (the docker build dominates: ~2-3 min measured), `destroy`
 300s, the invoke family 900s (upload/download included), everything else
-120s. Override per call with `timeoutMs`.
-
-## runtime Family (data plane)
-
-All runtime subcommands are approved-tier with 900s wrapper timeouts
-(invoke/upload/download). `exec-command` runs arbitrary commands inside the
-deployed agent's sandbox (rce); `upload-files` moves local files to the
-cloud (data-exfil); `download-files --recursive` can pull whole directories
-(local-write). Sessions need `start-session` first; clean up with
-`stop-session` even on failure paths.
+120s (`exec-command`'s CLI-side `--timeout` default of 60s interacts with
+this — see Runtime Sessions). Override per call with `timeoutMs`.

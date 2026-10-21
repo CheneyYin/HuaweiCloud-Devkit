@@ -1256,6 +1256,20 @@ test('agentarts SKILL.md and references only mention registered commands', () =>
   }
 });
 
+test('cli-workflows.md teaches gateway provisioning, session lifecycle, and the exec-command timeout interplay (PR9)', () => {
+  const body = readFileSync(join(pluginRoot, 'skills', 'huawei-agentarts', 'references', 'cli-workflows.md'), 'utf8');
+  assert.match(body, /## Gateway Provisioning/);
+  assert.match(body, /## Runtime Sessions/);
+  // The timeout interplay is the PR9 core fact: CLI 60s vs wrapper 120s vs max 3600.
+  assert.match(body, /--timeout/);
+  assert.match(body, /60s/);
+  assert.match(body, /120s/);
+  assert.match(body, /3600/);
+  // The IAM-agency auto-create side effect is taught (SDK source, not yet cloud-measured).
+  assert.match(body, /AgentArtsCoreGateway/);
+  assert.doesNotMatch(body, /TODO/i);
+});
+
 test('tool count is never hardcoded in AGENTS.md (TOOL_DEFINITIONS.length is the source)', () => {
   const agents = readFileSync(join(root, 'AGENTS.md'), 'utf8');
   assert.doesNotMatch(agents, /\b\d+ (MCP )?tool definitions/, 'AGENTS.md hardcodes a tool count');
