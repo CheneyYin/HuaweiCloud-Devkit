@@ -10,7 +10,8 @@ import {
   globalCredentialsPath,
   readGlobalCredentials,
 } from '../auth/credentials.ts';
-import { fingerprint, runHcloudConfigure, resolveManagedProfile } from '../auth/reconcile.ts';
+import { fingerprint, runHcloudConfigure, runHcloudProfileDelete, resolveManagedProfile } from '../auth/reconcile.ts';
+import { resolveAndApplyProjectId, type ProjectIdResult } from '../auth/project-id.ts';
 import { clearUserHash } from '../telemetry/telemetry.ts';
 import { hdkitGenerateUserHash } from './hdkit/hdkitservice-api.ts';
 import { asText } from './as-text.ts';
@@ -56,6 +57,12 @@ export interface PendingConfirm {
 }
 
 export const pendingConfirms = new Map<string, PendingConfirm>();
+
+// Tombstones for confirm tokens already consumed (D4-24, #745): a repeat
+// huaweicloud_auth_confirm call classifies as already_processed instead of
+// not_found. Kept in-memory only: confirm tokens are session-scoped and never
+// persisted across processes.
+export const consumedConfirms = new Map<string, { consumedAt: number }>();
 
 export function readImportFile() {
   const path = join(dirname(globalCredentialsPath()), 'creds-import.json');
@@ -142,22 +149,44 @@ export function persistCredentials(ak: string, sk: string, securityToken: string
     obs = { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
   const profile = resolveManagedProfile();
-  let hcloud: { ok: boolean; error?: string; reason?: string };
+  let project: ProjectIdResult | undefined;
+  let hcloud: { ok: boolean; error?: string; reason?: string; profileReset?: boolean };
   if (!profile) {
     hcloud = { ok: false, reason: 'KooCLI current profile unresolved' };
   } else {
-    hcloud = runHcloudConfigure(profile, akValue, skValue, region);
+    // #920: `configure set` refuses an empty --cli-security-token, so a stale
+    // token already in the profile survives the write and poisons every hcloud
+    // call with APIGW.0301 — while the tool still reports "synchronized". When
+    // persisting WITHOUT a token, walk the documented manual bypass (delete the
+    // profile, then re-configure) so the on-disk profile truly matches the
+    // incoming credentials. The delete is best-effort: a missing profile
+    // ("nothing to clean") must not fail the persist.
+    let profileReset = false;
+    if (!String(securityToken || '')) {
+      const deleted = runHcloudProfileDelete(profile);
+      profileReset = deleted.ok || /not (exist|found)/i.test(deleted.error || '');
+    }
+    hcloud = { ...runHcloudConfigure(profile, akValue, skValue, region), profileReset };
   }
   if (hcloud.ok) {
     writeLastSync({ kooCliProfile: profile, s1Fingerprint: fingerprint(akValue, skValue) });
+    // The delete/recreate purge above wiped EVERY profile setting — including
+    // cli-project-id, which `configure set` (ak/sk/region only) never restores.
+    // Without this re-application a routine AK/SK rotation breaks every
+    // region-scoped hcloud call with APIGW.0301 while the persist still
+    // reports ok. Best-effort: a failed resolution does not fail the persist,
+    // but the result is SURFACED (not silently discarded) so callers can tell
+    // a complete sync from a credentials-only one.
+    project = resolveAndApplyProjectId({ region, profile: profile ?? undefined });
   }
   return {
     status: obs.ok && hcloud.ok ? 'ok' : 'partial',
     scope: 'persist',
     backedUp: Boolean(before),
     obs: obs.ok ? { configured: true } : { configured: false, error: obs.error },
+    project,
     hcloud,
-    note: 'S1 written with configuredBySession (R9), which now takes priority over env-injected credentials; S2(current profile) and S3 synced. Note: running `auth init` later clears the configuredBySession flag and env credentials regain priority.',
+    note: 'S1 written with configuredBySession (R9), which now takes priority over env-injected credentials; S2(current profile) and S3 synced. Persisting without a security token resets the target profile first (delete + recreate) so a stale token cannot survive the write (#920). Note: running `auth init` later clears the configuredBySession flag and env credentials regain priority.',
   };
 }
 

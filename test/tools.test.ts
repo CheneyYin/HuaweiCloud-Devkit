@@ -513,15 +513,34 @@ test('auth_switch clear resets runtime', async () => {
   }
 });
 
-test('auth_switch persist(mode=import) rejects missing region and keeps import file (#502)', async () => {
-  const home = fixtureDir('auth-import-region-');
+// Hand-rolled HUAWEICLOUD_HOME isolation for the import-file tests: set a
+// fixture home, run, and restore (with the runtime store cleared either way).
+async function withImportHome(fn: () => Promise<void>): Promise<void> {
+  const home = fixtureDir('auth-import-case-');
   const prevHome = process.env.HUAWEICLOUD_HOME;
   process.env.HUAWEICLOUD_HOME = home;
   try {
-    const cfgDir = join(home, '.config', 'huaweicloud');
-    mkdirSync(cfgDir, { recursive: true });
-    const importFile = join(cfgDir, 'creds-import.json');
-    writeFileSync(importFile, JSON.stringify({ ak: 'IMPORT_AK', sk: 'IMPORT_SK' }), 'utf8');
+    await fn();
+  } finally {
+    if (prevHome === undefined) delete process.env.HUAWEICLOUD_HOME;
+    else process.env.HUAWEICLOUD_HOME = prevHome;
+    clearRuntimeCredentials();
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+// Seed a creds-import.json under the isolated home.
+function seedImportFile(ak: string, sk: string): { cfgDir: string; importFile: string } {
+  const cfgDir = join(process.env.HUAWEICLOUD_HOME!, '.config', 'huaweicloud');
+  mkdirSync(cfgDir, { recursive: true });
+  const importFile = join(cfgDir, 'creds-import.json');
+  writeFileSync(importFile, JSON.stringify({ ak, sk }), 'utf8');
+  return { cfgDir, importFile };
+}
+
+test('auth_switch persist(mode=import) rejects missing region and keeps import file (#502)', async () => {
+  await withImportHome(async () => {
+    const { cfgDir, importFile } = seedImportFile('IMPORT_AK', 'IMPORT_SK');
 
     const out = (await callTool('huaweicloud_auth_switch', {
       vendorConfirmed: 'test: vendor established by the harness',
@@ -536,23 +555,12 @@ test('auth_switch persist(mode=import) rejects missing region and keeps import f
     assert.equal(existsSync(join(cfgDir, 'credentials.json')), false);
     // Import file must survive for replay.
     assert.equal(existsSync(importFile), true);
-  } finally {
-    if (prevHome === undefined) delete process.env.HUAWEICLOUD_HOME;
-    else process.env.HUAWEICLOUD_HOME = prevHome;
-    clearRuntimeCredentials();
-    rmSync(home, { recursive: true, force: true });
-  }
+  });
 });
 
 test('auth_switch temporary(mode=import) clears import file on success', async () => {
-  const home = fixtureDir('auth-import-temp-');
-  const prevHome = process.env.HUAWEICLOUD_HOME;
-  process.env.HUAWEICLOUD_HOME = home;
-  try {
-    const cfgDir = join(home, '.config', 'huaweicloud');
-    mkdirSync(cfgDir, { recursive: true });
-    const importFile = join(cfgDir, 'creds-import.json');
-    writeFileSync(importFile, JSON.stringify({ ak: 'TMP_AK', sk: 'TMP_SK' }), 'utf8');
+  await withImportHome(async () => {
+    const { importFile } = seedImportFile('TMP_AK', 'TMP_SK');
 
     const out = (await callTool('huaweicloud_auth_switch', {
       vendorConfirmed: 'test: vendor established by the harness',
@@ -563,12 +571,7 @@ test('auth_switch temporary(mode=import) clears import file on success', async (
     assert.equal(out.scope, 'temporary');
     assert.equal(existsSync(importFile), false, 'import file should be cleared after successful temporary set');
     assert.equal(resolveCredentialsWithRuntime({})!.ak, 'TMP_AK');
-  } finally {
-    if (prevHome === undefined) delete process.env.HUAWEICLOUD_HOME;
-    else process.env.HUAWEICLOUD_HOME = prevHome;
-    clearRuntimeCredentials();
-    rmSync(home, { recursive: true, force: true });
-  }
+  });
 });
 
 test('auth_switch persist(mode=import) with STS token is rejected and clears import file', async () => {
@@ -603,5 +606,62 @@ test('auth_switch persist(mode=import) with STS token is rejected and clears imp
     else process.env.HUAWEICLOUD_HOME = prevHome;
     clearRuntimeCredentials();
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('huaweicloud_explain_error maps Ecs.0707 to flavor/image-type combination troubleshooting (#922)', async () => {
+  // Regression input from the 1024 activity report: kc2.small.2 + market-type
+  // Ubuntu image → Ecs.0707 "the product does not exist", with no hint which
+  // side (flavor vs image type) is wrong. Both service spellings (ECS and the
+  // lowercase alias) must route to the Ecs pattern table.
+  for (const service of ['ECS', 'ecs']) {
+    const result = (await callTool('huaweicloud_explain_error', {
+      service,
+      errorCode: 'Ecs.0707',
+      message: 'the product does not exist',
+    })) as { suggestions?: string[] };
+    const text = JSON.stringify(result);
+    assert.match(text, /flavor \+ image-type combination/);
+    if (service === 'ECS') {
+      assert.match(text, /gold/, 'must point at gold-type images');
+      assert.match(text, /market/, 'must name the market-type incompatibility');
+      assert.match(text, /ListFlavors/, 'must direct at re-listing flavors');
+      assert.match(text, /cond:operation/, 'must point at the AZ/status spec fields');
+    }
+  }
+});
+
+test('G: explain_error surfaces CREDENTIAL_EXPIRED first when temp STS has expired', async () => {
+  // parseStsExpiry prioritizes HW_STS_EXPIRES_AT over the token itself — scrub
+  // it (and the ambient HW_* triplet) so the expired-token setup is real.
+  const prev = {
+    HW_STS_EXPIRES_AT: process.env.HW_STS_EXPIRES_AT,
+    HW_ACCESS_KEY: process.env.HW_ACCESS_KEY,
+    HW_SECRET_KEY: process.env.HW_SECRET_KEY,
+    HW_SECURITY_TOKEN: process.env.HW_SECURITY_TOKEN,
+  };
+  for (const key of ['HW_STS_EXPIRES_AT', 'HW_ACCESS_KEY', 'HW_SECRET_KEY', 'HW_SECURITY_TOKEN']) {
+    delete process.env[key];
+  }
+  clearRuntimeCredentials();
+  const past = Math.floor(Date.now() / 1000) - 3600;
+  const token = Buffer.from(JSON.stringify({ exp: past })).toString('base64url');
+  setRuntimeCredentials('EXP_AK', 'EXP_SK', token, 'cn-north-4');
+  try {
+    const result = (await callTool('huaweicloud_explain_error', {
+      service: 'VPC',
+      errorCode: 'APIGW.0301',
+      message: 'Incorrect IAM authentication information',
+    })) as { suggestions?: string[] };
+    const text = JSON.stringify(result);
+    assert.match(text, /CREDENTIAL_EXPIRED/);
+    assert.match(text, /security token has expired/i);
+    assert.ok(Array.isArray(result.suggestions) && result.suggestions.length > 0);
+  } finally {
+    clearRuntimeCredentials();
+    for (const [key, value] of Object.entries(prev)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 });

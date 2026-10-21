@@ -7,10 +7,12 @@ import {
   isCodeArtsContext,
   isPlaceholder,
   obsConfigPath,
+  parseStsExpiry,
   readCodeArtsCredentials,
   readGlobalCredentials,
   readGlobalCredentialsResolved,
   readGlobalCredentialsStrict,
+  resolveCredentialsWithRuntime,
   writeLastSync,
   writeObsConfig,
 } from './credentials.ts';
@@ -21,6 +23,7 @@ import {
   hasRuntimeCredentials,
   resolveManagedProfile,
   runHcloudConfigure,
+  runHcloudProfileDelete,
 } from './reconcile.ts';
 import { hcloudProbeNextStep, hcloudProbeRaw, probeHcloud } from '../hcloud-probe.ts';
 
@@ -217,18 +220,65 @@ export function computeOnboarding({
   return { needsSetup: true, scenario, reason, message, steps, accountHint };
 }
 
+// Compute temporary-STS expiry info for auth_status. Permanent AK/SK creds carry
+// no security token and therefore have no expiry — we return null so callers only
+// see expiry for the platform-injected temporary STS case.
+function computeStsExpiry(): {
+  expiresAt: number | null;
+  expiresAtUtc: string | null;
+  expiresAtLocal: string | null;
+  remainingMs: number | null;
+  status: string;
+} | null {
+  // The ACTIVE credential set (runtime-first), not the S1 display read: the
+  // panel's "sts" half reflects what a tool call would actually authenticate
+  // with right now.
+  let creds;
+  try {
+    creds = asCredentialRecord(resolveCredentialsWithRuntime({ allowMissing: true }));
+  } catch {
+    creds = null;
+  }
+  if (!creds?.ak || !creds?.sk || !creds.securityToken) return null;
+  const expiresAt = parseStsExpiry({ securityToken: creds.securityToken });
+  if (expiresAt === null)
+    return { status: 'unknown', expiresAt: null, expiresAtUtc: null, expiresAtLocal: null, remainingMs: null };
+  const remainingMs = expiresAt - Date.now();
+  const expiresAtUtc = new Date(expiresAt).toISOString();
+  const expiresAtLocal = new Date(expiresAt).toString();
+  let status = 'valid';
+  if (remainingMs <= 0) status = 'expired';
+  else if (remainingMs <= 5 * 60 * 1000) status = 'expiring_soon';
+  return { expiresAt, expiresAtUtc, expiresAtLocal, remainingMs, status };
+}
+
 export function getAuthStatus(target = 'all') {
   const credentials = readGlobalCredentialsForStatus();
   const reconciled = { ...exportStateForStatus(), runtimeActive: hasRuntimeCredentials() };
   const hcloud = probeHcloud();
   const s4Creds = asCredentialRecord(readCodeArtsCredentials());
   const onboarding = computeOnboarding({ credentials, reconciled });
+  const stsExpiry = computeStsExpiry();
+  // The credential panel (#919 follow-up UX): one glance separates the
+  // temporary STS (same source as the sandbox MCP session) from the permanent
+  // S1 store, and names which one is active.
+  const credentialPanel = {
+    sts: stsExpiry,
+    s1: {
+      configured: Boolean(credentials?.ak && credentials?.sk),
+      fingerprint: credentials?.ak ? fingerprint(credentials.ak, credentials.sk) : null,
+      persistent: true, // permanent, no expiry
+    },
+    activeSource: stsExpiry ? 'temporary-sts' : credentials?.ak ? 's1-persistent' : 'none',
+  };
   return {
     target,
     credentialsConfigured: Boolean(credentials?.ak && credentials?.sk),
     credentialsPath: globalCredentialsPath(),
     mcpSettingsConfigured: Boolean(s4Creds?.ak && s4Creds?.sk),
     mcpSettingsSource: s4Creds ? 'codearts' : null,
+    stsExpiry,
+    credentialPanel,
     obsConfigured: existsSync(obsConfigPath()),
     obsConfigPath: obsConfigPath(),
     kooCliInstalled: hcloud.installed,
@@ -355,6 +405,14 @@ export function syncAuth(target = 'all'): SyncAuthResult {
     };
   }
 
+  // #920: the same purge the persist path walks — `configure set` refuses an
+  // empty --cli-security-token, so a stale token in the profile would survive
+  // this sync and poison every hcloud call with APIGW.0301 while syncAuth
+  // still reports ok. Best-effort, shared seam, nothing to clean is fine —
+  // but the outcome is SURFACED (profileReset), never silently swallowed.
+  const purge = runHcloudProfileDelete(profile);
+  const profileReset = purge.ok || /not (exist|found)/i.test(purge.error || '');
+
   const { ok, error } = runHcloudConfigure(profile, credentials.ak, credentials.sk, credentials.region);
   if (!ok) {
     // #900: `hcloud configure set` failures are usually a missing/invalid
@@ -391,11 +449,25 @@ export function syncAuth(target = 'all'): SyncAuthResult {
     ok: true,
     profile,
     obs: { configured: true, path: obs.path, endpoint: obs.endpoint },
-    hcloud: { ok: true, message: `KooCLI config synced to profile=${profile}` },
+    hcloud: {
+      ok: true,
+      message: profileReset
+        ? `KooCLI config synced to profile=${profile}`
+        : `KooCLI config synced to profile=${profile} (profile reset failed: ${
+            purge.error || 'unknown error'
+          } — a stale security token may survive the sync)`,
+    },
     credentialsConfigured: true,
     agents: getAgentRegistrationStatuses(target).agents,
     note: 'OBS credentials were synced from the global credential vault. Agent MCP registration is managed by "npx huaweicloud-devkit install --target <agent>".',
   };
-  if (project.ok) result.projectId = project.projectId;
+  if (project.ok) {
+    result.projectId = project.projectId;
+  } else {
+    // The purge above wiped the profile's cli-project-id, and the restoration
+    // failed — a lie-by-omission here would leave region-scoped calls broken
+    // with APIGW.0301 on an ok:true result (the round-4 review gap).
+    result.hcloud.message += ` (project-id not restored after the profile reset: ${project.reason} — region-scoped hcloud calls may fail with APIGW.0301 until configured)`;
+  }
   return result;
 }

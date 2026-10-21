@@ -149,10 +149,10 @@ test(
   withAuthHome(() => {
     const token = createApprovalToken({ tool: 't', toolArgs: { a: 1 } });
     const first = consumeApprovalToken(token);
-    assert.ok(first, 'the first consume wins and deletes the entry');
+    assert.ok(first, 'the first consume wins and tombstones the entry');
 
     // Simulate the racing reader: it read the store BEFORE the winner's
-    // delete landed, so the entry is back while the marker exists. Only
+    // tombstone landed, so the entry is back while the marker exists. Only
     // the exclusive-create marker can reject this replay — if the marker
     // gate regresses, this consume would succeed and the test fails.
     const file = join(process.env.HUAWEICLOUD_HOME!, '.config', 'huaweicloud', 'approvals.json');

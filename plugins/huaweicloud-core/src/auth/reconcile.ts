@@ -295,21 +295,9 @@ export function exportStateForStatus(_jailed?: boolean) {
   };
 }
 
-export function runHcloudConfigure(
-  profile: string,
-  ak: string,
-  sk: string,
-  region?: string,
-): { ok: boolean; error: string } {
+// Shared spawn shape for the KooCLI configure verbs: ok + redacted stderr.
+function runHcloudConfigureArgs(args: string[]): { ok: boolean; error: string } {
   const { executable, argsPrefix } = resolveHcloudCommand();
-  const args = [
-    'configure',
-    'set',
-    `--cli-profile=${profile}`,
-    `--cli-access-key=${ak}`,
-    `--cli-secret-key=${sk}`,
-    `--cli-region=${region || ''}`,
-  ];
   const r = spawnSync(executable, [...argsPrefix, ...args], {
     shell: false,
     windowsHide: true,
@@ -324,4 +312,34 @@ export function runHcloudConfigure(
         .slice(0, 240),
     ),
   };
+}
+
+export function runHcloudConfigure(
+  profile: string,
+  ak: string,
+  sk: string,
+  region?: string,
+): { ok: boolean; error: string } {
+  return runHcloudConfigureArgs([
+    'configure',
+    'set',
+    `--cli-profile=${profile}`,
+    `--cli-access-key=${ak}`,
+    `--cli-secret-key=${sk}`,
+    `--cli-region=${region || ''}`,
+  ]);
+}
+
+// Delete a KooCLI profile (best-effort). The #920 purge seam, shared by ALL
+// THREE KooCLI write paths (the auth_switch persist tool path, syncAuth, and
+// the setup-cli `auth init` path): `configure set` REFUSES an empty --cli-security-token, so
+// a stale/expired token already in the profile can never be overwritten — it
+// poisons every hcloud call with APIGW.0301 while the writer still reports
+// success. The documented manual bypass is `hcloud configure delete
+// --cli-profile=<profile>` followed by a re-configure; this helper makes that
+// path a runtime step instead of user knowledge.
+// A missing profile reports a non-zero status, which callers treat as
+// "nothing to clean" — never as an error.
+export function runHcloudProfileDelete(profile: string): { ok: boolean; error: string } {
+  return runHcloudConfigureArgs(['configure', 'delete', `--cli-profile=${profile}`]);
 }

@@ -16,6 +16,7 @@ import {
   readImportFile,
   clearImportFile,
   pendingConfirms,
+  consumedConfirms,
   refreshUserHashAfterAuthChange,
 } from '../../lib/credentials.ts';
 import { resolveSecretValue } from '../../lib/secret-vault/store.ts';
@@ -162,13 +163,35 @@ async function handleAuthSwitch(args: ToolArgs = {}, _opts: CallToolOptions = {}
 }
 
 async function handleAuthConfirm(args: ToolArgs = {}, _opts: CallToolOptions = {}) {
-  const pending = pendingConfirms.get(args.token || '');
-  if (!pending) throw new Error('confirmToken not found or expired.');
-  pendingConfirms.delete(args.token || '');
+  // D4-24 precise JSON contract (#745): a missing or already-consumed confirm
+  // token returns a structured result instead of throwing a generic Error
+  // string, mirroring runApprovedCommand's contract. Tombstones are kept
+  // in-memory only: confirm tokens are session-scoped and never persisted
+  // across processes.
+  const token = String(args.token || '');
+  const pending = pendingConfirms.get(token);
+  if (!pending) {
+    if (token && consumedConfirms.has(token)) {
+      return { status: 'ok', outcome: 'already_processed' };
+    }
+    return { status: 'rejected', code: 'CONFIRM_TOKEN_NOT_FOUND' };
+  }
   if (args.decision === 's1') {
+    pendingConfirms.delete(token);
+    consumedConfirms.set(token, { consumedAt: Date.now() });
     return { status: 'ok', outcome: 'aborted', message: '保持 S1 现有账号，未覆盖。' };
   }
+  // v2 deviation from main's ordering, deliberate (D4-24's own goal is
+  // machine-assertable states that do not lie): the token is tombstoned only
+  // AFTER the persist completes. main tombstoned first, so a persist that
+  // THREW (unresolvable secret ref, EACCES on S1) followed by a retry
+  // returned already_processed for an action that never ran. Here a thrown
+  // persist leaves the token PENDING, so the retry re-attempts it — the
+  // persist body is synchronous, so no interleaving window exists between
+  // the delete and the tombstone.
   const confirmed = persistCredentials(pending.newAk, pending.newSk, pending.newSecurityToken, pending.newRegion);
+  pendingConfirms.delete(token);
+  consumedConfirms.set(token, { consumedAt: Date.now() });
   if (pending.fromImport && confirmed.status !== 'partial') clearImportFile();
   refreshUserHashAfterAuthChange();
   return confirmed;

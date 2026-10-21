@@ -20,8 +20,8 @@ import { createRequire } from 'node:module';
 
 import { getAuthStatus, syncAuth } from './auth/service.ts';
 import { resolveAndApplyProjectId } from './auth/project-id.ts';
-import { SUPPORTED_AGENT_TARGETS } from './auth/agent-registration.ts';
-import { readKooCliProfiles, resolveManagedProfile } from './auth/reconcile.ts';
+import { SUPPORTED_AGENT_TARGETS, xdgConfigHome } from './auth/agent-registration.ts';
+import { readKooCliProfiles, resolveManagedProfile, runHcloudProfileDelete } from './auth/reconcile.ts';
 import { redactSecrets } from './safety-policy.ts';
 // Where every supported agent target lives: the pure-path family shared by
 // the deploy/uninstall/status/doctor flows.
@@ -97,7 +97,13 @@ import { readAgentDelta, saveAgentDelta, takeAgentDelta, purgeBackup } from './m
 import { isUsableOfficeaceRoot, readOfficeaceRootMarker, writeOfficeaceRootMarker } from './officeace-paths.ts';
 import { queryDistTagsFetch, determineTarget, semverCompare } from './update-check.ts';
 import { getKooCliVersion, compareVersion, kooCliDownloadBase } from './koocli-version.ts';
-import { findHcloudBin, hcloudProbeNextStep, hcloudProbeRaw, probeHcloud } from './hcloud-probe.ts';
+import {
+  findHcloudBin,
+  hcloudProbeNextStep,
+  hcloudProbeRaw,
+  probeHcloud,
+  resolveHcloudCommand,
+} from './hcloud-probe.ts';
 import { asText } from './lib/as-text.ts';
 import { asRecord } from './lib/as-record.ts';
 import { skillTreeEquals } from './lib/skill-tree.ts';
@@ -5112,10 +5118,11 @@ function configureHcloud(credentials: { ak: unknown; sk: unknown; region?: unkno
   code: number | null;
   error: string;
 } {
-  // findHcloudBin already honors a valid HCLOUD_BIN through the guarded
-  // shared chain; a raw env fallback here would resurrect the stale-override
-  // divergence the chain exists to prevent.
-  const hcloudBin = findHcloudBin() || 'hcloud';
+  // resolveHcloudCommand (not a bare findHcloudBin): honors the
+  // HCLOUD_BIN_ARGS_JSON node-launch convention — critical now that the
+  // #920 purge deletes the profile BEFORE this write; a bare-binary spawn
+  // that deterministically fails would leave the deleted profile unrestored.
+  const { executable, argsPrefix } = resolveHcloudCommand();
   const args = [
     'configure',
     'set',
@@ -5124,7 +5131,7 @@ function configureHcloud(credentials: { ak: unknown; sk: unknown; region?: unkno
     `--cli-secret-key=${asText(credentials.sk)}`,
     `--cli-region=${asText(credentials.region || '')}`,
   ];
-  const r = spawnSync(hcloudBin, args, {
+  const r = spawnSync(executable, [...argsPrefix, ...args], {
     shell: false,
     windowsHide: true,
     stdio: 'pipe',
@@ -5135,6 +5142,38 @@ function configureHcloud(credentials: { ak: unknown; sk: unknown; region?: unkno
     code: r.status,
     error: redactSecrets(
       String(r.stderr || '')
+        .trim()
+        .slice(0, 240),
+    ),
+  };
+}
+
+// Verify that the freshly written KooCLI profile can actually authenticate
+// (#920): a stale/expired security token in the profile survives
+// `configure set` (it refuses empty values) and poisons every hcloud call with
+// APIGW.0301 — while the setup output still claims success. Probe with a real
+// `hcloud STS GetCallerIdentity` and only report synchronized when it passes.
+function verifyHcloudIdentity(region: string): { ok: boolean; code: number | null; error: string } {
+  // An empty region must be omitted entirely — `--cli-region=` sends a
+  // literal empty value that KooCLI rejects as an invalid region.
+  const args = ['STS', 'GetCallerIdentity'];
+  if (region) args.push(`--cli-region=${region}`);
+  // resolveHcloudCommand (not a bare findHcloudBin): honors the
+  // HCLOUD_BIN_ARGS_JSON node-launch convention every other spawn in this
+  // flow uses — a bare binary path would run `node STS GetCallerIdentity`.
+  const { executable, argsPrefix } = resolveHcloudCommand();
+  const r = spawnSync(executable, [...argsPrefix, ...args], {
+    shell: false,
+    windowsHide: true,
+    stdio: 'pipe',
+    timeout: 30000,
+  });
+  const output = `${String(r.stdout || '')}${String(r.stderr || '')}`;
+  return {
+    ok: r.status === 0 && !/APIGW\.0301|Incorrect IAM authentication/i.test(output),
+    code: r.status,
+    error: redactSecrets(
+      String(r.stderr || r.stdout || '')
         .trim()
         .slice(0, 240),
     ),
@@ -5253,6 +5292,18 @@ async function cmdAuthInit(): Promise<void> {
   }
 
   if (findHcloudBin()) {
+    // #920: `configure set` refuses empty --cli-security-token values, so a
+    // stale token already in the profile survives the write. When auth init
+    // runs WITHOUT a token, delete the profile first (documented manual
+    // bypass, shared seam with the auth_switch persist path) so the recreated
+    // profile cannot keep poisoning calls with APIGW.0301. A missing profile
+    // ("nothing to clean") is not an error.
+    if (!securityToken) {
+      const purge = runHcloudProfileDelete(configuredProfileName());
+      if (!purge.ok && !/not (exist|found)/i.test(purge.error || '')) {
+        console.error(`KooCLI profile reset skipped: ${purge.error || 'unknown error'}`);
+      }
+    }
     const result = configureHcloud({ ak: akValue, sk: skValue, region });
     if (!result.ok) console.log(`KooCLI update failed: ${result.error || result.code}`);
     else {
@@ -5260,21 +5311,48 @@ async function cmdAuthInit(): Promise<void> {
       if (proj.ok) {
         console.log(`  Project ID auto-set: ${proj.projectId}`);
       } else {
-        console.log(
-          `\x1b[33m  Project ID not auto-set (${proj.reason}). Sandbox exec may fail with APIGW.0301 until it is configured:\x1b[0m`,
+        // #920: an unconfigured project_id is an ERROR, not a warning — most
+        // hcloud calls fail with APIGW.0301 until it is set.
+        console.error(
+          `\x1b[31m  ERROR: Project ID not auto-set (${proj.reason}). hcloud API calls (ECS/VPC/OBS API paths, sandbox exec) will fail with APIGW.0301 Incorrect IAM authentication information until it is configured. Recover with:\x1b[0m`,
         );
-        console.log(`    hcloud IAM KeystoneListProjects --cli-region=${region} --name=${region}`);
-        console.log(`    hcloud configure set --cli-project-id=<project_id>`);
+        console.error(`    hcloud IAM KeystoneListProjects --cli-region=${region} --name=${region}`);
+        console.error(`    hcloud configure set --cli-project-id=<project_id>`);
+        console.error(`    (or re-run "npx huaweicloud-devkit auth init", which auto-sets it)`);
+      }
+
+      // #920: verify the profile can actually authenticate before claiming
+      // success — a poisoned profile must never print "synchronized".
+      // Temporary-credential inputs skip the probe: the profile deliberately
+      // carries no security token (tokens are not written at rest), so
+      // GetCallerIdentity with the AK/SK alone cannot succeed — verifying
+      // would deterministically fail and the recovery text would mislead.
+      const identity = securityToken ? null : verifyHcloudIdentity(region);
+      if (identity === null) {
+        console.log(
+          '\nCredentials written. Temporary tokens are never written to the KooCLI profile, so identity verification was skipped (a pre-existing profile token, if any, is left in place this run).',
+        );
+      } else if (identity.ok) {
+        console.log('\nCredentials synchronized.');
+      } else {
+        console.error(
+          `\x1b[31m  ERROR: credentials were written but the KooCLI profile FAILED the hcloud STS GetCallerIdentity verification (exit ${identity.code}). hcloud calls will fail with APIGW.0301 — "Credentials synchronized" is NOT confirmed. Typical cause: a stale/expired security token in the profile or wrong AK/SK. Recover with:\x1b[0m`,
+        );
+        console.error(`    hcloud configure delete --cli-profile=${configuredProfileName()}`);
+        console.error(`    then re-run "npx huaweicloud-devkit auth init" with AK/SK only (no token)`);
+        console.error(`    Last error: ${identity.error || 'unknown'}`);
+        process.exitCode = 1;
       }
     }
   } else {
     console.log('KooCLI not found. Run "npx huaweicloud-devkit install-hcloud" and then "auth sync".');
   }
 
-  console.log('\nCredentials synchronized.');
-  console.log('\nNext steps:');
-  console.log('  npx huaweicloud-devkit install --target all');
-  console.log('  Restart your agent sessions.');
+  if (process.exitCode !== 1) {
+    console.log('\nNext steps:');
+    console.log('  npx huaweicloud-devkit install --target all');
+    console.log('  Restart your agent sessions.');
+  }
 }
 
 async function cmdAuthReconcile(): Promise<void> {
@@ -5356,7 +5434,10 @@ async function cmdAuthSync(): Promise<void> {
 
   const result = syncAuth(target);
   if (result.ok) {
-    console.log('Credentials synchronized.');
+    // Print the honest sync message, not an unconditional success line: the
+    // #920 purge outcomes (profile reset failed / project-id not restored)
+    // ride in hcloud.message and must reach the CLI user.
+    console.log(result.hcloud.message);
   } else {
     console.error(result.error);
   }

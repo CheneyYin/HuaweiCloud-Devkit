@@ -15,7 +15,7 @@ import { asRecord } from './lib/as-record.ts';
 // The CLI face's consent layer lives in src/lib/approval-tokens.ts; these
 // re-exports keep existing import sites (tests) compiling — the
 // tool-schemas.ts re-export precedent.
-export { hashArgs, createApprovalToken, consumeApprovalToken } from './lib/approval-tokens.ts';
+export { hashArgs, createApprovalToken, consumeApprovalToken, inspectApprovalToken } from './lib/approval-tokens.ts';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_FORCE_KILL_AFTER_MS = 2_000;
@@ -318,6 +318,9 @@ export function resolveStsInjectArgs(rawArgs: unknown): string[] {
   // expiring, skip injection — using a dead token would make a doomed IAM round
   // trip. If expiry is unknown/unparseable we keep the existing "inject anyway"
   // behavior (can't prove it's stale).
+  // KNOWN asymmetry (inherited from main): the runHcloud CREDENTIAL_EXPIRED
+  // gate fires only at true expiry, so in this grace window the command runs
+  // under the KooCLI profile's credentials instead of the session STS.
   const expiry = parseStsExpiry({ securityToken: creds.securityToken });
   if (expiry !== null) {
     const grace = 60 * 1000;
@@ -434,6 +437,24 @@ export interface HcloudRunOptions extends ClassifyOptions {
   env?: Record<string, string | undefined>;
 }
 
+// Returns true when the current credentials are a TEMPORARY STS set that has
+// already expired (per token expiry). Lets us fail fast with a clear
+// CREDENTIAL_EXPIRED instead of letting a doomed IAM call return a misleading
+// error. Permanent AK/SK (no token) and unparseable expiry are never treated
+// as expired.
+function isTemporaryStsExpired(): boolean {
+  let creds;
+  try {
+    creds = asCreds(resolveCredentialsWithRuntime({ allowMissing: true }));
+  } catch {
+    return false;
+  }
+  if (!creds?.securityToken) return false;
+  const expiry = parseStsExpiry({ securityToken: creds.securityToken });
+  if (expiry === null) return false; // unknown → don't block
+  return expiry <= Date.now();
+}
+
 export async function runHcloud(args: unknown, options: HcloudRunOptions = {}): Promise<HcloudRunResult> {
   const normalizedArgs = Array.isArray(args) ? args.map(String) : [];
   const plan: HcloudPlanWithArgs = {
@@ -441,6 +462,22 @@ export async function runHcloud(args: unknown, options: HcloudRunOptions = {}): 
     rawArgs: normalizedArgs,
   };
   assertAllowed(plan.classification);
+
+  // Fail fast when the platform-injected temporary STS is already expired —
+  // otherwise hcloud would make a doomed IAM round trip and surface a
+  // misleading error (e.g. "缺少 cli-domain-id"). Permanent AK/SK and
+  // unknown-expiry tokens are never gated.
+  if (isTemporaryStsExpired()) {
+    return {
+      ok: false,
+      code: 'CREDENTIAL_EXPIRED',
+      error:
+        'Temporary STS credentials have expired. Re-login or start a new session so the platform injects fresh credentials, then retry.',
+      stderr: '',
+      stdout: '',
+      plan,
+    };
+  }
 
   // Link B: when the runtime/environment carries live temporary STS credentials
   // (security token set), KooCLI/obsutil would not see them (they read S2/S3 only

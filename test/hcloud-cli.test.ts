@@ -7,6 +7,7 @@ import {
   consumeApprovalToken,
   createApprovalToken,
   hashArgs,
+  inspectApprovalToken,
   planHcloudCommand,
   redactArgsWithObs,
   resolveStsInjectArgs,
@@ -17,7 +18,7 @@ import {
   type HcloudRunResult,
 } from '../plugins/huaweicloud-core/src/hcloud-cli.ts';
 import { clearRuntimeCredentials, setRuntimeCredentials } from '../plugins/huaweicloud-core/src/auth/credentials.ts';
-import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
+import { callTool, type ToolArgs } from '../plugins/huaweicloud-core/src/tools.ts';
 import { fixtureDir } from './fixture-dir.ts';
 
 // Deterministic-tier seam: disable the once-per-session first-assertion
@@ -50,6 +51,7 @@ async function withTempAuthHome(fn: (home: string) => Promise<void> | void) {
     HW_ACCESS_KEY: process.env.HW_ACCESS_KEY,
     HW_SECRET_KEY: process.env.HW_SECRET_KEY,
     HW_SECURITY_TOKEN: process.env.HW_SECURITY_TOKEN,
+    HW_STS_EXPIRES_AT: process.env.HW_STS_EXPIRES_AT,
   };
   process.env.HUAWEICLOUD_HOME = home;
   process.env.HCLOUD_CONFIG_PATH = join(home, '.hcloud', 'config.json');
@@ -57,6 +59,9 @@ async function withTempAuthHome(fn: (home: string) => Promise<void> | void) {
   delete process.env.HW_ACCESS_KEY;
   delete process.env.HW_SECRET_KEY;
   delete process.env.HW_SECURITY_TOKEN;
+  // parseStsExpiry prioritizes this env over the token itself — a stray value
+  // would flip the CREDENTIAL_EXPIRED gate tests.
+  delete process.env.HW_STS_EXPIRES_AT;
   try {
     return await fn(home);
   } finally {
@@ -642,4 +647,221 @@ test('resolveStsInjectArgs skips when obsutil attached -iAK/-kSK/-tTOK present',
   assert.deepEqual(resolveStsInjectArgs(['OBS', 'ls', '-kSK_VAL', '-tTOK_VAL']), []);
   assert.deepEqual(resolveStsInjectArgs(['OBS', 'ls', '-iAK_VAL', '-d']), []);
   clearRuntimeCredentials();
+});
+
+// ── CREDENTIAL_EXPIRED fast-fail (#919 follow-up UX) ────────────────────────
+
+test('A: runHcloud fails fast with CREDENTIAL_EXPIRED for expired temp STS (no exec)', async () => {
+  await withTempAuthHome(async () => {
+    const marker = join(fixtureDir('hcdk-gate-'), 'ran.txt');
+    const script = fakeHcloudScript(`
+import { writeFileSync } from 'node:fs';
+writeFileSync(${JSON.stringify(marker)}, 'executed', 'utf8');
+console.log(JSON.stringify({ ok: true }));
+`);
+    const past = Math.floor(Date.now() / 1000) - 300; // expired 5 min ago
+    const token = Buffer.from(JSON.stringify({ exp: past })).toString('base64url');
+    clearRuntimeCredentials();
+    setRuntimeCredentials('GATE_AK', 'GATE_SK', token, 'cn-north-4');
+    const result = await runHcloud(['VPC', 'ListVpcs'], {
+      executable: process.execPath,
+      executableArgs: [script],
+    });
+    clearRuntimeCredentials();
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'CREDENTIAL_EXPIRED');
+    assert.match(result.error ?? '', /STS.*expired/i);
+    assert.ok(!existsSync(marker), 'expired STS must not reach hcloud spawn');
+  });
+});
+
+// Driver for the never-gated family: set a runtime credential shape, run a
+// harmless read through a fake hcloud, and clear the runtime store again.
+async function runWithRuntimeCreds(
+  ak: string,
+  sk: string,
+  securityToken: string | undefined,
+): Promise<HcloudRunResult> {
+  const script = fakeHcloudScript('console.log(JSON.stringify({ ok: true, args: process.argv.slice(2) }));');
+  clearRuntimeCredentials();
+  setRuntimeCredentials(ak, sk, securityToken, 'cn-north-4');
+  try {
+    return await runHcloud(['VPC', 'ListVpcs'], {
+      executable: process.execPath,
+      executableArgs: [script],
+    });
+  } finally {
+    clearRuntimeCredentials();
+  }
+}
+
+test('A: runHcloud does NOT gate permanent AK/SK (no token) when none expired', async () => {
+  await withTempAuthHome(async () => {
+    const result = await runWithRuntimeCreds('GATE_PERM_AK', 'GATE_PERM_SK', undefined);
+    assert.equal(result.ok, true);
+    assert.ok(result.code !== 'CREDENTIAL_EXPIRED', 'permanent AK/SK must never be gated');
+  });
+});
+
+test('A: runHcloud does NOT gate an unparseable-expiry STS token (unknown → inject anyway)', async () => {
+  await withTempAuthHome(async () => {
+    const result = await runWithRuntimeCreds('GATE_UNK_AK', 'GATE_UNK_SK', 'not-a-parseable-token');
+    assert.equal(result.ok, true);
+    assert.ok(result.code !== 'CREDENTIAL_EXPIRED', 'unknown expiry must not be treated as expired');
+  });
+});
+
+// ── D4-24 (#745): approval token precise JSON contract ─────────────────────
+
+test('inspectApprovalToken classifies a fresh token as valid', async () => {
+  await withTempAuthHome(() => {
+    const token = createApprovalToken(['ECS', 'ListServersDetails']);
+    const inspection = inspectApprovalToken(token);
+    assert.equal(inspection.state, 'valid');
+    assert.ok(inspection.entry, 'valid state carries the stored entry');
+    assert.equal(inspection.entry.argsHash, hashArgs(['ECS', 'ListServersDetails']));
+  });
+});
+
+// Backdate a stored token past the 5-minute TTL.
+function backdateToken(home: string, token: string): void {
+  const file = join(home, '.config', 'huaweicloud', 'approvals.json');
+  const map = JSON.parse(readFileSync(file, 'utf8')) as Record<string, { createdAt: number }>;
+  map[token]!.createdAt = Date.now() - 6 * 60_000;
+  writeFileSync(file, JSON.stringify(map), 'utf8');
+}
+
+test('inspectApprovalToken classifies an expired token as expired', async () => {
+  await withTempAuthHome((home) => {
+    const token = createApprovalToken(['ECS', 'ListServersDetails']);
+    backdateToken(home, token);
+
+    const inspection = inspectApprovalToken(token);
+    assert.equal(inspection.state, 'expired');
+    assert.equal(inspection.entry, undefined, 'expired state does not leak the entry');
+  });
+});
+
+test('inspectApprovalToken classifies an already-consumed token as already_consumed', async () => {
+  await withTempAuthHome(() => {
+    const token = createApprovalToken(['ECS', 'ListServersDetails']);
+    const first = consumeApprovalToken(token);
+    assert.ok(first, 'first consume returns the stored entry');
+
+    const inspection = inspectApprovalToken(token);
+    assert.equal(inspection.state, 'already_consumed');
+  });
+});
+
+test('inspectApprovalToken classifies an unknown token as not_found', async () => {
+  await withTempAuthHome(() => {
+    const inspection = inspectApprovalToken('never-created-uuid');
+    assert.equal(inspection.state, 'not_found');
+  });
+});
+
+test('consumeApprovalToken keeps a tombstone so the second call is distinguishable from not_found', async () => {
+  await withTempAuthHome(() => {
+    const token = createApprovalToken(['ECS', 'ListServersDetails']);
+    const first = consumeApprovalToken(token);
+    assert.ok(first);
+    // Second consume still returns null (backward compatible), but
+    // inspectApprovalToken must report already_consumed, not not_found.
+    assert.equal(consumeApprovalToken(token), null);
+    assert.equal(inspectApprovalToken(token).state, 'already_consumed');
+  });
+});
+
+// D4-24 drivers: plan an approval and run it under a fake HCLOUD_BIN, with
+// the env restored either way.
+async function withFakeHcloudBin<T>(fn: () => Promise<T>): Promise<T> {
+  const fake = fakeHcloudExecutable('console.log(JSON.stringify({ ok: true }));');
+  const prevBin = process.env.HCLOUD_BIN;
+  process.env.HCLOUD_BIN = fake;
+  try {
+    return await fn();
+  } finally {
+    if (prevBin === undefined) delete process.env.HCLOUD_BIN;
+    else process.env.HCLOUD_BIN = prevBin;
+  }
+}
+
+async function planApproval(): Promise<string> {
+  const plan = (await callTool('huaweicloud_plan_cli_command', {
+    args: ['ECS', 'ListServersDetails'],
+  })) as HcloudPlan;
+  assert.ok(plan.approvalToken);
+  return plan.approvalToken;
+}
+
+async function runApproved(token: string): Promise<ToolArgs> {
+  return (await callTool('huaweicloud_run_approved_command', {
+    args: ['ECS', 'ListServersDetails'],
+    approvalToken: token,
+    approvedByUser: true,
+    maxRetries: 0,
+  })) as ToolArgs;
+}
+
+test('runApprovedCommand: expired token returns {status:rejected, code:CONFIRM_TOKEN_EXPIRED}', async () => {
+  await withTempAuthHome(async (home) => {
+    await withFakeHcloudBin(async () => {
+      const token = await planApproval();
+      backdateToken(home, token);
+
+      const result = (await runApproved(token)) as { status: string; code: string };
+      assert.equal(result.status, 'rejected');
+      assert.equal(result.code, 'CONFIRM_TOKEN_EXPIRED');
+    });
+  });
+});
+
+test('runApprovedCommand: same token submitted twice returns {status:ok, outcome:already_processed}', async () => {
+  await withTempAuthHome(async () => {
+    await withFakeHcloudBin(async () => {
+      const token = await planApproval();
+
+      const first = (await runApproved(token)) as ApprovedRunResult;
+      assert.equal(first.approved, true, 'first call executes the command');
+
+      const second = (await runApproved(token)) as { status: string; outcome: string };
+      assert.equal(second.status, 'ok');
+      assert.equal(second.outcome, 'already_processed');
+    });
+  });
+});
+
+test('runApprovedCommand: unknown token returns {status:rejected, code:CONFIRM_TOKEN_NOT_FOUND}', async () => {
+  await withTempAuthHome(async () => {
+    const result = (await callTool('huaweicloud_run_approved_command', {
+      args: ['ECS', 'ListServersDetails'],
+      approvalToken: 'never-created-uuid',
+      approvedByUser: true,
+      maxRetries: 0,
+    })) as { status: string; code: string };
+    assert.equal(result.status, 'rejected');
+    assert.equal(result.code, 'CONFIRM_TOKEN_NOT_FOUND');
+  });
+});
+
+test('tombstones age out: an aged tombstone inspects as not_found, not already_consumed', async () => {
+  await withTempAuthHome(async (home) => {
+    const token = createApprovalToken(['ECS', 'ListServersDetails']);
+    assert.ok(consumeApprovalToken(token), 'first consume wins');
+
+    // Age the TOMBSTONE past the TTL (createdAt is the original mint time).
+    backdateToken(home, token);
+    const inspection = inspectApprovalToken(token);
+    assert.equal(
+      inspection.state,
+      'not_found',
+      'an aged tombstone must read as not_found — the same answer the next mint prune gives',
+    );
+
+    // And the next unrelated mint prunes it from the store entirely.
+    createApprovalToken(['OBS', 'ls']);
+    const file = join(home, '.config', 'huaweicloud', 'approvals.json');
+    const map = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    assert.ok(!(token in map), 'the aged tombstone is pruned by the mint');
+  });
 });

@@ -1858,6 +1858,40 @@ test('auth/error-table is a zod-free, IO-free, sibling-free leaf (#900)', () => 
   );
 });
 
+test('auth init implements the #920 gates: shared purge seam, identity verification, exit codes', () => {
+  const setup = readSource(join('src', 'setup-cli.ts'));
+  const reconcile = readSource(join('src', 'auth', 'reconcile.ts'));
+  const libCredentials = readSource(join('src', 'lib', 'credentials.ts'));
+
+  // The purge is ONE implementation in the shared module; both write paths
+  // call it (setup-cli auth init + the auth_switch persist tool path).
+  assert.match(reconcile, /export function runHcloudProfileDelete\(profile: string\)/);
+  assert.match(setup, /import \{[^}]*runHcloudProfileDelete[^}]*\} from '\.\/auth\/reconcile\.ts'/);
+  assert.match(libCredentials, /import \{[^}]*runHcloudProfileDelete[^}]*\} from '\.\.\/auth\/reconcile\.ts'/);
+
+  // cmdAuthInit: purge before configure when no token; identity verification
+  // (STS GetCallerIdentity + the APIGW.0301 output scan) gates the
+  // "Credentials synchronized" claim; failure sets exitCode 1 and suppresses
+  // the Next steps block; project-id failure escalates to ERROR.
+  assert.match(setup, /if \(!securityToken\) \{/);
+  assert.match(setup, /function verifyHcloudIdentity\(region: string\)/);
+  assert.match(setup, /\['STS', 'GetCallerIdentity'\]/);
+  assert.match(setup, /APIGW\\.0301\|Incorrect IAM authentication/);
+  assert.match(setup, /if \(identity\.ok\) \{\s*\n\s*console\.log\('\\nCredentials synchronized\.'\)/);
+  assert.match(setup, /process\.exitCode = 1;/);
+  assert.match(setup, /if \(process\.exitCode !== 1\) \{/);
+  assert.match(setup, /ERROR: Project ID not auto-set/);
+
+  // The tool-side persist re-applies project-id after the purge wiped every
+  // profile setting (the round-1 critical: rotation must not break
+  // region-scoped calls).
+  assert.match(
+    libCredentials,
+    /resolveAndApplyProjectId\(\{ region, profile: profile \?\? undefined \}\);/,
+    'persistCredentials must re-apply project-id after the purge',
+  );
+});
+
 test('ERROR_TABLE carries the #900 code set with executable actions', () => {
   const leaf = readSource(join('src', 'auth', 'error-table.ts'));
   for (const code of [

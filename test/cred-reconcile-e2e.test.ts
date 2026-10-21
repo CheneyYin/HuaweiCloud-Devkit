@@ -56,6 +56,9 @@ const ENV_KEYS = [
   'HCLOUD_BIN',
   'HCLOUD_BIN_ARGS_JSON',
   'HCLOUD_FAKE_LOG',
+  'HCLOUD_FAKE_SCRIPT',
+  'HCLOUD_FAKE_DELETE_ERROR',
+  'HW_STS_EXPIRES_AT',
   'CODEARTS_PROJECT_DIR',
 ];
 
@@ -104,6 +107,7 @@ interface FakeKooCliProfile {
   accessKeyId: string;
   secretAccessKey: string;
   region: string;
+  securityToken?: string;
 }
 
 function writeFakeKooCli(current: string, profiles: FakeKooCliProfile[]) {
@@ -205,6 +209,15 @@ test('05 syncAuth propagates S1 into the KooCLI current profile', () => {
     assert.match(logContent, /--cli-profile=deploy/);
     assert.match(logContent, /--cli-access-key=E2E5_AK/);
     assert.equal(existsSync(lastSyncPath()), true, 'syncAuth must write the .last_sync marker');
+
+    // #920: syncAuth walks the SAME purge as the persist path — delete before
+    // set — and the honest message carries no stale-token warning on success.
+    assertDeleteBeforeSet(readHcloudCalls(log));
+    assert.match(res.hcloud.message, /synced to profile=deploy/);
+    assert.doesNotMatch(res.hcloud.message, /profile reset failed/);
+    assert.doesNotMatch(res.hcloud.message, /project-id not restored/);
+    // And the purge's project-id wipe is restored end-to-end.
+    assert.equal(res.projectId, 'proj-e2e-001');
   });
 });
 
@@ -672,5 +685,209 @@ test('23 scanState reports manualModified when KooCLI config is newer than .last
     const inc = scan.inconsistencies.find((i) => i.store === 'S2-current');
     assert.ok(inc, 'expected an S2-current inconsistency after manual KooCLI edit');
     assert.equal(inc.manualModified, true);
+  });
+});
+
+// #920 test helpers: persist via the tool, read the fake hcloud call log,
+// and assert the delete-before-set ordering the stale-token purge requires.
+async function persistViaSwitch(
+  ak: string,
+  sk: string,
+  region: string,
+): Promise<AuthSwitchResult & { hcloud?: { ok?: boolean; profileReset?: boolean } }> {
+  return (await callTool('huaweicloud_auth_switch', {
+    mode: 'memory',
+    action: 'persist',
+    ak,
+    sk,
+    region,
+  })) as AuthSwitchResult & { hcloud?: { ok?: boolean; profileReset?: boolean } };
+}
+
+function readHcloudCalls(log: string): string[][] {
+  return readFileSync(log, 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as string[]);
+}
+
+function assertDeleteBeforeSet(calls: string[][]): void {
+  const deleteIdx = calls.findIndex((c) => c[0] === 'configure' && c[1] === 'delete');
+  const setIdx = calls.findIndex((c) => c[0] === 'configure' && c[1] === 'set');
+  assert.ok(deleteIdx !== -1, 'configure delete must run (stale-token cleanup, #920)');
+  assert.ok(setIdx !== -1, 'configure set must run after the delete (re-create)');
+  assert.ok(deleteIdx < setIdx, 'the profile delete must precede the re-create');
+}
+
+// Read one profile from the fake KooCLI config (the fake implements the
+// configure delete/set effects against the real config path).
+function readFakeProfile(dir: string, name: string): Record<string, string> {
+  const config = JSON.parse(readFileSync(join(dir, '.hcloud', 'config.json'), 'utf8')) as {
+    profiles: Array<Record<string, string>>;
+  };
+  const profile = config.profiles.find((p) => p.name === name);
+  assert.ok(profile, `profile ${name} must exist in the fake config`);
+  return profile;
+}
+
+test('24 persist without a security token resets the profile (delete + recreate) so a stale token cannot survive (#920)', async () => {
+  await withTempHome(async (dir) => {
+    setFakeHcloud(join(dir, 'hcloud.log'));
+    const ak = 'E2E24_AK';
+    const sk = 'E2E24_SK';
+    const region = 'cn-north-4';
+    writeFakeKooCli('deploy', [{ name: 'deploy', accessKeyId: ak, secretAccessKey: sk, region }]);
+
+    const out = await persistViaSwitch(ak, sk, region);
+    assert.equal(out.status, 'ok');
+    assert.equal(out.hcloud?.profileReset, true, 'persist without a token must walk the delete/recreate path');
+
+    const calls = readHcloudCalls(join(dir, 'hcloud.log'));
+    assertDeleteBeforeSet(calls);
+    const deleteIdx = calls.findIndex((c) => c[0] === 'configure' && c[1] === 'delete');
+    assert.ok(
+      calls[deleteIdx]!.some((a) => String(a).startsWith('--cli-profile=')),
+      'the delete must target the managed profile',
+    );
+
+    // END state (the fake implements configure delete/set against the real
+    // config path): the recreated profile carries the new AK/SK and the
+    // project-id the persist re-applies after the purge wiped every setting.
+    const recreated = readFakeProfile(dir, 'deploy');
+    assert.equal(recreated.accessKeyId, ak);
+    assert.equal(recreated.projectId, 'proj-e2e-001', 'project-id is re-applied after the purge');
+    assert.ok(!('securityToken' in recreated), 'no security token at rest');
+
+    // The recreated profile keeps the credential stores consistent.
+    const scan = scanState();
+    assert.equal(scan.inconsistencies.length, 0);
+  });
+});
+
+test('24b persist still succeeds when the profile to reset does not exist (delete is best-effort, #920)', async () => {
+  await withTempHome(async (dir) => {
+    setFakeHcloud(join(dir, 'hcloud.log'));
+    const ak = 'E2E24B_AK';
+    const sk = 'E2E24B_SK';
+    writeFakeKooCli('deploy', [{ name: 'deploy', accessKeyId: ak, secretAccessKey: sk, region: 'cn-north-4' }]);
+    // Simulate a KooCLI that reports "profile does not exist" on delete.
+    process.env.HCLOUD_FAKE_DELETE_ERROR = '1';
+
+    const out = await persistViaSwitch(ak, sk, 'cn-north-4');
+    assert.equal(out.status, 'ok');
+    assert.equal(out.hcloud?.ok, true, 'a missing profile on delete must not fail the persist');
+    assert.equal(out.hcloud?.profileReset, true, '"not exist" on delete counts as nothing-to-clean');
+  });
+});
+
+test('25 initial scenario: a preset profile with a stale/expired securityToken is reset by persist (#920)', async () => {
+  await withTempHome(async (dir) => {
+    setFakeHcloud(join(dir, 'hcloud.log'));
+    const ak = 'E2E25_AK';
+    const sk = 'E2E25_SK';
+    const region = 'cn-north-4';
+    // Initial scenario: the preset profile already carries a stale/expired
+    // securityToken. `configure set` refuses empty values, so the token can
+    // never be overwritten in place — only the delete/recreate path removes it.
+    writeFakeKooCli('deploy', [
+      { name: 'deploy', accessKeyId: ak, secretAccessKey: sk, region, securityToken: 'E2E25_STALE_TOKEN' },
+    ]);
+
+    const out = await persistViaSwitch(ak, sk, region);
+    assert.equal(out.status, 'ok');
+    assert.equal(
+      out.hcloud?.profileReset,
+      true,
+      'persist must walk the delete/recreate path when the preset profile carries a stale token',
+    );
+
+    const calls = readHcloudCalls(join(dir, 'hcloud.log'));
+    assertDeleteBeforeSet(calls);
+    const setIdx = calls.findIndex((c) => c[0] === 'configure' && c[1] === 'set');
+    assert.ok(
+      calls[setIdx]!.every((a) => !String(a).startsWith('--cli-security-token=')),
+      'the re-create must not pass a security token (no new token at rest)',
+    );
+
+    // END state: the preset profile's stale securityToken is GONE from the
+    // on-disk config (the fake implements the delete/set effects), and the
+    // project-id survives the purge via the persist's re-application.
+    const recreated = readFakeProfile(dir, 'deploy');
+    assert.ok(!('securityToken' in recreated), 'the stale securityToken is gone');
+    assert.equal(recreated.projectId, 'proj-e2e-001', 'project-id is re-applied after the purge');
+
+    // The recreated profile keeps the credential stores consistent.
+    const scan = scanState();
+    assert.equal(scan.inconsistencies.length, 0);
+  });
+});
+
+// D4-24 (#745): auth_confirm returns the precise JSON contract for consumed
+// and unknown tokens instead of throwing a generic Error string.
+test('26 auth_confirm: same token submitted twice returns {status:ok, outcome:already_processed}', async () => {
+  await withTempHome(async () => {
+    writeGlobalCredentials({ ak: 'E2E26_A_AK', sk: 'E2E26_A_SK', region: 'cn-north-4' });
+    const switched = (await callTool('huaweicloud_auth_switch', {
+      mode: 'memory',
+      action: 'persist',
+      ak: 'E2E26_B_AK',
+      sk: 'E2E26_B_SK',
+      region: 'cn-north-4',
+    })) as AuthSwitchResult;
+    assert.equal(switched.status, 'needs_confirmation');
+
+    const first = (await callTool('huaweicloud_auth_confirm', {
+      token: switched.confirmToken,
+      decision: 's1',
+    })) as { status: string; outcome: string };
+    assert.equal(first.status, 'ok');
+    assert.equal(first.outcome, 'aborted');
+
+    const second = (await callTool('huaweicloud_auth_confirm', {
+      token: switched.confirmToken,
+      decision: 's1',
+    })) as { status: string; outcome: string };
+    assert.equal(second.status, 'ok');
+    assert.equal(second.outcome, 'already_processed');
+  });
+});
+
+test("26b auth_confirm: unknown token returns {status:'rejected', code:'CONFIRM_TOKEN_NOT_FOUND'}", async () => {
+  await withTempHome(async () => {
+    const out = (await callTool('huaweicloud_auth_confirm', {
+      token: 'never-created-token',
+      decision: 'newImported',
+    })) as { status: string; code: string };
+    assert.equal(out.status, 'rejected');
+    assert.equal(out.code, 'CONFIRM_TOKEN_NOT_FOUND');
+  });
+});
+
+// #919 follow-up UX: auth_status exposes the credential panel (temporary STS
+// vs permanent S1, and which one is active).
+test('27 auth_status exposes credentialPanel with sts/s1/activeSource', async () => {
+  await withTempHome(async () => {
+    // No STS anywhere → panel reports S1-absent, activeSource none.
+    const bare = getAuthStatus('all');
+    assert.equal(bare.credentialPanel.s1.configured, false);
+    assert.equal(bare.credentialPanel.activeSource, 'none');
+    assert.equal(bare.stsExpiry, null);
+
+    // Permanent S1 → s1 configured with fingerprint, activeSource s1-persistent.
+    writeGlobalCredentials({ ak: 'E2E27_AK', sk: 'E2E27_SK', region: 'cn-north-4' });
+    const withS1 = getAuthStatus('all');
+    assert.equal(withS1.credentialPanel.s1.configured, true);
+    assert.equal(withS1.credentialPanel.s1.fingerprint, fingerprint('E2E27_AK', 'E2E27_SK'));
+    assert.equal(withS1.credentialPanel.s1.persistent, true);
+    assert.equal(withS1.credentialPanel.activeSource, 's1-persistent');
+
+    // Runtime temporary STS (unexpired) → panel's sts half populated and active.
+    const future = Math.floor(Date.now() / 1000) + 3600;
+    const token = Buffer.from(JSON.stringify({ exp: future })).toString('base64url');
+    setRuntimeCredentials('E2E27_RT_AK', 'E2E27_RT_SK', token, 'cn-north-4');
+    const withSts = getAuthStatus('all');
+    assert.equal(typeof withSts.stsExpiry?.status, 'string');
+    assert.equal(withSts.credentialPanel.activeSource, 'temporary-sts');
+    clearRuntimeCredentials();
   });
 });

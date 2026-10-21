@@ -37,16 +37,16 @@ Tokens are persisted to a per-user file (`~/.config/huaweicloud/approvals.json`,
 - Token is a UUID
 - Tokens are single-use (exclusive-create claim marker next to the store)
 - Tokens expire after 5 minutes
-- Stale entries and markers are pruned on every mint (consume deletes only its own entry)
+- Stale entries and markers are pruned on every mint; consume replaces its entry with a tombstone (`{ consumedAt }`, D4-24/#745) so a replay classifies as already_processed instead of not_found
 
 ### Key Functions
 
-| Function                       | Location                             | Purpose                                      |
-| ------------------------------ | ------------------------------------ | -------------------------------------------- |
-| `createApprovalToken(rawArgs)` | `lib/approval-tokens.ts`             | Stores hash + redacted args, returns token   |
-| `consumeApprovalToken(token)`  | `lib/approval-tokens.ts`             | Validates, claims single-use, deletes entry  |
-| `planHcloudCommand()`          | `src/hcloud-cli.ts`                  | Returns `approvalToken` in result            |
-| `runApprovedCommand()`         | `src/packs/huaweicloud-cli/tools.ts` | Validates token, executes with provided args |
+| Function                       | Location                             | Purpose                                        |
+| ------------------------------ | ------------------------------------ | ---------------------------------------------- |
+| `createApprovalToken(rawArgs)` | `lib/approval-tokens.ts`             | Stores hash + redacted args, returns token     |
+| `consumeApprovalToken(token)`  | `lib/approval-tokens.ts`             | Validates, claims single-use, tombstones entry |
+| `planHcloudCommand()`          | `src/hcloud-cli.ts`                  | Returns `approvalToken` in result              |
+| `runApprovedCommand()`         | `src/packs/huaweicloud-cli/tools.ts` | Validates token, executes with provided args   |
 
 ## Why Token Instead of String Comparison
 

@@ -4,7 +4,7 @@ import { runHcloud, planHcloudCommand, type HcloudRunResult } from '../../hcloud
 import { hcloudProbeNextStep, hcloudProbeRaw, probeHcloud, type ProbeHcloudOptions } from '../../hcloud-probe.ts';
 import { redactSecrets } from '../../safety-policy.ts';
 import { asText } from '../../lib/as-text.ts';
-import { consumeApprovalToken, hashArgs } from '../../lib/approval-tokens.ts';
+import { consumeApprovalToken, hashArgs, inspectApprovalToken } from '../../lib/approval-tokens.ts';
 import { numericArg, vendorConfirmed } from '../../lib/tool-schema-parts.ts';
 import type { PackToolDefinition, LooseToolSchema } from '../../lib/pack-types.ts';
 import type { CallToolOptions, ToolArgs } from '../../tools.ts';
@@ -127,9 +127,33 @@ async function runApprovedCommand(args: ToolArgs = {}) {
     throw new Error('approvedByUser must be true after explicit user approval for this exact command.');
   }
   const token = String(args.approvalToken || '');
+
+  // D4-24 precise JSON contract (#745): expired and already-consumed tokens
+  // return a structured result instead of throwing a generic Error string, so
+  // clients can machine-assert the two non-success states.
+  const inspection = inspectApprovalToken(token);
+  if (inspection.state === 'already_consumed') {
+    return { status: 'ok', outcome: 'already_processed' };
+  }
+  if (inspection.state === 'expired') {
+    return { status: 'rejected', code: 'CONFIRM_TOKEN_EXPIRED' };
+  }
+  if (inspection.state === 'not_found') {
+    // A token that was never created (typo / unknown / pruned beyond the
+    // tombstone window) is still a rejection, but carries no expired/already
+    // semantics — surface a distinct code so clients can tell the cases apart.
+    return { status: 'rejected', code: 'CONFIRM_TOKEN_NOT_FOUND' };
+  }
+
   const stored = consumeApprovalToken(token);
   if (!stored) {
-    throw new Error('Invalid or expired approval token. Please re-plan the command.');
+    // Defensive: inspectApprovalToken said 'valid' but consume returned null.
+    // The only path is the O_EXCL claim losing a race — another consumer is
+    // spending this exact token right now — so classify as already_consumed
+    // (never a misleading success, never a false not_found).
+    const recheck = inspectApprovalToken(token);
+    if (recheck.state === 'expired') return { status: 'rejected', code: 'CONFIRM_TOKEN_EXPIRED' };
+    return { status: 'ok', outcome: 'already_processed' };
   }
   const providedArgs = Array.isArray(args.args) ? args.args.map(String) : [];
   if (hashArgs(providedArgs) !== stored.argsHash) {

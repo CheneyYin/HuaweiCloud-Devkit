@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 import { evaluateArtifacts, evaluateCommandRisk, evaluateDeployPlan, type RiskEvaluation } from './risk-rule-engine.ts';
 import { classifyTextCommand } from './safety-policy.ts';
+import { parseStsExpiry, resolveCredentialsWithRuntime } from './auth/credentials.ts';
 import { trackToolInvoke, trackSkillRetrieve } from './telemetry/telemetry.ts';
 // The update tool handlers live in the update pack's handler map (merged
 // into PACK_TOOL_HANDLERS); only the DistTags type for the CallToolOptions
@@ -1174,6 +1175,8 @@ function explainError({ service = 'unknown', errorCode = '', message = '', reque
   const SERVICE_ALIASES: Record<string, string> = {
     functiongraph: 'FSS',
     fgs: 'FSS',
+    ecs: 'Ecs',
+    ECS: 'Ecs',
   };
   const patternKey = SERVICE_ALIASES[svc] || service;
 
@@ -1201,6 +1204,10 @@ function explainError({ service = 'unknown', errorCode = '', message = '', reque
     VPC: {
       'VPC.0301': 'Bandwidth name is required for PER type EIPs, even though --help marks it optional.',
     },
+    Ecs: {
+      'Ecs.0707':
+        'The flavor + image-type combination does not exist ("the product does not exist") — the error does not say which side is wrong, so check BOTH (#922): (1) the flavor is abandoned/sellout in this region/AZ (check os_extra_specs.cond:operation:status and cond:operation:az; see the huawei-ecs skill references/flavors.md for the AZ-vs-global-status conflict rule); (2) the image TYPE is incompatible with the flavor — market-type images fail with KunPeng flavors (kc1/kc2 etc.). Fix: switch the image to a gold-type image or switch to a compatible general-purpose flavor (verified: kc2.small.2 + market Ubuntu → Ecs.0707; s6.medium.2 + gold Ubuntu works), re-listing with hcloud ECS ListFlavors / hcloud IMS ListImages --__imagetype=gold first.',
+    },
     APIGW: {
       'APIGW.0301':
         'Incorrect IAM authentication information. The AK/SK is invalid (check the SK for typos), the security token is missing or expired, or the profile lacks project_id. Fix: re-run "npx huaweicloud-devkit auth init" (it auto-sets project_id), or set it manually: hcloud configure set --cli-project-id=<project_id> after finding it via hcloud IAM KeystoneListProjects --cli-region=<region> --name=<region>.',
@@ -1215,6 +1222,23 @@ function explainError({ service = 'unknown', errorCode = '', message = '', reque
   for (const [code, tip] of Object.entries(svcPatterns)) {
     if (errorCode && code.includes(errorCode)) {
       if (!suggestions.includes(tip)) suggestions.push(tip);
+    }
+  }
+
+  // When the active credential set is a temporary STS token that has already
+  // expired, surface that as the PRIMARY cause before generic auth guidance.
+  let activeCreds;
+  try {
+    activeCreds = resolveCredentialsWithRuntime({ allowMissing: true });
+  } catch {
+    activeCreds = null;
+  }
+  if (activeCreds?.ak && activeCreds?.sk && activeCreds.securityToken) {
+    const expiry = parseStsExpiry({ securityToken: activeCreds.securityToken });
+    if (expiry !== null && expiry <= Date.now()) {
+      suggestions.push(
+        'CREDENTIAL_EXPIRED: the temporary STS security token has expired. Re-authenticate to obtain fresh credentials (e.g. run "npx huaweicloud-devkit auth init" or re-login / restart the session).',
+      );
     }
   }
 
