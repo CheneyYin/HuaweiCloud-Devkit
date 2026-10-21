@@ -109,6 +109,6 @@ hcloud BSS ListOnDemandResourceRatings --project_id=<pid> \
 ## Auth Bootstrapping (prerequisite for every command above)
 
 - Symptom of a broken profile: every hcloud API returns `APIGW.0301 Incorrect IAM authentication information` while OBS/obsutil keeps working - caused by a stale `securityToken` in the profile
-- Fix: `hcloud configure delete --cli-profile=default`, then re-run `npx huaweicloud-devkit auth init` with permanent AK/SK only (no token). `configure set` refuses empty values, so the token cannot be cleared in place
+- Fix: re-run `npx huaweicloud-devkit auth init` (or `auth sync`) with permanent AK/SK only (no token) — the devkit PURGES the profile (delete + re-create) automatically on tokenless writes (#920). Manual fallback: `hcloud configure delete --cli-profile=default`, then re-configure. `configure set` refuses empty values, so the token cannot be cleared in place
 - project_id is auto-discovered once signing works - no need to configure it manually
 - VPC/OBS create responses expose `tenant_id` (= domain_id) - a fallback source for the account-id
