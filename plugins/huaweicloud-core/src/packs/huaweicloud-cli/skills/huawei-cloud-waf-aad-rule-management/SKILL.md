@@ -17,7 +17,7 @@ tags: [huawei-cloud, waf, aad, security, ddos]
 ## Overview
 
 This skill provides AI-Agent capabilities for **Huawei Cloud WAF (Web Application Firewall)** and
-**AAD (Anti-DDoS)** via the verified `hcloud` CLI (KooCLI 7.2.12). It helps users answer "what
+**AAD (Anti-DDoS)** via the verified `hcloud` CLI (KooCLI 7.2.12; parameter surfaces re-checked identical on 7.3.12). It helps users answer "what
 web/DDoS protection is configured", "is my site actually behind WAF", "are my rules safe and in
 the right order", and "is every public EIP covered by Anti-DDoS".
 
@@ -51,7 +51,7 @@ the right order", and "is every public EIP covered by Anti-DDoS".
 
 ## Prerequisites
 
-1. **hcloud CLI (KooCLI) 7.2.12+** installed.
+1. **hcloud CLI (KooCLI) 7.2.12+** installed (parameter surfaces verified identical on 7.3.12).
    - Installation & configuration: see `references/cli-installation-guide.md`
    - Verify: `hcloud version`
 2. **Authentication** — one of:
@@ -132,7 +132,7 @@ CreateInstance is not supported.`). AAD instances are purchased as period packag
 
 ## Core Commands
 
-All commands below were verified against KooCLI 7.2.12 (`hcloud <service> <Operation> --help`);
+All commands below were verified against KooCLI 7.2.12 (`hcloud <service> <Operation> --help`; parameter surfaces re-checked identical on 7.3.12);
 parameter names are taken verbatim from the CLI metadata. `--cli-region` is required for every
 command. For WAF, `--project_id` is a path parameter of the API; KooCLI automatically uses the
 default project of the authenticated profile when it is omitted, so the examples below omit it
@@ -278,7 +278,7 @@ Operation CreateInstance is not supported.`). **Do NOT fabricate CLI commands fo
 
 ## Parameter Confirmation
 
-All parameter names below are verified against `hcloud <service> <Operation> --help` (KooCLI 7.2.12).
+All parameter names below are verified against `hcloud <service> <Operation> --help` (KooCLI 7.2.12; parameter surfaces re-checked identical on 7.3.12).
 `{region}` / `{project_id}` are context values; obtain the project ID from _My Credentials → Projects_.
 
 **参数校验（工具参数安全，强制）**: 所有动作参数在拼装 `hcloud` 命令前必须校验，非法输入直接拒绝并向用户说明，禁止把未经校验的参数传入命令执行：
@@ -334,7 +334,7 @@ The generic invocation shape is `hcloud <service> <Operation> --cli-region=<regi
 
 | Feature                   | Description                                                      | Example                                                   |
 | ------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------- |
-| Service name              | `WAF`, `AAD` (as detected from KooCLI 7.2.12 metadata)           | `hcloud WAF ...`                                          |
+| Service name              | `WAF`, `AAD` (as detected from KooCLI metadata, 7.2.12–7.3.12)   | `hcloud WAF ...`                                          |
 | Operation name            | PascalCase                                                       | `ListCompositeHosts`, `BatchCreateCcRule`                 |
 | Region parameter          | `--cli-region=<value>` (required; profile value used if omitted) | `--cli-region=cn-north-4`                                 |
 | Project ID                | `--project_id=<value>` (required for WAF)                        | `--project_id=a1b2...`                                    |

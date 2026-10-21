@@ -128,7 +128,7 @@ const kooCliVersion = pkg.kooCliVersion;
 assert.match(
   kooCliVersion ?? '',
   /^\d+\.\d+\.\d+$/,
-  'package.json must declare a "kooCliVersion" semver (e.g. "7.2.12")',
+  'package.json must declare a "kooCliVersion" semver (e.g. "7.3.12")',
 );
 
 function walk(dir, acc = []) {

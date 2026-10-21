@@ -71,7 +71,7 @@
       "type": "query",
       "executor": "cli",
       "command": "hcloud CTS ListQuotas --cli-region={region}",
-      "note": "Read-only R3 query. Verified against real hcloud KooCLI 7.2.12 (cn-north-4)."
+      "note": "Read-only R3 query. Verified against real hcloud KooCLI 7.2.12 (cn-north-4); parameter surfaces re-checked identical on 7.3.12."
     },
     {
       "id": "TC-10",

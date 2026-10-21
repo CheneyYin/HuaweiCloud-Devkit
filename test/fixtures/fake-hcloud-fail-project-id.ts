@@ -15,7 +15,7 @@ if (process.argv[2] === 'configure') {
   process.exit(1);
 }
 if (process.argv[2] === 'version') {
-  console.log('KooCLI Fake 7.2.12');
+  console.log('KooCLI Fake 7.3.12');
   process.exit(0);
 }
 process.exit(0);

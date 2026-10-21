@@ -41,7 +41,7 @@
 ## 4. CLI Correctness
 
 - [ ] Every `hcloud CTS <Operation>` uses PascalCase operation names and includes `--cli-region`
-- [ ] All required parameters from `--help` (KooCLI 7.2.12) are present in command examples
+- [ ] All required parameters from `--help` (KooCLI 7.2.12; parameter surfaces re-checked identical on 7.3.12) are present in command examples
 - [ ] Parameter names match `--help` output verbatim (e.g. `--obs_info.bucket_name`,
       `--operations.1.service_type`, indexed `--key.N=value` syntax)
 - [ ] `ListTraceResources` uses `--domain_id` (not `--project_id`)

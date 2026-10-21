@@ -446,6 +446,49 @@ test('classifyHcloudArgs blocks obsutil write commands', () => {
   }
 });
 
+test('classifyHcloudArgs blocks the KooCLI 7.3.12 obsutil write subcommands (7.3.12 pin)', () => {
+  // 7.3.12 added these set/put/delete-capable subcommands (writes ride on
+  // -method=put/set/delete) — they must hit the same deny as their older
+  // siblings, on every layer (TS classifier, py hook twin, plan/read faces).
+  const methodWrites = ['bucket-tagging', 'object-tagging', 'encryption', 'mirror-back-to-source'];
+  for (const op of methodWrites) {
+    assert.equal(
+      classifyHcloudArgs(['obs', op, 'obs://bucket', '-method=put']).decision,
+      'deny',
+      `obs ${op} -method=put should be blocked`,
+    );
+    assert.equal(
+      classifyHcloudArgs(['OBS', op, 'obs://bucket', '-method=delete']).decision,
+      'deny',
+      `OBS ${op} -method=delete should be blocked (case-insensitive service)`,
+    );
+    assert.equal(
+      classifyTextCommand(`hcloud OBS ${op} obs://bucket -method=set -localfile=c.xml`).decision,
+      'deny',
+      `raw-text hcloud OBS ${op} -method=set should be blocked`,
+    );
+  }
+  // custom-domain writes ride on -cname/certificate options, not -method.
+  assert.equal(classifyHcloudArgs(['obs', 'custom-domain', 'obs://bucket', '-cname=x.com']).decision, 'deny');
+  assert.equal(classifyTextCommand('hcloud OBS custom-domain obs://b -cname=x.com').decision, 'deny');
+  // The full-name public-access-block writes (no -method — the verb is the
+  // command name; deleting re-opens public access) and the pre-existing
+  // abort/archive writes the 7.3.12-pin sweep dispositioned.
+  for (const op of ['put-public-access-block', 'delete-public-access-block', 'abort', 'archive']) {
+    assert.equal(classifyHcloudArgs(['obs', op, 'obs://bucket']).decision, 'deny', `obs ${op} should be blocked`);
+    assert.equal(
+      classifyTextCommand(`hcloud OBS ${op} obs://bucket`).decision,
+      'deny',
+      `raw-text hcloud OBS ${op} should be blocked`,
+    );
+  }
+  // Read controls of the same families stay allowed (regression pin: a
+  // vocabulary over-reach flipping reads to deny fails here).
+  for (const op of ['get-public-access-block', 'get-bucket-policy-status', 'get-bucket-public-status', 'check', 'ls']) {
+    assert.equal(classifyHcloudArgs(['obs', op, 'obs://bucket']).decision, 'allow', `obs ${op} should stay a read`);
+  }
+});
+
 test('classifyHcloudArgs allows obsutil read commands', () => {
   const reads = ['ls', 'stat', 'help', 'version'];
   for (const op of reads) {

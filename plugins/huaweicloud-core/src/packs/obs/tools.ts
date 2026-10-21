@@ -14,8 +14,9 @@ import { asRecord } from '../../lib/as-record.ts';
 
 // Handlers migrated verbatim from src/tools.ts. setupObsConfig syncs the
 // global credential vault (or the hcloud profile) into ~/.obsutilconfig;
-// handleObsWebsiteConfig signs OBS REST calls with AWS4 (KooCLI OBS has no
-// SetBucketWebsite operation).
+// handleObsWebsiteConfig signs OBS REST calls with AWS4 — the recommended
+// website-config path (no XML file juggling) over KooCLI 7.3.12+'s
+// `OBS website -method=put -localfile=<xml>` command (7.2.x had neither).
 
 // Mirrors the JS `a || b || ''` chain for string fields: the first non-empty
 // string wins, everything else falls through.
@@ -292,7 +293,7 @@ export const OBS_TOOLS = [
   {
     name: 'huaweicloud_obs_set_website_config',
     description:
-      '配置 OBS 桶的静态网站托管。KooCLI OBS 不支持 SetBucketWebsite API，此工具内部实现 AWS4 签名调用 OBS REST API，屏蔽签名细节。支持 set（配置）、get（查询）、delete（删除）三种操作。操作前需确保桶已创建且已设置 public-read ACL。',
+      '配置 OBS 桶的静态网站托管（推荐路径：无需手写 XML，此工具内部实现 AWS4 签名调用 OBS REST API，屏蔽签名细节）。支持 set（配置）、get（查询）、delete（删除）三种操作。KooCLI 7.3.12+ 另有 `hcloud OBS website -method=put -localfile=<xml>`（XML 文件方式；7.2.x 无此 CLI 命令）。操作前需确保桶已创建且已设置 public-read ACL。',
     schema: obsWebsiteConfigSchema,
     handler: handleObsWebsiteConfig,
   },

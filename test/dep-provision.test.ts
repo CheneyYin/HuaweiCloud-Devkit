@@ -156,14 +156,14 @@ test('provisioning: hcloud present skips with an INFO line, no installer call', 
   let installerCalls = 0;
   await provisionDependencies(['hcloud'], {
     log: out.log,
-    probeHcloud: () => ({ status: 'ok', installed: true, installedVersion: '7.2.12' }),
+    probeHcloud: () => ({ status: 'ok', installed: true, installedVersion: '7.3.12' }),
     installKooCli: async () => {
       installerCalls += 1;
       return true;
     },
   });
   assert.equal(installerCalls, 0);
-  assert.match(out.text(), /hcloud: present \(7\.2\.12\), skipping install/);
+  assert.match(out.text(), /hcloud: present \(7\.3\.12\), skipping install/);
 });
 
 test('provisioning: a version mismatch still counts as present (doctor owns that warning)', async () => {
@@ -773,10 +773,10 @@ test('installers: an already-present binary writes no receipt', async () => {
     process.env.HUAWEICLOUD_HOME = home;
     await provisionDependencies(['hcloud'], {
       log: out.log,
-      probeHcloud: () => ({ status: 'ok', installed: true, installedVersion: '7.2.12' }),
+      probeHcloud: () => ({ status: 'ok', installed: true, installedVersion: '7.3.12' }),
       installKooCli: async () => true,
     });
-    assert.match(out.text(), /hcloud: present \(7\.2\.12\), skipping install/);
+    assert.match(out.text(), /hcloud: present \(7\.3\.12\), skipping install/);
     // The skip path never reaches an installer, so no receipt can appear.
     assert.equal(readReceipt('hcloud'), null);
   } finally {

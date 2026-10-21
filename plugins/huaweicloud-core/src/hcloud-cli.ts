@@ -157,7 +157,28 @@ function applyPreflightFindings(classification: RiskDecision, sgFindings: SgFind
   return classification;
 }
 
-const OBS_WRITE_SUBCOMMANDS = new Set(['mb', 'cp', 'mv', 'rm', 'chattri', 'restore']);
+const OBS_WRITE_SUBCOMMANDS = new Set([
+  'mb',
+  'cp',
+  'mv',
+  'rm',
+  'chattri',
+  'restore',
+  // KooCLI 7.3.12 write-capable additions (-method based, except
+  // custom-domain which writes via -cname/certificate options), plus the
+  // full-name put/delete public-access-block writes.
+  'bucket-tagging',
+  'object-tagging',
+  'encryption',
+  'custom-domain',
+  'mirror-back-to-source',
+  'put-public-access-block',
+  'delete-public-access-block',
+  'abort',
+  'archive',
+  'create-share',
+  'update',
+]);
 
 function obsWriteHint(args: unknown): string | null {
   if (!Array.isArray(args) || args.length < 2) return null;

@@ -126,7 +126,7 @@ if (argv[0] === 'configure' && (argv[1] === 'delete' || argv[1] === 'set') && pr
 }
 
 if (argv[0] === 'version') {
-  process.stdout.write(`KooCLI Fake ${process.env.HCLOUD_FAKE_VERSION || '7.2.12'}\n`);
+  process.stdout.write(`KooCLI Fake ${process.env.HCLOUD_FAKE_VERSION || '7.3.12'}\n`);
   process.exit(0);
 }
 if (argv[0] === 'IAM' && argv[1] === 'KeystoneListProjects') {

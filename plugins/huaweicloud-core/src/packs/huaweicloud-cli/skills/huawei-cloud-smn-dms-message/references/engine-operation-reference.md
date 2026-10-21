@@ -1,7 +1,7 @@
 # Engine & Operation Reference — SMN + DMS
 
 Complete mapping of the 15 `huawei_*` actions to real KooCLI commands. Parameter names are
-verbatim from `hcloud <Service> <Operation> --help` (KooCLI 7.2.12, verified 2026-09-07).
+verbatim from `hcloud <Service> <Operation> --help` (KooCLI 7.2.12, verified 2026-09-07; parameter surfaces re-checked identical on 7.3.12, 2026-10-22).
 
 ## SMN (service `SMN`, uppercase)
 

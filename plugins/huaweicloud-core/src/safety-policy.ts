@@ -694,6 +694,32 @@ const OBSUTIL_WRITES = new Set([
   'share-add',
   'share-update',
   'share-rm',
+  // KooCLI 7.3.12 added these write-capable obsutil subcommands — set/put/
+  // delete via -method for bucket-tagging/object-tagging/encryption/
+  // mirror-back-to-source; custom-domain writes ride on -cname/certificate
+  // options instead. All must hit the write deny like their older siblings.
+  'bucket-tagging',
+  'object-tagging',
+  'encryption',
+  'custom-domain',
+  'mirror-back-to-source',
+  // 7.3.12's public-access-block family: the get*/read variants stay reads,
+  // but put/delete are full-name writes (Set/Delete the bucket's
+  // Block-Public-Access configuration — deleting it re-opens public access).
+  'put-public-access-block',
+  'delete-public-access-block',
+  // Pre-existing on 7.2.x too but never dispositioned (7.3.12-pin sweep catch):
+  // abort discards in-flight multipart uploads; archive writes log files into
+  // OBS — both cloud-side writes, same class as cp/rm.
+  'abort',
+  'archive',
+  // create-share is the live share-authorization family (issues a capability
+  // token — the same privilege class as sign, which is denied); the
+  // share-add/update/rm spellings above are the dead pre-rename names.
+  // update is obsutil's SELF-update (mutates the installed binary — denied on
+  // the same least-surprise grounds).
+  'create-share',
+  'update',
 ]);
 
 // Peel a trailing glued redirection (with its operand) off a token:
@@ -1691,8 +1717,11 @@ export function classifyHcloudArgs(args: unknown, options: ClassifyOptions = {})
   const obsutilWrites = OBSUTIL_WRITES;
   const obsutilReads = ['ls', 'stat', 'cat', 'help', 'version'];
   const isObs = service.toLowerCase() === 'obs';
-  const isObsWrite = isObs && obsutilWrites.has(operation);
-  const isObsRead = isObs && obsutilReads.includes(operation);
+  // Lowercase the vocab lookup (py-twin parity): the real binary rejects
+  // case-variant subcommands, but the policy must not lean on that — the
+  // wired Node hook faces agent-constructed text, not the binary.
+  const isObsWrite = isObs && obsutilWrites.has(operation.toLowerCase());
+  const isObsRead = isObs && obsutilReads.includes(operation.toLowerCase());
   if (isObsWrite && !options.allowWrites) {
     return {
       decision: 'deny',

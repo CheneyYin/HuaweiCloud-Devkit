@@ -273,6 +273,15 @@ DEVKIT_BIN_NAMES = {
 OBSUTIL_WRITES = {
     "mb", "cp", "mv", "rm", "delete", "mkdir", "sync", "restore", "chattri",
     "bucketpolicy", "lifecycle", "cors", "website", "sign", "share-add", "share-update", "share-rm",
+    # KooCLI 7.3.12 write-capable subcommands (-method based, except
+    # custom-domain which writes via -cname/certificate options),
+    # plus the full-name put/delete public-access-block writes.
+    "bucket-tagging", "object-tagging", "encryption", "custom-domain", "mirror-back-to-source",
+    "put-public-access-block", "delete-public-access-block",
+    # Pre-existing on 7.2.x too but never dispositioned (7.3.12-pin sweep),
+    # plus create-share (issues capability tokens — sign's class) and update
+    # (obsutil self-update — mutates the installed binary).
+    "abort", "archive", "create-share", "update",
 }
 # Argument-less full-dump forms — at COMMAND POSITION (start or after a
 # separator) so `make env` / `rg env` stay legitimate: env/printenv/export/

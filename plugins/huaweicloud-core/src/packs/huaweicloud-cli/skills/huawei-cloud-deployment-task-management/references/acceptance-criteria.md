@@ -43,7 +43,7 @@
 
 - [ ] Every `hcloud CodeArtsDeploy <Operation>` uses PascalCase operation names and includes
       `--cli-region`
-- [ ] All required parameters from `--help` (KooCLI 7.2.12) are present in command examples
+- [ ] All required parameters from `--help` (KooCLI 7.2.12; parameter surfaces re-checked identical on 7.3.12) are present in command examples
 - [ ] Parameter names match `--help` output verbatim (e.g. `--states.1=failed`,
       `--params.1.type=encrypt`, `--configs.1.name`, `--create_type=template`)
 - [ ] `CheckIsDuplicateAppName` used as pre-check for `huawei_create_clouddeploy_app`

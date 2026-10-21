@@ -74,4 +74,4 @@ hcloud SMN CreateTopic --cli-region=cn-north-4 --help
 hcloud Kafka CreatePostPaidKafkaInstance --cli-region=cn-north-4 --help
 ```
 
-The skill's SKILL.md parameter tables were verified against KooCLI 7.2.12 on 2026-09-07.
+The skill's SKILL.md parameter tables were verified against KooCLI 7.2.12 on 2026-09-07; parameter surfaces re-checked identical on 7.3.12 (2026-10-22).

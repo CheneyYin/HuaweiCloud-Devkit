@@ -983,3 +983,38 @@ process.exit(1);
   });
   assert.equal(failed.ok, false, 'a non-zero failure count still vetoes');
 });
+
+test('KooCLI 7.3.12 pin: the OBS write-subcommand advisory covers the new names', () => {
+  // The plan advisory (OBS_WRITE_SUBCOMMANDS) fires for the eleven denied
+  // obsutil writes (the 7.3.12 additions plus the pre-existing catches) —
+  // its vocabulary has no other regression pin.
+  for (const op of [
+    'bucket-tagging',
+    'object-tagging',
+    'encryption',
+    'custom-domain',
+    'mirror-back-to-source',
+    'put-public-access-block',
+    'delete-public-access-block',
+    'abort',
+    'archive',
+    'create-share',
+    'update',
+  ]) {
+    // custom-domain's real flag form is -cname/certificate options (not
+    // -method); the other ten are -method or full-name writes.
+    const opArgs = op === 'custom-domain' ? ['-cname=x.com'] : ['-method=put'];
+    const plan = planHcloudCommand(['OBS', op, 'obs://bucket', ...opArgs], { allowWrites: false });
+    assert.equal(plan.safeToRun, false, `OBS ${op} must not read as safe to run`);
+    // The advisory lands in plan.warnings (the OBS mb pin's shape) — asserting
+    // the reason regex alone would pass for every OBS deny regardless of
+    // OBS_WRITE_SUBCOMMANDS membership.
+    assert.ok(
+      plan.warnings.some((w) => typeof w === 'string' && /resource manifest/i.test(w)),
+      `OBS ${op} should carry the obsutil batch-approval advisory in plan.warnings`,
+    );
+  }
+  // Read controls stay advisory-free.
+  const read = planHcloudCommand(['OBS', 'get-public-access-block', 'obs://bucket'], { allowWrites: false });
+  assert.equal(read.safeToRun, true);
+});

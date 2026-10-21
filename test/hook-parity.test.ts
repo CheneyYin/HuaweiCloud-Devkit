@@ -52,6 +52,28 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
     'deny',
   ],
   ['hcloud OBS rm obs://bucket/obj -f', 'deny'],
+  // KooCLI 7.3.12 obsutil write subcommands — the pin keeps the TS and py
+  // OBSUTIL_WRITES vocabularies from drifting apart on the new names.
+  ['hcloud OBS bucket-tagging obs://b -method=put', 'deny'],
+  ['hcloud OBS object-tagging obs://b -method=delete', 'deny'],
+  ['hcloud OBS encryption obs://b -method=put -localfile=e.xml', 'deny'],
+  ['hcloud OBS custom-domain obs://b -cname=x.com', 'deny'],
+  ['hcloud OBS mirror-back-to-source obs://b -method=delete', 'deny'],
+  ['hcloud OBS put-public-access-block obs://b -public-access-block-configuration=BlockPublicAcls=true', 'deny'],
+  ['hcloud OBS delete-public-access-block obs://b', 'deny'],
+  // The read variants of the same families stay allowed on BOTH layers.
+  ['hcloud OBS get-public-access-block obs://b', 'allow'],
+  ['hcloud OBS check obs://src obs://dst', 'allow'],
+  // Case-variant obsutil subcommands: the vocab lookup must be
+  // case-insensitive on BOTH layers (the binary rejects these, but the
+  // policy must not lean on that).
+  ['hcloud OBS RM obs://b -f', 'deny'],
+  ['hcloud OBS Abort obs://b/key', 'deny'],
+  // The live share-authorization family + the abort/archive catches.
+  ['hcloud OBS create-share obs://b', 'deny'],
+  ['hcloud OBS update obs://b', 'deny'],
+  ['hcloud OBS abort obs://b/key -f', 'deny'],
+  ['hcloud OBS archive obs://b', 'deny'],
   ['hcloud ECS ListServers --cli-region=cn-north-4', 'allow'],
   ['hcloud ECS CreateServers --help', 'allow'],
   ['hcloud OBS ls obs://bucket', 'allow'],

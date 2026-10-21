@@ -52,11 +52,11 @@ hcloud OBS config -i
 
 ## 静态网站托管
 
-KooCLI OBS **不支持** `SetBucketWebsite` 命令。配置静态网站托管需要：
+KooCLI OBS 没有 API 风格的 `SetBucketWebsite` 操作；7.3.12+ 提供了 obsutil 风格的 `hcloud OBS website obs://<bucket> -method=put -localfile=<xml>`（XML 文件方式）。配置静态网站托管的三条路径（推荐顺序）：
 
-1. **MCP 工具**: `huaweicloud_obs_set_website_config`（插件内置，AWS4 签名处理，action=set/get/delete，实测可用）
-2. **REST API**: `PUT /?website` 到桶的 endpoint
-3. **控制台**: OBS 控制台 → 桶 → 静态网站托管 → 开启
+1. **MCP 工具**: `huaweicloud_obs_set_website_config`（插件内置，AWS4 签名处理，action=set/get/delete，实测可用 —— 无需手写 XML）
+2. **KooCLI 7.3.12+**: `hcloud OBS website`（先写 WebsiteConfiguration XML 文件，再 `-method=put -localfile=<xml>`；7.2.x 无此命令）
+3. **REST API / 控制台**: `PUT /?website` 或 OBS 控制台 → 桶 → 静态网站托管 → 开启
 
 ## Content-Disposition 强制下载陷阱（2022-01-01 后创建的桶）
 

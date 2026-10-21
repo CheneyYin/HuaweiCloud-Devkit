@@ -593,6 +593,39 @@ test('huawei-sandbox carries the tunnel contract, the 401 trap, and the Step 0/1
   assert.match(sandbox, /DevBridge API Key 前置引导（before expose, not mid-expose）/);
 });
 
+test('KooCLI 7.3.12 pin: the OBS website/cors capability claims are current, not stale', () => {
+  // The bump swept the pre-7.3.12 "KooCLI OBS lacks website config" family out of
+  // the skills — this guard keeps it out (the exact intra-file half-drift mode a
+  // copy pass would reintroduce) and pins the new teaching on the hot surfaces.
+  const staleClaim = /KooCLI OBS does NOT support this|obsutil has no website command|lacks website config/;
+  const surfaces = [
+    join(pluginRoot, 'src', 'packs', 'obs', 'skills', 'huawei-obs', 'SKILL.md'),
+    join(pluginRoot, 'src', 'packs', 'obs', 'skills', 'huawei-obs', 'references', 'static-website.md'),
+    join(pluginRoot, 'src', 'packs', 'obs', 'skills', 'huawei-obs', 'references', 'bucket-lifecycle.md'),
+    join(pluginRoot, 'src', 'packs', 'obs', 'skills', 'huawei-obs', 'references', 'common-pitfalls.md'),
+    join(pluginRoot, 'src', 'packs', 'huaweicloud-cli', 'skills', 'huawei-iac', 'SKILL.md'),
+    join(pluginRoot, 'src', 'packs', 'huaweicloud-cli', 'skills', 'huawei-iac', 'references', 'resource-catalog.md'),
+    join(pluginRoot, 'src', 'packs', 'obs', 'tools.ts'),
+  ];
+  for (const surface of surfaces) {
+    const text = readFileSync(surface, 'utf8');
+    assert.doesNotMatch(text, staleClaim, `${surface}: the pre-7.3.12 stale claim must not return`);
+  }
+  const obsSkill = readFileSync(join(pluginRoot, 'src', 'packs', 'obs', 'skills', 'huawei-obs', 'SKILL.md'), 'utf8');
+  assert.match(obsSkill, /KooCLI 7\.3\.12\+ has `hcloud OBS website/);
+  assert.match(obsSkill, /KooCLI 7\.3\.12\+ has `hcloud OBS cors/);
+  const staticSite = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'obs', 'skills', 'huawei-obs', 'references', 'static-website.md'),
+    'utf8',
+  );
+  assert.match(staticSite, /7\.2\.x has no such command/);
+  const iacRow = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'huaweicloud-cli', 'skills', 'huawei-iac', 'SKILL.md'),
+    'utf8',
+  );
+  assert.match(iacRow, /KooCLI 7\.3\.12\+ ships `hcloud OBS website/);
+});
+
 test('huawei-voucher covers HDKIT_COMPETITION_NOT_CONFIGURED', () => {
   const voucher = readFileSync(
     join(pluginRoot, 'src', 'packs', 'voucher', 'skills', 'huawei-voucher', 'SKILL.md'),

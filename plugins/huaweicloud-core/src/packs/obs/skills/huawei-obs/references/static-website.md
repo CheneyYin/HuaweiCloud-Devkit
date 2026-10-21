@@ -8,7 +8,7 @@
 3. Bulk upload        → hcloud OBS cp <build-dir>/ obs://<bucket>/ -r -f -flat -acl=public-read
 4. Set bucket ACL     → hcloud OBS chattri obs://<bucket> -acl=public-read
 5. Set object ACLs    → hcloud OBS chattri obs://<bucket>/ -r -f -acl=public-read
-6. Configure website  → huaweicloud_obs_set_website_config tool (KooCLI OBS lacks the command; the plugin tool wraps the REST API with AWS4 signing)
+6. Configure website  → huaweicloud_obs_set_website_config tool (recommended; 7.3.12+ also ships `hcloud OBS website -method=put -localfile=<xml>`, XML-file based)
 7. Verify             → GET with headers: curl -s -D - -o /dev/null http://<bucket>.obs-website.<region>.myhuaweicloud.com (see common-pitfalls.md #899 — a bare 200 can still download instead of render)
 ```
 
@@ -30,9 +30,11 @@ hcloud OBS chattri obs://my-static-site -acl=public-read
 # 5. Set object ACLs recursively (objects don't inherit bucket ACL automatically)
 hcloud OBS chattri obs://my-static-site/ -r -f -acl=public-read
 
-# 5. Configure static website hosting
-# KooCLI OBS does NOT support this. Use the MCP tool (handles AWS4 signing internally):
+# 5. Configure static website hosting — MCP tool (recommended, no XML juggling):
 # action=set, bucket=<bucket>, region=<region>, indexDocument=index.html, errorDocument=404.html
+# KooCLI 7.3.12+ alternative (XML-file based):
+#   hcloud OBS website obs://my-static-site -method=put -localfile=website.xml
+#   (website.xml carries the WebsiteConfiguration; 7.2.x has no such command)
 # Or use Huawei Cloud Console:
 #   Console → OBS → Bucket → Basic Settings → Static Website Hosting
 

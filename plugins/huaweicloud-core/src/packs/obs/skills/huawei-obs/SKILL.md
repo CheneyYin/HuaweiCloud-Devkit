@@ -35,16 +35,16 @@ Domain expertise for Huawei Cloud Object Storage Service (OBS). Covers bucket/ob
 
 ## Critical Warnings
 
-| Trap                               | Why                                                                                                                                                |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Bucket name is global              | All users share bucket namespace. Always use a unique name: `{prefix}-{timestamp}` (e.g. `mybucket-20260810155048`)                                |
-| Three-layer permissions            | IAM > Bucket Policy > ACL. Most restrictive wins                                                                                                   |
-| Versioning is irreversible         | Once enabled, cannot be disabled, only suspended                                                                                                   |
-| OBS uses AK/SK directly            | NOT IAM tokens. Auth errors mean check AK/SK validity                                                                                              |
-| Static website via CLI missing     | KooCLI OBS lacks website config. Use `huaweicloud_obs_set_website_config` MCP tool (handles AWS4 signing internally) or console                    |
-| **OBS needs separate cred config** | `hcloud configure` is NOT enough for OBS. Before any OBS operation, call `huaweicloud_setup_obs_config` to sync credentials from hcloud profile.   |
-| **obsutil interactive prompts**    | `cp`/`rm` without `-f` causes "Please input (y/n)" → Agent hangs (TIMEOUT). Always use `-f` for non-interactive.                                   |
-| **Directory upload adds prefix**   | `cp <dir>/ obs://<bucket>/ -r` puts files under `bucket/<dir>/...`. Use `-flat` for root-level files (static sites). Preview with `-dryRun` first. |
+| Trap                               | Why                                                                                                                                                                                                                               |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bucket name is global              | All users share bucket namespace. Always use a unique name: `{prefix}-{timestamp}` (e.g. `mybucket-20260810155048`)                                                                                                               |
+| Three-layer permissions            | IAM > Bucket Policy > ACL. Most restrictive wins                                                                                                                                                                                  |
+| Versioning is irreversible         | Once enabled, cannot be disabled, only suspended                                                                                                                                                                                  |
+| OBS uses AK/SK directly            | NOT IAM tokens. Auth errors mean check AK/SK validity                                                                                                                                                                             |
+| Static website config paths        | KooCLI 7.3.12+ has `hcloud OBS website obs://<bucket> -method=put -localfile=<xml>` (XML-file based); the `huaweicloud_obs_set_website_config` MCP tool remains the recommended path (no XML file juggling, AWS4 signing handled) |
+| **OBS needs separate cred config** | `hcloud configure` is NOT enough for OBS. Before any OBS operation, call `huaweicloud_setup_obs_config` to sync credentials from hcloud profile.                                                                                  |
+| **obsutil interactive prompts**    | `cp`/`rm` without `-f` causes "Please input (y/n)" → Agent hangs (TIMEOUT). Always use `-f` for non-interactive.                                                                                                                  |
+| **Directory upload adds prefix**   | `cp <dir>/ obs://<bucket>/ -r` puts files under `bucket/<dir>/...`. Use `-flat` for root-level files (static sites). Preview with `-dryRun` first.                                                                                |
 
 ## OBS Credential Setup (Required Before First Use)
 
@@ -62,28 +62,28 @@ hcloud OBS config -e=<endpoint> -i=<AK> -k=<SK> -t=token
 
 ## Common Workflows
 
-| Task                         | Command                                                                   |
-| ---------------------------- | ------------------------------------------------------------------------- |
-| Create bucket                | `hcloud OBS mb obs://<bucket> -location=<region>`                         |
-| List buckets/objects         | `hcloud OBS ls [obs://<bucket>]`                                          |
-| Upload file                  | `hcloud OBS cp <file> obs://<bucket>/<key>`                               |
-| Upload directory (recursive) | `hcloud OBS cp <dir>/ obs://<bucket>/ -r -f -flat`                        |
-| Download object              | `hcloud OBS cp obs://<bucket>/<key> <local-path>`                         |
-| Set bucket ACL               | `hcloud OBS chattri obs://<bucket> -acl=public-read`                      |
-| Set object ACL               | `hcloud OBS chattri obs://<bucket>/<key> -acl=public-read`                | Bucket ACL does NOT cascade — anonymous reads need both |
-| Set lifecycle                | `hcloud OBS lifecycle obs://<bucket> -method=put -localfile=<json>`       |
-| Set bucket policy            | `hcloud OBS bucketpolicy obs://<bucket> -method=put -localfile=<json>`    |
-| Set CORS                     | Not available via `hcloud OBS` — use API/SDK (`SetBucketCors`) or console |
-| Delete bucket                | `hcloud OBS rm obs://<bucket> -r` (must be empty)                         |
-| Presigned URL                | `hcloud OBS sign obs://<bucket>/<key> -e=<seconds>`                       |
-| Object metadata              | `hcloud OBS stat obs://<bucket>/<key>`                                    |
+| Task                         | Command                                                                                                                                        |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Create bucket                | `hcloud OBS mb obs://<bucket> -location=<region>`                                                                                              |
+| List buckets/objects         | `hcloud OBS ls [obs://<bucket>]`                                                                                                               |
+| Upload file                  | `hcloud OBS cp <file> obs://<bucket>/<key>`                                                                                                    |
+| Upload directory (recursive) | `hcloud OBS cp <dir>/ obs://<bucket>/ -r -f -flat`                                                                                             |
+| Download object              | `hcloud OBS cp obs://<bucket>/<key> <local-path>`                                                                                              |
+| Set bucket ACL               | `hcloud OBS chattri obs://<bucket> -acl=public-read`                                                                                           |
+| Set object ACL               | `hcloud OBS chattri obs://<bucket>/<key> -acl=public-read`                                                                                     | Bucket ACL does NOT cascade — anonymous reads need both |
+| Set lifecycle                | `hcloud OBS lifecycle obs://<bucket> -method=put -localfile=<json>`                                                                            |
+| Set bucket policy            | `hcloud OBS bucketpolicy obs://<bucket> -method=put -localfile=<json>`                                                                         |
+| Set CORS                     | KooCLI 7.3.12+ has `hcloud OBS cors obs://<bucket> -method=put -localfile=<xml>` (XML-file based); or use API/SDK (`SetBucketCors`) or console |
+| Delete bucket                | `hcloud OBS rm obs://<bucket> -r` (must be empty)                                                                                              |
+| Presigned URL                | `hcloud OBS sign obs://<bucket>/<key> -e=<seconds>`                                                                                            |
+| Object metadata              | `hcloud OBS stat obs://<bucket>/<key>`                                                                                                         |
 
 ## Static Website Deployment Workflow
 
 See `references/static-website.md` for the full end-to-end workflow:
 Build → Create bucket → Upload → Set bucket ACL → Set object ACL → Configure website (huaweicloud_obs_set_website_config tool)
 
-> KooCLI OBS does NOT support `SetBucketWebsite`. Use the `huaweicloud_obs_set_website_config` MCP tool (handles AWS4 signing internally, no manual signature needed) or the Huawei Cloud console.
+> KooCLI 7.2.x has no `SetBucketWebsite`; 7.3.12+ ships `hcloud OBS website` (XML-file based: write the WebsiteConfiguration XML, then `-method=put -localfile=<xml>`). The `huaweicloud_obs_set_website_config` MCP tool remains the recommended path — no XML file juggling, AWS4 signing handled internally.
 
 ## Single-File Quick Share
 
