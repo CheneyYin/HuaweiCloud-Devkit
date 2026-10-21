@@ -54,7 +54,10 @@ export const SANDBOX_TIMEOUT_MS = {
   upload_file: 120000,
   upload_project: 120000,
   deploy_nginx: 60000,
-  deploy_check: 30000,
+  // Bounded per-tunnel probing can spend up to 5 × 5s of curl alone plus
+  // devbridge list round-trips — the probe loop must fit the budget instead
+  // of dying as a ws-exec timeout (the pre-probing 30s default did not).
+  deploy_check: 60000,
   expose_tunnel: 90000,
 } as const;
 
@@ -638,7 +641,7 @@ export const SANDBOX_TOOLS = [
   {
     name: 'huaweicloud_sandbox_expose_tunnel',
     description:
-      'Expose a port on the sandbox to a public DevBridge tunnel URL (devbridge 0.2.x). Authenticates automatically (probing AK/SK vs API-Key builds, using /tmp/hw_creds.sh and /tmp/hw_api_key as injected by huaweicloud_sandbox_credentials), pre-cleans stale tunnels to avoid quota errors, starts the host, extracts the public URL (https://<id>-<port>.devbridge-s2.hwtunnel.com), and health-checks it before returning. Use the ACTUAL port reported by huaweicloud_sandbox_deploy_nginx (its "port" field auto-increments on conflict) — never the originally requested port. This automates the manual "Expose the deployed app" flow (huawei-sandbox skill). Returns ok, publicUrl, port, tunnelId, and warnings; when no usable URL is reachable after retries it returns ok:false instead of a dead URL. If the API Key is missing on a release build it returns ok:false with instructions to create one.',
+      'Expose a port on the sandbox to a public DevBridge tunnel URL (devbridge 0.2.x). Authenticates automatically (probing AK/SK vs API-Key builds, using /tmp/hw_creds.sh and /tmp/hw_api_key as injected by huaweicloud_sandbox_credentials), pre-cleans stale tunnels to avoid quota errors, starts the host detached from the exec session (setsid/nohup/disown so it survives session teardown), extracts the public URL (https://<id>-<port>.devbridge-s2.hwtunnel.com), and health-checks it before returning. Use the ACTUAL port reported by huaweicloud_sandbox_deploy_nginx (its "port" field auto-increments on conflict) — never the originally requested port. This automates the manual "Expose the deployed app" flow (huawei-sandbox skill). Returns ok, publicUrl, port, tunnelId, authMode, expiresAt (72-hour tunnel lifetime), and warnings. The URL is re-verified from a second independent exec session: persistent/verifyHttpCode distinguish a session-surviving URL from one that dies with the deploying session, and a non-persistent URL carries a 请勿分享 warning. Gateway-level tunnel errors (404 "tunnel not found" / "port not configured", 502 "bad gateway") are classified by exact body — an app\'s own 404/502 page is never mistaken for them. When no usable URL is reachable after retries it returns ok:false instead of a dead URL. If the API Key is missing on a release build it returns ok:false with instructions to create one.',
     schema: exposeTunnelSchema,
     handler: handleExposeTunnel,
   },

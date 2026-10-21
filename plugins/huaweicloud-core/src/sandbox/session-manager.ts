@@ -200,6 +200,18 @@ interface DeployCheckResult {
 export const DEVBRIDGE_TUNNEL_DOMAIN = 'devbridge-s2.hwtunnel.com';
 // Migration placeholder page marker — a tunnel URL returning this body must be treated as unreachable.
 export const DEVBRIDGE_MIGRATION_MARKER = '服务已迁移';
+// Gateway-level tunnel error bodies. "tunnel not found" was verified live
+// against the s2 gateway (Oct 2026: 404, text/plain, body "tunnel not found\n");
+// the other two are the gateway's documented contract:
+//   404 "tunnel not found"    — no live host session on the gateway (host process dead or
+//                               tunnel deleted); the tunnel RECORD may still exist in `list`
+//   404 "port not configured" — the URL's port is not registered on the tunnel
+//   502 "bad gateway"         — host session alive, but the registered port has no local service
+// A bare status check cannot distinguish these from app-generated 404/502 responses, so the
+// checks below match the exact body AND gate on the HTTP status code.
+export const DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER = 'tunnel not found';
+export const DEVBRIDGE_PORT_NOT_CONFIGURED_MARKER = 'port not configured';
+export const DEVBRIDGE_BAD_GATEWAY_MARKER = 'bad gateway';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -411,7 +423,7 @@ export async function resolveProxyNodePort(
 }
 
 export function buildExposeRemediation(port: number): string {
-  return `In the sandbox: source /tmp/hw_creds.sh; source /tmp/hw_api_key 2>/dev/null; devbridge delete-all; devbridge create <name>; devbridge port create <tunnelId> -p ${port} --protocol http -a; nohup devbridge host <tunnelId> -p ${port} > /tmp/host.log 2>&1 & If deploy_nginx reported a different (auto-incremented) port in its "port" field, use THAT port instead of the one shown here. Full procedure in huawei-sandbox skill, Step 7 (Expose via DevBridge).`;
+  return `In the sandbox: source /tmp/hw_creds.sh; source /tmp/hw_api_key 2>/dev/null; devbridge delete-all; devbridge create <name>; devbridge port create <tunnelId> -p ${port} --protocol http -a; if command -v setsid >/dev/null 2>&1; then setsid nohup devbridge host <tunnelId> -p ${port} -e 72 > /tmp/host.log 2>&1 < /dev/null & else nohup devbridge host <tunnelId> -p ${port} -e 72 > /tmp/host.log 2>&1 < /dev/null & fi; disown 2>/dev/null || true; If deploy_nginx reported a different (auto-incremented) port in its "port" field, use THAT port instead of the one shown here. Full procedure in huawei-sandbox skill, Step 7 (Expose via DevBridge).`;
 }
 
 export async function uploadFileWithSession(
@@ -480,13 +492,7 @@ export async function uploadFileWithSession(
   const verify = await execWithSession(workspaceId, `md5sum "${remotePath}"`, username, timeoutMs);
   let md5Verified = false;
   if (verify.exitCode === 0) {
-    const remoteMd5 = String(verify.stdout || '')
-      // eslint-disable-next-line no-control-regex
-      .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
-      // eslint-disable-next-line no-control-regex
-      .replace(/\x1b\][^\x07]*\x07/g, '')
-      .trim()
-      .split(/\s+/)[0];
+    const remoteMd5 = stripTerminalEscapes(verify.stdout).trim().split(/\s+/)[0];
     md5Verified = remoteMd5 === expectedMd5;
     if (!md5Verified) {
       throw new Error(
@@ -1165,16 +1171,40 @@ export interface ParsedDeployCheck {
   parseWarning: string | undefined;
 }
 
+// Strip terminal escape sequences from sandbox command output (#946): CSI
+// color/cursor codes and OSC shell-integration markers (shells with integration
+// enabled wrap EVERY line in \x1b]133;C\x07, which blinds anchored ^DB_...=
+// parsers), then normalize \r\n / \r line endings to \n. The single copy —
+// every sandbox-output parser entry point (parseDeployCheckOutput and the
+// devbridge-tunnel parsers) folds this in instead of re-rolling the regexes.
+// Use new RegExp to avoid ESLint no-control-regex on literal control chars in regex.
+export function stripTerminalEscapes(text: unknown): string {
+  // Callers pass ws-exec stdout (string | undefined at runtime); a non-string
+  // input reads as empty, matching the previous `String(stdout || '')` for the
+  // cases that matter (empty/undefined) without Object's default stringification.
+  const raw = typeof text === 'string' ? text : '';
+  const ESC = '\x1b';
+  // CSI: parameter bytes 0x30-0x3F (digits ; : < = > ? — `?` for private modes
+  // like \x1b[?2026h, `>` for device attributes), then intermediate bytes
+  // 0x20-0x2F (e.g. `\x1b[0 q`), then a letter final. A digits-;-only class
+  // leaves ?-prefixed sequences intact, blinding the anchored ^KEY= lookups.
+  // Known edge: a malformed/truncated CSI followed by data lets the
+  // intermediate class consume one leading data char — fail-closed corruption
+  // of that field, still preferable to the unstripped escape blinding the line.
+  const csiRe = new RegExp(ESC + '\\[[0-9:;<=>?]*[ -/]*[a-zA-Z]', 'g');
+  const oscRe = new RegExp(ESC + '\\][^' + ESC + '\x07]*(?:\x07|' + ESC + '\\\\)', 'g');
+  return raw
+    .replace(csiRe, '')
+    .replace(oscRe, '')
+    .replace(/\r\n|\r/g, '\n');
+}
+
 export function parseDeployCheckOutput(stdout: string): ParsedDeployCheck {
   // Strip ANSI escape sequences (CSI color/cursor codes and OSC shell-integration markers)
-  // and split on any line-ending style (\r\n, \r, or \n) to handle all terminal outputs.
-  // Use new RegExp to avoid ESLint no-control-regex on literal control chars in regex.
-  const ESC = '\x1b';
-  const csiRe = new RegExp(ESC + '\\[[0-9;]*[a-zA-Z]', 'g');
-  const oscRe = new RegExp(ESC + '\\][^' + ESC + '\x07]*(?:\x07|' + ESC + '\\\\)', 'g');
-  const cleanStdout = stdout.replace(csiRe, '').replace(oscRe, '');
+  // and normalize line endings to \n to handle all terminal outputs.
+  const cleanStdout = stripTerminalEscapes(stdout);
   const checks: Record<string, DeployCheckEntry> = {};
-  const lines = cleanStdout.split(new RegExp('\\r\\n|\\r|\\n'));
+  const lines = cleanStdout.split('\n');
   for (const line of lines) {
     const trimmed = line.trim();
     const m = trimmed.match(/^(\w+):(PASS|FAIL|SKIP)\b(.*)/);
@@ -1211,7 +1241,12 @@ export async function deployCheck(
   workspaceId: string,
   { port, project, outputDir, frameworkType }: DeployCheckOptions,
   username = 'root',
-  timeoutMs = 30000,
+  // Mirrors SANDBOX_TIMEOUT_MS.deploy_check (packs/sandbox/tools.ts): the
+  // bounded per-tunnel probing alone can spend 5 × 5s of curl plus devbridge
+  // list round-trips. The remaining curls (localhost nginx/fingerprint, the
+  // external QR service) are still unbounded — pre-existing; a hang there can
+  // still consume the budget, but the probe loop itself now fits.
+  timeoutMs = 60000,
 ): Promise<DeployCheckResult> {
   if (!workspaceId) {
     throw new Error('sandbox deploy check: workspace_id is required.');
@@ -1227,11 +1262,12 @@ export async function deployCheck(
     `TOTAL=0`,
     ``,
     `TOTAL=$((TOTAL+1))`,
-    `if curl -s -o /dev/null -w "%{http_code}" http://localhost:${port} 2>/dev/null | grep -qE "^(2|3)"; then`,
-    `  echo "nginx_serving:PASS (port ${port})"`,
+    `HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:${port} 2>/dev/null)`,
+    `if [ -n "$HTTP_CODE" ] && [ "$HTTP_CODE" != "000" ]; then`,
+    `  echo "nginx_serving:PASS (port ${port}, HTTP \${HTTP_CODE})"`,
     `  PASS=$((PASS+1))`,
     `else`,
-    `  echo "nginx_serving:FAIL"`,
+    `  echo "nginx_serving:FAIL (port ${port}, no HTTP response)"`,
     `fi`,
     ``,
     `TOTAL=$((TOTAL+1))`,
@@ -1273,30 +1309,60 @@ export async function deployCheck(
     `fi`,
     ``,
     `TOTAL=$((TOTAL+1))`,
-    `TUNNEL_ID=$(devbridge list -j 2>/dev/null | grep -oP '"tunnelId":\\s*"\\K[^"]+' | head -1)`,
-    `if [ -z "$TUNNEL_ID" ]; then`,
-    `  TUNNEL_ID=$(devbridge list 2>/dev/null | grep -E '^[a-z2-7]{8}[[:space:]]' | awk '{print $1}' | head -1)`,
+    `TUNNEL_IDS=$(devbridge list -j 2>/dev/null | grep -oP '"tunnelId":\\s*"\\K[^"]+' | head -5)`,
+    `if [ -z "$TUNNEL_IDS" ]; then`,
+    `  TUNNEL_IDS=$(devbridge list 2>/dev/null | grep -E '^[a-z2-7]{8}[[:space:]]' | awk '{print $1}' | head -5)`,
     `fi`,
-    `TUNNEL_URL="https://\${TUNNEL_ID}-${port}.${DEVBRIDGE_TUNNEL_DOMAIN}"`,
+    `# Gateway-level tunnel errors have exact text/plain bodies ("tunnel not found"`,
+    `# verified live on the s2 gateway): 404 "tunnel not found" = no live host session`,
+    `# (the tunnel RECORD may still be in \`list\`); 404 "port not configured" = URL port`,
+    `# not registered; 502 "bad gateway" = tunnel alive, local service down. The`,
+    `# whole-content comparison (tr strips \\r/\\n, so CRLF forms compare equal) plus`,
+    `# status gating avoids flagging app-generated 404/502 pages — a page that`,
+    `# merely MENTIONS a marker never matches. No migration-marker grep here: the`,
+    `# probe URL is always constructed on the CURRENT gateway domain, which never`,
+    `# serves the retired gateway's placeholder — a body grep could only fire on`,
+    `# app content (a Chinese page saying 服务已迁移 is a legitimate app). Migration`,
+    `# is judged host-log-side by expose_tunnel (DB_MIGRATION). --max-time 5 (vs`,
+    `# the expose/verify probes' 10) keeps 5 bounded probes inside the timeout budget.`,
     `probe_tunnel() {`,
-    `  local url="$1" code`,
-    `  code=$(curl -s -o /tmp/.dc_tunnel_body -w "%{http_code}" --max-time 10 "$url" 2>/dev/null || echo "000")`,
-    `  [ "$code" = "000" ] && return 1`,
-    `  # A migrated gateway serves a placeholder page with HTTP 200 — treat it as unreachable.`,
-    `  if grep -q "${DEVBRIDGE_MIGRATION_MARKER}" /tmp/.dc_tunnel_body 2>/dev/null; then return 1; fi`,
+    `  local url="$1" code body`,
+    `  code=$(curl -s -o /tmp/.dc_tunnel_body -w "%{http_code}" --max-time 5 "$url" 2>/dev/null)`,
+    `  PROBE_FAIL_REASON=""`,
+    `  if [ -z "$code" ] || [ "$code" = "000" ]; then PROBE_FAIL_REASON="unreachable"; rm -f /tmp/.dc_tunnel_body; return 1; fi`,
+    `  body=$(tr -d '\\r\\n' < /tmp/.dc_tunnel_body 2>/dev/null)`,
     `  rm -f /tmp/.dc_tunnel_body`,
-    `  [ "$code" = "200" ] || [ "$code" = "304" ] || return 1`,
+    `  if [ "$code" = "404" ] && [ "$body" = "${DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER}" ]; then PROBE_FAIL_REASON="tunnel not found (no live host session on the gateway)"; return 1; fi`,
+    `  if [ "$code" = "404" ] && [ "$body" = "${DEVBRIDGE_PORT_NOT_CONFIGURED_MARKER}" ]; then PROBE_FAIL_REASON="port not configured (URL port not registered on the tunnel)"; return 1; fi`,
+    `  if [ "$code" = "502" ] && [ "$body" = "${DEVBRIDGE_BAD_GATEWAY_MARKER}" ]; then PROBE_FAIL_REASON="bad gateway (tunnel alive, local service not serving)"; return 1; fi`,
     `  return 0`,
     `}`,
-    `if [ -n "$TUNNEL_ID" ] && probe_tunnel "$TUNNEL_URL"; then`,
-    `  echo "tunnel_url_accessible:PASS ($TUNNEL_URL)"`,
+    `# Probe each listed tunnel (bounded to 5) and select the first one that actually`,
+    `# serves this port — \`devbridge list\` order is arbitrary, so a stale tunnel listed`,
+    `# first must not shadow the live one.`,
+    `SELECTED_URL=""`,
+    `FIRST_ID=""`,
+    `FIRST_REASON=""`,
+    `for CAND in $TUNNEL_IDS; do`,
+    `  if [ -z "$FIRST_ID" ]; then FIRST_ID="$CAND"; fi`,
+    `  CAND_URL="https://\${CAND}-${port}.${DEVBRIDGE_TUNNEL_DOMAIN}"`,
+    `  if probe_tunnel "$CAND_URL"; then`,
+    `    SELECTED_URL="$CAND_URL"`,
+    `    break`,
+    `  fi`,
+    `  # The FAIL detail pairs the first listed URL with the FIRST probe's reason —`,
+    `  # PROBE_FAIL_REASON is overwritten per candidate and would misattribute.`,
+    `  if [ -z "$FIRST_REASON" ]; then FIRST_REASON="$PROBE_FAIL_REASON"; fi`,
+    `done`,
+    `TUNNEL_URL="$SELECTED_URL"`,
+    `if [ -n "$SELECTED_URL" ]; then`,
+    `  echo "tunnel_url_accessible:PASS ($SELECTED_URL)"`,
     `  PASS=$((PASS+1))`,
-    `elif [ -n "$TUNNEL_ID" ]; then`,
-    `  echo "tunnel_url_accessible:FAIL ($TUNNEL_URL -> unreachable, tunnel not found, or migration placeholder page)"`,
+    `elif [ -n "$FIRST_ID" ]; then`,
+    `  echo "tunnel_url_accessible:FAIL (https://\${FIRST_ID}-${port}.${DEVBRIDGE_TUNNEL_DOMAIN} -> $FIRST_REASON)"`,
     `else`,
     `  echo "tunnel_url_accessible:FAIL (no tunnel)"`,
     `fi`,
-    `rm -f /tmp/.dc_tunnel_body 2>/dev/null || true`,
     ``,
     `${`
 TOTAL=$((TOTAL+1))

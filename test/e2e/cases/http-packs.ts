@@ -315,6 +315,10 @@ export const wsSandboxCases: E2eCase[] = [
       { kind: 'toolCall', name: 'huaweicloud_sandbox_expose_tunnel', ok: true },
       { kind: 'ws', intent: 'devbridge-auth-probe', times: { min: 1, max: 1 } },
       { kind: 'ws', intent: 'devbridge-expose-script', times: { min: 1, max: 2 } },
+      // #919: a healthy expose is followed by the independent fresh-session
+      // re-verify of the URL (one tool call runs verify at most once; max 2 is
+      // slack, not a semantic claim).
+      { kind: 'ws', intent: 'devbridge-verify-script', times: { min: 1, max: 2 } },
     ],
     softExpect: [{ kind: 'agentSays', text: { any: ['devbridge-s2.hwtunnel.com', 'e2e-tunnel-1'] } }],
     budget: { timeoutMs: 420_000, attempts: 2 },

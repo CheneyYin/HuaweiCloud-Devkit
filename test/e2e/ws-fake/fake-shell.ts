@@ -107,6 +107,14 @@ const INTENT_TABLE: IntentRow[] = [
     run: () => ({ stdout: DEVBRIDGE_EXPOSE_OK_STDOUT }),
   },
   {
+    // exposeTunnel's independent re-verify (#919): a fresh-session GET of the
+    // exposed URL, emitted by buildDevbridgeVerifyScript. Synthesizes the
+    // healthy persistent answer (HTTP 200, body is NOT "tunnel not found").
+    intent: 'devbridge-verify-script',
+    pattern: /^VERIFY_CODE=\$\(curl -s -o \/tmp\/devbridge_verify_body /,
+    run: () => ({ stdout: DEVBRIDGE_VERIFY_OK_STDOUT }),
+  },
+  {
     intent: 'echo',
     pattern: /^echo\s+(.*)$/,
     run: (m) => ({ stdout: `${m[1]}\n` }),
@@ -252,11 +260,11 @@ export function runShellCommand(blob: string, fs: FakeFs): ShellResult {
 // through the product's parseDeployCheckOutput (complete, 6/6, publicUrl),
 // and the product's script must keep emitting this grammar.
 export const DEPLOY_CHECK_ALL_PASS = [
-  'nginx_serving:PASS (port 8080)',
+  'nginx_serving:PASS (port 8080, HTTP 200)',
   'output_dir:PASS',
   'content_verified:PASS',
   'devbridge_tunnel:PASS',
-  'tunnel_url_accessible:PASS',
+  'tunnel_url_accessible:PASS (https://e2e-tunnel-1-8080.devbridge-s2.hwtunnel.com)',
   'qr_code:PASS',
   'SCORE:6/6',
   'TUNNEL_URL:https://e2e-tunnel-1-8080.devbridge-s2.hwtunnel.com',
@@ -273,8 +281,15 @@ export const DEVBRIDGE_EXPOSE_OK_STDOUT = [
   'Tunnel URL: https://e2e-tunnel-1-8080.devbridge-s2.hwtunnel.com',
   'DB_TUNNEL_URL=https://e2e-tunnel-1-8080.devbridge-s2.hwtunnel.com',
   'DB_HTTP_CODE=200',
+  'DB_EXPIRY_HOURS=72',
+  'DB_TUNNEL_BODY=',
   'DB_QUOTA_ERROR=0',
+  'DB_MIGRATION=0',
 ].join('\n');
+
+// The #919 re-verify vocabulary (buildDevbridgeVerifyScript's output grammar) —
+// pinned both-ways through parseDevbridgeVerifyOutput the same way.
+export const DEVBRIDGE_VERIFY_OK_STDOUT = ['DB_VERIFY_HTTP_CODE=200', 'DB_VERIFY_NOT_FOUND=0'].join('\n');
 
 // The client's ready command embeds the nonce as the printf argument
 // `'__WS_EXEC_READY_' '<nonce>__'`.

@@ -19,12 +19,15 @@ import {
   DEPLOY_CHECK_ALL_PASS,
   DEVBRIDGE_AUTH_KEYRING_STDOUT,
   DEVBRIDGE_EXPOSE_OK_STDOUT,
+  DEVBRIDGE_VERIFY_OK_STDOUT,
   FakeFs,
 } from './e2e/ws-fake/fake-shell.ts';
 import { parseDeployCheckOutput } from '../plugins/huaweicloud-core/src/sandbox/session-manager.ts';
 import {
+  buildDevbridgeVerifyScript,
   parseDevbridgeAuthOutput,
   parseDevbridgeExposeOutput,
+  parseDevbridgeVerifyOutput,
 } from '../plugins/huaweicloud-core/src/sandbox/devbridge-tunnel.ts';
 
 // Golden pins for the hwlink wire protocol the E2E ws-fake shares with the
@@ -222,6 +225,16 @@ test('devbridge expose grammar cross-tier pin: fake synthesis parses through the
   assert.equal(parsed.tunnelId, 'e2e-tunnel-1');
   assert.equal(parsed.httpCode, '200');
   assert.equal(parsed.quotaError, false);
+  assert.equal(parsed.expiryHours, 72);
+  assert.equal(parsed.gatewayTunnelError, false);
+  assert.equal(parsed.badGateway, false);
+  assert.equal(parsed.migration, false);
+});
+
+test('devbridge verify grammar cross-tier pin: fake synthesis parses through the product parser', () => {
+  const parsed = parseDevbridgeVerifyOutput(DEVBRIDGE_VERIFY_OK_STDOUT);
+  assert.equal(parsed.httpCode, '200');
+  assert.equal(parsed.notFound, false);
 });
 
 test('devbridge fake rows recognize the real scripts (first-line anchors)', () => {
@@ -245,6 +258,11 @@ test('devbridge fake rows recognize the real scripts (first-line anchors)', () =
     fs,
   );
   assert.equal(cleanup.stdout, DEVBRIDGE_EXPOSE_OK_STDOUT);
+  // The #919 re-verify script is built by the product's own builder — feed the
+  // REAL script through the fake so the anchor and the pin stay honest.
+  const verify = runShellCommand(buildDevbridgeVerifyScript('https://e2e-tunnel-1-8080.devbridge-s2.hwtunnel.com'), fs);
+  assert.equal(verify.intent, 'devbridge-verify-script');
+  assert.equal(verify.stdout, DEVBRIDGE_VERIFY_OK_STDOUT);
   // The connect flow's unquoted PATH export still hits the generic row,
   // not the auth-probe row.
   const plain = runShellCommand('export PATH=$HOME/.huawei/bin${PATH:+:$PATH}', fs);

@@ -1300,6 +1300,116 @@ test('devbridge tunnel handling is migrated to the s2 gateway domain', () => {
   assert.doesNotMatch(sandbox, /https:\/\/<id>-<port>\.cn-north-4-bridge\.myhuaweicloud\.com/);
 });
 
+test('devbridge host launch survives the exec session (#919/#922): setsid guard, disown, -e 72', () => {
+  const sandbox = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'SKILL.md'),
+    'utf8',
+  );
+  const devbridgeTunnel = readSource(join('src', 'sandbox', 'devbridge-tunnel.ts'));
+  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
+
+  // The tool's expose script: setsid-detached nohup with the no-setsid fallback
+  // (some images lack setsid), stdin dropped from the controlling tty, guarded
+  // disown (POSIX-sh without the builtin must not abort), and the 72h expiry
+  // echoed so exposeTunnel can compute expiresAt.
+  assert.match(devbridgeTunnel, /if command -v setsid > \/dev\/null 2>&1; then setsid nohup devbridge host/);
+  assert.match(devbridgeTunnel, /< \/dev\/null & else nohup devbridge host/);
+  assert.match(devbridgeTunnel, /`disown 2>\/dev\/null \|\| true`/);
+  assert.match(devbridgeTunnel, /DEVBRIDGE_HOST_EXPIRY_HOURS = 72/);
+  assert.match(devbridgeTunnel, /DB_EXPIRY_HOURS=\$\{expiryHours\}/);
+  assert.doesNotMatch(devbridgeTunnel, /-e 8\b/);
+
+  // The skill teaches the same guarded launch on every host start line.
+  assert.match(sandbox, /setsid nohup devbridge host -p <port> -e 72/);
+  assert.match(sandbox, /disown 2>\/dev\/null \|\| true/);
+  assert.doesNotMatch(sandbox, /-e 8 /);
+  // The deploy_check remediation string is the third agent-facing surface —
+  // it must teach the same guarded launch (a bare `nohup … &` there reaps the
+  // host when the remediation's own exec session ends).
+  assert.match(sessionManager, /setsid nohup devbridge host <tunnelId> -p \$\{port\} -e 72/);
+  assert.match(
+    sessionManager,
+    /devbridge host <tunnelId> -p \$\{port\} -e 72 > \/tmp\/host\.log 2>&1 < \/dev\/null & fi; disown/,
+  );
+  // Migration/quota verdicts are host-log facts read from dedicated fields —
+  // never a whole-stdout scan that the echoed probe body (DB_TUNNEL_BODY)
+  // could poison with app content. Count-robust (grep -c prints line counts).
+  assert.match(devbridgeTunnel, /DB_MIGRATION=\$\(grep -c '\$\{DEVBRIDGE_MIGRATION_MARKER\}' \$\{hostLog\}/);
+  assert.match(devbridgeTunnel, /Number\(readDbField\(text, 'DB_MIGRATION'\)\) > 0/);
+  assert.doesNotMatch(devbridgeTunnel, /includes\('10006'\)/);
+});
+
+test('expose_tunnel re-verifies from an independent exec session and classifies gateway tunnel errors (#919)', () => {
+  const devbridgeTunnel = readSource(join('src', 'sandbox', 'devbridge-tunnel.ts'));
+  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
+
+  // Fresh-session GET re-verify with the dedicated parser and output fields.
+  assert.match(devbridgeTunnel, /export function buildDevbridgeVerifyScript/);
+  assert.match(devbridgeTunnel, /export function parseDevbridgeVerifyOutput/);
+  assert.match(devbridgeTunnel, /persistent/);
+  assert.match(devbridgeTunnel, /请勿分享/);
+  assert.match(devbridgeTunnel, /DB_VERIFY_HTTP_CODE/);
+
+  // Gateway-level errors: status-gated exact-body markers, shared constants.
+  // The probe compares the WHOLE body (tr strips \r/\n — CRLF-tolerant, and an
+  // app page that merely mentions a marker never matches).
+  assert.match(sessionManager, /DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER = 'tunnel not found'/);
+  assert.match(sessionManager, /DEVBRIDGE_PORT_NOT_CONFIGURED_MARKER = 'port not configured'/);
+  assert.match(sessionManager, /DEVBRIDGE_BAD_GATEWAY_MARKER = 'bad gateway'/);
+  assert.match(sessionManager, /body=\$\(tr -d '[^']*' < \/tmp\/\.dc_tunnel_body/);
+  assert.match(sessionManager, /\[ "\$code" = "404" \] && \[ "\$body" = "\$\{DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER\}" \]/);
+
+  // Retry exhaustion on a gateway-dead URL must fail, not soften to a warning.
+  assert.match(devbridgeTunnel, /gateway reports the fresh tunnel URL as dead/);
+});
+
+test('deploy_check judges reachability by non-000 and probes listed tunnels boundedly', () => {
+  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
+
+  // nginx_serving: any non-000 HTTP code counts (404/502 = content issue,
+  // not a connectivity issue).
+  assert.match(sessionManager, /\[ -n "\$HTTP_CODE" \] && \[ "\$HTTP_CODE" != "000" \]/);
+  assert.doesNotMatch(sessionManager, /grep -qE "\^\(2\|3\)"/);
+
+  // Bounded per-tunnel probing (head -5) with a selected URL — `devbridge list`
+  // order is arbitrary, so the first row must not shadow the live tunnel.
+  assert.match(sessionManager, /TUNNEL_IDS=\$\(devbridge list -j[^\n]*head -5\)/);
+  assert.match(sessionManager, /for CAND in \$TUNNEL_IDS; do/);
+  assert.match(sessionManager, /SELECTED_URL="\$CAND_URL"/);
+});
+
+test('stripTerminalEscapes is the single escape-stripping seam for sandbox output parsers (#946)', () => {
+  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
+  const devbridgeTunnel = readSource(join('src', 'sandbox', 'devbridge-tunnel.ts'));
+
+  // One exported definition; the devbridge parsers import it (no second copy).
+  assert.match(sessionManager, /export function stripTerminalEscapes/);
+  assert.match(devbridgeTunnel, /stripTerminalEscapes,\n\} from '\.\/session-manager\.ts'/);
+  const csiConstruction = "ESC + '\\\\[[0-9:;<=>?]*[ -/]*[a-zA-Z]'";
+  assert.equal(sessionManager.split(csiConstruction).length - 1, 1, 'CSI regex must be constructed once');
+  assert.equal(devbridgeTunnel.includes(csiConstruction), false);
+  // The CSI class covers the private-mode parameter bytes (\x1b[?2026h etc.) —
+  // a digits-;-only class leaves them intact and blinds the anchored lookups.
+  assert.match(sessionManager, /0-9:;<=>\?\]\*\[ -\/\]\*\[a-zA-Z\]/);
+  for (const [name, source] of [
+    ['session-manager', sessionManager],
+    ['devbridge-tunnel', devbridgeTunnel],
+  ] as const) {
+    // Deny BOTH CSI- and OSC-form literal-regex copies (/\x1b[…/, /\x1b]…).
+    assert.doesNotMatch(
+      source,
+      /\/\\x1b[\\[\]]/,
+      `${name}: no literal escape-regex copies — fold stripTerminalEscapes in`,
+    );
+  }
+
+  // Every sandbox-output parser entry point folds the stripper in.
+  assert.match(sessionManager, /parseDeployCheckOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/);
+  assert.match(devbridgeTunnel, /parseDevbridgeExposeOutput\(stdout[\s\S]{0,600}?stripTerminalEscapes\(stdout\)/);
+  assert.match(devbridgeTunnel, /parseDevbridgeAuthOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/);
+  assert.match(devbridgeTunnel, /parseDevbridgeVerifyOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/);
+});
+
 test('devbridge 0.2.x flow: auth capability probe, version detection, in-place upgrade guidance', () => {
   const sandbox = readFileSync(
     join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'SKILL.md'),
