@@ -172,6 +172,7 @@ test(
         const rawKey = readFileSync(result.memoryApiKeyFile, 'utf8').trim();
         assert.ok(rawKey.length > 0, 'key file must hold the raw key');
         artifacts.rawKey = rawKey;
+        artifacts.keyFile = result.memoryApiKeyFile;
         assert.ok(!JSON.stringify(result).includes(rawKey), 'payload must not carry the raw key');
         return { spaceId, keyFile: result.memoryApiKeyFile };
       });
@@ -223,8 +224,7 @@ test(
         // Credential canary over the scratch tree: AK/SK (and the raw key,
         // outside its ONE sanctioned file) must appear nowhere.
         const hits = scanTree(scratch, creds);
-        const keyFile =
-          artifacts.keyFile || join(scratch, '.config', 'huaweicloud', `agentarts-memory-api-key-${spaceId}.txt`);
+        const keyFile = artifacts.keyFile;
         const strayKeys = [];
         const walk = (dir) => {
           for (const entry of readdirSync(dir, { withFileTypes: true })) {

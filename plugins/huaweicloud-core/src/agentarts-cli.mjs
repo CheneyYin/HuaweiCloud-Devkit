@@ -520,7 +520,10 @@ function extractMemoryApiKey(rawStdout, operation) {
     if (keyMatch) apiKey = keyMatch[1];
   }
   if (!spaceId) {
-    const idMatch = /"id"\s*:\s*"([^"]+)"/.exec(text);
+    // Fallback regex: match the TOP-LEVEL "id" key only (quoted boundary
+    // rejects suffixed keys like "api_key_id"/"agency_id" — those are the
+    // realistic collision sources in a noisy create response).
+    const idMatch = /(?<![_a-zA-Z])"id"\s*:\s*"([^"]+)"/.exec(text);
     if (idMatch) spaceId = idMatch[1];
   }
   if (!apiKey || !spaceId) return null;
