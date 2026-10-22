@@ -11,8 +11,9 @@ import {
   callAgentartsMemoryTool,
   AGENTARTS_MEMORY_TOOL_DEFINITIONS,
   MEMORY_READ_OPERATIONS,
-  MEMORY_WRITE_OPERATIONS,
 } from '../plugins/huaweicloud-core/src/agentarts-memory.mjs';
+import { planAgentartsCommand } from '../plugins/huaweicloud-core/src/agentarts-cli.mjs';
+import { setRuntimeCredentials } from '../plugins/huaweicloud-core/src/auth/credentials.mjs';
 
 // Isolation: HUAWEICLOUD_HOME pointed at a scratch dir so the 0600 key-file
 // resolution never touches the real home (the agentarts-cli test pattern).
@@ -439,36 +440,49 @@ test('memory write enforces the token lifecycle and exact-parameter binding', as
     const plan = planAgentartsMemoryWrite(params);
     assert.equal(plan.ok, true);
 
+    // No attestation → the repo's three-element contract throws.
+    await assert.rejects(
+      () => runAgentartsMemoryWrite({ ...params, approvalToken: plan.approvalToken }),
+      /approvedByUser must be true/,
+    );
+
     // No token → remediation points at the plan tool.
-    const noToken = await runAgentartsMemoryWrite(params);
+    const noToken = await runAgentartsMemoryWrite({ ...params, approvedByUser: true });
     assert.equal(noToken.ok, false);
     assert.match(noToken.error, /approvalToken is required/);
 
     // Different parameters → binding mismatch, token NOT consumed.
-    const changed = await runAgentartsMemoryWrite({
-      ...params,
-      approvalToken: plan.approvalToken,
-      messages: [{ role: 'user', content: 'DIFFERENT' }],
-    });
+    const changed = await runAgentartsMemoryWrite(
+      {
+        ...params,
+        approvedByUser: true,
+        approvalToken: plan.approvalToken,
+        messages: [{ role: 'user', content: 'DIFFERENT' }],
+      },
+      { runCandidate: async () => ({ exitCode: 0, stdout: '{}', stderr: '' }) },
+    );
     assert.equal(changed.ok, false);
+    assert.equal(changed.code, 'CONFIRM_TOKEN_MISMATCH');
     assert.match(changed.error, /DIFFERENT parameters/);
     const recheck = await runAgentartsMemoryWrite(
-      { ...params, approvalToken: plan.approvalToken },
+      { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
       {
         runCandidate: async () => ({ exitCode: 0, stdout: '{"items": []}', stderr: '' }),
       },
     );
     assert.equal(recheck.ok, true, 'token must stay valid for the original parameters after a mismatch rejection');
 
-    // Replay after a successful execution → already consumed.
-    const replay = await runAgentartsMemoryWrite(
-      { ...params, approvalToken: plan.approvalToken },
-      {
-        runCandidate: async () => ({ exitCode: 0, stdout: '{"items": []}', stderr: '' }),
-      },
-    );
-    assert.equal(replay.ok, false);
-    assert.match(replay.error, /already_consumed/);
+    // Replay after a successful execution → idempotent already_processed
+    // (the D4-24 vocabulary: a consumed token reads "stop", never "re-plan
+    // and duplicate the write").
+    const replay = await runAgentartsMemoryWrite({
+      ...params,
+      approvedByUser: true,
+      approvalToken: plan.approvalToken,
+    });
+    assert.equal(replay.ok, true);
+    assert.equal(replay.outcome, 'already_processed');
+    assert.match(replay.note, /Verify with huaweicloud_agentarts_memory_read/);
   });
 });
 
@@ -484,10 +498,10 @@ test('memory write executes with the key env-only and redacts results', async ()
     assert.equal(plan.ok, true);
     const seen = [];
     const out = await runAgentartsMemoryWrite(
-      { ...params, approvalToken: plan.approvalToken },
+      { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
       {
-        runCandidate: async (candidate, args, childEnv) => {
-          seen.push({ args, childEnv });
+        runCandidate: async (candidate, args, childEnv, stdinData) => {
+          seen.push({ args, childEnv, stdinData });
           return {
             exitCode: 0,
             stdout: '{"id": "sess-1", "actor_id": "user-7", "api_key": "LEAKY777"}',
@@ -499,12 +513,18 @@ test('memory write executes with the key env-only and redacts results', async ()
     assert.equal(out.ok, true);
     assert.equal(out.result.id, 'sess-1');
     assert.equal(out.result.api_key, '<redacted>');
-    // Env-only key transport, no AK/SK, request JSON non-secret.
+    // Env-only key transport, no AK/SK.
     assert.equal(seen[0].childEnv.HUAWEICLOUD_SDK_MEMORY_API_KEY, KEY);
     assert.ok(!seen[0].args.some((a) => String(a).includes(KEY)));
     assert.equal(seen[0].childEnv.HUAWEICLOUD_SDK_AK, undefined);
-    const request = JSON.parse(seen[0].args[seen[0].args.length - 1]);
+    // The WRITE request rides STDIN (argv limit + process-list exposure),
+    // never argv: args are exactly ['-c', <snippet>] and no user DATA
+    // value appears in them (the snippet's own source mentions field
+    // names — that is code, not data).
+    const request = JSON.parse(seen[0].stdinData);
     assert.equal(request.actor_id, 'user-7');
+    assert.equal(seen[0].args.length, 2);
+    assert.ok(!seen[0].args.some((a) => String(a).includes('user-7')));
     assert.doesNotMatch(JSON.stringify(out), /LEAKY777|KEY_ONETIME_mem42/);
   });
 });
@@ -522,5 +542,92 @@ test('memory write dispatch routes plan and write', async () => {
     });
     assert.equal(routed.ok, false);
     assert.match(routed.error, /memory_id is required/);
+  });
+});
+
+test('memory write plan warns on credential-shaped message content (loud storage)', async () => {
+  await withIsolation(async (home) => {
+    writeKeyFile(home, 'sp1', KEY);
+    const clean = planAgentartsMemoryWrite({
+      operation: 'add_messages',
+      space_id: 'sp1',
+      session_id: 's1',
+      messages: [{ role: 'user', content: 'we decided on tabs for this repo' }],
+    });
+    assert.equal(clean.ok, true);
+    assert.deepEqual(clean.warnings, []);
+
+    const risky = planAgentartsMemoryWrite({
+      operation: 'add_messages',
+      space_id: 'sp1',
+      session_id: 's1',
+      messages: [{ role: 'user', content: 'the api_key is AKIA123 and password=Secret99' }],
+    });
+    assert.equal(risky.ok, true);
+    assert.equal(risky.warnings.length, 1);
+    assert.match(risky.warnings[0], /credential shapes/);
+  });
+});
+
+test('memory write canonicalizes meta key order (binding is semantic, not byte-luck)', async () => {
+  await withIsolation(async (home) => {
+    writeKeyFile(home, 'sp1', KEY);
+    const plan = planAgentartsMemoryWrite({
+      operation: 'create_session',
+      space_id: 'sp1',
+      actor_id: 'u1',
+      meta: { alpha: 1, beta: 2 },
+    });
+    assert.equal(plan.ok, true);
+    // Same meta, different key order → the SAME canonical request binds.
+    const out = await runAgentartsMemoryWrite(
+      {
+        operation: 'create_session',
+        space_id: 'sp1',
+        actor_id: 'u1',
+        approvedByUser: true,
+        approvalToken: plan.approvalToken,
+        meta: { beta: 2, alpha: 1 },
+      },
+      { runCandidate: async () => ({ exitCode: 0, stdout: '{"id": "s9"}', stderr: '' }) },
+    );
+    assert.equal(out.ok, true);
+  });
+});
+
+test('memory write rejects unknown message keys (no silent no-ops)', async () => {
+  await withIsolation(async () => {
+    const out = planAgentartsMemoryWrite({
+      operation: 'add_messages',
+      space_id: 'sp1',
+      session_id: 's1',
+      messages: [{ role: 'user', content: 'x', tyop_filed: 'oops' }],
+    });
+    assert.equal(out.ok, false);
+    assert.match(out.error, /unknown key "tyop_filed"/);
+  });
+});
+
+test('a CLI approval token can never authorize an SDK memory write (namespace separation)', async () => {
+  await withIsolation(async (home) => {
+    writeKeyFile(home, 'sp1', KEY);
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // Mint a token in the agentarts CLI namespace for the SAME-looking
+    // operation text; the SDK write must reject it as not_found.
+    const cliPlan = planAgentartsCommand(['memory', 'create', 'x', '--strategies', 'semantic']);
+    assert.equal(cliPlan.ok, true);
+    const out = await runAgentartsMemoryWrite(
+      {
+        operation: 'create_session',
+        space_id: 'sp1',
+        actor_id: 'u1',
+        approvedByUser: true,
+        approvalToken: cliPlan.approvalToken,
+      },
+      { runCandidate: async () => ({ exitCode: 0, stdout: '{}', stderr: '' }) },
+    );
+    assert.equal(out.ok, false);
+    assert.equal(out.code, 'CONFIRM_TOKEN_NOT_FOUND');
+    assert.match(out.error, /different namespace/);
   });
 });

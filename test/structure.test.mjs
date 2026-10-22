@@ -1398,17 +1398,23 @@ test('the agentarts memory data-plane read bridge registers with its safety cont
   const { MEMORY_READ_OPERATIONS } = await import('../plugins/huaweicloud-core/src/agentarts-memory.mjs');
   // Exactly the 8 read-only data-plane methods (the 4 writes are a separate
   // approval-gated unit; the operation enum must not grow silently).
-  assert.deepEqual([...MEMORY_READ_OPERATIONS].sort(), [
-    'get_last_k_messages',
-    'get_memory',
-    'get_message',
-    'get_session',
-    'list_memories',
-    'list_messages',
-    'list_sessions',
-    'search_memories',
-  ]);
-  assert.deepEqual([...def.inputSchema.properties.operation.enum].sort(), [...MEMORY_READ_OPERATIONS].sort());
+  assert.deepEqual(
+    [...MEMORY_READ_OPERATIONS].sort((a, b) => a.localeCompare(b)),
+    [
+      'get_last_k_messages',
+      'get_memory',
+      'get_message',
+      'get_session',
+      'list_memories',
+      'list_messages',
+      'list_sessions',
+      'search_memories',
+    ],
+  );
+  assert.deepEqual(
+    [...def.inputSchema.properties.operation.enum].sort((a, b) => a.localeCompare(b)),
+    [...MEMORY_READ_OPERATIONS].sort((a, b) => a.localeCompare(b)),
+  );
   // The credential channel is the 0600 key file read server-side — the tool
   // must never accept a key parameter of any spelling.
   for (const banned of ['api_key', 'apiKey', 'api-key', 'key']) {
@@ -1449,4 +1455,30 @@ test('the agentarts memory WRITE bridge registers with its approval contract pin
   }
   // The TextMessage role contract (the dataclass Literal excludes 'tool').
   assert.match(plan.inputSchema.properties.messages.description, /user\|assistant\|system/);
+  // The three-element approval contract: the attestation is REQUIRED on
+  // the write tool (same gate as every approved runner).
+  assert.ok(write.inputSchema.required.includes('approvedByUser'));
+  assert.match(write.inputSchema.properties.approvedByUser.description, /explicitly approved/);
+  // Just-in-time teaching pinned into the tool texts: async extraction at
+  // the search surface, soft-delete semantics on the deletes.
+  assert.match(
+    TOOL_DEFINITIONS.find((t) => t.name === 'huaweicloud_agentarts_memory_read').description,
+    /search_memories results LAG add_messages/,
+  );
+  assert.match(plan.description, /90-365 days/);
+  assert.match(write.description, /90-365 days/);
+});
+
+test('huawei-agentarts SKILL.md routes the memory data-plane bridge (U2/U3)', () => {
+  const body = readFileSync(join(pluginRoot, 'skills', 'huawei-agentarts', 'SKILL.md'), 'utf8');
+  // The routing floor: all three memory tools are taught (the read bridge
+  // and the plan/write pair — an untaught tool is a dead end).
+  assert.match(body, /huaweicloud_agentarts_memory_read/);
+  assert.match(body, /huaweicloud_agentarts_memory_plan/);
+  assert.match(body, /huaweicloud_agentarts_memory_write/);
+  // Tier map rows exist for both halves.
+  assert.match(body, /readonly \(SDK data plane\)/);
+  assert.match(body, /approved \(SDK data plane\)/);
+  // Async-extraction caveat taught at the skill layer too.
+  assert.match(body, /extraction is async|not immediately searchable/);
 });
