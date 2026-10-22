@@ -6,6 +6,12 @@
 
 ## Unreleased
 
+- fix(sandbox): createConnection() classifies transient/restriction errors (HDKIT_SUB_ACCOUNT_RESTRICTED / HD.83700029 drift) and retries with backoff — retry-exhausted errors carry a non-misleading hint instead of the server's "switch to the main account" advice (#997)
+- fix(sandbox): exposeTunnel() probes devbridge version inside the auth waterfall — 0.1.x returns structured devbridge_too_old + remediation before exposing; no-Tunnel-URL failures return ok:false with the version read back (#998)
+- fix(sandbox): devbridge installs to /workspace/.local/bin (survives reboots) + persistence table for data-disk vs system-disk paths (#999)
+- fix(sandbox): tunnel probe/verify curls pass --noproxy '*' — injected proxy returned 502/404 fakes for working tunnels (#1000)
+- fix(safety): obsutilWrites no longer grades nonexistent cors/website subcommands (#1001)
+- feat(obs): huaweicloud_obs_set_cors tool — AWS4-signed PUT/GET/DELETE /?cors via the shared obsSignedRequest; rejects HEAD-less rules at the input boundary (p01) and returns an OPTIONS preflight verify hint (#1003)
 - fix(huawei-ecs): Ecs.0044 volume-type sellout mapping + RHEL-family firewalld coverage with no-SSH recovery path (#971)
 - fix(safety): admin-port deny remediation now points at /32 egress-IP rules and the cloud-init no-SSH path (#971)
 - docs(huawei-ecs): large-user_data JSON-file path (--skeleton / --cli-jsonInput / --dryrun) + anti-pattern warning against abandoning the MCP approval channel (#964)
