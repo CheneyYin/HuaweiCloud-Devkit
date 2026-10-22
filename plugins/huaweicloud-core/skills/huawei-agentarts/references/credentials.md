@@ -106,14 +106,16 @@ plan time. Lifecycle:
   `~/.config/huaweicloud/agentarts-memory-api-key-<space_id>.txt`
   (0600, honors `HUAWEICLOUD_HOME`). The returned payload stays redacted
   and carries only `memoryApiKeyFile` (the path, never the key).
-- The user reads the file directly for the data plane. Reading it via
-  Bash is hook-blocked (credentialFilePatterns matches the
-  `~/.huaweicloud`-adjacent state path) — that is defense in depth, not
-  an error; the agent must never `cat` it into the transcript.
-- Data-plane consumption: the `HUAWEICLOUD_SDK_MEMORY_API_KEY`
-  environment variable (or the SDK's `api_key` parameter) — inject it the
-  same argv-free way as any other secret (see the yaml recipe above);
-  echoing `$HUAWEICLOUD_SDK_MEMORY_API_KEY` is hook-blocked.
+- Reading the file via Bash is hook-blocked (credentialFilePatterns
+  matches the `~/.huaweicloud`-adjacent state path) — that is defense in
+  depth, not an error; the agent must never `cat` it into the transcript.
+- Data-plane consumption through the devkit: the
+  `huaweicloud_agentarts_memory_read` tool reads the 0600 key file
+  server-side and injects `HUAWEICLOUD_SDK_MEMORY_API_KEY` into the SDK
+  child process env only (never argv, never the transcript). Outside the
+  devkit, the user injects the env var themselves the same argv-free way
+  as any other secret (see the yaml recipe above); echoing
+  `$HUAWEICLOUD_SDK_MEMORY_API_KEY` is hook-blocked.
 - `memory delete --force` is irreversible (deletes the space and its
   sessions/messages/memories); the wrapper canonicalizes `--force` and
   the approval carries the `irreversible` label.

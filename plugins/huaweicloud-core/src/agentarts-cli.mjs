@@ -1130,6 +1130,31 @@ export function runPythonSnippet(candidate, args, childEnv, timeoutMs) {
   });
 }
 
+// Shared SDK-snippet execution loop: try every python candidate, advance
+// the chain only on "this python cannot run the SDK" (module missing /
+// spawn error) — a candidate that found the SDK and failed (auth, network,
+// API error) is FINAL, retrying on another interpreter would only mask the
+// real error. shapeResult(result, candidate) builds the per-tool payload;
+// the loop owns the chain, the module-missing remediation, and the
+// runCandidate seam (tests override it; production runs runPythonSnippet).
+export async function runOverPythonCandidates({ args, childEnv, timeoutMs, runCandidate, shapeResult }) {
+  for (const candidate of pythonCandidatesForAgentarts()) {
+    const result = await (runCandidate || ((c) => runPythonSnippet(c, args, childEnv, timeoutMs)))(
+      candidate,
+      args,
+      childEnv,
+    );
+    const moduleMissing =
+      result.exitCode === 3 || /ModuleNotFoundError|AGENTARTS_SDK_MISSING/.test(result.stderr || '');
+    if (result.spawnError || moduleMissing) continue;
+    return shapeResult(result, candidate);
+  }
+  return {
+    ok: false,
+    error: `No python candidate could import agentarts (tried: ${pythonCandidatesForAgentarts().join(', ')}). Install the SDK: npx huaweicloud-devkit install-agentarts (or pip install agentarts-sdk==${pinnedSdkVersion() || 'the pinned version'} -i ${AGENTARTS_SDK_MIRROR}).`,
+  };
+}
+
 // Read-only agent listing through the SDK API. Env-or-fail, allowlist child
 // env, redaction, and the readonly timeout are the same contracts as the
 // CLI readonly runner; only the executable (python, not the CLI) and the
@@ -1152,49 +1177,44 @@ export async function listAgentartsAgents(params = {}, options = {}) {
   const childEnv = buildChildEnv(options);
   const timeoutMs = options.timeoutMs ?? READONLY_TIMEOUT_MS;
   const args = ['-c', LIST_AGENTS_SNIPPET, jsonArg];
-  const runCandidate = options.runCandidate || ((candidate) => runPythonSnippet(candidate, args, childEnv, timeoutMs));
 
-  for (const candidate of pythonCandidatesForAgentarts()) {
-    const result = await runCandidate(candidate, args);
-    const moduleMissing =
-      result.exitCode === 3 || /ModuleNotFoundError|AGENTARTS_SDK_MISSING/.test(result.stderr || '');
-    // Only "this python cannot run the SDK" advances the chain. A candidate
-    // that found the SDK and failed (auth, network, API error) is FINAL —
-    // retrying on a different interpreter would only mask the real error.
-    if (result.spawnError || moduleMissing) continue;
-    const failed = result.timedOut || result.exitCode !== 0 || detectFailure(result.stdout || '', result.stderr || '');
-    let agents = null;
-    if (!failed) {
-      try {
-        const parsed = JSON.parse(result.stdout);
-        agents = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.items) ? parsed.items : null;
-      } catch {
-        agents = null;
+  return runOverPythonCandidates({
+    args,
+    childEnv,
+    timeoutMs,
+    runCandidate: options.runCandidate,
+    shapeResult: (result, candidate) => {
+      const failed =
+        result.timedOut || result.exitCode !== 0 || detectFailure(result.stdout || '', result.stderr || '');
+      let agents = null;
+      if (!failed) {
+        try {
+          const parsed = JSON.parse(result.stdout);
+          agents = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.items) ? parsed.items : null;
+        } catch {
+          agents = null;
+        }
+        // Parsed output must pass the SAME redaction as the string paths —
+        // an unredacted parsed object would be the one surface a future
+        // credential-shaped field could ride (the object path masks by key
+        // name; trap 27's parse-bypass class).
+        if (agents) agents = redactSecrets(agents);
       }
-      // Parsed output must pass the SAME redaction as the string paths —
-      // an unredacted parsed object would be the one surface a future
-      // credential-shaped field could ride (the object path masks by key
-      // name; trap 27's parse-bypass class).
-      if (agents) agents = redactSecrets(agents);
-    }
-    return {
-      ok: !failed,
-      service: 'AgentArts',
-      operation: 'list-agents (SDK API; no CLI command in 0.1.7)',
-      executable: candidate,
-      exitCode: result.exitCode,
-      failureDetected: failed,
-      agents,
-      count: Array.isArray(agents) ? agents.length : null,
-      stdout: redactSecrets(result.stdout || ''),
-      stderr: redactSecrets(result.stderr || ''),
-      ...(result.timedOut ? { timedOut: true, error: `agentarts list timed out after ${timeoutMs} ms.` } : {}),
-    };
-  }
-  return {
-    ok: false,
-    error: `No python candidate could import agentarts (tried: ${pythonCandidatesForAgentarts().join(', ')}). Install the SDK: npx huaweicloud-devkit install-agentarts (or pip install agentarts-sdk==${pinnedSdkVersion() || 'the pinned version'} -i ${AGENTARTS_SDK_MIRROR}).`,
-  };
+      return {
+        ok: !failed,
+        service: 'AgentArts',
+        operation: 'list-agents (SDK API; no CLI command in 0.1.7)',
+        executable: candidate,
+        exitCode: result.exitCode,
+        failureDetected: failed,
+        agents,
+        count: Array.isArray(agents) ? agents.length : null,
+        stdout: redactSecrets(result.stdout || ''),
+        stderr: redactSecrets(result.stderr || ''),
+        ...(result.timedOut ? { timedOut: true, error: `agentarts list timed out after ${timeoutMs} ms.` } : {}),
+      };
+    },
+  });
 }
 
 // Tool surface: definitions and handlers exported so tools.mjs stays a thin

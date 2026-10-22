@@ -60,6 +60,10 @@ export function redactCredentialShapes(text, { blobBound = 'line' } = {}) {
       : [new RegExp(`((?:${BLOB})\\s*[:=]\\s*).*`, 'gi'), '$1<redacted>'];
   return (
     String(text)
+      // Bearer tokens first: `Authorization: Bearer <token>` would otherwise
+      // redact only the scheme word and let the token ride — and the
+      // agentarts data-plane key transits exactly as a Bearer header value.
+      .replace(/((?:authorization)\s*[:=]\s*)bearer\s+[^\s,;"']+/gi, '$1<redacted>')
       // QUOTED blob keys: the value is a quoted string (or one-level
       // object/array) — redact exactly it and let mid-JSON neighbors on
       // the same line survive.
