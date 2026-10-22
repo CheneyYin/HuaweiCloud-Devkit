@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 
 import { getCodexPluginName, getMarketplaceName } from '../../../plugins/huaweicloud-core/src/codex-probe.ts';
 import { startGatewayProxy } from './gateway-proxy.ts';
-import { requiredModelEnv, runHeadlessAgent } from './shared.ts';
+import { requiredModelEnv, runHeadlessAgent, verifyLegWire } from './shared.ts';
 import type { AgentDriver, DriverContext, DriverProbe, RunRequest, RunResult } from './types.ts';
 
 // codex adapter, spike-validated on codex-cli 0.162.1 (2026-10-21):
@@ -209,6 +209,7 @@ function mergeConfigToml(home: string, serverJs: string): void {
 export const codexDriver: AgentDriver = {
   id: 'codex',
   installTarget: 'codex',
+  modelWire: 'responses',
   supportsInstallPacks: false,
 
   prepareHome(home: string): NodeJS.ProcessEnv {
@@ -220,7 +221,7 @@ export const codexDriver: AgentDriver = {
     return { https_proxy: EGRESS_BLOCK_PROXY, HTTPS_PROXY: EGRESS_BLOCK_PROXY };
   },
 
-  probe(): DriverProbe {
+  async probe(): Promise<DriverProbe> {
     const { found, version, detail } = codexVersion();
     if (!found) {
       return { ok: false, detail, command: null, version: null };
@@ -234,7 +235,13 @@ export const codexDriver: AgentDriver = {
         detail: `missing environment: ${missing.join(', ')}. Set a dedicated E2E key (never the real auth file) plus provider/model pins.`,
       };
     }
-    return { ok: true, command: 'codex', version, detail: `codex ready, ${detail} (auth via ${apiKeyVar})` };
+    // codex 0.162.1 is responses-only: verify that exact wire (route + key
+    // + model) before the suite spends its budget on a dead gateway.
+    const wire = await verifyLegWire('responses');
+    if (!wire.ok) {
+      return { ok: false, command: 'codex', version, detail: wire.detail };
+    }
+    return { ok: true, command: 'codex', version, detail: `${detail}; ${wire.detail} (auth via ${apiKeyVar})` };
   },
 
   prepare(ctx: DriverContext): NodeJS.ProcessEnv {

@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 
+import { scrubSecrets } from '../env-policy.ts';
 import type { RunRequest } from './types.ts';
 
 // Shared driver plumbing. Every driver owns the same agent-independent
@@ -11,7 +12,9 @@ import type { RunRequest } from './types.ts';
 
 const APIKEY_ENV_VARS = ['E2E_APIKEY', 'E2E_TEST_API_KEY'] as const;
 
-function apiKeyEnvVar(): string | null {
+// The env spelling that carries the session key (either is accepted); the
+// single resolver every consumer uses so a new spelling cannot drift.
+export function apiKeyEnvVar(): string | null {
   for (const key of APIKEY_ENV_VARS) {
     if (process.env[key]) return key;
   }
@@ -32,6 +35,118 @@ export function resolveCommand(name: string): string | null {
   const direct = spawnSync(name, ['--version'], { encoding: 'utf8', timeout: 10_000 });
   if (direct.status === 0 || direct.stdout) return name;
   return null;
+}
+
+// Authorized pre-flight of the exact model wire the leg speaks (codex is
+// responses-only; opencode rides chat/completions). A dead key, a missing
+// route, or an unlisted model otherwise costs a full all-red suite whose
+// only signature is a dead agent — measured 2026-10-22 on the CI codex leg
+// (zero tool calls, zero agent hcloud calls on every case). Non-2xx, a
+// fetch failure, or an SSE error frame in the first chunk fails the probe;
+// network errors and 5xx get one retry (a blip at nightly o'clock must not
+// void the whole run). Node's global fetch ignores proxy env vars, so the
+// probe goes direct — a proxied local network where only proxy-aware agent
+// stacks reach the gateway is the accepted false-negative residual.
+export interface WireProbeInput {
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  wire: 'responses' | 'chat';
+}
+
+export interface WireProbeResult {
+  ok: boolean;
+  detail: string;
+  // Transient classes (network failure, 5xx) earn one retry; a 4xx or an
+  // error frame is deterministic and retrying only delays the verdict.
+  retryable: boolean;
+}
+
+const WIRE_ROUTES: Record<WireProbeInput['wire'], string> = {
+  responses: '/responses',
+  chat: '/chat/completions',
+};
+
+async function probeModelWireOnce(input: WireProbeInput): Promise<WireProbeResult> {
+  const route = WIRE_ROUTES[input.wire];
+  const url = `${input.baseUrl.replace(/\/+$/, '')}${route}`;
+  const body =
+    input.wire === 'responses'
+      ? JSON.stringify({ model: input.model, input: 'ping', stream: true })
+      : JSON.stringify({ model: input.model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${input.apiKey}`, 'Content-Type': 'application/json' },
+      body,
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const text = (await res.text()).slice(0, 200);
+      return {
+        ok: false,
+        retryable: res.status >= 500,
+        detail: `HTTP ${res.status} from POST ${route} — ${scrubSecrets(text)}`,
+      };
+    }
+    if (input.wire === 'responses') {
+      // Streamed 200 can still open with an error frame (gateway accepted,
+      // then rejected auth/model mid-handshake): read the first chunk only.
+      const reader = res.body?.getReader();
+      if (reader) {
+        const { value } = await reader.read();
+        const chunk = value ? Buffer.from(value).toString('utf8') : '';
+        await reader.cancel().catch(() => {});
+        if (chunk.includes('"type":"error"')) {
+          return {
+            ok: false,
+            retryable: false,
+            detail: `error frame from POST ${route} — ${scrubSecrets(chunk.slice(0, 200))}`,
+          };
+        }
+      } else {
+        await res.body?.cancel().catch(() => {});
+      }
+      return { ok: true, retryable: false, detail: `model wire verified (HTTP 200, POST ${route})` };
+    }
+    const payload = (await res.json()) as { error?: unknown };
+    if (payload && payload.error !== undefined) {
+      return {
+        ok: false,
+        retryable: false,
+        detail: `error body from POST ${route} — ${scrubSecrets(JSON.stringify(payload.error).slice(0, 200))}`,
+      };
+    }
+    return { ok: true, retryable: false, detail: `model wire verified (HTTP 200, POST ${route})` };
+  } catch (error) {
+    return { ok: false, retryable: true, detail: `request failed: ${String((error as Error)?.message ?? error)}` };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function probeModelWire(input: WireProbeInput): Promise<WireProbeResult> {
+  const first = await probeModelWireOnce(input);
+  if (first.ok || !first.retryable) return first;
+  await new Promise((resolve) => setTimeout(resolve, 2_000));
+  const second = await probeModelWireOnce(input);
+  if (second.ok) return second;
+  return { ok: false, retryable: false, detail: `${first.detail}; retry: ${second.detail}` };
+}
+
+// The leg-facing wrapper every wire consumer uses (both drivers' probe()
+// and the runner's mid-suite re-probe): resolves the session env itself so
+// the probe call site cannot drift from the key-spelling resolution.
+export async function verifyLegWire(wire: WireProbeInput['wire']): Promise<WireProbeResult> {
+  const apiKeyVar = apiKeyEnvVar();
+  return probeModelWire({
+    baseUrl: process.env.E2E_PROVIDER_BASEURL!,
+    model: process.env.E2E_MODEL!,
+    apiKey: apiKeyVar ? process.env[apiKeyVar]! : '',
+    wire,
+  });
 }
 
 // Detached headless run: capture the streams, resolve on exit, and kill the

@@ -59,6 +59,11 @@ export interface CaseVerdict {
   liveness: boolean;
   expectations: ExpectationVerdict[];
   soft: ExpectationVerdict[];
+  // Set by the runner (never the evaluator) when an attempt crashed in
+  // harness code instead of running the agent: the FAIL line prints this
+  // instead of the liveness text, so an infra crash never reads as a dead
+  // agent.
+  runnerError?: string;
 }
 
 const UNBOUNDED = Number.POSITIVE_INFINITY;

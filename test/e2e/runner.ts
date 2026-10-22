@@ -27,6 +27,7 @@ import { WsFake } from './ws-fake/hwlink-server.ts';
 import type { E2eCase, Expectation } from './types.ts';
 import { opencodeDriver } from './drivers/opencode.ts';
 import { codexDriver } from './drivers/codex.ts';
+import { verifyLegWire } from './drivers/shared.ts';
 import type { AgentDriver, DriverId } from './drivers/types.ts';
 import { cliCases } from './cases/cli.ts';
 import { coreCases } from './cases/core.ts';
@@ -90,6 +91,10 @@ interface AttemptReport {
   attempt: number;
   exitCode: number | null;
   hcloudCalls: string[];
+  // Install-phase probes (separate log since the channel split): present
+  // with an empty run log separates "install ran, agent dead" from
+  // "install itself crashed" — the CI triage this field was born from.
+  installHcloudCalls: string[];
   httpCalls: string[];
   gatewayCalls: string[];
   wsCalls: string[];
@@ -138,11 +143,17 @@ function seamVars(
   httpFake: HttpFake,
   fixtures: E2eCase['fixtures'],
   pathShimDir: string,
+  // Install-phase hcloud probes (the installer's version checks) ride a
+  // separate log so the run-session recording names agent activity only: a
+  // dead agent then reads as "All calls: (none)" instead of "version |
+  // version", and install-crash vs dead-agent stays distinguishable in the
+  // report (installHcloudCalls vs hcloudCalls).
+  hcloudLog = 'hcloud-fake.log',
 ): NodeJS.ProcessEnv {
   const vars: NodeJS.ProcessEnv = {
     HCLOUD_BIN: process.execPath,
     HCLOUD_BIN_ARGS_JSON: JSON.stringify([fakeHcloud]),
-    HCLOUD_FAKE_LOG: join(home, 'hcloud-fake.log'),
+    HCLOUD_FAKE_LOG: join(home, hcloudLog),
     HCLOUD_FAKE_VERSION: kooCliVersion,
     HUAWEICLOUD_DEVKIT_TRACE: join(home, 'devkit-trace.jsonl'),
     // The whole Huawei Cloud HTTP boundary points at the local fake — every
@@ -291,8 +302,8 @@ function runInstall(
   }
 }
 
-function readHcloudLog(home: string): { argv: string[] }[] {
-  const logPath = join(home, 'hcloud-fake.log');
+function readHcloudLog(home: string, file = 'hcloud-fake.log'): { argv: string[] }[] {
+  const logPath = join(home, file);
   if (!existsSync(logPath)) return [];
   return readFileSync(logPath, 'utf8')
     .split('\n')
@@ -304,6 +315,25 @@ function readHcloudLog(home: string): { argv: string[] }[] {
         return { argv: [line] };
       }
     });
+}
+
+// The verdict shape for a harness crash (constructed by the runner, never
+// the evaluator): fail, not live, and the error's first line rides the
+// verdict so the FAIL output distinguishes an infra crash from a dead
+// agent — the two got conflated in the 2026-10-22 CI triage.
+function runnerErrorVerdict(caseId: string, stack: string): CaseVerdict {
+  return {
+    caseId,
+    pass: false,
+    liveness: false,
+    expectations: [],
+    soft: [],
+    runnerError: stack.split('\n')[0]?.slice(0, 300) ?? 'unknown error',
+  };
+}
+
+function scrubbedStack(err: unknown): string {
+  return scrubSecrets(String((err as Error)?.stack ?? err));
 }
 
 async function runCase(
@@ -385,7 +415,15 @@ async function runCase(
         processEnv: process.env,
         home,
         driverVars: installDriverVars,
-        seamVars: seamVars(home, scriptPath, kooCliVersion, httpFake, caseDef.fixtures, pathShimDir),
+        seamVars: seamVars(
+          home,
+          scriptPath,
+          kooCliVersion,
+          httpFake,
+          caseDef.fixtures,
+          pathShimDir,
+          'hcloud-fake-install.log',
+        ),
       });
       runInstall(bin, home, workdir, installEnv, driver.installTarget, caseDef.installPacks);
       const env = buildCaseEnv({
@@ -438,6 +476,7 @@ async function runCase(
         attempt,
         exitCode: run.exitCode,
         hcloudCalls: recordings.hcloud.map((c) => scrubSecrets(c.argv.join(' '))),
+        installHcloudCalls: readHcloudLog(home, 'hcloud-fake-install.log').map((c) => c.argv.join(' ')),
         httpCalls: recordings.http.map((h) => `${h.method} ${h.path}`),
         gatewayCalls: recordings.gateway.map((g) => `${g.method}${g.tool ? `:${g.tool}` : ''}`),
         wsCalls: recordings.ws.map(
@@ -452,6 +491,30 @@ async function runCase(
         verdict,
       });
       if (verdict.pass) break;
+    } catch (error) {
+      // A harness crash (install failure, driver throw, fs error) must not
+      // eat the suite's only diagnostics: the partial recordings and the
+      // stack ship as a runner-error attempt, and the next attempt still
+      // runs (transient throws recover; deterministic ones fail fast in
+      // main after three consecutive runner-error cases).
+      const stack = scrubbedStack(error);
+      const verdict = runnerErrorVerdict(caseDef.id, stack);
+      attempts.push({
+        attempt,
+        exitCode: null,
+        hcloudCalls: readHcloudLog(home).map((c) => scrubSecrets(c.argv.join(' '))),
+        installHcloudCalls: readHcloudLog(home, 'hcloud-fake-install.log').map((c) => c.argv.join(' ')),
+        httpCalls: httpFake ? httpFake.recordings.map((h) => `${h.method} ${h.path}`) : [],
+        gatewayCalls: readGatewayLog(home).map((g) => `${g.method}${g.tool ? `:${g.tool}` : ''}`),
+        wsCalls: (wsFake?.connections ?? []).map(
+          (conn) =>
+            `conn(source=${conn.source ?? 'n/a'}): ${conn.commands.map((c) => c.intent).join(',') || '(no commands)'}`,
+        ),
+        stdout: stack.slice(0, 8000),
+        stderr: '',
+        verdict,
+      });
+      lastVerdict = lastVerdict ?? verdict;
     } finally {
       await httpFake?.stop();
       await wsFake?.stop();
@@ -778,16 +841,20 @@ async function selfcheck(bin: string, kooCliVersion: string): Promise<boolean> {
 const REPORT_RETENTION = 20;
 
 function pruneReports(reportDir: string): void {
-  const reports = readdirSync(reportDir)
-    .filter((name) => name.startsWith('report-') && name.endsWith('.json'))
-    .map((name) => ({ name, mtime: statSync(join(reportDir, name)).mtimeMs }))
-    .sort((a, b) => b.mtime - a.mtime);
-  for (const stale of reports.slice(REPORT_RETENTION)) {
-    try {
-      rmSync(join(reportDir, stale.name), { force: true });
-    } catch {
-      // best-effort: pruning must never fail a run
+  try {
+    const reports = readdirSync(reportDir)
+      .filter((name) => name.startsWith('report-') && name.endsWith('.json'))
+      .map((name) => ({ name, mtime: statSync(join(reportDir, name)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime);
+    for (const stale of reports.slice(REPORT_RETENTION)) {
+      try {
+        rmSync(join(reportDir, stale.name), { force: true });
+      } catch {
+        // best-effort: pruning must never fail a run
+      }
     }
+  } catch {
+    // best-effort: pruning must never fail a run
   }
 }
 
@@ -800,11 +867,6 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const driverId = process.env.E2E_AGENT || 'opencode';
   const driver = DRIVERS[driverId as DriverId];
-  if (!driver) {
-    out(`[runner] unknown E2E_AGENT "${driverId}" (available: ${Object.keys(DRIVERS).join(', ')})`);
-    process.exitCode = 2;
-    return;
-  }
   const pkg = packageJson();
 
   if (args[0] === 'selfcheck') {
@@ -822,72 +884,211 @@ async function main(): Promise<void> {
     return;
   }
 
-  const probe = driver.probe();
-  if (!probe.ok) {
-    out(`[runner] driver "${driverId}" not ready: ${probe.detail}`);
-    process.exitCode = 2;
-    return;
-  }
-  // Startup echo of the resolved driver (and version) — the matrix CI legs
-  // grep this (load-bearing, not informational) so a wiring miss cannot
-  // pass as a green duplicate of the other leg.
-  out(`[runner] driver ${driver.id}${probe.version ? ` (${probe.version})` : ''}: ${probe.detail}`);
-  sweepStaleTempDirs();
-
-  const selected = args.length > 0 ? ALL_CASES.filter((c) => args.includes(c.id)) : ALL_CASES;
-  if (selected.length === 0) {
-    out(`[runner] no case matches ${args.join(', ')} (available: ${ALL_CASES.map((c) => c.id).join(', ')})`);
-    process.exitCode = 2;
-    return;
-  }
-
-  const tarball = npmPackTarball();
-  const prefix = installPrefix(tarball);
-  const bin = join(prefix, 'node_modules', 'huaweicloud-devkit', 'bin', 'setup.cjs');
+  // The report scaffold exists before anything that can fail loudly, and
+  // the finally below always serializes it: every terminal path — probe
+  // refusal, fatal throw, aborted suite, normal completion — ships an
+  // uploaded artifact. The 2026-10-22 CI runs (both legs) exited 1 with no
+  // .e2e-results at all, taking the only per-attempt diagnostics with them;
+  // that class of evidence loss ends here.
   const reportDir = join(root, '.e2e-results');
   mkdirSync(reportDir, { recursive: true });
   pruneReports(reportDir);
   const report: Record<string, unknown> = {
     startedAt: new Date().toISOString(),
-    agent: {
+    agent: null,
+    cases: [] as unknown[],
+  };
+  let tarball: string | null = null;
+  let prefix: string | null = null;
+  try {
+    if (!driver) {
+      report.fatalError = `unknown E2E_AGENT "${driverId}" (available: ${Object.keys(DRIVERS).join(', ')})`;
+      out(`[runner] ${report.fatalError as string}`);
+      process.exitCode = 2;
+      return;
+    }
+    const probe = await driver.probe();
+    report.agent = {
       id: driver.id,
       command: probe.command,
       model: process.env.E2E_MODEL || null,
       provider: process.env.E2E_PROVIDER_ID || null,
       devkitVersion: pkg.version,
       agentVersion: probe.version,
-    },
-    cases: [] as unknown[],
-  };
-  let failures = 0;
-  try {
+    };
+    if (!probe.ok) {
+      // Probe detail carries gateway response bodies — scrubbed like every
+      // other runner surface, and the spelling stays grep-compatible with
+      // the workflow's driver-echo guard.
+      report.fatalError = scrubSecrets(probe.detail);
+      out(`[runner] driver ${driver.id} not ready: ${report.fatalError as string}`);
+      process.exitCode = 2;
+      return;
+    }
+    // Startup echo of the resolved driver (and version) — the matrix CI legs
+    // grep this (load-bearing, not informational) so a wiring miss cannot
+    // pass as a green duplicate of the other leg.
+    out(`[runner] driver ${driver.id}${probe.version ? ` (${probe.version})` : ''}: ${scrubSecrets(probe.detail)}`);
+    sweepStaleTempDirs();
+
+    const selected = args.length > 0 ? ALL_CASES.filter((c) => args.includes(c.id)) : ALL_CASES;
+    if (selected.length === 0) {
+      report.fatalError = `no case matches ${args.join(', ')} (available: ${ALL_CASES.map((c) => c.id).join(', ')})`;
+      out(`[runner] ${report.fatalError as string}`);
+      process.exitCode = 2;
+      return;
+    }
+
+    tarball = npmPackTarball();
+    prefix = installPrefix(tarball);
+    const bin = join(prefix, 'node_modules', 'huaweicloud-devkit', 'bin', 'setup.cjs');
+    let failures = 0;
+    let skips = 0;
+    let runnerErrors = 0;
+    let consecutiveRunnerErrors = 0;
+    let consecutiveDeadAgents = 0;
+    let aborted = false;
     for (const caseDef of selected) {
       out(`[runner] case ${caseDef.id} (pack ${caseDef.pack})`);
-      const { verdict, report: caseReport } = await runCase(caseDef, driver, bin, pkg.kooCliVersion);
-      (report.cases as unknown[]).push({ id: caseDef.id, ...caseReport, verdict });
-      if (verdict.pass) {
+      let outcome: Awaited<ReturnType<typeof runCase>>;
+      try {
+        outcome = await runCase(caseDef, driver, bin, pkg.kooCliVersion);
+      } catch (error) {
+        // The belt over runCase's own per-attempt catch: a throw outside the
+        // attempt loop (temp dirs, fake startup) still becomes a case entry
+        // with the stack, never a suite-killing unhandled rejection.
+        const stack = scrubbedStack(error);
+        const verdict = runnerErrorVerdict(caseDef.id, stack);
+        outcome = {
+          verdict,
+          recordings: {
+            hcloud: [],
+            toolCalls: [],
+            disclosures: [],
+            http: [],
+            gateway: [],
+            ws: [],
+            files: {},
+            finalText: null,
+          },
+          report: {
+            attempts: [
+              {
+                attempt: 1,
+                exitCode: null,
+                hcloudCalls: [],
+                installHcloudCalls: [],
+                httpCalls: [],
+                gatewayCalls: [],
+                wsCalls: [],
+                stdout: stack.slice(0, 8000),
+                stderr: '',
+                verdict,
+              },
+            ],
+          },
+        };
+      }
+      (report.cases as unknown[]).push({ id: caseDef.id, ...outcome.report, verdict: outcome.verdict });
+      if (outcome.report.skipped) {
+        skips++;
+        out(`  SKIP  ${caseDef.id} — ${outcome.report.skipped.reason}`);
+        continue;
+      }
+      if (outcome.verdict.pass) {
+        consecutiveRunnerErrors = 0;
+        consecutiveDeadAgents = 0;
         out(`  PASS  ${caseDef.id}`);
-      } else {
-        failures++;
-        out(`  FAIL  ${caseDef.id}${verdict.liveness ? '' : ' (liveness: no boundary activity recorded)'}`);
-        for (const v of verdict.expectations) {
-          // The console evidence rides the CI job log (the workflow tees
-          // runner stdout), so it scrubs like the report artifact.
-          if (!v.pass) out(`    expectation failed: ${JSON.stringify(v.expectation)} — ${scrubSecrets(v.evidence)}`);
+        continue;
+      }
+      failures++;
+      if (outcome.verdict.runnerError) {
+        runnerErrors++;
+        consecutiveRunnerErrors++;
+        out(`  FAIL  ${caseDef.id} — runner error: ${outcome.verdict.runnerError}`);
+        if (consecutiveRunnerErrors >= 3) {
+          // Three harness crashes in a row is systematic, not flaky: stop
+          // burning budget (each red case still paid install + LLM turns)
+          // and leave the stacks in the report as the diagnostic.
+          report.fatalError = `aborted after ${consecutiveRunnerErrors} consecutive runner-error cases (last: ${caseDef.id})`;
+          out(`[runner] ${report.fatalError as string}`);
+          process.exitCode = 2;
+          aborted = true;
+          break;
         }
+        continue;
+      }
+      consecutiveRunnerErrors = 0;
+      out(`  FAIL  ${caseDef.id}${outcome.verdict.liveness ? '' : ' (liveness: no boundary activity recorded)'}`);
+      for (const v of outcome.verdict.expectations) {
+        // The console evidence rides the CI job log (the workflow tees
+        // runner stdout), so it scrubs like the report artifact.
+        if (!v.pass) out(`    expectation failed: ${JSON.stringify(v.expectation)} — ${scrubSecrets(v.evidence)}`);
+      }
+      if (!outcome.verdict.liveness) {
+        consecutiveDeadAgents++;
+        // A dead-agent streak with a live start probe means the gateway (or
+        // the key's quota) died mid-suite: re-probe once at three, and abort
+        // as infra when the wire is dead instead of burning the remaining
+        // cases on guaranteed red.
+        if (consecutiveDeadAgents === 3) {
+          const wire = await verifyLegWire(driver.modelWire);
+          if (!wire.ok) {
+            report.fatalError = `model wire died mid-suite after case ${caseDef.id}: ${scrubSecrets(wire.detail)}`;
+            out(`[runner] ${report.fatalError as string}`);
+            process.exitCode = 2;
+            aborted = true;
+            break;
+          }
+        }
+      } else {
+        consecutiveDeadAgents = 0;
       }
     }
+    if (!aborted) {
+      // Pure infra red (every failure a runner error) exits 2, the runner's
+      // infra class — distinguishable from product red without reading the
+      // report body.
+      process.exitCode = failures > 0 ? (runnerErrors === failures ? 2 : 1) : 0;
+      out(
+        `[runner] ${selected.length - failures - skips}/${selected.length} cases passed` +
+          `${skips > 0 ? `, ${skips} skipped` : ''}${failures > 0 ? `, ${failures} failed` : ''}`,
+      );
+    }
+  } catch (error) {
+    report.fatalError = scrubSecrets(String((error as Error)?.stack ?? error)).slice(0, 4000);
+    out(`[runner] fatal: ${String((error as Error)?.message ?? error)}`);
+    process.exitCode = 1;
   } finally {
-    rmSync(prefix, { recursive: true, force: true });
-    rmSync(tarball, { force: true });
+    if (prefix) {
+      try {
+        rmSync(prefix, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup on the crash path
+      }
+    }
+    if (tarball) {
+      try {
+        rmSync(tarball, { force: true });
+      } catch {
+        // best-effort cleanup on the crash path
+      }
+    }
+    const reportPath = join(reportDir, `report-${Date.now()}.json`);
+    // The whole serialized report passes the scrub: per-attempt transcripts,
+    // hcloud argv, and the evaluator's expectation evidence (which embeds
+    // raw argv and tool args) all land in this uploaded CI artifact.
+    try {
+      writeFileSync(reportPath, scrubSecrets(JSON.stringify(report, null, 2)), 'utf8');
+      out(`[runner] Report: ${reportPath}`);
+    } catch (error) {
+      out(`[runner] report write failed: ${String(error)}`);
+      // A green run that shipped no artifact is misleading (the report is
+      // the suite's evidence): only an already-set infra exit code (2)
+      // survives a lost report.
+      process.exitCode = process.exitCode === 2 ? 2 : 1;
+    }
   }
-  const reportPath = join(reportDir, `report-${Date.now()}.json`);
-  // The whole serialized report passes the scrub: per-attempt transcripts,
-  // hcloud argv, and the evaluator's expectation evidence (which embeds
-  // raw argv and tool args) all land in this uploaded CI artifact.
-  writeFileSync(reportPath, scrubSecrets(JSON.stringify(report, null, 2)), 'utf8');
-  out(`[runner] ${selected.length - failures}/${selected.length} cases passed. Report: ${reportPath}`);
-  process.exitCode = failures > 0 ? 1 : 0;
 }
 
 void main();

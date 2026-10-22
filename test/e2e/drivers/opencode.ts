@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import type { AgentDriver, DriverContext, DriverProbe, RunRequest, RunResult } from './types.ts';
-import { requiredModelEnv, resolveCommand, runHeadlessAgent } from './shared.ts';
+import { requiredModelEnv, resolveCommand, runHeadlessAgent, verifyLegWire } from './shared.ts';
 import { opencodeSeamVersionSupported } from '../../../plugins/huaweicloud-core/src/lib/opencode-permission-seam.ts';
 
 // opencode adapter. Auth is a dedicated E2E key injected via env
@@ -63,9 +63,10 @@ function opencodeConfigFile(home: string): string {
 export const opencodeDriver: AgentDriver = {
   id: 'opencode',
   installTarget: 'opencode',
+  modelWire: 'chat',
   supportsInstallPacks: true,
 
-  probe(): DriverProbe {
+  async probe(): Promise<DriverProbe> {
     const command = resolveCommand('opencode');
     if (!command) {
       return { ok: false, detail: 'opencode binary not found on PATH', command: null, version: null };
@@ -88,11 +89,17 @@ export const opencodeDriver: AgentDriver = {
         detail: `missing environment: ${missing.join(', ')}. Set a dedicated E2E key (never the real auth file) plus provider/model pins.`,
       };
     }
+    // The leg rides chat/completions: verify that exact wire before the
+    // suite spends its budget on a dead gateway.
+    const wire = await verifyLegWire('chat');
+    if (!wire.ok) {
+      return { ok: false, command, version: version.version, detail: wire.detail };
+    }
     return {
       ok: true,
       command,
       version: version.version,
-      detail: `opencode ready, ${version.detail} (auth via ${apiKeyVar})`,
+      detail: `opencode ready, ${version.detail}; ${wire.detail} (auth via ${apiKeyVar})`,
     };
   },
 

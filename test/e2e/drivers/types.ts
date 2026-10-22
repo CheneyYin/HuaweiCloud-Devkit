@@ -45,12 +45,20 @@ export type DriverId = 'opencode' | 'codex';
 export interface AgentDriver {
   readonly id: DriverId;
   readonly installTarget: string;
+  // The model wire the agent's CLI speaks — codex 0.162.1 removed the chat
+  // wire (responses only), opencode rides chat/completions. The runner uses
+  // it for the mid-suite wire re-probe; probe() uses it for the pre-flight.
+  readonly modelWire: 'responses' | 'chat';
   // Whether `install --packs` can reach this target. The codex target is
   // managed by the codex CLI and has no packs write path (installCodex
   // documents this), so the runner records a skip for installPacks cases
   // instead of letting them run with a silently unapplied posture.
   readonly supportsInstallPacks: boolean;
-  probe(): DriverProbe;
+  // Async because the readiness check authorizes one live request against
+  // the model gateway: a dead key or a missing route must abort the run
+  // before any case spends budget (the all-red dead-agent signature it
+  // prevents was measured on the 2026-10-22 CI codex leg).
+  probe(): Promise<DriverProbe>;
   // Pre-install hook: some agents refuse to resolve a home that does not
   // exist yet (codex never creates CODEX_HOME). The runner calls this before
   // install so install-time agent spawns see a valid home; returned vars are

@@ -16,16 +16,16 @@ LLM) against the fake Huawei Cloud boundary. The agent layer is never
 mocked; the Huawei Cloud boundary is fully fake but recording. Cases are
 driver-agnostic data: every assertion surface works for both legs.
 
-| Channel                            | Seam                                                                                                      | Owner                                                       |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| hcloud argv                        | `HCLOUD_BIN` + `HCLOUD_BIN_ARGS_JSON` + `HCLOUD_FAKE_LOG` (+ `HCLOUD_FAKE_SCRIPT`, `HCLOUD_FAKE_VERSION`) | env contract (long-standing)                                |
-| HTTP (hdkitservice / IAM / hwlink) | `HDKITSERVICE_ENDPOINT`, `HW_IAM_ENDPOINT`, `HWLINK_ENDPOINT` → local `HttpFake`                          | env contract (long-standing)                                |
-| gateway sidecar                    | `OPENMCP_BIN` (+ fixture knob `FAKE_POLICY`, recording `OPENMCP_FAKE_LOG`)                                | env contract (long-standing)                                |
-| icons manifest                     | `HUAWEICLOUD_ICONS_OFFLINE=1` (forces the bundled snapshot; case-scoped `E2eCase.env`)                    | env contract (long-standing)                                |
-| npm registry (update pack)         | `HUAWEICLOUD_NPM_REGISTRY` → local `HttpFake`, honored by `queryDistTags` on both faces                   | env contract (extended — see Known boundaries)              |
-| tool-call trace                    | `HUAWEICLOUD_DEVKIT_TRACE` (see below)                                                                    | new contract, frozen                                        |
-| disclosure events                  | same trace file, recorded at the stdio transport's outbound wire face                                     | new contract, frozen                                        |
-| file artifacts                     | HOME-relative paths under the throwaway home                                                              | installer layout (pinned by cross-platform-install.test.ts) |
+| Channel                            | Seam                                                                                                      | Owner                                                                                                                                          |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| hcloud argv (agent session)        | `HCLOUD_BIN` + `HCLOUD_BIN_ARGS_JSON` + `HCLOUD_FAKE_LOG` (+ `HCLOUD_FAKE_SCRIPT`, `HCLOUD_FAKE_VERSION`) | env contract (long-standing; the install phase rides a sibling log, `hcloud-fake-install.log`, so the run recording names agent activity only) |
+| HTTP (hdkitservice / IAM / hwlink) | `HDKITSERVICE_ENDPOINT`, `HW_IAM_ENDPOINT`, `HWLINK_ENDPOINT` → local `HttpFake`                          | env contract (long-standing)                                                                                                                   |
+| gateway sidecar                    | `OPENMCP_BIN` (+ fixture knob `FAKE_POLICY`, recording `OPENMCP_FAKE_LOG`)                                | env contract (long-standing)                                                                                                                   |
+| icons manifest                     | `HUAWEICLOUD_ICONS_OFFLINE=1` (forces the bundled snapshot; case-scoped `E2eCase.env`)                    | env contract (long-standing)                                                                                                                   |
+| npm registry (update pack)         | `HUAWEICLOUD_NPM_REGISTRY` → local `HttpFake`, honored by `queryDistTags` on both faces                   | env contract (extended — see Known boundaries)                                                                                                 |
+| tool-call trace                    | `HUAWEICLOUD_DEVKIT_TRACE` (see below)                                                                    | new contract, frozen                                                                                                                           |
+| disclosure events                  | same trace file, recorded at the stdio transport's outbound wire face                                     | new contract, frozen                                                                                                                           |
+| file artifacts                     | HOME-relative paths under the throwaway home                                                              | installer layout (pinned by cross-platform-install.test.ts)                                                                                    |
 
 ## Coupling classification (test → devkit dependency health)
 
@@ -216,6 +216,28 @@ group and killed tree-wide on timeout; a startup sweep removes stale
 `hwc-e2e-*` temp dirs older than a day (signal-death self-healing).
 `selfcheck` subcommand proves the full chain (tarball → install → MCP server
 → callTool → fakes) without the LLM.
+
+Two incident-hardening contracts, born from the 2026-10-22 CI failure
+(both legs exited 1 with zero `.e2e-results` — a dead model gateway produced
+an all-red dead-agent suite, and a runner-side crash took the only
+diagnostics with it):
+
+- **Model-wire pre-flight.** Each driver's `probe()` sends one authorized
+  request to the exact wire the leg speaks (responses for codex,
+  chat/completions for opencode) before any case spends budget: a dead key,
+  a missing route, or an unlisted model aborts in seconds as exit 2 with the
+  HTTP status and response body (scrubbed) in the output and the report.
+  Mid-suite, three consecutive liveness-false cases re-probe the wire once;
+  a dead wire aborts the suite as infra (`fatalError` in the report) instead
+  of burning the remaining budget on guaranteed red.
+- **The report always ships.** The report scaffold exists before anything
+  that can fail loudly, a `finally` serializes it on every terminal path
+  (probe refusal, fatal throw, aborted or completed suite), and per-attempt
+  plus per-case catches turn harness crashes into `runnerError` case
+  verdicts — the stack rides the attempt's stdout instead of killing the
+  process. Three consecutive runner-error cases abort the suite (a
+  systematic crash must not burn 31 × install + LLM budget); pure infra red
+  exits 2, product red exits 1.
 
 CI (`.github/workflows/e2e-nightly.yml`): the only required repository
 setting is the `E2E_TEST_MODEL_APIKEY` secret. Provider/model/baseURL default
