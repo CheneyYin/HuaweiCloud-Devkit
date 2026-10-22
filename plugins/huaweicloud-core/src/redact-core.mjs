@@ -39,11 +39,12 @@ const CREDS = keyPattern(CREDENTIAL_KEY_TOKENS);
 // embedded as a JSON string value (invoke/FunctionGraph results):
 // \"api_key\": \"…\". One escape level is tolerated on the quotes, and the
 // quoted bodies match internal escape pairs ("a\"b"). The blob class gets
-// the same tolerance plus a one-level object/array value ("metadata":
-// {…}) — the string path must not be weaker than the parsed-object path.
+// the same tolerance plus object/array values up to two nesting levels
+// ("user_data": {"script": {"body": …}}) — the string path must not be
+// weaker than the parsed-object path for the shapes real output prints.
 const VALUE = '(\\\\?"(?:[^"\\\\]|\\\\.)*\\\\?"|\\\\?\'(?:[^\'\\\\]|\\\\.)*\\\\?\'|[^\\s,;]+)';
 const QUOTED_BLOB_VALUE =
-  '(\\{[^{}]*\\}|\\[[^\\]\\[]*\\]|\\\\?"(?:[^"\\\\]|\\\\.)*\\\\?"|\\\\?\'(?:[^\'\\\\]|\\\\.)*\\\\?\')';
+  '(\\{(?:[^{}]|\\{[^{}]*\\})*\\}|\\[[^\\]\\[]*\\]|\\\\?"(?:[^"\\\\]|\\\\.)*\\\\?"|\\\\?\'(?:[^\'\\\\]|\\\\.)*\\\\?\')';
 
 // Blob bound policy. The DISPLAY path (redactSecrets — payload stdout, 0600
 // side files) sweeps the whole rest of the line: a blob value has no
