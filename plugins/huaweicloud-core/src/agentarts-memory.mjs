@@ -16,17 +16,25 @@
 // wrapper-captured 0600 key file (memoryApiKeyFile), injected ONLY into
 // the child env (HUAWEICLOUD_SDK_MEMORY_API_KEY), and never appears in
 // argv, the tool arguments, or the payload.
+//
+// Failure contract: the snippet's exit codes are OURS and trustworthy
+// (0 = JSON printed, 1 = failure, 3 = module missing). NO content
+// signature scan runs on the payload — memory CONTENT is by design a
+// store of failure experience (tracebacks, ERROR log lines), so scanning
+// result text for CLI failure signatures guarantees false positives on
+// successful reads. Exit code + stdout-parseability is the whole
+// detector.
 
 import { readFileSync } from 'node:fs';
 
 import {
+  AGENTARTS_SDK_MIRROR,
   buildChildEnv,
-  detectFailure,
   memoryApiKeyFile,
   pinnedSdkVersion,
   pythonCandidatesForAgentarts,
   READONLY_TIMEOUT_MS,
-  runPythonSnippet,
+  runOverPythonCandidates,
   saveLargeOutput,
 } from './agentarts-cli.mjs';
 import { redactSecrets } from './safety-policy.mjs';
@@ -113,6 +121,56 @@ const MEMORY_READ_SNIPPET = [
   '    sys.exit(1)',
 ].join('\n');
 
+// Filter-key allowlists, transcribed from the pinned venv's
+// sdk/memory/inner/config.py dataclasses. The boundary REJECTS unknown
+// keys: a stray key would either raise a dataclass TypeError at run time
+// or (worse) ride the argv JSON silently — and a credential-shaped key in
+// filters would put a secret on the process list (the top-level params
+// are whitelisted; filters must be too).
+// - search: actor_id is managed by the REQUIRED top-level param (the
+//   bridge injects it into filters) — passing it inside filters is
+//   rejected to avoid two sources for one isolation-critical field.
+// - list: sort_by/sort_order exist on the dataclass but the 0.1.7 HTTP
+//   layer never sends them (memory_service.py filter_mappings maps 7
+//   keys) — rejected as the silent-no-op class.
+const SEARCH_FILTER_FIELDS = [
+  'query',
+  'strategy_type',
+  'strategy_id',
+  'assistant_id',
+  'session_id',
+  'memory_type',
+  'start_time',
+  'end_time',
+  'top_k',
+  'min_score',
+];
+const LIST_FILTER_FIELDS = [
+  'strategy_type',
+  'strategy_id',
+  'actor_id',
+  'assistant_id',
+  'session_id',
+  'start_time',
+  'end_time',
+];
+
+function validateFilterKeys(operation, filters) {
+  const legal = operation === 'search_memories' ? SEARCH_FILTER_FIELDS : LIST_FILTER_FIELDS;
+  for (const key of Object.keys(filters)) {
+    if (key === 'actor_id' && operation === 'search_memories') {
+      return 'filters.actor_id is managed by the required top-level actor_id parameter — pass it there, not inside filters.';
+    }
+    if (key === 'sort_by' || key === 'sort_order') {
+      return `filters.${key} exists on the SDK dataclass but the 0.1.7 HTTP layer never sends it (memory_service.py filter_mappings) — a silent no-op. Sorting is server-default only.`;
+    }
+    if (!legal.includes(key)) {
+      return `Unknown filters key "${key}" — legal keys for ${operation}: ${legal.join(', ')}.`;
+    }
+  }
+  return null;
+}
+
 // Boundary validation (the tool's front door — the snippet trusts what
 // arrives). Returns an error string or null.
 function validateMemoryRead(params) {
@@ -128,7 +186,16 @@ function validateMemoryRead(params) {
     if (typeof params[field] !== 'string' || params[field].length === 0) return message;
     return null;
   };
-  if (params.operation === 'get_session' || params.operation === 'get_last_k_messages') {
+  // list_messages: the SDK docstring claims session_id is optional ("query
+  // all messages under Space"), but the 0.1.7 HTTP layer builds
+  // /sessions/{session_id}/messages unconditionally — None stringifies
+  // into the path (memory_service.py list_messages). Required here until
+  // an S0 run proves the space-wide form works.
+  if (
+    params.operation === 'get_session' ||
+    params.operation === 'get_last_k_messages' ||
+    params.operation === 'list_messages'
+  ) {
     const err = need('session_id', 'session_id is required for this operation.');
     if (err) return err;
   }
@@ -178,6 +245,8 @@ function validateMemoryRead(params) {
     if (typeof params.filters !== 'object' || Array.isArray(params.filters)) {
       return 'filters must be an object (MemorySearchFilter / MemoryListFilter fields).';
     }
+    const filterError = validateFilterKeys(params.operation, params.filters);
+    if (filterError) return filterError;
   }
   return null;
 }
@@ -261,61 +330,67 @@ export async function readAgentartsMemory(params = {}, options = {}) {
   const childEnv = { ...buildChildEnv({ injectCredentials: false }), HUAWEICLOUD_SDK_MEMORY_API_KEY: keyLoad.key };
   const timeoutMs = options.timeoutMs ?? READONLY_TIMEOUT_MS;
   const args = ['-c', MEMORY_READ_SNIPPET, jsonArg];
-  const runCandidate = options.runCandidate || ((candidate) => runPythonSnippet(candidate, args, childEnv, timeoutMs));
 
-  for (const candidate of pythonCandidatesForAgentarts()) {
-    const result = await runCandidate(candidate, args, childEnv);
-    const moduleMissing =
-      result.exitCode === 3 || /ModuleNotFoundError|AGENTARTS_SDK_MISSING/.test(result.stderr || '');
-    // Only "this python cannot run the SDK" advances the chain (the
-    // list_agents contract): a candidate that found the SDK and failed
-    // (auth, network, API error) is FINAL.
-    if (result.spawnError || moduleMissing) continue;
-    const failed = result.timedOut || result.exitCode !== 0 || detectFailure(result.stdout || '', result.stderr || '');
-    let parsed = null;
-    if (!failed) {
-      try {
-        parsed = JSON.parse(result.stdout);
-      } catch {
-        parsed = null;
+  return runOverPythonCandidates({
+    args,
+    childEnv,
+    timeoutMs,
+    runCandidate: options.runCandidate,
+    shapeResult: (result, candidate) => {
+      // Trustworthy exit codes (see the module header): exit 0 means the
+      // snippet printed result JSON — a parse failure on exit 0 is a
+      // pollution detector, NOT a content scan. No failure signature runs
+      // against the payload: memory CONTENT is by design a store of
+      // failure experience (tracebacks, ERROR lines), so scanning it
+      // guarantees false positives on successful reads.
+      let parsed = null;
+      if (!result.timedOut && result.exitCode === 0) {
+        try {
+          parsed = JSON.parse(result.stdout);
+        } catch {
+          parsed = null;
+        }
+        // Parsed results pass the SAME redaction as the string paths — the
+        // object path masks credential-shaped fields (trap 27 class).
+        if (parsed !== null && parsed !== undefined) parsed = redactSecrets(parsed);
       }
-      // Parsed results pass the SAME redaction as the string paths — the
-      // object path masks credential-shaped fields (trap 27 class).
-      if (parsed !== null && parsed !== undefined) parsed = redactSecrets(parsed);
-    }
-    const safeStdout = redactSecrets(result.stdout || '');
-    const largeOutputFile = failed ? null : saveLargeOutput(safeStdout);
-    const payloadStdout = largeOutputFile
-      ? `${safeStdout.slice(0, 2000)}\n...(truncated, full output saved to ${largeOutputFile})`
-      : safeStdout;
-    return {
-      ok: !failed,
-      service: 'AgentArts',
-      operation: `memory ${params.operation} (SDK data plane; no CLI subcommand in 0.1.7)`,
-      executable: candidate,
-      exitCode: result.exitCode,
-      failureDetected: failed,
-      result: parsed,
-      stdout: payloadStdout,
-      stderr: redactSecrets(result.stderr || ''),
-      ...(result.timedOut
-        ? { timedOut: true, error: `agentarts memory ${params.operation} timed out after ${timeoutMs} ms.` }
-        : {}),
-    };
-  }
-  return {
-    ok: false,
-    error: `No python candidate could import agentarts (tried: ${pythonCandidatesForAgentarts().join(', ')}). Install the SDK: npx huaweicloud-devkit install-agentarts (or pip install agentarts-sdk==${pinnedSdkVersion() || 'the pinned version'} -i https://mirrors.huaweicloud.com/repository/pypi/simple).`,
-  };
+      const failed = result.timedOut || result.exitCode !== 0 || parsed === null;
+      const safeStdout = redactSecrets(result.stdout || '');
+      // Truncation applies to successes AND failures (a 60s timeout can
+      // accumulate a lot of output). When the side file fires, `result`
+      // is dropped — the file pointer is the contract; returning an
+      // untruncated parsed object next to a truncated stdout would defeat
+      // the whole large-output machinery.
+      const largeOutputFile = saveLargeOutput(safeStdout);
+      const payloadStdout = largeOutputFile
+        ? `${safeStdout.slice(0, 2000)}\n...(truncated, full output saved to ${largeOutputFile})`
+        : safeStdout;
+      return {
+        ok: !failed,
+        service: 'AgentArts',
+        operation: `memory ${params.operation} (SDK data plane; no CLI subcommand in 0.1.7)`,
+        executable: candidate,
+        exitCode: result.exitCode,
+        failureDetected: failed,
+        ...(largeOutputFile || failed ? {} : { result: parsed }),
+        stdout: payloadStdout,
+        stderr: redactSecrets(result.stderr || ''),
+        ...(result.timedOut
+          ? { timedOut: true, error: `agentarts memory ${params.operation} timed out after ${timeoutMs} ms.` }
+          : {}),
+      };
+    },
+  });
 }
 
-// Tool surface: definitions and the dispatch handler exported so tools.mjs
-// stays a thin registration site (the agentarts-cli pattern).
+// Tool surface: definitions exported so tools.mjs stays a thin
+// registration site (the agentarts-cli pattern — dispatch lives in
+// callAgentartsMemoryTool, definitions carry no handlers).
 export const AGENTARTS_MEMORY_TOOL_DEFINITIONS = [
   {
     name: 'huaweicloud_agentarts_memory_read',
     description:
-      "Read the AgentArts memory DATA plane (SDK MemoryClient — the 0.1.7 CLI has NO data-plane subcommands): sessions, messages, and memories of an existing memory space. The one-time data-plane api_key is read from the wrapper-captured 0600 key file (spaces created through the memory create tool); it never enters argv, tool arguments, or output. actor_id is REQUIRED for search_memories — server-side isolation is actor-level only, and an unscoped search silently spans every actor in the space; list_memories without filters.actor_id lists ALL actors' memories (an ops/debug stance). Pagination is 0-based; sessions limit 1-20, messages/memories limit 1-100. Region defaults to cn-southwest-2 (the only e2e-measured region). Read-only: no approval needed.",
+      "Read the AgentArts memory DATA plane (SDK MemoryClient — the 0.1.7 CLI has NO data-plane subcommands): sessions, messages, and memories of an existing memory space. The one-time data-plane api_key is read from the wrapper-captured 0600 key file (spaces created through the memory create tool); it never enters argv, tool arguments, or output. actor_id is REQUIRED for search_memories — server-side isolation is actor-level only, and an unscoped search silently spans every actor in the space; list_memories without filters.actor_id lists ALL actors' memories (an ops/debug stance). list_messages requires session_id (the SDK's space-wide form builds a broken /sessions/None path in 0.1.7). Pagination is 0-based; sessions limit 1-20, messages/memories limit 1-100. Region defaults to cn-southwest-2 (the only e2e-measured region). Read-only: no approval needed.",
     inputSchema: {
       type: 'object',
       required: ['operation', 'space_id'],
@@ -324,7 +399,7 @@ export const AGENTARTS_MEMORY_TOOL_DEFINITIONS = [
           type: 'string',
           enum: MEMORY_READ_OPERATIONS,
           description:
-            'The read operation. Required params: get_session/get_last_k_messages → session_id; get_message → message_id + session_id; get_memory → memory_id; search_memories → actor_id + filters.query.',
+            'The read operation. Required params: get_session/get_last_k_messages/list_messages → session_id; get_message → message_id + session_id; get_memory → memory_id; search_memories → actor_id + filters.query.',
         },
         space_id: {
           type: 'string',
@@ -349,11 +424,10 @@ export const AGENTARTS_MEMORY_TOOL_DEFINITIONS = [
         filters: {
           type: 'object',
           description:
-            'search_memories: MemorySearchFilter fields (query REQUIRED, plus strategy_type/strategy_id/assistant_id/session_id/memory_type/start_time/end_time/top_k/min_score). list_memories: MemoryListFilter fields (strategy_type/strategy_id/actor_id/assistant_id/session_id/start_time/end_time/sort_by/sort_order).',
+            'search_memories: MemorySearchFilter fields (query REQUIRED, plus strategy_type/strategy_id/assistant_id/session_id/memory_type/start_time/end_time/top_k/min_score — actor_id goes in the top-level param). list_memories: MemoryListFilter fields (strategy_type/strategy_id/actor_id/assistant_id/session_id/start_time/end_time — sort_by/sort_order exist on the SDK dataclass but 0.1.7 never sends them; rejected here). Unknown keys are rejected.',
         },
       },
     },
-    handler: async (args) => readAgentartsMemory(args || {}),
   },
 ];
 

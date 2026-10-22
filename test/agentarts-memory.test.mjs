@@ -70,6 +70,31 @@ test('memory read validates the boundary before any spawn', async () => {
       /k must be a positive integer/,
     );
     await bad({ operation: 'list_memories', space_id: 'sp1', filters: ['nope'] }, /filters must be an object/);
+    // list_messages requires session_id: the SDK's space-wide form builds a
+    // broken /sessions/None path in 0.1.7 (memory_service.py).
+    await bad({ operation: 'list_messages', space_id: 'sp1' }, /session_id is required/);
+    // Filter keys are allowlisted: a credential-shaped key in filters would
+    // ride the argv JSON onto the process list.
+    await bad(
+      {
+        operation: 'search_memories',
+        space_id: 'sp1',
+        actor_id: 'u1',
+        filters: { query: 'q', api_key: 'SUPERSECRET' },
+      },
+      /Unknown filters key "api_key"/,
+    );
+    // actor_id has exactly one source (the top-level param).
+    await bad(
+      { operation: 'search_memories', space_id: 'sp1', actor_id: 'u1', filters: { query: 'q', actor_id: 'u2' } },
+      /filters\.actor_id is managed by the required top-level actor_id parameter/,
+    );
+    // sort_by/sort_order: the dataclass accepts them, the 0.1.7 HTTP layer
+    // never sends them — the silent-no-op class, rejected at the boundary.
+    await bad(
+      { operation: 'list_memories', space_id: 'sp1', filters: { sort_by: 'updated_at' } },
+      /never sends it \(memory_service\.py filter_mappings\)/,
+    );
   });
 });
 
@@ -211,6 +236,39 @@ test('module-missing advances the python candidate chain; spawn errors do not le
   });
 });
 
+test('traceback-bearing memory CONTENT reads as success (no content signature scan)', async () => {
+  await withIsolation(async (home) => {
+    writeKeyFile(home, 'sp1', KEY);
+    // Memory content is by design a store of failure experience — episodic
+    // memories about debugging carry tracebacks and ERROR log lines. A
+    // content-signature failure scan would permanently report these
+    // successful reads as failures (adversarial round-1 finding). The
+    // failure contract is exit codes + stdout parseability only.
+    const out = await readAgentartsMemory(
+      { operation: 'list_memories', space_id: 'sp1' },
+      {
+        runCandidate: async () => ({
+          exitCode: 0,
+          stdout: JSON.stringify({
+            items: [
+              {
+                id: 'm1',
+                content:
+                  '2026-10-21 12:00:00 - ERROR - build failed; Traceback (most recent call last): ... TypeError: boom',
+              },
+            ],
+            total: 1,
+          }),
+          stderr: '',
+        }),
+      },
+    );
+    assert.equal(out.ok, true);
+    assert.equal(out.failureDetected, false);
+    assert.match(out.result.items[0].content, /Traceback/);
+  });
+});
+
 test('large memory results truncate to a pointer like the CLI wrapper', async () => {
   await withIsolation(async (home) => {
     writeKeyFile(home, 'sp1', KEY);
@@ -223,6 +281,9 @@ test('large memory results truncate to a pointer like the CLI wrapper', async ()
     );
     assert.equal(out.ok, true);
     assert.match(out.stdout, /truncated, full output saved to/);
+    // When the side file fires, `result` is DROPPED — an untruncated parsed
+    // object next to a truncated stdout would defeat the machinery.
+    assert.equal('result' in out, false);
     const saved = out.stdout.match(/saved to (.+)$/m)?.[1];
     assert.ok(saved && existsSync(saved));
     // The side file is scrubbed (no key anywhere) and 0600.
@@ -254,14 +315,17 @@ test('memory read tool surface: definition and dispatch', async () => {
 });
 
 test('the read operation set is exactly the 8 data-plane readonly methods', () => {
-  assert.deepEqual([...MEMORY_READ_OPERATIONS].sort((a, b) => a.localeCompare(b)), [
-    'get_last_k_messages',
-    'get_memory',
-    'get_message',
-    'get_session',
-    'list_memories',
-    'list_messages',
-    'list_sessions',
-    'search_memories',
-  ]);
+  assert.deepEqual(
+    [...MEMORY_READ_OPERATIONS].sort((a, b) => a.localeCompare(b)),
+    [
+      'get_last_k_messages',
+      'get_memory',
+      'get_message',
+      'get_session',
+      'list_memories',
+      'list_messages',
+      'list_sessions',
+      'search_memories',
+    ],
+  );
 });
