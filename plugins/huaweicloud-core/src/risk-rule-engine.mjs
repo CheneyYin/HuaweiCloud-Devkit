@@ -23,9 +23,11 @@ export function loadRiskRules(options = {}) {
 // command argument" warning must not itself be the leak channel. Same
 // single-source scrubber as redactSecrets (findings trap 27): before the
 // unification this local copy lacked api_key entirely and tolerated no
-// quoted-key forms.
+// quoted-key forms. The blob sweep uses the nextKey bound: evidence must
+// stay diagnosable for the fields AFTER a blob value (the display path
+// keeps the whole-line sweep).
 function redactEvidence(text) {
-  return redactCredentialShapes(text);
+  return redactCredentialShapes(text, { blobBound: 'nextKey' });
 }
 
 function normalizeText(value) {

@@ -38,20 +38,33 @@ const CREDS = keyPattern(CREDENTIAL_KEY_TOKENS);
 // A quoted value may itself be backslash-escaped when the whole document is
 // embedded as a JSON string value (invoke/FunctionGraph results):
 // \"api_key\": \"…\". One escape level is tolerated on the quotes, and the
-// quoted bodies match internal escape pairs ("a\"b").
+// quoted bodies match internal escape pairs ("a\"b"). The blob class gets
+// the same tolerance plus a one-level object/array value ("metadata":
+// {…}) — the string path must not be weaker than the parsed-object path.
 const VALUE = '(\\\\?"(?:[^"\\\\]|\\\\.)*\\\\?"|\\\\?\'(?:[^\'\\\\]|\\\\.)*\\\\?\'|[^\\s,;]+)';
+const QUOTED_BLOB_VALUE =
+  '(\\{[^{}]*\\}|\\[[^\\]\\[]*\\]|\\\\?"(?:[^"\\\\]|\\\\.)*\\\\?"|\\\\?\'(?:[^\'\\\\]|\\\\.)*\\\\?\')';
 
-export function redactCredentialShapes(text) {
+// Blob bound policy. The DISPLAY path (redactSecrets — payload stdout, 0600
+// side files) sweeps the whole rest of the line: a blob value has no
+// reliable terminator and may embed arbitrary sensitive content. The
+// EVIDENCE path (risk-finding evidence) stops the sweep at the next
+// key-shaped token so later fields on the same evidence line stay
+// diagnosable — nested credential-shaped content is still caught by the
+// credential pass that runs right after.
+export function redactCredentialShapes(text, { blobBound = 'line' } = {}) {
+  const unquotedBlob =
+    blobBound === 'nextKey'
+      ? [new RegExp(`((?:${BLOB})\\s*[:=]\\s*)((?:(?!\\s+[\\w.-]+[:=]).)*)(.*)`, 'gi'), '$1<redacted>$3']
+      : [new RegExp(`((?:${BLOB})\\s*[:=]\\s*).*`, 'gi'), '$1<redacted>'];
   return (
     String(text)
-      // Opaque blob keys (cloud-init user_data, metadata, private_key) carry
-      // base64/scripts that may embed SSH keys, DB passwords, bootstrap
-      // tokens. QUOTED form: the value is a quoted string — redact exactly
-      // it and let mid-JSON neighbors on the same line survive.
-      .replace(new RegExp(`((["'])(?:${BLOB})\\2\\s*[:=]\\s*)("[^"]*"|'[^']*')`, 'gi'), '$1<redacted>')
-      // UNQUOTED blob form: redact the ENTIRE rest of the line — the value
-      // has no reliable terminator.
-      .replace(new RegExp(`((?:${BLOB})\\s*[:=]\\s*).*`, 'gi'), '$1<redacted>')
+      // QUOTED blob keys: the value is a quoted string (or one-level
+      // object/array) — redact exactly it and let mid-JSON neighbors on
+      // the same line survive.
+      .replace(new RegExp(`((\\\\?["'])(?:${BLOB})\\2\\s*[:=]\\s*)(${QUOTED_BLOB_VALUE})`, 'gi'), '$1<redacted>')
+      // UNQUOTED blob form: bound per the policy above.
+      .replace(unquotedBlob[0], unquotedBlob[1])
       // Credential-shaped keys. The backreferenced quote pair tolerates
       // JSON/Python-dict keys and one backslash escape level.
       .replace(new RegExp(`(\\\\?["']?)(${CREDS})\\1(\\s*[:=]\\s*)(${VALUE})`, 'gi'), '$1$2$1$3<redacted>')
