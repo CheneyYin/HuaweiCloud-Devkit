@@ -12,7 +12,11 @@ import { planHcloudCommand, runHcloud, consumeApprovalToken, inspectApprovalToke
 import { argsMatchPlanBinding } from './approval-tokens.mjs';
 import { checkAccountType } from './account-type.mjs';
 import { AGENTARTS_TOOL_DEFINITIONS, callAgentartsTool } from './agentarts-cli.mjs';
-import { AGENTARTS_MEMORY_TOOL_DEFINITIONS, callAgentartsMemoryTool } from './agentarts-memory.mjs';
+import {
+  AGENTARTS_MEMORY_TOOL_DEFINITIONS,
+  AGENTARTS_MEMORY_WRITE_TOOL_DEFINITIONS,
+  callAgentartsMemoryTool,
+} from './agentarts-memory.mjs';
 import { searchMarketplace } from './search-market.mjs';
 import { getServiceIcon } from './icon-library.mjs';
 import { detectFramework } from './detect-framework.mjs';
@@ -957,6 +961,7 @@ export const TOOL_DEFINITIONS = [
   },
   ...AGENTARTS_TOOL_DEFINITIONS,
   ...AGENTARTS_MEMORY_TOOL_DEFINITIONS,
+  ...AGENTARTS_MEMORY_WRITE_TOOL_DEFINITIONS,
 ];
 
 function toolInvokeValue(name, args) {
@@ -1205,6 +1210,8 @@ export async function callTool(name, rawArgs = {}, opts = {}) {
     case 'huaweicloud_agentarts_list_agents':
       return callAgentartsTool(name, args);
     case 'huaweicloud_agentarts_memory_read':
+    case 'huaweicloud_agentarts_memory_plan':
+    case 'huaweicloud_agentarts_memory_write':
       return callAgentartsMemoryTool(name, args);
     case 'huaweicloud_show_profile_redacted':
       return showProfileRedacted(args.profile);

@@ -34,7 +34,7 @@ const OPERATION_TIMEOUT_MS = {
   'runtime upload-files': 900_000,
   'runtime download-files': 900_000,
 };
-const DEFAULT_APPROVED_TIMEOUT_MS = 120_000;
+export const DEFAULT_APPROVED_TIMEOUT_MS = 120_000;
 const LARGE_OUTPUT_THRESHOLD = 50_000;
 const OUTPUT_DIR = join('/tmp', 'huaweicloud-devkit');
 

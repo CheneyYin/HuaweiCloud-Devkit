@@ -6,9 +6,12 @@ import { join } from 'node:path';
 
 import {
   readAgentartsMemory,
+  planAgentartsMemoryWrite,
+  runAgentartsMemoryWrite,
   callAgentartsMemoryTool,
   AGENTARTS_MEMORY_TOOL_DEFINITIONS,
   MEMORY_READ_OPERATIONS,
+  MEMORY_WRITE_OPERATIONS,
 } from '../plugins/huaweicloud-core/src/agentarts-memory.mjs';
 
 // Isolation: HUAWEICLOUD_HOME pointed at a scratch dir so the 0600 key-file
@@ -349,4 +352,175 @@ test('the read operation set is exactly the 8 data-plane readonly methods', () =
       'search_memories',
     ],
   );
+});
+
+test('memory write plan validates the boundary (write-specific rules)', async () => {
+  await withIsolation(async () => {
+    const bad = async (params, pattern) => {
+      const out = await planAgentartsMemoryWrite(params);
+      assert.equal(out.ok, false, JSON.stringify(params));
+      assert.match(out.error, pattern);
+    };
+    await bad(
+      { operation: 'list_sessions', space_id: 'sp1' },
+      /operation must be one of: create_session, add_messages, delete_session, delete_memory/,
+    );
+    await bad({ operation: 'create_session', space_id: 'sp1' }, /actor_id is REQUIRED for create_session/);
+    await bad(
+      { operation: 'add_messages', space_id: 'sp1', session_id: 's1', messages: [] },
+      /messages must be a non-empty array/,
+    );
+    await bad(
+      { operation: 'add_messages', space_id: 'sp1', session_id: 's1', messages: [{ role: 'tool', content: 'x' }] },
+      /role must be one of user, assistant, system/,
+    );
+    await bad(
+      { operation: 'add_messages', space_id: 'sp1', session_id: 's1', messages: [{ role: 'user', content: '' }] },
+      /content must be a non-empty string/,
+    );
+    await bad(
+      {
+        operation: 'add_messages',
+        space_id: 'sp1',
+        session_id: 's1',
+        messages: [{ role: 'user', content: 'x', meta: 5 }],
+      },
+      /messages\[0\]\.meta must be a string/,
+    );
+    await bad({ operation: 'delete_session', space_id: 'sp1' }, /session_id is required for delete_session/);
+    await bad({ operation: 'delete_memory', space_id: 'sp1' }, /memory_id is required for delete_memory/);
+    await bad(
+      {
+        operation: 'add_messages',
+        space_id: 'sp1',
+        session_id: 's1',
+        messages: [{ role: 'user', content: 'x' }],
+        timestamp: 1.5,
+      },
+      /timestamp must be an integer/,
+    );
+  });
+});
+
+test('memory write plan mints a bound token with the right labels', async () => {
+  await withIsolation(async (home) => {
+    writeKeyFile(home, 'sp1', KEY);
+    const plan = planAgentartsMemoryWrite({
+      operation: 'add_messages',
+      space_id: 'sp1',
+      session_id: 's1',
+      messages: [
+        { role: 'user', content: 'we decided on tabs' },
+        { role: 'assistant', content: 'noted' },
+      ],
+    });
+    assert.equal(plan.ok, true);
+    assert.equal(plan.tier, 'approved');
+    assert.deepEqual(plan.labels, []);
+    assert.equal(typeof plan.approvalToken, 'string');
+    assert.equal(plan.request.messages.length, 2);
+    assert.equal(plan.request.region, 'cn-southwest-2');
+    assert.match(plan.approvalNote, /binds them exactly/);
+
+    const del = planAgentartsMemoryWrite({ operation: 'delete_memory', space_id: 'sp1', memory_id: 'm9' });
+    assert.equal(del.ok, true);
+    assert.deepEqual(del.labels, ['irreversible']);
+
+    const soft = planAgentartsMemoryWrite({ operation: 'delete_session', space_id: 'sp1', session_id: 's1' });
+    assert.deepEqual(soft.labels, []);
+  });
+});
+
+test('memory write enforces the token lifecycle and exact-parameter binding', async () => {
+  await withIsolation(async (home) => {
+    writeKeyFile(home, 'sp1', KEY);
+    const messages = [{ role: 'user', content: 'we decided on tabs' }];
+    const params = { operation: 'add_messages', space_id: 'sp1', session_id: 's1', messages };
+    const plan = planAgentartsMemoryWrite(params);
+    assert.equal(plan.ok, true);
+
+    // No token → remediation points at the plan tool.
+    const noToken = await runAgentartsMemoryWrite(params);
+    assert.equal(noToken.ok, false);
+    assert.match(noToken.error, /approvalToken is required/);
+
+    // Different parameters → binding mismatch, token NOT consumed.
+    const changed = await runAgentartsMemoryWrite({
+      ...params,
+      approvalToken: plan.approvalToken,
+      messages: [{ role: 'user', content: 'DIFFERENT' }],
+    });
+    assert.equal(changed.ok, false);
+    assert.match(changed.error, /DIFFERENT parameters/);
+    const recheck = await runAgentartsMemoryWrite(
+      { ...params, approvalToken: plan.approvalToken },
+      {
+        runCandidate: async () => ({ exitCode: 0, stdout: '{"items": []}', stderr: '' }),
+      },
+    );
+    assert.equal(recheck.ok, true, 'token must stay valid for the original parameters after a mismatch rejection');
+
+    // Replay after a successful execution → already consumed.
+    const replay = await runAgentartsMemoryWrite(
+      { ...params, approvalToken: plan.approvalToken },
+      {
+        runCandidate: async () => ({ exitCode: 0, stdout: '{"items": []}', stderr: '' }),
+      },
+    );
+    assert.equal(replay.ok, false);
+    assert.match(replay.error, /already_consumed/);
+  });
+});
+
+test('memory write executes with the key env-only and redacts results', async () => {
+  await withIsolation(async (home) => {
+    writeKeyFile(home, 'sp1', KEY);
+    const params = {
+      operation: 'create_session',
+      space_id: 'sp1',
+      actor_id: 'user-7',
+    };
+    const plan = planAgentartsMemoryWrite(params);
+    assert.equal(plan.ok, true);
+    const seen = [];
+    const out = await runAgentartsMemoryWrite(
+      { ...params, approvalToken: plan.approvalToken },
+      {
+        runCandidate: async (candidate, args, childEnv) => {
+          seen.push({ args, childEnv });
+          return {
+            exitCode: 0,
+            stdout: '{"id": "sess-1", "actor_id": "user-7", "api_key": "LEAKY777"}',
+            stderr: '',
+          };
+        },
+      },
+    );
+    assert.equal(out.ok, true);
+    assert.equal(out.result.id, 'sess-1');
+    assert.equal(out.result.api_key, '<redacted>');
+    // Env-only key transport, no AK/SK, request JSON non-secret.
+    assert.equal(seen[0].childEnv.HUAWEICLOUD_SDK_MEMORY_API_KEY, KEY);
+    assert.ok(!seen[0].args.some((a) => String(a).includes(KEY)));
+    assert.equal(seen[0].childEnv.HUAWEICLOUD_SDK_AK, undefined);
+    const request = JSON.parse(seen[0].args[seen[0].args.length - 1]);
+    assert.equal(request.actor_id, 'user-7');
+    assert.doesNotMatch(JSON.stringify(out), /LEAKY777|KEY_ONETIME_mem42/);
+  });
+});
+
+test('memory write dispatch routes plan and write', async () => {
+  await withIsolation(async () => {
+    const rejected = await callAgentartsMemoryTool('huaweicloud_agentarts_memory_write', {
+      operation: 'delete_memory',
+    });
+    assert.equal(rejected.ok, false);
+    assert.match(rejected.error, /space_id must match/);
+    const routed = await callAgentartsMemoryTool('huaweicloud_agentarts_memory_plan', {
+      operation: 'delete_memory',
+      space_id: 'sp1',
+    });
+    assert.equal(routed.ok, false);
+    assert.match(routed.error, /memory_id is required/);
+  });
 });

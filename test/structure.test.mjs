@@ -1422,3 +1422,31 @@ test('the agentarts memory data-plane read bridge registers with its safety cont
   assert.match(def.description, /NO data-plane subcommands/);
   assert.match(def.description, /cn-southwest-2/);
 });
+
+test('the agentarts memory WRITE bridge registers with its approval contract pinned', async () => {
+  const { TOOL_DEFINITIONS } = await import('../plugins/huaweicloud-core/src/tools.mjs');
+  const plan = TOOL_DEFINITIONS.find((t) => t.name === 'huaweicloud_agentarts_memory_plan');
+  const write = TOOL_DEFINITIONS.find((t) => t.name === 'huaweicloud_agentarts_memory_write');
+  assert.ok(plan, 'tools.mjs missing huaweicloud_agentarts_memory_plan');
+  assert.ok(write, 'tools.mjs missing huaweicloud_agentarts_memory_write');
+  const { MEMORY_WRITE_OPERATIONS } = await import('../plugins/huaweicloud-core/src/agentarts-memory.mjs');
+  // Exactly the 4 write methods — the enum must not grow silently.
+  assert.deepEqual(
+    [...MEMORY_WRITE_OPERATIONS].sort((a, b) => a.localeCompare(b)),
+    ['add_messages', 'create_session', 'delete_memory', 'delete_session'],
+  );
+  // Writes are token-gated: the plan mints the token, the write consumes
+  // it, and the texts teach the binding + single-use semantics.
+  assert.match(plan.description, /approvalToken/);
+  assert.match(plan.description, /binds the exact planned request/);
+  assert.match(write.inputSchema.required.join(','), /^approvalToken/);
+  assert.match(write.description, /EXACT same parameters/);
+  assert.match(write.description, /irreversible/);
+  // Same no-secret-parameter rule as the read tool.
+  for (const banned of ['api_key', 'apiKey', 'api-key', 'key']) {
+    assert.equal(banned in plan.inputSchema.properties, false, `plan tool must not accept a ${banned} parameter`);
+    assert.equal(banned in write.inputSchema.properties, false, `write tool must not accept a ${banned} parameter`);
+  }
+  // The TextMessage role contract (the dataclass Literal excludes 'tool').
+  assert.match(plan.inputSchema.properties.messages.description, /user\|assistant\|system/);
+});
