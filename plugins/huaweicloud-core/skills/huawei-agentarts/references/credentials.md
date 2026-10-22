@@ -90,7 +90,12 @@ parsed YAML, not from the image, so the file is not needed inside the image:
 ## Memory data-plane key (measured lifecycle, PR11)
 
 `memory create` authenticates on the CONTROL plane (AK/SK via the
-wrapper's env injection) and returns a ONE-TIME data-plane `api_key`. Only
+wrapper's env injection) and returns a ONE-TIME data-plane `api_key`. The
+create REQUIRES `--strategies` — at least one built-in strategy
+(semantic, episodic, user_preference, summary — e2e-measured; event —
+enum-evidenced only) or the server answers HTTP 400 [AgentArts.01010400]
+after the CLI has already created an orphan API key (key-before-space
+order); the plan tool rejects a missing value before any cloud call. Only
 the `--output json` branch prints it (the table branch prints Space
 ID/Status and the key is lost forever), so the wrapper canonicalizes
 create to `--output json` and REJECTS an explicit non-json `--output` at

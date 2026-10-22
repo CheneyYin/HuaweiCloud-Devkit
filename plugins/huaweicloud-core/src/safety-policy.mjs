@@ -673,21 +673,52 @@ function isStdinFedSegment(segment) {
   return re.test(segment) || re.test(segment.replace(/['"]/g, ''));
 }
 
+// Group/subcommand token resolution for an agentarts argv (WITHOUT the
+// executable token): skip leading dash tokens, lowercase, apply the
+// policy's aliases, and resolve the subcommand ONLY for groups with a
+// subcommands table. Exported so the approval wrapper's effective
+// classification mirrors THIS resolution (aliases included) instead of
+// hand-copying it — a policy alias mapping into a command family must
+// resolve identically in both places.
+export function resolveAgentartsGroupTokens(rawArgs, policy = DEFAULT_POLICY) {
+  const commandPolicy = policy.agentartsCommandPolicy || {};
+  const commands = commandPolicy.commands || {};
+  const aliases = commandPolicy.aliases || {};
+  const args = (Array.isArray(rawArgs) ? rawArgs : []).map((token) => String(token).toLowerCase());
+  let i = 0;
+  while (i < args.length && args[i].startsWith('-')) i += 1;
+  const group = args[i] || '';
+  const normalizedGroup = aliases[group] || group;
+  const entry = commands[normalizedGroup];
+  // Only groups WITH a subcommands table can resolve a subcommand: `invoke`
+  // takes a required positional {payload}, and treating it as a subcommand
+  // glued the payload into the operation (bogus "unregistered" warnings,
+  // broken timeout selection, Node/Python reason drift).
+  const next = args[i + 1];
+  const sub = entry?.subcommands && next && !next.startsWith('-') ? next : undefined;
+  return { groupIndex: i, group: normalizedGroup, sub };
+}
+
 // Registry resolution shared by the hook decision path AND the agentarts
 // approval wrapper (agentarts-cli.mjs) — one classification source, so the
 // "hook classification ≡ wrapper tier" invariant is structural, not tested
-// after the fact. Returns { tier, labels, group, subcommand, operation,
-// unregistered } for an argv array WITHOUT the executable token.
+// after the fact. ONE measured exception (findings trap 26a): the wrapper
+// re-derives help-in-value-slot argvs to their real tier; the hook's
+// position-blind help short-circuit stands until the per-command value-
+// flag metadata lands (recorded follow-up). Returns { tier, labels, group,
+// subcommand, operation, unregistered } for an argv array WITHOUT the
+// executable token.
 export function resolveAgentartsTier(rawArgs, options = {}) {
   const policy = options.policy || DEFAULT_POLICY;
   const commandPolicy = policy.agentartsCommandPolicy || {};
   const commands = commandPolicy.commands || {};
-  const aliases = commandPolicy.aliases || {};
   const defaultTier = commandPolicy.defaultTier || 'approved';
 
   const args = (Array.isArray(rawArgs) ? rawArgs : []).map((token) => token.toLowerCase());
-  let i = 0;
-  while (i < args.length && args[i].startsWith('-')) i += 1;
+  const resolved = resolveAgentartsGroupTokens(args, policy);
+  const i = resolved.groupIndex;
+  const normalizedGroup = resolved.group;
+  const subcommand = resolved.sub ?? '';
   const group = args[i] || '';
 
   // Typer eager flags: --help/-h are valid at every command level, so any
@@ -702,23 +733,15 @@ export function resolveAgentartsTier(rawArgs, options = {}) {
     return { tier: 'local', labels: [], group, subcommand: '', operation: group, unregistered: false };
   }
 
-  const normalizedGroup = aliases[group] || group;
   const entry = commands[normalizedGroup];
   let tier = defaultTier;
   let labels = [];
-  let subcommand = '';
   let unregistered = !entry;
   if (entry) {
     tier = entry.tier || defaultTier;
     labels = entry.labels || [];
-    // Only groups WITH a subcommands table can resolve a subcommand: `invoke`
-    // takes a required positional {payload}, and treating it as a subcommand
-    // glued the payload into the operation (bogus "unregistered" warnings,
-    // broken timeout selection, Node/Python reason drift).
-    const sub = args[i + 1];
-    if (entry.subcommands && sub && !sub.startsWith('-')) {
-      subcommand = sub;
-      const subEntry = entry.subcommands[sub];
+    if (subcommand) {
+      const subEntry = entry.subcommands[subcommand];
       if (subEntry) {
         tier = subEntry.tier || tier;
         labels = subEntry.labels || labels;

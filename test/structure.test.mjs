@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { MEMORY_STRATEGY_BUILTINS, MEMORY_STRATEGY_MEASURED } from '../plugins/huaweicloud-core/src/agentarts-cli.mjs';
+
 const root = fileURLToPath(new URL('..', import.meta.url));
 const pluginRoot = join(root, 'plugins', 'huaweicloud-core');
 
@@ -1283,6 +1285,38 @@ test('huawei-agentarts skill ships with routing floor and core registry wiring',
   const creds = readFileSync(join(skillDir, 'references', 'credentials.md'), 'utf8');
   assert.match(creds, /agentarts-memory-api-key/);
   assert.match(creds, /0600/);
+  // The credentials reference carries the third hand-written copy of the
+  // strategy list — pinned (with the provenance split) so it cannot drift
+  // from the wrapper's sets.
+  assert.match(creds, /semantic, episodic, user_preference, summary/);
+  assert.match(creds, /event\s+—\s+enum-evidenced/);
+  // Friction fix 1 (e2e-measured): memory create requires --strategies
+  // (server 400 [AgentArts.01010400] + orphan API key) — taught as a trap
+  // in SKILL.md and the workflows reference, enforced at plan time. The
+  // provenance split (four measured + event enum-evidenced) is pinned in
+  // BOTH doc surfaces (the wrapper derives its strings from the sets; the
+  // docs are hand-written and must not drift).
+  assert.match(body, /--strategies/);
+  assert.match(body, /AgentArts\.01010400/);
+  assert.match(body, /measured: semantic, episodic, user_preference, summary; event is enum-evidenced/);
+  const workflows = readFileSync(join(skillDir, 'references', 'cli-workflows.md'), 'utf8');
+  assert.match(workflows, /--strategies/);
+  assert.match(workflows, /semantic, episodic, user_preference, summary, event/);
+  assert.match(workflows, /event enum-evidenced only/);
+  // Two-directional pin: the exact-string guards above catch doc EDITS,
+  // this cross-check catches SET edits — every builtin in the wrapper's
+  // exported set must appear in the taught list, so adding a strategy to
+  // the sets fails here until the docs are updated. The MEASURED set is
+  // pinned to SKILL.md's provenance phrasing the same way.
+  for (const strategy of MEMORY_STRATEGY_BUILTINS) {
+    assert.ok(
+      workflows.includes(strategy),
+      `MEMORY_STRATEGY_BUILTINS value ${strategy} is missing from cli-workflows.md`,
+    );
+  }
+  for (const strategy of MEMORY_STRATEGY_MEASURED) {
+    assert.ok(body.includes(strategy), `MEMORY_STRATEGY_MEASURED value ${strategy} is missing from SKILL.md`);
+  }
 
   // Core skill routes agent workloads and declares the gate exemption (D15).
   const core = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-core', 'SKILL.md'), 'utf8');
