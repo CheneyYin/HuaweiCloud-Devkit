@@ -89,6 +89,10 @@ const MEMORY_READ_SNIPPET = [
   'try:',
   '    from agentarts.sdk.memory.client import MemoryClient',
   '    from agentarts.sdk.memory.inner.config import MemoryListFilter, MemorySearchFilter',
+  'except ModuleNotFoundError:',
+  '    print("AGENTARTS_SDK_MISSING", file=sys.stderr)',
+  '    sys.exit(3)',
+  'try:',
   '    params = json.loads(sys.argv[1])',
   '    client = MemoryClient(region_name=params["region"])',
   '    op = params["operation"]',
@@ -126,9 +130,6 @@ const MEMORY_READ_SNIPPET = [
   '        print("AGENTARTS_MEMORY_BAD_OPERATION", file=sys.stderr)',
   '        sys.exit(2)',
   '    print(json.dumps(result, ensure_ascii=False, default=lambda o: getattr(o, "__dict__", str(o))))',
-  'except ModuleNotFoundError:',
-  '    print("AGENTARTS_SDK_MISSING", file=sys.stderr)',
-  '    sys.exit(3)',
   'except Exception as error:',
   '    print("{}: {}".format(type(error).__name__, error), file=sys.stderr)',
   '    sys.exit(1)',
@@ -184,6 +185,46 @@ function validateFilterKeys(operation, filters) {
   return null;
 }
 
+// Legal top-level parameter keys per bridge — a typo'd field must not
+// vanish silently (the silent-no-op class; a typo'd idempotency_key on a
+// retry would disarm the duplicate-write guard).
+const MEMORY_READ_PARAM_KEYS = [
+  'operation',
+  'space_id',
+  'actor_id',
+  'session_id',
+  'message_id',
+  'memory_id',
+  'k',
+  'limit',
+  'offset',
+  'region',
+  'filters',
+];
+const MEMORY_WRITE_PARAM_KEYS = [
+  'operation',
+  'space_id',
+  'actor_id',
+  'assistant_id',
+  'session_id',
+  'meta',
+  'messages',
+  'timestamp',
+  'idempotency_key',
+  'is_force_extract',
+  'memory_id',
+  'region',
+];
+
+function rejectUnknownParams(params, legalKeys) {
+  for (const key of Object.keys(params)) {
+    if (!legalKeys.includes(key)) {
+      return `Unknown parameter "${key}" — legal keys: ${legalKeys.join(', ')}.`;
+    }
+  }
+  return null;
+}
+
 // Boundary validation (the tool's front door — the snippet trusts what
 // arrives). Returns an error string or null.
 function validateMemoryRead(params) {
@@ -195,6 +236,8 @@ function validateMemoryRead(params) {
   if (typeof params.space_id !== 'string' || params.space_id.length === 0) {
     return 'space_id is required.';
   }
+  const unknown = rejectUnknownParams(params, MEMORY_READ_PARAM_KEYS);
+  if (unknown) return unknown;
   const need = (field, message) => {
     if (typeof params[field] !== 'string' || params[field].length === 0) return message;
     return null;
@@ -447,6 +490,8 @@ function validateMemoryWrite(params) {
   if (typeof params.space_id !== 'string' || params.space_id.length === 0) {
     return 'space_id is required.';
   }
+  const unknown = rejectUnknownParams(params, MEMORY_WRITE_PARAM_KEYS);
+  if (unknown) return unknown;
   if (params.operation === 'create_session') {
     if (typeof params.actor_id !== 'string' || params.actor_id.length === 0) {
       return 'actor_id is REQUIRED for create_session: the actor is the isolation unit of the whole memory model — a session without one breaks actor-scoped retrieval.';
@@ -533,7 +578,7 @@ function validateMemoryWrite(params) {
 // different key order) produce the SAME canonical JSON — the token binds
 // bytes, and key-order-only differences would spuriously mismatch.
 function deepSortKeys(value) {
-  if (Array.isArray(value)) return value.map(deepSortKeys);
+  if (Array.isArray(value)) return value.map((item) => deepSortKeys(item));
   if (value && typeof value === 'object') {
     return Object.fromEntries(
       Object.keys(value)
@@ -611,15 +656,26 @@ export function planAgentartsMemoryWrite(params = {}) {
   // Loud-storage warning: message content matching credential shapes is
   // the user's decision to make, not an accident to record silently.
   const warnings = [];
-  if (Array.isArray(params.messages)) {
-    const flagged = params.messages.some(
-      (message) => typeof message?.content === 'string' && redactCredentialShapes(message.content) !== message.content,
+  const credentialShaped = (text) => typeof text === 'string' && redactCredentialShapes(text) !== text;
+  const flagged =
+    (Array.isArray(params.messages) &&
+      params.messages.some(
+        (message) =>
+          credentialShaped(message?.content) ||
+          credentialShaped(message?.meta) ||
+          (message?.meta !== undefined &&
+            message?.meta !== null &&
+            typeof message.meta === 'object' &&
+            credentialShaped(JSON.stringify(message.meta))),
+      )) ||
+    (params.meta !== undefined &&
+      params.meta !== null &&
+      typeof params.meta === 'object' &&
+      credentialShaped(JSON.stringify(params.meta)));
+  if (flagged) {
+    warnings.push(
+      'Some request content (message bodies or metadata) matches credential shapes (api_key/password/token patterns — the check is over-inclusive on ordinary key:value phrasing). Storing credentials in cloud memory makes them retrievable by every actor-scoped query — confirm the user intends THIS content to be memorized before presenting the request for approval.',
     );
-    if (flagged) {
-      warnings.push(
-        'Some message content matches credential shapes (api_key/password/token patterns). Storing credentials in cloud memory makes them retrievable by every actor-scoped query — confirm the user intends THIS content to be memorized before presenting the request for approval.',
-      );
-    }
   }
   const labels = MEMORY_WRITE_LABELS[params.operation] ?? [];
   const labelSuffix = labels.length > 0 ? ` Labels: ${labels.join(', ')}.` : '';
@@ -692,6 +748,9 @@ export async function runAgentartsMemoryWrite({ approvalToken, approvedByUser, .
   // The repo's three-element approval contract: token + exact parameters +
   // the explicit attestation (same gate as every approved runner — the
   // plan tool's guidance is the teaching layer, THIS is the enforcement).
+  // Ordering divergence from the CLI runners is deliberate: param
+  // validation runs FIRST (a pure data error needs no attestation), the
+  // attestation throw second.
   if (approvedByUser !== true) {
     throw new Error(
       'approvedByUser must be true after explicit user approval of the plan request — run huaweicloud_agentarts_memory_plan, present the request to the user, and only then execute with the token.',
@@ -768,13 +827,24 @@ export async function runAgentartsMemoryWrite({ approvalToken, approvedByUser, .
   // executing. A failed execution burns the token (concurrency safety);
   // the failure payload says so (see tokenConsumedNote below).
   if (!store.consume(approvalToken)) {
+    // Defensive recheck (the CLI runner's pattern): inspect said valid but
+    // consume lost a race — re-classify instead of guessing expired.
+    const recheck = store.inspect(approvalToken);
+    if (recheck.state === 'already_consumed') {
+      return {
+        ok: true,
+        status: 'ok',
+        outcome: 'already_processed',
+        note: 'This token was consumed by a concurrent call — the write may already have executed. Verify with huaweicloud_agentarts_memory_read before re-planning anything.',
+      };
+    }
     return {
       ok: false,
       status: 'rejected',
-      code: 'CONFIRM_TOKEN_EXPIRED',
+      code: recheck.state === 'expired' ? 'CONFIRM_TOKEN_EXPIRED' : 'CONFIRM_TOKEN_NOT_FOUND',
       service: 'AgentArts',
       operation: `memory ${params.operation} (SDK data plane)`,
-      error: 'approvalToken could not be consumed (concurrent use?) — re-plan.',
+      error: 'approvalToken could not be consumed (raced and pruned?) — re-plan.',
     };
   }
   const childEnv = { ...buildChildEnv({ injectCredentials: false }), HUAWEICLOUD_SDK_MEMORY_API_KEY: keyLoad.key };
