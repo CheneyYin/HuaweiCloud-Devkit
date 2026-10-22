@@ -153,6 +153,11 @@ test('redactSecrets redacts quoted JSON/Python-dict key forms (agentarts memory 
     redactSecrets('{"id":"i","metadata":{"owner":"team-x"},"status":"s"}'),
     '{"id":"i","metadata":<redacted>,"status":"s"}',
   );
+  // Two nesting levels under a quoted blob key (round 3): the object
+  // alternative matches one nested brace pair; deeper nesting is residual
+  // (ledgered) — credential-shaped keys inside are still caught by the
+  // credential pass.
+  assert.equal(redactSecrets('{"user_data": {"script": {"body": "SECRETXYZ"}}}'), '{"user_data": <redacted>}');
   // The DISPLAY path keeps the whole-line sweep for unquoted blobs —
   // nested non-credential content (an SSH key inside a script) rides no
   // further than the line, and nothing after the key survives.
