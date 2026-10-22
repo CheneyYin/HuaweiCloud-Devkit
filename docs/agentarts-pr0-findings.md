@@ -103,6 +103,8 @@ fixture 捕获环境: `COLUMNS=80 NO_COLOR=1` 非 TTY 重定向，共 43 个文�
 
 ## 遗留到 S0（账号侧实测项）
 
+- 【U2/U3 桥新增 2026-10-22】memory 数据面桥工具族真机 e2e（12 方法的信封/分页/序列化实测; `search_memories` 阈值行为——0.3 hook / 0.7 插件 / 0.5 SDK 默认三分叉; `add_messages` 抽取延迟量级）。
+- 【U2/U3 桥新增 2026-10-22】`memory get -o json` 首查是否回传 api_key——若回传, readonly get 成为 key 找回路径（当前桥的 0600 文件是唯一副本, 空间在 wrapper 外创建则无文件）。
 - `launch`/`destroy` 的真实交互提示行为。【源码预裁】destroy 的唯一提示是 `Confirm.ask` 且被 `--yes` 门控（destroy.py:39-47）；launch 链无任何 CLI 级 prompt 站点（deploy.py 全链零 confirm/prompt/input）；docker login 经 subprocess 程序化传参。S0 仅做真机确认。
 - deploy → invoke → destroy 全链路与计时。
 - 审批计数基线核验（config/deploy/invoke/destroy = 4）。
