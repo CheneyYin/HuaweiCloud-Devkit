@@ -1,10 +1,6 @@
 # Changelog
 
-## 1.1.10-next.2 (2026-10-20)
-
-- docs(huawei-ecs): large-user_data JSON-file path — keep the MCP approval channel
-
-## Unreleased
+## 1.1.11 (2026-10-22)
 
 - fix(sandbox): createConnection() classifies transient/restriction errors (HDKIT_SUB_ACCOUNT_RESTRICTED / HD.83700029 drift) and retries with backoff — retry-exhausted errors carry a non-misleading hint instead of the server's "switch to the main account" advice (#997)
 - fix(sandbox): exposeTunnel() probes devbridge version inside the auth waterfall — 0.1.x returns structured devbridge_too_old + remediation before exposing; no-Tunnel-URL failures return ok:false with the version read back (#998)
@@ -15,6 +11,10 @@
 - fix(huawei-ecs): Ecs.0044 volume-type sellout mapping + RHEL-family firewalld coverage with no-SSH recovery path (#971)
 - fix(safety): admin-port deny remediation now points at /32 egress-IP rules and the cloud-init no-SSH path (#971)
 - docs(huawei-ecs): large-user_data JSON-file path (--skeleton / --cli-jsonInput / --dryrun) + anti-pattern warning against abandoning the MCP approval channel (#964)
+
+## 1.1.10-next.2 (2026-10-20)
+
+- docs(huawei-ecs): large-user_data JSON-file path — keep the MCP approval channel
 
 ## 1.1.10-next.0 (2026-10-20)
 
@@ -28,14 +28,6 @@
 - docs(iam): primary-account judgment rule in skill + quick-ref
 - feat(iam): add huaweicloud_check_account_type tool
 - fix(safety): close tokenization bypasses in command classifier (#927) (#928)
-
-## Unreleased
-
-- fix(sandbox): upload_file auto-creates the remote parent directory and reports honest local-path errors (#953)
-- feat(iam): huaweicloud_check_account_type tool — one-shot primary/sub-account judgment via GetCallerIdentity + KeystoneListAuthDomains, rule username == domainName (#954)
-- docs(iam): primary-account judgment rule + disproved-rules exclusions in huawei-iam skill (#954)
-- fix(safety): stop misclassifying STS GetCallerIdentity as temporary-credential exposure (#954)
-- chore: correct stale MCP tool count in AGENTS.md (39 → 43)
 
 ## 1.1.9-next.3 (2026-10-18)
 
