@@ -18,10 +18,15 @@ Every command shape here is fixture-verified against agentarts-sdk 0.1.7
 - Credentials are injected by the wrapper tools from the devkit runtime
   credential state (`huaweicloud_auth_init`). NEVER export AK/SK manually —
   see `huaweicloud-cli-and-auth`.
-- Control plane is cn-southwest-2 only. The memory subcommands' help text
-  CLAIMS a cn-north-4 default, but the actual code default is
-  cn-southwest-2 (constant.py:79, findings trap 15) — always pass
-  `--region` explicitly on the memory family regardless.
+- Control plane is cn-southwest-2 only. The memory six (create/get/list/
+  update/delete/status) help text CLAIMS a cn-north-4 default, but the
+  actual code fallback is cn-southwest-2 (constant.py:79, findings trap
+  15). Resolution chain: `HUAWEICLOUD_SDK_REGION` → `HUAWEICLOUD_REGION` →
+  `OS_REGION_NAME` → cn-southwest-2 — wrapper child envs strip all three
+  (wrapper runs always land on cn-southwest-2), but in your own terminal
+  an exported `HUAWEICLOUD_SDK_REGION` wins, and some sibling skills'
+  install guides export it. Always pass `--region` explicitly on the
+  memory family regardless.
 
 ## Golden Path (deploy an agent)
 

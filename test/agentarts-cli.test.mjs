@@ -203,6 +203,57 @@ test('plan marks unknown commands fail-safe and suggests --help', async () => {
   });
 });
 
+test('plan flags the memory family trap-15 region lie (help cn-north-4 vs actual cn-southwest-2)', async () => {
+  await withIsolation(() => {
+    // The agent followed the CLI help text's wrong default.
+    const lied = planAgentartsCommand(['memory', 'list', '--region', 'cn-north-4']);
+    assert.ok(lied.warnings.some((w) => /wrong help text/.test(w) && /cn-southwest-2/.test(w) && /trap 15/.test(w)));
+    // Inline and attached short forms parse to the same warning.
+    const inline = planAgentartsCommand(['memory', 'get', 'sp1', '--region=cn-north-4']);
+    assert.ok(inline.warnings.some((w) => /wrong help text/.test(w)));
+    const attached = planAgentartsCommand(['memory', 'status', '-rcn-north-4']);
+    assert.ok(attached.warnings.some((w) => /wrong help text/.test(w)));
+
+    // Omitting --region gets the drift-guard note (env chain -> cn-southwest-2)
+    // with the full chain and the user-terminal caveat pinned.
+    const absent = planAgentartsCommand(['memory', 'list']);
+    const absentNote = absent.warnings.find((w) => /No --region on memory list/.test(w));
+    assert.ok(absentNote, 'absent-region note missing');
+    assert.match(absentNote, /future default drift/);
+    assert.match(absentNote, /cn-southwest-2/);
+    assert.match(absentNote, /HUAWEICLOUD_SDK_REGION/);
+    assert.match(absentNote, /OS_REGION_NAME/);
+    assert.match(absentNote, /your own terminal/);
+
+    // Membership is derived from the fixture-pinned value-flag table: every
+    // region-flagged memory subcommand fires the absent note.
+    const regionSubs = [...MEMORY_SUBCOMMAND_VALUE_FLAGS]
+      .filter(([, flags]) => flags.has('--region'))
+      .map(([sub]) => sub)
+      .sort((a, b) => a.localeCompare(b));
+    assert.deepEqual(regionSubs, ['create', 'delete', 'get', 'list', 'status', 'update']);
+    for (const sub of regionSubs) {
+      const argv = sub === 'create' ? ['memory', 'create', 'x', '--strategies', 'semantic'] : ['memory', sub, 'sp1'];
+      const plan = planAgentartsCommand(argv);
+      assert.ok(
+        plan.warnings.some((w) => new RegExp(`No --region on memory ${sub}`).test(w)),
+        `${sub} must fire the absent-region note`,
+      );
+    }
+
+    // The correct region and non-region subcommands stay quiet.
+    const ok = planAgentartsCommand(['memory', 'list', '--region', 'cn-southwest-2']);
+    assert.ok(!ok.warnings.some((w) => /trap 15|No --region/.test(w)));
+    const install = planAgentartsCommand(['memory', 'install', 'opencode']);
+    assert.ok(!install.warnings.some((w) => /trap 15|No --region/.test(w)));
+
+    // A dangling --region is still the pre-existing hard rejection.
+    const dangling = planAgentartsCommand(['memory', 'list', '--region']);
+    assert.equal(dangling.ok, false);
+    assert.match(dangling.error, /dangling --region/);
+  });
+});
+
 test('wrapper tier equals the hook decision for the same vectors (single classification source)', async () => {
   await withIsolation(() => {
     const cases = [
@@ -1008,7 +1059,10 @@ test('plan rejects memory create without strategies before any cloud call (frict
     for (const s of ['semantic', 'episodic', 'user_preference', 'summary']) {
       const p = planAgentartsCommand(['memory', 'create', 'x', '--strategies', s]);
       assert.equal(p.ok, true);
-      assert.ok(!p.warnings.some((w) => /outside the known built-in set/.test(w)), `${s} must be warning-free`);
+      assert.ok(
+        !p.warnings.some((w) => /outside the known built-in set/.test(w)),
+        `${s} must carry no unknown-strategy warning`,
+      );
       assert.ok(!p.warnings.some((w) => /enum-evidenced/.test(w)), `${s} must carry no provenance note`);
     }
     const ev = planAgentartsCommand(['memory', 'create', 'x', '--strategies', 'event']);

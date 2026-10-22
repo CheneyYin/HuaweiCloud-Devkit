@@ -30,7 +30,7 @@ Enterprise agent platform for Huawei Cloud: hosts agent runtimes (LangGraph/Lang
 
 - Python 3.10+ (per the SDK README) and `pip install agentarts-sdk==0.1.7 -i https://mirrors.huaweicloud.com/repository/pypi/simple` (pinned; Huawei Cloud PyPI mirror — if the mirror lags a newly pinned version, drop `-i` and install from official PyPI; verify with `agentarts --version`). Or run `npx huaweicloud-devkit install-agentarts` (devkit-owned venv, auto-resolved). CLI resolution: `AGENTARTS_BIN` > devkit-managed venv > PATH — a personal venv install needs its full path or `AGENTARTS_BIN`.
 - Credentials: `HUAWEICLOUD_SDK_AK` / `HUAWEICLOUD_SDK_SK` env vars. NEVER let AK/SK enter shell history or the conversation — see huaweicloud-cli-and-auth
-- Region: control plane is cn-southwest-2 only; the memory create/get/list/update/delete/status subcommands default to cn-north-4 (install/uninstall take no region flag) — pass `--region` explicitly on the six that have it
+- Region: control plane is cn-southwest-2 only. The memory six (create/get/list/update/delete/status) CLAIM a cn-north-4 default in help text — the actual code fallback is cn-southwest-2 (constant.py:79, trap 15); an exported HUAWEICLOUD_SDK_REGION/HUAWEICLOUD_REGION/OS_REGION_NAME wins first in your own terminal (wrapper child envs strip them). Pass `--region` explicitly on the six regardless (install/uninstall take no region flag)
 
 ## Safety Tier Map (hook-enforced, wrapper-consumed)
 
