@@ -1604,3 +1604,26 @@ test('huawei-agentarts SKILL.md routes the memory data-plane bridge (U2/U3)', ()
   // Async-extraction caveat taught at the skill layer too.
   assert.match(body, /extraction is async|not immediately searchable/);
 });
+
+test('memory data-plane retention traps and dual-path decision are taught (U4)', () => {
+  const workflows = readFileSync(
+    join(pluginRoot, 'skills', 'huawei-agentarts', 'references', 'cli-workflows.md'),
+    'utf8',
+  );
+  // The 7-day message TTL trap (SDK source) — material to any agent using
+  // add_messages as an archive.
+  assert.match(workflows, /Message TTL is 7 days by default/);
+  assert.match(workflows, /message_ttl_hours: 168/);
+  // The threshold three-way divergence (hook 0.3 / plugin 0.7 / SDK 0.5).
+  assert.match(workflows, /hook\s+path uses 0\.3, the plugin's MCP path 0\.7, the SDK\/server default 0\.5/);
+  // The dual-path decision (governed bridge vs host-trust plugin install).
+  assert.match(workflows, /dual-path decision/);
+  assert.match(workflows, /host-trust/);
+  assert.match(workflows, /\/recall \/remember commands are broken in 0\.1\.7/);
+  // The upstream asks document exists and carries the evidence ladder.
+  const asks = readFileSync(join(root, 'docs', 'agentarts-upstream-asks.md'), 'utf8');
+  assert.match(asks, /Tier 1/);
+  assert.match(asks, /数据面子命令族/);
+  assert.match(asks, /memory update.*四旗标/);
+  assert.match(asks, /S0 待真机裁决/);
+});

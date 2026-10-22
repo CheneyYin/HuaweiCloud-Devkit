@@ -217,6 +217,32 @@ soft delete — unreachable through this toolkit immediately, retained
 server-side for async cleanup (90-365 days per the SDK), no in-toolkit
 recovery.
 
+Two retention/recall traps worth knowing before you lean on the data:
+
+- **Message TTL is 7 days by default** (`message_ttl_hours: 168`, range
+  1-8760, SDK source). Raw conversation messages a space stores through
+  `add_messages` EXPIRE after a week unless the space was created with a
+  higher `--ttl`; extracted MEMORIES persist independently. Use the
+  bridge for durable facts (they become memories via extraction), not as
+  a permanent conversation archive.
+- **Search thresholds diverge across the official surfaces**: the hook
+  path uses 0.3, the plugin's MCP path 0.7, the SDK/server default 0.5
+  (min_score). The bridge passes min_score through untouched — omit it
+  for the server default, lower it (e.g. 0.3) when a recall seems to be
+  missing material.
+
+Which path to use (the dual-path decision): the WRAPPER bridge
+(memory_read/plan/write) is governed — approval tokens, redaction, the
+0600 key channel — and works on every host, but captures nothing
+automatically. The official PLUGIN (`memory install`, user terminal
+only — host-trust: it writes the api_key into the host agent's config)
+auto-captures conversations into a space but only covers five platforms
+and its /recall /remember commands are broken in 0.1.7 (they curl an
+HTTP server that does not exist). For cross-session memory on a
+supported host: install the plugin (user's terminal), then use the
+bridge tools for governed search/ops. For every other host or purpose:
+the bridge alone.
+
 ## Wrapper Rules (why some commands hard-stop)
 
 | Shape                              | Wrapper behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
