@@ -631,3 +631,115 @@ test('a CLI approval token can never authorize an SDK memory write (namespace se
     assert.match(out.error, /different namespace/);
   });
 });
+
+test('failed write executions say the token burned, with idempotency_key guidance', async () => {
+  await withIsolation(async (home) => {
+    writeKeyFile(home, 'sp1', KEY);
+    const params = {
+      operation: 'add_messages',
+      space_id: 'sp1',
+      session_id: 's1',
+      messages: [{ role: 'user', content: 'batch one' }],
+    };
+    for (const [label, outcome] of [
+      ['exit-1', { exitCode: 1, stdout: '', stderr: 'ValueError: boom' }],
+      ['timeout', { exitCode: null, stdout: '', stderr: '', timedOut: true }],
+    ]) {
+      // Each variant gets its OWN plan: the first failure consumes the
+      // token, and a shared one would turn the second into
+      // already_processed.
+      const plan = planAgentartsMemoryWrite(params);
+      assert.equal(plan.ok, true, label);
+      const out = await runAgentartsMemoryWrite(
+        { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+        { runCandidate: async () => outcome },
+      );
+      assert.equal(out.ok, false, label);
+      assert.match(out.error, /single-use token was consumed by this attempt/, label);
+      assert.match(out.error, /idempotency_key/, label);
+      if (outcome.timedOut) assert.match(out.error, /timeout that may have landed server-side/, label);
+    }
+  });
+});
+
+test('unknown top-level write/read parameters are rejected, not silently dropped', async () => {
+  await withIsolation(async () => {
+    // A typo'd idempotencykey would silently disarm the duplicate-write
+    // guard the retry guidance relies on.
+    const typo = planAgentartsMemoryWrite({
+      operation: 'add_messages',
+      space_id: 'sp1',
+      session_id: 's1',
+      messages: [{ role: 'user', content: 'x' }],
+      idempotencykey: 'retry-1',
+    });
+    assert.equal(typo.ok, false);
+    assert.match(typo.error, /Unknown parameter "idempotencykey"/);
+
+    const readTypo = await readAgentartsMemory({ operation: 'list_sessions', space_id: 'sp1', limt: 5 });
+    assert.equal(readTypo.ok, false);
+    assert.match(readTypo.error, /Unknown parameter "limt"/);
+  });
+});
+
+test('credential-shape warning covers session/message metadata too', async () => {
+  await withIsolation(async (home) => {
+    writeKeyFile(home, 'sp1', KEY);
+    const sessionMeta = planAgentartsMemoryWrite({
+      operation: 'create_session',
+      space_id: 'sp1',
+      actor_id: 'u1',
+      meta: { note: 'password=Secret99' },
+    });
+    assert.equal(sessionMeta.ok, true);
+    assert.equal(sessionMeta.warnings.length, 1);
+
+    const messageMeta = planAgentartsMemoryWrite({
+      operation: 'add_messages',
+      space_id: 'sp1',
+      session_id: 's1',
+      messages: [{ role: 'user', content: 'plain text', meta: 'api_key: AKIA999' }],
+    });
+    assert.equal(messageMeta.ok, true);
+    assert.equal(messageMeta.warnings.length, 1);
+
+    const innocuous = planAgentartsMemoryWrite({
+      operation: 'create_session',
+      space_id: 'sp1',
+      actor_id: 'u1',
+      meta: { project: 'demo', owner: 'team-x' },
+    });
+    assert.deepEqual(innocuous.warnings, []);
+  });
+});
+
+test('a RUNTIME ModuleNotFoundError is a final failure, not a chain advance', async () => {
+  await withIsolation(async (home) => {
+    writeKeyFile(home, 'sp1', KEY);
+    const params = {
+      operation: 'add_messages',
+      space_id: 'sp1',
+      session_id: 's1',
+      messages: [{ role: 'user', content: 'x' }],
+    };
+    const plan = planAgentartsMemoryWrite(params);
+    const candidates = [];
+    const out = await runAgentartsMemoryWrite(
+      { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+      {
+        runCandidate: async (candidate) => {
+          candidates.push(candidate);
+          // A runtime import failure INSIDE the SDK (exit 1 via the scoped
+          // handler): the loop must NOT advance the chain and must NOT
+          // print the install-the-SDK remediation — and the burn note must
+          // survive.
+          return { exitCode: 1, stdout: '', stderr: "ModuleNotFoundError: No module named 'yaml'" };
+        },
+      },
+    );
+    assert.equal(out.ok, false);
+    assert.equal(candidates.length, 1, 'runtime module errors must not advance the candidate chain');
+    assert.doesNotMatch(out.error, /install-agentarts/);
+    assert.match(out.error, /single-use token was consumed by this attempt/);
+  });
+});

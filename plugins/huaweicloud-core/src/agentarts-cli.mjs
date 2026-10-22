@@ -1160,8 +1160,12 @@ export async function runOverPythonCandidates({
       childEnv,
       stdinData,
     );
-    const moduleMissing =
-      result.exitCode === 3 || /ModuleNotFoundError|AGENTARTS_SDK_MISSING/.test(result.stderr || '');
+    // The snippet CONTRACT is the only module-missing signal: exit code 3
+    // and/or the AGENTARTS_SDK_MISSING marker. A raw ModuleNotFoundError in
+    // stderr can be a RUNTIME import failure inside the SDK (scoped import
+    // try in the snippets) — that is a final failure, not a reason to
+    // advance the chain with a misleading install-the-SDK remediation.
+    const moduleMissing = result.exitCode === 3 || /AGENTARTS_SDK_MISSING/.test(result.stderr || '');
     if (result.spawnError || moduleMissing) continue;
     return shapeResult(result, candidate);
   }

@@ -688,7 +688,12 @@ test('list agents advances python candidates only on module-missing or spawn err
     );
     assert.equal(result.ok, true);
     assert.equal(result.count, 1);
-    // ModuleNotFoundError text in stderr (not our exit code) also advances.
+    // A RUNTIME ModuleNotFoundError (exit 1, inside the SDK, past the
+    // scoped import try) is a FINAL failure — advancing the chain here
+    // would print the install-the-SDK remediation for a non-install
+    // problem and, on the memory write bridge, drop the burned-token
+    // note. Only the snippet CONTRACT (exit 3 / AGENTARTS_SDK_MISSING
+    // marker) advances.
     result = await listAgentartsAgents(
       {},
       {
@@ -698,7 +703,7 @@ test('list agents advances python candidates only on module-missing or spawn err
             : { exitCode: 1, stdout: '', stderr: 'ModuleNotFoundError: No module named ' },
       },
     );
-    assert.equal(result.ok, true);
+    assert.equal(result.ok, false);
     // ENOENT (spawnError) advances as well.
     result = await listAgentartsAgents(
       {},
