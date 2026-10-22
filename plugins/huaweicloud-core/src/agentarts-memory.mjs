@@ -216,10 +216,33 @@ const MEMORY_WRITE_PARAM_KEYS = [
   'region',
 ];
 
-function rejectUnknownParams(params, legalKeys) {
+// Per-operation applicability: a LEGAL key in the wrong operation is a
+// silent no-op otherwise (top-level meta with add_messages, actor_id with
+// list_memories — which wants filters.actor_id). Every operation takes
+// operation/space_id/region; the map lists the rest.
+const OP_PARAM_APPLICABILITY = {
+  list_sessions: ['actor_id', 'limit', 'offset'],
+  get_session: ['session_id'],
+  get_last_k_messages: ['session_id', 'k'],
+  get_message: ['session_id', 'message_id'],
+  list_messages: ['session_id', 'limit', 'offset'],
+  search_memories: ['actor_id', 'filters'],
+  list_memories: ['limit', 'offset', 'filters'],
+  get_memory: ['memory_id'],
+  create_session: ['actor_id', 'assistant_id', 'session_id', 'meta'],
+  add_messages: ['session_id', 'messages', 'timestamp', 'idempotency_key', 'is_force_extract'],
+  delete_session: ['session_id'],
+  delete_memory: ['memory_id'],
+};
+
+function rejectUnknownParams(params, legalKeys, operation) {
+  const applicable = OP_PARAM_APPLICABILITY[operation] ?? [];
   for (const key of Object.keys(params)) {
     if (!legalKeys.includes(key)) {
       return `Unknown parameter "${key}" — legal keys: ${legalKeys.join(', ')}.`;
+    }
+    if (!['operation', 'space_id', 'region'].includes(key) && !applicable.includes(key)) {
+      return `"${key}" is not a parameter of ${operation} — it would be silently ignored. Applicable keys for ${operation}: ${applicable.join(', ') || '(none beyond operation/space_id/region)'}.`;
     }
   }
   return null;
@@ -236,7 +259,7 @@ function validateMemoryRead(params) {
   if (typeof params.space_id !== 'string' || params.space_id.length === 0) {
     return 'space_id is required.';
   }
-  const unknown = rejectUnknownParams(params, MEMORY_READ_PARAM_KEYS);
+  const unknown = rejectUnknownParams(params, MEMORY_READ_PARAM_KEYS, params.operation);
   if (unknown) return unknown;
   const need = (field, message) => {
     if (typeof params[field] !== 'string' || params[field].length === 0) return message;
@@ -490,7 +513,7 @@ function validateMemoryWrite(params) {
   if (typeof params.space_id !== 'string' || params.space_id.length === 0) {
     return 'space_id is required.';
   }
-  const unknown = rejectUnknownParams(params, MEMORY_WRITE_PARAM_KEYS);
+  const unknown = rejectUnknownParams(params, MEMORY_WRITE_PARAM_KEYS, params.operation);
   if (unknown) return unknown;
   if (params.operation === 'create_session') {
     if (typeof params.actor_id !== 'string' || params.actor_id.length === 0) {
@@ -659,15 +682,7 @@ export function planAgentartsMemoryWrite(params = {}) {
   const credentialShaped = (text) => typeof text === 'string' && redactCredentialShapes(text) !== text;
   const flagged =
     (Array.isArray(params.messages) &&
-      params.messages.some(
-        (message) =>
-          credentialShaped(message?.content) ||
-          credentialShaped(message?.meta) ||
-          (message?.meta !== undefined &&
-            message?.meta !== null &&
-            typeof message.meta === 'object' &&
-            credentialShaped(JSON.stringify(message.meta))),
-      )) ||
+      params.messages.some((message) => credentialShaped(message?.content) || credentialShaped(message?.meta))) ||
     (params.meta !== undefined &&
       params.meta !== null &&
       typeof params.meta === 'object' &&
