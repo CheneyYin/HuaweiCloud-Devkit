@@ -1390,3 +1390,35 @@ test('the agentarts trio registers and the shared approval store backs both wrap
   );
   assert.equal(typeof callTool, 'function');
 });
+
+test('the agentarts memory data-plane read bridge registers with its safety contract pinned', async () => {
+  const { TOOL_DEFINITIONS } = await import('../plugins/huaweicloud-core/src/tools.mjs');
+  const def = TOOL_DEFINITIONS.find((t) => t.name === 'huaweicloud_agentarts_memory_read');
+  assert.ok(def, 'tools.mjs missing huaweicloud_agentarts_memory_read');
+  const { MEMORY_READ_OPERATIONS } = await import('../plugins/huaweicloud-core/src/agentarts-memory.mjs');
+  // Exactly the 8 read-only data-plane methods (the 4 writes are a separate
+  // approval-gated unit; the operation enum must not grow silently).
+  assert.deepEqual([...MEMORY_READ_OPERATIONS].sort(), [
+    'get_last_k_messages',
+    'get_memory',
+    'get_message',
+    'get_session',
+    'list_memories',
+    'list_messages',
+    'list_sessions',
+    'search_memories',
+  ]);
+  assert.deepEqual([...def.inputSchema.properties.operation.enum].sort(), [...MEMORY_READ_OPERATIONS].sort());
+  // The credential channel is the 0600 key file read server-side — the tool
+  // must never accept a key parameter of any spelling.
+  for (const banned of ['api_key', 'apiKey', 'api-key', 'key']) {
+    assert.equal(banned in def.inputSchema.properties, false, `tool must not accept a ${banned} parameter`);
+  }
+  assert.match(def.inputSchema.properties.space_id.pattern, /A-Za-z0-9_-/);
+  // The actor-isolation contract is taught in the tool text itself (the
+  // agent reads the description, not our source).
+  assert.match(def.description, /actor_id is REQUIRED for search_memories/);
+  assert.match(def.description, /actor-level only/);
+  assert.match(def.description, /NO data-plane subcommands/);
+  assert.match(def.description, /cn-southwest-2/);
+});
