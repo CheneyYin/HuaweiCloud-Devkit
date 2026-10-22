@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.12-next.0 (2026-10-22)
+
+- chore: set version override to 1.1.12 for next preview release
+- docs(voucher): claimed-prefix match widened to cover legacy 已领取 message
+- docs(voucher): already-claimed UX explains real-name-level dedup
+- docs(voucher): UX row for HDKIT_NOT_CODEARTS_OFFICEACE_USER (CodeArts OR OfficeAce)
+- docs(voucher): ops copy for HDKIT_NOT_CODEARTS_USER UX row
+- docs(voucher): UX row for HDKIT_NOT_CODEARTS_USER (copy placeholder, ops TBD)
+
 ## 1.1.11 (2026-10-22)
 
 - fix(sandbox): createConnection() classifies transient/restriction errors (HDKIT_SUB_ACCOUNT_RESTRICTED / HD.83700029 drift) and retries with backoff — retry-exhausted errors carry a non-misleading hint instead of the server's "switch to the main account" advice (#997)
