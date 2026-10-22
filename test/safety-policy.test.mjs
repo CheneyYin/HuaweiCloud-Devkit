@@ -142,6 +142,21 @@ test('redactSecrets redacts quoted JSON/Python-dict key forms (agentarts memory 
     redactSecrets('{"id":"i","user_data":"x","status":"s"}'),
     '{"id":"i","user_data":<redacted>,"status":"s"}',
   );
+  // Trap-27 round 2: the blob class gets the same escape-level and
+  // object-value tolerance as the credential keys (the string path must
+  // not be weaker than the parsed-object path for user_data/metadata).
+  assert.equal(
+    redactSecrets('{"data": "{\\"user_data\\": \\"IyEvYmlu\\"}"}'),
+    '{"data": "{\\"user_data\\": <redacted>}',
+  );
+  assert.equal(
+    redactSecrets('{"id":"i","metadata":{"owner":"team-x"},"status":"s"}'),
+    '{"id":"i","metadata":<redacted>,"status":"s"}',
+  );
+  // The DISPLAY path keeps the whole-line sweep for unquoted blobs —
+  // nested non-credential content (an SSH key inside a script) rides no
+  // further than the line, and nothing after the key survives.
+  assert.equal(redactSecrets('user_data: blob password: nested'), 'user_data: <redacted>');
 });
 
 test('every string-path redaction key token is also object-path classified (single-source guard)', async () => {

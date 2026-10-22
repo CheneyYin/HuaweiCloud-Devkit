@@ -630,6 +630,23 @@ test('list agents exit-code contract: ours, with detectFailure as the second lay
     assert.equal(result.ok, true);
     assert.equal(result.agents, null);
     assert.equal(result.count, null);
+    // Trap 27: the PARSED agents array passes the same redaction as the
+    // string paths — a credential-shaped field on a future agent dict must
+    // not ride the one parse-first surface unmasked.
+    result = await listAgentartsAgents(
+      {},
+      {
+        runCandidate: async () => ({
+          exitCode: 0,
+          stdout: '[{"name":"a","status":"RUNNING","api_key":"KEY_OUT991"}]',
+          stderr: '',
+        }),
+      },
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.agents[0].name, 'a');
+    assert.equal(result.agents[0].api_key, '<redacted>');
+    assert.doesNotMatch(JSON.stringify(result), /KEY_OUT991/);
   });
 });
 
