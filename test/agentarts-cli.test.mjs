@@ -90,6 +90,9 @@ async function withIsolation(fn) {
         '    if read -t 2 line; then echo "STDIN_LEAK: $line" >&2; exit 1; fi',
         '    echo "OK"',
         '    exit 0;;',
+        '  *" --stub-get-key "*)',
+        '    echo \'{"id": "sp-verify-1", "api_key": "KEY_ONETIME_get555", "status": "ACTIVE", "api_key_id": "key-9"}\'',
+        '    exit 0;;',
         '  *" --stub-key "*)',
         '    echo "2026-10-21 INFO creating space"',
         '    echo \'{"id": "space-e2e-001", "api_key": "KEY_ONETIME_abc123", "name": "s"}\'',
@@ -298,6 +301,31 @@ test('readonly run executes the stub, parses output, and redacts credential-shap
     assert.equal(failure.failureDetected, true);
     // Exit code lies in 0.1.7 — success is decided by output parsing only.
     assert.equal(failure.exitCode, 0);
+  });
+});
+
+test('readonly memory get masks the quoted one-time api_key (trap 27)', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // The stub prints the `memory get -o json` shape: a QUOTED api_key —
+    // the form that rode the readonly payload unmasked before trap 27
+    // (extractMemoryApiKey only guards the create path; get relies on
+    // redactSecrets string redaction alone).
+    const out = await runAgentartsReadonlyCommand([
+      'memory',
+      'get',
+      'sp-verify-1',
+      '--region',
+      'cn-southwest-2',
+      '--output',
+      'json',
+      '--stub-get-key',
+    ]);
+    assert.equal(out.ok, true);
+    assert.match(out.stdout, /"api_key": <redacted>/);
+    // The identifier (not the secret) stays visible for traceability.
+    assert.match(out.stdout, /"api_key_id": "key-9"/);
+    assert.doesNotMatch(JSON.stringify(out), /KEY_ONETIME_get555/);
   });
 });
 
