@@ -13,20 +13,21 @@ import {
 
 // Isolation: HUAWEICLOUD_HOME pointed at a scratch dir so the 0600 key-file
 // resolution never touches the real home (the agentarts-cli test pattern).
-function withIsolation(fn) {
-  return async () => {
-    const home = mkdtempSync(join(tmpdir(), 'agentarts-memory-'));
-    const previousHome = process.env.HUAWEICLOUD_HOME;
-    const previousBin = process.env.AGENTARTS_BIN;
-    process.env.HUAWEICLOUD_HOME = home;
-    try {
-      await fn(home);
-    } finally {
-      process.env.HUAWEICLOUD_HOME = previousHome;
-      process.env.AGENTARTS_BIN = previousBin;
-      rmSync(home, { recursive: true, force: true });
-    }
-  };
+// EXECUTOR pattern (not a factory): the helper must await fn() inline — a
+// returned-uncalled async arrow makes every test vacuously green (adversarial
+// round-2 finding 1).
+async function withIsolation(fn) {
+  const home = mkdtempSync(join(tmpdir(), 'agentarts-memory-'));
+  const previousHome = process.env.HUAWEICLOUD_HOME;
+  const previousBin = process.env.AGENTARTS_BIN;
+  process.env.HUAWEICLOUD_HOME = home;
+  try {
+    await fn(home);
+  } finally {
+    process.env.HUAWEICLOUD_HOME = previousHome;
+    process.env.AGENTARTS_BIN = previousBin;
+    rmSync(home, { recursive: true, force: true });
+  }
 }
 
 function writeKeyFile(home, spaceId, key) {
@@ -63,7 +64,7 @@ test('memory read validates the boundary before any spawn', async () => {
     );
     // SDK limit ranges are enforced at the boundary.
     await bad({ operation: 'list_sessions', space_id: 'sp1', limit: 25 }, /limit must be 1-20/);
-    await bad({ operation: 'list_messages', space_id: 'sp1', limit: 0 }, /limit must be 1-100/);
+    await bad({ operation: 'list_messages', space_id: 'sp1', session_id: 's1', limit: 0 }, /limit must be 1-100/);
     await bad({ operation: 'list_memories', space_id: 'sp1', offset: -1 }, /offset must be >= 0/);
     await bad(
       { operation: 'get_last_k_messages', space_id: 'sp1', session_id: 's1', k: 0 },
@@ -94,6 +95,12 @@ test('memory read validates the boundary before any spawn', async () => {
     await bad(
       { operation: 'list_memories', space_id: 'sp1', filters: { sort_by: 'updated_at' } },
       /never sends it \(memory_service\.py filter_mappings\)/,
+    );
+    // filters on the six non-filter operations: rejected, not silently
+    // ignored (the same silent-no-op class).
+    await bad(
+      { operation: 'get_memory', space_id: 'sp1', memory_id: 'm1', filters: { strategy_type: 'semantic' } },
+      /get_memory takes no filters/,
     );
   });
 });
@@ -203,6 +210,18 @@ test('memory read redacts parsed results and masks failure output', async () => 
     assert.equal(failure.failureDetected, true);
     assert.match(failure.stderr, /Traceback/);
     assert.match(failure.stderr, /api_key=<redacted>/);
+
+    // exit 0 + unparseable stdout: pollution detector fires with an
+    // explanatory error field.
+    const polluted = await readAgentartsMemory(
+      { operation: 'list_sessions', space_id: 'sp1' },
+      {
+        runCandidate: async () => ({ exitCode: 0, stdout: 'not json at all', stderr: '' }),
+      },
+    );
+    assert.equal(polluted.ok, false);
+    assert.equal(polluted.failureDetected, true);
+    assert.match(polluted.error, /not parseable JSON — output pollution suspected/);
   });
 });
 
@@ -211,7 +230,7 @@ test('module-missing advances the python candidate chain; spawn errors do not le
     writeKeyFile(home, 'sp1', KEY);
     const candidates = [];
     const out = await readAgentartsMemory(
-      { operation: 'list_messages', space_id: 'sp1' },
+      { operation: 'list_messages', space_id: 'sp1', session_id: 's1' },
       {
         runCandidate: async (candidate) => {
           candidates.push(candidate);
@@ -224,7 +243,7 @@ test('module-missing advances the python candidate chain; spawn errors do not le
     assert.equal(candidates.length, 2);
 
     const spawnErr = await readAgentartsMemory(
-      { operation: 'list_messages', space_id: 'sp1' },
+      { operation: 'list_messages', space_id: 'sp1', session_id: 's1' },
       {
         runCandidate: async () => ({ exitCode: null, stdout: '', stderr: '', spawnError: new Error('ENOENT') }),
       },
@@ -272,7 +291,7 @@ test('traceback-bearing memory CONTENT reads as success (no content signature sc
 test('large memory results truncate to a pointer like the CLI wrapper', async () => {
   await withIsolation(async (home) => {
     writeKeyFile(home, 'sp1', KEY);
-    const big = JSON.stringify({ items: [{ id: 'm', content: 'x'.repeat(80) }], total: 700 }).repeat(900);
+    const big = JSON.stringify({ items: [{ id: 'm', content: 'x'.repeat(100) }], total: 700, pad: 'y'.repeat(60000) });
     const out = await readAgentartsMemory(
       { operation: 'list_memories', space_id: 'sp1', limit: 100 },
       {
@@ -284,7 +303,7 @@ test('large memory results truncate to a pointer like the CLI wrapper', async ()
     // When the side file fires, `result` is DROPPED — an untruncated parsed
     // object next to a truncated stdout would defeat the machinery.
     assert.equal('result' in out, false);
-    const saved = out.stdout.match(/saved to (.+)$/m)?.[1];
+    const saved = out.stdout.match(/saved to (.+?)\)\s*$/)?.[1];
     assert.ok(saved && existsSync(saved));
     // The side file is scrubbed (no key anywhere) and 0600.
     const content = readFileSync(saved, 'utf8');
@@ -294,20 +313,22 @@ test('large memory results truncate to a pointer like the CLI wrapper', async ()
 });
 
 test('memory read tool surface: definition and dispatch', async () => {
-  await withIsolation(async (home) => {
-    writeKeyFile(home, 'sp1', KEY);
+  await withIsolation(async () => {
     const definition = AGENTARTS_MEMORY_TOOL_DEFINITIONS[0];
     assert.equal(definition.name, 'huaweicloud_agentarts_memory_read');
     // The tool must NEVER accept an api_key parameter — the key channel is
     // the 0600 file, read server-side.
     assert.equal('api_key' in definition.inputSchema.properties, false);
     assert.equal(definition.inputSchema.required.join(','), 'operation,space_id');
+    // Definitions carry no handlers (dispatch lives in the call function).
+    assert.equal('handler' in definition, false);
 
-    const out = await callAgentartsMemoryTool('huaweicloud_agentarts_memory_read', {
+    // Dispatch routing (no spawn: invalid params stop at the boundary).
+    const rejected = await callAgentartsMemoryTool('huaweicloud_agentarts_memory_read', {
       operation: 'list_sessions',
-      space_id: 'sp1',
     });
-    assert.equal(out.ok, true);
+    assert.equal(rejected.ok, false);
+    assert.match(rejected.error, /space_id must match/);
     const unknown = await callAgentartsMemoryTool('huaweicloud_agentarts_memory_bogus', {});
     assert.equal(unknown.ok, false);
     assert.match(unknown.error, /Unknown agentarts memory tool/);
