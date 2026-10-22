@@ -100,11 +100,17 @@ test('memory read validates the boundary before any spawn', async () => {
       { operation: 'list_memories', space_id: 'sp1', filters: { sort_by: 'updated_at' } },
       /never sends it \(memory_service\.py filter_mappings\)/,
     );
-    // filters on the six non-filter operations: rejected, not silently
-    // ignored (the same silent-no-op class).
+    // filters on the six non-filter operations: rejected as inapplicable,
+    // not silently ignored (the same silent-no-op class).
     await bad(
       { operation: 'get_memory', space_id: 'sp1', memory_id: 'm1', filters: { strategy_type: 'semantic' } },
-      /get_memory takes no filters/,
+      /"filters" is not a parameter of get_memory/,
+    );
+    // A legal key in the WRONG operation is rejected (actor_id with
+    // list_memories wants filters.actor_id).
+    await bad(
+      { operation: 'list_memories', space_id: 'sp1', actor_id: 'u1' },
+      /"actor_id" is not a parameter of list_memories/,
     );
   });
 });
@@ -399,6 +405,18 @@ test('memory write plan validates the boundary (write-specific rules)', async ()
         timestamp: 1.5,
       },
       /timestamp must be an integer/,
+    );
+    // A legal key in the WRONG operation is rejected (top-level meta
+    // belongs to create_session, not add_messages).
+    await bad(
+      {
+        operation: 'add_messages',
+        space_id: 'sp1',
+        session_id: 's1',
+        messages: [{ role: 'user', content: 'x' }],
+        meta: { note: 'wrong level' },
+      },
+      /"meta" is not a parameter of add_messages/,
     );
   });
 });
