@@ -32,7 +32,7 @@ version: 5
 
 返回 `{ claimed, message }`：
 
-- `claimed=true` + message 以「已领取过」开头 → 已领取，告知结果即可，不再引导
+- `claimed=true` + message 以「已领取」开头 → 已领取，告知结果即可，不再引导
 - `claimed=false` + `message="未领取"` → 未领取，可引导领取
 
 ### 2. 领取代金券
