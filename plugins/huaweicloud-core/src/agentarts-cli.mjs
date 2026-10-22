@@ -201,6 +201,7 @@ export const MEMORY_SUBCOMMAND_VALUE_FLAGS = new Map([
 function scanMemoryArgs(args, valueFlags, from = 0) {
   let strategies = null;
   let output = null;
+  let region = null;
   let genuineHelp = false;
   let danglingFlag = null;
   const consumedDashPrefixed = [];
@@ -212,10 +213,12 @@ function scanMemoryArgs(args, valueFlags, from = 0) {
         danglingFlag = arg;
         if (arg === '--strategies' || arg === '-s') strategies = '';
         else if (arg === '--output' || arg === '-o') output = '';
+        else if (arg === '--region' || arg === '-r') region = '';
       } else {
         if (/^-/.test(next)) consumedDashPrefixed.push({ flag: arg, value: next });
         if (arg === '--strategies' || arg === '-s') strategies = next;
         else if (arg === '--output' || arg === '-o') output = next;
+        else if (arg === '--region' || arg === '-r') region = next;
       }
       i += 1;
       continue;
@@ -227,10 +230,12 @@ function scanMemoryArgs(args, valueFlags, from = 0) {
     if (i < from) continue;
     if (arg.startsWith('--strategies=')) strategies = arg.slice(13);
     else if (arg.startsWith('--output=')) output = arg.slice(9);
+    else if (arg.startsWith('--region=')) region = arg.slice(9);
     else if (/^-s\S+$/.test(arg)) strategies = arg.slice(2);
     else if (/^-o\S+$/.test(arg)) output = arg.slice(2);
+    else if (/^-r\S+$/.test(arg)) region = arg.slice(2);
   }
-  return { strategies, output, genuineHelp, danglingFlag, consumedDashPrefixed };
+  return { strategies, output, region, genuineHelp, danglingFlag, consumedDashPrefixed };
 }
 
 // The classifier's help short-circuit is position-blind (safety-policy.mjs,
@@ -310,7 +315,19 @@ function argvContainsBearerToken(args) {
   return args.some((arg) => /^--bearer-token/i.test(arg) || /^-bt/i.test(arg));
 }
 
-function planningGuidance(classification, canonicalArgs) {
+// The memory six take --region (install/uninstall have no region flag).
+// Derived from the fixture-pinned value-flag table so the roster cannot
+// drift from it. Trap 15: their help text claims a cn-north-4 default —
+// the actual code fallback is cn-southwest-2 (constant.py get_region),
+// which is also the only e2e-measured region. The plan surfaces that lie
+// whenever the agent follows the help text or omits the flag.
+const MEMORY_REGION_SUBCOMMANDS = new Set(
+  [...MEMORY_SUBCOMMAND_VALUE_FLAGS].filter(([, flags]) => flags.has('--region')).map(([sub]) => sub),
+);
+const TRAP15_NOTE =
+  'The CLI help claims cn-north-4 as the default region — that text is wrong (findings trap 15): the actual code fallback is cn-southwest-2 (get_region, constant.py), and cn-southwest-2 is the only e2e-measured region.';
+
+function planningGuidance(classification, canonicalArgs, memoryScan) {
   const notes = [];
   if (classification.unregistered) {
     notes.push(
@@ -337,6 +354,24 @@ function planningGuidance(classification, canonicalArgs) {
     }
     if (!canonicalArgs.some((a) => /^(--yes|-y)$/.test(a))) {
       notes.push('memory install/uninstall requires --yes to skip its confirmation prompts.');
+    }
+  }
+  const memorySub = classification.operation?.startsWith('memory ')
+    ? classification.operation.slice('memory '.length)
+    : null;
+  if (memorySub && MEMORY_REGION_SUBCOMMANDS.has(memorySub)) {
+    // '' (inline --region=) normalizes to absent — source-true: the SDK's
+    // Python `if region:` treats it as unset. A dangling --region is
+    // hard-rejected before notes ever run.
+    const region = memoryScan?.region || null;
+    if (region && region.toLowerCase() === 'cn-north-4') {
+      notes.push(
+        `--region cn-north-4 follows the CLI's wrong help text. ${TRAP15_NOTE} Pass --region cn-southwest-2 — the only control-plane region and the only e2e-measured one.`,
+      );
+    } else if (region === null) {
+      notes.push(
+        `No --region on memory ${memorySub}. ${TRAP15_NOTE} Omitting the flag resolves through the SDK env chain (HUAWEICLOUD_SDK_REGION/HUAWEICLOUD_REGION/OS_REGION_NAME — stripped in wrapper child envs) to cn-southwest-2; in your own terminal an exported HUAWEICLOUD_SDK_REGION wins, and some sibling skills' install guides export it. Pass --region explicitly to guard against future default drift.`,
+      );
     }
   }
   return notes;
@@ -449,7 +484,7 @@ export function planAgentartsCommand(rawArgs, options = {}) {
       'Rejected: a literal <redacted> sits at a secret slot — the plan cannot bind it (its display would be indistinguishable from a redacted real secret, and the approved replay would write the literal string). Re-plan with the actual secret value; at run time, re-supply the real value wherever a plan displays <redacted>.',
     );
   }
-  const notes = planningGuidance(classification, canonicalArgs);
+  const notes = planningGuidance(classification, canonicalArgs, memoryScan);
   if (memoryScan?.consumedDashPrefixed?.length > 0) {
     // Mid-argv cannibalization stays a WARNING (a dash-leading value is
     // legitimate click input: `-d -overview`), but it can silently

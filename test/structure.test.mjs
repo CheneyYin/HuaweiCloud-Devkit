@@ -1276,6 +1276,39 @@ test('huawei-agentarts skill ships with routing floor and core registry wiring',
   assert.match(body, /AGENTARTS_BIN/);
   assert.match(body, /HUAWEICLOUD_SDK_AK/);
   assert.match(body, /cn-north-4/);
+  // Trap 15: the memory help text's cn-north-4 default contradicts the
+  // code (constant.py:79; get_region() = HUAWEICLOUD_SDK_REGION →
+  // HUAWEICLOUD_REGION → OS_REGION_NAME → cn-southwest-2 fallback). Every
+  // Region line must teach the actual fallback and the env chain, and
+  // every '. '-split sentence mentioning cn-north-4 (case-insensitive)
+  // must BOTH carry claim framing (CLAIM/help text) AND restate the
+  // cn-southwest-2 counterstatement in the same sentence — sentence-scoped
+  // because a line-level framing check is gameable by an unrelated 'help
+  // text' mention elsewhere in the bullet, same-sentence because
+  // attribution without contradiction ('defaults to cn-north-4 per the
+  // help text') is the realistic drift shape.
+  const regionLines = body.split('\n').filter((l) => /^-\s*Region:/.test(l));
+  assert.ok(regionLines.length > 0, 'SKILL.md region line missing');
+  for (const line of regionLines) {
+    assert.match(line, /actual code fallback is\s+cn-southwest-2/);
+    assert.match(line, /HUAWEICLOUD_SDK_REGION/);
+    assert.match(line, /HUAWEICLOUD_REGION/);
+    assert.match(line, /OS_REGION_NAME/);
+    for (const sentence of line.split('. ')) {
+      if (sentence.toLowerCase().includes('cn-north-4')) {
+        assert.match(
+          sentence,
+          /CLAIM|help text/i,
+          'cn-north-4 may appear on a Region line only as the quoted help-text claim (trap 15)',
+        );
+        assert.match(
+          sentence,
+          /cn-southwest-2/,
+          'the cn-north-4 sentence must restate the cn-southwest-2 counterstatement (trap 15)',
+        );
+      }
+    }
+  }
   // PR11: memory create/update/delete are approved (no blocked row remains)
   // and the one-time-key trap + file capture is taught.
   assert.doesNotMatch(body, /blocked \(this release\)/);
@@ -1300,6 +1333,12 @@ test('huawei-agentarts skill ships with routing floor and core registry wiring',
   assert.match(body, /AgentArts\.01010400/);
   assert.match(body, /measured: semantic, episodic, user_preference, summary; event is enum-evidenced/);
   const workflows = readFileSync(join(skillDir, 'references', 'cli-workflows.md'), 'utf8');
+  // Trap-15 twin pin: the reference layer carries the full resolution
+  // chain — it must not drift from the corrected SKILL.md statement.
+  assert.match(workflows, /actual code fallback is\s+cn-southwest-2/);
+  assert.match(workflows, /HUAWEICLOUD_SDK_REGION/);
+  assert.match(workflows, /HUAWEICLOUD_REGION/);
+  assert.match(workflows, /OS_REGION_NAME/);
   assert.match(workflows, /--strategies/);
   assert.match(workflows, /semantic, episodic, user_preference, summary, event/);
   assert.match(workflows, /event enum-evidenced only/);
