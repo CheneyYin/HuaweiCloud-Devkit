@@ -30,6 +30,7 @@ import { readFileSync } from 'node:fs';
 import {
   AGENTARTS_SDK_MIRROR,
   buildChildEnv,
+  DEFAULT_APPROVED_TIMEOUT_MS,
   memoryApiKeyFile,
   pinnedSdkVersion,
   pythonCandidatesForAgentarts,
@@ -37,6 +38,7 @@ import {
   runOverPythonCandidates,
   saveLargeOutput,
 } from './agentarts-cli.mjs';
+import { createApprovalTokenStore, hashNamespacedArgs } from './approval-tokens.mjs';
 import { redactSecrets } from './safety-policy.mjs';
 
 // The 8 read-only data-plane methods, transcribed from the pinned venv's
@@ -331,7 +333,7 @@ export async function readAgentartsMemory(params = {}, options = {}) {
 
   // Allowlist env + the data-plane key. injectCredentials stays OFF: the
   // data plane needs no AK/SK (MemoryClient's control plane is lazy and
-  // none of these 8 methods reach it) — a narrower credential surface
+  // none of these methods reach it) — a narrower credential surface
   // than every other agentarts tool, on purpose.
   const childEnv = { ...buildChildEnv({ injectCredentials: false }), HUAWEICLOUD_SDK_MEMORY_API_KEY: keyLoad.key };
   const timeoutMs = options.timeoutMs ?? READONLY_TIMEOUT_MS;
@@ -342,57 +344,357 @@ export async function readAgentartsMemory(params = {}, options = {}) {
     childEnv,
     timeoutMs,
     runCandidate: options.runCandidate,
-    shapeResult: (result, candidate) => {
-      // Trustworthy exit codes (see the module header): exit 0 means the
-      // snippet printed result JSON — a parse failure on exit 0 is a
-      // pollution detector, NOT a content scan. No failure signature runs
-      // against the payload: memory CONTENT is by design a store of
-      // failure experience (tracebacks, ERROR lines), so scanning it
-      // guarantees false positives on successful reads.
-      let parsed = null;
-      if (!result.timedOut && result.exitCode === 0) {
-        try {
-          parsed = JSON.parse(result.stdout);
-        } catch {
-          parsed = null;
+    shapeResult: (result, candidate) => shapeMemoryResult(result, candidate, params, timeoutMs),
+  });
+}
+
+// Shared payload shaper for the read and write bridges (identical failure
+// contract, redaction, and truncation semantics).
+function shapeMemoryResult(result, candidate, params, timeoutMs) {
+  // Trustworthy exit codes (see the module header): exit 0 means the
+  // snippet printed result JSON — a parse failure on exit 0 is a
+  // pollution detector, NOT a content scan. No failure signature runs
+  // against the payload: memory CONTENT is by design a store of
+  // failure experience (tracebacks, ERROR lines), so scanning it
+  // guarantees false positives on successful reads.
+  let parsed = null;
+  if (!result.timedOut && result.exitCode === 0) {
+    try {
+      parsed = JSON.parse(result.stdout);
+    } catch {
+      parsed = null;
+    }
+    // Parsed results pass the SAME redaction as the string paths — the
+    // object path masks credential-shaped fields (trap 27 class).
+    if (parsed !== null && parsed !== undefined) parsed = redactSecrets(parsed);
+  }
+  const failed = result.timedOut || result.exitCode !== 0 || parsed === null;
+  const safeStdout = redactSecrets(result.stdout || '');
+  // Truncation applies to successes AND failures (a long timeout can
+  // accumulate a lot of output). When the side file fires, `result`
+  // is dropped — the file pointer is the contract; returning an
+  // untruncated parsed object next to a truncated stdout would defeat
+  // the whole large-output machinery.
+  const largeOutputFile = saveLargeOutput(safeStdout);
+  const payloadStdout = largeOutputFile
+    ? `${safeStdout.slice(0, 2000)}\n...(truncated, full output saved to ${largeOutputFile})`
+    : safeStdout;
+  const parsePolluted = !result.timedOut && result.exitCode === 0 && parsed === null;
+  return {
+    ok: !failed,
+    service: 'AgentArts',
+    operation: `memory ${params.operation} (SDK data plane; no CLI subcommand in 0.1.7)`,
+    executable: candidate,
+    exitCode: result.exitCode,
+    failureDetected: failed,
+    ...(largeOutputFile || failed ? {} : { result: parsed }),
+    stdout: payloadStdout,
+    stderr: redactSecrets(result.stderr || ''),
+    ...(result.timedOut
+      ? { timedOut: true, error: `agentarts memory ${params.operation} timed out after ${timeoutMs} ms.` }
+      : {}),
+    ...(parsePolluted
+      ? {
+          error:
+            'exit 0 but stdout was not parseable JSON — output pollution suspected (the snippet prints clean JSON on success).',
         }
-        // Parsed results pass the SAME redaction as the string paths — the
-        // object path masks credential-shaped fields (trap 27 class).
-        if (parsed !== null && parsed !== undefined) parsed = redactSecrets(parsed);
+      : {}),
+  };
+}
+
+// The 4 WRITE data-plane methods (U3), token-gated like every approved
+// cloud write in this repo. Signatures (pinned venv client.py):
+// - create_memory_session(space_id, id?, actor_id?, assistant_id?, meta?)
+//   — actor_id REQUIRED at this boundary (the isolation model; a session
+//   without an actor breaks actor-scoped retrieval).
+// - add_messages(space_id, session_id, messages: TextMessage[], *,
+//   timestamp?, idempotency_key?, is_force_extract=False) — TextMessage
+//   roles are user/assistant/system ONLY (the dataclass Literal; tool
+//   roles are ToolCallMessage shapes this bridge does not expose), and
+//   content must be non-empty (to_dict raises on empty). ONE approval
+//   covers the whole batch.
+// - delete_session(space_id, session_id) — SOFT delete (90-365d async
+//   cleanup per the SDK docstring): approved, not irreversible-labeled.
+// - delete_memory(space_id, memory_id) — the SDK docstring says
+//   "this operation is irreversible": carries the irreversible label.
+export const MEMORY_WRITE_OPERATIONS = ['create_session', 'add_messages', 'delete_session', 'delete_memory'];
+const MEMORY_WRITE_LABELS = {
+  delete_memory: ['irreversible'],
+};
+
+// TextMessage's role Literal (config.py:904-905) — 'tool' is NOT a
+// TextMessage role; the tool-call/result message shapes are separate
+// dataclasses this bridge deliberately does not expose.
+const TEXT_MESSAGE_ROLES = new Set(['user', 'assistant', 'system']);
+
+function validateMemoryWrite(params) {
+  if (!MEMORY_WRITE_OPERATIONS.includes(params.operation)) {
+    return `operation must be one of: ${MEMORY_WRITE_OPERATIONS.join(', ')}.`;
+  }
+  const spaceFile = memoryApiKeyFile(params.space_id);
+  if (!spaceFile.ok) return spaceFile.error;
+  if (typeof params.space_id !== 'string' || params.space_id.length === 0) {
+    return 'space_id is required.';
+  }
+  if (params.operation === 'create_session') {
+    if (typeof params.actor_id !== 'string' || params.actor_id.length === 0) {
+      return 'actor_id is REQUIRED for create_session: the actor is the isolation unit of the whole memory model — a session without one breaks actor-scoped retrieval.';
+    }
+    for (const field of ['assistant_id', 'session_id']) {
+      if (
+        params[field] !== undefined &&
+        params[field] !== null &&
+        (typeof params[field] !== 'string' || !params[field])
+      ) {
+        return `${field} must be a non-empty string when provided.`;
       }
-      const failed = result.timedOut || result.exitCode !== 0 || parsed === null;
-      const safeStdout = redactSecrets(result.stdout || '');
-      // Truncation applies to successes AND failures (a 60s timeout can
-      // accumulate a lot of output). When the side file fires, `result`
-      // is dropped — the file pointer is the contract; returning an
-      // untruncated parsed object next to a truncated stdout would defeat
-      // the whole large-output machinery.
-      const largeOutputFile = saveLargeOutput(safeStdout);
-      const payloadStdout = largeOutputFile
-        ? `${safeStdout.slice(0, 2000)}\n...(truncated, full output saved to ${largeOutputFile})`
-        : safeStdout;
-      const parsePolluted = !result.timedOut && result.exitCode === 0 && parsed === null;
-      return {
-        ok: !failed,
-        service: 'AgentArts',
-        operation: `memory ${params.operation} (SDK data plane; no CLI subcommand in 0.1.7)`,
-        executable: candidate,
-        exitCode: result.exitCode,
-        failureDetected: failed,
-        ...(largeOutputFile || failed ? {} : { result: parsed }),
-        stdout: payloadStdout,
-        stderr: redactSecrets(result.stderr || ''),
-        ...(result.timedOut
-          ? { timedOut: true, error: `agentarts memory ${params.operation} timed out after ${timeoutMs} ms.` }
-          : {}),
-        ...(parsePolluted
-          ? {
-              error:
-                'exit 0 but stdout was not parseable JSON — output pollution suspected (the snippet prints clean JSON on success).',
-            }
-          : {}),
-      };
-    },
+    }
+    if (
+      params.meta !== undefined &&
+      params.meta !== null &&
+      (typeof params.meta !== 'object' || Array.isArray(params.meta))
+    ) {
+      return 'session meta must be an object.';
+    }
+  }
+  if (params.operation === 'add_messages') {
+    if (typeof params.session_id !== 'string' || params.session_id.length === 0) {
+      return 'session_id is required for add_messages.';
+    }
+    if (!Array.isArray(params.messages) || params.messages.length === 0) {
+      return 'messages must be a non-empty array (one approval covers the whole batch).';
+    }
+    for (const [index, message] of params.messages.entries()) {
+      if (!message || typeof message !== 'object' || Array.isArray(message)) {
+        return `messages[${index}] must be an object.`;
+      }
+      if (!TEXT_MESSAGE_ROLES.has(message.role)) {
+        return `messages[${index}].role must be one of user, assistant, system (TextMessage's Literal — tool roles are separate dataclasses this bridge does not expose).`;
+      }
+      if (typeof message.content !== 'string' || message.content.length === 0) {
+        return `messages[${index}].content must be a non-empty string (the SDK raises on empty content).`;
+      }
+      for (const field of ['actor_id', 'assistant_id', 'meta']) {
+        if (message[field] !== undefined && message[field] !== null && typeof message[field] !== 'string') {
+          return `messages[${index}].${field} must be a string when provided.`;
+        }
+      }
+    }
+    if (params.timestamp !== undefined && params.timestamp !== null && !Number.isSafeInteger(params.timestamp)) {
+      return 'timestamp must be an integer (milliseconds).';
+    }
+    if (
+      params.idempotency_key !== undefined &&
+      params.idempotency_key !== null &&
+      (typeof params.idempotency_key !== 'string' || !params.idempotency_key)
+    ) {
+      return 'idempotency_key must be a non-empty string when provided.';
+    }
+    if (
+      params.is_force_extract !== undefined &&
+      params.is_force_extract !== null &&
+      typeof params.is_force_extract !== 'boolean'
+    ) {
+      return 'is_force_extract must be a boolean.';
+    }
+  }
+  if (params.operation === 'delete_session') {
+    if (typeof params.session_id !== 'string' || params.session_id.length === 0) {
+      return 'session_id is required for delete_session.';
+    }
+  }
+  if (params.operation === 'delete_memory') {
+    if (typeof params.memory_id !== 'string' || params.memory_id.length === 0) {
+      return 'memory_id is required for delete_memory.';
+    }
+  }
+  return null;
+}
+
+// The canonical request: plan and write build it from params the SAME way,
+// so the approval token binds byte-identical JSON. It carries ONLY
+// non-secret parameters (the key rides the child env, never here).
+function buildMemoryWriteRequest(params) {
+  const request = {
+    operation: params.operation,
+    space_id: params.space_id,
+    region: typeof params.region === 'string' && params.region ? params.region : 'cn-southwest-2',
+  };
+  if (params.operation === 'create_session') {
+    request.actor_id = params.actor_id;
+    for (const field of ['assistant_id', 'session_id']) {
+      if (typeof params[field] === 'string' && params[field]) request[field] = params[field];
+    }
+    if (params.meta !== undefined && params.meta !== null) request.meta = params.meta;
+  }
+  if (params.operation === 'add_messages') {
+    request.session_id = params.session_id;
+    request.messages = params.messages.map((message) => {
+      const entry = { role: message.role, content: message.content };
+      for (const field of ['actor_id', 'assistant_id', 'meta']) {
+        if (typeof message[field] === 'string' && message[field]) entry[field] = message[field];
+      }
+      return entry;
+    });
+    if (params.timestamp !== undefined && params.timestamp !== null) request.timestamp = params.timestamp;
+    if (typeof params.idempotency_key === 'string' && params.idempotency_key) {
+      request.idempotency_key = params.idempotency_key;
+    }
+    if (params.is_force_extract === true) request.is_force_extract = true;
+  }
+  if (params.operation === 'delete_session') request.session_id = params.session_id;
+  if (params.operation === 'delete_memory') request.memory_id = params.memory_id;
+  return request;
+}
+
+// Token namespace for the memory data-plane writes — distinct from the
+// agentarts CLI namespace so a CLI token can never authorize an SDK write
+// (and vice versa). The request JSON carries no secrets, so hash-exact
+// binding is the whole check (the CLI's scrub-tolerance fallback exists
+// for argv secrets; there are none here by construction).
+const MEMORY_WRITE_TOKEN_CLI = 'agentarts-memory-sdk';
+
+export function planAgentartsMemoryWrite(params = {}) {
+  const invalid = validateMemoryWrite(params);
+  if (invalid) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `memory ${params.operation || '(unknown)'} (SDK data plane)`,
+      error: invalid,
+    };
+  }
+  const keyLoad = loadMemoryApiKey(params.space_id);
+  if (!keyLoad.ok) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `memory ${params.operation} (SDK data plane)`,
+      error: keyLoad.error,
+    };
+  }
+  const request = buildMemoryWriteRequest(params);
+  const approvalToken = createApprovalTokenStore(MEMORY_WRITE_TOKEN_CLI).create([JSON.stringify(request)]);
+  return {
+    ok: true,
+    service: 'AgentArts',
+    tier: 'approved',
+    operation: `memory ${params.operation} (SDK data plane; no CLI subcommand in 0.1.7)`,
+    labels: MEMORY_WRITE_LABELS[params.operation] ?? [],
+    request,
+    approvalToken,
+    approvalNote:
+      'Present the request above to the user. On explicit approval, run huaweicloud_agentarts_memory_write with THIS approvalToken and the SAME parameters (the token binds them exactly); otherwise discard it. One approval covers the whole add_messages batch.',
+  };
+}
+
+const MEMORY_WRITE_SNIPPET = [
+  'import json, sys',
+  'try:',
+  '    from agentarts.sdk.memory.client import MemoryClient',
+  '    from agentarts.sdk.memory.inner.config import TextMessage',
+  '    params = json.loads(sys.argv[1])',
+  '    client = MemoryClient(region_name=params["region"])',
+  '    op = params["operation"]',
+  '    space = params["space_id"]',
+  '    if op == "create_session":',
+  '        kwargs = {"actor_id": params["actor_id"]}',
+  '        if params.get("assistant_id"): kwargs["assistant_id"] = params["assistant_id"]',
+  '        if params.get("session_id"): kwargs["id"] = params["session_id"]',
+  '        if params.get("meta"): kwargs["meta"] = params["meta"]',
+  '        result = client.create_memory_session(space, **kwargs)',
+  '    elif op == "add_messages":',
+  '        messages = [TextMessage(role=m["role"], content=m["content"], actor_id=m.get("actor_id"), assistant_id=m.get("assistant_id"), meta=m.get("meta")) for m in params["messages"]]',
+  '        kwargs = {}',
+  '        if params.get("timestamp") is not None: kwargs["timestamp"] = params["timestamp"]',
+  '        if params.get("idempotency_key"): kwargs["idempotency_key"] = params["idempotency_key"]',
+  '        if params.get("is_force_extract") is not None: kwargs["is_force_extract"] = params["is_force_extract"]',
+  '        result = client.add_messages(space, params["session_id"], messages, **kwargs)',
+  '    elif op == "delete_session":',
+  '        client.delete_session(space, params["session_id"])',
+  '        result = {"deleted": True, "session_id": params["session_id"]}',
+  '    elif op == "delete_memory":',
+  '        client.delete_memory(space, params["memory_id"])',
+  '        result = {"deleted": True, "memory_id": params["memory_id"]}',
+  '    else:',
+  '        print("AGENTARTS_MEMORY_BAD_OPERATION", file=sys.stderr)',
+  '        sys.exit(2)',
+  '    print(json.dumps(result, ensure_ascii=False, default=lambda o: getattr(o, "__dict__", str(o))))',
+  'except ModuleNotFoundError:',
+  '    print("AGENTARTS_SDK_MISSING", file=sys.stderr)',
+  '    sys.exit(3)',
+  'except Exception as error:',
+  '    print("{}: {}".format(type(error).__name__, error), file=sys.stderr)',
+  '    sys.exit(1)',
+].join('\n');
+
+export async function runAgentartsMemoryWrite({ approvalToken, ...params } = {}, options = {}) {
+  const invalid = validateMemoryWrite(params);
+  if (invalid) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `memory ${params.operation || '(unknown)'} (SDK data plane)`,
+      error: invalid,
+    };
+  }
+  if (typeof approvalToken !== 'string' || !approvalToken) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `memory ${params.operation} (SDK data plane)`,
+      error:
+        'approvalToken is required — run huaweicloud_agentarts_memory_plan first, present the request to the user, and pass the token plus the SAME parameters here on explicit approval.',
+    };
+  }
+  const store = createApprovalTokenStore(MEMORY_WRITE_TOKEN_CLI);
+  const inspection = store.inspect(approvalToken);
+  if (inspection.state !== 'valid') {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `memory ${params.operation} (SDK data plane)`,
+      error: `approvalToken is ${inspection.state} — re-plan with huaweicloud_agentarts_memory_plan and get a fresh approval.`,
+    };
+  }
+  const request = buildMemoryWriteRequest(params);
+  const requestHash = hashNamespacedArgs(MEMORY_WRITE_TOKEN_CLI, [JSON.stringify(request)]);
+  if (requestHash !== inspection.entry.argsHash) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `memory ${params.operation} (SDK data plane)`,
+      error:
+        'approvalToken was minted for DIFFERENT parameters — the write binds the exact planned request. Re-plan with the changed parameters (the token stays valid for the original ones).',
+    };
+  }
+  // Binding verified — consume (single-use tombstone) before executing.
+  if (!store.consume(approvalToken)) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `memory ${params.operation} (SDK data plane)`,
+      error: 'approvalToken could not be consumed (concurrent use?) — re-plan.',
+    };
+  }
+  const keyLoad = loadMemoryApiKey(params.space_id);
+  if (!keyLoad.ok) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `memory ${params.operation} (SDK data plane)`,
+      error: keyLoad.error,
+    };
+  }
+  const childEnv = { ...buildChildEnv({ injectCredentials: false }), HUAWEICLOUD_SDK_MEMORY_API_KEY: keyLoad.key };
+  const timeoutMs = options.timeoutMs ?? DEFAULT_APPROVED_TIMEOUT_MS;
+  const args = ['-c', MEMORY_WRITE_SNIPPET, JSON.stringify(request)];
+  return runOverPythonCandidates({
+    args,
+    childEnv,
+    timeoutMs,
+    runCandidate: options.runCandidate,
+    shapeResult: (result, candidate) => shapeMemoryResult(result, candidate, params, timeoutMs),
   });
 }
 
@@ -444,9 +746,73 @@ export const AGENTARTS_MEMORY_TOOL_DEFINITIONS = [
   },
 ];
 
+// Write-bridge tool definitions (token-gated like every approved cloud
+// write in this repo).
+export const AGENTARTS_MEMORY_WRITE_TOOL_DEFINITIONS = [
+  {
+    name: 'huaweicloud_agentarts_memory_plan',
+    description:
+      'Plan an AgentArts memory DATA-PLANE WRITE (SDK MemoryClient — the 0.1.7 CLI has no data-plane subcommands): create_session, add_messages (a whole batch per approval), delete_session (soft delete), delete_memory (irreversible). Validates the request, reads nothing from the cloud, and returns the exact request plus an approvalToken. Present the request to the user; on explicit approval run huaweicloud_agentarts_memory_write with the token and the SAME parameters. The token binds the exact planned request — changed parameters need a fresh plan. The one-time data-plane api_key rides the wrapper-captured 0600 key file (env-only). actor_id is REQUIRED for create_session (the actor is the isolation unit). TextMessage roles: user/assistant/system only.',
+    inputSchema: {
+      type: 'object',
+      required: ['operation', 'space_id'],
+      properties: {
+        operation: { type: 'string', enum: MEMORY_WRITE_OPERATIONS },
+        space_id: { type: 'string', pattern: '^[A-Za-z0-9_-]+$' },
+        actor_id: { type: 'string', description: 'REQUIRED for create_session.' },
+        session_id: {
+          type: 'string',
+          description: 'Required for add_messages/delete_session; optional custom id for create_session.',
+        },
+        assistant_id: { type: 'string', description: 'create_session/add_messages optional.' },
+        meta: { type: 'object', description: 'create_session: session metadata object.' },
+        messages: {
+          type: 'array',
+          description:
+            'add_messages: non-empty array of {role: user|assistant|system, content: non-empty string, actor_id?, assistant_id?, meta? (strings)}. One approval covers the whole batch.',
+          items: { type: 'object' },
+        },
+        timestamp: { type: 'integer', description: 'add_messages: message time in ms.' },
+        idempotency_key: { type: 'string', description: 'add_messages: duplicate-submission guard.' },
+        is_force_extract: {
+          type: 'boolean',
+          description:
+            'add_messages: force memory extraction (default false — extraction is async; a write is not immediately retrievable).',
+        },
+        memory_id: { type: 'string', description: 'delete_memory.' },
+        region: { type: 'string', description: 'Defaults to cn-southwest-2.' },
+      },
+    },
+  },
+  {
+    name: 'huaweicloud_agentarts_memory_write',
+    description:
+      'Execute a PLANNED and USER-APPROVED AgentArts memory data-plane write. Requires the approvalToken from huaweicloud_agentarts_memory_plan plus the EXACT same parameters (the token binds them; a mismatch rejects without consuming the token). Single-use: the token is consumed on execution. delete_memory is irreversible; delete_session is a soft delete; add_messages extraction is asynchronous (not immediately searchable — use is_force_extract consciously).',
+    inputSchema: {
+      type: 'object',
+      required: ['approvalToken', 'operation', 'space_id'],
+      properties: {
+        approvalToken: { type: 'string' },
+        operation: { type: 'string', enum: MEMORY_WRITE_OPERATIONS },
+        space_id: { type: 'string', pattern: '^[A-Za-z0-9_-]+$' },
+        actor_id: { type: 'string' },
+        session_id: { type: 'string' },
+        assistant_id: { type: 'string' },
+        meta: { type: 'object' },
+        messages: { type: 'array', items: { type: 'object' } },
+        timestamp: { type: 'integer' },
+        idempotency_key: { type: 'string' },
+        is_force_extract: { type: 'boolean' },
+        memory_id: { type: 'string' },
+        region: { type: 'string' },
+      },
+    },
+  },
+];
+
 export async function callAgentartsMemoryTool(name, rawArgs = {}) {
-  if (name !== 'huaweicloud_agentarts_memory_read') {
-    return { ok: false, error: `Unknown agentarts memory tool: ${name}` };
-  }
-  return readAgentartsMemory(rawArgs);
+  if (name === 'huaweicloud_agentarts_memory_read') return readAgentartsMemory(rawArgs);
+  if (name === 'huaweicloud_agentarts_memory_plan') return planAgentartsMemoryWrite(rawArgs);
+  if (name === 'huaweicloud_agentarts_memory_write') return runAgentartsMemoryWrite(rawArgs);
+  return { ok: false, error: `Unknown agentarts memory tool: ${name}` };
 }
