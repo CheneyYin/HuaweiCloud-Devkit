@@ -119,7 +119,7 @@ test('wire probe fails on connection refusal and reports the retry too', async (
 });
 
 test('wire probe scrubs the session key out of gateway response bodies', async () => {
-  const key = 'sk-leaked-wire-secret-42';
+  const key = 'sk-leaked-key-42';
   const saved = process.env.E2E_APIKEY;
   process.env.E2E_APIKEY = key;
   try {
