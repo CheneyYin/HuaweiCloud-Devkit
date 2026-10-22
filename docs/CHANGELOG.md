@@ -6,6 +6,9 @@
 
 ## Unreleased
 
+- feat(agentarts): memory create --strategies plan guard (server 400 [AgentArts.01010400] + orphan API key made pre-cloud) + value-slot-aware argv scanning (click semantics: value flags eat dash tokens, last-wins, no '=' stripping on short options), position-blind help-collapse re-derivation via shared resolveAgentartsGroupTokens, dangling-flag rejection, stderr-only usage signatures + exit-2 backstop, one-time api_key hardening across close/timeout/false-positive paths (path-safe spaceId, scrubbed side file, honest capture-failed notes), shared scrubPositionalSecrets/argsMatchPlanBinding consumed by BOTH wrappers (hash-first binding before token consumption, placeholder rejection, obsutil credential-shape dialect), hcloud display/binding unified on the same scrubber, bearer-token guard on every spelling (friction fix 1, 13-round adversarial loop)
+- docs(agentarts): swarm scenario planning — 5 scenarios with CLI dependency/shortage adjudication (agentarts-scenario-plan.md) + findings corrections: memory region default adjudicated (help text claims cn-north-4, code defaults cn-southwest-2), memory status space_id is positional, BEARER_TOKEN env fallback on the invoke family, wider install prompt surface, gateway exit-0 trap (traps 15/20-26)
+
 - fix(huawei-ecs): Ecs.0044 volume-type sellout mapping + RHEL-family firewalld coverage with no-SSH recovery path (#971)
 - fix(safety): admin-port deny remediation now points at /32 egress-IP rules and the cloud-init no-SSH path (#971)
 - docs(huawei-ecs): large-user_data JSON-file path (--skeleton / --cli-jsonInput / --dryrun) + anti-pattern warning against abandoning the MCP approval channel (#964)

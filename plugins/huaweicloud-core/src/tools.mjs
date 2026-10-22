@@ -8,7 +8,8 @@ import { createHmac, createHash } from 'node:crypto';
 
 import { evaluateArtifacts, evaluateCommandRisk, evaluateDeployPlan } from './risk-rule-engine.mjs';
 import { classifyTextCommand, redactSecrets } from './safety-policy.mjs';
-import { planHcloudCommand, runHcloud, consumeApprovalToken, inspectApprovalToken, hashArgs } from './hcloud-cli.mjs';
+import { planHcloudCommand, runHcloud, consumeApprovalToken, inspectApprovalToken } from './hcloud-cli.mjs';
+import { argsMatchPlanBinding } from './approval-tokens.mjs';
 import { checkAccountType } from './account-type.mjs';
 import { AGENTARTS_TOOL_DEFINITIONS, callAgentartsTool } from './agentarts-cli.mjs';
 import { searchMarketplace } from './search-market.mjs';
@@ -275,7 +276,8 @@ export const TOOL_DEFINITIONS = [
         args: {
           type: 'array',
           items: { type: 'string' },
-          description: 'hcloud arguments, excluding the hcloud executable.',
+          description:
+            'hcloud arguments, excluding the hcloud executable. Where the plan displays <redacted> for a secret, re-supply the REAL value — a literal <redacted> (bare or inline --param=<redacted>) is rejected.',
         },
         approvalToken: {
           type: 'string',
@@ -1993,6 +1995,25 @@ async function runApprovedCommand(args = {}) {
     return { status: 'rejected', code: 'CONFIRM_TOKEN_NOT_FOUND' };
   }
 
+  const providedArgs = Array.isArray(args.args) ? args.args.map(String) : [];
+  // Binding validation runs against the INSPECTION entry BEFORE the token
+  // is consumed (same restructure as the agentarts runner): a
+  // placeholder/mismatch rejection must not burn the approval — the
+  // corrected retry reuses the same token.
+  // Shared binding check (approval-tokens.mjs — the SAME one the agentarts
+  // runner consumes): hash-exact, scrub-tolerant only for replaced secret
+  // values, literal '<redacted>' placeholders (bare or inline
+  // --param=<redacted>) always rejected.
+  const binding = argsMatchPlanBinding(inspection.entry, providedArgs);
+  if (!binding.ok) {
+    throw new Error(
+      binding.reason === 'placeholder'
+        ? 'Provided args contain a literal <redacted> placeholder — replace the placeholders with the actual secret values (the plan displays them redacted; the approval binds the real args).'
+        : 'Provided args do not match the approved plan. Use the exact args from the plan. ' +
+            'If the plan shows <redacted> for passwords or secrets, replace <redacted> with the actual values in approvedCommand.',
+    );
+  }
+  const strictPlan = planHcloudCommand(providedArgs, { allowWrites: false });
   const stored = consumeApprovalToken(token);
   if (!stored) {
     // Defensive: inspectApprovalToken said 'valid' but consume returned null
@@ -2003,18 +2024,6 @@ async function runApprovedCommand(args = {}) {
     if (recheck.state === 'already_consumed') return { status: 'ok', outcome: 'already_processed' };
     return { status: 'rejected', code: 'CONFIRM_TOKEN_NOT_FOUND' };
   }
-  const providedArgs = Array.isArray(args.args) ? args.args.map(String) : [];
-  if (hashArgs(providedArgs) !== stored.argsHash) {
-    const redactedStored = JSON.stringify(stored.argsRedacted);
-    const redactedProvided = JSON.stringify(redactSecrets(providedArgs));
-    if (redactedStored !== redactedProvided) {
-      throw new Error(
-        'Provided args do not match the approved plan. Use the exact args from the plan. ' +
-          'If the plan shows <redacted> for passwords or secrets, replace <redacted> with the actual values in approvedCommand.',
-      );
-    }
-  }
-  const strictPlan = planHcloudCommand(providedArgs, { allowWrites: false });
   const result = await runHcloud(providedArgs, {
     allowWrites: true,
     timeoutMs: args.timeoutMs,

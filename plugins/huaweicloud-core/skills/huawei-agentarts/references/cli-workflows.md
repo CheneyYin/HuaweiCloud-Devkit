@@ -18,8 +18,10 @@ Every command shape here is fixture-verified against agentarts-sdk 0.1.7
 - Credentials are injected by the wrapper tools from the devkit runtime
   credential state (`huaweicloud_auth_init`). NEVER export AK/SK manually —
   see `huaweicloud-cli-and-auth`.
-- Control plane is cn-southwest-2 only. The memory create/get/list/update/
-  delete/status subcommands default to cn-north-4 — pass `--region` on those.
+- Control plane is cn-southwest-2 only. The memory subcommands' help text
+  CLAIMS a cn-north-4 default, but the actual code default is
+  cn-southwest-2 (constant.py:79, findings trap 15) — always pass
+  `--region` explicitly on the memory family regardless.
 
 ## Golden Path (deploy an agent)
 
@@ -105,7 +107,8 @@ evidence) — treat pre-deploy as required.
 huaweicloud_agentarts_run_readonly_command
   ["memory","list","--region","cn-southwest-2","--output","json"]
   ["memory","get","<space-id>","--region","cn-southwest-2"]
-  ["memory","status","--space-id","<space-id>","--region","cn-southwest-2"]
+  ["memory","status","<space-id>","--region","cn-southwest-2"]  (space_id is a
+   POSITIONAL argument — a --space-id flag is rejected by the CLI)
   ["gateway","list"]
   ["gateway","get-target","<gateway-id>","<target-id>"]
 
@@ -173,14 +176,22 @@ pass `--session` to exec-command/invoke/upload/download; stop with
 
 ## Wrapper Rules (why some commands hard-stop)
 
-| Shape                              | Wrapper behavior                                                                                                                                                                                                             |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--bearer-token` / `-bt` anywhere  | Rejected at plan: argv is process-list visible                                                                                                                                                                               |
-| bare `agentarts config`            | Hard stop: interactive wizard                                                                                                                                                                                                |
-| `gateway delete` / `delete-target` | Hard stop: typer.confirm, NO skip flag exists — user terminal only                                                                                                                                                           |
-| `memory install`/`uninstall`       | Plan requires an explicit target (hermes, claude, codex, opencode, openclaw) — the plan canonicalizes `--yes`; it writes credentials into the host agent's config — a user decision, never agent-initiated                   |
-| `memory create`/`update`/`delete`  | Approved (PR11). create canonicalizes to `--output json` and captures the one-time api_key to a 0600 file (payload stays redacted — see credentials.md); delete canonicalizes `--force` and carries the `irreversible` label |
-| `destroy`                          | Plan appends `--yes` (measured non-interactive flag); approval binds to that form                                                                                                                                            |
+| Shape                              | Wrapper behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--bearer-token` / `-bt` anywhere  | Rejected at plan: argv is process-list visible                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| bare `agentarts config`            | Hard stop: interactive wizard                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `gateway delete` / `delete-target` | Hard stop: typer.confirm, NO skip flag exists — user terminal only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `memory install`/`uninstall`       | Plan requires an explicit target (hermes, claude, codex, opencode, openclaw) — the plan canonicalizes `--yes`; it writes credentials into the host agent's config — a user decision, never agent-initiated                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `memory create`/`update`/`delete`  | Approved (PR11). create REQUIRES `--strategies` (server: HTTP 400 [AgentArts.01010400] without at least one built-in strategy — and the failed attempt orphans the API key the CLI created just before the space; the plan tool rejects a missing value and lists the legal built-ins: semantic, episodic, user_preference, summary, event — the first four e2e-measured, event enum-evidenced only). create canonicalizes to `--output json` and captures the one-time api_key to a 0600 file (payload stays redacted — see credentials.md); delete canonicalizes `--force` and carries the `irreversible` label. `memory update` also HAS `--strategies` (fixture), but its empty/missing semantics are unmeasured — no create-style rejection there |
+| `destroy`                          | Plan appends `--yes` (measured non-interactive flag); approval binds to that form                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+
+Worked example (space creation, the full canonical form):
+
+```
+agentarts memory create my-space --strategies semantic,episodic --region cn-southwest-2
+# the plan tool canonicalizes to --output json and captures the one-time
+# api_key to the 0600 key file; memory list/get/status verify it afterward
+```
 
 ## Exit Codes Lie
 
