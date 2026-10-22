@@ -69,7 +69,7 @@ KooCLI OBS **不支持** `SetBucketWebsite` 命令。配置静态网站托管需
 
 **避坑方法**：
 
-1. **验证网页行为必须用 GET 直连**（`curl -s -D - -o NUL <url>` 或浏览器）——HEAD 和代理层会给出假象
+1. **验证网页行为必须用 GET 直连**（`curl -s -D - -o /dev/null <url>`，Windows 下为 `-o NUL`；或浏览器）——HEAD 和代理层会给出假象
 2. **官方解法**：绑定自定义域名接入 **CDN**，在"CDN 控制台 > 域名管理 > 高级设置 > HTTP header 配置"设置 `Content-Disposition: inline`（参见华为云 CDN 文档《如何在浏览器中在线预览 OBS 中的对象？》）
 3. 跨云对照：阿里云 OSS 同样策略（Bucket 域名访问 HTML 强制下载，绑定自定义域名即可在线预览）
 
@@ -235,7 +235,7 @@ node -e "fetch('<same-url>', {method:'PUT', headers:{'Origin':'https://<your-app
 
 **降级路径 ①：REST API `PUT /?cors` + CORS XML**
 
-向桶 endpoint 发 `PUT /?cors`，body 为 CORSConfiguration XML；请求需带 AWS4 签名（Authorization 头，可用 SDK/工具生成，或使用插件内 `huaweiicloud_obs_set_website_config` 同款的 AWS4 签名方式）。`PUT /?cors` 使用的 AllowedMethod 必须覆盖浏览器直传全部五个方法：
+向桶 endpoint 发 `PUT /?cors`，body 为 CORSConfiguration XML；请求需带 AWS4 签名（Authorization 头，可用 SDK/工具生成，或使用插件内 `huaweicloud_obs_set_website_config` 同款的 AWS4 签名方式）。`PUT /?cors` 使用的 AllowedMethod 必须覆盖浏览器直传全部五个方法：
 
 ```xml
 <CORSConfiguration>
