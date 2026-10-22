@@ -329,7 +329,15 @@ function flushEvents() {
   if (eventQueue.length === 0) return;
   isFlushing = true;
 
+  // Re-resolve userHash right before sending: events enqueued before identity
+  // resolution (cacheUserHash) permanently carried null otherwise (#1014).
+  loadUserHash();
   const batch = eventQueue.splice(0, BATCH_SIZE);
+  if (userHash) {
+    for (const event of batch) {
+      if (!event.userHash) event.userHash = userHash;
+    }
+  }
   const keys = batch.map((e) => e.key).join(',');
   debugLog(
     `FLUSH start events=${batch.length} harness=${batch[0].harness} agentVersion=${batch[0].agentVersion} keys=[${keys}]`,
