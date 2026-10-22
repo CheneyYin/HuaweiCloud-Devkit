@@ -1,59 +1,29 @@
 # Changelog
 
-## 1.1.10 (2026-10-20)
+## 1.1.12-next.0 (2026-10-22)
 
-- chore: merge dev into main for 1.1.10 release (#973)
-- chore(release): 1.1.9 (#950)
-- chore: advance main to 1.1.9-next.3 (prepare 1.1.9 stable release) (#949)
-- chore(release): 1.1.8
-- chore: merge dev into main for 1.1.8 release (#892)
-- chore(release): 1.1.7
-- chore: merge dev into main for 1.1.7 release (#812)
-- chore(release): 1.1.6 (#796)
-- style: prettier normalize plugin manifests
-- chore(release): 1.1.6
-- chore(release): 1.1.5
-- chore: sync README beta badge to v1.1.5
-- chore: version override for 1.1.5 stable release
-- chore(release): 1.1.4
-- chore(release): 1.1.3 (#620)
-- chore: advance main to 1.1.3-next.4 (business keeps dev; prepare stable 1.1.3) (#619)
-- test(update-check): decouple upgrade-tag logic from repo package.json version
-- chore(release): 1.1.2
-- test: resolve structure.test.mjs to dev version (union-merge artifact)
-- chore(release): 1.1.1 (#515)
-- chore: merge dev into main for 1.1.1 stable release (#513)
-- chore: add dsh.bundle manifest for DSH plugin ecosystem
-- chore(release): 1.1.0 (#440)
-- chore: merge dev into main for 1.1.0 release (#438)
-- chore: version override for 1.1.0 stable release (#433)
-- docs: add Huawei Cloud npm mirror recommendation for China users
-- chore(release): 1.0.2
-- style: prettier format fix
-- feat: v1.0.2 stable - merge all dev changes
-- fix(release): update release trigger to workflow_dispatch and main push only
-- feat(release): sync release workflow to main, seed manifest with 1.0.1
-- fix(release): retire the live Publish Dev workflow on main
-- fix(release): restore full publish flow with quoted step names
-- fix(release): probe publish job with environment only
-- fix(release): probe without job outputs and needs.outputs wiring
-- fix(release): restore full tag-gated publish logic
-- fix(release): reduce npm-publish workflow to minimal probe
-- fix(release): drop workflow_dispatch inputs, derive dist-tag from the tag version
-- fix(release): rename publish workflow to npm-publish to recover a fresh workflow_dispatch index
-- fix(release): add pack-verify script to main
-- fix(release): sync ci.yml with pack verification to main
-- fix(release): add tag-gated Publish workflow to main so workflow_dispatch works from tags
+- chore: set version override to 1.1.12 for next preview release
+- docs(voucher): claimed-prefix match widened to cover legacy 已领取 message
+- docs(voucher): already-claimed UX explains real-name-level dedup
+- docs(voucher): UX row for HDKIT_NOT_CODEARTS_OFFICEACE_USER (CodeArts OR OfficeAce)
+- docs(voucher): ops copy for HDKIT_NOT_CODEARTS_USER UX row
+- docs(voucher): UX row for HDKIT_NOT_CODEARTS_USER (copy placeholder, ops TBD)
+
+## 1.1.11 (2026-10-22)
+
+- fix(sandbox): createConnection() classifies transient/restriction errors (HDKIT_SUB_ACCOUNT_RESTRICTED / HD.83700029 drift) and retries with backoff — retry-exhausted errors carry a non-misleading hint instead of the server's "switch to the main account" advice (#997)
+- fix(sandbox): exposeTunnel() probes devbridge version inside the auth waterfall — 0.1.x returns structured devbridge_too_old + remediation before exposing; no-Tunnel-URL failures return ok:false with the version read back (#998)
+- fix(sandbox): devbridge installs to /workspace/.local/bin (survives reboots) + persistence table for data-disk vs system-disk paths (#999)
+- fix(sandbox): tunnel probe/verify curls pass --noproxy '*' — injected proxy returned 502/404 fakes for working tunnels (#1000)
+- fix(safety): obsutilWrites no longer grades nonexistent cors/website subcommands (#1001)
+- feat(obs): huaweicloud_obs_set_cors tool — AWS4-signed PUT/GET/DELETE /?cors via the shared obsSignedRequest; rejects HEAD-less rules at the input boundary (p01) and returns an OPTIONS preflight verify hint (#1003)
+- fix(huawei-ecs): Ecs.0044 volume-type sellout mapping + RHEL-family firewalld coverage with no-SSH recovery path (#971)
+- fix(safety): admin-port deny remediation now points at /32 egress-IP rules and the cloud-init no-SSH path (#971)
+- docs(huawei-ecs): large-user_data JSON-file path (--skeleton / --cli-jsonInput / --dryrun) + anti-pattern warning against abandoning the MCP approval channel (#964)
 
 ## 1.1.10-next.2 (2026-10-20)
 
 - docs(huawei-ecs): large-user_data JSON-file path — keep the MCP approval channel
-
-## Unreleased
-
-- fix(huawei-ecs): Ecs.0044 volume-type sellout mapping + RHEL-family firewalld coverage with no-SSH recovery path (#971)
-- fix(safety): admin-port deny remediation now points at /32 egress-IP rules and the cloud-init no-SSH path (#971)
-- docs(huawei-ecs): large-user_data JSON-file path (--skeleton / --cli-jsonInput / --dryrun) + anti-pattern warning against abandoning the MCP approval channel (#964)
 
 ## 1.1.10-next.0 (2026-10-20)
 
@@ -67,14 +37,6 @@
 - docs(iam): primary-account judgment rule in skill + quick-ref
 - feat(iam): add huaweicloud_check_account_type tool
 - fix(safety): close tokenization bypasses in command classifier (#927) (#928)
-
-## Unreleased
-
-- fix(sandbox): upload_file auto-creates the remote parent directory and reports honest local-path errors (#953)
-- feat(iam): huaweicloud_check_account_type tool — one-shot primary/sub-account judgment via GetCallerIdentity + KeystoneListAuthDomains, rule username == domainName (#954)
-- docs(iam): primary-account judgment rule + disproved-rules exclusions in huawei-iam skill (#954)
-- fix(safety): stop misclassifying STS GetCallerIdentity as temporary-credential exposure (#954)
-- chore: correct stale MCP tool count in AGENTS.md (39 → 43)
 
 ## 1.1.9-next.3 (2026-10-18)
 
