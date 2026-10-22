@@ -21,7 +21,7 @@ import { createApprovalTokenStore, scrubPositionalSecrets, argsMatchPlanBinding 
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const READONLY_TIMEOUT_MS = 60_000;
+export const READONLY_TIMEOUT_MS = 60_000;
 // Measured per-operation approved-tier defaults (PR0 D11 + the e2e run):
 // launch's docker build dominates (~2-3 min), destroy is a control-plane
 // delete (~10s but leave headroom), the invoke family carries the CLI's own
@@ -590,7 +590,7 @@ export function planAgentartsCommand(rawArgs, options = {}) {
 // inject HUAWEICLOUD_SDK_AK/SK from the devkit runtime credential state —
 // injection replaces, not adds. TLS trust anchors ride along with the proxy
 // vars (a MITM proxy without its CA bundle turns into confusing TLS errors).
-function buildChildEnv(options = {}) {
+export function buildChildEnv(options = {}) {
   const env = {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
@@ -684,7 +684,7 @@ const INVOKE_FAMILY_OPERATIONS = new Set([
   'runtime stop-session',
 ]);
 
-function detectFailure(stdout, stderr, operation = null) {
+export function detectFailure(stdout, stderr, operation = null) {
   if (FAILURE_SIGNATURE_RE.test(`${stdout}\n${stderr}`)) return true;
   // Child-output-bearing operations (INVOKE_FAMILY_OPERATIONS — invoke
   // family + launch/docker-build): BOTH usage-error signatures are
@@ -698,7 +698,7 @@ function detectFailure(stdout, stderr, operation = null) {
   return USAGE_ERROR_BOX_RE.test(stderr || '');
 }
 
-function saveLargeOutput(scrubbedStdout) {
+export function saveLargeOutput(scrubbedStdout) {
   if (scrubbedStdout.length <= LARGE_OUTPUT_THRESHOLD) return null;
   try {
     mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -908,18 +908,21 @@ function extractMemoryApiKey(rawStdout, operation) {
     if (idMatch) spaceId = idMatch[1];
   }
   if (!apiKey || !spaceId) return null;
+  const file = memoryApiKeyFile(spaceId);
+  return { apiKey, spaceId, file: file.ok ? file.path : null };
+}
+
+// The 0600 key-file path for a memory space's one-time data-plane api_key,
+// shared by the create-path writer and the data-plane read bridge. The
+// space id must pass the charset gate BEFORE path construction: an id like
+// 'x/../../../.ssh/evil' must never steer path operations outside the
+// state root.
+export function memoryApiKeyFile(spaceId) {
+  if (typeof spaceId !== 'string' || !/^[A-Za-z0-9_-]+$/.test(spaceId)) {
+    return { ok: false, error: 'space_id must match /^[A-Za-z0-9_-]+$/ (server-controlled id; path safety).' };
+  }
   const stateRoot = process.env.HUAWEICLOUD_HOME || homedir();
-  // The space id is SERVER-CONTROLLED (JSON.parse or regex extracted) —
-  // charset-validate before path construction: an id like
-  // 'x/../../../.ssh/evil' must never steer mkdirSync/writeFileSync
-  // outside the state root. file: null signals "not path-safe"; the key
-  // is still scrubbed from the payload, the caller reports the failure.
-  const pathSafeSpaceId = /^[A-Za-z0-9_-]+$/.test(spaceId);
-  return {
-    apiKey,
-    spaceId,
-    file: pathSafeSpaceId ? join(stateRoot, '.config', 'huaweicloud', `agentarts-memory-api-key-${spaceId}.txt`) : null,
-  };
+  return { ok: true, path: join(stateRoot, '.config', 'huaweicloud', `agentarts-memory-api-key-${spaceId}.txt`) };
 }
 
 // The env-or-fail credential contract: without devkit credentials the CLI
@@ -1095,7 +1098,7 @@ export function pythonCandidatesForAgentarts() {
   return [...new Set(candidates)];
 }
 
-function runPythonSnippet(candidate, args, childEnv, timeoutMs) {
+export function runPythonSnippet(candidate, args, childEnv, timeoutMs) {
   return new Promise((resolve) => {
     const child = spawn(candidate, args, {
       shell: false,
