@@ -1098,14 +1098,22 @@ export function pythonCandidatesForAgentarts() {
   return [...new Set(candidates)];
 }
 
-export function runPythonSnippet(candidate, args, childEnv, timeoutMs) {
+export function runPythonSnippet(candidate, args, childEnv, timeoutMs, stdinData = null) {
   return new Promise((resolve) => {
     const child = spawn(candidate, args, {
       shell: false,
       windowsHide: true,
       env: childEnv,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      // 'pipe' for stdin only when the caller sends data — the write bridge
+      // transports the request JSON via stdin (a conversation batch can
+      // exceed the kernel's per-argument limit in argv, and argv is
+      // process-list visible).
+      stdio: [stdinData === null ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     });
+    if (stdinData !== null) {
+      child.stdin.on('error', () => {});
+      child.stdin.end(stdinData, 'utf8');
+    }
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -1137,12 +1145,20 @@ export function runPythonSnippet(candidate, args, childEnv, timeoutMs) {
 // real error. shapeResult(result, candidate) builds the per-tool payload;
 // the loop owns the chain, the module-missing remediation, and the
 // runCandidate seam (tests override it; production runs runPythonSnippet).
-export async function runOverPythonCandidates({ args, childEnv, timeoutMs, runCandidate, shapeResult }) {
+export async function runOverPythonCandidates({
+  args,
+  childEnv,
+  timeoutMs,
+  runCandidate,
+  shapeResult,
+  stdinData = null,
+}) {
   for (const candidate of pythonCandidatesForAgentarts()) {
-    const result = await (runCandidate || ((c) => runPythonSnippet(c, args, childEnv, timeoutMs)))(
+    const result = await (runCandidate || ((c) => runPythonSnippet(c, args, childEnv, timeoutMs, stdinData)))(
       candidate,
       args,
       childEnv,
+      stdinData,
     );
     const moduleMissing =
       result.exitCode === 3 || /ModuleNotFoundError|AGENTARTS_SDK_MISSING/.test(result.stderr || '');

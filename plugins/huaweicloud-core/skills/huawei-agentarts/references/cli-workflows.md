@@ -179,6 +179,44 @@ Session lifecycle: `start-session --agent <name>` returns the session id;
 pass `--session` to exec-command/invoke/upload/download; stop with
 `stop-session` even on failure paths.
 
+## Memory Data Plane (SDK bridge — no CLI subcommands in 0.1.7)
+
+The CLI stops at space management. All 12 data-plane methods run through
+the SDK bridge tools; the one-time data-plane api_key is read from the
+wrapper-captured 0600 key file and injected env-only (never argv, never
+the transcript — see credentials.md).
+
+The write loop (create → record → recall):
+
+1. Create the space through the CLI pair (`memory create` captures the
+   key file).
+2. `huaweicloud_agentarts_memory_plan` with `create_session` and the
+   user's `actor_id` (REQUIRED — the actor is the isolation unit).
+   Approve, then `huaweicloud_agentarts_memory_write` with
+   `approvedByUser: true`. Capture `result.id` (or pass your own
+   `session_id` to create_session).
+3. `memory_plan add_messages` with the session id and the message batch
+   (roles user/assistant/system; ONE approval covers the whole batch;
+   the request rides stdin, so batch size is not argv-limited). Approve,
+   write.
+4. Verify ingestion with `memory_read list_messages` (immediate). The
+   natural next check, `memory_read search_memories`, LAGS: extraction
+   is asynchronous, so an empty result right after a write is EXPECTED —
+   do not re-write (duplicate) or churn `is_force_extract`; wait, or
+   verify ingestion via list_messages.
+5. Recall with `memory_read search_memories` using the SAME `actor_id`
+   (required — server isolation is actor-level only).
+
+Failure/retry semantics: a mismatched write rejects without consuming
+the token; a SUCCESSFUL write consumes it, and replay returns
+`already_processed` (verify with `memory_read` before re-planning
+anything); a FAILED write burns the token — re-plan to retry, and pass
+`idempotency_key` on add_messages retries (a timeout may have landed
+server-side). `delete_memory` is irreversible; `delete_session` is a
+soft delete — unreachable through this toolkit immediately, retained
+server-side for async cleanup (90-365 days per the SDK), no in-toolkit
+recovery.
+
 ## Wrapper Rules (why some commands hard-stop)
 
 | Shape                              | Wrapper behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
