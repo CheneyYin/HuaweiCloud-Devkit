@@ -26,6 +26,7 @@
     "hcloud[/\\\\](config|credentials)",
     "huaweicloud[/\\\\](config|credentials)",
     "\\.agentarts_config",
+    "agentarts-memory-api-key",
     "\\.env"
   ],
   "blockedConfigureSubcommands": ["show", "get", "list", "export", "init"],

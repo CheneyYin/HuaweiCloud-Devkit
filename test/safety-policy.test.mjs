@@ -137,9 +137,11 @@ test('redactSecrets redacts quoted JSON/Python-dict key forms (agentarts memory 
   assert.equal(redactSecrets('secret=pw123'), 'secret=<redacted>');
   // Bearer tokens redact whole (the agentarts data-plane key rides an
   // Authorization: Bearer header — the scheme word must not eat the slot
-  // while the token survives).
+  // while the token survives). Basic gets the same treatment: both schemes
+  // are single-token by construction.
   assert.equal(redactSecrets('Authorization: Bearer KEY_ONETIME_mem42'), 'Authorization: <redacted>');
   assert.equal(redactSecrets('authorization=Bearer abc123xyz'), 'authorization=<redacted>');
+  assert.equal(redactSecrets('Authorization: Basic dGVzdA=='), 'Authorization: <redacted>');
   // A QUOTED blob key bounds the redaction to the quoted value — mid-JSON
   // neighbors on the same line survive (the unquoted form keeps the
   // whole-line sweep: no reliable value terminator).

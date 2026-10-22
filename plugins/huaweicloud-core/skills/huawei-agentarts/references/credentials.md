@@ -106,8 +106,10 @@ plan time. Lifecycle:
   `~/.config/huaweicloud/agentarts-memory-api-key-<space_id>.txt`
   (0600, honors `HUAWEICLOUD_HOME`). The returned payload stays redacted
   and carries only `memoryApiKeyFile` (the path, never the key).
-- Reading the file via Bash is hook-blocked (credentialFilePatterns
-  matches the `~/.huaweicloud`-adjacent state path) — that is defense in
+- Reading the file via Bash is hook-blocked: credentialFilePatterns
+  matches the `agentarts-memory-api-key` filename component (the
+  `~/.config/huaweicloud` state root is NOT itself matched — the filename
+  pattern is what denies `cat`/`head`/redirect reads). That is defense in
   depth, not an error; the agent must never `cat` it into the transcript.
 - Data-plane consumption through the devkit: the
   `huaweicloud_agentarts_memory_read` tool reads the 0600 key file

@@ -162,7 +162,7 @@ function validateFilterKeys(operation, filters) {
       return 'filters.actor_id is managed by the required top-level actor_id parameter — pass it there, not inside filters.';
     }
     if (key === 'sort_by' || key === 'sort_order') {
-      return `filters.${key} exists on the SDK dataclass but the 0.1.7 HTTP layer never sends it (memory_service.py filter_mappings) — a silent no-op. Sorting is server-default only.`;
+      return `filters.${key} exists on the MemoryListFilter dataclass but the 0.1.7 HTTP layer never sends it (memory_service.py filter_mappings) — a silent no-op. Sorting is server-default only.`;
     }
     if (!legal.includes(key)) {
       return `Unknown filters key "${key}" — legal keys for ${operation}: ${legal.join(', ')}.`;
@@ -242,6 +242,12 @@ function validateMemoryRead(params) {
     if (!Number.isSafeInteger(k) || k < 1) return 'k must be a positive integer for get_last_k_messages.';
   }
   if (params.filters !== undefined && params.filters !== null) {
+    // Only the two list/search operations take filters — on the other six
+    // the param would ride the argv JSON and be silently ignored by the
+    // snippet (the same silent-no-op class as sort_by).
+    if (params.operation !== 'search_memories' && params.operation !== 'list_memories') {
+      return `${params.operation} takes no filters — only search_memories and list_memories do.`;
+    }
     if (typeof params.filters !== 'object' || Array.isArray(params.filters)) {
       return 'filters must be an object (MemorySearchFilter / MemoryListFilter fields).';
     }
@@ -365,6 +371,7 @@ export async function readAgentartsMemory(params = {}, options = {}) {
       const payloadStdout = largeOutputFile
         ? `${safeStdout.slice(0, 2000)}\n...(truncated, full output saved to ${largeOutputFile})`
         : safeStdout;
+      const parsePolluted = !result.timedOut && result.exitCode === 0 && parsed === null;
       return {
         ok: !failed,
         service: 'AgentArts',
@@ -377,6 +384,12 @@ export async function readAgentartsMemory(params = {}, options = {}) {
         stderr: redactSecrets(result.stderr || ''),
         ...(result.timedOut
           ? { timedOut: true, error: `agentarts memory ${params.operation} timed out after ${timeoutMs} ms.` }
+          : {}),
+        ...(parsePolluted
+          ? {
+              error:
+                'exit 0 but stdout was not parseable JSON — output pollution suspected (the snippet prints clean JSON on success).',
+            }
           : {}),
       };
     },
