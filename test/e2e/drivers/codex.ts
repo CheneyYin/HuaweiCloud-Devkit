@@ -58,7 +58,7 @@ const LOADER_SOURCE = [
 ].join('\n');
 
 // TOML string escaping for values interpolated from the model env config.
-function tomlString(value: string): string {
+export function tomlString(value: string): string {
   return `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
 }
 

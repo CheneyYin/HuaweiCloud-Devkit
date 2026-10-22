@@ -7,7 +7,7 @@ import test from 'node:test';
 
 import { getCodexPluginName, getMarketplaceName } from '../plugins/huaweicloud-core/src/codex-probe.ts';
 import { shapeForGateway, startGatewayProxy } from './e2e/drivers/gateway-proxy.ts';
-import { codexDriver } from './e2e/drivers/codex.ts';
+import { codexDriver, tomlString } from './e2e/drivers/codex.ts';
 import type { DriverContext } from './e2e/drivers/types.ts';
 import { fixtureDir } from './fixture-dir.ts';
 
@@ -123,12 +123,21 @@ test('codex prepare merges config.toml with top-level keys before any table head
   assert.match(content, /wire_api = "responses"/);
   assert.match(content, /base_url = "http:\/\/127\.0\.0\.1:1\/v1"/);
   assert.match(content, /\[mcp_servers\.hwc\]/);
-  assert.ok(content.includes(serverJs), 'the mcp_servers args must point at the installed plugin cache server');
-  assert.ok(content.includes(join('mcp-env-loader.mjs')), 'the mcp_servers args must reference the env loader');
+  // The driver TOML-escapes every interpolated path (a backslash doubles on
+  // win32), so containment must be checked against the escaped form — the
+  // raw path.join spelling only appears verbatim on POSIX.
+  assert.ok(
+    content.includes(tomlString(serverJs)),
+    'the mcp_servers args must point at the installed plugin cache server',
+  );
+  assert.ok(content.includes(tomlString(loaderPath)), 'the mcp_servers args must reference the env loader');
   assert.match(content, /HUAWEICLOUD_AGENT_TOOLKIT_MODE = "local"/);
   // The MCP child env is stripped to login vars, so the command must be an
   // absolute binary.
-  assert.match(content, new RegExp(`command = "${process.execPath.replaceAll('\\', '\\\\')}"`));
+  assert.ok(
+    content.includes(`command = ${tomlString(process.execPath)}`),
+    'the mcp_servers command must be the suite node binary in TOML-escaped form',
+  );
 });
 
 test('codex prepare bridges E2E_TEST_APIKEY and blocks codex https egress', () => {
