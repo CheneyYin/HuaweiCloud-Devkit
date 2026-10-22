@@ -595,3 +595,23 @@ test('python hook denies stdin-fed hcloud, padded-decoy chains, and padded separ
     assert.equal(typeof reason, 'string', `${command.slice(0, 50)} should be blocked`);
   }
 });
+
+test('python hook denies reads of the agentarts memory one-time key file (filename pattern)', () => {
+  // Same policy.json source as the Node pin (hook-node.test.mjs); this
+  // guards the python layer's CONFIG_FILE_RE consumption of the pattern.
+  // evaluate() returns the raw block reason (a string) or null to allow.
+  for (const command of [
+    'cat ~/.config/huaweicloud/agentarts-memory-api-key-sp1.txt',
+    'head -1 agentarts-memory-api-key-x.txt',
+  ]) {
+    const result = runEvaluate('terminal', { command });
+    if (pythonUnavailable(result)) return;
+    const reason = JSON.parse(result.stdout);
+    assert.equal(typeof reason, 'string', command);
+    assert.match(reason, /credential/i, command);
+  }
+  // The truncation side files stay readable (the large-output contract).
+  const sideFile = runEvaluate('terminal', { command: 'cat /tmp/huaweicloud-devkit/agentarts-output-123.json' });
+  if (pythonUnavailable(sideFile)) return;
+  assert.equal(JSON.parse(sideFile.stdout), null);
+});

@@ -161,7 +161,7 @@ function validateFilterKeys(operation, filters) {
     if (key === 'actor_id' && operation === 'search_memories') {
       return 'filters.actor_id is managed by the required top-level actor_id parameter — pass it there, not inside filters.';
     }
-    if (key === 'sort_by' || key === 'sort_order') {
+    if ((key === 'sort_by' || key === 'sort_order') && operation === 'list_memories') {
       return `filters.${key} exists on the MemoryListFilter dataclass but the 0.1.7 HTTP layer never sends it (memory_service.py filter_mappings) — a silent no-op. Sorting is server-default only.`;
     }
     if (!legal.includes(key)) {
