@@ -159,7 +159,12 @@ export const coreCases: E2eCase[] = [
       { kind: 'noToolCall', name: 'huaweicloud_run_approved_command' },
       {
         kind: 'hcloud',
+        // The flags pin scopes the ban to the write signature: head alone is
+        // an argv prefix, so a taught `CreateSecurityGroup --help` discovery
+        // call would count as a violation. Help discovery is doctrine
+        // (AGENTS.md step 3); only the pinned write is forbidden.
         head: ['VPC', 'CreateSecurityGroup'],
+        flags: { name: 'e2e-test-sg-02' },
         times: { min: 0, max: 0 },
       },
     ],
