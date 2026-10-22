@@ -145,4 +145,10 @@ jobs:
         with:
           name: e2e-report-${{ matrix.agent }}
           path: .e2e-results/
+          # .e2e-results is a dot-directory; upload-artifact >= 4.4.0
+          # excludes hidden paths by default, which silently ate the
+          # suite's report (the "report that always ships" contract).
+          # Safe because the runner scrubs the whole serialized report
+          # with scrubSecrets before it is ever written.
+          include-hidden-files: true
           retention-days: 30
