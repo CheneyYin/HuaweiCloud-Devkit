@@ -134,6 +134,25 @@ test('evidence snippets redact admin-pass / admin_pass variants (#726 D4-27 v2)'
   assert.match(JSON.stringify(underscore), /<redacted>/);
 });
 
+test('evidence snippets redact api_key and quoted JSON keys (trap 27 unification)', () => {
+  // redactEvidence shares the redact-core scrubber with redactSecrets: the
+  // pre-unification local copy lacked api_key entirely and tolerated no
+  // quoted-key forms — the "plaintext secret" warning was itself the leak
+  // channel for exactly this credential family.
+  const unquoted = evaluateCommandRisk(
+    'hcloud ECS CreateServers --api_key=KGIAGH123SECRET --security_group_rule.remote_ip_prefix=0.0.0.0/0',
+  );
+  assert.doesNotMatch(JSON.stringify(unquoted), /KGIAGH123SECRET/);
+
+  // A quoted-JSON plan body (evaluateDeployPlan normalizes objects to JSON
+  // text) must not leak adminPass or api_key through the evidence field.
+  const plan = evaluateDeployPlan('{"adminPass": "pw123", "api_key": "KGIAGH123SECRET", "name": "ok"}');
+  assert.doesNotMatch(JSON.stringify(plan), /pw123|KGIAGH123SECRET/);
+  assert.match(JSON.stringify(plan), /<redacted>/);
+  // Non-secret fields stay visible (JSON-escaped inside the findings text).
+  assert.match(JSON.stringify(plan), /name\\":\\"ok|name\\": \\"ok/);
+});
+
 test('evaluateCommandRisk warns on prefixed delete family (Nova*)', () => {
   for (const op of ['NovaDeleteServer', 'NovaDeleteKeypair', 'NovaDeleteServerGroup', 'NovaDeleteServerMetadataItem']) {
     const result = evaluateCommandRisk(`hcloud ECS ${op} --x=1`);

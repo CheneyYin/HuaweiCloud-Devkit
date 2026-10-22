@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { evaluateCommandRisk, mergeRiskDecision } from './risk-rule-engine.mjs';
+import { redactCredentialShapes } from './redact-core.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const policyPath = join(__dirname, '..', 'safety', 'policy.json');
@@ -50,20 +51,10 @@ function isSecretKeyName(key, policy = DEFAULT_POLICY) {
 }
 
 function redactString(text) {
-  return (
-    String(text)
-      // Opaque blob keys (cloud-init user_data, metadata, private_key) carry
-      // base64/scripts that may embed SSH keys, DB passwords, bootstrap tokens.
-      // Redact the ENTIRE value of this arg — not just the first whitespace token.
-      .replace(/((?:user[_-]?data|metadata|private[_-]?key)\s*[:=]\s*).*/gi, '$1<redacted>')
-      .replace(
-        /((?:access[_-]?key|secret[_-]?key|api[_-]?key|security[_-]?token|x[_-]?auth[_-]?token|token|authorization|password|passwd|admin[_-]?pass|credential)\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)/gi,
-        '$1<redacted>',
-      )
-      // Case-insensitive AK/SK prefixes: agentarts/SDK CLIs print lowercase
-      // `ak: value` / `sk=value` shapes the old case-sensitive form missed.
-      .replace(/\b(ak|sk)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1=<redacted>')
-  );
+  // The string path is the safety net for unparseable CLI output; the
+  // shapes it must catch live in redact-core.mjs (single source, shared
+  // with risk-rule-engine's evidence scrubber — findings trap 27).
+  return redactCredentialShapes(text);
 }
 
 export function redactSecrets(value, policy = DEFAULT_POLICY) {

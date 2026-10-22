@@ -703,9 +703,10 @@ function saveLargeOutput(scrubbedStdout) {
   try {
     mkdirSync(OUTPUT_DIR, { recursive: true });
     const filePath = join(OUTPUT_DIR, `agentarts-output-${Date.now()}.json`);
-    // The CALLER pre-scrubs (the one-time api_key JSON shape must be gone
-    // BEFORE this point — redactSecrets alone does not mask it); the pass
-    // here is defense-in-depth for key:value shapes only. 0600 regardless.
+    // The CALLER pre-scrubs (the create-path split/join removes the exact
+    // key value BEFORE this point); the redactSecrets pass here is
+    // defense-in-depth for every other credential shape (including the
+    // quoted JSON api_key form — trap 27). 0600 regardless.
     writeFileSync(filePath, redactSecrets(scrubbedStdout), { encoding: 'utf8', mode: 0o600 });
     return filePath;
   } catch {
@@ -782,11 +783,11 @@ async function runAgentarts(canonicalArgs, classification, options = {}) {
           }
         }
       }
-      // redactSecrets only masks `key[:=]value` SHAPES — a JSON body like
-      // {"api_key": "K"} is a plain string to it and would leak the raw
-      // key in stdout. A successful memory create carries exactly that
-      // shape, so the captured key is scrubbed from the text explicitly
-      // before the generic redaction pass.
+      // The captured one-time key is scrubbed from the text explicitly
+      // (split/join on the exact value) BEFORE the generic redaction pass —
+      // belt-and-suspenders over redactSecrets, which since trap 27 also
+      // masks the quoted JSON api_key shape but cannot know this specific
+      // key. A successful memory create carries exactly that shape.
       const payloadStdout =
         memoryApiKey && stdout.includes(memoryApiKey.apiKey)
           ? stdout.split(memoryApiKey.apiKey).join('<redacted>')
@@ -795,13 +796,12 @@ async function runAgentarts(canonicalArgs, classification, options = {}) {
       // The large-output side file gets the SAME scrubbed text: a real
       // memory create prints ~53KB (trap 25) — above the 50KB threshold —
       // so an unscrubbed side file would leak the one-time key on every
-      // successful create. saveLargeOutput's own redactSecrets pass alone
-      // does not mask the JSON api_key shape. When the side file is
-      // written, the payload stdout is TRUNCATED to a head + pointer (the
-      // hcloud wrapper's pattern) — otherwise the ~53KB rides the payload
-      // into the transcript anyway and the side file offloads nothing.
-      // spaceId / memoryApiKeyFile / the failure verdict are separate
-      // fields, so nothing actionable is lost to the truncation.
+      // successful create. When the side file is written, the payload
+      // stdout is TRUNCATED to a head + pointer (the hcloud wrapper's
+      // pattern) — otherwise the ~53KB rides the payload into the
+      // transcript anyway and the side file offloads nothing. spaceId /
+      // memoryApiKeyFile / the failure verdict are separate fields, so
+      // nothing actionable is lost to the truncation.
       const largeOutputFile = saveLargeOutput(safeStdout);
       const payloadStdoutFinal = largeOutputFile
         ? `${safeStdout.slice(0, 2000)}\n...(truncated, full output saved to ${largeOutputFile})`
@@ -1168,6 +1168,11 @@ export async function listAgentartsAgents(params = {}, options = {}) {
       } catch {
         agents = null;
       }
+      // Parsed output must pass the SAME redaction as the string paths —
+      // an unredacted parsed object would be the one surface a future
+      // credential-shaped field could ride (the object path masks by key
+      // name; trap 27's parse-bypass class).
+      if (agents) agents = redactSecrets(agents);
     }
     return {
       ok: !failed,
