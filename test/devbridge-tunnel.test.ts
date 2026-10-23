@@ -532,7 +532,9 @@ function recordingSeam(base: OneShotSeam): { seam: OneShotSeam; calls: string[] 
   return {
     calls,
     seam: (ws, command, user, timeout) => {
-      calls.push(command.slice(0, 40));
+      // #999: 120 chars — the data-disk PATH export prefix rides the first
+      // line now, pushing the discriminating tokens past the old 40-char window.
+      calls.push(command.slice(0, 120));
       return base(ws, command, user, timeout);
     },
   };

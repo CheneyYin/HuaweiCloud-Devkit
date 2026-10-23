@@ -1598,6 +1598,18 @@ test('devbridge host launch survives the exec session (#919/#922): setsid guard,
   assert.match(sandbox, /export PATH="\/workspace\/.local\/bin:\$HOME\/\.huawei\/bin:\$PATH"/);
   assert.match(devbridgeTunnel, /export PATH="\/workspace\/.local\/bin:\$HOME\/\.huawei\/bin:\$PATH"/);
   assert.match(sandbox, /stale ~\/\.huawei\/bin\/devbridge removed/);
+  // The Layer-3 install target is the substantive core of #999 — WHERE the
+  // binary lands. The old system-disk-only export form must not re-creep.
+  assert.match(sandbox, /mkdir -p \/workspace\/.local\/bin/);
+  assert.match(sandbox, /install -m 0755 \/tmp\/devbridge-pkg\/devbridge \/workspace\/.local\/bin\/devbridge/);
+  assert.doesNotMatch(
+    sandbox,
+    /export PATH="\$HOME\/\.huawei\/bin:\$PATH"/,
+    'the system-disk-only export must not return',
+  );
+  // The connect flow's unquoted PATH form (tools.ts) — the third code leg.
+  const sandboxToolsSource = readSource(join('src', 'packs', 'sandbox', 'tools.ts'));
+  assert.match(sandboxToolsSource, /export PATH=\/workspace\/.local\/bin:\$HOME\/\.huawei\/bin\$\{PATH:\+:\$PATH\}/);
 
   assert.doesNotMatch(devbridgeTunnel, /-e 8\b/);
 

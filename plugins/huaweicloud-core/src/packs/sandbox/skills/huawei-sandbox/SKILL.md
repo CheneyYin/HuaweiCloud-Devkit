@@ -253,8 +253,13 @@ curl -fsSL --http1.1 --retry 3 --retry-all-errors --max-time 120 \
 # Note: GitCode repo is named "devbrige" (missing 'd') — this is the actual repo name, not a typo.
 #       GitHub repo is "devspace-devbridge" (correct spelling). Do NOT "fix" the GitCode URL.
 DB_TARGET=$(grep -m1 'DEFAULT_VERSION=' /tmp/devbridge-install.sh | cut -d'"' -f2)
-if ! bash /tmp/devbridge-install.sh -s -u "https://gitcode.com/CloudDeveloperDepartment/devbrige/releases/download/${DB_TARGET}" -v "${DB_TARGET}"; then
-  bash /tmp/devbridge-install.sh -s   # fallback: GitHub (baked-in URL)
+# -p /workspace/.local/bin (deliberate divergence from main, recorded): the
+# installer's default INSTALL_DIR is ~/.huawei/bin — the SYSTEM disk, wiped on
+# reboot (the exact #999 measured failure). The flag is upstream-supported
+# (install.sh -p, --prefix DIR) and also points the installer's ~/.bashrc PATH
+# line at the data disk.
+if ! bash /tmp/devbridge-install.sh -s -p /workspace/.local/bin -u "https://gitcode.com/CloudDeveloperDepartment/devbrige/releases/download/${DB_TARGET}" -v "${DB_TARGET}"; then
+  bash /tmp/devbridge-install.sh -s -p /workspace/.local/bin   # fallback: GitHub (baked-in URL)
 fi
 export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"   # PREPEND (session shells do not re-source ~/.bashrc)
 # Layer 3 (both installer paths failed): direct GitHub release tar.gz.
@@ -289,9 +294,9 @@ devbridge version                     # must print 0.2.x-release
 if [ -f /usr/local/bin/devbridge ] && [ -x /workspace/.local/bin/devbridge ] && [ "$(readlink -f /usr/local/bin/devbridge)" != "$(readlink -f /workspace/.local/bin/devbridge)" ]; then
   rm -f /usr/local/bin/devbridge && echo "stale /usr/local/bin/devbridge removed"
 fi
-# A leftover 0.2.x in ~/.huawei/bin (installed by older docs) is valid until the
-# next reboot — deduplicate it against the /workspace copy so the version check
-# above can never report the image's 0.1.x.
+# A leftover 0.2.x in ~/.huawei/bin (installed by older docs or an unprefixed
+# installer run) is valid until the next reboot — deduplicate it against the
+# /workspace copy so the version check above can never report the image's 0.1.x.
 if [ -x "$HOME/.huawei/bin/devbridge" ] && [ -x /workspace/.local/bin/devbridge ] && [ "$(readlink -f "$HOME/.huawei/bin/devbridge")" != "$(readlink -f /workspace/.local/bin/devbridge)" ]; then
   rm -f "$HOME/.huawei/bin/devbridge" && echo "stale ~/.huawei/bin/devbridge removed"
 fi
@@ -303,12 +308,12 @@ fi
 
 ### Sandbox filesystem persistence: what survives a reboot (#999)
 
-| Path                                         | Type           | After a sandbox reboot                                                               |
-| -------------------------------------------- | -------------- | ------------------------------------------------------------------------------------ |
-| `/workspace` (incl. `/workspace/.local/bin`) | Data disk      | **Survives** — install project code and the devbridge 0.2.x binary here              |
-| `$HOME` (incl. `~/.huawei/bin`)              | System disk    | **Rolled back to the image state** — an installed binary is lost, 0.1.13 returns     |
-| `/usr/local/bin`                             | System disk    | Rolled back — the image-preinstalled 0.1.x returns                                   |
-| `/tmp`                                       | Session-scoped | Cleared — `/tmp/hw_creds.sh`, `/tmp/hw_api_key`, `/tmp/tunnel-keepalive.sh` are gone |
+| Path                                         | Type           | After a sandbox reboot                                                           |
+| -------------------------------------------- | -------------- | -------------------------------------------------------------------------------- |
+| `/workspace` (incl. `/workspace/.local/bin`) | Data disk      | **Survives** — install project code and the devbridge 0.2.x binary here          |
+| `$HOME` (incl. `~/.huawei/bin`)              | System disk    | **Rolled back to the image state** — an installed binary is lost, 0.1.13 returns |
+| `/usr/local/bin`                             | System disk    | Rolled back — the image-preinstalled 0.1.x returns                               |
+| `/tmp`                                       | Session-scoped | Cleared — `/tmp/hw_creds.sh`, `/tmp/hw_api_key` are gone                         |
 
 Measured (2026-10-22): an overnight reboot reverted `~/.huawei/bin/devbridge` 0.2.2 to the image's 0.1.13 — **yesterday's successful operation replayed as today's unexplained failure**. Recovery after a reboot: re-run the Step 0 install (or just re-export the PATH to the surviving `/workspace/.local/bin`), and re-run `huaweicloud_sandbox_credentials` to re-inject `/tmp` credentials.
 

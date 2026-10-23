@@ -217,7 +217,12 @@ export function buildDevbridgeExposeScript(port: number, expiryHours: number = D
   // derived from the shared domain constant, never hardcoded.
   const domainLiteral = DEVBRIDGE_TUNNEL_DOMAIN.replace(/\./g, '\\.');
   return [
-    `pkill -f "devbridge host" 2>/dev/null || true`,
+    // #999: the export rides the same first line as the pkill so the fake's
+    // first-line recognizer (and any reader) sees one stable anchor — the
+    // one-shot exec shell does NOT inherit the auth probe's PATH, and after
+    // the Layer-3 install + dedup (or a reboot) the only surviving binary
+    // lives at /workspace/.local/bin.
+    `export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"; pkill -f "devbridge host" 2>/dev/null || true`,
     `sleep 2`,
     `devbridge delete-all > /dev/null 2>&1 || true`,
     // #922 (S8): setsid is unavailable on some sandbox images — fall back to a
@@ -521,7 +526,9 @@ export async function exposeTunnel(
         try {
           await runOneShot(
             workspaceId,
-            `pkill -f "devbridge host" 2>/dev/null || true; sleep 2; devbridge delete-all > /dev/null 2>&1 || true`,
+            // #999: same first-line export as the expose script (the cleanup
+            // one-shot is a fresh shell too).
+            `export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"; pkill -f "devbridge host" 2>/dev/null || true; sleep 2; devbridge delete-all > /dev/null 2>&1 || true`,
             username,
             20000,
           );

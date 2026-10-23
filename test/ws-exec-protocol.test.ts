@@ -28,6 +28,7 @@ import {
 } from '../plugins/huaweicloud-core/src/sandbox/session-manager.ts';
 import {
   buildDevbridgeAuthProbe,
+  buildDevbridgeExposeScript,
   buildDevbridgeVerifyScript,
   parseDevbridgeAuthOutput,
   parseDevbridgeExposeOutput,
@@ -266,15 +267,13 @@ test('devbridge fake rows recognize the real scripts (first-line anchors)', () =
     fs,
   );
   assert.equal(auth.stdout, DEVBRIDGE_AUTH_KEYRING_STDOUT);
-  const expose = runShellCommand(
-    'pkill -f "devbridge host" 2>/dev/null || true\nsleep 2\ndevbridge delete-all > /dev/null 2>&1 || true',
-    fs,
-  );
+  // #999: the expose script (and the retry-cleanup blob) now opens with the
+  // data-disk PATH export riding the same first line as the pkill — feed the
+  // REAL builder so the anchor and the pin stay honest.
+  const expose = runShellCommand(buildDevbridgeExposeScript(8080), fs);
   assert.equal(expose.stdout, DEVBRIDGE_EXPOSE_OK_STDOUT);
-  // The retry-cleanup blob is a single ;-joined line with the same pkill
-  // prefix — the anchor must recognize it too (ZERO_UNKNOWN gate).
   const cleanup = runShellCommand(
-    'pkill -f "devbridge host" 2>/dev/null || true; sleep 2; devbridge delete-all > /dev/null 2>&1 || true',
+    'export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"; pkill -f "devbridge host" 2>/dev/null || true; sleep 2; devbridge delete-all > /dev/null 2>&1 || true',
     fs,
   );
   assert.equal(cleanup.stdout, DEVBRIDGE_EXPOSE_OK_STDOUT);

@@ -101,9 +101,11 @@ const INTENT_TABLE: IntentRow[] = [
     // exposeTunnel's expose script AND its retry-cleanup blob — the latter
     // is a single ;-joined line whose prefix is the same pkill, so the
     // anchor must NOT be $-terminated. Synthesizes a healthy tunnel
-    // answer for both callers.
+    // answer for both callers. #999: the export rides the same first line as
+    // the pkill (a leading standalone export would collide with the auth
+    // probe's $-anchored row — first-line recognition cannot tell them apart).
     intent: 'devbridge-expose-script',
-    pattern: /^pkill -f "devbridge host" 2>\/dev\/null \|\| true/,
+    pattern: /^export PATH="\/workspace\/\.local\/bin:\$HOME\/\.huawei\/bin:\$PATH"; pkill -f "devbridge host"/,
     run: () => ({ stdout: DEVBRIDGE_EXPOSE_OK_STDOUT }),
   },
   {
