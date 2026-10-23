@@ -1,78 +1,8 @@
-import crypto from 'node:crypto';
-import type { Dispatcher } from 'undici';
-
-import { getProxyDispatcher } from '../proxy/proxy-agent.ts';
+import { fetchWithProxy } from '../proxy/proxy-agent.ts';
+import { signSdkHmacRequest } from '../lib/hw-request-signing.ts';
 
 function iamBaseUrl(): string {
   return process.env.HW_IAM_ENDPOINT || 'https://iam.myhuaweicloud.com';
-}
-
-function sha256Hex(data: string): string {
-  return crypto.createHash('sha256').update(data).digest('hex');
-}
-
-function hmacSha256(key: string, data: string): string {
-  return crypto.createHmac('sha256', key).update(data).digest('hex');
-}
-
-function urlEncode(str: string): string {
-  const hex = (c: number): string => '%' + (c < 16 ? '0' : '') + c.toString(16).toUpperCase();
-  const noEscape = new Set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~'.split(''));
-  let out = '';
-  for (const ch of str) {
-    const c = ch.codePointAt(0) ?? 0;
-    out += noEscape.has(ch) && c < 0x80 ? ch : c < 0x80 ? hex(c) : encodeURIComponent(ch);
-  }
-  return out;
-}
-
-function timestamp(): string {
-  return new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '') + 'Z';
-}
-
-function signIamRequest(
-  path: string,
-  query: Record<string, string>,
-  ak: string,
-  sk: string,
-  securitytoken?: string,
-): Record<string, string> {
-  const ts = timestamp();
-  const host = new URL(iamBaseUrl()).host;
-
-  const cqs = Object.entries(query)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([k, v]) => `${urlEncode(k)}=${urlEncode(v)}`)
-    .join('&');
-
-  const curi =
-    '/' +
-    path
-      .split('/')
-      .filter(Boolean)
-      .map((s) => urlEncode(s))
-      .join('/') +
-    '/';
-
-  const signedHeaders = securitytoken ? 'host;x-sdk-date;x-security-token' : 'host;x-sdk-date';
-  const canonicalHeaders = securitytoken
-    ? `host:${host}\nx-sdk-date:${ts}\nx-security-token:${securitytoken}\n`
-    : `host:${host}\nx-sdk-date:${ts}\n`;
-
-  const payloadHash = sha256Hex('');
-  const canonicalRequest = ['GET', curi, cqs, canonicalHeaders, signedHeaders, payloadHash].join('\n');
-  const stringToSign = `SDK-HMAC-SHA256\n${ts}\n${sha256Hex(canonicalRequest)}`;
-  const signature = hmacSha256(sk, stringToSign);
-
-  const headers: Record<string, string> = {
-    host,
-    'x-sdk-date': ts,
-    Authorization: `SDK-HMAC-SHA256 Access=${ak}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
-  };
-  if (securitytoken) {
-    headers['x-security-token'] = securitytoken;
-  }
-  return headers;
 }
 
 interface IamProject {
@@ -152,19 +82,8 @@ export async function validateIamCredentials({
 
   let resp: { status: number; text(): Promise<string> };
   try {
-    const headers = signIamRequest(path, query, ak, sk, securityToken);
-    const fetchOpts: RequestInit & { dispatcher?: Dispatcher } = { headers, signal: controller.signal };
-    const dispatcher = await getProxyDispatcher(url);
-    if (dispatcher) {
-      fetchOpts.dispatcher = dispatcher;
-      const { fetch: undiciFetch } = await import('undici');
-      // Bridge the duplicated undici type packages (@types/node's undici-types
-      // vs the undici npm package); both describe the same runtime RequestInit.
-      const init = fetchOpts as unknown as Parameters<typeof undiciFetch>[1];
-      resp = await undiciFetch(url, init);
-    } else {
-      resp = await fetch(url, fetchOpts);
-    }
+    const headers = signSdkHmacRequest({ path, query, ak, sk, securityToken: securityToken, baseUrl: base });
+    resp = await fetchWithProxy(url, { headers, signal: controller.signal });
   } catch (error) {
     return {
       valid: false,

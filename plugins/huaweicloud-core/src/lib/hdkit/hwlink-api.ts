@@ -1,89 +1,15 @@
-import { createHash, createHmac } from 'node:crypto';
-
 import { resolveCredentialsWithRuntime } from '../../auth/credentials.ts';
-import { getProxyDispatcher } from '../../proxy/proxy-agent.ts';
+import { fetchWithProxy } from '../../proxy/proxy-agent.ts';
+import { signSdkHmacRequest } from '../hw-request-signing.ts';
 import { asText } from '../as-text.ts';
 
 const BASE_URL = process.env.HWLINK_ENDPOINT || 'https://devstation.myhuaweicloud.com';
-
-function sha256Hex(data: string): string {
-  return createHash('sha256').update(data).digest('hex');
-}
-
-function hmacSha256(key: string, data: string): string {
-  return createHmac('sha256', key).update(data).digest('hex');
-}
-
-function urlEncode(str: string): string {
-  const hex = (c: number): string => '%' + (c < 16 ? '0' : '') + c.toString(16).toUpperCase();
-  const noEscape = new Set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~'.split(''));
-  let out = '';
-  for (const ch of str) {
-    const c = ch.codePointAt(0) ?? 0;
-    out += noEscape.has(ch) && c < 0x80 ? ch : c < 0x80 ? hex(c) : encodeURIComponent(ch);
-  }
-  return out;
-}
-
-function timestamp(): string {
-  return new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '') + 'Z';
-}
 
 function sortedQs(query: Record<string, unknown>): string {
   return Object.entries(query)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
     .join('&');
-}
-
-function signRequest(
-  method: string,
-  path: string,
-  query: Record<string, unknown>,
-  body: unknown,
-  ak: string,
-  sk: string,
-  securitytoken: string,
-): Record<string, string> {
-  const ts = timestamp();
-  const host = new URL(BASE_URL).host;
-
-  const cqs = Object.entries(query)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([k, v]) => `${urlEncode(k)}=${urlEncode(String(v))}`)
-    .join('&');
-
-  const curi =
-    '/' +
-    path
-      .split('/')
-      .filter(Boolean)
-      .map((s) => urlEncode(s))
-      .join('/') +
-    '/';
-
-  const signedHeaders = securitytoken ? 'host;x-sdk-date;x-security-token' : 'host;x-sdk-date';
-  const canonicalHeaders = securitytoken
-    ? `host:${host}\nx-sdk-date:${ts}\nx-security-token:${securitytoken}\n`
-    : `host:${host}\nx-sdk-date:${ts}\n`;
-
-  const bodyStr = body ? JSON.stringify(body) : '';
-  const payloadHash = sha256Hex(bodyStr);
-
-  const canonicalRequest = [method, curi, cqs, canonicalHeaders, signedHeaders, payloadHash].join('\n');
-
-  const stringToSign = `SDK-HMAC-SHA256\n${ts}\n${sha256Hex(canonicalRequest)}`;
-  const signature = hmacSha256(sk, stringToSign);
-
-  const headers: Record<string, string> = {
-    host,
-    'x-sdk-date': ts,
-    Authorization: `SDK-HMAC-SHA256 Access=${ak}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
-  };
-  if (securitytoken) {
-    headers['x-security-token'] = securitytoken;
-  }
-  return headers;
 }
 
 export function getCredentials(): { ak: string; sk: string; securitytoken: string } {
@@ -106,18 +32,8 @@ async function apiGet(
   query = query || {};
   const qs = sortedQs(query);
   const fullPath = qs ? `${path}?${qs}` : path;
-  const headers = signRequest('GET', path, query, undefined, ak, sk, securitytoken);
-  const url = `${BASE_URL}${fullPath}`;
-  const dispatcher = await getProxyDispatcher(url);
-  const fetchOpts: RequestInit = { headers };
-  if (dispatcher) {
-    const { fetch: undiciFetch } = await import('undici');
-    // Bridge the duplicated undici type packages; see proxy-agent.ts.
-    const init = { ...fetchOpts, dispatcher } as unknown as Parameters<typeof undiciFetch>[1];
-    const resp = await undiciFetch(url, init);
-    return { status: resp.status, data: await resp.json() };
-  }
-  const resp = await fetch(url, fetchOpts);
+  const headers = signSdkHmacRequest({ path, query, ak, sk, securityToken: securitytoken, baseUrl: BASE_URL });
+  const resp = await fetchWithProxy(`${BASE_URL}${fullPath}`, { headers });
   return { status: resp.status, data: await resp.json() };
 }
 
@@ -128,22 +44,21 @@ async function apiPost(
   sk: string,
   securitytoken: string,
 ): Promise<{ status: number; data: unknown }> {
-  const headers = signRequest('POST', path, {}, body, ak, sk, securitytoken);
-  const url = `${BASE_URL}${path}`;
-  const dispatcher = await getProxyDispatcher(url);
-  const fetchOpts: RequestInit = {
+  const headers = signSdkHmacRequest({
+    method: 'POST',
+    path,
+    query: {},
+    body,
+    ak,
+    sk,
+    securityToken: securitytoken,
+    baseUrl: BASE_URL,
+  });
+  const resp = await fetchWithProxy(`${BASE_URL}${path}`, {
     method: 'POST',
     headers: { ...headers, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  };
-  if (dispatcher) {
-    const { fetch: undiciFetch } = await import('undici');
-    // Bridge the duplicated undici type packages; see proxy-agent.ts.
-    const init = { ...fetchOpts, dispatcher } as unknown as Parameters<typeof undiciFetch>[1];
-    const resp = await undiciFetch(url, init);
-    return { status: resp.status, data: await resp.json() };
-  }
-  const resp = await fetch(url, fetchOpts);
+  });
   return { status: resp.status, data: await resp.json() };
 }
 
