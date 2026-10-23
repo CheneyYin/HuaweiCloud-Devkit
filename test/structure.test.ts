@@ -1688,6 +1688,15 @@ test('devbridge 0.2.x flow: auth capability probe, version detection, in-place u
   assert.doesNotMatch(sandbox, /Login needs --huaweicloud/);
   assert.match(sandbox, /Never expose tunnel details/);
 
+  // The #935 sandbox traps (ported from main 1.1.10): 0.2.x has no
+  // --huawei flag (docs ran ahead of the binary — teach the direct
+  // --access-key form); MCP-injected STS credentials are obsutil-encrypted
+  // (devbridge reads ciphertext → APIGW.0301); sandboxes have no systemd.
+  assert.match(sandbox, /does NOT exist in sandbox devbridge 0\.2\.x binaries/);
+  assert.match(sandbox, /obsutil 加密态存储/);
+  assert.match(sandbox, /沙箱无 systemd/);
+  assert.match(sandbox, /nginx -t` 验证 \+ `nginx -s reload` 热加载/);
+
   // Auth is a verified three-tier waterfall (keyring → AK/SK → api-key file);
   // the preferred path is the expose_tunnel tool, the manual script is the
   // fallback. The probe vocabulary is DB_AUTH_MODE modes, not AUTH_MODE.
