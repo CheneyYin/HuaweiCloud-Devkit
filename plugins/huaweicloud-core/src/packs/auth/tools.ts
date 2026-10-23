@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { vendorConfirmed } from '../../lib/tool-schema-parts.ts';
 
 import { getAuthStatus, syncAuth } from '../../auth/service.ts';
+import { checkAccountType } from '../../auth/account-type.ts';
 import {
   setRuntimeCredentials,
   clearRuntimeCredentials,
@@ -239,6 +240,19 @@ const authConfirmSchema = z.looseObject({
   decision: z.enum(['s1', 'newImported']).optional(),
 });
 
+async function handleCheckAccountType(args: ToolArgs = {}, _opts: CallToolOptions = {}) {
+  return checkAccountType({ region: typeof args.region === 'string' ? args.region : undefined });
+}
+
+const checkAccountTypeSchema = z.looseObject({
+  region: z
+    .string()
+    .optional()
+    .describe(
+      'Optional region ID for the region-level GetCallerIdentity endpoint (e.g., cn-north-4). Defaults to the configured cli-region.',
+    ),
+});
+
 export const AUTH_TOOLS = [
   {
     name: 'huaweicloud_auth_status',
@@ -275,6 +289,13 @@ export const AUTH_TOOLS = [
     schema: authConfirmSchema,
     handler: handleAuthConfirm,
   },
+  {
+    name: 'huaweicloud_check_account_type',
+    description:
+      'Check whether the current credentials belong to the primary account or an IAM sub-user. Runs STS GetCallerIdentity + IAM KeystoneListAuthDomains (both read-only, no identity-policy permission required) and applies the validated rule: username == domainName -> primary account, otherwise IAM sub-user. Use before sandbox deployment (primary-account prechecks), account confirmation, or any task that needs to know who the current AK/SK belongs to. Returns isPrimaryAccount, applicable, domainId, domainName, userId, username, principalUrn, and an evidence string. Agency-session credentials are detected and reported as applicable:false.',
+    schema: checkAccountTypeSchema,
+    handler: handleCheckAccountType,
+  },
 ] as const satisfies readonly PackToolDefinition[];
 
 export type AuthToolName = (typeof AUTH_TOOLS)[number]['name'];
@@ -288,6 +309,7 @@ export const AUTH_TOOL_SCHEMAS: Readonly<Record<AuthToolName, LooseToolSchema>> 
   huaweicloud_auth_init: authInitSchema,
   huaweicloud_auth_switch: authSwitchSchema,
   huaweicloud_auth_confirm: authConfirmSchema,
+  huaweicloud_check_account_type: checkAccountTypeSchema,
 };
 
 // Dispatch map merged into PACK_TOOL_HANDLERS in packs/registry.ts. Typed over
@@ -299,4 +321,5 @@ export const AUTH_TOOL_HANDLERS: Readonly<Record<AuthToolName, PackToolDefinitio
   huaweicloud_auth_init: handleAuthInit,
   huaweicloud_auth_switch: handleAuthSwitch,
   huaweicloud_auth_confirm: handleAuthConfirm,
+  huaweicloud_check_account_type: handleCheckAccountType,
 };

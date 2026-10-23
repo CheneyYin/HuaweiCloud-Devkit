@@ -312,6 +312,10 @@ const TOOL_DEFINITIONS_LITERALS = [
     description: packDescription('huaweicloud_obs_set_cors'),
   },
   {
+    name: 'huaweicloud_check_account_type',
+    description: packDescription('huaweicloud_check_account_type'),
+  },
+  {
     name: 'huaweicloud_list_packs',
     description:
       'List the devkit capability packs — the complete skill and tool inventory of this server. Returns each pack with id, title, description, the skill names it owns (browse their metadata with huaweicloud_list_skills, load them with huaweicloud_retrieve_skill), its tool names, and the enabled flag. The "huaweicloud-cli" pack carries the twenty Huawei Cloud service skills (ecs, vpc, obs, iam, rds, ...) with per-service CLI workflows plus the seven KooCLI execution tools (check_cli, plan_cli_command, run_readonly_command, list_operations, run_approved_command, show_profile_redacted, list_regions); the huaweicloud-cli-and-auth skill covers KooCLI installation and credentials. Use this to discover what the devkit knows before picking a skill or pack.',

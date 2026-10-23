@@ -202,6 +202,7 @@ const PER_PACK_TOOLS = {
     'huaweicloud_auth_init',
     'huaweicloud_auth_switch',
     'huaweicloud_auth_confirm',
+    'huaweicloud_check_account_type',
   ],
   obs: ['huaweicloud_setup_obs_config', 'huaweicloud_obs_set_website_config', 'huaweicloud_obs_set_cors'],
   voucher: ['huaweicloud_voucher_status', 'huaweicloud_voucher_claim', 'huaweicloud_competition_voucher_claim'],
@@ -352,14 +353,14 @@ test('MCP tools/list includes all required core tools with valid schemas', async
     for (const required of REQUIRED_TOOLS) {
       assert.ok(toolNames.includes(required), `Missing tool: ${required}`);
     }
-    // Plus every optional-pack tool: tools/list must carry the full 50.
+    // Plus every optional-pack tool: tools/list must carry the full 51.
     const perPackNames = Object.values(PER_PACK_TOOLS).flat();
     for (const name of perPackNames) {
       assert.ok(toolNames.includes(name), `Missing tool: ${name}`);
     }
     assert.equal(
       REQUIRED_TOOLS.length + perPackNames.length,
-      50,
+      51,
       'always-on + per-pack lists must cover the full registry',
     );
     assert.ok(toolNames.length >= 25, `Expected >= 25 tools, got ${toolNames.length}`);
@@ -399,12 +400,12 @@ test('DEVKIT_PACKS=sandbox trims tools/list to core 12 + sandbox 12', async () =
 
     const mcpServerPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js');
     // DEVKIT_PACKS rides the spawn env into the stdio server; without it the
-    // suite's other tests above still see the full 50.
+    // suite's other tests above still see the full 51.
     const responses = await invokeMcpSequence(
       mcpServerPath,
       { ...makeEnv(home, cwd), DEVKIT_PACKS: 'sandbox' },
       listTools,
-    );
+    );)
 
     assert.ok(responses[0].result, 'initialize returned result');
     assert.ok(responses[1].result, 'tools/list returned result');

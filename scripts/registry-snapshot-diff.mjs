@@ -36,6 +36,7 @@ const EXEMPT_TOOLS = new Set([
   'huaweicloud_competition_voucher_claim',
   'huaweicloud_sandbox_expose_tunnel',
   'huaweicloud_obs_set_cors',
+  'huaweicloud_check_account_type',
 ]);
 
 // Declared, intentional drifts from the legacy literals. Each entry names the

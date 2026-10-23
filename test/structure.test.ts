@@ -694,6 +694,29 @@ test('the #935/#971 ECS+iac field knowledge keeps its live-verified command form
   assert.doesNotMatch(ecsTrouble, /ListServersDetails [^\n]* --id=/);
 });
 
+test('huawei-iam skill documents the validated primary-account judgment rule (#954)', () => {
+  const body = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'huaweicloud-cli', 'skills', 'huawei-iam', 'SKILL.md'),
+    'utf8',
+  );
+  assert.match(body, /username == domainName/);
+  assert.match(body, /huaweicloud_check_account_type/);
+  // Both disproved judgment rules must be named so they are not rediscovered.
+  assert.match(body, /ShowDomainPasswordPolicy/);
+  assert.match(body, /principal_id == account_id/);
+  // The #935 SELF_VERIFY self-agency pre-creation trap stays taught.
+  assert.match(body, /SELF_VERIFY/);
+
+  const quickRef = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'huaweicloud-cli', 'skills', 'huawei-iam', 'references', 'quick-ref.md'),
+    'utf8',
+  );
+  assert.match(quickRef, /STS GetCallerIdentity/);
+  assert.match(quickRef, /KeystoneListAuthDomains/);
+  assert.match(quickRef, /username == domainName/);
+  assert.match(quickRef, /assumed-agency/);
+});
+
 test('huawei-voucher covers HDKIT_COMPETITION_NOT_CONFIGURED', () => {
   const voucher = readFileSync(
     join(pluginRoot, 'src', 'packs', 'voucher', 'skills', 'huawei-voucher', 'SKILL.md'),
@@ -2662,7 +2685,7 @@ test('eight packs register their tools; the central map dispatches them', () => 
   // packs/registry.ts.
   const packs = [
     { id: 'sandbox', tools: SANDBOX_TOOLS, count: 12 },
-    { id: 'auth', tools: AUTH_TOOLS, count: 5 },
+    { id: 'auth', tools: AUTH_TOOLS, count: 6 },
     { id: 'obs', tools: OBS_TOOLS, count: 3 },
     { id: 'voucher', tools: VOUCHER_TOOLS, count: 3 },
     { id: 'discovery', tools: DISCOVERY_TOOLS, count: 3 },
