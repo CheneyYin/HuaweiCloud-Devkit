@@ -256,6 +256,17 @@ function setWorkspaceId(id: string | null): void {
 
 const sessions = new Map<string, HwlinkTerminalSession>();
 
+// The signed-connection prologue every hwlink session flavor shares:
+// credentials, the hdkit connection request, the proxy-aware WebSocket
+// implementation, and the ws-exec runtime.
+async function openHwlinkConnection(workspaceId: string) {
+  const { ak, sk, securitytoken } = getCredentials();
+  const { wsUrl, source } = await createConnection(workspaceId, ak, sk, securitytoken);
+  const WebSocketImpl = await getWebSocketImpl(wsUrl);
+  const wsExec = await loadWsExec();
+  return { wsUrl, source, WebSocketImpl, wsExec };
+}
+
 // The side-effecting half of getSession: credentials, the hdkit connection
 // request, and the ws-exec spawn. Split out so the cache orchestration in
 // getSession is the only logic that reads and writes the sessions Map.
@@ -264,12 +275,7 @@ async function connectTerminalSession(
   username: string,
   timeoutMs?: number,
 ): Promise<HwlinkTerminalSession> {
-  const { ak, sk, securitytoken } = getCredentials();
-  const { wsUrl, source } = await createConnection(workspaceId, ak, sk, securitytoken);
-
-  const WebSocketImpl = await getWebSocketImpl(wsUrl);
-
-  const wsExec = await loadWsExec();
+  const { wsUrl, source, WebSocketImpl, wsExec } = await openHwlinkConnection(workspaceId);
   return await wsExec.connectHwlinkTerminalSession({
     url: wsUrl,
     source,
@@ -306,11 +312,7 @@ async function getSession(workspaceId: string, username: string, timeoutMs?: num
 }
 
 async function createTunnelSession(workspaceId: string, username: string, timeoutMs = 30000): Promise<TunnelSession> {
-  const { ak, sk, securitytoken } = getCredentials();
-  const { wsUrl, source } = await createConnection(workspaceId, ak, sk, securitytoken);
-  const WebSocketImpl = await getWebSocketImpl(wsUrl);
-
-  const wsExec = await loadWsExec();
+  const { wsUrl, source, WebSocketImpl, wsExec } = await openHwlinkConnection(workspaceId);
   const mux = new wsExec.HwlinkWebSocketMultiplexer(wsUrl, source, { WebSocketImpl, protocol: 'devenv' });
 
   await new Promise<void>((resolve, reject) => {
@@ -350,12 +352,7 @@ export async function execOneShot(
   username: string,
   timeoutMs: number,
 ): Promise<HwlinkExecResult> {
-  const { ak, sk, securitytoken } = getCredentials();
-  const { wsUrl, source } = await createConnection(workspaceId, ak, sk, securitytoken);
-
-  const WebSocketImpl = await getWebSocketImpl(wsUrl);
-
-  const wsExec = await loadWsExec();
+  const { wsUrl, source, WebSocketImpl, wsExec } = await openHwlinkConnection(workspaceId);
   return await wsExec.executeHwlinkCommand({
     url: wsUrl,
     source,
@@ -667,6 +664,23 @@ async function uploadViaTunnel(
     let respBuf = Buffer.alloc(0);
     let contentLength = -1;
     let headerEnd = -1;
+    // One settlement path for both completions (full body per Content-Length,
+    // or whatever arrived when the socket closed): status check, logging,
+    // and JSON parsing live here so the two triggers cannot drift.
+    const settleResponse = (resp: string, body: string): void => {
+      const statusLine = resp.split('\r\n')[0] || '';
+      const statusCode = parseInt(statusLine.split(' ')[1]!, 10);
+      if (!statusCode || statusCode < 200 || statusCode >= 300) {
+        uploadLog(`uploadViaTunnel: POST failed with HTTP ${statusCode}: ${body.slice(0, 200)}`);
+        reject(new Error(`upload HTTP ${statusCode}: ${body}`));
+        return;
+      }
+      try {
+        resolve(asRecord(JSON.parse(body)));
+      } catch {
+        reject(new Error(`invalid JSON response: ${body.slice(0, 200)}`));
+      }
+    };
     sock.on('data', (chunk) => {
       respBuf = Buffer.concat([respBuf, chunk]);
       if (contentLength < 0) {
@@ -683,20 +697,7 @@ async function uploadViaTunnel(
         if (bodyReceived >= contentLength) {
           done(() => {
             const resp = respBuf.toString();
-            const statusLine = resp.split('\r\n')[0] || '';
-            const statusCode = parseInt(statusLine.split(' ')[1]!, 10);
-            const body = resp.slice(headerEnd + 4, headerEnd + 4 + contentLength);
-            if (!statusCode || statusCode < 200 || statusCode >= 300) {
-              uploadLog(`uploadViaTunnel: POST failed with HTTP ${statusCode}: ${body.slice(0, 200)}`);
-              reject(new Error(`upload HTTP ${statusCode}: ${body}`));
-              return;
-            }
-            try {
-              const parsed: unknown = JSON.parse(body);
-              resolve(asRecord(parsed));
-            } catch (error) {
-              reject(new Error(`invalid JSON response: ${body.slice(0, 200)}`));
-            }
+            settleResponse(resp, resp.slice(headerEnd + 4, headerEnd + 4 + contentLength));
           });
         }
       }
@@ -704,21 +705,8 @@ async function uploadViaTunnel(
     sock.on('close', () => {
       done(() => {
         const resp = respBuf.toString();
-        const statusLine = resp.split('\r\n')[0] || '';
-        const statusCode = parseInt(statusLine.split(' ')[1]!, 10);
         const he = resp.indexOf('\r\n\r\n');
-        const body = he > 0 ? resp.slice(he + 4) : '';
-        if (!statusCode || statusCode < 200 || statusCode >= 300) {
-          uploadLog(`uploadViaTunnel: POST failed with HTTP ${statusCode}: ${body.slice(0, 200)}`);
-          reject(new Error(`upload HTTP ${statusCode}: ${body}`));
-          return;
-        }
-        try {
-          const parsed: unknown = JSON.parse(body);
-          resolve(asRecord(parsed));
-        } catch (error) {
-          reject(new Error(`invalid JSON response: ${body.slice(0, 200)}`));
-        }
+        settleResponse(resp, he > 0 ? resp.slice(he + 4) : '');
       });
     });
     sock.on('error', (err) => {
