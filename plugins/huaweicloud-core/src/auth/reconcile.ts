@@ -15,6 +15,7 @@ import {
 import { resolveHcloudCommand } from '../hcloud-probe.ts';
 import { redactSecrets } from '../safety-policy.ts';
 import { asText } from '../lib/as-text.ts';
+import { asRecord } from '../lib/as-record.ts';
 
 export { hasRuntimeCredentials };
 
@@ -74,10 +75,6 @@ interface LastSyncRecord {
   ts?: unknown;
   kooCliProfile?: unknown;
   s1Fingerprint?: unknown;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 function toLastSync(value: unknown): LastSyncRecord {

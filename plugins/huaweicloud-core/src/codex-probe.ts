@@ -4,14 +4,11 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { lookupOnPath } from './lib/dep-resolve.ts';
+import { asRecord } from './lib/as-record.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = resolve(__dirname, '..');
 const PACKAGE_ROOT = resolve(PLUGIN_ROOT, '..', '..');
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
 
 export function getMarketplaceName(): string {
   const marketplacePath = join(PACKAGE_ROOT, '.agents', 'plugins', 'marketplace.json');

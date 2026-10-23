@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { asRecord } from './lib/as-record.ts';
 
 interface FrameworkSpec {
   type: string;
@@ -185,10 +186,6 @@ const FRAMEWORKS = {
     nginxType: 'static',
   },
 } satisfies Record<string, FrameworkSpec>;
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
 
 function readPkg(projectPath: string): Record<string, unknown> | null {
   const pkgPath = join(projectPath, 'package.json');

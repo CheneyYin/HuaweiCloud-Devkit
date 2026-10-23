@@ -8,6 +8,7 @@ import { consumeApprovalToken, hashArgs } from '../../lib/approval-tokens.ts';
 import { numericArg } from '../../lib/tool-schema-parts.ts';
 import type { PackToolDefinition, LooseToolSchema } from '../../lib/pack-types.ts';
 import type { CallToolOptions, ToolArgs } from '../../tools.ts';
+import { asRecord } from '../../lib/as-record.ts';
 
 // The seven KooCLI-coupled execution tools sunk from core (src/tools.ts):
 // version/profile inspection, plan/read-only/approved command execution,
@@ -19,10 +20,6 @@ import type { CallToolOptions, ToolArgs } from '../../tools.ts';
 // configuration trimmed of this pack has no devkit-side hcloud CLI write
 // path, and the gateway face, when enabled, is a separate delegated write
 // path.
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
 
 export async function runVersionCheck(options: ProbeHcloudOptions = {}) {
   const result = probeHcloud(options);

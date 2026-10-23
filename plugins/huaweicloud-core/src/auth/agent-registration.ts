@@ -31,14 +31,17 @@ export const SUPPORTED_AGENT_TARGETS: string[] = [
 // relative XDG_CONFIG_HOME still splits installer (~/.config) from agent
 // (<cwd>/<relative>). Matching cwd-dependent resolution would be worse;
 // every opencode path derivation — the write side (configRoot in
-// setup-cli.ts), the detection side below, and the agent-presence probe —
+// src/targets.ts), the detection side below, and the agent-presence probe —
 // must share this resolver regardless.
 export function xdgConfigHome(): string {
   const xdg = process.env.XDG_CONFIG_HOME;
   return xdg && isAbsolute(xdg) ? xdg : join(homedir(), '.config');
 }
 
-function opencodeConfigFile(): string {
+// The canonical jsonc-then-json preference: the detection side here and the
+// installer's write side (re-exported through src/targets.ts) must resolve
+// the same file or a written config goes unread.
+export function opencodeConfigFile(): string {
   const jsonc = join(xdgConfigHome(), 'opencode', 'opencode.jsonc');
   if (existsSync(jsonc)) return jsonc;
   return join(xdgConfigHome(), 'opencode', 'opencode.json');

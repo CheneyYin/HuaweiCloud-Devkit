@@ -1,5 +1,6 @@
 import { resolveCredentialsWithRuntime } from '../../auth/credentials.ts';
 import { fetchWithProxy } from '../../proxy/proxy-agent.ts';
+import { asRecord } from '../as-record.ts';
 import { signSdkHmacRequest } from '../hw-request-signing.ts';
 import { asText } from '../as-text.ts';
 
@@ -60,10 +61,6 @@ async function apiPost(
     body: JSON.stringify(body),
   });
   return { status: resp.status, data: await resp.json() };
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 export async function createConnection(

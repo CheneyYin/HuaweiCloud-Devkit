@@ -346,12 +346,12 @@ export function installRuntimeDeps(pluginsDir: string): void {
   };
   if (r.status !== 0 && isRetryable(r)) {
     console.log(`  \x1b[33m[WARN]\x1b[0m npm install hit file-lock error, retrying in 2s...`);
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2000);
+    sleepSync(2000);
     r = spawnSync('npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], spawnOpts);
   }
   if (r.status !== 0 && !isRetryable(r)) {
     console.log(`  \x1b[33m[RETRY]\x1b[0m npm install failed (exit ${r.status}), retrying in 3s...`);
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3000);
+    sleepSync(3000);
     r = spawnSync('npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], spawnOpts);
   }
   const undiciDir = join(pluginsDir, 'node_modules', 'undici');

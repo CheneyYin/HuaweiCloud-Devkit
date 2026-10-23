@@ -16,15 +16,12 @@ import { join, dirname, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { asRecord } from '../lib/as-record.ts';
 import { createConnection, getCredentials } from '../lib/hdkit/hwlink-api.ts';
 import { getWebSocketImpl } from '../proxy/proxy-agent.ts';
 import { trackSandboxConnect, trackSandboxDisconnect } from '../telemetry/telemetry.ts';
 
 const execFileAsync = promisify(execFile);
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
 
 // Thrown values cross the JS boundary as `unknown` under strict mode; only a
 // non-empty message string is surfaced (same pattern as update-check.ts).

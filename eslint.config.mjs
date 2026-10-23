@@ -138,12 +138,6 @@ export default [
     },
   },
   {
-    files: ['plugins/huaweicloud-core/src/lib/hdkit/hdkitservice-api.ts'],
-    rules: {
-      'n/no-missing-import': ['error', { allowModules: ['undici'] }],
-    },
-  },
-  {
     files: ['plugins/huaweicloud-core/src/proxy/proxy-agent.ts'],
     rules: {
       'n/prefer-node-protocol': 'off',

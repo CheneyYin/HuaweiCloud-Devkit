@@ -13,6 +13,7 @@ import {
   VaultError,
   type SecretRef,
 } from './refs.ts';
+import { asRecord } from '../as-record.ts';
 
 export { VaultError };
 
@@ -122,10 +123,6 @@ function decrypt(masterKey: Buffer, ref: SecretRef, record: SecretRecord): strin
       `Decrypting ${formatSecretRef(ref)} failed: the master key does not match the one this secret was encrypted with (rotated custody tier?), or the file was tampered with. Version ${record.version}.`,
     );
   }
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 function readRecord(path: string): SecretRecord | null {

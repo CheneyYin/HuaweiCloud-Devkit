@@ -2,6 +2,7 @@ import { fetchWithProxy } from '../../proxy/proxy-agent.ts';
 import { cacheUserHash } from '../../telemetry/telemetry.ts';
 import { readInstalledVersion } from '../../update-check.ts';
 import { getCredentials } from './hwlink-api.ts';
+import { asRecord } from '../as-record.ts';
 import { asText } from '../as-text.ts';
 
 interface HdkitError extends Error {
@@ -17,10 +18,6 @@ interface HttpResponseLike {
   ok: boolean;
   status: number;
   text(): Promise<string>;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 function getHdkitBaseUrl(): string {

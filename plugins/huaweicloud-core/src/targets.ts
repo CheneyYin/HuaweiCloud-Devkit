@@ -26,11 +26,10 @@ export function opencodeCommandsDir(): string {
 export function opencodePluginsDir(): string {
   return join(configRoot('opencode'), 'huaweicloud-plugins');
 }
-export function opencodeConfigFile(): string {
-  const jsonc = join(configRoot('opencode'), 'opencode.jsonc');
-  if (existsSync(jsonc)) return jsonc;
-  return join(configRoot('opencode'), 'opencode.json');
-}
+// The jsonc-then-json file preference lives with its xdgConfigHome resolver
+// in auth/agent-registration.ts (the detection side); the path family
+// re-exports it so install-side callers have one import surface.
+export { opencodeConfigFile } from './auth/agent-registration.ts';
 
 export function codexDesktopPluginsDir(): string {
   return join(homedir(), 'plugins', 'huaweicloud-devkit');
@@ -51,7 +50,7 @@ export function openclawPluginsDir(): string {
 export function codeartsSkillsDir(): string {
   return join(homedir(), '.codeartsdoer', 'skills');
 }
-export function codeartsMcpSettingsDir(): string {
+function codeartsMcpSettingsDir(): string {
   return join(homedir(), '.codeartsdoer', 'mcp');
 }
 export function codeartsMcpSettingsFile(): string {

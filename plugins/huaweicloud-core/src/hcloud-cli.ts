@@ -10,6 +10,7 @@ import type { RiskDecision } from './risk-rule-engine.ts';
 import { getProxySettings } from './proxy/proxy-config.ts';
 import { resolveHcloudCommand } from './hcloud-probe.ts';
 import { parseStsExpiry, resolveCredentialsWithRuntime } from './auth/credentials.ts';
+import { asRecord } from './lib/as-record.ts';
 
 // The CLI face's consent layer lives in src/lib/approval-tokens.ts; these
 // re-exports keep existing import sites (tests) compiling — the
@@ -21,10 +22,6 @@ const DEFAULT_FORCE_KILL_AFTER_MS = 2_000;
 const DEFAULT_MAX_RETRIES = 1;
 const LARGE_OUTPUT_THRESHOLD = 50_000;
 const OUTPUT_DIR = join('/tmp', 'huaweicloud-devkit');
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
 
 function asString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;

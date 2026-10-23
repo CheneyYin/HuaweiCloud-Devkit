@@ -1,4 +1,5 @@
 import { getProxyDispatcher } from './proxy/proxy-agent.ts';
+import { asRecord } from './lib/as-record.ts';
 
 const INDEX_URL =
   'https://gitcode.com/api/v5/repos/2501_91318609/skills-for-index/contents/skills-index/index.json?ref=main';
@@ -79,10 +80,6 @@ interface MarketplaceSearchResult {
 
 let cachedIndex: MarketIndex | null = null;
 let cachedCnEnMap: Record<string, string> | null = null;
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
 
 function toMarketSkill(value: unknown): MarketSkill {
   const raw = asRecord(value);

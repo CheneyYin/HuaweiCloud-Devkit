@@ -33,8 +33,11 @@ export interface SdkRequestSigning {
   method?: string;
   path: string;
   query?: Record<string, unknown>;
-  // A body of undefined or '' signs the empty payload; any other value signs
-  // its JSON serialization.
+  // A falsy body (undefined, '', null, 0, false) signs the empty payload;
+  // any truthy value signs its JSON serialization. This matches both legacy
+  // signers (the IAM validator hashed '' unconditionally; hwlink used the
+  // same truthiness check), so callers passing scalar 0/null get the legacy
+  // behavior, not a throw.
   body?: unknown;
   ak: string;
   sk: string;

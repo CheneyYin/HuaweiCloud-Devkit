@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { asText } from './lib/as-text.ts';
+import { asRecord } from './lib/as-record.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const defaultRulesPath = join(__dirname, '..', 'safety', 'rules', 'cloud-risk-rules.json');
@@ -76,10 +77,6 @@ export interface RiskDecision {
 export interface RiskRuleOptions {
   path?: string;
   catalog?: RiskCatalog;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 // Unknown severities normalize to 'info' (rank 1). The shipped JSON only emits

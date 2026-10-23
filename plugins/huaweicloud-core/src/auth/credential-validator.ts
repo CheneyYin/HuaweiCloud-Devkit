@@ -1,3 +1,4 @@
+import { asRecord } from '../lib/as-record.ts';
 import { fetchWithProxy } from '../proxy/proxy-agent.ts';
 import { signSdkHmacRequest } from '../lib/hw-request-signing.ts';
 
@@ -26,10 +27,6 @@ function projectForRegion(projects: unknown[], region?: string): string | null {
     if (match) return match.id;
   }
   return usable.find((p) => p.id)?.id || null;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 export interface ValidateIamCredentialsOptions {

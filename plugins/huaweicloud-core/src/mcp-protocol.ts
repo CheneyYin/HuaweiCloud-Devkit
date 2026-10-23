@@ -17,6 +17,7 @@ import { getToolSchema, assertConstructedSchemas } from './tool-schemas.ts';
 import { peekCachedUpdateInfo, applyUpdateHint, readInstalledVersion } from './update-check.ts';
 import { initTelemetry } from './telemetry/telemetry.ts';
 import { detectAgent } from './telemetry/agent-detect.ts';
+import { asRecord } from './lib/as-record.ts';
 
 const pkgVersion = readInstalledVersion() || '0.0.0';
 
@@ -196,10 +197,6 @@ export function _isHintConsumed(sessionId: string): boolean {
 // Both call sites hand over the full initialize params; the client identity
 // lives one level down at params.clientInfo. A call site that passed params
 // straight into detectAgent silently degraded agent detection to env-only.
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
 export function toClientInfo(params: unknown): { name: string | null; version: string | null } {
   const info = asRecord(asRecord(params).clientInfo);
   return {

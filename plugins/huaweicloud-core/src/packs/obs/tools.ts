@@ -10,15 +10,12 @@ import { fetchWithProxy } from '../../proxy/proxy-agent.ts';
 import { asCredentialRecord, type CredentialLike } from '../../lib/credentials.ts';
 import type { PackToolDefinition, LooseToolSchema } from '../../lib/pack-types.ts';
 import type { CallToolOptions, ToolArgs } from '../../tools.ts';
+import { asRecord } from '../../lib/as-record.ts';
 
 // Handlers migrated verbatim from src/tools.ts. setupObsConfig syncs the
 // global credential vault (or the hcloud profile) into ~/.obsutilconfig;
 // handleObsWebsiteConfig signs OBS REST calls with AWS4 (KooCLI OBS has no
 // SetBucketWebsite operation).
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
 
 // Mirrors the JS `a || b || ''` chain for string fields: the first non-empty
 // string wins, everything else falls through.

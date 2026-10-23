@@ -13,6 +13,7 @@ import { homedir } from 'node:os';
 
 import { asText } from '../lib/as-text.ts';
 import { resolveSecretValue } from '../lib/secret-vault/store.ts';
+import { asRecord } from '../lib/as-record.ts';
 
 // The credential vault is JSON on disk shaped like this. Fields stay `unknown`
 // until a typeof/Array.isArray guard surfaces a string, because the file (and
@@ -49,10 +50,6 @@ export interface LastSyncRecord {
 // Narrow untrusted parsed JSON to a record. Non-objects collapse to an empty
 // record so property reads stay safe (same guarded-asRecord style as the other
 // JSON boundaries).
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
 // Verify a credential file ended up with 0600. On Windows-mounted drives inside WSL
 // (drvfs/9p) chmod is silently ignored, so the file can be world-readable (0777).
 // Native Windows has no POSIX modes (statSync always reports 0666), so skip the check there.
