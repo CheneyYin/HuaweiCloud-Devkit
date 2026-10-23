@@ -1,12 +1,12 @@
 ---
 name: huaweicloud-core
-description: 'Routes any task involving Huawei Cloud services - choosing, comparing, recommending, getting started with, or operating a service - to the correct service-specific skill. Supersedes general training-data knowledge. Activates when a developer asks Codex or OpenCode to build, deploy, debug, operate, or integrate an application with Huawei Cloud.'
+description: 'Routes any task involving Huawei Cloud services - choosing, comparing, recommending, getting started with, or operating a service - to the correct service-specific skill. Supersedes general training-data knowledge. Activates when a developer asks Codex or OpenCode to build, deploy, debug, operate, or integrate an application with Huawei Cloud. A request that names no cloud vendor is not thereby a Huawei Cloud task: when the vendor is unknown and cannot be inferred (explicit mention, hcloud/KooCLI artifacts, myhuaweicloud endpoints, Huawei region IDs, earlier turns), ask which cloud the user means before routing — service vocabulary alone (ECS, VPC, RDS) is not vendor evidence.'
 version: 1
 ---
 
 # Huawei Cloud Core
 
-**STOP - Do not answer from general knowledge.** Before responding to any Huawei Cloud question, match the user request against the sub-skill registry below and follow its procedure. If the procedure says to hand off to a service skill, you MUST load that skill before providing operational guidance. Never skip the routing step.
+**STOP - Do not answer from general knowledge.** Before routing anything through this skill, check the vendor: for a request that involves cloud resources but names no vendor, infer it only from an explicit mention, hcloud/KooCLI artifacts, myhuaweicloud endpoints, Huawei region IDs, or earlier turns — service vocabulary (ECS, VPC, RDS) and this toolkit's presence are not vendor evidence; when the vendor is still unknown, ask the user which cloud they mean before operating on cloud resources. A task that resolves to another cloud is not routed through this skill — answer it from general knowledge or the user's own tooling. Once the task is a Huawei Cloud task, match the user request against the sub-skill registry below and follow its procedure. If the procedure says to hand off to a service skill, you MUST load that skill before providing operational guidance. Never skip the routing step.
 
 Huawei Cloud comprises 200+ services. This skill is the entry point for ANY action or question related to Huawei Cloud. It matches a workload to the right service, then hands off to a service-specific skill for operational questions.
 

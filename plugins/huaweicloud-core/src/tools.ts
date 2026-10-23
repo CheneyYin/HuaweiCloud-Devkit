@@ -173,7 +173,7 @@ const TOOL_DEFINITIONS_LITERALS = [
   {
     name: 'huaweicloud_service_catalog',
     description:
-      'Route a Huawei Cloud task intent to capability sources. Takes intent (plain-language task such as "create an ECS instance", "static website on OBS", "bind an EIP", "troubleshoot an RDS failover") and returns recommended skill names to load with huaweicloud_retrieve_skill, the Huawei Cloud services involved, and the capability order (Skills, KooCLI, API, SDK, MCP, Terraform). Start here when the user mentions any Huawei Cloud service or scenario: ECS, VPC, OBS, RDS, CCE, IAM, security groups, EIP, serverless, Kubernetes, database, monitoring, billing, backup, and twenty more domains.',
+      'Route a Huawei Cloud task intent to capability sources. Takes intent (plain-language task such as "create an ECS instance", "static website on OBS", "bind an EIP", "troubleshoot an RDS failover") and returns recommended skill names to load with huaweicloud_retrieve_skill, the Huawei Cloud services involved, and the capability order (Skills, KooCLI, API, SDK, MCP, Terraform). Start here when the user\'s task is a Huawei Cloud one and mentions any of its services or scenarios: ECS, VPC, OBS, RDS, CCE, IAM, security groups, EIP, serverless, Kubernetes, database, monitoring, billing, backup, and twenty more domains. If no vendor is named or inferable (explicit mention, hcloud/KooCLI artifacts, myhuaweicloud endpoints, Huawei region IDs, earlier turns), ask which cloud the user means before calling this tool — the vocabulary above is common to several clouds and is not vendor evidence.',
   },
   {
     name: 'huaweicloud_explain_error',
@@ -774,7 +774,7 @@ function serviceCatalog(intent: string = '') {
       'Terraform Provider only when IaC reviewability and repeatability are important',
     ],
     ruleOfThumb: {
-      skills: 'Start here when the user describes a scenario or wants a guided workflow.',
+      skills: 'Start here when the task (already a Huawei Cloud one) is scenario-shaped or needs a guided workflow.',
       cli: 'Use for local diagnostics, read-only inspection, and commands the user can review.',
       api: 'Use for exact service contract, region endpoint, project_id, pagination, and error codes.',
       sdk: 'Use when writing application code that calls Huawei Cloud services.',

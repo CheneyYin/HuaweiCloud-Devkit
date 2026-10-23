@@ -61,4 +61,4 @@ post_install: |
     1. Configure credentials: npx huaweicloud-devkit auth init
     2. Restart Hermes Agent session (MCP tools load on restart)
     3. Verify: hermes doctor
-    4. Try: "Help me check my ECS instances" or "Deploy this website to OBS"
+    4. Try: "Help me check my ECS instances on Huawei Cloud" or "Deploy this website to Huawei Cloud OBS"

@@ -45,6 +45,12 @@ export interface Recordings {
   ws: WsConnectionRecording[];
   files: Record<string, string | null>;
   finalText: string | null;
+  // The agent process's exit code (null on timeout-kill signal death).
+  // Boundary-liveness ignores it; disclosure-liveness requires 0 — the
+  // honest cross-leg model-turn proof (a dead model wire exits non-zero
+  // or null on both drivers, while codex's -o finalText can exist for a
+  // turn that never completed).
+  exitCode: number | null;
 }
 
 export interface ExpectationVerdict {
@@ -358,12 +364,35 @@ export function evaluateCase(caseDef: E2eCase, recordings: Recordings): CaseVerd
   // vacuous green of a dead harness. Files are excluded on purpose: fixtures
   // can seed them. A session with zero tool calls, zero hcloud calls, zero
   // http requests, and zero gateway requests never exercised devkit at all.
+  // The 'disclosure' mode (cases whose expected outcome IS zero boundary
+  // activity, e.g. the vendor-ambiguity guard) uses two conjoined proofs:
+  // an initialize-handshake disclosure (toolsList / instructions, recorded
+  // at the transport's outbound wire face — never toolsListChanged, which
+  // is not a handshake event) AND a zero agent exit code. The conjunction
+  // closes the half-dead chain (server boots and handshakes BEFORE any
+  // model turn, so disclosures alone prove the harness booted, not that
+  // the model ever turned — a dead model wire would vacuously pass the
+  // zero-activity expectations and reset the runner's dead-agent streak;
+  // exitCode is the honest cross-leg model-turn proof because codex's -o
+  // finalText can exist for a turn that never completed). A never-booted
+  // chain fails on disclosures; a half-dead chain fails on exitCode; a
+  // correctly-asking session passes with its own alibi, so the runner's
+  // streak treats the pass exactly like a boundary-liveness pass. The
+  // exit-code conjunct presumes both agent CLIs exit non-zero (or die to
+  // null) on a dead model wire — an assumption, not a measurement; see
+  // docs/e2e-testing-design.md's disclosure-liveness bullet for the
+  // residual.
+  const handshakeDisclosures = recordings.disclosures.filter(
+    (d) => d.event === 'toolsList' || d.event === 'instructions',
+  );
   const liveness =
-    recordings.toolCalls.length > 0 ||
-    recordings.hcloud.length > 0 ||
-    recordings.http.length > 0 ||
-    recordings.gateway.length > 0 ||
-    recordings.ws.some((conn) => conn.commands.length > 0);
+    caseDef.liveness === 'disclosure'
+      ? handshakeDisclosures.length > 0 && recordings.exitCode === 0
+      : recordings.toolCalls.length > 0 ||
+        recordings.hcloud.length > 0 ||
+        recordings.http.length > 0 ||
+        recordings.gateway.length > 0 ||
+        recordings.ws.some((conn) => conn.commands.length > 0);
 
   return {
     caseId: caseDef.id,

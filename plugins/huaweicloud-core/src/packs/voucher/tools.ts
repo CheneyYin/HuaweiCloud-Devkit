@@ -40,7 +40,7 @@ export const VOUCHER_TOOLS = [
   {
     name: 'huaweicloud_voucher_status',
     description:
-      '查询代金券领取状态。用户首次使用、开始会话或询问插件能力时，应主动调用本工具检查：未领取（claimed=false）则主动提示可领取一张代金券；已领取（claimed=true）则不提示、不打扰。',
+      '查询代金券领取状态。当会话已处于华为云任务上下文（用户已指明华为云，或先前轮次已确认）且用户首次使用或询问插件能力时，主动调用本工具检查：未领取（claimed=false）则主动提示可领取一张代金券；已领取（claimed=true）则不提示、不打扰。厂商未定（用户未指明、上下文无法推断）时不要调用——先问用户用的是哪家云。',
     schema: voucherStatusSchema,
     handler: handleVoucherStatus,
   },

@@ -177,6 +177,24 @@ export interface E2eCase {
   // The env channel (DEVKIT_PACKS) is stripped by env-policy for every
   // case, so this is the single delivery path.
   installPacks?: string;
+  // Liveness evidence mode. 'boundary' (default): any boundary-channel
+  // activity (toolCalls/hcloud/http/gateway/ws) proves the chain alive.
+  // 'disclosure': an initialize-handshake disclosure (toolsList /
+  // instructions, recorded at the transport's outbound wire face BEFORE
+  // any model turn — never toolsListChanged) conjoined with a zero agent
+  // exit code (the honest cross-leg model-turn proof; codex's -o
+  // finalText can exist for a turn that never completed; an assumption,
+  //  not a measurement — a CLI that exits 0 after a model error reopens
+  //  the half-dead hole on that leg, documented in the design doc) — for
+  //  negative
+  // cases whose EXPECTED outcome is zero boundary activity (the vendor
+  // ambiguity guard): a never-booted chain fails on disclosures, a
+  // half-dead chain (handshake done, model wire dead) fails on the exit
+  // code, a live session that correctly asks the user passes. The pass
+  // carries its own chain-alive proof, so the runner's dead-agent streak
+  // treats it exactly like a boundary-liveness pass — no waiver flag, no
+  // streak special-case.
+  liveness?: 'boundary' | 'disclosure';
   fixtures: CaseFixtures;
   expect: Expectation[];
   softExpect?: Expectation[];

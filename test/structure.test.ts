@@ -632,6 +632,85 @@ test('the action-first load teaching survives copy passes on every load-path sur
   assert.match(tools, /fails or is denied/, 'the source carries the trigger vocabulary the pins grep for');
 });
 
+test('the vendor boundary survives copy passes on every disclosure surface', () => {
+  // Measured failure (live probe, 2026-10-23): every disclosure surface
+  // conditioned on "the task IS a Huawei Cloud task" while none defined
+  // what makes it one. One presence pin per clause-carrying surface
+  // outside instructionsFor (pinned in the three-form test): the core
+  // routing skill's description and STOP guard, the capability-discovery
+  // description (its scenario-shaped trigger was vendor-neutral), the
+  // service_catalog description (its Start-here vocabulary list taught
+  // availability-as-intent), the voucher_status description (its
+  // session-start teaching fired before any vendor was established), the
+  // huawei-voucher SKILL (the catalog entry list_skills serves — same
+  // teaching, second surface), the huawei-sandbox SKILL (its
+  // deployment-shaped triggers were vendor-neutral), and the hermes
+  // manifest's example prompts (they taught the ambiguity anti-pattern
+  // to new users). A copy pass reverting any one surface keeps every
+  // other gate green — the one-file-at-a-time drift mode the load-path
+  // pin family documented.
+  const core = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-core', 'SKILL.md'), 'utf8');
+  assert.match(
+    core,
+    /service vocabulary alone \(ECS, VPC, RDS\) is not vendor evidence/,
+    'the core skill description must carry the vendor gate',
+  );
+  assert.match(
+    core,
+    /ask the user which cloud they mean before operating on cloud resources/,
+    'the core skill STOP guard must demand the vendor question',
+  );
+  const discovery = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-capability-discovery', 'SKILL.md'), 'utf8');
+  assert.match(
+    discovery,
+    /scenario shape alone is not vendor evidence/,
+    'the capability-discovery description must gate its scenario-shaped trigger',
+  );
+  const serviceCatalog = TOOL_DEFINITIONS.find((tool) => tool.name === 'huaweicloud_service_catalog');
+  assert.ok(serviceCatalog, 'the service_catalog definition must exist');
+  assert.match(
+    serviceCatalog.description,
+    /is not vendor evidence/,
+    'the service_catalog description must not teach availability-as-intent',
+  );
+  const voucherStatus = VOUCHER_TOOLS.find((tool) => tool.name === 'huaweicloud_voucher_status');
+  assert.ok(voucherStatus, 'the voucher_status definition must exist');
+  assert.match(
+    voucherStatus.description,
+    /厂商未定/,
+    'the voucher_status description must not fire its session-start teaching before a vendor is established',
+  );
+  const voucherSkill = readFileSync(join(pluginRoot, 'skills', 'huawei-voucher', 'SKILL.md'), 'utf8');
+  assert.match(
+    voucherSkill,
+    /厂商未定/,
+    'the huawei-voucher skill (the catalog entry list_skills serves) must carry the same vendor gate as the tool',
+  );
+  assert.doesNotMatch(
+    voucherSkill,
+    /场景默认执行"先查后提示"：会话开始/,
+    'the huawei-voucher proactive rule must not list an unconditional session-start trigger',
+  );
+  const sandboxSkill = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
+  assert.match(
+    sandboxSkill,
+    /deployment\/website vocabulary alone is not vendor evidence/,
+    'the huawei-sandbox description must gate its deployment-shaped triggers',
+  );
+  assert.match(
+    sandboxSkill,
+    /settle the vendor first/,
+    'the huawei-sandbox proactive offering must route unknown-vendor tasks out of scope',
+  );
+  const manifest = readFileSync(join(root, 'integrations', 'hermes', 'manifest.yaml'), 'utf8');
+  assert.match(
+    manifest,
+    /ECS instances on Huawei Cloud/,
+    'the hermes manifest ECS example prompt must name the vendor (it teaches first tasks to new users)',
+  );
+  assert.match(manifest, /to Huawei Cloud OBS/, 'the hermes manifest OBS example prompt must name the vendor too');
+});
+
 test('retrieve_skill reference cap stays in sync between code and description', () => {
   // The description teaches "each reference body capped at 4000 characters";
   // this pins the taught number to the truncation constant so neither can
@@ -778,6 +857,51 @@ test('server instructions carry the three-form skillRoot disclosure contract', (
       form,
       /never silently proceed that way; confirm with the user instead/,
       `the ${label} form must demand confirmation over silent bypass`,
+    );
+  }
+  // The vendor boundary rides EVERY form (measured failure, live probe
+  // 2026-10-23, opencode 1.19.0 + glm-5.2, twice-stable): a vendor-neutral
+  // prompt ("查看ECS实例列表") in a context with no Huawei Cloud signal
+  // made the model call auth_status then run_readonly_command without
+  // asking which cloud the user meant — every surface conditioned on "the
+  // task IS a Huawei Cloud task" while none defined what makes it one, so
+  // tool availability stood in as intent evidence. The rule defines the
+  // inference boundary and gates TWO prongs — cloud-resource operations,
+  // and probing Huawei Cloud tooling/credential/account state (the
+  // measured first moves) — while devkit meta tools fall outside by
+  // construction: the probe prong names tooling/credential/account state,
+  // not the plugin's own version, catalog, or skills. The other-cloud
+  // allowance stays positive so the refusal-priming shape the 2026-10-19
+  // postmortem documented cannot re-enter through the exemption sentence.
+  for (const [label, form] of [
+    ['full', full],
+    ['bare', bare],
+    ['remote', remote],
+  ] as const) {
+    assert.match(
+      form,
+      /not evidence of which cloud the user means/,
+      `the ${label} form must deny availability-as-intent evidence`,
+    );
+    assert.match(
+      form,
+      /ask the user which cloud they mean before operating on cloud resources/,
+      `the ${label} form must demand the vendor question before cloud-resource operations`,
+    );
+    assert.match(
+      form,
+      /before probing Huawei Cloud tooling, credential, or account state/,
+      `the ${label} form must gate the probe face (the measured first moves)`,
+    );
+    assert.match(
+      form,
+      /generic service vocabulary \(ECS, VPC, RDS, serverless\) and the devkit's own presence do not infer it/,
+      `the ${label} form must scope the inference boundary (vocabulary and presence do not infer)`,
+    );
+    assert.match(
+      form,
+      /tasks for other clouds remain answerable from general knowledge/,
+      `the ${label} form must keep the other-cloud allowance positive, not exemption-from-prohibition`,
     );
   }
   assert.doesNotMatch(

@@ -59,7 +59,7 @@ object per line, two discriminated shapes, `v: 1`:
 
 ```
 { type: 'toolCall', v, ts, name, args, ok, error? }
-{ type: 'disclosure', v, ts, event: 'toolsList'|'toolsListChanged', toolCount? }
+{ type: 'disclosure', v, ts, event: 'toolsList'|'toolsListChanged'|'instructions', toolCount? }
 ```
 
 - Redaction: args pass `redactSecrets` plus a supplemental `api_key` /
@@ -134,15 +134,21 @@ files are never copied. Local config: gitignored `test/e2e/.env`.
   Covering it needs a product seam (an `HUAWEICLOUD_MARKETPLACE_INDEX`-style
   override); until one lands, this tool has no E2E case.
 - **LLM cost/latency**: a single case takes 1 to 4 min with an attempts cap
-  of 2. A full opencode leg covers all 31 cases and measured ~34-40 min
-  wall clock (first-attempt passes); the codex leg covers 29 cases plus 2
-  recorded skips (the installPacks channel has no codex write path) with
-  ~18.6k base tokens per model turn — timing extrapolated pending the
-  first nightly. Per-attempt budget caps sum to 147 min single-pass /
-  294 min worst case for opencode (139/278 for codex), which the CI job
-  timeout of 330 min per leg covers. Failures attach per-attempt summaries
-  (recorded call lists, transcripts, verdict evidence) to the JSON report
-  for offline triage.
+  of 2. A full opencode leg covers all 33 cases; the 31-case leg measured
+  ~34-40 min wall clock (first-attempt passes), extrapolated to ~38-45 min
+  for 33 pending the first nightly (the codex leg covers 31 cases plus 2
+  recorded skips — the installPacks channel has no codex write path —
+  with ~18.6k base tokens per model turn, timing likewise extrapolated).
+  Per-attempt budget caps sum to 155 min single-pass / 310 min worst case
+  for opencode (147/294 for codex). Treat the 330-min CI job timeout as
+  tight: the worst-case budget sum already consumes its headroom once
+  the 66 install/teardown cycles (tens of seconds each, riding OUTSIDE
+  the per-attempt timeoutMs) and the pre-suite steps (npm ci, pinned CLI
+  installs, pack + prefix install) are counted — and a job-timeout kill
+  is signal death, which skips the report `finally`. Suite growth past
+  this point should bump the timeout, not bank on the headroom. Failures attach per-attempt
+  summaries (recorded call lists, transcripts, verdict evidence) to the
+  JSON report for offline triage.
 
 ## The codex driver
 
@@ -236,8 +242,38 @@ diagnostics with it):
   plus per-case catches turn harness crashes into `runnerError` case
   verdicts — the stack rides the attempt's stdout instead of killing the
   process. Three consecutive runner-error cases abort the suite (a
-  systematic crash must not burn 31 × install + LLM budget); pure infra red
+  systematic crash must not burn 33 × install + LLM budget); pure infra red
   exits 2, product red exits 1.
+- **Disclosure liveness mode.** Cases whose expected outcome IS zero
+  boundary activity (the vendor-ambiguity guard,
+  `core-free-choice-vendor-ambiguity`) carry `liveness: 'disclosure'`:
+  an initialize-handshake disclosure (toolsList / instructions, recorded
+  at the transport's outbound wire face BEFORE any model turn) conjoined
+  with a zero agent exit code is the chain-and-model-turn proof. A
+  never-booted chain fails (no initialize → no disclosures); a half-dead
+  chain (handshake done, model wire dead before the first turn) fails on
+  the exit code — disclosures alone would prove only that the harness
+  booted, and a dead wire would vacuously green the zero-activity
+  expectations and reset the dead-agent streak. The exit-code conjunct
+  is an assumption, not a measurement: it presumes both agent CLIs exit
+  non-zero (or are killed to a null exit) when the model wire dies — a
+  CLI that exits 0 after printing a model error would reopen the
+  half-dead hole on that leg (documented residual; the 2026-10-22
+  incident reports carry per-attempt exit codes to check against). A
+  correctly-asking session passes carrying its own alibi, so the
+  runner's dead-agent streak treats the pass exactly like a
+  boundary-liveness pass — no waiver flag, no streak special-case.
+  Status of the guard itself: the negative half is expected RED on the
+  currently measured model (opencode 1.19.0 + glm-5.2, post-teaching
+  live re-run still fired check_cli → auth_status → show_profile →
+  run_readonly, plus auth_switch persist) — the durable regression
+  signal, not a broken case. The enforcement rung is deliberately
+  deferred and teaching-only until measured insufficient: a
+  vendorConfirmed attestation parameter on the probe/execution tool
+  faces (the approvedByUser pattern), or a first-call
+  `_decorateResult` vendor-boundary reminder landing between the first
+  and second moves. Either lands as its own change when the red is
+  accepted as chronic.
 
 CI (`.github/workflows/e2e-nightly.yml`): the only required repository
 setting is the `E2E_TEST_MODEL_APIKEY` secret. Provider/model/baseURL default

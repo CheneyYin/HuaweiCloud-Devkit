@@ -85,6 +85,33 @@ const pkgVersion = readInstalledVersion() || '0.0.0';
 const TRIMMED_CAPABILITY_RULE =
   "That unavailability is about the capability, not just the skill text or the MCP tools: a trimmed pack's services are unavailable through every execution path, including hcloud commands run directly from your shell — never silently proceed that way; confirm with the user instead. ";
 
+// Vendor boundary, shared by every instruction form. Measured failure
+// (live probe, 2026-10-23, opencode 1.19.0 + glm-5.2, twice-stable): with
+// a vendor-neutral prompt ("查看ECS实例列表") in a context carrying no
+// Huawei Cloud signal, the model called auth_status then
+// run_readonly_command(ECS ListServersDetails) without ever asking which
+// cloud the user meant — every disclosure surface conditioned on "the task
+// IS a Huawei Cloud task" while none defined what makes it one, so tool
+// availability stood in as intent evidence. The rule defines the
+// inference boundary explicitly (vendor mention, hcloud artifacts,
+// myhuaweicloud endpoints, Huawei region IDs, earlier turns — generic
+// service vocabulary and the devkit's own presence do NOT infer it) and
+// gates both cloud-resource operations AND the Huawei Cloud
+// tooling/credential/account probe face (CLI install checks, profile
+// reads, auth status — the measured first moves); devkit meta tools
+// (check_update, list_skills, ...) fall outside by construction — the
+// probe clause names tooling/credential/account state, not the plugin's
+// own version, catalog, or skills. The wording leads with the procedure
+// and keeps the other-cloud allowance positive ("remain answerable from
+// general knowledge") — evaluative classifications and
+// exemption-from-prohibition phrasing primed refusal in the 2026-10-19
+// retrieve_skill measurement.
+const VENDOR_BOUNDARY_RULE =
+  'Vendor boundary: tools or skills being available in this session is not evidence of which cloud the user means. ' +
+  "For a request that involves cloud resources but names no vendor, infer the vendor only from an explicit mention, hcloud/KooCLI artifacts, myhuaweicloud endpoints, Huawei region IDs, or earlier turns of this conversation — generic service vocabulary (ECS, VPC, RDS, serverless) and the devkit's own presence do not infer it. " +
+  'When the vendor is still unknown, ask the user which cloud they mean before operating on cloud resources through any tool or hcloud command, and before probing Huawei Cloud tooling, credential, or account state (CLI install checks, profile reads, auth status). ' +
+  "Requests that are not cloud tasks are outside this rule; tasks for other clouds remain answerable from general knowledge — the devkit's tools themselves only operate on Huawei Cloud. ";
+
 export function instructionsFor(remote: boolean, runtimePacks = false): string {
   if (remote) {
     return (
@@ -95,6 +122,7 @@ export function instructionsFor(remote: boolean, runtimePacks = false): string {
       'Which skills are ENABLED is pack-gated (the operator controls pack posture); ' +
       'a huawei-* service skill absent from the catalog belongs to a trimmed pack; treat it as unavailable. ' +
       TRIMMED_CAPABILITY_RULE +
+      VENDOR_BOUNDARY_RULE +
       'Route Huawei Cloud tasks through the huaweicloud-core skill; browse packs with huaweicloud_list_packs.'
     );
   }
@@ -112,6 +140,7 @@ export function instructionsFor(remote: boolean, runtimePacks = false): string {
     `To load a skill, attempt the direct read first: read ${SKILLS_ROOT}/<name>/SKILL.md and the references/ files you need with your file tools — untruncated and selective. ` +
     'Do not pre-check reachability and do not call huaweicloud_retrieve_skill before attempting — the attempt itself is the check. ' +
     'If a direct read of the tree fails or is denied, load the skill with huaweicloud_retrieve_skill instead — it needs no file access. ' +
+    VENDOR_BOUNDARY_RULE +
     'Route Huawei Cloud tasks through the huaweicloud-core skill; browse packs with huaweicloud_list_packs.'
   );
 }

@@ -66,7 +66,7 @@ export const discoveryCases: E2eCase[] = [
     id: 'discovery-get-service-icon-offline',
     pack: 'discovery',
     env: { HUAWEICLOUD_ICONS_OFFLINE: '1' },
-    prompt: '用 huaweicloud_get_service_icon 找一下 ECS 服务的官方图标,告诉我图标链接。',
+    prompt: '用 huaweicloud_get_service_icon 找一下华为云 ECS 服务的官方图标,告诉我图标链接。',
     fixtures: {},
     expect: [{ kind: 'toolCall', name: 'huaweicloud_get_service_icon', args: { service: 'ecs' }, ok: true }],
     softExpect: [{ kind: 'agentSays', text: { any: ['logo', '图标', 'ecs'] } }],

@@ -69,12 +69,13 @@ jobs:
     concurrency:
       group: ${{ github.event_name == 'pull_request' && format('e2e-pr-{0}-{1}', github.event.pull_request.number, matrix.agent) || format('e2e-trunk-{0}', matrix.agent) }}
       cancel-in-progress: true
-    # Per leg: 31 cases for opencode, 29 cases plus 2 recorded skips for
+    # Per leg: 33 cases for opencode, 31 cases plus 2 recorded skips for
     # codex (the installPacks channel has no codex write path), attempts
-    # cap 2, per-attempt budget caps sum to 147 min single-pass / 294 min
-    # worst case for opencode (139/278 for codex), plus npm ci + npm pack +
-    # install. The codex leg carries its own per-turn overhead (~18.6k
-    # base tokens per model turn).
+    # cap 2, per-attempt budget caps sum to 155 min single-pass / 310 min
+    # worst case for opencode (147/294 for codex), plus npm ci + npm pack +
+    # install and per-attempt install/teardown cycles. The codex leg
+    # carries its own per-turn overhead (~18.6k base tokens per model
+    # turn).
     timeout-minutes: 330
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

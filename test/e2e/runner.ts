@@ -29,12 +29,7 @@ import { opencodeDriver } from './drivers/opencode.ts';
 import { codexDriver } from './drivers/codex.ts';
 import { verifyLegWire } from './drivers/shared.ts';
 import type { AgentDriver, DriverId } from './drivers/types.ts';
-import { cliCases } from './cases/cli.ts';
-import { coreCases } from './cases/core.ts';
-import { authCases, sandboxCases, voucherCases, wsSandboxCases } from './cases/http-packs.ts';
-import { openMcpCases } from './cases/open-mcp.ts';
-import { discoveryCases, obsCases } from './cases/local-packs.ts';
-import { updateCases } from './cases/update.ts';
+import { ALL_CASES } from './cases/index.ts';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const fakeHcloud = fileURLToPath(new URL('../fixtures/fake-hcloud.ts', import.meta.url));
@@ -42,18 +37,6 @@ const fakeOpenMcp = fileURLToPath(new URL('../fixtures/fake-open-mcp-sidecar.mjs
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const TEMP_PREFIX = 'hwc-e2e-';
 const DRIVERS: Record<DriverId, AgentDriver> = { opencode: opencodeDriver, codex: codexDriver };
-const ALL_CASES: E2eCase[] = [
-  ...cliCases,
-  ...coreCases,
-  ...authCases,
-  ...voucherCases,
-  ...sandboxCases,
-  ...wsSandboxCases,
-  ...openMcpCases,
-  ...obsCases,
-  ...discoveryCases,
-  ...updateCases,
-];
 
 function packageJson(): { version: string; kooCliVersion: string } {
   return JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { version: string; kooCliVersion: string };
@@ -353,6 +336,7 @@ async function runCase(
     ws: [],
     files: {},
     finalText: null,
+    exitCode: null,
   };
   const maxAttempts = Math.max(1, caseDef.budget.attempts);
 
@@ -468,6 +452,7 @@ async function runCase(
           : [],
         files: collectFiles(caseDef, home),
         finalText: run.finalText,
+        exitCode: run.exitCode,
       };
       const verdict = evaluateCase(caseDef, recordings);
       lastVerdict = verdict;
@@ -970,6 +955,7 @@ async function main(): Promise<void> {
             ws: [],
             files: {},
             finalText: null,
+            exitCode: null,
           },
           report: {
             attempts: [
@@ -1019,7 +1005,17 @@ async function main(): Promise<void> {
         continue;
       }
       consecutiveRunnerErrors = 0;
-      out(`  FAIL  ${caseDef.id}${outcome.verdict.liveness ? '' : ' (liveness: no boundary activity recorded)'}`);
+      // Mode-aware liveness text: boundary cases died with no boundary
+      // activity; disclosure cases (whose expected outcome IS zero
+      // boundary activity) died short of the handshake or the model turn
+      // (non-zero exit) — the same suffix for both would send triage to
+      // the wrong channel.
+      const livenessSuffix = outcome.verdict.liveness
+        ? ''
+        : caseDef.liveness === 'disclosure'
+          ? ' (liveness: no handshake disclosures or the agent exited non-zero)'
+          : ' (liveness: no boundary activity recorded)';
+      out(`  FAIL  ${caseDef.id}${livenessSuffix}`);
       for (const v of outcome.verdict.expectations) {
         // The console evidence rides the CI job log (the workflow tees
         // runner stdout), so it scrubs like the report artifact.
