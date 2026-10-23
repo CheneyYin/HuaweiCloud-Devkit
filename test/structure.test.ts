@@ -632,7 +632,10 @@ test('the #935/#971 ECS+iac field knowledge keeps its live-verified command form
   // it (missing required params, v2-era flag names, wrong operation names).
   // Main still carries the broken forms, so a future sync copy pass is the
   // concrete regression vector; these pins keep the corrected doctrine in.
-  const iac = readFileSync(join(pluginRoot, 'src', 'packs', 'huaweicloud-cli', 'skills', 'huawei-iac', 'SKILL.md'), 'utf8');
+  const iac = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'huaweicloud-cli', 'skills', 'huawei-iac', 'SKILL.md'),
+    'utf8',
+  );
   const ecsCreate = readFileSync(
     join(pluginRoot, 'src', 'packs', 'huaweicloud-cli', 'skills', 'huawei-ecs', 'references', 'create-instance.md'),
     'utf8',
@@ -1689,13 +1692,23 @@ test('devbridge 0.2.x flow: auth capability probe, version detection, in-place u
   assert.match(sandbox, /Never expose tunnel details/);
 
   // The #935 sandbox traps (ported from main 1.1.10): 0.2.x has no
-  // --huawei flag (docs ran ahead of the binary — teach the direct
-  // --access-key form); MCP-injected STS credentials are obsutil-encrypted
+  // --huaweicloud flag (docs ran ahead of the binary — teach the direct
+  // --access-key form); platform-side STS credentials are obsutil-encrypted
   // (devbridge reads ciphertext → APIGW.0301); sandboxes have no systemd.
   assert.match(sandbox, /does NOT exist in sandbox devbridge 0\.2\.x binaries/);
   assert.match(sandbox, /obsutil 加密态存储/);
   assert.match(sandbox, /沙箱无 systemd/);
   assert.match(sandbox, /nginx -t` 验证 \+ `nginx -s reload` 热加载/);
+
+  // The paired implementation pin: the SKILL's deploy_nginx claim (配置写入
+  // 后自动回验存在性与 nginx -t) is only true because session-manager.ts
+  // implements the A1 verify block — docs-ahead-of-code (the failure this
+  // guard's sibling prose denounces) fails here.
+  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
+  assert.match(sessionManager, /DB_NGINX_CONFIG_MISSING=1/);
+  assert.match(sessionManager, /DB_NGINX_T=PASS/);
+  assert.match(sessionManager, /resolveNginxConfigPath/);
+  assert.match(sessionManager, /fix_and_retry/);
 
   // Auth is a verified three-tier waterfall (keyring → AK/SK → api-key file);
   // the preferred path is the expose_tunnel tool, the manual script is the

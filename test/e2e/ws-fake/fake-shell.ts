@@ -199,12 +199,20 @@ const INTENT_TABLE: IntentRow[] = [
     },
   },
   {
-    // The resolve-script family (multi-line blobs): upload_project's
-    // permission fixup opens with REAL_PATH=, deployNginx's config-write
-    // blob opens with REAL_PROJECT= — both are readlink resolvers.
+    // upload_project's permission fixup opens with REAL_PATH= — a readlink
+    // resolver, no output expected.
     intent: 'resolve-real-path',
-    pattern: /^REAL_(PATH|PROJECT)=\$\(readlink .*$/,
+    pattern: /^REAL_PATH=\$\(readlink .*$/,
     run: () => ({ stdout: '' }),
+  },
+  {
+    // deployNginx's config-write blob (resolve script + tee heredoc + embedded
+    // reload + chmod fixups + the A1 (#935) verify block, one exec) opens with
+    // REAL_PROJECT=. The verify block's success markers must be synthesized —
+    // deployNginx's verdict reads them (DB_NGINX_T=PASS, no CONFIG_MISSING).
+    intent: 'deploy-nginx-config-write',
+    pattern: /^REAL_PROJECT=\$\(readlink .*$/,
+    run: () => ({ stdout: 'DB_NGINX_T=PASS\n' }),
   },
   {
     // Agent-initiated verification (`ls /workspace/myproject` after an

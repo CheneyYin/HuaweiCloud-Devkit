@@ -12,6 +12,9 @@ import {
   resolveProxyNodePort,
   buildExposeRemediation,
   TUNNEL_URL_PATTERN,
+  resolveNginxConfigPath,
+  parseDeployNginxVerifyOutput,
+  evaluateDeployNginxVerify,
   _setSessionConnectorForTests,
   execWithSession,
   closeAllSessions,
@@ -180,4 +183,93 @@ test('resolveProxyNodePort re-probes past targetPort + 1 when it is occupied', a
   const used = new Set([81, 82]);
   const port = await resolveProxyNodePort(undefined, 80, async (p) => used.has(p));
   assert.equal(port, 83);
+});
+
+// ---------------------------------------------------------------------------
+// A1 (#935): deploy_nginx configName basename sanitation + write verification
+// (ported from main's 1.1.10 issue-935 battery; the doc claim in the sandbox
+// skill — 配置写入后自动回验存在性与 nginx -t — is backed by these paths).
+// ---------------------------------------------------------------------------
+
+test('resolveNginxConfigPath strips path separators from configName (#935 A1)', () => {
+  // Regression input from report 3 problem 2: a path-shaped configName used to
+  // produce `/etc/nginx/conf.d//root/hc-activity.conf` (broken path, tunnel 502).
+  const path = resolveNginxConfigPath('/root/xxx.conf', 'myapp');
+  assert.equal(path, '/etc/nginx/conf.d/xxx.conf');
+  assert.ok(!path.includes('//'), `config path must not contain "//": ${path}`);
+});
+
+test('resolveNginxConfigPath takes the basename of nested relative paths (#935 A1)', () => {
+  assert.equal(resolveNginxConfigPath('./x/y.conf', 'myapp'), '/etc/nginx/conf.d/y.conf');
+  assert.equal(resolveNginxConfigPath('dir/sub/site.conf', 'myapp'), '/etc/nginx/conf.d/site.conf');
+});
+
+test('resolveNginxConfigPath strips Windows-style separators too (#935 A1)', () => {
+  assert.equal(resolveNginxConfigPath('C:\\root\\a.conf', 'myapp'), '/etc/nginx/conf.d/a.conf');
+});
+
+test('resolveNginxConfigPath keeps pure-filename behavior unchanged (#935 A1 constraint)', () => {
+  assert.equal(resolveNginxConfigPath('webapp', 'myapp'), '/etc/nginx/conf.d/webapp.conf');
+  assert.equal(resolveNginxConfigPath('webapp.conf', 'myapp'), '/etc/nginx/conf.d/webapp.conf');
+  // Empty configName falls back to the project name (previous behavior).
+  assert.equal(resolveNginxConfigPath('', 'myapp'), '/etc/nginx/conf.d/myapp.conf');
+});
+
+test('parseDeployNginxVerifyOutput detects a missing config file (tee write failed) (#935 A1)', () => {
+  const stdout = ['some deploy output', 'DB_NGINX_CONFIG_MISSING=1'].join('\n');
+  const verify = parseDeployNginxVerifyOutput(stdout);
+  assert.equal(verify.configMissing, true);
+});
+
+test('parseDeployNginxVerifyOutput captures a failing nginx -t (#935 A1)', () => {
+  const stdout = [
+    'deploy output',
+    'DB_NGINX_T=FAIL',
+    'DB_NGINX_T_OUTPUT: nginx: [emerg] unknown directive "foo" in /etc/nginx/conf.d/x.conf:1',
+    'DB_NGINX_T_OUTPUT: nginx: configuration file /etc/nginx/nginx.conf test failed',
+  ].join('\n');
+  const verify = parseDeployNginxVerifyOutput(stdout);
+  assert.equal(verify.configMissing, false);
+  assert.equal(verify.nginxTest, 'FAIL');
+  assert.match(verify.nginxTestOutput, /unknown directive/);
+});
+
+test('parseDeployNginxVerifyOutput reports PASS for a clean nginx -t (#935 A1)', () => {
+  const verify = parseDeployNginxVerifyOutput('DB_NGINX_T=PASS\n');
+  assert.equal(verify.configMissing, false);
+  assert.equal(verify.nginxTest, 'PASS');
+});
+
+test('evaluateDeployNginxVerify returns ok:false with explicit error on tee write failure (#935 A1)', () => {
+  const result = { exitCode: 0 };
+  const verify = parseDeployNginxVerifyOutput('DB_NGINX_CONFIG_MISSING=1\n');
+  const verdict = evaluateDeployNginxVerify(result, verify, '/etc/nginx/conf.d/xxx.conf');
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.error ?? '', /tee write failed/);
+  assert.match(verdict.error ?? '', /\/etc\/nginx\/conf\.d\/xxx\.conf/);
+});
+
+test('evaluateDeployNginxVerify returns ok:false with explicit error on nginx -t failure (#935 A1)', () => {
+  const result = { exitCode: 0 };
+  const verify = parseDeployNginxVerifyOutput('DB_NGINX_T=FAIL\nDB_NGINX_T_OUTPUT: nginx: [emerg] bad config\n');
+  const verdict = evaluateDeployNginxVerify(result, verify, '/etc/nginx/conf.d/xxx.conf');
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.error ?? '', /nginx -t did not pass/);
+  assert.match(verdict.error ?? '', /bad config/);
+});
+
+test('evaluateDeployNginxVerify returns ok:false on non-zero deploy exit (#935 A1)', () => {
+  const verdict = evaluateDeployNginxVerify(
+    { exitCode: 1 },
+    parseDeployNginxVerifyOutput(''),
+    '/etc/nginx/conf.d/x.conf',
+  );
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.error ?? '', /exited with code 1/);
+});
+
+test('evaluateDeployNginxVerify returns ok:true for a verified write (#935 A1)', () => {
+  const result = { exitCode: 0 };
+  const verify = parseDeployNginxVerifyOutput('DB_NGINX_T=PASS\n');
+  assert.equal(evaluateDeployNginxVerify(result, verify, '/etc/nginx/conf.d/x.conf').ok, true);
 });

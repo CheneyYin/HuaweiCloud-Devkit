@@ -295,7 +295,7 @@ fi
 Authentication tries three credential sources in order, each verified with a real login + `auth status` before use; a failure falls through to the next tier:
 
 - **Tier 1 — keyring API Key** (preferred): recent sandbox images (hd-space-ai-shell line) get `HW_DEVBRIDGE_API_KEY` auto-injected by the platform into the sandbox keyring — **zero user action, long-lived key**. Read it via `hwcloud keyring get HW_DEVBRIDGE_API_KEY 2>&1` (⚠ the value goes to **stderr** — `2>&1` is mandatory or you silently capture an empty string) and accept only values starting with `devbridge_` (`(not found)` and error text are rejected). If the first read fails, a light revive (restart the D-Bus session bus at `unix:path=/run/dbus-session`, replace a locked keyring daemon with `printf '\n' | gnome-keyring-daemon --unlock`) retries once — no package installs.
-- **Tier 2 — AK/SK** (image builds, legacy sandboxes): image builds keep `--access-key/--secret-key`. STS credentials **must** include `--security-token "$HW_SECURITY_TOKEN"` or the gateway rejects the request with 401 `APIGW.0301`. **The `--huaweicloud` SSO login flag does NOT exist in sandbox devbridge 0.2.x binaries (e.g. 0.2.2)** — 文档超前于二进制：不要尝试 `--huaweicloud`，直接使用 `devbridge auth login --access-key/--secret-key`（上方脚本以 `auth login --help` 探测为准）。0.1.x binaries additionally advertised `--huaweicloud` (use it only when their help advertises it).
+- **Tier 2 — AK/SK** (image builds, legacy sandboxes): image builds keep `--access-key/--secret-key`. STS credentials **must** include `--security-token "$HW_SECURITY_TOKEN"` or the gateway rejects the request with 401 `APIGW.0301`. **The `--huaweicloud` SSO login flag does NOT exist in sandbox devbridge 0.2.x binaries (e.g. 0.2.2)** — 文档超前于二进制：不要尝试 `--huaweicloud`，直接使用 `devbridge auth login --access-key/--secret-key`（以下方手动等价脚本以 `auth login --help` 探测为准；0.1.x 的 `--huaweicloud` 条件分支仅 `huaweicloud_sandbox_expose_tunnel` 工具内置的瀑布脚本实现，手动回退一律用直连 `--access-key` 形式）。0.1.x binaries additionally advertised `--huaweicloud` (use it only when their help advertises it).
 - **Tier 3 — `/tmp/hw_api_key`** (release builds, user-provided one-time): the file is written by `huaweicloud_sandbox_credentials` from the local `HW_API_KEY` env (preferred) or the `api_key` param.
 
 `huaweicloud_sandbox_expose_tunnel` runs this waterfall automatically and reports the winning mode (`API_KEY_KEYRING` / `AKSK_SUPPORTED` / `API_KEY_FILE`) or `NO_CREDENTIAL` with a non-sensitive per-tier `attempts` diagnostic. Manual equivalent:
@@ -327,8 +327,8 @@ devbridge auth status   # separate step: a status failure must not mask the logi
 
 **沙箱凭证与 devbridge 版本差异陷阱（实测 #935 坑2/坑3）**：
 
-- 沙箱内 devbridge 0.2.2 无技能文档所述 `--huaweicloud` 登录标志（文档超前于二进制）—— 应直接使用 `devbridge auth login --access-key/--secret-key`（`auth login --help` 探测到 `--access-key` 支持时走该分支，见上方手动等价脚本）。
-- 沙箱内 MCP 注入的 STS 凭证为 obsutil 加密态存储：devbridge 读到密文凭证会报 `APIGW.0301`。需先上传本地 DevKit 明文凭证库（AK 20 位 / SK 40 位，通过 `huaweicloud_sandbox_credentials` 注入），再创建隧道。
+- 沙箱内 devbridge 0.2.2 无旧版技能文档所述 `--huaweicloud` 登录标志（文档超前于二进制）—— 应直接使用 `devbridge auth login --access-key/--secret-key`（`auth login --help` 探测到 `--access-key` 支持时走该分支，见上方手动等价脚本）。
+- 沙箱**平台侧**（hdkitservice）注入的 STS 凭证为 obsutil 加密态存储：devbridge 读到密文凭证会报 `APIGW.0301`。这与 DevKit 自己经 `huaweicloud_sandbox_credentials` 写入 `/tmp/hw_creds.sh` 的**明文**凭证是两条通道（该工具一次调用同时刷新两者）；devbridge 瀑布只读明文通道。遇到密文态报错时，重跑 `huaweicloud_sandbox_credentials`（或传 `enable_sts: false` 跳过平台侧 STS 注入）后再创建隧道。
 
 1. **Why (one sentence)**: "沙箱的地址生成服务发布版构建已移除 AK/SK 登录，仅支持 API Key（镜像内置构建仍支持 AK/SK，Agent 已自动探测）。API Key 按账号管理，创建一次长期可用、所有沙箱通用。"
 2. **Where (exact steps)**: open https://devstation.connect.huaweicloud.com/space/devbridge/apikey → 登录控制台 → 选择 DevBridge 场景 → 点击"创建"。**完整值仅在创建时展示一次，立即复制**（`devbridge_` 开头）。

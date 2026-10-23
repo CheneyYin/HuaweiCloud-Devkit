@@ -467,8 +467,9 @@ export const wsSandboxCases: E2eCase[] = [
       { kind: 'ws', intent: 'nginx-installed', times: { min: 1, max: 1 } },
       { kind: 'ws', intent: 'port-free', times: { min: 1, max: 2 } },
       // The config-write blob (resolve script + tee heredoc + embedded
-      // reload + chmod fixups, one exec) opens with REAL_PROJECT=.
-      { kind: 'ws', intent: 'resolve-real-path', times: { min: 1, max: 1 } },
+      // reload + chmod fixups + the A1 verify block, one exec) opens with
+      // REAL_PROJECT= — its own intent since the A1 (#935) split.
+      { kind: 'ws', intent: 'deploy-nginx-config-write', times: { min: 1, max: 1 } },
       { kind: 'ws', intent: 'devbridge-active', times: { min: 1, max: 1 } },
     ],
     softExpect: [{ kind: 'agentSays', text: { any: ['nginx', '8080', '配置'] } }],

@@ -156,11 +156,14 @@ interface DeployNginxOptions {
 
 interface DeployNginxResult {
   ok: boolean;
+  error?: string;
   nginxType: string;
   port: number;
   nodePort: number | undefined;
   outputPath: string;
   projectPath: string;
+  configPath: string;
+  verification?: { configPath: string; nginxTest: string };
   exitCode: number;
   stdout: string;
   nextStep: string;
@@ -967,6 +970,69 @@ export async function uploadProjectWithSession(
   };
 }
 
+// A1 (#935): normalize configName to a bare filename — a path-shaped value
+// (e.g. a local path echoed back by a caller) must never splice into a broken
+// target like `/etc/nginx/conf.d//root/hc-activity.conf` (nginx never serves
+// it, the tunnel answers 502). Only the basename is kept and the `.conf`
+// suffix stripped before the path is rebuilt; a pure filename (no separators)
+// keeps the previous behavior unchanged.
+export function resolveNginxConfigPath(configName: string | undefined, project: string): string {
+  const raw = String(configName || project || '');
+  const base = raw.split(/[\\/]/).filter(Boolean).pop() || '';
+  const name = base.replace(/\.conf$/i, '') || 'default';
+  return `/etc/nginx/conf.d/${name}.conf`;
+}
+
+export interface ParsedDeployNginxVerify {
+  configMissing: boolean;
+  nginxTest: string;
+  nginxTestOutput: string;
+}
+
+// A1 (#935): parse the write-verification block appended to the deploy_nginx
+// script. The old flow returned ok:true whenever the deploy script exited 0,
+// even when the tee write silently failed — the config file never existed and
+// the tunnel answered 502. The verification block emits explicit markers:
+//   DB_NGINX_CONFIG_MISSING=1  — the target config file does not exist
+//   DB_NGINX_T=PASS|FAIL       — nginx -t verdict, with failure output echoed
+//                                as `DB_NGINX_T_OUTPUT: ...` lines
+export function parseDeployNginxVerifyOutput(stdout: string | undefined): ParsedDeployNginxVerify {
+  const text = String(stdout || '');
+  const configMissing = /DB_NGINX_CONFIG_MISSING=1/.test(text);
+  const nginxTest = text.match(/^DB_NGINX_T=(\w+)$/m)?.[1] ?? '';
+  const nginxTestOutput = (text.match(/^DB_NGINX_T_OUTPUT: .*$/gm) ?? [])
+    .map((line) => line.replace(/^DB_NGINX_T_OUTPUT: /, ''))
+    .join('\n');
+  return { configMissing, nginxTest, nginxTestOutput };
+}
+
+export interface DeployNginxVerdict {
+  ok: boolean;
+  error?: string;
+}
+
+// A1 (#935): the deploy verdict. A deploy script exit of 0 alone is NOT proof
+// of success — the tee write can fail silently (broken pipe) and nginx -t can
+// reject the config. Returns ok:false with an explicit, actionable error for
+// any verification failure; a pure function so the verdict is unit-testable.
+export function evaluateDeployNginxVerify(
+  result: { exitCode: number },
+  verify: ParsedDeployNginxVerify,
+  configPath: string,
+): DeployNginxVerdict {
+  const writeVerified = result.exitCode === 0 && !verify.configMissing && verify.nginxTest === 'PASS';
+  if (writeVerified) return { ok: true };
+  const problems: string[] = [];
+  if (result.exitCode !== 0) problems.push(`deploy script exited with code ${result.exitCode}`);
+  if (verify.configMissing) problems.push(`nginx config file ${configPath} was not created (tee write failed)`);
+  if (verify.nginxTest !== 'PASS')
+    problems.push(`nginx -t did not pass${verify.nginxTestOutput ? ` — ${verify.nginxTestOutput}` : ''}`);
+  return {
+    ok: false,
+    error: `sandbox deploy nginx: configuration write verification failed — ${problems.join('; ')}.`,
+  };
+}
+
 export async function deployNginx(
   workspaceId: string,
   { nginxType, port, project, outputDir, nodePort, publicPort, configName }: DeployNginxOptions,
@@ -1103,10 +1169,14 @@ fi`;
     throw new Error(`sandbox deploy nginx: unknown nginxType "${nginxType}". Must be one of: spa, proxy, static`);
   }
 
+  // A1 (#935): configName is normalized to a bare filename so a path-shaped
+  // value can never produce `/etc/nginx/conf.d//root/xxx.conf` again.
+  const configPath = resolveNginxConfigPath(configName, project);
+
   const cmd = [
     resolveScript,
     `sudo mkdir -p /etc/nginx/conf.d`,
-    `sudo tee /etc/nginx/conf.d/${configName || project}.conf > /dev/null << 'NGINX_EOF'`,
+    `sudo tee ${configPath} > /dev/null << 'NGINX_EOF'`,
     config,
     `NGINX_EOF`,
     `# Resolve symlinks for chmod (chmod does not follow symlinks on Linux)`,
@@ -1115,6 +1185,11 @@ fi`;
     `find "$REAL_PROJECT" -type f -path "*/node_modules/.bin/*" -exec chmod +x {} \\; 2>/dev/null || true`,
     `if pgrep -x nginx > /dev/null 2>&1; then sudo killall -9 nginx 2>/dev/null; sleep 1; fi
     sudo nginx`,
+    `# A1 (#935): verify the config write took effect before reporting success`,
+    `NGINX_CONFIG_PATH=${configPath}`,
+    `if [ ! -f "$NGINX_CONFIG_PATH" ]; then echo "DB_NGINX_CONFIG_MISSING=1"; fi`,
+    `NGINX_T_OUTPUT=$(sudo nginx -t 2>&1 || true)`,
+    `if echo "$NGINX_T_OUTPUT" | grep -Eq "syntax is ok|test is successful"; then echo "DB_NGINX_T=PASS"; else echo "DB_NGINX_T=FAIL"; echo "$NGINX_T_OUTPUT" | sed "s/^/DB_NGINX_T_OUTPUT: /"; fi`,
   ].join('\n');
 
   const result = await execOneShot(workspaceId, cmd, username, timeoutMs);
@@ -1134,26 +1209,53 @@ fi`;
     // a failed probe leaves tunnelActive false; the result then carries the incomplete-deployment warning
   }
 
+  const warning =
+    [
+      !tunnelActive
+        ? 'No active DevBridge tunnel — deployment is incomplete. Proceed to Step 7 to expose the app.'
+        : undefined,
+      formatPortConflictWarning(basePort, targetPort),
+      tunnelActive ? formatPortDriftWarning(basePort, targetPort) : undefined,
+    ]
+      .filter(Boolean)
+      .join(' | ') || undefined;
+
+  // A1 (#935): verify the config write before reporting success. A deploy
+  // script exit of 0 alone is NOT proof — the tee write can fail silently and
+  // nginx -t can reject the config. Any verification failure returns ok:false
+  // with an explicit, actionable error.
+  const verify = parseDeployNginxVerifyOutput(result.stdout);
+  const verdict = evaluateDeployNginxVerify(result, verify, configPath);
+  if (!verdict.ok) {
+    return {
+      ok: false,
+      error: verdict.error,
+      nginxType,
+      port: targetPort,
+      nodePort: effectiveNodePort || undefined,
+      outputPath,
+      projectPath,
+      configPath,
+      exitCode: result.exitCode,
+      stdout: result.stdout,
+      nextStep: 'fix_and_retry',
+      warning,
+    };
+  }
+
   return {
-    ok: result.exitCode === 0,
+    ok: true,
     nginxType,
     port: targetPort,
     nodePort: effectiveNodePort || undefined,
     outputPath,
     projectPath,
+    configPath,
+    verification: { configPath, nginxTest: verify.nginxTest },
     exitCode: result.exitCode,
     stdout: result.stdout,
     nextStep: 'expose_via_devbridge',
-    warning:
-      [
-        !tunnelActive
-          ? 'No active DevBridge tunnel — deployment is incomplete. Proceed to Step 7 to expose the app.'
-          : undefined,
-        formatPortConflictWarning(basePort, targetPort),
-        tunnelActive ? formatPortDriftWarning(basePort, targetPort) : undefined,
-      ]
-        .filter(Boolean)
-        .join(' | ') || undefined,
+    warning,
   };
 }
 
