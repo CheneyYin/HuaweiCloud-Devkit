@@ -268,6 +268,104 @@ test('huaweicloud_explain_error maps APIGW.0301 to credential/project_id guidanc
   assert.match(text, /project_id/);
 });
 
+// A3/E2E-B1 (#935): the new ECS order-failure mappings, the Kps service
+// entry, and the errorCode-only routing (real MCP calls pass only errorCode —
+// the service key is derived from the dotted-code prefix).
+test('huaweicloud_explain_error maps Ecs.0019 to on-sale flavor re-listing (#935 A3)', async () => {
+  const result = await callTool('huaweicloud_explain_error', {
+    service: 'ECS',
+    errorCode: 'Ecs.0019',
+    message: 'the flavor does not exist',
+  });
+  const text = JSON.stringify(result);
+  assert.match(text, /Ecs\.0019/);
+  assert.match(text, /ListFlavors/, 'must direct at hcloud ECS ListFlavors');
+  assert.match(text, /replacement|替代/, 'must point at switching to a replacement flavor');
+  assert.match(text, /flavors\.md/, 'must reference the flavors.md status field rules');
+});
+
+test('huaweicloud_explain_error maps Ecs.0319 to AZ-capacity guidance (#935 A3)', async () => {
+  const result = await callTool('huaweicloud_explain_error', {
+    service: 'ECS',
+    errorCode: 'Ecs.0319',
+    message: 'insufficient capacity',
+  });
+  const text = JSON.stringify(result);
+  assert.match(text, /Ecs\.0319/);
+  assert.match(text, /availability zone|AZ/i, 'must suggest changing the AZ');
+  assert.match(text, /replacement|替代|ListFlavors/, 'must suggest switching the flavor and retrying');
+});
+
+test('huaweicloud_explain_error maps Ecs.0044 to volume-type sellout guidance (#971 A)', async () => {
+  const result = await callTool('huaweicloud_explain_error', {
+    service: 'ECS',
+    errorCode: 'Ecs.0044',
+    message: 'the volumeType [SATA] is sellout in az[cn-north-4a]',
+  });
+  const text = JSON.stringify(result);
+  assert.match(text, /Ecs\.0044/);
+  assert.match(text, /volume type|volumetype/i, 'must name the volume-type root cause');
+  assert.match(text, /root_volume\.volumetype/, 'must direct at the exact parameter to change');
+  assert.match(text, /Ecs\.0319/, 'must distinguish from the flavor-capacity error Ecs.0319');
+  assert.match(text, /NovaListAvailabilityZones/, 'must offer the AZ-switch alternative');
+});
+
+test('huaweicloud_explain_error maps Ecs.0067 to cash-balance/recharge guidance (#935 A3)', async () => {
+  const result = await callTool('huaweicloud_explain_error', {
+    service: 'ECS',
+    errorCode: 'Ecs.0067',
+    message: 'insufficient account balance',
+  });
+  const text = JSON.stringify(result);
+  assert.match(text, /Ecs\.0067/);
+  assert.match(text, /ShowCustomerAccountBalances/, 'must direct at the BSS cash balance query');
+  assert.match(text, /top up|充值/i, 'must instruct topping up');
+  assert.match(text, /代金券|voucher/i, 'must explain vouchers do not count in order risk control');
+});
+
+test('huaweicloud_explain_error adds a Kps service entry mapping KPS.9004 (#935 A3)', async () => {
+  const result = await callTool('huaweicloud_explain_error', {
+    service: 'KPS',
+    errorCode: 'KPS.9004',
+    message: 'keypair creation restricted',
+  });
+  const text = JSON.stringify(result);
+  assert.match(text, /KPS\.9004/);
+  assert.match(text, /ShowCustomerAccountBalances/, 'must direct at the BSS cash balance query');
+  assert.match(text, /arrears|欠费|historical/i, 'must mention settling historical arrears');
+  // Lowercase service alias resolves to the same mapping.
+  const lower = await callTool('huaweicloud_explain_error', {
+    service: 'kps',
+    errorCode: 'KPS.9004',
+    message: 'keypair creation restricted',
+  });
+  assert.match(JSON.stringify(lower), /KPS\.9004/);
+});
+
+test('explain_error with errorCode only (no service) hits Ecs.0019 mapping (#935 E2E-B1)', async () => {
+  // MCP probe evidence: errorCode-only call returned "No known error-code
+  // pattern matched", service: unknown — the service-keyed table was never hit.
+  const result = await callTool('huaweicloud_explain_error', { errorCode: 'Ecs.0019' });
+  const text = JSON.stringify(result);
+  assert.match(text, /Ecs\.0019/);
+  assert.match(text, /taken offline/, 'must hit the Ecs.0019 flavor-offline mapping');
+  assert.match(text, /ListFlavors/, 'must direct at hcloud ECS ListFlavors');
+});
+
+test('explain_error with errorCode only (no service) hits Ecs.0319 mapping (#935 E2E-B1)', async () => {
+  const result = await callTool('huaweicloud_explain_error', { errorCode: 'Ecs.0319' });
+  const text = JSON.stringify(result);
+  assert.match(text, /Ecs\.0319/);
+  assert.match(text, /availability zone/i, 'must hit the Ecs.0319 AZ-capacity mapping');
+});
+
+test('explain_error with errorCode only (no service) hits Ecs.0067 mapping (#935 E2E-B1)', async () => {
+  const result = await callTool('huaweicloud_explain_error', { errorCode: 'Ecs.0067' });
+  const text = JSON.stringify(result);
+  assert.match(text, /Ecs\.0067/);
+  assert.match(text, /ShowCustomerAccountBalances/, 'must hit the cash-balance mapping without a service arg');
+});
+
 test('huaweicloud_explain_error fallback teaches context capture and error-center lookup (#648)', async () => {
   // Regression input from issue #648 EXP-E08: ECS Ecs.0103 with minimal context
   // fell into the generic fallback and produced only a "collect info" line.
@@ -454,11 +552,7 @@ test('retrieve_skill marks truncated references and leaves short ones whole', as
   assert.equal(result.ok, true, result.error);
   const long = result.references.find((ref) => ref.filename === 'create-instance.md')!;
   assert.ok(long.content.length > 4000, 'create-instance.md exceeds the cap after the 1.1.10 port');
-  assert.match(
-    long.content,
-    /\[truncated at 4000 chars[^\]]*\]/,
-    'cut references must carry the truncation marker',
-  );
+  assert.match(long.content, /\[truncated at 4000 chars[^\]]*\]/, 'cut references must carry the truncation marker');
   const short = result.references.find((ref) => ref.filename === 'evs.md')!;
   assert.ok(!short.content.includes('[truncated'), 'short references must not carry the marker');
 });
