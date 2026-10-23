@@ -970,6 +970,96 @@ test('telemetry hooks never classify skill-tool loads', () => {
   }
 });
 
+// The five telemetry hooks are deliberately self-contained single files —
+// each agent dir ships exactly one hook file, so a shared import has no
+// deployment path and the classification surface lives five times. What
+// must not drift is the shared semantics: the read/write verb lists, the
+// hcloud capture bounds per documented family, the telemetry opt-out gate,
+// and the 3-token value trim. This guard pins those in lockstep: a verb
+// added to one hook and not the others fails here instead of silently
+// misclassifying writes on one platform.
+test('telemetry hooks keep the shared classification surface in lockstep', () => {
+  const integrations = join(root, 'integrations');
+  const readHook = (...rel: string[]): string => readFileSync(join(integrations, ...rel), 'utf8');
+  const jsHooks: Array<[string, string]> = [
+    ['opencode', readHook('opencode', 'hooks', 'skill-tracker.js')],
+    ['dsh', readHook('dsh', 'hook-plugin.mjs')],
+    ['atomcode', readHook('atomcode', 'hooks', 'huaweicloud-telemetry.js')],
+  ];
+  const pyHooks: Array<[string, string]> = [
+    ['workbuddy', readHook('workbuddy', 'hooks', 'telemetry-tracker.py')],
+    ['hermes', readHook('hermes', 'hooks', 'huaweicloud-telemetry.py')],
+  ];
+  const allHooks = [...jsHooks, ...pyHooks];
+
+  // The READ/WRITE verb alternation, extracted across the three source
+  // forms (JS regex literal, JS new RegExp concat, Python re.compile
+  // concat) and normalized to the bare verb list.
+  const verbList = (hookName: string, source: string, kind: 'READ_VERBS' | 'WRITE_VERBS'): string[] => {
+    const literal = source.match(new RegExp(`${kind}\\s*=\\s*/(.*)/i`));
+    let pattern = literal?.[1];
+    if (pattern === undefined) {
+      const decl = source.match(
+        new RegExp(`${kind} = (?:new RegExp\\(|re\\.compile\\()([\\s\\S]*?)(?:,\\s*'i'|, re\\.IGNORECASE)`),
+      );
+      assert.ok(decl, `${hookName}: ${kind} declaration not found`);
+      pattern = (decl[1]!.match(/'([^']*)'/g) ?? []).map((s) => s.slice(1, -1)).join('');
+    }
+    assert.ok(pattern, `${hookName}: ${kind} pattern not extracted`);
+    return pattern
+      .replace(/\\+b/g, '')
+      .replace(/[()]/g, '')
+      .replace(/\\+w\*/g, '')
+      .split('|')
+      .map((v) => v.trim())
+      .filter((v) => v.length > 0);
+  };
+
+  const referenceRead = verbList('opencode', jsHooks[0]![1], 'READ_VERBS');
+  const referenceWrite = verbList('opencode', jsHooks[0]![1], 'WRITE_VERBS');
+  assert.ok(referenceRead.length >= 5, 'read verb list extracted');
+  assert.ok(referenceWrite.length >= 30, 'write verb list extracted');
+  for (const [hookName, source] of allHooks) {
+    assert.deepEqual(
+      verbList(hookName, source, 'READ_VERBS'),
+      referenceRead,
+      `${hookName} READ_VERBS drifted from the shared list`,
+    );
+    assert.deepEqual(
+      verbList(hookName, source, 'WRITE_VERBS'),
+      referenceWrite,
+      `${hookName} WRITE_VERBS drifted from the shared list`,
+    );
+    assert.match(
+      source,
+      /HUAWEICLOUD_DEVKIT_TELEMETRY[^\n]{0,40}(?:===?|==) ?['"]off['"]/,
+      `${hookName} must gate the local spool on the telemetry opt-out`,
+    );
+  }
+
+  // The two documented capture families: the bounded 4-token capture
+  // (opencode + dsh) and the unbounded tail with flag stripping
+  // (atomcode + the Python hooks).
+  const bounded = (source: string): string => source.match(/HCLOUD_RE = (\/.*\/i)/)?.[1] ?? '';
+  assert.ok(bounded(jsHooks[0]![1]).includes('{0,3}'), 'opencode capture is bounded');
+  assert.equal(bounded(jsHooks[1]![1]), bounded(jsHooks[0]![1]), 'dsh and opencode capture bounds drifted');
+  for (const [hookName, source] of [...jsHooks.slice(2), ...pyHooks]) {
+    assert.match(source, /\(\.\+\)/, `${hookName} unbounded capture`);
+    assert.doesNotMatch(source, /\{0,3\}/, `${hookName} belongs to the unbounded-capture family`);
+  }
+
+  // The 3-token value trim: every hook's spool path bounds cli:* values to
+  // the Service+Operation prefix.
+  for (const [hookName, source] of allHooks) {
+    const jsTrim = source.match(/value\.split\([^)]*\)\.slice\(0, 3\)/);
+    const pyTrim = source.match(/value\.split\(\)\[:(?:3|\d+)\]/);
+    assert.ok(
+      jsTrim || pyTrim,
+      `${hookName} must trim cli:* values to the command prefix before spooling`,
+    );
+  }
+});
+
 test('proxy nginx template listens on targetPort, not the stale listenPort (#738)', () => {
   const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
 
