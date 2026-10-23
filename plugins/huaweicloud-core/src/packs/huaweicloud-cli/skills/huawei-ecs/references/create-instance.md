@@ -102,8 +102,9 @@ export PATH=/usr/local/lib/nodejs/node-${NODE_VERSION}-linux-${ARCH}/bin:$PATH
 ln -sf /usr/local/lib/nodejs/node-${NODE_VERSION}-linux-${ARCH}/bin/{node,npm,npx} /usr/local/bin/
 # npm registry 指向华为云
 npm config set registry https://repo.huaweicloud.com/repository/npm/
-# DNS 兜底（子网 dnsList 缺失时自救）
-grep -q 100.125.0.20 /etc/resolv.conf || echo "nameserver 100.125.0.20" >> /etc/resolv.conf
+# DNS 兜底（子网 dnsList 缺失时自救；cn-north-4 的内网 DNS —— 其他区域
+# 见上方 DNS 前置修复段落的区域差异说明，勿跨区域套用）
+grep -q 100.125.1.250 /etc/resolv.conf || echo "nameserver 100.125.1.250" >> /etc/resolv.conf || true
 ```
 
 **可观测性模板**（实测教训：cloud-init 失败后无感知、固定 sleep 空等 ≈8 分钟）：
@@ -244,14 +245,16 @@ hcloud ECS ListServersDetails --cli-region=<region> --server_id=<instance-id>
 
 curl http://<eip-address>
 # Expected: HTTP 200 (if port 80 open and web server installed)
+```
 
 ## 9. Delete instance (with cleanup)
+
 hcloud ECS DeleteServers --servers.1.id=<instance-id> --delete_publicip=true --delete_volume=true
 Warning: --delete_publicip and --delete_volume default to false. Set to true to avoid orphaned charges.
 
 ## Constraints
+
 - Name: 1-64 chars, letters/digits/hyphens
 - Flavor: must be available in target region — always ListFlavors first
 - Root volume: SSD 40GB min
 - Keypair is safer than adminPass (passwords leak into shell history)
-```

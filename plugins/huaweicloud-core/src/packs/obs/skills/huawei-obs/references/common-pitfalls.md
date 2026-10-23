@@ -69,7 +69,7 @@ KooCLI OBS 没有 API 风格的 `SetBucketWebsite` 操作；7.3.12+ 提供了 ob
 
 **避坑方法**：
 
-1. **验证网页行为必须用 GET 直连**（`curl -s -D - -o /dev/null <url>` 或浏览器）——HEAD 和代理层会给出假象
+1. **验证网页行为必须用 GET 直连**（`curl -s -D - -o /dev/null <url>`（Windows 下为 `-o NUL`）或浏览器）——HEAD 和代理层会给出假象
 2. **官方解法**：绑定自定义域名接入 **CDN**，在"CDN 控制台 > 域名管理 > 高级设置 > HTTP header 配置"设置 `Content-Disposition: inline`（参见华为云 CDN 文档《如何在浏览器中在线预览 OBS 中的对象？》）
 3. 跨云对照：阿里云 OSS 同样策略（Bucket 域名访问 HTML 强制下载，绑定自定义域名即可在线预览）
 
