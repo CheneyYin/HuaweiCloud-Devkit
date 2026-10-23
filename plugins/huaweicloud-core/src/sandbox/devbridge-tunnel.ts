@@ -223,14 +223,25 @@ export function buildDevbridgeExposeScript(port: number, expiryHours: number = D
     // must not abort the script.
     `if command -v setsid > /dev/null 2>&1; then setsid nohup devbridge host -p ${port} -e ${expiryHours} > ${hostLog} 2>&1 < /dev/null & else nohup devbridge host -p ${port} -e ${expiryHours} > ${hostLog} 2>&1 < /dev/null & fi`,
     `disown 2>/dev/null || true`,
-    `sleep 12`,
+    `sleep 6`,
     `TUNNEL_URL=$(grep -oE "https://[A-Za-z0-9_-]+-${port}\\.${domainLiteral}" ${hostLog} | head -1)`,
-    // No `|| echo "000"`: curl's -w already prints 000 on transport-level failure
-    // (DNS/refused/timeout) and exits non-zero, so `|| echo` appends a second
-    // 000 to the captured output — a value no '000' sentinel check ever equals.
-    // Early curl exits leave the field '' or '000' — both are handled as
-    // unreachable.
-    `HTTP_CODE=$(curl -s -o /tmp/.db_probe_body -w "%{http_code}" --max-time 10 "$TUNNEL_URL" 2>/dev/null)`,
+    // A2 (#935): probe with retries + backoff — 502/000 before the gateway is
+    // ready is not a failure; the LAST probe decides reachability. Each probe
+    // rewrites /tmp/.db_probe_body so DB_TUNNEL_BODY reflects the final one.
+    // No `|| echo "000"`: curl's -w already prints 000 on transport-level
+    // failure (DNS/refused/timeout) and exits non-zero, so `|| echo` appends a
+    // second 000 to the captured output — a value no '000' sentinel check ever
+    // equals. Early curl exits leave the field '' or '000' — both are handled
+    // as unreachable.
+    `HTTP_CODE="000"`,
+    `if [ -n "$TUNNEL_URL" ]; then`,
+    `  for i in 1 2 3 4; do`,
+    `    HTTP_CODE=$(curl -s -o /tmp/.db_probe_body -w "%{http_code}" --max-time 10 "$TUNNEL_URL" 2>/dev/null)`,
+    `    echo "DB_PROBE_$i=$HTTP_CODE"`,
+    `    if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "304" ]; then break; fi`,
+    `    if [ "$i" != "4" ]; then sleep 5; fi`,
+    `  done`,
+    `fi`,
     `echo "DB_HOST_LOG="`,
     `tail -n 5 ${hostLog}`,
     `echo "DB_TUNNEL_URL=$TUNNEL_URL"`,
@@ -288,6 +299,35 @@ export function buildDevbridgeVerifyScript(tunnelUrl: string): string {
   ].join('\n');
 }
 
+export interface DevbridgeProbe {
+  attempt: number;
+  httpCode: string;
+}
+
+// A2 (#935): parse the probe sequence emitted by buildDevbridgeExposeScript.
+// Each probe echo is `DB_PROBE_<n>=<code>`; reachability is decided by the
+// LAST probe — intermediate 502/000 probes are gateway-not-ready noise, not
+// failures, so they must not leak into the tool's verdict.
+export function parseDevbridgeProbeSequence(stdout: unknown): { probes: DevbridgeProbe[]; finalHttpCode: string } {
+  const text = stripTerminalEscapes(stdout);
+  const probes: DevbridgeProbe[] = [];
+  for (const m of text.matchAll(/^DB_PROBE_(\d+)=(\S*)$/gm)) {
+    probes.push({ attempt: Number(m[1]), httpCode: m[2] ?? '' });
+  }
+  const finalHttpCode = probes.length > 0 ? probes[probes.length - 1]!.httpCode : '';
+  return { probes, finalHttpCode };
+}
+
+// A2 (#935): the reachability warning must come from the LAST probe's HTTP
+// status, not from a single early curl — the old single-shot check warned
+// "Tunnel reachable check returned HTTP (expected 200/304)" while the same
+// log showed DB_HTTP_CODE=200. 200/304 = no warning; anything else surfaces
+// as-is.
+export function formatTunnelReachabilityWarning(httpCode: string): string | undefined {
+  if (httpCode === '200' || httpCode === '304') return undefined;
+  return `Tunnel reachable check returned HTTP ${httpCode || '000'} (expected 200/304). The URL may not be serving yet — the final probe decides.`;
+}
+
 export interface DevbridgeExpose {
   tunnelUrl: string;
   httpCode: string;
@@ -297,6 +337,7 @@ export interface DevbridgeExpose {
   gatewayTunnelError: boolean;
   badGateway: boolean;
   migration: boolean;
+  probes: DevbridgeProbe[];
 }
 
 // Anchored `^KEY=value` field reader over stripped multi-line text — the DB_*
@@ -333,7 +374,8 @@ export function parseDevbridgeExposeOutput(stdout: unknown): DevbridgeExpose {
   const gatewayTunnelError =
     httpCode === '404' && (body === DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER || body === DEVBRIDGE_PORT_NOT_CONFIGURED_MARKER);
   const badGateway = httpCode === '502' && body === DEVBRIDGE_BAD_GATEWAY_MARKER;
-  return { tunnelUrl, httpCode, quotaError, tunnelId, expiryHours, gatewayTunnelError, badGateway, migration };
+  const { probes } = parseDevbridgeProbeSequence(text);
+  return { tunnelUrl, httpCode, quotaError, tunnelId, expiryHours, gatewayTunnelError, badGateway, migration, probes };
 }
 
 export interface DevbridgeVerify {
@@ -478,11 +520,10 @@ export async function exposeTunnel(
       warnings.push(
         'Tunnel reachable but the gateway reports "bad gateway" — the local service on the exposed port is not serving.',
       );
-    if (parsed.httpCode !== '200' && parsed.httpCode !== '304') {
-      warnings.push(
-        `Tunnel reachable check returned HTTP ${parsed.httpCode} (expected 200/304). The URL may not be serving yet.`,
-      );
-    }
+    // A2 (#935): the warning comes from the FINAL probe's HTTP status — the
+    // in-script retry loop already absorbed gateway-not-ready 502/000 noise.
+    const reachabilityWarning = formatTunnelReachabilityWarning(parsed.httpCode);
+    if (reachabilityWarning) warnings.push(reachabilityWarning);
     // v2 deviation (the Q2 ruling): a final attempt with no usable URL is a
     // failure — ok:true with a dead publicUrl misleads agents into treating
     // the deployment as complete. A migrated gateway serves its placeholder

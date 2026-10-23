@@ -12,8 +12,10 @@ import {
   buildDevbridgeVerifyScript,
   DEVBRIDGE_HOST_EXPIRY_HOURS,
   exposeTunnel,
+  formatTunnelReachabilityWarning,
   parseDevbridgeAuthOutput,
   parseDevbridgeExposeOutput,
+  parseDevbridgeProbeSequence,
   parseDevbridgeVerifyOutput,
   validateTunnelPort,
 } from '../plugins/huaweicloud-core/src/sandbox/devbridge-tunnel.ts';
@@ -209,6 +211,8 @@ test('D: parseDevbridgeExposeOutput extracts the full field set from a healthy e
     'DB_HOST_LOG=',
     'some log line',
     'Tunnel URL: https://c4rdv7bv-8081.devbridge-s2.hwtunnel.com',
+    'DB_PROBE_1=502',
+    'DB_PROBE_2=200',
     'DB_TUNNEL_URL=https://c4rdv7bv-8081.devbridge-s2.hwtunnel.com',
     'DB_HTTP_CODE=200',
     'DB_EXPIRY_HOURS=72',
@@ -224,7 +228,53 @@ test('D: parseDevbridgeExposeOutput extracts the full field set from a healthy e
     gatewayTunnelError: false,
     badGateway: false,
     migration: false,
+    probes: [
+      { attempt: 1, httpCode: '502' },
+      { attempt: 2, httpCode: '200' },
+    ],
   });
+});
+
+// A2 (#935): the in-script probe retry loop — the LAST probe decides
+// reachability; intermediate 502/000 probes are gateway-not-ready noise.
+test('parseDevbridgeProbeSequence takes the final probe as the verdict (#935 A2)', () => {
+  const { probes, finalHttpCode } = parseDevbridgeProbeSequence(
+    ['DB_PROBE_1=502', 'DB_PROBE_2=000', 'DB_PROBE_3=200', 'DB_HTTP_CODE=200'].join('\n'),
+  );
+  assert.equal(probes.length, 3);
+  assert.equal(probes[0]!.httpCode, '502');
+  assert.equal(probes[1]!.httpCode, '000');
+  assert.equal(probes[2]!.httpCode, '200');
+  // The final verdict comes from the LAST probe, not the first.
+  assert.equal(finalHttpCode, '200');
+});
+
+test('a 502/000 → 200 probe sequence produces NO reachability warning (#935 A2)', () => {
+  // Regression from report 2 problem 8: the old single-shot check warned
+  // "Tunnel reachable check returned HTTP (expected 200/304)" while the same
+  // log showed DB_HTTP_CODE=200 and a manual retry returned 200.
+  const { finalHttpCode } = parseDevbridgeProbeSequence(
+    ['DB_PROBE_1=502', 'DB_PROBE_2=000', 'DB_PROBE_3=200', 'DB_HTTP_CODE=200'].join('\n'),
+  );
+  assert.equal(formatTunnelReachabilityWarning(finalHttpCode), undefined);
+});
+
+test('a final non-200/304 probe still surfaces the reachability warning (#935 A2)', () => {
+  const warning = formatTunnelReachabilityWarning('502');
+  assert.match(warning ?? '', /HTTP 502/);
+  assert.match(warning ?? '', /expected 200\/304/);
+  assert.equal(formatTunnelReachabilityWarning('000'), formatTunnelReachabilityWarning(''));
+  assert.match(formatTunnelReachabilityWarning('') ?? '', /HTTP 000/);
+  // 304 is a success-equivalent (cached response) — no warning.
+  assert.equal(formatTunnelReachabilityWarning('304'), undefined);
+});
+
+test('the expose script carries the A2 probe retry loop with last-probe verdict (#935 A2)', () => {
+  const script = buildDevbridgeExposeScript(8080);
+  assert.match(script, /for i in 1 2 3 4; do/);
+  assert.match(script, /DB_PROBE_\$i=\$HTTP_CODE/);
+  assert.match(script, /if \[ "\$HTTP_CODE" = "200" \] \|\| \[ "\$HTTP_CODE" = "304" \]/);
+  assert.match(script, /if \[ "\$i" != "4" \]; then sleep 5; fi/);
 });
 
 test('D: parseDevbridgeExposeOutput classifies gateway-level tunnel errors by exact body + status', () => {
