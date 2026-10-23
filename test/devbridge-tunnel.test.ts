@@ -283,6 +283,10 @@ test('the expose script carries the A2 probe retry loop with last-probe verdict 
   assert.match(script, /if \[ "\$i" != "4" \]; then sleep 5; fi/);
   // The final code IS the loop variable — the "last probe decides" wiring.
   assert.match(script, /DB_HTTP_CODE=\$HTTP_CODE/);
+  // #1000: the probe curl must bypass the injected sandbox proxy — the site
+  // whose proxied 502/404 fakes motivated the whole fix (main's battery pinned
+  // it; a python replace in the U11 port silently missed this anchor).
+  assert.match(script, /curl -s --noproxy '\*' -o \/tmp\/\.db_probe_body/);
 });
 
 test('parseDevbridgeProbeSequence strips OSC/CSI noise from probe lines (#946 + #935 A2)', () => {

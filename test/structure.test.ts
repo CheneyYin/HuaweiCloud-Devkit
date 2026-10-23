@@ -1583,6 +1583,15 @@ test('devbridge host launch survives the exec session (#919/#922): setsid guard,
   assert.match(devbridgeTunnel, /`disown 2>\/dev\/null \|\| true`/);
   assert.match(devbridgeTunnel, /DEVBRIDGE_HOST_EXPIRY_HOURS = 72/);
   assert.match(devbridgeTunnel, /DB_EXPIRY_HOURS=\$\{expiryHours\}/);
+  // #1000, the agent-facing SKILL surface: the manual fallbacks' curls carry
+  // --noproxy with the MANDATORY comment, and the Proxy-trap doctrine
+  // paragraph (with the SSH-path cross-reference) teaches the why. Localhost
+  // curls are exempt — loopback bypasses the injected proxy.
+  assert.match(sandbox, /curl -s --noproxy '\*' -o \/dev\/null/);
+  assert.match(sandbox, /Proxy trap on verify commands \(#1000\)/);
+  assert.match(sandbox, /windows-ssh\.md §0\.1/);
+  assert.match(sandbox, /localhost curls are unaffected/);
+
   assert.doesNotMatch(devbridgeTunnel, /-e 8\b/);
 
   // The skill teaches the same guarded launch on every host start line.

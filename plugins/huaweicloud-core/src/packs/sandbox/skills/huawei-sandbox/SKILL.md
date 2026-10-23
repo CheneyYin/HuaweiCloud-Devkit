@@ -384,7 +384,7 @@ fi
 
 **Never return a tunnel URL without verifying it first** — a stale URL (from a killed tunnel process) will silently fail. Always curl-check before giving the URL to the developer. Note: a migrated gateway serves its placeholder page with **HTTP 200** — a bare status check is not enough when diagnosing "200 but wrong content".
 
-**Proxy trap on verify commands (#1000)**: every curl against `*.hwtunnel.com` MUST pass `--noproxy '*'` — the sandbox injects an HTTP/HTTPS proxy that does not route the tunnel domain, so a proxied verify returns 502/404 fakes while the tunnel is actually serving. If a tunnel "fails" verification, re-test with `--noproxy '*'` BEFORE checking versions/credentials/ports (same trap on the SSH path: huawei-ecs skill references/windows-ssh.md §0.1).
+**Proxy trap on verify commands (#1000)**: every curl against `*.hwtunnel.com` MUST pass `--noproxy '*'` — the sandbox injects an HTTP/HTTPS proxy that does not route the tunnel domain, so a proxied verify returns 502/404 fakes while the tunnel is actually serving. If a tunnel "fails" verification, re-test with `--noproxy '*'` BEFORE checking versions/credentials/ports (same trap on the SSH path: huawei-ecs skill references/windows-ssh.md §0.1). localhost curls are unaffected — loopback bypasses the injected proxy.
 
 **Quota recovery**: if the tunnel creation fails with `10006: quota exceeded`:
 
