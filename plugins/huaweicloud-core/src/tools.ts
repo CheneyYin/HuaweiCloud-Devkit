@@ -1302,10 +1302,14 @@ function explainError({ service = 'unknown', errorCode = '', message = '', reque
     ECS: 'Ecs',
     kps: 'Kps',
     KPS: 'Kps',
+    apic: 'APIG',
+    apigw: 'APIGW',
+    obs: 'OBS',
   };
   // #935 E2E-B1: real MCP calls pass only errorCode (e.g. Ecs.0019, KPS.9004)
   // with no service — derive the service key from the dotted-code prefix so the
-  // service-keyed mapping table is hit. Explicit service behavior is unchanged.
+  // service-keyed mapping table is hit. Behavior for an explicit real service
+  // name is unchanged; absent/empty/'unknown' service derives from the prefix.
   let resolvedService = service;
   if ((!service || svc === 'unknown') && /^[A-Za-z]+\.\w+/.test(errorCode)) {
     const prefix = errorCode.split('.')[0]!.toLowerCase();
@@ -1364,12 +1368,30 @@ function explainError({ service = 'unknown', errorCode = '', message = '', reque
         'The current IAM user has no permissions in the requested region. Go to IAM console → Users → Permissions → add the target region, or switch to a different region.',
     },
   };
-  if (hwErrorPatterns[patternKey] && hwErrorPatterns[patternKey][errorCode]) {
-    suggestions.push(hwErrorPatterns[patternKey][errorCode]);
+  const patternTable = hwErrorPatterns[patternKey];
+  if (patternTable) {
+    const exact: string | undefined = patternTable[errorCode];
+    if (exact) {
+      suggestions.push(exact);
+    } else {
+      // Case-variant transcriptions (e.g. ECS.0019 echoed from console output)
+      // derive the right service key but used to miss the case-sensitive entry —
+      // the exact-hit scan is case-insensitive on the code. Deliberate divergence
+      // from main: without it the prefix-derivation feature no-ops on any
+      // non-canonical casing.
+      const lowerCode = errorCode.toLowerCase();
+      for (const [code, tip] of Object.entries(patternTable)) {
+        if (code.toLowerCase() === lowerCode) {
+          suggestions.push(tip);
+          break;
+        }
+      }
+    }
   }
-  const svcPatterns: Record<string, string> = hwErrorPatterns[patternKey] || {};
+  const svcPatterns: Record<string, string> = patternTable || {};
+  const lowerErrorCode = errorCode.toLowerCase();
   for (const [code, tip] of Object.entries(svcPatterns)) {
-    if (errorCode && code.includes(errorCode)) {
+    if (errorCode && code.toLowerCase().includes(lowerErrorCode)) {
       if (!suggestions.includes(tip)) suggestions.push(tip);
     }
   }

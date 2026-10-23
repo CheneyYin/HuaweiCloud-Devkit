@@ -333,13 +333,14 @@ test('huaweicloud_explain_error adds a Kps service entry mapping KPS.9004 (#935 
   assert.match(text, /KPS\.9004/);
   assert.match(text, /ShowCustomerAccountBalances/, 'must direct at the BSS cash balance query');
   assert.match(text, /arrears|欠费|historical/i, 'must mention settling historical arrears');
-  // Lowercase service alias resolves to the same mapping.
+  // Lowercase service alias resolves to the same mapping — asserted on the
+  // mapping text, not the echoed errorCode (which would match even on a miss).
   const lower = await callTool('huaweicloud_explain_error', {
     service: 'kps',
     errorCode: 'KPS.9004',
     message: 'keypair creation restricted',
   });
-  assert.match(JSON.stringify(lower), /KPS\.9004/);
+  assert.match(JSON.stringify(lower), /ShowCustomerAccountBalances/);
 });
 
 test('explain_error with errorCode only (no service) hits Ecs.0019 mapping (#935 E2E-B1)', async () => {
@@ -882,4 +883,68 @@ test('serviceCatalog: slash-bearing keywords (ak/sk, ci/cd) match via the phrase
   // the shared assertSkillForIntent helper to avoid duplicating its loop.
   await assertSkillForIntent('configure AK/SK credentials', 'huawei-iam');
   await assertSkillForIntent('ci/cd pipeline for deployment', 'huawei-cloud-deployment-task-management');
+});
+
+test('explain_error with errorCode only (no service) hits KPS.9004 mapping (#935 E2E-B1)', async () => {
+  const result = await callTool('huaweicloud_explain_error', { errorCode: 'KPS.9004' });
+  const text = JSON.stringify(result);
+  assert.match(text, /KPS\.9004/);
+  assert.match(text, /ShowCustomerAccountBalances/, 'must hit the KPS.9004 restriction mapping');
+});
+
+test('explain_error with errorCode only (no service) hits existing Ecs.0707 mapping (#935 E2E-B1)', async () => {
+  const result = await callTool('huaweicloud_explain_error', { errorCode: 'Ecs.0707' });
+  const text = JSON.stringify(result);
+  assert.match(text, /Ecs\.0707/);
+  assert.match(text, /flavors\.md/, 'must hit the pre-existing Ecs.0707 mapping');
+});
+
+test('explain_error with service=unknown + dotted errorCode hits the mapping (MCP-equivalent shape) (#935 E2E-B1)', async () => {
+  const result = await callTool('huaweicloud_explain_error', { service: 'unknown', errorCode: 'Ecs.0019' });
+  const text = JSON.stringify(result);
+  assert.match(text, /Ecs\.0019/);
+  assert.match(text, /taken offline/, 'service:unknown + dotted code must derive the service key');
+});
+
+test('explain_error with explicit service=ECS keeps behavior unchanged (#935 E2E-B1 regression)', async () => {
+  const result = await callTool('huaweicloud_explain_error', {
+    service: 'ECS',
+    errorCode: 'Ecs.0019',
+    message: 'the flavor does not exist',
+  });
+  const text = JSON.stringify(result);
+  assert.match(text, /"service":"ECS"/, 'the echoed service field must stay as passed');
+  assert.match(text, /Ecs\.0019/);
+  assert.match(text, /taken offline/, 'explicit-service mapping hit must be preserved');
+});
+
+test('explain_error with dot-less errorCode and no service keeps the fallback behavior (#935 E2E-B1)', async () => {
+  const result = await callTool('huaweicloud_explain_error', { errorCode: '0019' });
+  const text = JSON.stringify(result);
+  assert.match(text, /No known error-code pattern matched/, 'dot-less code must not be mis-routed');
+  assert.ok(!text.includes('taken offline'), 'must not hit the Ecs.0019 mapping');
+});
+
+test('explain_error hits mappings for case-variant errorCodes (deliberate divergence from main)', async () => {
+  // The prefix derivation resolves the service half; the entry scan is
+  // case-insensitive on the code so transcriptions like ECS.0019 (console
+  // echo) or kps.9004 still hit — main's port no-ops on non-canonical casing.
+  const upper = await callTool('huaweicloud_explain_error', { errorCode: 'ECS.0019' });
+  assert.match(JSON.stringify(upper), /taken offline/, 'uppercase-prefixed code must hit the Ecs.0019 mapping');
+  const lower = await callTool('huaweicloud_explain_error', { errorCode: 'kps.9004' });
+  assert.match(JSON.stringify(lower), /ShowCustomerAccountBalances/, 'lowercase code must hit the KPS.9004 mapping');
+});
+
+test('explain_error derives apic/apigw/obs prefixes and lowercase services to their tables', async () => {
+  // apic → APIG: all four APIC entries were unreachable errorCode-only (the
+  // uppercase fallback yields APIC, the table is keyed APIG).
+  const apic = await callTool('huaweicloud_explain_error', { errorCode: 'APIC.7241' });
+  assert.match(JSON.stringify(apic), /enterprise_project_id/, 'APIC.7241 must hit the APIG table via the apic alias');
+  // obs service alias: service:'obs' used to miss the case-keyed OBS table.
+  const obs = await callTool('huaweicloud_explain_error', {
+    service: 'obs',
+    errorCode: 'InvalidAccessKeyId',
+    message: 'invalid access key id',
+  });
+  assert.match(JSON.stringify(obs), /OBS uses AK\/SK directly/, "service:'obs' must hit the OBS table");
 });
