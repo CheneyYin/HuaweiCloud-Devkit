@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, sep } from 'node:path';
+
+import { fixtureDir } from './fixture-dir.ts';
+
 import {
   resolveWsExecIndexUrl,
   splitBase64Chunks,
@@ -18,7 +24,14 @@ import {
   _setSessionConnectorForTests,
   execWithSession,
   closeAllSessions,
+  classifyLocalUploadPath,
+  buildUploadResetCommand,
+  uploadFileWithSession,
 } from '../plugins/huaweicloud-core/src/sandbox/session-manager.ts';
+
+function escapeRegExp(s: string): string {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 // Models the real HwlinkTerminalExecSession failure surface: once the
 // transport dies (state 'closed'), every exec rejects with the
@@ -272,4 +285,80 @@ test('evaluateDeployNginxVerify returns ok:true for a verified write (#935 A1)',
   const result = { exitCode: 0 };
   const verify = parseDeployNginxVerifyOutput('DB_NGINX_T=PASS\n');
   assert.equal(evaluateDeployNginxVerify(result, verify, '/etc/nginx/conf.d/x.conf').ok, true);
+});
+
+// --- 953: upload local-path classification + remote mkdir ---
+// (ported from main's 1.1.10 battery; the report case was an agent handing
+// the MCP server a path from another machine — the old error said "file not
+// found" even when the whole parent tree was absent.)
+
+test('953: buildUploadResetCommand mkdirs the remote parent before any chunk writes', () => {
+  const cmd = buildUploadResetCommand('/workspace/game2048/index.html', '/workspace/game2048/index.html.b64tmp');
+  assert.match(cmd, /^mkdir -p "\$\(dirname "\/workspace\/game2048\/index\.html"\)" && /);
+  assert.match(cmd, /rm -f "\/workspace\/game2048\/index\.html\.b64tmp"$/);
+});
+
+test('953: buildUploadResetCommand quotes paths containing spaces', () => {
+  const cmd = buildUploadResetCommand('/workspace/my site/index .html', '/tmp/x y.b64tmp');
+  assert.ok(cmd.includes('"/workspace/my site/index .html"'));
+  assert.ok(cmd.includes('"/tmp/x y.b64tmp"'));
+});
+
+test('953: classifyLocalUploadPath distinguishes missing file vs missing parent directory', () => {
+  const dir = fixtureDir('upload-classify-');
+  const existingFile = join(dir, 'exists.txt');
+  writeFileSync(existingFile, 'x');
+
+  // Existing file with existing parent -> pass.
+  assert.equal(classifyLocalUploadPath(existingFile, 'file'), null);
+  // Existing directory as file -> type mismatch keeps the old semantics.
+  assert.match((classifyLocalUploadPath(dir, 'file') as Error).message, /path is not a regular file/);
+
+  // Missing file, existing parent -> accurate "not found".
+  const missingFile = join(dir, 'missing.txt');
+  assert.match((classifyLocalUploadPath(missingFile, 'file') as Error).message, /local regular file not found/);
+
+  // Missing file AND missing parent -> names the parent + tmp hint (the #953 report case).
+  const deepMissing = join(dir, 'no', 'such', 'dir', 'file.txt');
+  const err = classifyLocalUploadPath(deepMissing, 'file') as Error;
+  assert.match(err.message, /directory not found/);
+  assert.match(err.message, new RegExp(escapeRegExp(dir + sep + 'no')));
+  assert.match(err.message, /temp directory/);
+
+  // Directory kind mirrors the three states for upload_project.
+  assert.equal(classifyLocalUploadPath(dir, 'directory'), null);
+  assert.match((classifyLocalUploadPath(join(dir, 'no', 'dir'), 'directory') as Error).message, /directory not found/);
+});
+
+test('953: uploadFileWithSession creates the remote parent directory on the reset step', async () => {
+  // Drive uploadFileWithSession through the session seam: the reset command
+  // must be the mkdir+rm compound, not the old bare rm.
+  const dir = fixtureDir('upload-reset-');
+  const local = join(dir, 'payload.txt');
+  writeFileSync(local, 'hello-953');
+  const seen: string[] = [];
+  class ResetRecordingSession {
+    state: 'ready' = 'ready';
+    close() {}
+    async exec(command: string): Promise<{ stdout: string; exitCode: number }> {
+      seen.push(command);
+      if (command.includes('md5sum')) {
+        return { stdout: 'f68f65ea754053a8fcf100233c26ce95', exitCode: 0 };
+      }
+      return { stdout: '', exitCode: 0 };
+    }
+  }
+  _setSessionConnectorForTests(() => new ResetRecordingSession() as never);
+  try {
+    await uploadFileWithSession('ws-953', local, '/workspace/game2048/index.html');
+  } finally {
+    _setSessionConnectorForTests(null);
+  }
+  const reset = seen.find((c) => c.includes('b64tmp'));
+  assert.ok(reset, 'a reset command targeting the b64tmp file must have run');
+  assert.match(
+    reset ?? '',
+    /^mkdir -p "\$\(dirname "\/workspace\/game2048\/index\.html"\)" && rm -f /,
+    'the reset must mkdir the remote parent before any chunk writes',
+  );
 });

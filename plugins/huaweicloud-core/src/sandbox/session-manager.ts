@@ -429,6 +429,43 @@ export function buildExposeRemediation(port: number): string {
   return `In the sandbox: source /tmp/hw_creds.sh; source /tmp/hw_api_key 2>/dev/null; devbridge delete-all; devbridge create <name>; devbridge port create <tunnelId> -p ${port} --protocol http -a; if command -v setsid >/dev/null 2>&1; then setsid nohup devbridge host <tunnelId> -p ${port} -e 72 > /tmp/host.log 2>&1 < /dev/null & else nohup devbridge host <tunnelId> -p ${port} -e 72 > /tmp/host.log 2>&1 < /dev/null & fi; disown 2>/dev/null || true; If deploy_nginx reported a different (auto-incremented) port in its "port" field, use THAT port instead of the one shown here. Full procedure in huawei-sandbox skill, Step 7 (Expose via DevBridge).`;
 }
 
+// #953: classify a local upload path BEFORE reading it — distinguish
+// missing file (accurate "not found") from missing PARENT directory (the
+// report case: agents hand the MCP server a path from another machine or a
+// nonexistent tree). The parent-missing error names the directory and the
+// copy-to-tmpdir escape hatch; the DevKit server reads files from the
+// machine it runs on, not the agent's machine.
+export function classifyLocalUploadPath(localPath: string, kind: 'file' | 'directory' = 'file'): Error | null {
+  const expected = kind === 'directory' ? 'directory' : 'regular file';
+  const prefix = kind === 'directory' ? 'sandbox upload project' : 'sandbox upload';
+  if (existsSync(localPath)) {
+    const stat = statSync(localPath);
+    const matches = kind === 'directory' ? stat.isDirectory() : stat.isFile();
+    if (!matches) {
+      return new Error(`${prefix}: path is not a ${expected}: ${localPath}`);
+    }
+    return null;
+  }
+  const parent = dirname(localPath);
+  if (!existsSync(parent)) {
+    return new Error(
+      `${prefix}: directory not found: ${parent}. The DevKit MCP server reads files from ` +
+        `the machine it runs on. Verify the path, or first copy the ${expected} to the local ` +
+        `temp directory (${tmpdir()}) and upload from there.`,
+    );
+  }
+  return new Error(`${prefix}: local ${expected} not found: ${localPath}`);
+}
+
+// #953: reset command for uploadFileWithSession. mkdir -p the remote parent BEFORE any
+// chunk writes — the `printf >>` appends land in "${remotePath}.b64tmp" next to the
+// target, so an absent directory (e.g. /workspace/game2048/) would fail the very first
+// batch. This aligns base64-path behavior with upload_project's file server (which
+// already makedirs). Both paths are quoted; "path with spaces" is covered by tests.
+export function buildUploadResetCommand(remotePath: string, tmpPath: string): string {
+  return `mkdir -p "$(dirname "${remotePath}")" && rm -f "${tmpPath}"`;
+}
+
 export async function uploadFileWithSession(
   workspaceId: string,
   localPath: string,
@@ -436,11 +473,9 @@ export async function uploadFileWithSession(
   username = 'root',
   timeoutMs = 30000,
 ): Promise<UploadFileResult> {
-  if (!existsSync(localPath)) {
-    throw new Error(`sandbox upload: local file not found: ${localPath}`);
-  }
-  if (!statSync(localPath).isFile()) {
-    throw new Error(`sandbox upload: path is not a regular file: ${localPath}`);
+  const localError = classifyLocalUploadPath(localPath, 'file');
+  if (localError) {
+    throw localError;
   }
   const content = readFileSync(localPath);
   const base64 = content.toString('base64');
@@ -448,7 +483,7 @@ export async function uploadFileWithSession(
   const chunks = splitBase64Chunks(base64);
   const tmp = `${remotePath}.b64tmp`;
 
-  const reset = await execWithSession(workspaceId, `rm -f "${tmp}"`, username, timeoutMs);
+  const reset = await execWithSession(workspaceId, buildUploadResetCommand(remotePath, tmp), username, timeoutMs);
   if (reset.exitCode !== 0) {
     throw new Error(`sandbox upload: failed to reset temp file: ${reset.stdout || reset.error || reset.exitCode}`);
   }
@@ -863,11 +898,9 @@ export async function uploadProjectWithSession(
         'Set HW_WORKSPACE_ID env var or ensure huaweicloud_sandbox_connect was called first.',
     );
   }
-  if (!existsSync(localDir)) {
-    throw new Error(`sandbox upload project: local directory not found: ${localDir}`);
-  }
-  if (!statSync(localDir).isDirectory()) {
-    throw new Error(`sandbox upload project: path is not a directory: ${localDir}`);
+  const localError = classifyLocalUploadPath(localDir, 'directory');
+  if (localError) {
+    throw localError;
   }
 
   rotateUploadLog();

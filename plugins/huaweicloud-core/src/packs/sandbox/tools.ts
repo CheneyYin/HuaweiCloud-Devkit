@@ -474,8 +474,16 @@ const closeSessionSchema = z.looseObject({
 });
 
 const uploadFileSchema = z.looseObject({
-  local_path: z.string().describe('Absolute path to the local file to upload.'),
-  remote_path: z.string().describe('Target path in the sandbox, e.g. /workspace/<repo>/index.html.'),
+  local_path: z
+    .string()
+    .describe(
+      'Absolute path to the local file, readable from the machine running the DevKit MCP server (copy to the local temp dir first if not).',
+    ),
+  remote_path: z
+    .string()
+    .describe(
+      'Target path in the sandbox, e.g. /workspace/<repo>/index.html. The remote parent directory is created automatically if absent.',
+    ),
   workspace_id: workspaceId,
   username,
   timeout_ms: numericArg
@@ -484,7 +492,11 @@ const uploadFileSchema = z.looseObject({
 });
 
 const uploadProjectSchema = z.looseObject({
-  local_dir: z.string().describe('Local project directory to upload.'),
+  local_dir: z
+    .string()
+    .describe(
+      'Local project directory, readable from the machine running the DevKit MCP server (copy to the local temp dir first if not).',
+    ),
   remote_dir: z
     .string()
     .optional()
@@ -618,14 +630,14 @@ export const SANDBOX_TOOLS = [
   {
     name: 'huaweicloud_sandbox_upload_file',
     description:
-      'Upload a local file into the sandbox workspace. Base64-encodes the file, writes it in small chunks through the terminal session (the exec channel is fragile for large single commands), then decodes and verifies the md5 checksum. Use this instead of embedding large file content directly in a command.',
+      'Upload a local file into the sandbox workspace. Base64-encodes the file, writes it in small chunks through the terminal session (the exec channel is fragile for large single commands), then decodes and verifies the md5 checksum. The remote parent directory is created automatically if absent. Use this instead of embedding large file content directly in a command. local_path must be readable from the machine running the DevKit MCP server — if the file lives elsewhere, copy it to the local temp directory first.',
     schema: uploadFileSchema,
     handler: handleUploadFile,
   },
   {
     name: 'huaweicloud_sandbox_upload_project',
     description:
-      'Package a local project directory and upload it to a sandbox workspace via HTTP tunnel. Creates a tar.gz archive, uploads it, and extracts it on the sandbox by default.',
+      'Package a local project directory and upload it to a sandbox workspace via HTTP tunnel. Creates a tar.gz archive, uploads it, and extracts it on the sandbox by default. local_dir must be readable from the machine running the DevKit MCP server — if the project lives elsewhere, copy it to the local temp directory first.',
     schema: uploadProjectSchema,
     handler: handleUploadProject,
   },
