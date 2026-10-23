@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 
 import { errorFromTable } from './auth/error-table.ts';
-import { compareVersion, getKooCliVersion, parseHcloudVersion } from './koocli-version.ts';
+import { compareVersion, getKooCliVersion, parseHcloudVersion, stripKooCliUpdateBanner } from './koocli-version.ts';
 import { redactSecrets } from './safety-policy.ts';
 import { DEPENDENCIES } from './lib/dependency-model.ts';
 import { resolveDependencyCommand } from './lib/dep-resolve.ts';
@@ -79,8 +79,12 @@ export function classifyHcloudProbe(
   result: HcloudProbeResultLike,
   requiredVersion: string | null = getKooCliVersion(),
 ): HcloudProbeClassification {
-  const stdout = String(result.stdout || '');
-  const stderr = String(result.stderr || '');
+  // A4 (#935): the 7.2.x banner names the TARGET version (更新至 7.3.12) —
+  // unstripped, parseHcloudVersion's first-match wins the banner's version and
+  // the installed-vs-paired mismatch (and check_cli's soft hint) silently
+  // disappears. Strip before any version parsing.
+  const stdout = stripKooCliUpdateBanner(String(result.stdout || ''));
+  const stderr = stripKooCliUpdateBanner(String(result.stderr || ''));
   const output = `${stdout}${stderr}`;
   const installedVersion = parseHcloudVersion(output);
 
@@ -149,8 +153,11 @@ export function probeHcloud(options: ProbeHcloudOptions = {}) {
     timeout: options.timeoutMs ?? 5000,
   });
   const classified = classifyHcloudProbe(r, options.requiredVersion);
-  const stdout = redactSecrets(String(r.stdout || '').trim());
-  const stderr = redactSecrets(String(r.stderr || r.error?.message || '').trim());
+  // A4 (#935): surfaced probe output is agent-facing — the banner rides every
+  // 7.2.x command, `hcloud version` included; check_cli/doctor's own soft
+  // hint stays the only sanctioned upgrade nudge.
+  const stdout = redactSecrets(stripKooCliUpdateBanner(String(r.stdout || '').trim()));
+  const stderr = redactSecrets(stripKooCliUpdateBanner(String(r.stderr || r.error?.message || '').trim()));
   return {
     executable,
     exitCode: r.status,

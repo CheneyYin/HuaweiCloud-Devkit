@@ -74,7 +74,12 @@ export function resolveAndApplyProjectId({
     }
     let projects: unknown[] | null = null;
     try {
-      const parsed: unknown = JSON.parse(String(list.stdout || ''));
+      // Banner- and prefix-tolerant parse (the established extractApiError
+      // idiom): KeystoneListProjects output may carry KooCLI preamble lines
+      // before the JSON body — slice to the first '{' instead of dying.
+      const raw = String(list.stdout || '');
+      const bracketIdx = raw.indexOf('{');
+      const parsed: unknown = JSON.parse(bracketIdx > 0 ? raw.substring(bracketIdx) : raw);
       const candidate = Array.isArray(parsed) ? parsed : (parsed as { projects?: unknown } | null)?.projects;
       projects = Array.isArray(candidate) ? candidate : null;
     } catch {

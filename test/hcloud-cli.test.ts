@@ -19,6 +19,8 @@ import {
   type HcloudRunResult,
 } from '../plugins/huaweicloud-core/src/hcloud-cli.ts';
 import { clearRuntimeCredentials, setRuntimeCredentials } from '../plugins/huaweicloud-core/src/auth/credentials.ts';
+import { classifyHcloudProbe } from '../plugins/huaweicloud-core/src/hcloud-probe.ts';
+import { getKooCliVersion } from '../plugins/huaweicloud-core/src/koocli-version.ts';
 import { callTool, type ToolArgs } from '../plugins/huaweicloud-core/src/tools.ts';
 import { fixtureDir } from './fixture-dir.ts';
 
@@ -1021,24 +1023,62 @@ test('KooCLI 7.3.12 pin: the OBS write-subcommand advisory covers the new names'
 });
 
 // A4 (#935): the KooCLI 7.2.x per-command version-upgrade banner must never
-// reach agent-facing output; the DevKit one-shot upgrade hint (check_cli /
-// doctor's soft mismatch hint) is the only sanctioned upgrade nudge.
+// reach agent-facing output. The strip is SHAPE-ANCHORED (see
+// koocli-version.ts): a JSON value, an error message, or help text that
+// merely MENTIONS hcloud update 更新至 survives verbatim — only the banner's
+// own line shape is removed.
 test('stripKooCliUpdateBanner removes the KooCLI 7.2.x upgrade banner line (#935 A4)', () => {
   const raw = ['可执行 hcloud update 更新至 7.3.12', '{', '  "servers": []', '}'].join('\n');
   const cleaned = stripKooCliUpdateBanner(raw);
   assert.ok(!cleaned.includes('可执行 hcloud update 更新至 7.3.12'), 'banner line must be removed');
   assert.match(cleaned, /servers/, 'the real output must survive');
+  // The bare form (no 可执行 lead-in) is also the banner.
+  assert.equal(stripKooCliUpdateBanner('hcloud update 更新至 7.3.12\n{"ok":true}'), '{"ok":true}');
 });
 
-test('stripKooCliUpdateBanner keeps real output and the DevKit one-shot upgrade hint (#935 A4)', () => {
+test('stripKooCliUpdateBanner keeps JSON values, error remediation, and help text that mention the phrase (#935 A4)', () => {
+  // Single-line JSON whose value echoes the banner — kept verbatim (a
+  // line-granular fragment match would annihilate it).
+  const jsonBody =
+    '{"error_code":"CMD.0212","error_msg":"当前KooCLI版本过低，请执行 hcloud update 更新至 7.3.12 后重试"}';
+  assert.equal(stripKooCliUpdateBanner(jsonBody), jsonBody, 'a JSON body line must never be stripped');
+  // An actionable stderr diagnostic — kept.
+  const diagnostic = '此功能需要新版CLI: 可执行 hcloud update 更新至 7.3.12 后重试';
+  assert.equal(stripKooCliUpdateBanner(diagnostic), diagnostic);
+  // Help text for the update command — kept.
+  const help = '  update      Update the CLI: run hcloud update to upgrade to the newest release';
+  assert.equal(stripKooCliUpdateBanner(help), help);
+  // Legitimately blank lines survive (only the banner's own line drops).
+  assert.equal(stripKooCliUpdateBanner('a\n\nb'), 'a\n\nb');
+});
+
+test('stripKooCliUpdateBanner salvages same-line banner+JSON by prefix removal (#935 A4)', () => {
+  // The whole line is NOT dropped — the banner prefix is removed and the
+  // trailing JSON survives for redactOutput's bracket-slice.
+  const cleaned = stripKooCliUpdateBanner('可执行 hcloud update 更新至 7.3.12{"result":"ok"}');
+  assert.equal(cleaned, '{"result":"ok"}');
+});
+
+test('stripKooCliUpdateBanner keeps the DevKit one-shot upgrade hint and multi-version prefixes (#935 A4)', () => {
   // The version-mismatch hint DevKit itself emits (check_cli/doctor soft hint)
   // must NOT be stripped — only the per-command KooCLI banner is.
-  const hint =
-    'KooCLI version mismatch: installed 7.2.12, paired 7.3.12. Run "npx huaweicloud-devkit update" to upgrade.';
+  const hint = `KooCLI version mismatch: installed 7.2.12, paired ${getKooCliVersion()}. Run "npx huaweicloud-devkit update" to upgrade.`;
   assert.equal(stripKooCliUpdateBanner(hint), hint, 'the DevKit upgrade hint must be preserved verbatim');
 
   const normal = 'ListVpcs有多个版本,默认使用该API版本v3\n{"vpcs":[]}';
   assert.equal(stripKooCliUpdateBanner(normal), normal, 'normal multi-version prefix lines are untouched here');
+});
+
+test('planHcloudCommand echo survives banner-shaped argument values (#935 A4)', () => {
+  // The plan face echoes a COMMAND string, not child-process output — an
+  // argument value carrying banner-shaped text must not blank the command the
+  // user is asked to approve.
+  const plan = planHcloudCommand(
+    ['ECS', 'CreateServers', '--server.name=ok', '--server.description=可执行 hcloud update 更新至 7.3.12'],
+    { allowWrites: true },
+  ) as HcloudPlan;
+  assert.match(plan.command ?? '', /CreateServers/, 'the displayed command must stay visible');
+  assert.match(plan.command ?? '', /server\.name=ok/);
 });
 
 test('runHcloud strips the KooCLI update banner from command output (#935 A4)', async () => {
@@ -1057,10 +1097,38 @@ test('runHcloud strips the KooCLI update banner from command output (#935 A4)', 
   assert.match(String(result.stdout), /result/, 'real output must survive');
 });
 
+test('runHcloud strips the banner from stderr too (#935 A4)', async () => {
+  const dir = fixtureDir('huaweicloud-banner-err-');
+  const script = join(dir, 'fake-hcloud.mjs');
+  writeFileSync(
+    script,
+    'console.error("可执行 hcloud update 更新至 7.3.12");\nconsole.error("boom");\nprocess.exit(1);\n',
+    'utf8',
+  );
+  const result = await runHcloud(['ECS', 'ListServersDetails'], {
+    executable: process.execPath,
+    executableArgs: [script],
+  });
+  assert.ok(!String(result.stderr).includes('hcloud update 更新至'), 'banner must not ride stderr either');
+  assert.match(String(result.stderr), /boom/, 'the real diagnostic must survive');
+});
+
 test('redactOutput strips the banner before JSON extraction (#935 A4 wiring)', () => {
   // The banner precedes the JSON body — redactOutput's bracket-slice must see
   // output whose first line is already the real content.
   const cleaned = redactOutput('可执行 hcloud update 更新至 7.3.12\n{"result":"ok"}');
   assert.ok(!cleaned.includes('hcloud update'), 'the banner must be gone');
   assert.match(cleaned, /"result"/);
+});
+
+test('classifyHcloudProbe parses the INSTALLED version, not the banner target (#935 A4)', () => {
+  // Banner-first probe output: the banner names the TARGET (7.3.12) while the
+  // installed version is 7.2.12 — the classification must see 7.2.12.
+  const classified = classifyHcloudProbe({
+    status: 0,
+    stdout: '可执行 hcloud update 更新至 7.3.12\nKooCLI 当前版本:7.2.12\n',
+    stderr: '',
+  });
+  assert.equal(classified.installedVersion, '7.2.12');
+  assert.equal(classified.status, 'version_mismatch');
 });

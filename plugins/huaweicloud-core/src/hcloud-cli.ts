@@ -11,11 +11,15 @@ import { getProxySettings } from './proxy/proxy-config.ts';
 import { resolveHcloudCommand } from './hcloud-probe.ts';
 import { parseStsExpiry, resolveCredentialsWithRuntime } from './auth/credentials.ts';
 import { asRecord } from './lib/as-record.ts';
+import { stripKooCliUpdateBanner } from './koocli-version.ts';
 
 // The CLI face's consent layer lives in src/lib/approval-tokens.ts; these
 // re-exports keep existing import sites (tests) compiling — the
 // tool-schemas.ts re-export precedent.
 export { hashArgs, createApprovalToken, consumeApprovalToken, inspectApprovalToken } from './lib/approval-tokens.ts';
+// The #935 A4 banner strip (see koocli-version.ts) re-exported for the
+// executor's existing test import sites.
+export { stripKooCliUpdateBanner } from './koocli-version.ts';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_FORCE_KILL_AFTER_MS = 2_000;
@@ -412,8 +416,12 @@ export function planHcloudCommand(args: unknown, options: ClassifyOptions = {}):
   return {
     executable: 'hcloud',
     args: normalizedArgs.map((arg) => redactSecrets(arg)),
-    command: redactOutput(command),
-    executableBlock: redactOutput(command),
+    // The plan echo is a COMMAND string, not child-process output — banner
+    // stripping is an output concern, and an argument VALUE that happens to
+    // carry banner-shaped text must never blank the command the user is asked
+    // to approve (redactSecrets only).
+    command: redactSecrets(command),
+    executableBlock: redactSecrets(command),
     warnings,
     classification: applyPreflightFindings(classification, sgFindings),
     sgFindings,
@@ -620,7 +628,10 @@ function runHcloudOnce(plan: HcloudPlanWithArgs, options: HcloudRunOptions): Pro
       clearTimeout(forceTimer);
       clearTimeout(settleTimer);
       if (result.stdout && String(result.stdout).length > LARGE_OUTPUT_THRESHOLD) {
-        const outputFile = saveLargeOutput(stdout);
+        // A4 (#935): the raw accumulator still carries the banner — the saved
+        // file is agent-read (the truncated stdout points at it), so the strip
+        // must apply here too, not only to the in-band redacted stdout.
+        const outputFile = saveLargeOutput(stripKooCliUpdateBanner(stdout));
         if (outputFile) {
           result.outputFile = outputFile;
           result.stdout = String(result.stdout).slice(0, 2000) + `\n...(truncated, full output saved to ${outputFile})`;
@@ -857,19 +868,13 @@ export function extractApiError(stdout: unknown): ApiErrorInfo | null {
   return null;
 }
 
-// A4 (#935): KooCLI 7.2.x prints a version-upgrade banner on EVERY command
-// output (e.g. 「可执行 hcloud update 更新至 7.3.12」), which floods agent
-// conversations and drowns the actual result. Banner lines are stripped from
-// command output here; the only upgrade hint DevKit emits is check_cli/doctor's
-// soft, one-shot mismatch hint — kooCliVersion in package.json is the single
-// source of truth for the paired version, and check_cli/doctor keep their
-// non-blocking semantics.
-export function stripKooCliUpdateBanner(output: unknown): string {
-  return asText(output || '')
-    .split('\n')
-    .filter((line) => !(/hcloud\s+update/i.test(line) && /更新至|update to/i.test(line)))
-    .join('\n');
-}
+// A4 (#935): the KooCLI 7.2.x version-upgrade banner strip lives in
+// koocli-version.ts (shared with the probe, which must not misparse the
+// banner's target version as the installed one). redactOutput applies it to
+// child-process output BEFORE the JSON bracket-slice; the only upgrade hint
+// DevKit emits is check_cli/doctor's soft, one-shot mismatch hint —
+// kooCliVersion in package.json stays the single source of truth, and
+// check_cli/doctor keep their non-blocking semantics.
 
 export function redactOutput(output: unknown): string {
   let text = stripKooCliUpdateBanner(asText(output || ''));
