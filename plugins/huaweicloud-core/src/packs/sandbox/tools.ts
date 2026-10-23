@@ -58,6 +58,11 @@ export const SANDBOX_TIMEOUT_MS = {
   // devbridge list round-trips — the probe loop must fit the budget instead
   // of dying as a ws-exec timeout (the pre-probing 30s default did not).
   deploy_check: 60000,
+  // The expose script's A2 (#935) bounded waits can spend ~63s in one exec
+  // (2s settle + up to 9s URL-extraction retries + 4 × 10s probes + 3 × 5s
+  // backoff) plus the delete-all round-trip — the headroom exists for the
+  // slow-gateway days the probe loop exists for, and a timeout still folds
+  // into the structured unreachable envelope (never a raw ws error).
   expose_tunnel: 90000,
 } as const;
 

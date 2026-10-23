@@ -223,11 +223,23 @@ export function buildDevbridgeExposeScript(port: number, expiryHours: number = D
     // must not abort the script.
     `if command -v setsid > /dev/null 2>&1; then setsid nohup devbridge host -p ${port} -e ${expiryHours} > ${hostLog} 2>&1 < /dev/null & else nohup devbridge host -p ${port} -e ${expiryHours} > ${hostLog} 2>&1 < /dev/null & fi`,
     `disown 2>/dev/null || true`,
-    `sleep 6`,
-    `TUNNEL_URL=$(grep -oE "https://[A-Za-z0-9_-]+-${port}\\.${domainLiteral}" ${hostLog} | head -1)`,
+    // A2 (#935), v2-hardened: bounded URL-extraction retry instead of a flat
+    // settle sleep — the host logs "Tunnel URL:" at its own pace (v2's old
+    // 12s flat window existed for slow host logs), so re-grep up to 4 times
+    // with 3s gaps (0/3/6/9s, early exit) before concluding the host never
+    // logged a URL. Main's A2 uses a flat sleep 6 + single grep, which halves
+    // the window v2 tuned for slow hosts — deliberate divergence, recorded.
+    `TUNNEL_URL=""`,
+    `for i in 1 2 3 4; do`,
+    `  TUNNEL_URL=$(grep -oE "https://[A-Za-z0-9_-]+-${port}\\.${domainLiteral}" ${hostLog} | head -1)`,
+    `  [ -n "$TUNNEL_URL" ] && break`,
+    `  sleep 3`,
+    `done`,
     // A2 (#935): probe with retries + backoff — 502/000 before the gateway is
-    // ready is not a failure; the LAST probe decides reachability. Each probe
-    // rewrites /tmp/.db_probe_body so DB_TUNNEL_BODY reflects the final one.
+    // ready is not a failure; the LAST probe decides reachability. Every probe
+    // that receives an HTTP response rewrites the body file; a transport-failed
+    // final probe leaves the previous body (inert — body verdicts are
+    // status-gated on 404/502, never 000).
     // No `|| echo "000"`: curl's -w already prints 000 on transport-level
     // failure (DNS/refused/timeout) and exits non-zero, so `|| echo` appends a
     // second 000 to the captured output — a value no '000' sentinel check ever
@@ -307,7 +319,10 @@ export interface DevbridgeProbe {
 // A2 (#935): parse the probe sequence emitted by buildDevbridgeExposeScript.
 // Each probe echo is `DB_PROBE_<n>=<code>`; reachability is decided by the
 // LAST probe — intermediate 502/000 probes are gateway-not-ready noise, not
-// failures, so they must not leak into the tool's verdict.
+// failures, so they must not leak into the tool's verdict. NB: in production
+// the verdict rides the DB_HTTP_CODE field (the loop variable's final value,
+// emitted by the script) — finalHttpCode here is a diagnostic/test derivation
+// for sequences parsed standalone.
 export function parseDevbridgeProbeSequence(stdout: unknown): { probes: DevbridgeProbe[]; finalHttpCode: string } {
   const text = stripTerminalEscapes(stdout);
   const probes: DevbridgeProbe[] = [];
@@ -466,18 +481,30 @@ export async function exposeTunnel(
   while (attempt < maxAttempts) {
     attempt += 1;
     const exposeScript = buildDevbridgeExposeScript(validatedPort);
-    result = await runOneShot(workspaceId, exposeScript, username, timeoutMs);
+    // A2 budget guard: the script's worst case is ~63s of bounded waits
+    // (2s settle + up to 9s URL-extraction + 4×10s probes + 3×5s backoff) plus
+    // the delete-all round-trip, inside one one-shot exec — a ws-exec timeout
+    // here must fold into the unreachable envelope (with the outer rebuild
+    // retry) instead of throwing a raw WebSocketExecError out of the tool.
+    let exposeFailed = false;
+    try {
+      result = await runOneShot(workspaceId, exposeScript, username, timeoutMs);
+    } catch {
+      exposeFailed = true;
+      result = { stdout: '', exitCode: 124 };
+    }
     const parsed = parseDevbridgeExposeOutput(result.stdout);
 
     // 10006 quota exceeded: clean up stale tunnels and retry.
     if (parsed.quotaError && attempt < maxAttempts) {
       continue;
     }
-    // Unreachable (000), a migrated-gateway placeholder (host-log marker), or
-    // gateway-level tunnel errors (404 "tunnel not found" / "port not
-    // configured"): one cleanup + rebuild retry. 502 "bad gateway" (host alive,
-    // local service down) also gets one retry to cover slow app starts.
-    const unreachable = parsed.httpCode === '000' || parsed.httpCode === '';
+    // Unreachable (000 — including a timed-out or failed expose exec), a
+    // migrated-gateway placeholder (host-log marker), or gateway-level tunnel
+    // errors (404 "tunnel not found" / "port not configured"): one cleanup +
+    // rebuild retry. 502 "bad gateway" (host alive, local service down) also
+    // gets one retry to cover slow app starts.
+    const unreachable = exposeFailed || parsed.httpCode === '000' || parsed.httpCode === '';
     const migration = parsed.migration === true;
     const gatewayTunnelError = parsed.gatewayTunnelError === true;
     const backendDown = parsed.badGateway === true;
@@ -520,10 +547,11 @@ export async function exposeTunnel(
       warnings.push(
         'Tunnel reachable but the gateway reports "bad gateway" — the local service on the exposed port is not serving.',
       );
-    // A2 (#935): the warning comes from the FINAL probe's HTTP status — the
-    // in-script retry loop already absorbed gateway-not-ready 502/000 noise.
-    const reachabilityWarning = formatTunnelReachabilityWarning(parsed.httpCode);
-    if (reachabilityWarning) warnings.push(reachabilityWarning);
+    if (exposeFailed) {
+      warnings.push(
+        'The expose script exec failed or timed out — the probe loop never completed; the attempt was treated as unreachable.',
+      );
+    }
     // v2 deviation (the Q2 ruling): a final attempt with no usable URL is a
     // failure — ok:true with a dead publicUrl misleads agents into treating
     // the deployment as complete. A migrated gateway serves its placeholder
@@ -540,6 +568,13 @@ export async function exposeTunnel(
         hostLog: String(result.stdout ?? '').slice(0, 400),
       };
     }
+
+    // A2 (#935): the reachability warning rides the OK path only, from the
+    // FINAL probe's HTTP status — the in-script retry loop already absorbed
+    // gateway-not-ready 502/000 noise, and the exhausted/unusable path above
+    // must not carry "may not be serving yet" retry phrasing.
+    const reachabilityWarning = formatTunnelReachabilityWarning(parsed.httpCode);
+    if (reachabilityWarning) warnings.push(reachabilityWarning);
 
     // #919: re-verify with a real GET from a SECOND, independent exec session.
     // The in-session health check above cannot prove the host survived session

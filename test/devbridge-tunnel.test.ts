@@ -271,10 +271,23 @@ test('a final non-200/304 probe still surfaces the reachability warning (#935 A2
 
 test('the expose script carries the A2 probe retry loop with last-probe verdict (#935 A2)', () => {
   const script = buildDevbridgeExposeScript(8080);
+  // URL extraction is a bounded re-grep loop, not a flat settle sleep.
+  assert.doesNotMatch(script, /sleep 12/, 'the fixed 12s settle must not return (bounded re-grep replaced it)');
+  assert.match(script, /TUNNEL_URL=""/);
   assert.match(script, /for i in 1 2 3 4; do/);
   assert.match(script, /DB_PROBE_\$i=\$HTTP_CODE/);
   assert.match(script, /if \[ "\$HTTP_CODE" = "200" \] \|\| \[ "\$HTTP_CODE" = "304" \]/);
   assert.match(script, /if \[ "\$i" != "4" \]; then sleep 5; fi/);
+  // The final code IS the loop variable — the "last probe decides" wiring.
+  assert.match(script, /DB_HTTP_CODE=\$HTTP_CODE/);
+});
+
+test('parseDevbridgeProbeSequence strips OSC/CSI noise from probe lines (#946 + #935 A2)', () => {
+  const noisy = parseDevbridgeProbeSequence(
+    '\x1b[?2026hDB_PROBE_1=502\r\n\x1b]133;C\x07DB_PROBE_2=200\r\nDB_HTTP_CODE=200',
+  );
+  assert.equal(noisy.probes.length, 2, 'escape-wrapped probe lines must parse');
+  assert.equal(noisy.finalHttpCode, '200');
 });
 
 test('D: parseDevbridgeExposeOutput classifies gateway-level tunnel errors by exact body + status', () => {
@@ -446,6 +459,33 @@ function exposeStdout(url: string, httpCode: string, quota = '0', body = '', exp
     `DB_QUOTA_ERROR=${quota}`,
     `DB_MIGRATION=${migration}`,
   ].join('\n');
+}
+
+// A2 (#935): probe-laden expose stdout — the reported regression (#935
+// report 2 problem 8) fired a reachability warning while the final probe (and
+// DB_HTTP_CODE) said 200; the composition through exposeTunnel must not.
+function exposeStdoutWithProbes(url: string, probes: string[], httpCode: string): string {
+  return [
+    'DB_HOST_LOG=',
+    `Tunnel URL: ${url}`,
+    ...probes.map((code, i) => `DB_PROBE_${i + 1}=${code}`),
+    `DB_TUNNEL_URL=${url}`,
+    `DB_HTTP_CODE=${httpCode}`,
+    'DB_EXPIRY_HOURS=72',
+    'DB_TUNNEL_BODY=',
+    'DB_QUOTA_ERROR=0',
+  ].join('\n');
+}
+
+// The auth-branch boilerplate shared by the A2 seam tests — the pre-existing
+// seam tests carry their own baselined copies of this shape.
+function withAuthOk(delegate: (command: string) => { stdout: string; exitCode: number }): OneShotSeam {
+  return async (_ws, command) => {
+    if (command.includes('DB_AUTH_MODE')) {
+      return { stdout: 'DB_AUTH_MODE=API_KEY_KEYRING\n', exitCode: 0 };
+    }
+    return delegate(command);
+  };
 }
 
 function verifyStdout(httpCode: string, notFound = '0'): string {
@@ -703,4 +743,39 @@ test('quota (10006) on the final attempt also returns ok:false with the quota wa
 test('exposeTunnel requires workspace_id and a valid port', async () => {
   await assert.rejects(exposeTunnel('', { port: 8080 }), /workspace_id is required/);
   await assert.rejects(exposeTunnel('ws-1', { port: '80;rm -rf /' }), /invalid port/);
+});
+
+test('A2: probe noise (502/000 → 200) through exposeTunnel yields NO reachability warning (#935 A2)', async () => {
+  // The reported production failure: single-shot check warned while the same
+  // log showed DB_HTTP_CODE=200. The final probe decides; intermediate noise
+  // must not leak into the tool's verdict, and the 200 path stays warning-free.
+  const url = 'https://c4rdv7bv-8080.devbridge-s2.hwtunnel.com';
+  const result = await exposeViaSeam(
+    withAuthOk((command) =>
+      command.startsWith('VERIFY_CODE=')
+        ? { stdout: verifyStdout('200'), exitCode: 0 }
+        : { stdout: exposeStdoutWithProbes(url, ['502', '000', '200'], '200'), exitCode: 0 },
+    ),
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.warnings, undefined, 'probe noise absorbed by the final 200 must not warn');
+});
+
+test('A2: an expose-exec timeout folds into the unreachable envelope, never a raw throw (#935 A2 budget guard)', async () => {
+  const url = 'https://c4rdv7bv-8080.devbridge-s2.hwtunnel.com';
+  let exposeCalls = 0;
+  const result = await exposeViaSeam(
+    withAuthOk((command) => {
+      if (command.includes('DB_PROBE_$i') || command.includes('DB_HTTP_CODE')) {
+        exposeCalls += 1;
+        throw new Error('ws-exec timeout (124)');
+      }
+      return { stdout: exposeStdout(url, '200'), exitCode: 0 };
+    }),
+  );
+  // Both attempts timed out mid-script → structured ok:false, not a throw.
+  assert.equal(result.ok, false);
+  assert.match(result.error ?? '', /no reachable public URL after retries/);
+  assert.match(result.warnings ?? '', /timed out/);
+  assert.equal(exposeCalls, 2, 'the outer rebuild retry must still run after a timeout-folded attempt');
 });

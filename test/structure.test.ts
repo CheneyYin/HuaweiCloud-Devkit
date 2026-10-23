@@ -1674,6 +1674,7 @@ test('stripTerminalEscapes is the single escape-stripping seam for sandbox outpu
   assert.match(devbridgeTunnel, /parseDevbridgeExposeOutput\(stdout[\s\S]{0,600}?stripTerminalEscapes\(stdout\)/);
   assert.match(devbridgeTunnel, /parseDevbridgeAuthOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/);
   assert.match(devbridgeTunnel, /parseDevbridgeVerifyOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/);
+  assert.match(devbridgeTunnel, /parseDevbridgeProbeSequence\(stdout[\s\S]{0,700}?stripTerminalEscapes\(stdout\)/);
 });
 
 test('devbridge 0.2.x flow: auth capability probe, version detection, in-place upgrade guidance', () => {
