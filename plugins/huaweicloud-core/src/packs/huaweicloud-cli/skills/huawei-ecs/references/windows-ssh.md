@@ -23,7 +23,7 @@ Only after all retries fail, treat it as a network problem (security group port 
 
 本机配置了 HTTP/HTTPS 代理时，`api.ipify`、`ifconfig.me` 等检测服务返回的是**代理出口 IP** 而非真实直连出口 —— 安全组按这个错误 IP 放通 22 端口后 SSH 仍然超时（连接根本不走代理）。
 
-Windows 检测**真实直连出口**必须绕过代理：
+Windows 检测**真实直连出口**必须绕过代理（pwsh 7+；Windows PowerShell 5.1 的 `Invoke-RestMethod` 无 `-NoProxy` 参数）：
 
 ```powershell
 # 真实直连出口（-NoProxy 绕过本机代理，实测确认）
@@ -32,12 +32,12 @@ Invoke-RestMethod -Uri "https://api.ipify.org" -NoProxy
 Invoke-RestMethod -Uri "https://api.ipify.org"
 ```
 
-放通规则用真实直连出口的 `/32` 精确规则（不要放通 `0.0.0.0/0`，风险规则也会拦截）：
+放通规则用真实直连出口的 `/32` 精确规则（不要放通 `0.0.0.0/0`，风险规则也会拦截）。默认 `CreateSecurityGroupRule` 是 v3 版本，端口参数用 `multiport`（不是 v2 的 `port_range_min/max`）：
 
 ```bash
 hcloud VPC CreateSecurityGroupRule --security_group_rule.security_group_id=<sg-id> \
-  --security_group_rule.direction=ingress --security_group_rule.port_range_min=22 \
-  --security_group_rule.port_range_max=22 --security_group_rule.protocol=tcp \
+  --security_group_rule.direction=ingress --security_group_rule.multiport=22 \
+  --security_group_rule.protocol=tcp \
   --security_group_rule.remote_ip_prefix=<真实直连出口IP>/32
 ```
 

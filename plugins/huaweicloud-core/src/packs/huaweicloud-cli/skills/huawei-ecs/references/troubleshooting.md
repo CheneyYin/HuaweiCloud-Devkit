@@ -4,21 +4,21 @@
 
 ## 错误码映射
 
-| 错误                                    | 根因                            | 修复                                                                                                                                                                                   |
-| --------------------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Ecs.0005` flavor-image 不匹配          | 镜像虚拟化类型与规格不兼容      | 检查 image `__support_amd`/`__support_xen` 与 flavor `os_extra_specs`。BareMetal 镜像不兼容标准 ECS 规格                                                                               |
-| `[USE_ERROR]不正确的参数:imagetype`     | 参数名错误                      | KooCLI 使用双下划线前缀：`--__imagetype=gold`（不是 `--imagetype`）                                                                                                                    |
-| `[USE_ERROR]不正确的参数:chargingMode`  | 参数路径错误                    | 计费模式参数路径：`--server.extendparam.chargingMode=postPaid`。不传默认按需付费                                                                                                       |
-| `[USE_ERROR]不正确的参数:__support_amd` | 参数无效                        | `IMS ListImages` 某些版本不支持此过滤。去掉该参数，使用 client-side 过滤                                                                                                               |
-| Cannot SSH                              | 安全组未开放22端口 或 未绑定EIP | 1) 添加入方向规则 tcp 22。2) `hcloud EIP AssociatePublicips --publicip_id=<id> --publicip.associate_instance_id=<port-id> --publicip.associate_instance_type=PORT`                     |
-| Flavor unavailable                      | 区域不支持该规格                | `hcloud ECS ListFlavors --cli-region=<r>` 先查。不硬编码 s6/m6 等规格名                                                                                                                |
-| Insufficient resources                  | AZ 库存不足                     | 换规格、换 AZ、或等待资源释放                                                                                                                                                          |
-| `Ecs.0019` flavor 已下线                | 规格已下架                      | `hcloud ECS ListFlavors --cli-region=<r>` 查当前在售规格并切换替代规格（状态字段规则见 `references/flavors.md`）                                                                       |
-| `Ecs.0319` 可用区容量不足               | 目标 AZ 规格库存售罄            | 更换可用区或更换规格后重试                                                                                                                                                             |
-| `Ecs.0044` 磁盘类型售罄                 | 目标 AZ 的 root volume 类型售罄 | 换 `--server.root_volume.volumetype`（SAS/SSD/GPSSD）或换 AZ（`hcloud ECS NovaListAvailabilityZones --cli-region=<r>`）；与 Ecs.0319（规格容量）是不同根因，ListFlavors 不预告磁盘售罄 |
-| `Ecs.0067` 余额受限                     | 现金余额不足/历史欠费           | 查 BSS 现金余额并充值（`hcloud BSS ShowCustomerAccountBalances --cli-region=cn-north-1`）；代金券不参与按量付费下单风控，历史欠费需先结清                                              |
-| `KPS.9004` 密钥对创建受限               | 现金余额不足/历史欠费           | 同上：查 BSS 现金余额并充值 + 历史欠费结清后重试 `hcloud ECS NovaCreateKeypair`                                                                                                        |
-| AuthFailure                             | AK/SK 过期或无效                | `npx huaweicloud-devkit auth init` 重新配置统一凭据                                                                                                                                    |
+| 错误                                    | 根因                            | 修复                                                                                                                                                                                                                                             |
+| --------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Ecs.0005` flavor-image 不匹配          | 镜像虚拟化类型与规格不兼容      | 检查 image `__support_amd`/`__support_xen` 与 flavor `os_extra_specs`。BareMetal 镜像不兼容标准 ECS 规格                                                                                                                                         |
+| `[USE_ERROR]不正确的参数:imagetype`     | 参数名错误                      | KooCLI 使用双下划线前缀：`--__imagetype=gold`（不是 `--imagetype`）                                                                                                                                                                              |
+| `[USE_ERROR]不正确的参数:chargingMode`  | 参数路径错误                    | 计费模式参数路径：`--server.extendparam.chargingMode=postPaid`。不传默认按需付费                                                                                                                                                                 |
+| `[USE_ERROR]不正确的参数:__support_amd` | 参数无效                        | `IMS ListImages` 某些版本不支持此过滤。去掉该参数，使用 client-side 过滤                                                                                                                                                                         |
+| Cannot SSH                              | 安全组未开放22端口 或 未绑定EIP | 1) 添加入方向规则 tcp 22。2) `hcloud EIP AssociatePublicips --publicip_id=<id> --publicip.associate_instance_id=<port-id> --publicip.associate_instance_type=PORT`                                                                               |
+| Flavor unavailable                      | 区域不支持该规格                | `hcloud ECS ListFlavors --cli-region=<r>` 先查。不硬编码 s6/m6 等规格名                                                                                                                                                                          |
+| Insufficient resources                  | AZ 库存不足                     | 换规格、换 AZ、或等待资源释放                                                                                                                                                                                                                    |
+| `Ecs.0019` flavor 已下线                | 规格已下架                      | `hcloud ECS ListFlavors --cli-region=<r>` 查当前在售规格并切换替代规格（状态字段规则见 `references/flavors.md`）                                                                                                                                 |
+| `Ecs.0319` 可用区容量不足               | 目标 AZ 规格库存售罄            | 更换可用区或更换规格后重试                                                                                                                                                                                                                       |
+| `Ecs.0044` 磁盘类型售罄                 | 目标 AZ 的 root volume 类型售罄 | 换 `--server.root_volume.volumetype`（SAS/SSD/GPSSD）或换 AZ（`hcloud ECS NovaListAvailabilityZones --cli-region=<r>`）；与 Ecs.0319（规格容量）是不同根因，ListFlavors 不预告磁盘售罄                                                           |
+| `Ecs.0067` 余额受限                     | 现金余额不足/历史欠费           | 查 BSS 现金余额并充值（`hcloud BSS ShowCustomerAccountBalances --cli-region=cn-north-1`；BSS 不在 KooCLI 默认 en 目录，报 `Unsupported service: BSS` 时先 `hcloud configure set --cli-lang=cn`）；代金券不参与按量付费下单风控，历史欠费需先结清 |
+| `KPS.9004` 密钥对创建受限               | 现金余额不足/历史欠费           | 同上：查 BSS 现金余额并充值 + 历史欠费结清后重试 `hcloud ECS NovaCreateKeypair`                                                                                                                                                                  |
+| AuthFailure                             | AK/SK 过期或无效                | `npx huaweicloud-devkit auth init` 重新配置统一凭据                                                                                                                                                                                              |
 
 ## 创建失败诊断流程
 
@@ -64,8 +64,8 @@ runcmd:
 
 SSH 超时时按序排查，先比对**本机真实直连出口 IP** 与安全组 22 端口规则的源 IP 是否一致：
 
-1. 查本机**真实直连出口**：Windows 用 `Invoke-RestMethod -Uri "https://api.ipify.org" -NoProxy`（配置了代理时，不带 `-NoProxy` 的 `api.ipify` 返回的是代理出口，不是真实直连出口 —— 详见 `references/windows-ssh.md` §0.1）；Linux 用 `curl --noproxy '*' https://api.ipify.org`
-2. 查安全组 22 端口规则的源 IP：`hcloud VPC ListSecurityGroupRules --security_group_id=<sg-id> --cli-region=<r>`
+1. 查本机**真实直连出口**：Windows 用 `Invoke-RestMethod -Uri "https://api.ipify.org" -NoProxy`（pwsh 7+，5.1 无 `-NoProxy`；配置了代理时，不带 `-NoProxy` 的 `api.ipify` 返回的是代理出口，不是真实直连出口 —— 详见 `references/windows-ssh.md` §0.1）；Linux 用 `curl --noproxy '*' https://api.ipify.org`
+2. 查安全组 22 端口规则的源 IP：`hcloud VPC ListSecurityGroupRules --security_group_id.1=<sg-id> --cli-region=<r>`（v3 默认版本该参数是数组，标量形式报 USE_ERROR）
 3. 两者不一致 → 更新规则源 IP 为真实直连出口的 `/32` 精确规则
 4. 一致仍超时 → 查 EIP 绑定（`hcloud EIP ListPublicips`）→ 再查实例内防火墙（上方 EulerOS firewalld 小节）
 5. 全部正常才考虑重装/重建
@@ -87,16 +87,18 @@ SSH 超时时按序排查，先比对**本机真实直连出口 IP** 与安全�
 
 ## 删除完成验证：轮询操作纠正（实测 #935 坑8）
 
-`NovaShowJob` 操作**不存在**（KooCLI 与 ECS API 均无此操作，删除轮询用它必然报错）。删除 ECS 后的正确验证方式：
+`NovaShowJob` 操作**不存在**（KooCLI 与 ECS API 均无此拼写 —— #935 报告用的是错误操作名）。Job 状态查询的正确操作是 `hcloud ECS ShowJob`（查询创建/删除云服务器等异步 API 返回的 job_id 执行状态）。删除 ECS 后的验证方式：
 
 ```bash
-# 删除 ECS（异步任务）
+# 删除 ECS（异步任务，返回 job_id）
 hcloud ECS DeleteServers --servers.1.id=<instance-id> --delete_publicip=true --delete_volume=true
 
-# 轮询直至目标实例状态为 DELETED（或列表查询 404）
+# 首选：轮询 job 状态直至 SUCCESS
+hcloud ECS ShowJob --job_id=<job-id>
+
+# 未记录 job_id 时的兜底：列表轮询直至实例不在列表中
 for i in 1 2 3 4 5 6; do
   hcloud ECS ListServersDetails --cli-region=<r> --limit=50 | grep -q "<instance-id>" || { echo "DELETED (not in list)"; break; }
-  hcloud ECS ListServersDetails --cli-region=<r> --id=<instance-id> | grep -q '"DELETED"' && { echo "DELETED"; break; }
   echo "still deleting..."; sleep 10
 done
 ```

@@ -37,12 +37,13 @@ If no VPC/subnet exists: load `huawei-vpc` skill → create VPC → create subne
 **子网 DNS 前置修复（实测 #935 坑4）**：模板/预置子网的 `dnsList` 可能为空 —— 这会让 cloud-init 域名解析与 yum/dnf 安装**静默失败**（表现为下载/安装卡死且无明确报错，或 `Could not resolve host`）。创建 ECS 前先检查并补充华为云内网 DNS：
 
 ```bash
-hcloud VPC ShowSubnet --subnet_id=<subnet-id> --cli-region=<region>   # 查看 dnsList
-# dnsList 为空（或缺少内网 DNS）时先修复再建实例：
-hcloud VPC UpdateSubnet --subnet_id=<subnet-id> --subnet.dnsList.1=100.125.1.250 --subnet.dnsList.2=100.125.129.250
+hcloud VPC ShowSubnet --subnet_id=<subnet-id> --cli-region=<region>   # 查看 dnsList（顺带记下 vpc_id 与 subnet name —— 下一步必填）
+# dnsList 为空（或缺少内网 DNS）时先修复再建实例（UpdateSubnet 必填 --vpc_id + --subnet.name）：
+hcloud VPC UpdateSubnet --cli-region=<region> --vpc_id=<vpc-id> --subnet_id=<subnet-id> --subnet.name=<name> \
+  --subnet.dnsList.1=100.125.1.250 --subnet.dnsList.2=100.125.129.250
 ```
 
-`100.125.1.250` / `100.125.129.250` 是华为云内网 DNS（各区域通用）。实例内自救兜底见下方 user_data 模板的「DNS 兜底」注释，但**修复子网 DNS 是唯一能让 cloud-init 首次开机就正常解析的路径**（user_data 只在 first boot 执行，错过即需人工补救）。
+`100.125.1.250` / `100.125.129.250` 是 cn-north-4 的华为云内网 DNS（实测值）。**内网 DNS 按区域不同** —— 其他区域用 `hcloud DNS ListNameServers --type=private` 或 `VPC UpdateSubnet --help` 链接的 DNS FAQ 表取本区域地址，不要跨区域套用。实例内自救兜底见下方 user_data 模板的「DNS 兜底」注释，但**修复子网 DNS 是唯一能让 cloud-init 首次开机就正常解析的路径**（user_data 只在 first boot 执行，错过即需人工补救）。
 
 ## 5. Create keypair (recommended over adminPass)
 
@@ -134,15 +135,20 @@ hcloud ECS CreateServers ... --server.user_data=$user_data
 The inline form above works only while the base64 blob fits the tool-call parameter limit (a few KB). The API itself accepts user_data up to **32KB before encoding** (`--server.user_data` in `hcloud ECS CreateServers --help`) — so a full bootstrap script (22KB base64 observed in the wild) is well within the API limit but **cannot be handed through a single MCP tool call**. When that happens, keep the MCP approval channel (plan → approve → run) and move the parameters to a local JSON file instead:
 
 ```bash
-# 1. Generate the API parameter skeleton (writes a JSON file into the CURRENT directory):
+# 1. Generate the API parameter skeleton (writes a JSON file into the CURRENT directory
+#    and prints its path; the middle filename segment is the CLI language, not the region):
 hcloud ECS CreateServers --skeleton
-#    -> ECS_CreateServers_<region>-<timestamp>.json, structured as header / path / body.
+#    -> ECS_CreateServers_<lang>-<timestamp>.json, structured as header / path / body.
 #    user_data lives at body.server.user_data (base64-encoded, same as inline).
 
-# 2. Fill in the real values (name/flavorRef/imageRef/nics/... and body.server.user_data),
-#    keep only the fields you actually use, then execute with the file:
+# 2. The generated file ENDS with a `骨架填写完成后,请删除此行及下列参数描述信息` separator
+#    plus a parameter-description block — delete the separator and everything below it
+#    first (only the leading JSON object is valid --cli-jsonInput input; the raw
+#    as-generated file fails to parse). Then fill in the real values
+#    (name/flavorRef/imageRef/nics/... and body.server.user_data),
+#    keep only the fields you actually use, and execute with the file:
 
-hcloud ECS CreateServers --cli-region=<region> --cli-jsonInput=./ECS_CreateServers_<region>-<timestamp>.json
+hcloud ECS CreateServers --cli-region=<region> --cli-jsonInput=./ECS_CreateServers_<lang>-<timestamp>.json
 
 # 3. Optional pre-flight: --dryrun validates and prints the request payload WITHOUT creating anything:
 hcloud ECS CreateServers --cli-region=<region> --cli-jsonInput=./<file>.json --dryrun
@@ -152,7 +158,7 @@ hcloud ECS CreateServers --cli-region=<region> --cli-jsonInput=./<file>.json --d
 
 > **Anti-pattern (observed in the wild, #964)**: when the base64 blob exceeded the tool parameter limit, the agent dropped the MCP tools entirely and ran `hcloud` directly in a shell — which also silently bypassed the plan → approve → run approval layer. The JSON-file path above keeps oversized parameters on the approved channel. Never abandon the MCP wrapper just because one parameter is too long.
 >
-> **Skeleton side effect**: `--skeleton` writes its JSON file to the current working directory (it does not print to stdout). Clean it up or keep it as the record of what was created.
+> **Skeleton side effect**: `--skeleton` writes its JSON file to the current working directory and prints the path to stdout (the skeleton content itself goes to the file). Clean it up or keep it as the record of what was created.
 
 The security and recovery notes below apply to user_data in general (inline or JSON-file form):
 
