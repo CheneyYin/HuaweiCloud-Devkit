@@ -512,15 +512,12 @@ type OneShotSeam = NonNullable<Parameters<typeof _setOneShotForTests>[0]>;
 
 // Drive exposeTunnel under a one-shot seam with guaranteed teardown — every
 // control-flow test composes its matcher and asserts on the result.
-// The seam default is keepalive:false — the pre-existing expose-mechanics
-// tests exercise the probe/verify/retry surface with simplistic seams that
-// cannot answer the watchdog read/install commands. The AUTO-ENROLL behavior
-// has its own dedicated test that opts IN with a keepalive-aware seam.
-async function exposeViaSeam(
-  seam: OneShotSeam,
-  port: number | string = 8080,
-  options: { keepalive?: boolean } = { keepalive: false },
-) {
+// Options are forwarded verbatim — OMITTING them exercises the production
+// default (enroll). The legacy expose-mechanics tests below pass an explicit
+// { keepalive: false }: their simplistic seams cannot answer the watchdog
+// read/install commands. The AUTO-ENROLL, default-omitted, and failure
+// behaviors have dedicated tests with keepalive-aware seams.
+async function exposeViaSeam(seam: OneShotSeam, port: number | string = 8080, options?: { keepalive?: boolean }) {
   _setOneShotForTests(seam);
   try {
     return await exposeTunnel('ws-1', { port, ...options });
@@ -574,7 +571,7 @@ test('exposeTunnel returns the auth-fail envelope with attempts and a truncated 
 
 test('exposeTunnel returns ok:true with the publicUrl on a healthy attempt, verified from a second session', async () => {
   const url = 'https://c4rdv7bv-8080.devbridge-s2.hwtunnel.com';
-  const result = await exposeViaSeam(healthyOneShot(url));
+  const result = await exposeViaSeam(healthyOneShot(url), 8080, { keepalive: false });
   assert.equal(result.ok, true);
   assert.equal(result.publicUrl, url);
   assert.equal(result.tunnelId, 'c4rdv7bv');
@@ -592,7 +589,7 @@ test('exposeTunnel returns ok:true with the publicUrl on a healthy attempt, veri
 
 test('#919: a URL that fails the fresh-session recheck is flagged non-persistent with the 请勿分享 warning', async () => {
   const url = 'https://c4rdv7bv-8080.devbridge-s2.hwtunnel.com';
-  const result = await exposeViaSeam(healthyOneShot(url, verifyStdout('000')));
+  const result = await exposeViaSeam(healthyOneShot(url, verifyStdout('000')), 8080, { keepalive: false });
   assert.equal(result.ok, true);
   assert.equal(result.publicUrl, url);
   assert.equal(result.verifyHttpCode, '000');
@@ -604,6 +601,8 @@ test('#919: a URL that fails the fresh-session recheck is flagged non-persistent
 test('#922 B2: HTTP 200 with a "tunnel not found" body (native false-success) is non-persistent', async () => {
   const result = await exposeViaSeam(
     healthyOneShot('https://c4rdv7bv-8080.devbridge-s2.hwtunnel.com', verifyStdout('200', '1')),
+    8080,
+    { keepalive: false },
   );
   assert.equal(result.ok, true);
   assert.equal(result.verifyHttpCode, '200');
@@ -621,6 +620,8 @@ test('#919 primary death mode: a 404 verify with the not-found body is non-persi
   // HTTP 404 (the real status), never a hardcoded 200.
   const result = await exposeViaSeam(
     healthyOneShot('https://c4rdv7bv-8080.devbridge-s2.hwtunnel.com', verifyStdout('404', '1')),
+    8080,
+    { keepalive: false },
   );
   assert.equal(result.ok, true);
   assert.equal(result.verifyHttpCode, '404');
@@ -660,7 +661,7 @@ test('gateway 404 "tunnel not found" retries once, then returns ok:false — nev
     // Every expose attempt: the gateway itself reports the tunnel dead.
     return { stdout: exposeStdout(url, '404', '0', 'tunnel not found'), exitCode: 0 };
   });
-  const result = await exposeViaSeam(seam);
+  const result = await exposeViaSeam(seam, 8080, { keepalive: false });
   assert.equal(result.ok, false);
   assert.equal(result.publicUrl, undefined);
   assert.match(result.error ?? '', /gateway reports the fresh tunnel URL as dead/);
@@ -673,18 +674,22 @@ test('gateway 404 "tunnel not found" retries once, then returns ok:false — nev
 test('502 "bad gateway" retries once for a slow app start, then reports ok:true with the bad-gateway warning', async () => {
   const url = 'https://c4rdv7bv-8080.devbridge-s2.hwtunnel.com';
   let exposeCount = 0;
-  const result = await exposeViaSeam(async (_ws, command) => {
-    if (command.includes('DB_AUTH_MODE')) {
-      return { stdout: 'DB_AUTH_MODE=API_KEY_KEYRING\n', exitCode: 0 };
-    }
-    if (command.startsWith('VERIFY_CODE=')) {
-      return { stdout: verifyStdout('502'), exitCode: 0 };
-    }
-    if (command.includes('nohup devbridge host')) {
-      exposeCount += 1;
-    }
-    return { stdout: exposeStdout(url, '502', '0', 'bad gateway'), exitCode: 0 };
-  });
+  const result = await exposeViaSeam(
+    async (_ws, command) => {
+      if (command.includes('DB_AUTH_MODE')) {
+        return { stdout: 'DB_AUTH_MODE=API_KEY_KEYRING\n', exitCode: 0 };
+      }
+      if (command.startsWith('VERIFY_CODE=')) {
+        return { stdout: verifyStdout('502'), exitCode: 0 };
+      }
+      if (command.includes('nohup devbridge host')) {
+        exposeCount += 1;
+      }
+      return { stdout: exposeStdout(url, '502', '0', 'bad gateway'), exitCode: 0 };
+    },
+    8080,
+    { keepalive: false },
+  );
   // 502 exact-body = tunnel alive, service down → retry (slow start), then
   // hand the URL over with the explicit bad-gateway warning (main semantics).
   assert.equal(exposeCount, 2);
@@ -707,7 +712,7 @@ test('v2 deviation: a final unreachable attempt returns ok:false, never ok:true 
     }
     return { stdout: '', exitCode: 0 }; // cleanup call
   });
-  const result = await exposeViaSeam(seam);
+  const result = await exposeViaSeam(seam, 8080, { keepalive: false });
   assert.equal(result.ok, false);
   assert.equal(result.publicUrl, undefined);
   assert.equal(result.httpCode, '000');
@@ -747,7 +752,11 @@ test('an app body that merely contains the migration marker is NOT a migration p
   // legitimately containing 服务已迁移 in its first bytes must not be
   // misdiagnosed as a retired pre-migration gateway URL.
   const url = 'https://c4rdv7bv-8080.devbridge-s2.hwtunnel.com';
-  const appMarker = await exposeViaSeam(healthyOneShot(url, verifyStdout('200'), '欢迎！本服务已迁移到新域名。'));
+  const appMarker = await exposeViaSeam(
+    healthyOneShot(url, verifyStdout('200'), '欢迎！本服务已迁移到新域名。'),
+    8080,
+    { keepalive: false },
+  );
   assert.equal(appMarker.ok, true);
   assert.equal(appMarker.publicUrl, url);
   assert.equal(appMarker.persistent, true);
@@ -762,7 +771,7 @@ test('quota (10006) on the final attempt also returns ok:false with the quota wa
     // Both attempts report quota exhausted and an unreachable URL.
     return { stdout: exposeStdout('', '000', '1') + '\n10006 quota exceeded', exitCode: 0 };
   });
-  const result = await exposeViaSeam(seam, '8081');
+  const result = await exposeViaSeam(seam, '8081', { keepalive: false });
   assert.equal(result.ok, false);
   assert.match(result.warnings ?? '', /10006/);
   assert.equal(result.port, 8081);
@@ -785,6 +794,8 @@ test('A2: probe noise (502/000 → 200) through exposeTunnel yields NO reachabil
         ? { stdout: verifyStdout('200'), exitCode: 0 }
         : { stdout: exposeStdoutWithProbes(url, ['502', '000', '200'], '200'), exitCode: 0 },
     ),
+    8080,
+    { keepalive: false },
   );
   assert.equal(result.ok, true);
   assert.equal(result.warnings, undefined, 'probe noise absorbed by the final 200 must not warn');
@@ -804,6 +815,8 @@ test('A2: an expose-exec timeout folds into the unreachable envelope, never a ra
       }
       return { stdout: exposeStdout(url, '200'), exitCode: 0 };
     }),
+    8080,
+    { keepalive: false },
   );
   // Both attempts timed out mid-script → structured ok:false, not a throw.
   assert.equal(result.ok, false);
@@ -908,7 +921,11 @@ test('#998 the too_old gate precedes the auth check — the combined case keeps 
 
 test('#998 the URL-present-unreachable terminal class carries its own code (#998 taxonomy)', async () => {
   const url = 'https://c4rdv7bv-8080.devbridge-s2.hwtunnel.com';
-  const result = await exposeViaSeam(withAuthOk(() => ({ stdout: exposeStdout(url, '000'), exitCode: 0 })));
+  const result = await exposeViaSeam(
+    withAuthOk(() => ({ stdout: exposeStdout(url, '000'), exitCode: 0 })),
+    8080,
+    { keepalive: false },
+  );
   assert.equal(result.ok, false);
   assert.equal(result.error_code, 'tunnel_unreachable');
   assert.match(result.error ?? '', /no reachable public URL after retries/);
@@ -999,6 +1016,7 @@ test('buildDevbridgeKeepaliveScript: 3-layer loop, hardcoded URLs, --noproxy hea
   ]);
   // Layer 1: host re-attach keyed on the tunnel-specific pgrep.
   assert.match(script, /pgrep -f "devbridge host \$ID"/);
+  assert.match(script, /pgrep -f "devbridge host -p \$PORT"/, 'the -p form expose launched must be probed too');
   assert.match(script, /setsid nohup devbridge host "\$ID"/);
   // Layer 2: daily 720h renewal.
   assert.match(script, /devbridge update "\$ID" -e 720/);
@@ -1007,7 +1025,11 @@ test('buildDevbridgeKeepaliveScript: 3-layer loop, hardcoded URLs, --noproxy hea
   assert.match(script, /HC=\$\(curl -s --noproxy '\*' -o \/dev\/null/);
   assert.match(script, /sleep 300/);
   // URLs hardcoded (the OSC trap doctrine), data-disk PATH.
-  assert.match(script, /TUNNELS="nv2dvv6w:https:\/\/nv2dvv6w-8080\.devbridge-s2\.hwtunnel\.com"/);
+  assert.match(
+    script,
+    /TUNNELS="nv2dvv6w:https:\/\/nv2dvv6w-8080\.devbridge-s2\.hwtunnel\.com:8080"/,
+    'the entry carries id:url:port (the dual-form probe needs the port)',
+  );
   assert.match(script, /export PATH="\/workspace\/\.local\/bin:\$HOME\/\.huawei\/bin:\$PATH"/);
   // Heredoc is single-quoted so the writer shell expands nothing.
   assert.match(script, /<< 'DB_KEEPALIVE_EOF'/);
@@ -1023,12 +1045,12 @@ test('buildDevbridgeKeepaliveScript: 3-layer loop, hardcoded URLs, --noproxy hea
   assert.throws(() => buildDevbridgeKeepaliveScript([]), /non-empty array/);
 });
 
-test('exposeTunnel AUTO-ENROLLS the verified tunnel into the watchdog (U16)', async () => {
+test('exposeTunnel AUTO-ENROLLS the verified tunnel, MERGED into existing coverage (U16)', async () => {
   const url = 'https://c4rdv7bv-8080.devbridge-s2.hwtunnel.com';
   const calls: string[] = [];
   const result = await exposeViaSeam(
     async (_ws, command) => {
-      calls.push(command.slice(0, 160));
+      calls.push(command);
       if (command.includes('DB_AUTH_MODE')) {
         return { stdout: 'DB_AUTH_MODE=API_KEY_KEYRING\n', exitCode: 0 };
       }
@@ -1036,7 +1058,12 @@ test('exposeTunnel AUTO-ENROLLS the verified tunnel into the watchdog (U16)', as
         return { stdout: verifyStdout('200'), exitCode: 0 };
       }
       if (command.includes('DB_KEEPALIVE_TUNNELS=')) {
-        return { stdout: 'DB_KEEPALIVE_TUNNELS=\n', exitCode: 0 }; // no existing watchdog
+        // An existing watchdog already protects aaaa1111 — the merge must keep
+        // it alongside the new tunnel (a replace regression drops to 1).
+        return {
+          stdout: 'DB_KEEPALIVE_TUNNELS=aaaa1111:https://aaaa1111-80.devbridge-s2.hwtunnel.com:80\n',
+          exitCode: 0,
+        };
       }
       if (command.includes('tunnel-keepalive.sh')) {
         return {
@@ -1050,22 +1077,49 @@ test('exposeTunnel AUTO-ENROLLS the verified tunnel into the watchdog (U16)', as
     { keepalive: true },
   );
   assert.equal(result.ok, true);
-  // keepalive: false not passed → enrolled, with the merged list (1 tunnel).
   assert.equal(result.keepalive?.enrolled, true);
-  assert.equal(result.keepalive?.tunnelCount, 1);
+  assert.equal(result.keepalive?.tunnelCount, 2, 'existing + new — a replace regression drops to 1 here');
   assert.equal(result.keepalive?.watchdogPid, '4242');
-  // The read-then-merge-then-install sequence ran (read, install).
-  assert.ok(
-    calls.some((c) => c.includes('DB_KEEPALIVE_TUNNELS')),
-    'the tunnels read ran',
-  );
-  assert.ok(
-    calls.some((c) => c.includes('tunnel-keepalive.sh')),
-    'the watchdog install ran',
-  );
-  // The installed list carries the new tunnel.
   const installCall = calls.find((c) => c.includes('cat > /tmp/tunnel-keepalive.sh'));
-  assert.ok(installCall, 'install script captured');
+  assert.ok(installCall, 'install script captured (full command, not truncated)');
+  assert.match(
+    installCall ?? '',
+    /aaaa1111:https:\/\/aaaa1111-80\.devbridge-s2\.hwtunnel\.com:80/,
+    'existing survives',
+  );
+  assert.match(
+    installCall ?? '',
+    /c4rdv7bv:https:\/\/c4rdv7bv-8080\.devbridge-s2\.hwtunnel\.com:8080/,
+    'new tunnel lands',
+  );
+});
+
+test('exposeTunnel defaults to enrollment when keepalive is omitted (U16)', async () => {
+  const url = 'https://c4rdv7bv-8080.devbridge-s2.hwtunnel.com';
+  const result = await exposeViaSeam(
+    async (_ws, command) => {
+      if (command.includes('DB_AUTH_MODE')) {
+        return { stdout: 'DB_AUTH_MODE=API_KEY_KEYRING\n', exitCode: 0 };
+      }
+      if (command.startsWith('VERIFY_CODE=')) {
+        return { stdout: verifyStdout('200'), exitCode: 0 };
+      }
+      if (command.includes('DB_KEEPALIVE_TUNNELS=')) {
+        return { stdout: 'DB_KEEPALIVE_TUNNELS=\n', exitCode: 0 };
+      }
+      if (command.includes('tunnel-keepalive.sh')) {
+        return {
+          stdout: 'DB_KEEPALIVE_SYNTAX=0\nDB_KEEPALIVE_PID=4242\nDB_KEEPALIVE_LOG=/tmp/tunnel-keepalive.log\n',
+          exitCode: 0,
+        };
+      }
+      return { stdout: exposeStdout(url, '200'), exitCode: 0 };
+    },
+    // No options — the schema's "default true — pass false to opt out".
+    8081,
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.keepalive?.enrolled, true, 'omitted keepalive must enroll');
 });
 
 test('exposeTunnel keepalive:false opts out; a failed enrollment warns but the tunnel stays ok (U16)', async () => {

@@ -84,7 +84,9 @@ const INTENT_TABLE: IntentRow[] = [
     // full text (benign script edits keep matching; semantic drift breaks
     // the parse pin instead). Answers the all-pass marker vocabulary.
     intent: 'deploy-check-script',
-    pattern: /^echo "=== DEPLOY CHECK ==="$/,
+    // #999: the data-disk PATH export rides the first line (a fresh one-shot
+    // shell cannot see /workspace/.local/bin otherwise); the echo follows.
+    pattern: /^export PATH="\/workspace\/.local\/bin:\$HOME\/\.huawei\/bin:\$PATH"; echo "=== DEPLOY CHECK ==="$/,
     run: () => ({ stdout: DEPLOY_CHECK_ALL_PASS }),
   },
   {

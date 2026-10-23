@@ -221,7 +221,11 @@ test('deploy-check grammar pin: degraded output yields INCOMPLETE with the faili
 });
 
 test('deploy-check script recognition: the anchored first line dispatches to the synthesis', () => {
-  const result = runShellCommand('echo "=== DEPLOY CHECK ==="\nTOTAL=0\n…', new FakeFs());
+  // #999: the data-disk PATH export rides the same first line as the marker.
+  const result = runShellCommand(
+    'export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"; echo "=== DEPLOY CHECK ==="\nTOTAL=0\n…',
+    new FakeFs(),
+  );
   assert.equal(result.intent, 'deploy-check-script');
   assert.equal(result.stdout, DEPLOY_CHECK_ALL_PASS);
   // The nginx presence probe answers INSTALLED — the product's real gate.

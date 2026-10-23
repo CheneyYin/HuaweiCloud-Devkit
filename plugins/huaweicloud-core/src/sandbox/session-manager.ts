@@ -1234,9 +1234,12 @@ fi`;
   try {
     // Version-aware: devbridge 0.1.x exposes JSON via `list -j`; 0.2.x removed -j and
     // prints a table whose data rows start with the 8-char base32 tunnel ID.
+    // #999: the data-disk-first PATH — a fresh one-shot shell does not inherit
+    // any prior export, and after the Layer-3 install + dedup (or a reboot) the
+    // only surviving binary lives at /workspace/.local/bin.
     const tunnelCheck = await execOneShot(
       workspaceId,
-      '(devbridge list -j 2>/dev/null | grep -q \'"tunnelId"\' || devbridge list 2>/dev/null | grep -Eq \'^[a-z2-7]{8}[[:space:]]\') && echo "ACTIVE" || echo "INACTIVE"',
+      'export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"; (devbridge list -j 2>/dev/null | grep -q \'"tunnelId"\' || devbridge list 2>/dev/null | grep -Eq \'^[a-z2-7]{8}[[:space:]]\') && echo "ACTIVE" || echo "INACTIVE"',
       username,
       10000,
     );
@@ -1395,7 +1398,9 @@ export async function deployCheck(
   const isCrossPlatform = frameworkType === 'cross-platform';
 
   const checkScript = [
-    `echo "=== DEPLOY CHECK ==="`,
+    // #999: the export rides the same first line as the marker (one-shot
+    // shells need it; first-line intent recognition needs a stable anchor).
+    `export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"; echo "=== DEPLOY CHECK ==="`,
     `PASS=0`,
     `TOTAL=0`,
     ``,

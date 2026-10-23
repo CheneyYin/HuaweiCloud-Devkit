@@ -65,11 +65,11 @@ Domain expertise for Huawei Cloud Sandbox (DevStation) instances and workspace t
 
 ### Tunnel Persistence (public URL lifetime)
 
-| Tool                                     | Purpose                                                                                                                                                                                                    |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `huaweicloud_sandbox_expose_tunnel`      | Expose a port → public tunnel URL (auth, pre-clean, health check; `expiry_hours` 1-720, def 72). **AUTO-enrolls into the keepalive watchdog** (merged into existing coverage; `keepalive: false` opts out) |
-| `huaweicloud_sandbox_renew_tunnel`       | Renew a tunnel lifetime (`update -e`, rolling window; returns absolute expiresAt)                                                                                                                          |
-| `huaweicloud_sandbox_keepalive_watchdog` | Install/replace the 3-layer watchdog: host re-attach + daily 720h renewal + 5-min health check                                                                                                             |
+| Tool                                     | Purpose                                                                                                                                                                                                                                                                                                                                       |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `huaweicloud_sandbox_expose_tunnel`      | Expose a port → public tunnel URL (auth, pre-clean, health check; `expiry_hours` 1-720, def 72). **AUTO-enrolls into the keepalive watchdog** (`keepalive: false` opts out; the merge preserves the watchdog ROSTER — note each expose pre-cleans all tunnels, so prior tunnels' coverage matters only for hosts surviving outside this flow) |
+| `huaweicloud_sandbox_renew_tunnel`       | Renew a tunnel lifetime (`update -e`, rolling window; returns absolute expiresAt)                                                                                                                                                                                                                                                             |
+| `huaweicloud_sandbox_keepalive_watchdog` | Install/replace the 3-layer watchdog: host re-attach + daily 720h renewal + 5-min health check                                                                                                                                                                                                                                                |
 
 ### Terminal Execution
 
@@ -325,7 +325,7 @@ fi
 | `/usr/local/bin`                             | System disk    | Rolled back — the image-preinstalled 0.1.x returns                                   |
 | `/tmp`                                       | Session-scoped | Cleared — `/tmp/hw_creds.sh`, `/tmp/hw_api_key`, `/tmp/tunnel-keepalive.sh` are gone |
 
-Measured (2026-10-22): an overnight reboot reverted `~/.huawei/bin/devbridge` 0.2.2 to the image's 0.1.13 — **yesterday's successful operation replayed as today's unexplained failure**. Recovery after a reboot: re-run the Step 0 install (or just re-export the PATH to the surviving `/workspace/.local/bin`), and re-run `huaweicloud_sandbox_credentials` to re-inject `/tmp` credentials. Re-run `huaweicloud_sandbox_keepalive_watchdog` (or any `huaweicloud_sandbox_expose_tunnel`, which re-enrolls) to restore the keepalive loop.
+Measured (2026-10-22): an overnight reboot reverted `~/.huawei/bin/devbridge` 0.2.2 to the image's 0.1.13 — **yesterday's successful operation replayed as today's unexplained failure**. Recovery after a reboot: re-run the Step 0 install (or just re-export the PATH to the surviving `/workspace/.local/bin`), and re-run `huaweicloud_sandbox_credentials` to re-inject `/tmp` credentials. The watchdog's tunnel LIST dies with `/tmp` — re-run `huaweicloud_sandbox_keepalive_watchdog` with the full `{tunnel_id, url}` list to restore coverage (a re-expose enrolls only the NEW tunnel it creates).
 
 ### Step 1: Authenticate — verified waterfall, keyring first
 
@@ -441,12 +441,20 @@ sleep 10 && cat /tmp/host.log
 This eliminates the most common deployment failure — historical tunnels from previous sessions accumulating past the max=10 quota.
 
 - The public URL has the form `https://<id>-<port>.devbridge-s2.hwtunnel.com` (from the `Tunnel URL:` line; 8-char lowercase base32 id). The pre-migration bridge domain `cn-north-4-bridge.myhuaweicloud.com` is dead — treat any URL on it as broken and never hand one to the developer.
-- **Start the host so it survives the exec session**: `setsid nohup ... < /dev/null & disown` (all three: setsid detaches the process group, `< /dev/null` drops the controlling tty, disown removes it from the shell's job table). On images without `setsid`, fall back to a bare `nohup ... &` launch (`if command -v setsid ...; else nohup ... ; fi`) and guard `disown` with `2>/dev/null || true` — a missing `setsid` must not leave the host unstarted. A bare `nohup ... &` (when `setsid` IS available) is reaped when the one-shot session ends — the tunnel dies right after a green in-session health check (the "200 but tunnel not found" trap); if an independent re-verify (fresh exec session, GET the URL) fails or answers 200 with a "tunnel not found" body, the URL is NOT persistent — always tell the developer 访问链接将在会话结束后失效，请勿分享 (never say 隧道/DevBridge to the developer — the language rule above). `-e 72` sets the tunnel lifetime in **hours** — surface it to the developer with the URL ("链接有效期 72 小时").
+- **Start the host so it survives the exec session**: `setsid nohup ... < /dev/null & disown` (all three: setsid detaches the process group, `< /dev/null` drops the controlling tty, disown removes it from the shell's job table). On images without `setsid`, fall back to a bare `nohup ... &` launch (`if command -v setsid ...; else nohup ... ; fi`) and guard `disown` with `2>/dev/null || true` — a missing `setsid` must not leave the host unstarted. A bare `nohup ... &` (when `setsid` IS available) is reaped when the one-shot session ends — the tunnel dies right after a green in-session health check (the "200 but tunnel not found" trap); if an independent re-verify (fresh exec session, GET the URL) fails or answers 200 with a "tunnel not found" body, the URL is NOT persistent — always tell the developer 访问链接将在会话结束后失效，请勿分享 (never say 隧道/DevBridge to the developer — the language rule above). `-e 72` sets the tunnel lifetime in **hours** — surface it to the developer with the URL ("链接已生成，默认自动续期保活" — expiry_hours 默认 72h，keepalive 看门狗每日续到 720h，除非 keepalive:false).
 - **Return this URL to the developer as the deployment result link.** Keep the host process running (do not close the session before handing over the URL).
 - Tunnel `description` (`-d`) accepts only Chinese characters, letters, and digits (0-64). Symbols such as `-`/`_`/spaces are rejected (`Invalid tunnel description`).
 - Official docs: https://huaweicloud.github.io/devspace-devbridge/
 
 **No local downgrade**: if the tunnel tooling cannot be installed in the sandbox, STOP and report a generic error ("无法生成访问地址") without technical detail. Never install it on the developer's local machine — a local install would defeat the purpose of sandbox deployment.
+
+### Step 3: Keep the URL alive (persistence & renewal)
+
+Every tunnel deployed to the sandbox is keepalive-protected by default — `huaweicloud_sandbox_expose_tunnel` AUTO-ENROLLS each exposed tunnel into the watchdog (merged into the existing roster; `keepalive: false` opts out). The enrollment satisfies the developer requirement (unattended renewal + host re-attach + health check) without any manual step.
+
+- **Tunnel lifetime is a rolling window** — renew before expiry and the SAME URL stays alive indefinitely (`huaweicloud_sandbox_renew_tunnel`, or the watchdog's daily 720h renewal).
+- **Host dies (sandbox restart / session teardown)** — the watchdog re-attaches with `devbridge host <id>`; the URL is bound to the tunnel ID and never changes.
+- **Manual install / full-list replacement** — `huaweicloud_sandbox_keepalive_watchdog` with the `{tunnel_id, url}` list (it SETS the list; expose MERGES into it). Full doctrine: `references/tunnel-persistence.md`.
 
 ## Web Application Deployment
 
@@ -1015,7 +1023,7 @@ Returns `complete: true/false`, `score`, and `nextStep` to fix missing items.
 
 - [Framework Commands](references/framework-commands.md) — command mapping for all supported frameworks
 - [Nginx Templates](references/nginx-templates.md) — nginx configuration templates and fallback
-- Tunnel persistence (renewal, re-attach, keepalive watchdog): references/tunnel-persistence.md
+- [Tunnel persistence](references/tunnel-persistence.md) — renewal, re-attach, and the keepalive watchdog
 
 ## Critical Warnings
 

@@ -574,21 +574,22 @@ export interface RenewTunnelResult {
 // exit-code check would misread as success on the old process alone.
 export function parseDevbridgeRenewOutput(stdout: unknown): RenewTunnelResult {
   const text = stripTerminalEscapes(stdout);
-  const getField = (key: string): string => {
-    const m = text.match(new RegExp(`^${key}=(.*)$`, 'm'));
-    return m ? (m[1] ?? '').trim() : '';
-  };
-  const renewExit = getField('DB_RENEW_EXIT');
-  const expirationUnix = Number(getField('DB_EXPIRATION')) || undefined;
+  const renewExit = readDbField(text, 'DB_RENEW_EXIT');
+  const expirationUnix = Number(readDbField(text, 'DB_EXPIRATION')) || undefined;
   const ok = renewExit === '0' && expirationUnix !== undefined;
   const expiration = expirationUnix !== undefined ? new Date(expirationUnix * 1000).toISOString() : undefined;
   return {
     ok,
-    tunnelId: getField('DB_RENEW_ID'),
-    renewedForHours: Number(getField('DB_RENEW_HOURS')) || undefined,
+    tunnelId: readDbField(text, 'DB_RENEW_ID'),
+    renewedForHours: Number(readDbField(text, 'DB_RENEW_HOURS')) || undefined,
     expirationUnix,
     expiresAt: expiration,
-    error: ok ? undefined : getField('DB_RENEW_ERROR') || `renewal failed (exit ${renewExit || 'unknown'})`,
+    error: ok
+      ? undefined
+      : readDbField(text, 'DB_RENEW_ERROR') ||
+        (renewExit === '0'
+          ? 'update succeeded but the absolute expiration could not be read back (management-plane record loss?) — treat as unverified'
+          : `renewal failed (exit ${renewExit || 'unknown'})`),
   };
 }
 
@@ -625,23 +626,34 @@ export interface KeepaliveTunnel {
 // integration-enabled shells, so anchored greps silently fail and the
 // constructed health URL 404s (measured 2026-10).
 // v2 divergences from main's script (recorded): the PATH export is
-// data-disk-first (#999), and the health-check curl carries --noproxy '*'
+// data-disk-first (#999); the health-check curl carries --noproxy '*'
 // (#1000 — main's own keepalive missed it; without it the watchdog logs WARN
-// 502/404 fakes for healthy tunnels).
+// 502/404 fakes for healthy tunnels) and drops main's `|| echo "000"` (the
+// file's documented sentinel-doubling doctrine — an empty HC still WARNs);
+// and the layer-1 probe matches BOTH host launch forms (main's single-form
+// pgrep cannot see the -p-form host expose_tunnel itself launched and
+// spuriously "restarts" it on the first tick).
 export function buildDevbridgeKeepaliveScript(tunnels: unknown): string {
   if (!Array.isArray(tunnels) || tunnels.length === 0) {
     throw new Error('sandbox keepalive: tunnels must be a non-empty array of {tunnelId, url}.');
   }
   const entries = (tunnels as Array<Record<string, unknown>>)
-    .map((t) => `${validateTunnelId(t?.tunnelId)}:${asText(t?.url ?? '')}`)
-    .map((entry) => {
-      const url = entry.slice(entry.indexOf(':') + 1);
+    .map((t) => {
+      const id = validateTunnelId(t?.tunnelId);
+      const url = asText(t?.url ?? '');
       if (!/^https:\/\/[A-Za-z0-9:._/-]+$/.test(url)) {
         throw new Error(
           `sandbox keepalive: invalid tunnel URL ${JSON.stringify(url.slice(0, 80))} for the keepalive health check. Expected an https:// URL with URL-safe characters (from huaweicloud_sandbox_expose_tunnel's publicUrl).`,
         );
       }
-      return entry;
+      // The URL embeds the port (https://<id>-<port>.domain) — the layer-1
+      // liveness probe needs BOTH host launch forms: expose_tunnel starts
+      // `devbridge host -p <port>` (the ID does not exist at launch), the
+      // re-attach form is `devbridge host <id>`. A single-form pgrep misses
+      // the live -p-form host and spuriously "restarts" it on the first tick
+      // (v2 fix — main's watchdog carries the single-form miss).
+      const port = url.match(/-(\d+)\.[^.]+\.[^.]+\.[^.]+\/?$/)?.[1] ?? '';
+      return port ? `${id}:${url}:${port}` : `${id}:${url}:`;
     })
     .join(' ');
   // Heredoc is single-quoted ('DB_KEEPALIVE_EOF') so the writer shell expands
@@ -656,8 +668,8 @@ export function buildDevbridgeKeepaliveScript(tunnels: unknown): string {
     `  NOW=$(date -u +%s)`,
     `  TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)`,
     `  for entry in $TUNNELS; do`,
-    `    ID="\${entry%%:*}"; URL="\${entry#*:}"`,
-    `    if ! pgrep -f "devbridge host $ID" > /dev/null 2>&1; then`,
+    `    ID="\${entry%%:*}"; REST="\${entry#*:}"; URL="\${REST%:*}"; PORT="\${REST##*:}"`,
+    `    if ! pgrep -f "devbridge host $ID" > /dev/null 2>&1 && ! pgrep -f "devbridge host -p $PORT" > /dev/null 2>&1; then`,
     `      if command -v setsid > /dev/null 2>&1; then setsid nohup devbridge host "$ID" > "/tmp/host-$ID.log" 2>&1 < /dev/null & else nohup devbridge host "$ID" > "/tmp/host-$ID.log" 2>&1 < /dev/null & fi`,
     `      echo "$TS host $ID restarted (same tunnel, URL unchanged)" >> /tmp/tunnel-keepalive.log`,
     `      sleep 8`,
@@ -725,7 +737,10 @@ export function parseKeepaliveTunnelsOutput(stdout: unknown): KeepaliveTunnel[] 
 
 // Merge the current watchdog tunnels with the incoming ones: dedupe by
 // tunnelId, incoming wins (same tunnel re-exposed refreshes its URL), existing
-// order preserved, new tunnels appended.
+// order preserved, new tunnels appended. Known limit: the read and the install
+// are two execs — two CONCURRENT expose_tunnel calls on the same sandbox can
+// interleave them and last-writer-wins drops the other's tunnel (documented;
+// single-sandbox concurrency is not a supported posture).
 export function mergeKeepaliveTunnels(existing: unknown, incoming: unknown): KeepaliveTunnel[] {
   const byId = new Map<string, KeepaliveTunnel>();
   for (const t of (Array.isArray(existing) ? existing : []) as Array<Record<string, unknown>>) {
@@ -762,22 +777,30 @@ export async function installKeepaliveWatchdog(
   const script = buildDevbridgeKeepaliveScript(tunnels);
   const result = await runOneShot(workspaceId, script, username, timeoutMs);
   const text = stripTerminalEscapes(result.stdout);
-  const getField = (key: string): string => {
-    const m = text.match(new RegExp(`^${key}=(.*)$`, 'm'));
-    return m ? (m[1] ?? '').trim() : '';
-  };
-  const syntax = getField('DB_KEEPALIVE_SYNTAX');
+  const syntax = readDbField(text, 'DB_KEEPALIVE_SYNTAX');
   if (syntax !== '0') {
     return {
       ok: false,
       error: `keepalive watchdog script failed the bash -n syntax check (exit ${syntax || 'unknown'}).`,
     };
   }
+  // The syntax gate alone is a weak success: the launch is unconditional, so a
+  // watchdog that dies inside the 3-second window (noexec /tmp, spawn failure)
+  // would report ok with no PID — a silent non-existence for a subsystem whose
+  // whole point is unattended liveness. An empty PID is an honest failure.
+  const pid = readDbField(text, 'DB_KEEPALIVE_PID');
+  if (!pid) {
+    return {
+      ok: false,
+      error:
+        'keepalive watchdog passed the syntax check but no running PID was found after launch — the script may have died immediately (noexec /tmp? missing bash?). Inspect /tmp/tunnel-keepalive.log.',
+    };
+  }
   return {
     ok: true,
     scriptPath: '/tmp/tunnel-keepalive.sh',
-    logPath: getField('DB_KEEPALIVE_LOG') || '/tmp/tunnel-keepalive.log',
-    watchdogPid: getField('DB_KEEPALIVE_PID') || undefined,
+    logPath: readDbField(text, 'DB_KEEPALIVE_LOG') || '/tmp/tunnel-keepalive.log',
+    watchdogPid: pid,
     tunnels: ((Array.isArray(tunnels) ? tunnels : []) as Array<Record<string, unknown>>).map((t) => ({
       tunnelId: asText(t.tunnelId),
       url: asText(t.url),
@@ -1074,6 +1097,11 @@ export async function exposeTunnel(
     // AUTO-ENROLL (see the return-shape comment below): read the installed
     // watchdog's tunnel list and merge the new tunnel into it.
     let keepaliveEnrollment: KeepaliveWatchdogResult | undefined;
+    if (keepalive !== false && parsed.tunnelUrl && !parsed.tunnelId) {
+      warnings.push(
+        'Keepalive enrollment skipped: the tunnel ID could not be derived from the exposed URL — the tunnel works but will NOT be auto-renewed.',
+      );
+    }
     if (keepalive !== false && parsed.tunnelUrl && parsed.tunnelId) {
       try {
         const readResult = await runOneShot(workspaceId, buildKeepaliveTunnelsReadScript(), username, 20000);

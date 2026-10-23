@@ -680,14 +680,16 @@ const renewTunnelSchema = z.looseObject({
   username,
   timeout_ms: numericArg
     .optional()
-    .describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.renew_tunnel ?? 60000})`),
+    .describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.renew_tunnel})`),
 });
 
 const keepaliveWatchdogSchema = z.looseObject({
   tunnels: z
     .array(
       z.looseObject({
-        tunnel_id: z.string().describe('DevBridge tunnel ID (from expose_tunnel or the URL).'),
+        tunnel_id: z
+          .string()
+          .describe('DevBridge tunnel ID (from expose_tunnel or the URL); a camelCase tunnelId key is also accepted.'),
         url: z.string().describe("The tunnel's public URL (from expose_tunnel's publicUrl)."),
       }),
     )
@@ -699,7 +701,7 @@ const keepaliveWatchdogSchema = z.looseObject({
   username,
   timeout_ms: numericArg
     .optional()
-    .describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.keepalive_watchdog ?? 60000})`),
+    .describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.keepalive_watchdog})`),
 });
 
 const signAgreementSchema = z.looseObject({});
@@ -800,7 +802,7 @@ export const SANDBOX_TOOLS = [
   {
     name: 'huaweicloud_sandbox_keepalive_watchdog',
     description:
-      'Install or replace the 3-layer keepalive watchdog for a set of tunnels (the tunnel-persistence pattern): (1) host re-attach — restarts `devbridge host <id>` when the host process dies (URL unchanged); (2) daily renewal — `update <id> -e 720` (29-day failure tolerance); (3) health check — curls each URL every 5 minutes and logs WARN on non-200/304. URLs are hardcoded per tunnel (never derived from port-list output — OSC escapes make those greps fail silently). Replaces the current watchdog (expose_tunnel MERGES into it; this tool SETS the list). Returns ok, scriptPath, logPath, watchdogPid, tunnels. The watchdog lives at /tmp/tunnel-keepalive.sh — cleared on reboot; re-run this tool (or expose_tunnel, which re-enrolls) after a reboot.',
+      'Install or replace the 3-layer keepalive watchdog for a set of tunnels (the tunnel-persistence pattern): (1) host re-attach — restarts `devbridge host <id>` when the host process dies (URL unchanged); (2) daily renewal — `update <id> -e 720` (29-day failure tolerance); (3) health check — curls each URL every 5 minutes and logs WARN on non-200/304. URLs are hardcoded per tunnel (never derived from port-list output — OSC escapes make those greps fail silently). Replaces the current watchdog (expose_tunnel MERGES into it; this tool SETS the list). Returns ok, scriptPath, logPath, watchdogPid, tunnels. The watchdog lives at /tmp/tunnel-keepalive.sh — cleared on reboot (the tunnel LIST dies with it): re-run this tool with the full list after a reboot (a re-expose enrolls only its own NEW tunnel).',
     schema: keepaliveWatchdogSchema,
     handler: handleKeepaliveWatchdog,
   },

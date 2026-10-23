@@ -393,9 +393,17 @@ test('MCP tools/list includes all required core tools with valid schemas', async
   }
 });
 
-test('DEVKIT_PACKS=sandbox trims tools/list to core 12 + sandbox 14', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'mcp-trim-'));
-  const cwd = mkdtempSync(join(tmpdir(), 'mcp-trim-proj-'));
+// Shared trim-scenario driver: install, spawn with DEVKIT_PACKS=<pack>, then
+// assert the trimmed tool count and the membership semantics (core survives,
+// the opted-in pack registers fully, every other pack is absent). Extracted
+// because the sandbox and open-mcp scenarios are token-identical otherwise.
+async function assertTrimmedToolsList(
+  packId: 'sandbox' | 'huaweicloud-open-mcp',
+  expectedCount: number,
+  expectedLabel: string,
+): Promise<void> {
+  const home = mkdtempSync(join(tmpdir(), `mcp-trim-${packId}-`));
+  const cwd = mkdtempSync(join(tmpdir(), `mcp-trim-${packId}-proj-`));
   try {
     const install = runCli(home, cwd, ['install', '--target', 'opencode']);
     assert.equal(install.status, 0, install.stderr);
@@ -405,74 +413,39 @@ test('DEVKIT_PACKS=sandbox trims tools/list to core 12 + sandbox 14', async () =
     // suite's other tests above still see the full 53.
     const responses = await invokeMcpSequence(
       mcpServerPath,
-      { ...makeEnv(home, cwd), DEVKIT_PACKS: 'sandbox' },
+      { ...makeEnv(home, cwd), DEVKIT_PACKS: packId },
       listTools,
     );
 
     assert.ok(responses[0].result, 'initialize returned result');
     assert.ok(responses[1].result, 'tools/list returned result');
     const toolNames = responses[1].result.tools.map((t) => t.name);
-    assert.equal(toolNames.length, 26, `expected core 12 + sandbox 14, got ${toolNames.length}`);
+    assert.equal(toolNames.length, expectedCount, `expected ${expectedLabel}, got ${toolNames.length}`);
 
-    // The always-on core surface survives any trimming...
     for (const required of REQUIRED_TOOLS) {
       assert.ok(toolNames.includes(required), `Missing core tool: ${required}`);
     }
-    // ...the opted-in sandbox pack registers fully...
-    for (const name of PER_PACK_TOOLS.sandbox) {
-      assert.ok(toolNames.includes(name), `Missing sandbox tool: ${name}`);
+    for (const name of PER_PACK_TOOLS[packId]) {
+      assert.ok(toolNames.includes(name), `Missing ${packId} tool: ${name}`);
     }
-    // ...and every other pack's tools are absent.
-    for (const [packId, names] of Object.entries(PER_PACK_TOOLS)) {
-      if (packId === 'sandbox') continue;
+    for (const [otherPack, names] of Object.entries(PER_PACK_TOOLS)) {
+      if (otherPack === packId) continue;
       for (const name of names) {
-        assert.ok(!toolNames.includes(name), `${name} from disabled pack ${packId} must not be registered`);
+        assert.ok(!toolNames.includes(name), `${name} from disabled pack ${otherPack} must not be registered`);
       }
     }
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
   }
+}
+
+test('DEVKIT_PACKS=sandbox trims tools/list to core 12 + sandbox 14', async () => {
+  await assertTrimmedToolsList('sandbox', 26, 'core 12 + sandbox 14');
 });
 
 test('DEVKIT_PACKS=huaweicloud-open-mcp trims tools/list to core 12 + gateway 3', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'mcp-trim-open-mcp-'));
-  const cwd = mkdtempSync(join(tmpdir(), 'mcp-trim-open-mcp-proj-'));
-  try {
-    const install = runCli(home, cwd, ['install', '--target', 'opencode']);
-    assert.equal(install.status, 0, install.stderr);
-
-    const mcpServerPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js');
-    const responses = await invokeMcpSequence(
-      mcpServerPath,
-      {
-        ...makeEnv(home, cwd),
-        DEVKIT_PACKS: 'huaweicloud-open-mcp',
-      },
-      listTools,
-    );
-
-    assert.ok(responses[0].result, 'initialize returned result');
-    assert.ok(responses[1].result, 'tools/list returned result');
-    const toolNames = responses[1].result.tools.map((t) => t.name);
-    assert.equal(toolNames.length, 15, `expected core 12 + gateway 3, got ${toolNames.length}`);
-
-    for (const required of REQUIRED_TOOLS) {
-      assert.ok(toolNames.includes(required), `Missing core tool: ${required}`);
-    }
-    for (const name of PER_PACK_TOOLS['huaweicloud-open-mcp']) {
-      assert.ok(toolNames.includes(name), `Missing gateway tool: ${name}`);
-    }
-    for (const [packId, names] of Object.entries(PER_PACK_TOOLS)) {
-      if (packId === 'huaweicloud-open-mcp') continue;
-      for (const name of names) {
-        assert.ok(!toolNames.includes(name), `${name} from disabled pack ${packId} must not be registered`);
-      }
-    }
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-    rmSync(cwd, { recursive: true, force: true });
-  }
+  await assertTrimmedToolsList('huaweicloud-open-mcp', 15, 'core 12 + gateway 3');
 });
 
 test('huaweicloud_search_docs returns relevant skill results', async () => {
