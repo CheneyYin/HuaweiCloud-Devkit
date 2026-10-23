@@ -7,6 +7,7 @@ import {
   execOneShot,
   stripTerminalEscapes,
 } from './session-manager.ts';
+import { asText } from '../lib/as-text.ts';
 
 // The DevBridge expose-tunnel flow, extracted from session-manager so the
 // tunnel helpers stay a cohesive unit with a pure-function test surface.
@@ -43,6 +44,9 @@ export interface ExposeTunnelResult {
   warnings?: string;
   hostLog?: string;
   error?: string;
+  error_code?: string;
+  version?: string;
+  remediation?: string;
   attempts?: Record<string, string>;
   hint?: string;
   loginOutput?: string;
@@ -91,6 +95,12 @@ export function buildDevbridgeAuthProbe(): string {
     // binary in /usr/local/bin never wins.
     `export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"`,
     `export HOME="\${HOME:-/root}"`,
+    // #998: probe the version in the SAME exec as the auth waterfall (no extra
+    // round trip). 0.1.x binaries' AK/SK tier still logs in, so the auth probe
+    // alone would green-light an expose that can never work — the version is
+    // what names the real cause.
+    `DB_VERSION=$(devbridge version 2>/dev/null | head -1)`,
+    `echo "DB_VERSION=\${DB_VERSION}"`,
     `DB_OK=0`,
     `db_login_ok() { devbridge auth status 2>/dev/null | grep -q "Logged in"; }`,
     `db_diag() { echo "DB_ATTEMPT_$1=$2"; }`,
@@ -182,11 +192,13 @@ export function buildDevbridgeAuthProbe(): string {
 export interface DevbridgeAuth {
   authMode: string;
   attempts: Record<string, string>;
+  version: string;
 }
 
-// Parse the raw stdout of buildDevbridgeAuthProbe into { authMode, attempts }.
+// Parse the raw stdout of buildDevbridgeAuthProbe into { authMode, attempts, version }.
 // authMode is the LAST DB_AUTH_MODE line; attempts collects the non-sensitive
-// DB_ATTEMPT_* diagnostics emitted by tiers that failed and fell through.
+// DB_ATTEMPT_* diagnostics emitted by tiers that failed and fell through;
+// version is the devbridge binary version probed in the same exec (#998).
 export function parseDevbridgeAuthOutput(stdout: unknown): DevbridgeAuth {
   // #946: OSC 133 markers precede every line on integration-enabled shells; the
   // anchored ^DB_ATTEMPT_ regexes are blind to them without stripping first.
@@ -197,7 +209,44 @@ export function parseDevbridgeAuthOutput(stdout: unknown): DevbridgeAuth {
   for (const m of text.matchAll(/^DB_ATTEMPT_([A-Z_]+)=(\S+)$/gm)) {
     attempts[m[1] ?? ''] = m[2] ?? '';
   }
-  return { authMode, attempts };
+  const version = text.match(/^DB_VERSION=(.*)$/m)?.[1]?.trim() ?? '';
+  return { authMode, attempts, version };
+}
+
+export interface DevbridgeVersionVerdict {
+  blocked: boolean;
+  error?: string;
+  remediation?: string;
+}
+
+// #998: 0.1.x binaries cannot serve tunnels — their hardcoded pre-migration
+// gateway was retired (Sep 2026) and now serves a「服务已迁移」placeholder,
+// while their AK/SK auth tier still logs in successfully. Without a version
+// check the auth green-light leads to an expose that fails after retries with
+// no version context, sending the caller chasing credentials/network/port
+// instead of the real cause. Block 0.1.x BEFORE exposing and point at the
+// Step 0 install path. An empty version (binary absent) does not block — the
+// auth waterfall handles that case.
+export function evaluateDevbridgeVersion(version: unknown): DevbridgeVersionVerdict {
+  const v = asText(version ?? '').trim();
+  if (!v) return { blocked: false };
+  if (/^0\.1($|[.-])/.test(v)) {
+    return {
+      blocked: true,
+      error:
+        `devbridge_too_old: ${v} cannot serve tunnels — its hardcoded gateway was migrated and now serves a 「服务已迁移」 placeholder. ` +
+        'An upgrade to 0.2.x is required before exposing; no credential change will fix this.',
+      // v2 divergence from main's remediation: -p /workspace/.local/bin rides
+      // the installer invocation (#999) — the data-disk install is the whole
+      // point, and main's text teaches the reboot-lossy default.
+      remediation:
+        'Upgrade in place per the huawei-sandbox skill Step 0: install 0.2.x via the GitCode mirror with GitHub fallback ' +
+        '(`install.sh -s -p /workspace/.local/bin -u <gitcode URL> -v <target>`, `-s` is required in the sandbox), then re-run huaweicloud_sandbox_expose_tunnel. ' +
+        'Install to /workspace/.local/bin (survives sandbox reboots) — never ~/.huawei/bin (wiped on system-disk reset). ' +
+        'Old 0.1.x tunnels do not survive the upgrade: the expose flow pre-cleans them.',
+    };
+  }
+  return { blocked: false };
 }
 
 // Start (or replace) a devbridge host bound to a single port, extract the public
@@ -462,7 +511,25 @@ export async function exposeTunnel(
 
   const authScript = buildDevbridgeAuthProbe();
   const authResult = await runOneShot(workspaceId, authScript, username, 30000);
-  const { authMode, attempts } = parseDevbridgeAuthOutput(authResult.stdout);
+  const { authMode, attempts, version: authVersion } = parseDevbridgeAuthOutput(authResult.stdout);
+
+  // #998: version gate BEFORE the expose loop. 0.1.x binaries' AK/SK tier still
+  // logs in, so authMode alone would green-light an expose that can never work.
+  // This must precede the authMode check — the structured too_old error names
+  // the real cause where the auth-failure path would point at credentials.
+  const versionCheck = evaluateDevbridgeVersion(authVersion);
+  if (versionCheck.blocked) {
+    return {
+      ok: false,
+      port: validatedPort,
+      error: versionCheck.error,
+      error_code: 'devbridge_too_old',
+      version: authVersion,
+      authMode,
+      attempts,
+      remediation: versionCheck.remediation,
+    };
+  }
 
   if (authMode !== 'API_KEY_KEYRING' && authMode !== 'AKSK_SUPPORTED' && authMode !== 'API_KEY_FILE') {
     // v2 deviation: truncation like hostLog — raw auth output is diagnostics,
@@ -572,13 +639,45 @@ export async function exposeTunnel(
     // with HTTP 200, so the marker counts as unusable exactly like 000/''.
     const usable = !migration && parsed.tunnelUrl !== '' && parsed.httpCode !== '000' && parsed.httpCode !== '';
     if (!usable) {
+      // #998 read-back: a no-URL failure after retries needs the version in the
+      // return body — the gate above catches 0.1.x upfront, but a binary that
+      // changed mid-flow (or an empty probe version) lands here, and in the
+      // measured incident a single version field would have saved the whole
+      // credentials/network/port misdiagnosis.
+      let noUrlVersion = authVersion;
+      if (parsed.tunnelUrl === '') {
+        try {
+          const versionResult = await runOneShot(
+            workspaceId,
+            `export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"; devbridge version 2>/dev/null | head -1`,
+            username,
+            15000,
+          );
+          noUrlVersion = String(versionResult.stdout ?? '').trim() || authVersion;
+        } catch {
+          // best-effort: the auth probe's version stands
+        }
+      }
+      const noUrlCheck = evaluateDevbridgeVersion(noUrlVersion);
+      if (noUrlCheck.blocked) {
+        warnings.push(
+          `devbridge version is ${noUrlVersion} — too old to serve tunnels; upgrade per Step 0 before retrying.`,
+        );
+      }
       return {
         ok: false,
         port: validatedPort,
-        error: 'Failed to expose a working DevBridge tunnel: no reachable public URL after retries.',
+        error: noUrlCheck.blocked
+          ? noUrlCheck.error
+          : parsed.tunnelUrl === ''
+            ? 'Failed to expose a working DevBridge tunnel: the host log contains no Tunnel URL — the host did not start. Check the hostLog below for the real cause.'
+            : 'Failed to expose a working DevBridge tunnel: no reachable public URL after retries.',
+        error_code: noUrlCheck.blocked ? 'devbridge_too_old' : parsed.tunnelUrl === '' ? 'no_tunnel_url' : undefined,
+        version: noUrlVersion || undefined,
         authMode,
         httpCode: parsed.httpCode,
         warnings: warnings.length > 0 ? warnings.join(' ') : undefined,
+        remediation: noUrlCheck.blocked ? noUrlCheck.remediation : undefined,
         hostLog: String(result.stdout ?? '').slice(0, 400),
       };
     }

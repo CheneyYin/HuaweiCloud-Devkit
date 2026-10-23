@@ -12,6 +12,7 @@ import {
   buildDevbridgeVerifyScript,
   DEVBRIDGE_HOST_EXPIRY_HOURS,
   exposeTunnel,
+  evaluateDevbridgeVersion,
   formatTunnelReachabilityWarning,
   parseDevbridgeAuthOutput,
   parseDevbridgeExposeOutput,
@@ -694,9 +695,12 @@ test('v2 deviation: a final unreachable attempt returns ok:false, never ok:true 
   assert.equal(result.ok, false);
   assert.equal(result.publicUrl, undefined);
   assert.equal(result.httpCode, '000');
-  assert.match(result.error ?? '', /no reachable public URL/);
-  // auth → expose (attempt 1) → cleanup → expose (attempt 2)
-  assert.equal(calls.length, 4);
+  // #998 taxonomy: an empty URL is the host-did-not-start class.
+  assert.equal(result.error_code, 'no_tunnel_url');
+  assert.match(result.error ?? '', /no Tunnel URL/);
+  // auth → expose (attempt 1) → cleanup → expose (attempt 2) → #998 version
+  // read-back (empty URL on the final attempt)
+  assert.equal(calls.length, 5);
   assert.ok(calls[1]!.includes('pkill -f "devbridge host"'));
   assert.ok(calls[3]!.includes('pkill -f "devbridge host"'));
 });
@@ -746,7 +750,7 @@ test('quota (10006) on the final attempt also returns ok:false with the quota wa
   assert.equal(result.ok, false);
   assert.match(result.warnings ?? '', /10006/);
   assert.equal(result.port, 8081);
-  assert.equal(calls.length, 3); // auth → expose ×2 (no cleanup between quota retries)
+  assert.equal(calls.length, 4); // auth → expose ×2 (no cleanup between quota retries) → #998 version read-back
 });
 
 test('exposeTunnel requires workspace_id and a valid port', async () => {
@@ -784,7 +788,60 @@ test('A2: an expose-exec timeout folds into the unreachable envelope, never a ra
   );
   // Both attempts timed out mid-script → structured ok:false, not a throw.
   assert.equal(result.ok, false);
-  assert.match(result.error ?? '', /no reachable public URL after retries/);
+  // The timeout-folded attempt parses empty stdout → the no-URL taxonomy with
+  // the timed-out warning (#998 + the A2 budget guard).
+  assert.match(result.error ?? '', /no Tunnel URL/);
   assert.match(result.warnings ?? '', /timed out/);
   assert.equal(exposeCalls, 2, 'the outer rebuild retry must still run after a timeout-folded attempt');
+});
+
+// ---- #998: devbridge version probe + gate ----
+
+test('the auth probe reads the version in the same exec (#998)', () => {
+  const script = buildDevbridgeAuthProbe();
+  assert.match(script, /DB_VERSION=\$\(devbridge version 2>\/dev\/null \| head -1\)/);
+  assert.match(script, /echo "DB_VERSION=\$\{DB_VERSION\}"/);
+});
+
+test('parseDevbridgeAuthOutput reads the version field, OSC-noise tolerant (#998 + #946)', () => {
+  const osc = '\x1b]133;C\x07';
+  const parsed = parseDevbridgeAuthOutput(`${osc}DB_VERSION=0.1.13-release\n${osc}DB_AUTH_MODE=AKSK_SUPPORTED\n`);
+  assert.equal(parsed.version, '0.1.13-release');
+  assert.equal(parsed.authMode, 'AKSK_SUPPORTED');
+  assert.equal(parseDevbridgeAuthOutput('DB_AUTH_MODE=API_KEY_KEYRING\n').version, '', 'absent version parses empty');
+});
+
+test('evaluateDevbridgeVersion blocks 0.1.x with devbridge_too_old + remediation (#998)', () => {
+  const blocked = evaluateDevbridgeVersion('0.1.13-release');
+  assert.equal(blocked.blocked, true);
+  assert.match(blocked.error ?? '', /devbridge_too_old/);
+  assert.match(blocked.error ?? '', /0\.1\.13-release/);
+  assert.match(blocked.remediation ?? '', /Step 0/);
+  assert.match(blocked.remediation ?? '', /workspace\/\.local\/bin/);
+  // v2 divergence: the remediation carries the -p data-disk prefix (#999).
+  assert.match(blocked.remediation ?? '', /install\.sh -s -p \/workspace\/\.local\/bin/);
+
+  assert.equal(evaluateDevbridgeVersion('0.2.2-release').blocked, false);
+  assert.equal(evaluateDevbridgeVersion('').blocked, false, 'absent binary must not block — auth handles it');
+  assert.equal(evaluateDevbridgeVersion(undefined).blocked, false);
+});
+
+test('exposeTunnel blocks 0.1.x BEFORE the expose loop — auth green-light is not enough (#998)', async () => {
+  let exposeCalls = 0;
+  const result = await exposeViaSeam(async (_ws, command) => {
+    if (command.includes('DB_AUTH_MODE')) {
+      // 0.1.x: the AK/SK tier still logs in — the auth alone would pass.
+      return { stdout: 'DB_VERSION=0.1.13-release\nDB_AUTH_MODE=AKSK_SUPPORTED\n', exitCode: 0 };
+    }
+    if (command.includes('pkill -f "devbridge host"')) {
+      exposeCalls += 1;
+    }
+    return { stdout: '', exitCode: 0 };
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.error_code, 'devbridge_too_old');
+  assert.equal(result.version, '0.1.13-release');
+  assert.match(result.error ?? '', /服务已迁移/);
+  assert.match(result.remediation ?? '', /Step 0/);
+  assert.equal(exposeCalls, 0, 'the expose script must never run for a 0.1.x binary');
 });
