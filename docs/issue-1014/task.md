@@ -1,8 +1,9 @@
-# Issue #1014 任务拆解（task）
+# Issue #1014 task checklist
 
-- [x] S1：`flushEvents` 发送前 `loadUserHash()` + batch 内 null `userHash` 回填（telemetry.mjs）
-- [x] S2：`setup-cli.mjs` 两处 telemetry 目录硬编码改为 `devkitTelemetryDir()`（尊重 `HUAWEICLOUD_DEVKIT_HOME`）
-- [x] S2 核对：user-hash 写入方仅 `cacheUserHash`，路径与 telemetry 一致；hooks 仅写 plugin 目录 hook-events
-- [x] 测试：`flushEvents backfills userHash written after enqueue`（入队时无文件、flush 前写入、断言携带 hash）
-- [x] 验证：`node --test test/telemetry.test.mjs` 18/18 通过；`npm test`、`npm run lint`、`npm run validate`、`npm run format:check`
-- [x] 建 PR 并关联 `fixes #1014`
+- [x] 根因分析：user_hash null 的代码路径（enqueue 早于 userHash 加载 + 不回填）
+- [x] telemetry.mjs：flushEvents 可 await、backfillIdentityFields、installId 惰性恢复
+- [x] telemetry.mjs：flushAllEvents + SIGTERM/SIGINT 退出兜底（3s 有界）
+- [x] tools.mjs：领券 case 补调 cacheUserHash
+- [x] mcp-protocol.mjs：领券工具 callTool 完毕后 await flushEvents()
+- [x] 单测：test/issue-1014-telemetry-flush.test.mjs
+- [x] lint / test / validate
