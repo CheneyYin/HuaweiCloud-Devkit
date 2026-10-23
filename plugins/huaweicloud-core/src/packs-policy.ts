@@ -88,24 +88,33 @@ export function warnPacksUserValueKept(label: string, current: string, requested
   );
 }
 
-// Apply the packs policy to one merged MCP entry. `envKey` is the env field
-// the target's harness reads ('env' for .mcp.json-style entries,
-// 'environment' for OpenCode and CodeArts Work). Returns true when the entry
-// changed, so callers can fold it into their "unchanged" short-circuit.
-export function applyPacksToEntry(
-  entry: Record<string, unknown>,
+// The env field + current DEVKIT_PACKS value one MCP entry carries — the
+// shared read both policy functions derive from, so the entry-shape
+// narrowing lives once.
+function readPacksEnv(
+  entry: unknown,
   envKey: 'env' | 'environment',
-  label: string,
-): boolean {
-  const flag = resolvePacksFlag();
-  if (flag.kind === 'unset') return false;
-  const rawEnv: unknown = entry[envKey];
+): { existingEnv: Record<string, unknown> | null; current: string | null } {
+  const rawEnv: unknown = asRecord(entry)[envKey];
   const existingEnv: Record<string, unknown> | null =
     rawEnv !== null && typeof rawEnv === 'object' && !Array.isArray(rawEnv)
       ? (rawEnv as Record<string, unknown>)
       : null;
   const current =
     existingEnv !== null && typeof existingEnv.DEVKIT_PACKS === 'string' ? existingEnv.DEVKIT_PACKS : null;
+  return { existingEnv, current };
+}
+
+// Apply the packs policy to one merged MCP entry. `envKey` is the env field
+// the target's harness reads ('env' for .mcp.json-style entries,
+// 'environment' for OpenCode and CodeArts Work). Returns true when the entry
+// changed, so callers can fold it into their "unchanged" short-circuit.
+// The single warning site: a kept user value warns here, exactly once —
+// packsEntryPending is pure and never warns.
+export function applyPacksToEntry(entry: Record<string, unknown>, envKey: 'env' | 'environment', label: string): boolean {
+  const flag = resolvePacksFlag();
+  if (flag.kind === 'unset') return false;
+  const { existingEnv, current } = readPacksEnv(entry, envKey);
   const { next, keptUserValue, requested } = packsWriteValue(current);
   if (keptUserValue) {
     warnPacksUserValueKept(label, current ?? '', requested);
@@ -123,25 +132,26 @@ export function applyPacksToEntry(
 }
 
 // Whether the packs policy would rewrite DEVKIT_PACKS in an entry shaped
-// like `existing`, warning when a user-set value wins. For writers whose
-// merge path rebuilds the env object from the raw existing entry (CodeArts
-// Work): the "unchanged" short-circuit must account for the packs write
-// before that rebuild discards it.
-export function packsEntryPending(entry: unknown, envKey: 'env' | 'environment', label: string): boolean {
-  if (resolvePacksFlag().kind === 'unset') return false;
-  const rawEnv: unknown = asRecord(entry)[envKey];
-  const existingEnv: Record<string, unknown> | null =
-    rawEnv !== null && typeof rawEnv === 'object' && !Array.isArray(rawEnv)
-      ? (rawEnv as Record<string, unknown>)
-      : null;
-  const current =
-    existingEnv !== null && typeof existingEnv.DEVKIT_PACKS === 'string' ? existingEnv.DEVKIT_PACKS : null;
-  const { next, keptUserValue, requested } = packsWriteValue(current);
-  if (keptUserValue) {
-    warnPacksUserValueKept(label, current ?? '', requested);
-    return false;
+// like `existing`, and why not when it would not. For writers whose merge
+// path rebuilds the env object from the raw existing entry (CodeArts Work):
+// the "unchanged" short-circuit must account for the packs write before
+// that rebuild discards it. Pure — the caller decides whether the
+// kept-user-value case warrants the warning (the mutating
+// applyPacksToEntry owns the warning on apply paths).
+export interface PacksEntryStatus {
+  pending: boolean;
+  keptUserValue: boolean;
+  current: string | null;
+  requested: string;
+}
+
+export function packsEntryPending(entry: unknown, envKey: 'env' | 'environment'): PacksEntryStatus {
+  if (resolvePacksFlag().kind === 'unset') {
+    return { pending: false, keptUserValue: false, current: null, requested: '' };
   }
-  return next !== current;
+  const { current } = readPacksEnv(entry, envKey);
+  const { next, keptUserValue, requested } = packsWriteValue(current);
+  return { pending: !keptUserValue && next !== current, keptUserValue, current, requested };
 }
 
 // For writers that regenerate their config wholesale (YAML blocks, the

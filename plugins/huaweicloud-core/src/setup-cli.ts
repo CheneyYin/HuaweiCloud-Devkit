@@ -153,6 +153,7 @@ import {
   readDevkitPacksFromJson,
   readDevkitPacksFromYaml,
   resolvePacksFlag,
+  warnPacksUserValueKept,
 } from './packs-policy.ts';
 
 // node:sqlite is a runtime-only builtin loaded through createRequire; only the
@@ -1439,7 +1440,14 @@ function registerCodeartsWorkMcp(): void {
     if (existing) {
       // codearts-work uses `command` array + `environment` naming; adapt via mergeCommandStyle.
       const { entry, changed } = mergeCommandStyle(existing, { mcpPath });
-      if (!changed && !packsEntryPending(existing, 'environment', 'CodeArts Work')) {
+      // packsEntryPending is pure; the kept-user-value warning fires exactly
+      // once — here when the merge is a no-op, or in applyPacksToEntry below
+      // when the merged entry is written (previously both sites warned).
+      const packsCheck = packsEntryPending(existing, 'environment');
+      if (!changed && !packsCheck.pending) {
+        if (packsCheck.keptUserValue) {
+          warnPacksUserValueKept('CodeArts Work', packsCheck.current ?? '', packsCheck.requested);
+        }
         console.log(`  MCP config unchanged: ${configPath}`);
         return;
       }
