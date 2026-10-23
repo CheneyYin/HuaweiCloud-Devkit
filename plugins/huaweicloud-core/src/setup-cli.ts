@@ -69,7 +69,6 @@ import {
   sweepReceiptTmpFiles,
   marketplacePayloadTree,
   isCoreNameShape,
-  NATIVE_RECEIPT_NAME,
 } from './lib/native-receipt.ts';
 import { PACK_IDS, type PackId } from './lib/pack-types.ts';
 import {
@@ -1443,6 +1442,35 @@ function backupDeltaFromMcpServersFile(pluginDest: string, agentKey: string): vo
   }
 }
 
+// Remove the huaweicloud-devkit entry from an agent's MCP config map,
+// backing up user-added fields first (issue #615). Shared by the
+// codearts/codearts-work/workbuddy/atomcode uninstalls; the map key and the
+// delta key spell the per-agent config dialect ('mcp' + 'command' for
+// codearts-work, 'mcpServers' + 'args' elsewhere).
+function removeMcpServerEntry(
+  configPath: string,
+  mapKey: 'mcpServers' | 'mcp',
+  deltaKey: 'args' | 'command',
+  agentKey: string,
+): void {
+  if (!existsSync(configPath)) return;
+  let config: Record<string, unknown> = {};
+  try {
+    config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
+  } catch {
+    // corrupt config leaves the empty default — no recognizable entry to clean
+  }
+  const servers = asRecord(config[mapKey]);
+  if (!servers['huaweicloud-devkit']) return;
+  const delta = extractUserDelta(servers['huaweicloud-devkit'], deltaKey);
+  if (delta) saveAgentDelta(agentKey, delta);
+  delete servers['huaweicloud-devkit'];
+  config[mapKey] = servers;
+  if (Object.keys(servers).length === 0) delete config[mapKey];
+  writeMcpSettingsFile(configPath, config);
+  console.log(`  MCP config cleaned: ${configPath}`);
+}
+
 function removeOpenCodeConfig(): void {
   const configPath = opencodeConfigFile();
   if (!existsSync(configPath)) return;
@@ -1654,19 +1682,41 @@ function codexStatus(): boolean {
   return probe.ok && probe.installed;
 }
 
-async function installOpenCode(): Promise<void> {
+// One deploy pipeline per directory-based target, run in both modes. Install
+// and update are the same artifact flow; update additionally prunes stale
+// files, writes the .installed marker itself (install mode gets its marker
+// from runInstallStep at the command level), and logs the same lines with an
+// "updated" marker on the copied artifacts.
+type DeployMode = 'install' | 'update';
+
+const deployWord = (mode: DeployMode): string => (mode === 'update' ? ' updated' : '');
+
+// The update-mode .installed marker. Install mode gets its marker from
+// runInstallStep at the command level, so only the deploy pipelines' update
+// paths write it themselves (dsh writes it in both modes, matching its
+// pre-unification behavior).
+function writeInstalledMarker(pluginDest: string): void {
+  mkdirSync(pluginDest, { recursive: true });
+  writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
+}
+
+async function deployOpenCode(mode: DeployMode): Promise<void> {
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
   const pluginSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'hooks', 'skill-tracker.js');
   const pluginDest = opencodePluginsDir();
 
   copyDir(commandsSrc, opencodeCommandsDir());
-  console.log(`  Commands -> ${opencodeCommandsDir()}`);
+  const staleCommands = mode === 'update' ? pruneStale(opencodeCommandsDir(), commandsSrc) : 0;
+  console.log(
+    `  Commands${deployWord(mode)} -> ${opencodeCommandsDir()}${staleCommands > 0 ? ` (removed ${staleCommands} stale)` : ''}`,
+  );
   copyServerPayload(pluginDest);
   const opcPlugins = join(configRoot('opencode'), 'plugins');
   mkdirSync(opcPlugins, { recursive: true });
   copyFileSync(pluginSrc, join(opcPlugins, 'skill-tracker.js'));
-  console.log(`  Plugin -> ${opcPlugins}`);
+  console.log(`  Plugin${deployWord(mode)} -> ${opcPlugins}`);
   updateOpenCodeConfig(pluginDest);
+  if (mode === 'update') writeInstalledMarker(pluginDest);
   installRuntimeDeps(pluginDest);
 }
 
@@ -1709,28 +1759,6 @@ function pruneStale(targetDir: string, sourceDir: string): number {
     }
   }
   return removed;
-}
-
-// Incremental update: overwrite copied files, prune stale ones, and only touch the config when necessary.
-async function updateOpenCode(): Promise<void> {
-  const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
-  const pluginSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'hooks', 'skill-tracker.js');
-  const pluginDest = opencodePluginsDir();
-
-  copyDir(commandsSrc, opencodeCommandsDir());
-  const staleCommands = pruneStale(opencodeCommandsDir(), commandsSrc);
-  console.log(
-    `  Commands updated -> ${opencodeCommandsDir()}${staleCommands > 0 ? ` (removed ${staleCommands} stale)` : ''}`,
-  );
-  copyServerPayload(pluginDest);
-  const opcPlugins = join(configRoot('opencode'), 'plugins');
-  mkdirSync(opcPlugins, { recursive: true });
-  copyFileSync(pluginSrc, join(opcPlugins, 'skill-tracker.js'));
-  console.log(`  Plugin updated -> ${opcPlugins}`);
-  updateOpenCodeConfig(pluginDest);
-  mkdirSync(pluginDest, { recursive: true });
-  writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
-  installRuntimeDeps(pluginDest);
 }
 
 function codexMarketplacePath(): string {
@@ -1815,25 +1843,31 @@ function removeCodexMarketplaceEntry(): void {
   console.log('  Marketplace entry removed');
 }
 
-async function installOpenClaw(): Promise<void> {
+// openclaw and codex-desktop both ship a .mcp.json plus the .codex-plugin
+// manifest into their plugin dir — the codex-discoverable plugin-dir shape;
+// the agentKey spells the delta-backup bucket in writeMcpServersFile.
+function writeMcpJsonAndCodexManifest(pluginDest: string, agentKey: string, mode: DeployMode): void {
+  const mcpServerAbsPath = join(pluginDest, 'dist', 'mcp-server.js').replace(/\\/g, '/');
+  writeMcpServersFile(pluginDest, mcpServerAbsPath, agentKey);
+  const codexPluginSrc = join(PLUGIN_ROOT, '.codex-plugin');
+  if (existsSync(codexPluginSrc)) {
+    copyDir(codexPluginSrc, join(pluginDest, '.codex-plugin'));
+    console.log(`  Plugin Manifest${deployWord(mode)} -> ${join(pluginDest, '.codex-plugin')}`);
+  }
+}
+
+async function deployOpenClaw(mode: DeployMode): Promise<void> {
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
   const pluginDest = openclawPluginsDir();
 
   mkdirSync(pluginDest, { recursive: true });
   copyDir(commandsSrc, join(homedir(), '.agents', 'commands'));
-  console.log(`  Commands -> ${join(homedir(), '.agents', 'commands')}`);
+  console.log(`  Commands${deployWord(mode)} -> ${join(homedir(), '.agents', 'commands')}`);
   copyServerPayload(pluginDest);
 
-  const mcpServerAbsPath = join(pluginDest, 'dist', 'mcp-server.js').replace(/\\/g, '/');
-  writeMcpServersFile(pluginDest, mcpServerAbsPath, 'openclaw');
+  writeMcpJsonAndCodexManifest(pluginDest, 'openclaw', mode);
 
-  const codexPluginSrc = join(PLUGIN_ROOT, '.codex-plugin');
-  if (existsSync(codexPluginSrc)) {
-    copyDir(codexPluginSrc, join(pluginDest, '.codex-plugin'));
-    console.log(`  Plugin Manifest -> ${join(pluginDest, '.codex-plugin')}`);
-  }
-
-  writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
+  if (mode === 'update') writeInstalledMarker(pluginDest);
   installRuntimeDeps(pluginDest);
 }
 
@@ -1858,83 +1892,18 @@ function uninstallOpenClaw(): void {
   }
 }
 
-async function updateOpenClaw(): Promise<void> {
-  const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
-  const pluginDest = openclawPluginsDir();
-
-  mkdirSync(pluginDest, { recursive: true });
-  copyDir(commandsSrc, join(homedir(), '.agents', 'commands'));
-  console.log(`  Commands updated -> ${join(homedir(), '.agents', 'commands')}`);
-  copyServerPayload(pluginDest);
-
-  const mcpServerAbsPath = join(pluginDest, 'dist', 'mcp-server.js').replace(/\\/g, '/');
-  writeMcpServersFile(pluginDest, mcpServerAbsPath, 'openclaw');
-
-  const codexPluginSrc = join(PLUGIN_ROOT, '.codex-plugin');
-  if (existsSync(codexPluginSrc)) {
-    copyDir(codexPluginSrc, join(pluginDest, '.codex-plugin'));
-    console.log(`  Plugin Manifest updated -> ${join(pluginDest, '.codex-plugin')}`);
-  }
-
-  writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
-  installRuntimeDeps(pluginDest);
-}
-
-async function installCodexDesktop(): Promise<void> {
+// Codex Desktop deploy: commands, assets, and the marketplace entry. Install
+// mode additionally cleans the pre-marketplace-era install locations — update
+// runs on machines already past that era.
+async function deployCodexDesktop(mode: DeployMode): Promise<void> {
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
   const pluginDest = codexDesktopPluginsDir();
 
   mkdirSync(pluginDest, { recursive: true });
   copyDir(commandsSrc, join(pluginDest, 'commands'));
-  console.log(`  Commands -> ${join(pluginDest, 'commands')}`);
-  copyServerPayload(pluginDest);
-
-  // Copy assets (icons, logos) for Codex Desktop plugin UI
-  const codexAssetsSrc = join(PLUGIN_ROOT, 'assets');
-  if (existsSync(codexAssetsSrc)) {
-    copyDir(codexAssetsSrc, join(pluginDest, 'assets'));
-    console.log(`  Assets -> ${join(pluginDest, 'assets')}`);
-  }
-
-  // Generate .mcp.json for Codex plugin MCP server discovery
-  const mcpServerAbsPath = join(pluginDest, 'dist', 'mcp-server.js').replace(/\\/g, '/');
-  writeMcpServersFile(pluginDest, mcpServerAbsPath, 'codex-desktop');
-
-  // Copy .codex-plugin manifest for Codex Desktop plugin registration
-  const codexPluginSrc = join(PLUGIN_ROOT, '.codex-plugin');
-  if (existsSync(codexPluginSrc)) {
-    copyDir(codexPluginSrc, join(pluginDest, '.codex-plugin'));
-    console.log(`  Plugin Manifest -> ${join(pluginDest, '.codex-plugin')}`);
-  }
-
-  // Register in personal marketplace (Codex discovers plugins from ~/.agents/plugins/marketplace.json)
-  ensureCodexMarketplaceEntry();
-  console.log('  \x1b[33m请到插件 → 个人 → HuaweiCloud DevKit → 安装\x1b[0m');
-
-  // Clean up old install locations from pre-marketplace era. Neither
-  // ~/.agents/skills nor ~/.agents/commands is removed wholesale: OpenClaw
-  // installs share both, and user-authored content must survive —
-  // devkit-owned skill names are reconciled precisely by
-  // cleanupNativeDirs() at the command level.
-  const oldPluginsDir = join(homedir(), '.agents', 'huaweicloud-plugins');
-  if (existsSync(oldPluginsDir)) {
-    removeIfExists(oldPluginsDir);
-    console.log('  Cleaned old install location');
-  }
-
-  installRuntimeDeps(pluginDest);
-}
-
-// Incremental update: overwrite copied files, prune stale ones, and only touch the config when necessary.
-async function updateCodexDesktop(): Promise<void> {
-  const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
-  const pluginDest = codexDesktopPluginsDir();
-
-  mkdirSync(pluginDest, { recursive: true });
-  copyDir(commandsSrc, join(pluginDest, 'commands'));
-  const staleCommands = pruneStale(join(pluginDest, 'commands'), commandsSrc);
+  const staleCommands = mode === 'update' ? pruneStale(join(pluginDest, 'commands'), commandsSrc) : 0;
   console.log(
-    `  Commands updated -> ${join(pluginDest, 'commands')}${staleCommands > 0 ? ` (removed ${staleCommands} stale)` : ''}`,
+    `  Commands${deployWord(mode)} -> ${join(pluginDest, 'commands')}${staleCommands > 0 ? ` (removed ${staleCommands} stale)` : ''}`,
   );
   copyServerPayload(pluginDest);
 
@@ -1942,20 +1911,30 @@ async function updateCodexDesktop(): Promise<void> {
   const codexAssetsSrc = join(PLUGIN_ROOT, 'assets');
   if (existsSync(codexAssetsSrc)) {
     copyDir(codexAssetsSrc, join(pluginDest, 'assets'));
-    console.log(`  Assets updated -> ${join(pluginDest, 'assets')}`);
+    console.log(`  Assets${deployWord(mode)} -> ${join(pluginDest, 'assets')}`);
   }
 
-  const mcpServerAbsPath = join(pluginDest, 'dist', 'mcp-server.js').replace(/\\/g, '/');
-  writeMcpServersFile(pluginDest, mcpServerAbsPath, 'codex-desktop');
+  writeMcpJsonAndCodexManifest(pluginDest, 'codex-desktop', mode);
 
-  const codexPluginSrc = join(PLUGIN_ROOT, '.codex-plugin');
-  if (existsSync(codexPluginSrc)) {
-    copyDir(codexPluginSrc, join(pluginDest, '.codex-plugin'));
-    console.log(`  Plugin Manifest updated -> ${join(pluginDest, '.codex-plugin')}`);
-  }
-
+  // Register in personal marketplace (Codex discovers plugins from ~/.agents/plugins/marketplace.json)
   ensureCodexMarketplaceEntry();
-  writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
+
+  if (mode === 'install') {
+    console.log('  \x1b[33m请到插件 → 个人 → HuaweiCloud DevKit → 安装\x1b[0m');
+
+    // Clean up old install locations from pre-marketplace era. Neither
+    // ~/.agents/skills nor ~/.agents/commands is removed wholesale: OpenClaw
+    // installs share both, and user-authored content must survive —
+    // devkit-owned skill names are reconciled precisely by
+    // cleanupNativeDirs() at the command level.
+    const oldPluginsDir = join(homedir(), '.agents', 'huaweicloud-plugins');
+    if (existsSync(oldPluginsDir)) {
+      removeIfExists(oldPluginsDir);
+      console.log('  Cleaned old install location');
+    }
+  }
+
+  if (mode === 'update') writeInstalledMarker(pluginDest);
   installRuntimeDeps(pluginDest);
 }
 
@@ -2074,7 +2053,7 @@ function registerCodeartsMcp(configPath: string, agentKey = 'codearts'): void {
   ensureMcpServersConfig({ configPath, mcpPath, agentKey, label: 'CodeArts', env, enabledByDefault: true });
 }
 
-async function installCodeArts(): Promise<void> {
+async function deployCodeArts(mode: DeployMode): Promise<void> {
   const pluginSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'hooks', 'skill-tracker.js');
   const pluginDest = codeartsPluginsDir();
 
@@ -2084,30 +2063,11 @@ async function installCodeArts(): Promise<void> {
   mkdirSync(codeartsHookDir, { recursive: true });
   copyFileSync(pluginSrc, join(codeartsHookDir, 'skill-tracker.js'));
 
-  console.log(`  Plugin -> ${codeartsHookDir}`);
+  console.log(`  Plugin${deployWord(mode)} -> ${codeartsHookDir}`);
 
   registerCodeartsMcp(codeartsMcpSettingsFile());
   registerCodeartsMcp(codeartsProjectMcpSettingsFile());
-  installRuntimeDeps(pluginDest);
-}
-
-// Incremental update: overwrite copied files, prune stale ones, and only touch the config when necessary.
-async function updateCodeArts(): Promise<void> {
-  const pluginSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'hooks', 'skill-tracker.js');
-  const pluginDest = codeartsPluginsDir();
-
-  copyServerPayload(pluginDest);
-
-  const codeartsHookDir = join(homedir(), '.codeartsdoer', 'plugins');
-  mkdirSync(codeartsHookDir, { recursive: true });
-  copyFileSync(pluginSrc, join(codeartsHookDir, 'skill-tracker.js'));
-
-  console.log(`  Plugin updated -> ${codeartsHookDir}`);
-
-  registerCodeartsMcp(codeartsMcpSettingsFile());
-  registerCodeartsMcp(codeartsProjectMcpSettingsFile());
-  mkdirSync(pluginDest, { recursive: true });
-  writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
+  if (mode === 'update') writeInstalledMarker(pluginDest);
   installRuntimeDeps(pluginDest);
 }
 
@@ -2127,25 +2087,8 @@ function uninstallCodeArts(): void {
   if (removeIfExists(codeartsPluginsDir())) {
     console.log('  Removed MCP server and safety policy');
   }
-  for (const configPath of [codeartsMcpSettingsFile(), codeartsProjectMcpSettingsFile()]) {
-    if (!existsSync(configPath)) continue;
-    let config: Record<string, unknown> = {};
-    try {
-      config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
-    } catch {
-      // corrupt config leaves the empty default — no recognizable entry to clean
-    }
-    const servers = asRecord(config.mcpServers);
-    if (servers['huaweicloud-devkit']) {
-      const delta = extractUserDelta(servers['huaweicloud-devkit'], 'args');
-      if (delta) saveAgentDelta('codearts', delta);
-      delete servers['huaweicloud-devkit'];
-      config.mcpServers = servers;
-      if (Object.keys(servers).length === 0) delete config.mcpServers;
-      writeMcpSettingsFile(configPath, config);
-      console.log(`  Config cleaned: ${configPath}`);
-    }
-  }
+  removeMcpServerEntry(codeartsMcpSettingsFile(), 'mcpServers', 'args', 'codearts');
+  removeMcpServerEntry(codeartsProjectMcpSettingsFile(), 'mcpServers', 'args', 'codearts');
 }
 
 // The payload triple every directory-based status section reports: server
@@ -2249,22 +2192,12 @@ function isPlainLocal(value: unknown): boolean {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-async function installCodeArtsWork(): Promise<void> {
-  const pluginDest = codeartsWorkPluginsDir();
-
-  copyServerPayload(pluginDest);
-
-  registerCodeartsWorkMcp();
-  installRuntimeDeps(pluginDest);
-}
-
-async function updateCodeArtsWork(): Promise<void> {
+async function deployCodeArtsWork(mode: DeployMode): Promise<void> {
   const pluginDest = codeartsWorkPluginsDir();
 
   copyServerPayload(pluginDest);
   registerCodeartsWorkMcp();
-  mkdirSync(pluginDest, { recursive: true });
-  writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
+  if (mode === 'update') writeInstalledMarker(pluginDest);
   installRuntimeDeps(pluginDest);
 }
 
@@ -2276,25 +2209,7 @@ function uninstallCodeArtsWork(): void {
     console.log('  Removed MCP server and safety policy');
   }
 
-  const configPath = codeartsWorkMcpSettingsFile();
-  if (existsSync(configPath)) {
-    let config: Record<string, unknown> = {};
-    try {
-      config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
-    } catch {
-      // corrupt config leaves the empty default — no recognizable entry to clean
-    }
-    const mcpMap = asRecord(config.mcp);
-    if (mcpMap['huaweicloud-devkit']) {
-      const delta = extractUserDelta(mcpMap['huaweicloud-devkit'], 'command');
-      if (delta) saveAgentDelta('codearts-work', delta);
-      delete mcpMap['huaweicloud-devkit'];
-      config.mcp = mcpMap;
-      if (Object.keys(mcpMap).length === 0) delete config.mcp;
-      writeMcpSettingsFile(configPath, config);
-      console.log(`  Config cleaned: ${configPath}`);
-    }
-  }
+  removeMcpServerEntry(codeartsWorkMcpSettingsFile(), 'mcp', 'command', 'codearts-work');
 }
 
 function codeartsWorkStatus(): void {
@@ -2469,28 +2384,15 @@ function removeAtomcodeHooks(): void {
   }
 }
 
-async function installWorkBuddy(): Promise<void> {
+async function deployWorkBuddy(mode: DeployMode): Promise<void> {
   const pluginDest = workbuddyPluginsDir();
 
   copyServerPayload(pluginDest);
-
   ensureWorkbuddyMcpConfig();
+  if (mode === 'update') writeInstalledMarker(pluginDest);
   installRuntimeDeps(pluginDest);
 
   // Deploy hook-based telemetry and safety hooks
-  deployWorkBuddyHooks();
-}
-
-// Incremental update: overwrite copied files, prune stale ones, and only touch the config when necessary.
-async function updateWorkBuddy(): Promise<void> {
-  const pluginDest = workbuddyPluginsDir();
-
-  copyServerPayload(pluginDest);
-  ensureWorkbuddyMcpConfig();
-  mkdirSync(pluginDest, { recursive: true });
-  writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
-  installRuntimeDeps(pluginDest);
-
   deployWorkBuddyHooks();
 }
 
@@ -2502,25 +2404,7 @@ function uninstallWorkBuddy(): void {
     console.log('  Removed MCP server and safety policy');
   }
 
-  const configPath = workbuddyMcpConfigFile();
-  if (existsSync(configPath)) {
-    let config: Record<string, unknown> = {};
-    try {
-      config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
-    } catch {
-      // corrupt config leaves the empty default — no recognizable entry to clean
-    }
-    const servers = asRecord(config.mcpServers);
-    if (servers['huaweicloud-devkit']) {
-      const delta = extractUserDelta(servers['huaweicloud-devkit'], 'args');
-      if (delta) saveAgentDelta('workbuddy', delta);
-      delete servers['huaweicloud-devkit'];
-      config.mcpServers = servers;
-      if (Object.keys(servers).length === 0) delete config.mcpServers;
-      writeMcpSettingsFile(configPath, config);
-      console.log(`  MCP config cleaned: ${configPath}`);
-    }
-  }
+  removeMcpServerEntry(workbuddyMcpConfigFile(), 'mcpServers', 'args', 'workbuddy');
 
   // Clean up hook-based telemetry artifacts
   const settingsPath = join(homedir(), '.workbuddy', 'settings.json');
@@ -2603,25 +2487,13 @@ function ensureAtomcodeMcpConfig(): boolean {
   });
 }
 
-async function installAtomCode(): Promise<void> {
-  const pluginDest = atomcodePluginsDir();
-
-  copyServerPayload(pluginDest);
-
-  ensureAtomcodeMcpConfig();
-  deployAtomcodeHooks();
-  installRuntimeDeps(pluginDest);
-}
-
-// Incremental update: overwrite copied files, prune stale ones, and only touch the config when necessary.
-async function updateAtomCode(): Promise<void> {
+async function deployAtomCode(mode: DeployMode): Promise<void> {
   const pluginDest = atomcodePluginsDir();
 
   copyServerPayload(pluginDest);
   ensureAtomcodeMcpConfig();
   deployAtomcodeHooks();
-  mkdirSync(pluginDest, { recursive: true });
-  writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
+  if (mode === 'update') writeInstalledMarker(pluginDest);
   installRuntimeDeps(pluginDest);
 }
 
@@ -2635,25 +2507,7 @@ function uninstallAtomCode(): void {
     console.log('  Removed MCP server and safety policy');
   }
 
-  const configPath = atomcodeMcpConfigFile();
-  if (existsSync(configPath)) {
-    let config: Record<string, unknown> = {};
-    try {
-      config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
-    } catch {
-      // corrupt config leaves the empty default — no recognizable entry to clean
-    }
-    const servers = asRecord(config.mcpServers);
-    if (servers['huaweicloud-devkit']) {
-      const delta = extractUserDelta(servers['huaweicloud-devkit'], 'args');
-      if (delta) saveAgentDelta('atomcode', delta);
-      delete servers['huaweicloud-devkit'];
-      config.mcpServers = servers;
-      if (Object.keys(servers).length === 0) delete config.mcpServers;
-      writeMcpSettingsFile(configPath, config);
-      console.log(`  MCP config cleaned: ${configPath}`);
-    }
-  }
+  removeMcpServerEntry(atomcodeMcpConfigFile(), 'mcpServers', 'args', 'atomcode');
 }
 
 function atomcodeStatus(): void {
@@ -2898,32 +2752,33 @@ function tryInstallDshMcpClient(): boolean {
   return false;
 }
 
-async function installDsh(): Promise<void> {
-  const pluginDest = dshPluginsDir();
-  const hookSrc = join(PACKAGE_ROOT, 'integrations', 'dsh', 'hook-plugin.mjs');
-
-  mkdirSync(pluginDest, { recursive: true });
-  copyServerPayload(pluginDest);
-  copyFileSync(hookSrc, join(pluginDest, 'hook-plugin.mjs'));
-  console.log(`  Hook Plugin -> ${join(pluginDest, 'hook-plugin.mjs')}`);
-  ensureDshMcpPatch();
-  tryInstallDshMcpClient();
-  installRuntimeDeps(pluginDest);
-  writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
+// After a uninstall removed our owned skills, drop the skills dir itself
+// when nothing (user content included) remains. Best-effort by design: an
+// empty skills dir left behind is harmless, so a failure is swallowed.
+function removeSkillsDirIfEmpty(skillsDir: string, removed: number): void {
+  if (removed === 0) return;
+  try {
+    if (existsSync(skillsDir) && readdirSync(skillsDir).length === 0) {
+      rmSync(skillsDir, { recursive: true, force: true });
+      console.log(`  Removed empty skills directory: ${skillsDir}`);
+    }
+  } catch {
+    // best-effort cleanup: an empty skills dir left behind is harmless
+  }
 }
 
-async function updateDsh(): Promise<void> {
+async function deployDsh(mode: DeployMode): Promise<void> {
   const pluginDest = dshPluginsDir();
   const hookSrc = join(PACKAGE_ROOT, 'integrations', 'dsh', 'hook-plugin.mjs');
 
   mkdirSync(pluginDest, { recursive: true });
   copyServerPayload(pluginDest);
   copyFileSync(hookSrc, join(pluginDest, 'hook-plugin.mjs'));
-  console.log(`  Hook Plugin updated -> ${join(pluginDest, 'hook-plugin.mjs')}`);
+  console.log(`  Hook Plugin${deployWord(mode)} -> ${join(pluginDest, 'hook-plugin.mjs')}`);
   ensureDshMcpPatch();
   tryInstallDshMcpClient();
   installRuntimeDeps(pluginDest);
-  writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
+  writeInstalledMarker(pluginDest);
 }
 
 function uninstallDsh(): void {
@@ -2931,16 +2786,7 @@ function uninstallDsh(): void {
   const oldHookFile = join(dshRoot(), 'plugins', 'skill-tracker.js');
   const removed = removeOwnedSkillsFrom(skillsDir);
   if (removed > 0) console.log(`  Removed ${removed} skills`);
-  if (removed > 0) {
-    try {
-      if (existsSync(skillsDir) && readdirSync(skillsDir).length === 0) {
-        rmSync(skillsDir, { recursive: true, force: true });
-        console.log(`  Removed empty skills directory: ${skillsDir}`);
-      }
-    } catch {
-      // best-effort cleanup: an empty skills dir left behind is harmless
-    }
-  }
+  removeSkillsDirIfEmpty(skillsDir, removed);
   if (removeIfExists(dshPluginsDir())) {
     console.log('  Removed MCP server, safety policy, and hook plugin');
   }
@@ -3047,16 +2893,7 @@ function uninstallOfficeAce(): void {
   const skillsDir = officeaceSkillsDir();
   const removed = removeOwnedSkillsFrom(skillsDir);
   if (removed > 0) console.log(`  Removed ${removed} skills`);
-  if (removed > 0) {
-    try {
-      if (existsSync(skillsDir) && readdirSync(skillsDir).length === 0) {
-        rmSync(skillsDir, { recursive: true, force: true });
-        console.log(`  Removed empty skills directory: ${skillsDir}`);
-      }
-    } catch {
-      // best-effort cleanup: an empty skills dir left behind is harmless
-    }
-  }
+  removeSkillsDirIfEmpty(skillsDir, removed);
 
   if (removeIfExists(officeacePluginsDir())) {
     console.log('  Removed MCP server and safety policy');
@@ -3525,18 +3362,22 @@ function hermesMcpSdkOk(): boolean {
     return false;
   }
 }
-
-async function installHermes(): Promise<void> {
+// Hermes deploy: safety + telemetry hooks, the config.yaml MCP block, and
+// the runtime deps. --skip-mcp-server (clone-based installs) is honored in
+// install mode only — update always ships the full server. The deps/sdk
+// tail follows install's order (deps first); the old update body ran the
+// sdk first, an ordering drift with no green-path effect.
+async function deployHermes(mode: DeployMode): Promise<void> {
   const hooksDir = join(PLUGIN_ROOT, 'hooks');
   const integrationsHooksDir = resolve(PLUGIN_ROOT, '..', '..', 'integrations', 'hermes', 'hooks');
   const pluginDest = hermesPluginsDir();
-  const skipMcp = process.argv.includes('--skip-mcp-server');
+  const skipMcp = mode === 'install' && process.argv.includes('--skip-mcp-server');
 
   // Skills are server data and always travel with the plugin dir; only the
   // bundled server itself is optional (--skip-mcp-server runs from a clone).
   copyServerPayload(pluginDest, { skipDist: skipMcp });
   copyDir(hooksDir, join(pluginDest, 'hooks'));
-  console.log(`  Safety Hooks -> ${join(pluginDest, 'hooks')}`);
+  console.log(`  Safety Hooks${deployWord(mode)} -> ${join(pluginDest, 'hooks')}`);
   // Telemetry hook lives in integrations/hermes/hooks/ (platform-specific adapter)
   copyFileSync(
     join(integrationsHooksDir, 'huaweicloud-telemetry.py'),
@@ -3547,31 +3388,9 @@ async function installHermes(): Promise<void> {
   ensureHermesHooksConfig();
   ensureHermesHookAllowlist();
   ensureHermesHookPlugin();
+  if (mode === 'update') writeInstalledMarker(pluginDest);
   if (!skipMcp) installRuntimeDeps(pluginDest);
   if (!skipMcp) ensureHermesMcpSdk();
-}
-
-async function updateHermes(): Promise<void> {
-  const hooksDir = join(PLUGIN_ROOT, 'hooks');
-  const integrationsHooksDir = resolve(PLUGIN_ROOT, '..', '..', 'integrations', 'hermes', 'hooks');
-  const pluginDest = hermesPluginsDir();
-
-  copyServerPayload(pluginDest);
-  copyDir(hooksDir, join(pluginDest, 'hooks'));
-  console.log(`  Safety Hooks updated -> ${join(pluginDest, 'hooks')}`);
-  // Telemetry hook lives in integrations/hermes/hooks/ (platform-specific adapter)
-  copyFileSync(
-    join(integrationsHooksDir, 'huaweicloud-telemetry.py'),
-    join(pluginDest, 'hooks', 'huaweicloud-telemetry.py'),
-  );
-  ensureHermesMcpConfig();
-  ensureHermesHooksConfig();
-  ensureHermesHookAllowlist();
-  ensureHermesHookPlugin();
-  ensureHermesMcpSdk();
-  mkdirSync(pluginDest, { recursive: true });
-  writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
-  installRuntimeDeps(pluginDest);
 }
 
 function uninstallHermes(): void {
@@ -3634,16 +3453,7 @@ function uninstallHermes(): void {
   // 4. Remove skills (file deletion comes after config cleanup)
   const removed = removeOwnedSkillsFrom(skillsDir);
   if (removed > 0) console.log(`  Removed ${removed} skills`);
-  if (removed > 0) {
-    try {
-      if (existsSync(skillsDir) && readdirSync(skillsDir).length === 0) {
-        rmSync(skillsDir, { recursive: true, force: true });
-        console.log(`  Removed empty skills directory: ${skillsDir}`);
-      }
-    } catch {
-      // best-effort cleanup: an empty skills dir left behind is harmless
-    }
-  }
+  removeSkillsDirIfEmpty(skillsDir, removed);
 
   // 5. Remove plugin directory (hook script files deleted last)
   if (removeIfExists(hermesPluginsDir())) {
@@ -4080,34 +3890,34 @@ async function cmdInstall(): Promise<void> {
   }
 
   if (shouldInstall('opencode')) {
-    await runInstallStep('opencode', '[OpenCode]', installOpenCode);
+    await runInstallStep('opencode', '[OpenCode]', () => deployOpenCode('install'));
   }
   if (shouldInstall('codex-desktop')) {
-    await runInstallStep('codex-desktop', '\n[Codex Desktop]', installCodexDesktop);
+    await runInstallStep('codex-desktop', '\n[Codex Desktop]', () => deployCodexDesktop('install'));
   }
   if (shouldInstall('codearts')) {
-    await runInstallStep('codearts', '\n[CodeArts]', installCodeArts);
+    await runInstallStep('codearts', '\n[CodeArts]', () => deployCodeArts('install'));
   }
   if (shouldInstall('codearts-work')) {
-    await runInstallStep('codearts-work', '\n[CodeArts Work]', installCodeArtsWork);
+    await runInstallStep('codearts-work', '\n[CodeArts Work]', () => deployCodeArtsWork('install'));
   }
   if (shouldInstall('workbuddy')) {
-    await runInstallStep('workbuddy', '\n[WorkBuddy]', installWorkBuddy);
+    await runInstallStep('workbuddy', '\n[WorkBuddy]', () => deployWorkBuddy('install'));
   }
   if (shouldInstall('dsh')) {
-    await runInstallStep('dsh', '\n[DSH]', installDsh);
+    await runInstallStep('dsh', '\n[DSH]', () => deployDsh('install'));
   }
   if (shouldInstall('officeace')) {
     await runInstallStep('officeace', '\n[OfficeAce]', installOfficeAce);
   }
   if (shouldInstall('hermes')) {
-    await runInstallStep('hermes', '\n[Hermes Agent]', installHermes);
+    await runInstallStep('hermes', '\n[Hermes Agent]', () => deployHermes('install'));
   }
   if (shouldInstall('openclaw')) {
-    await runInstallStep('openclaw', '\n[OpenClaw]', installOpenClaw);
+    await runInstallStep('openclaw', '\n[OpenClaw]', () => deployOpenClaw('install'));
   }
   if (shouldInstall('atomcode')) {
-    await runInstallStep('atomcode', '\n[AtomCode]', installAtomCode);
+    await runInstallStep('atomcode', '\n[AtomCode]', () => deployAtomCode('install'));
   }
   if (shouldInstall('codex')) {
     await runInstallStep('codex', '\n[Codex]', () => {
@@ -5025,7 +4835,7 @@ const PAYLOAD_TARGETS: readonly PayloadTarget[] = [
     id: 'opencode',
     label: 'OpenCode',
     dir: opencodePluginsDir,
-    update: updateOpenCode,
+    update: () => deployOpenCode('update'),
     hint: 'MCP 工具在重启 OpenCode 会话后才生效。',
     nativeSkills: () => [opencodeSkillsDir()],
   },
@@ -5033,14 +4843,14 @@ const PAYLOAD_TARGETS: readonly PayloadTarget[] = [
     id: 'codex-desktop',
     label: 'Codex Desktop',
     dir: codexDesktopPluginsDir,
-    update: updateCodexDesktop,
+    update: () => deployCodexDesktop('update'),
     hint: 'MCP 工具在重启 Codex Desktop 会话后才生效。',
   },
   {
     id: 'codearts',
     label: 'CodeArts',
     dir: codeartsPluginsDir,
-    update: updateCodeArts,
+    update: () => deployCodeArts('update'),
     hint: 'MCP 工具在重启 CodeArts 会话后才生效。',
     // Mirrors registerCodeartsMcp: user level plus the project dir of the
     // tree the install runs in.
@@ -5050,7 +4860,7 @@ const PAYLOAD_TARGETS: readonly PayloadTarget[] = [
     id: 'codearts-work',
     label: 'CodeArts Work',
     dir: codeartsWorkPluginsDir,
-    update: updateCodeArtsWork,
+    update: () => deployCodeArtsWork('update'),
     hint: 'MCP 工具在重启 CodeArts Work 会话后才生效。',
     nativeSkills: () => [codeartsWorkSkillsDir()],
   },
@@ -5058,7 +4868,7 @@ const PAYLOAD_TARGETS: readonly PayloadTarget[] = [
     id: 'workbuddy',
     label: 'WorkBuddy',
     dir: workbuddyPluginsDir,
-    update: updateWorkBuddy,
+    update: () => deployWorkBuddy('update'),
     hint: 'MCP 工具在重启 WorkBuddy 会话后才生效。',
     nativeSkills: () => [workbuddySkillsDir()],
   },
@@ -5066,7 +4876,7 @@ const PAYLOAD_TARGETS: readonly PayloadTarget[] = [
     id: 'dsh',
     label: 'DSH',
     dir: dshPluginsDir,
-    update: updateDsh,
+    update: () => deployDsh('update'),
     hint: 'Restart the DSH session for changes to take effect.',
     nativeSkills: () => [dshSkillsDir()],
   },
@@ -5081,7 +4891,7 @@ const PAYLOAD_TARGETS: readonly PayloadTarget[] = [
     id: 'hermes',
     label: 'Hermes Agent',
     dir: hermesPluginsDir,
-    update: updateHermes,
+    update: () => deployHermes('update'),
     hint: 'Restart Hermes Agent for changes to take effect.',
     nativeSkills: () => [hermesSkillsDir()],
   },
@@ -5089,7 +4899,7 @@ const PAYLOAD_TARGETS: readonly PayloadTarget[] = [
     id: 'openclaw',
     label: 'OpenClaw',
     dir: openclawPluginsDir,
-    update: updateOpenClaw,
+    update: () => deployOpenClaw('update'),
     hint: 'Restart OpenClaw for changes to take effect.',
     // ~/.agents/skills is shared with opencode's loader; Phase 0 measured
     // opencode deduplicating by name across both dirs, so the overlap
@@ -5100,7 +4910,7 @@ const PAYLOAD_TARGETS: readonly PayloadTarget[] = [
     id: 'atomcode',
     label: 'AtomCode',
     dir: atomcodePluginsDir,
-    update: updateAtomCode,
+    update: () => deployAtomCode('update'),
     hint: 'Restart the AtomCode session for changes to take effect.',
     nativeSkills: () => [atomcodeSkillsDir()],
   },

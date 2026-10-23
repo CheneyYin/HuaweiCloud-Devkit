@@ -144,10 +144,7 @@ test('atomcode lifecycle: install, update, uninstall', () => {
   assert.match(install.stdout, /\[AtomCode\]/);
   assertPayloadInstalled(pluginDir);
   assertMcpEntry(configPath, 'mcpServers');
-  assert.ok(
-    existsSync(join(pluginDir, 'hooks', 'huaweicloud-telemetry.js')),
-    'telemetry hook script missing',
-  );
+  assert.ok(existsSync(join(pluginDir, 'hooks', 'huaweicloud-telemetry.js')), 'telemetry hook script missing');
   const hooks = readJson(hooksConfigPath);
   const hwTelemetry = (hooks.hooks as Record<string, unknown> | undefined)?.['hw-telemetry'];
   assert.equal((hwTelemetry as Record<string, unknown> | undefined)?.event, 'pre_tool_use');
@@ -195,8 +192,5 @@ test('hermes update refreshes payload, config, and hooks', () => {
   assert.match(config, /huaweicloud-devkit/);
   assert.match(config, /mcp-server\.js/);
   assert.ok(existsSync(join(pluginDir, 'hooks', 'huaweicloud-safety.mjs')), 'safety hook missing');
-  assert.ok(
-    existsSync(join(pluginDir, 'hooks', 'huaweicloud-telemetry.py')),
-    'telemetry hook missing',
-  );
+  assert.ok(existsSync(join(pluginDir, 'hooks', 'huaweicloud-telemetry.py')), 'telemetry hook missing');
 });

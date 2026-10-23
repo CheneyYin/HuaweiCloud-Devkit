@@ -1243,8 +1243,8 @@ test('setup-cli.ts supports the codearts target end to end', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
   // parseTarget accepts codearts
   assert.match(setup, /'codearts'/);
-  // install / uninstall / status functions exist
-  assert.match(setup, /async function installCodeArts\(\)/);
+  // deploy (install+update) / uninstall / status functions exist
+  assert.match(setup, /async function deployCodeArts\(mode: DeployMode\)/);
   assert.match(setup, /function uninstallCodeArts\(\)/);
   assert.match(setup, /function codeartsStatus\(\)/);
   // path helpers for user-level and project-level codearts dirs
@@ -1253,9 +1253,9 @@ test('setup-cli.ts supports the codearts target end to end', () => {
   assert.match(setup, /function codeartsProjectSkillsDir\(\)/);
   assert.match(setup, /function codeartsProjectMcpSettingsFile\(\)/);
   assert.match(setup, /function codeartsPluginsDir\(\)/);
-  // install ships the server payload (dist + safety + skills server data)
+  // deploy ships the server payload (dist + safety + skills server data)
   // into the codearts plugin dir and registers both MCP configs
-  assert.match(setup, /async function installCodeArts\(\): Promise<void> \{\s*\n\s*const pluginSrc/);
+  assert.match(setup, /async function deployCodeArts\(mode: DeployMode\): Promise<void> \{\s*\n\s*const pluginSrc/);
   assert.match(setup, /copyServerPayload\(pluginDest\)/);
   assert.match(setup, /registerCodeartsMcp\(codeartsMcpSettingsFile\(\)\)/);
   assert.match(setup, /registerCodeartsMcp\(codeartsProjectMcpSettingsFile\(\)\)/);
@@ -1453,7 +1453,7 @@ test('hermes restart hints, unix auto-install in dep/installers/hcloud, grouped 
   // a row of the payload-target table the marker loop and the update
   // dispatch derive from.
   assert.match(setup, /id: 'hermes',\s+label: 'Hermes Agent',\s+dir: hermesPluginsDir,/);
-  assert.match(setup, /update: updateHermes,/);
+  assert.match(setup, /update: \(\) => deployHermes\('update'\),/);
   assert.match(setup, /join\(target\.dir\(\), '\.installed'\)/);
   // Unix install-hcloud executes for real: download → extract → install → verify
   // (#280-3); the body moved to dep-provision.ts when provisioning absorbed
@@ -1571,9 +1571,8 @@ test('setup-cli.ts supports the dsh target end to end', () => {
   assert.match(setup, /function dshPluginsDir\(\)/);
   assert.match(setup, /const DSH_MCP_PATCH_START = '# HuaweiCloud DevKit DSH integration start';/);
   assert.match(setup, /const DSH_MCP_PATCH_END = '# HuaweiCloud DevKit DSH integration end';/);
-  // install / update / uninstall / status functions exist
-  assert.match(setup, /async function installDsh\(\)/);
-  assert.match(setup, /async function updateDsh\(\)/);
+  // deploy (install+update) / uninstall / status functions exist
+  assert.match(setup, /async function deployDsh\(mode: DeployMode\)/);
   assert.match(setup, /function uninstallDsh\(\)/);
   assert.match(setup, /function dshStatus\(\)/);
   // install ships the server payload and registers MCP through cordis.patch.yml
@@ -1608,7 +1607,7 @@ test('setup-cli.ts supports the dsh target end to end', () => {
   // (installMarkerDirForTarget is a lookup over the table — pinned in its own test)
   // doctor and the update dispatch reach DSH through the payload-target table
   assert.match(setup, /id: 'dsh',\s+label: 'DSH',\s+dir: dshPluginsDir,/);
-  assert.match(setup, /update: updateDsh,/);
+  assert.match(setup, /update: \(\) => deployDsh\('update'\),/);
   assert.match(setup, /dshPatchConfigured\(\)/);
   // help text documents the target
   assert.match(
@@ -1673,10 +1672,9 @@ test('setup-cli.ts supports the officeace target end to end', () => {
 test('setup-cli.ts supports the hermes target end to end', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
   assert.match(setup, /'hermes'/);
-  assert.match(setup, /async function installHermes\(\)/);
+  assert.match(setup, /async function deployHermes\(mode: DeployMode\)/);
   assert.match(setup, /function uninstallHermes\(\)/);
   assert.match(setup, /function hermesStatus\(\)/);
-  assert.match(setup, /async function updateHermes\(\)/);
   assert.match(setup, /function hermesHomeDir\(\)/);
   assert.match(setup, /function hermesSkillsDir\(\)/);
   assert.match(setup, /function hermesPluginsDir\(\)/);
