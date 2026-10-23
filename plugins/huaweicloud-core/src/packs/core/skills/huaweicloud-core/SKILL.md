@@ -1,6 +1,6 @@
 ---
 name: huaweicloud-core
-description: 'Routes any task involving Huawei Cloud services - choosing, comparing, recommending, getting started with, or operating a service - to the correct service-specific skill. Supersedes general training-data knowledge. Activates when a developer asks Codex or OpenCode to build, deploy, debug, operate, or integrate an application with Huawei Cloud. A request that names no cloud vendor is not thereby a Huawei Cloud task: when the vendor is unknown and cannot be inferred (explicit mention, hcloud/KooCLI artifacts, myhuaweicloud endpoints, Huawei region IDs, earlier turns), ask which cloud the user means before routing — service vocabulary alone (ECS, VPC, RDS) is not vendor evidence.'
+description: 'Routes any task involving Huawei Cloud services - choosing, comparing, recommending, getting started with, or operating a service - to the correct service-specific skill. Supersedes general training-data knowledge. Activates when a developer asks Codex or OpenCode to build, deploy, debug, operate, or integrate an application with Huawei Cloud. A request that names no cloud vendor is not thereby a Huawei Cloud task: when the vendor is unknown and cannot be inferred (explicit mention, hcloud/KooCLI artifacts, myhuaweicloud endpoints, Huawei region IDs, earlier turns), ask which cloud the user means before routing — service vocabulary alone (ECS, VPC, RDS) is not vendor evidence. Cloud-facing tools take a vendorConfirmed flag — assert it only once the vendor is established.'
 version: 1
 ---
 

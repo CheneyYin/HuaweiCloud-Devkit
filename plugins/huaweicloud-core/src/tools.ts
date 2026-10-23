@@ -173,7 +173,7 @@ const TOOL_DEFINITIONS_LITERALS = [
   {
     name: 'huaweicloud_service_catalog',
     description:
-      'Route a Huawei Cloud task intent to capability sources. Takes intent (plain-language task such as "create an ECS instance", "static website on OBS", "bind an EIP", "troubleshoot an RDS failover") and returns recommended skill names to load with huaweicloud_retrieve_skill, the Huawei Cloud services involved, and the capability order (Skills, KooCLI, API, SDK, MCP, Terraform). Start here when the user\'s task is a Huawei Cloud one and mentions any of its services or scenarios: ECS, VPC, OBS, RDS, CCE, IAM, security groups, EIP, serverless, Kubernetes, database, monitoring, billing, backup, and twenty more domains. If no vendor is named or inferable (explicit mention, hcloud/KooCLI artifacts, myhuaweicloud endpoints, Huawei region IDs, earlier turns), ask which cloud the user means before calling this tool — the vocabulary above is common to several clouds and is not vendor evidence.',
+      'Route a Huawei Cloud task intent to capability sources. Takes intent (plain-language task such as "create an ECS instance", "static website on OBS", "bind an EIP", "troubleshoot an RDS failover") and returns recommended skill names to load with huaweicloud_retrieve_skill, the Huawei Cloud services involved, and the capability order (Skills, KooCLI, API, SDK, MCP, Terraform). Start here when the user\'s task is a Huawei Cloud one and mentions any of its services or scenarios: ECS, VPC, OBS, RDS, CCE, IAM, security groups, EIP, serverless, Kubernetes, database, monitoring, billing, backup, and twenty more domains. If no vendor is named or inferable (explicit mention, hcloud/KooCLI artifacts, myhuaweicloud endpoints, Huawei region IDs, earlier turns), ask which cloud the user means before calling this tool — the vocabulary above is common to several clouds and is not vendor evidence. Vendor-gated (vendorConfirmed): call only when the vendor is established — see the vendorConfirmed parameter description.',
   },
   {
     name: 'huaweicloud_explain_error',
@@ -370,6 +370,10 @@ export const TOOL_DEFINITIONS: readonly ToolDefinition[] = TOOL_DEFINITIONS_LITE
 export type ToolArgs = {
   args?: string[];
   allowWrites?: boolean;
+  // The vendor-gate attestation (VENDOR_GATED_TOOLS faces only; see
+  // callTool's gate). Optional in the schema by design — the gate, not
+  // zod, is the enforcement, so the teaching rejection reaches the model.
+  vendorConfirmed?: boolean;
   timeoutMs?: number;
   maxRetries?: number;
   cwd?: string;
@@ -546,7 +550,67 @@ export async function callTool(name: ToolName, rawArgs: ToolArgs = {}, opts: Cal
   }
 }
 
+// The vendor gate enforces the VENDOR_BOUNDARY_RULE teaching at the tool
+// face. Measured failure (live probe 2026-10-23, twice-stable; post-fix
+// e2e blade red): with teaching landed and disclosed, a vendor-neutral
+// prompt still drove check_cli → auth_status → show_profile →
+// run_readonly_command and even auth_switch persist — instructions alone
+// did not change the first move. The mechanism composes two
+// repo-measured consent patterns: the approvedByUser attestation (models
+// are notably reluctant to falsely assert a user-context boolean —
+// core-approval-negative green) and the gateway refusal teaching (the
+// rejection reason itself names the two honest exits — the
+// openmcp-execute-refusal-consent precedent). The gate throws instead of
+// returning a structured result so the refusal rides the same channel
+// the approval chain already established (callTool errors reach the model
+// with their message, and the trace records ok:false — the e2e negative
+// case's zero-assertion pin reads exactly that shape). Statelessness is
+// deliberate: every call re-asserts, no session or cross-request state,
+// so the stateless remote face is covered by construction.
+//
+// Scope: the MEASURED entry set (the probe/execution chain above) plus
+// the sibling claim face — not every cloud-facing tool. Deliberately
+// ungated, extend on measurement (never silently): gateway_call (its own
+// policy engine is its consent plane — devkit does not double-gate it);
+// the sandbox exec/upload/deploy faces (they take a workspace_id
+// directly — NOT only behind connect — but every e2e flow reaches them
+// through gated connect or a user-supplied id); the obs faces
+// (setup_obs_config, obs_set_website_config), auth_sync/auth_confirm,
+// sandbox check_user/sign_agreement/credentials/expose_tunnel, and
+// voucher_status (account-state probes and writers that no measured
+// vendor-neutral first move has landed on); and the devkit meta tools
+// (check_update, list_skills, ...) the rule exempts.
+export const VENDOR_GATED_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
+  'huaweicloud_auth_status',
+  'huaweicloud_auth_init',
+  'huaweicloud_auth_switch',
+  'huaweicloud_check_cli',
+  'huaweicloud_show_profile_redacted',
+  'huaweicloud_list_operations',
+  'huaweicloud_list_regions',
+  'huaweicloud_run_readonly_command',
+  'huaweicloud_plan_cli_command',
+  'huaweicloud_run_approved_command',
+  'huaweicloud_service_catalog',
+  'huaweicloud_sandbox_connect',
+  'huaweicloud_voucher_claim',
+  'huaweicloud_competition_voucher_claim',
+]);
+
+// 295 chars — under call-trace's 300-char error cap, so the full teaching
+// (both honest exits) survives into devkit-trace.jsonl for nightly triage.
+const VENDOR_GATE_MESSAGE =
+  "Vendor gate: this tool operates on Huawei Cloud. Pass vendorConfirmed: true ONLY when the user's request or conversation establishes Huawei Cloud (explicit mention, hcloud/KooCLI artifacts, myhuaweicloud endpoints, Huawei region IDs, or earlier turns) — the devkit being installed is NOT confirmation. If the vendor is unknown, ask which cloud they mean, then retry once established.";
+
 async function dispatchTool(name: ToolName, args: ToolArgs, opts: CallToolOptions): Promise<unknown> {
+  // The gate sits at dispatch's top, inside callTool's traced region: a
+  // rejected call is recorded (ok:false + this message) and the handler
+  // never runs — no hcloud spawn, no HTTP, no state touched. The gate
+  // fires before isPackToolName so pack and core gated tools are covered
+  // by one check.
+  if (VENDOR_GATED_TOOLS.has(name) && args.vendorConfirmed !== true) {
+    throw new Error(VENDOR_GATE_MESSAGE);
+  }
   // Pack tools (every non-core name) dispatch through the central handler
   // map in packs/registry.ts before the switch; the type guard narrows
   // `name` to the core remainder, which is what the switch below and its

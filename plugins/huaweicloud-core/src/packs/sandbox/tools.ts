@@ -30,7 +30,14 @@ import { resolveCredentialsWithRuntime } from '../../auth/credentials.ts';
 import { asCredentialRecord, type CredentialLike } from '../../lib/credentials.ts';
 import { vaultGet, VaultError } from '../../lib/secret-vault/store.ts';
 import { isSecretRef } from '../../lib/secret-vault/refs.ts';
-import { numericArg, looseObject, gitConfig, workspaceId, username } from '../../lib/tool-schema-parts.ts';
+import {
+  numericArg,
+  looseObject,
+  gitConfig,
+  workspaceId,
+  username,
+  vendorConfirmed,
+} from '../../lib/tool-schema-parts.ts';
 import type { PackToolDefinition, LooseToolSchema } from '../../lib/pack-types.ts';
 import type { CallToolOptions, ToolArgs } from '../../tools.ts';
 
@@ -550,6 +557,7 @@ const exposeTunnelSchema = z.looseObject({
 const signAgreementSchema = z.looseObject({});
 
 const connectSchema = z.looseObject({
+  vendorConfirmed,
   source: z
     .string()
     .optional()
@@ -651,7 +659,7 @@ export const SANDBOX_TOOLS = [
   {
     name: 'huaweicloud_sandbox_connect',
     description:
-      'Connect to a sandbox via hdkitservice. One user one instance - reuses existing sandbox if available, otherwise creates a new one. Returns session_id, dev_stage_id, connection_id, connection_address, and expiresAt (STS credential expiry).',
+      'Connect to a sandbox via hdkitservice. One user one instance - reuses existing sandbox if available, otherwise creates a new one. Returns session_id, dev_stage_id, connection_id, connection_address, and expiresAt (STS credential expiry). Vendor-gated (vendorConfirmed): call only when the vendor is established — see the vendorConfirmed parameter description; when unknown, ask which cloud the user means first.',
     schema: connectSchema,
     handler: handleConnect,
   },

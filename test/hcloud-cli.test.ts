@@ -325,6 +325,7 @@ process.exit(1);
     process.env.HCLOUD_BIN = fake;
     try {
       const plan = (await callTool('huaweicloud_plan_cli_command', {
+        vendorConfirmed: true,
         args: ['BSS', 'ShowCustomerAccountBalances'],
         allowWrites: true,
       })) as HcloudPlan;
@@ -333,6 +334,7 @@ process.exit(1);
       assert.ok(!plan.args.includes('--cli-lang'), 'approved args carry no lang flag');
 
       const result = (await callTool('huaweicloud_run_approved_command', {
+        vendorConfirmed: true,
         args: ['BSS', 'ShowCustomerAccountBalances'],
         approvalToken: plan.approvalToken,
         approvedByUser: true,
@@ -360,11 +362,13 @@ process.exit(1);
 
 test('koocli lang G4: approval token still rejects args that differ from the approved plan', async () => {
   const plan = (await callTool('huaweicloud_plan_cli_command', {
+    vendorConfirmed: true,
     args: ['BSS', 'ShowCustomerAccountBalances'],
     allowWrites: true,
   })) as HcloudPlan;
   await assert.rejects(
     callTool('huaweicloud_run_approved_command', {
+      vendorConfirmed: true,
       args: ['BSS', 'DifferentOperation'],
       approvalToken: plan.approvalToken,
       approvedByUser: true,

@@ -594,7 +594,7 @@ async function selfcheck(bin: string, kooCliVersion: string): Promise<boolean> {
           jsonrpc: '2.0',
           id: 3,
           method: 'tools/call',
-          params: { name: 'huaweicloud_check_cli', arguments: {} },
+          params: { name: 'huaweicloud_check_cli', arguments: { vendorConfirmed: true } },
         },
         {
           jsonrpc: '2.0',
@@ -602,7 +602,7 @@ async function selfcheck(bin: string, kooCliVersion: string): Promise<boolean> {
           method: 'tools/call',
           params: {
             name: 'huaweicloud_plan_cli_command',
-            arguments: { args: ['VPC', 'ListSecurityGroups', '--cli-region=cn-north-4'] },
+            arguments: { vendorConfirmed: true, args: ['VPC', 'ListSecurityGroups', '--cli-region=cn-north-4'] },
           },
         },
         {
@@ -615,7 +615,7 @@ async function selfcheck(bin: string, kooCliVersion: string): Promise<boolean> {
           jsonrpc: '2.0',
           id: 6,
           method: 'tools/call',
-          params: { name: 'huaweicloud_sandbox_connect', arguments: {} },
+          params: { name: 'huaweicloud_sandbox_connect', arguments: { vendorConfirmed: true } },
         },
         {
           jsonrpc: '2.0',

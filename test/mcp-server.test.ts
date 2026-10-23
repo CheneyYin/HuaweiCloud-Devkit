@@ -206,7 +206,7 @@ test('MCP server initializes, lists tools, and plans CLI commands', async () => 
 
     const planned = await client.request('tools/call', {
       name: 'huaweicloud_plan_cli_command',
-      arguments: { args: ['ECS', 'NovaListServers'] },
+      arguments: { vendorConfirmed: true, args: ['ECS', 'NovaListServers'] },
     });
     assert.equal(planned.result.isError, false);
     assert.match(planned.result.content[0].text, /NovaListServers/);
@@ -305,7 +305,10 @@ test('MCP server returns isError tool results for tools/call missing required pa
     // (the SDK high-level server wraps McpError InvalidParams), not JSON-RPC
     // -32602 error responses. The migration decision is recorded in the SDK
     // migration plan; this pins the new contract.
-    const single = await client.request('tools/call', { name: 'huaweicloud_plan_cli_command', arguments: {} });
+    const single = await client.request('tools/call', {
+      name: 'huaweicloud_plan_cli_command',
+      arguments: { vendorConfirmed: true },
+    });
     assert.ok(single.result, 'missing required param must return a tool result');
     assert.equal(single.result.isError, true, 'missing required param must set isError');
     assert.match(single.result.content[0].text, /args/);
@@ -593,8 +596,9 @@ test('tools/call accepts string numerics and passes unknown keys through (#530 l
     // string is still rejected by the tool itself with its #530 message.
     const ok = await client.request('tools/call', {
       name: 'huaweicloud_list_operations',
-      arguments: { service: 'ECS', timeoutMs: '9999', unknownExtra: 'kept' },
+      arguments: { vendorConfirmed: true, service: 'ECS', timeoutMs: '9999', unknownExtra: 'kept' },
     });
+    assert.equal(ok.result.isError, false, 'the acceptance arm must observe a successful dispatch');
     assert.ok(ok.result, `expected a result: ${JSON.stringify(ok).slice(0, 300)}`);
 
     const bad = await client.request('tools/call', {
@@ -609,7 +613,7 @@ test('tools/call accepts string numerics and passes unknown keys through (#530 l
     // plan tool echoes the full command back.
     const planned = await client.request('tools/call', {
       name: 'huaweicloud_plan_cli_command',
-      arguments: { args: ['ECS', 'NovaListServers'], unknownExtra: 'kept' },
+      arguments: { vendorConfirmed: true, args: ['ECS', 'NovaListServers'], unknownExtra: 'kept' },
     });
     assert.ok(planned.result, `expected a plan result: ${JSON.stringify(planned).slice(0, 300)}`);
     assert.equal(planned.result.isError, false);
@@ -627,11 +631,22 @@ test('tools/call works with arguments omitted entirely', async () => {
       capabilities: {},
       clientInfo: { name: 'test-client', version: '0.0.0' },
     });
+    // A non-gated no-arg tool carries the omitted-arguments contract (the
+    // zod layer must accept a missing arguments object); the gated sibling
+    // below carries the vendor-gate contract on the same wire shape.
     const response = await client.request('tools/call', {
-      name: 'huaweicloud_list_regions',
+      name: 'huaweicloud_list_skills',
     });
     assert.ok(response.result, 'omitted arguments must not fail validation');
     assert.equal(response.result.isError, false);
+    // The vendor gate on the same omitted-arguments shape: a proper tool
+    // result (never a protocol error) carrying the teaching rejection.
+    const gated = await client.request('tools/call', {
+      name: 'huaweicloud_list_regions',
+    });
+    assert.ok(gated.result, 'the gate must answer as a tool result, not a protocol error');
+    assert.equal(gated.result.isError, true);
+    assert.match(gated.result.content[0].text, /Vendor gate: this tool operates on Huawei Cloud/);
   } finally {
     client.close();
   }

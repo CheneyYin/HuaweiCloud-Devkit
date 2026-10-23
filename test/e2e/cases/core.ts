@@ -1,6 +1,7 @@
 import { PACK_OF } from '../../../plugins/huaweicloud-core/src/packs/registry.ts';
+import { VENDOR_GATED_TOOLS } from '../../../plugins/huaweicloud-core/src/tools.ts';
 import { S1_SEED, VOUCHER_CLAIMED_RESPONSE } from './http-packs.ts';
-import type { E2eCase } from '../types.ts';
+import type { E2eCase, Expectation } from '../types.ts';
 
 // Roster facts derive from PACK_OF (the product's ownership truth), never a
 // magic number: adding a tool changes these expectations only through the
@@ -8,6 +9,17 @@ import type { E2eCase } from '../types.ts';
 const TOTAL_TOOLS = Object.keys(PACK_OF).length;
 const CORE_TOOLS = Object.values(PACK_OF).filter((owner) => owner === 'core').length;
 const VOUCHER_TOOLS = Object.values(PACK_OF).filter((owner) => owner === 'voucher').length;
+
+// The blade's assertion pins derive from the gate roster itself — the
+// same VENDOR_GATED_TOOLS callTool reads — so extending the gate
+// automatically extends this case's pins (a gated-but-unpinned face was
+// a round-5 review finding; roster derivation closes that drift class).
+const GATED_ASSERTION_PINS: Expectation[] = [...VENDOR_GATED_TOOLS].map((name) => ({
+  kind: 'toolCall',
+  name,
+  args: { vendorConfirmed: true },
+  times: { min: 0, max: 0 },
+}));
 
 export const coreCases: E2eCase[] = [
   {
@@ -179,7 +191,7 @@ export const coreCases: E2eCase[] = [
     // + force-included core.
     installPacks: 'voucher',
     prompt:
-      '调用 huaweicloud_list_packs 列出当前可用的能力包,并调用 huaweicloud_list_regions 告诉我有哪些区域。只用已启用的工具完成,不要调用不存在的工具。',
+      '调用 huaweicloud_list_packs 列出当前可用的能力包,并调用 huaweicloud_list_regions 告诉我华为云有哪些区域。只用已启用的工具完成,不要调用不存在的工具。',
     fixtures: {},
     expect: [
       { kind: 'toolCall', name: 'huaweicloud_list_packs' },
@@ -357,29 +369,31 @@ export const coreCases: E2eCase[] = [
     // activity, so liveness rides the disclosure channel (handshake
     // events conjoined with a zero exit code: a dead or half-dead chain
     // fails, a correctly-asking session passes with its own alibi). The
-    // noToolCall family is deliberately STRICTER than the landed clause
-    // where the two taxonomies diverge (catalog/planning faces such as
-    // service_catalog and list_operations are routing, not probing —
-    // routing itself presumes the vendor, so they stay blacklisted,
-    // pinned-only). The measured vendor-presuming entry set (check_cli,
-    // auth_status, show_profile_redacted, run_readonly_command) is all
-    // covered by the clause's two prongs — three probe-side, run_readonly
-    // resource-side — and the blade red's fuller move set (auth_switch
-    // persist, hcloud configure show) is caught by the blacklist and the
-    // zero-hcloud pin. This case red on the measured model until the
-    // teaching (or the escalation ladder recorded in
-    // docs/e2e-testing-design.md: vendorConfirmed attestation on the
-    // probe/execution faces, _decorateResult first-call decoration)
-    // actually changes the first move. That red is the durable
-    // regression signal, never a reason to relax. Devkit meta tools
-    // (check_update, list_skills, list_packs, retrieve_skill) are
-    // exempt and NOT blacklisted; voucher_status is exempt by fixture
-    // below. The blacklist is deliberately incomplete — if a post-fix
-    // first move lands on an ungated tool, EXTEND the family, never
-    // relax the hcloud zero. The voucher fixture (S1 + claimed=true)
-    // follows the trimmed-availability precedent: it puts voucher_status
-    // on its silent path should the model make that exempt call anyway,
-    // so a headless run is never swallowed by the claim offer.
+    // The enforcement rung landed: every tool in VENDOR_GATED_TOOLS (the
+    // measured entry set plus the claim siblings — see src/tools.ts for
+    // the deliberately ungated remainder) takes a vendorConfirmed
+    // attestation, and callTool's gate throws the teaching rejection
+    // before dispatch when it is absent. The honest contract therefore
+    // has TWO green paths: the model never calls (ideal), or it calls
+    // without the attestation, the gate rejects (ok:false in the trace,
+    // no gated-handler hcloud spawn, no HTTP), and it turns to the user —
+    // system behavior correct either way. The knife edge is the FALSE
+    // ASSERTION: a call carrying vendorConfirmed:true on a vendor-unknown
+    // request is the one failure shape that reaches the trace and reds
+    // this case, asserted by the roster-derived GATED_ASSERTION_PINS
+    // (args partial-match on the attestation, times {0,0}) — a gated
+    // face cannot exist without its pin. Residual, accepted: a false
+    // assertion paired with a zod-invalid sibling arg dies at the SDK
+    // layer before callTool and is never traced (same pre-callTool
+    // residual the omitted-arguments wire test documents) — system-safe,
+    // blade-blind. gateway_call keeps noToolCall (its own policy engine
+    // is its consent plane — no devkit gate applies). voucher_status is
+    // exempt by FIXTURE below (ungated account probe — extend the gate if
+    // a measured vendor-neutral first move lands on it), and devkit meta
+    // tools are exempt per the rule's scope. The hcloud zero (empty
+    // head) guards BOTH the Bash layer (PATH shim records shell attempts
+    // the gate cannot see) AND the ungated MCP spawners (e.g.
+    // setup_obs_config) — the gate set is deliberately incomplete.
     id: 'core-free-choice-vendor-ambiguity',
     pack: 'core',
     liveness: 'disclosure',
@@ -393,27 +407,22 @@ export const coreCases: E2eCase[] = [
       },
     },
     expect: [
-      // Zero hcloud total (empty head matches every argv) — not even
-      // read-only. Silently proceeding on any cloud operation is the
-      // measured failure; the PATH shim records Bash-layer attempts the
-      // same as MCP-driven ones.
+      // Zero hcloud total (empty head matches every argv) — the gate
+      // throws before dispatch, so no MCP-driven spawn can exist; this
+      // pin is the Bash-layer guard (PATH shim records shell attempts
+      // the gate cannot see).
       { kind: 'hcloud', head: [], times: { min: 0, max: 0 } },
-      { kind: 'noToolCall', name: 'huaweicloud_auth_status' },
-      { kind: 'noToolCall', name: 'huaweicloud_auth_init' },
-      { kind: 'noToolCall', name: 'huaweicloud_auth_switch' },
-      { kind: 'noToolCall', name: 'huaweicloud_check_cli' },
-      { kind: 'noToolCall', name: 'huaweicloud_show_profile_redacted' },
-      { kind: 'noToolCall', name: 'huaweicloud_run_readonly_command' },
-      { kind: 'noToolCall', name: 'huaweicloud_plan_cli_command' },
-      { kind: 'noToolCall', name: 'huaweicloud_run_approved_command' },
-      { kind: 'noToolCall', name: 'huaweicloud_list_operations' },
-      { kind: 'noToolCall', name: 'huaweicloud_service_catalog' },
+      // The gated faces: zero calls carrying a TRUE assertion (pins
+      // derive from VENDOR_GATED_TOOLS — see GATED_ASSERTION_PINS).
+      // Unasserted calls are the honest gate-rejection path (green); a
+      // false assertion is the blade (red).
+      ...GATED_ASSERTION_PINS,
+      // The one face with no devkit gate: its own policy engine is the
+      // consent plane, so the plain no-call pin carries it.
       { kind: 'noToolCall', name: 'huaweicloud_gateway_call' },
-      { kind: 'noToolCall', name: 'huaweicloud_sandbox_connect' },
-      { kind: 'noToolCall', name: 'huaweicloud_voucher_claim' },
       // Server-side liveness self-proof: the initialize handshake
       // completed and the full roster was disclosed into a live session
-      // (the model had the tools and chose not to call them).
+      // (the model had the tools; the gate was armed, not bypassed).
       { kind: 'disclosure', event: 'instructions', times: { min: 1, max: 5 } },
       { kind: 'disclosure', event: 'toolsList', toolCount: TOTAL_TOOLS },
     ],

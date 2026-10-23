@@ -263,17 +263,24 @@ diagnostics with it):
   correctly-asking session passes carrying its own alibi, so the
   runner's dead-agent streak treats the pass exactly like a
   boundary-liveness pass — no waiver flag, no streak special-case.
-  Status of the guard itself: the negative half is expected RED on the
-  currently measured model (opencode 1.19.0 + glm-5.2, post-teaching
-  live re-run still fired check_cli → auth_status → show_profile →
-  run_readonly, plus auth_switch persist) — the durable regression
-  signal, not a broken case. The enforcement rung is deliberately
-  deferred and teaching-only until measured insufficient: a
-  vendorConfirmed attestation parameter on the probe/execution tool
-  faces (the approvedByUser pattern), or a first-call
-  `_decorateResult` vendor-boundary reminder landing between the first
-  and second moves. Either lands as its own change when the red is
-  accepted as chronic.
+  Status of the guard itself: the enforcement rung has LANDED. The
+  post-teaching live re-run (opencode 1.19.0 + glm-5.2) still fired
+  check_cli → auth_status → show_profile → run_readonly plus
+  auth_switch persist — teaching alone measured insufficient, so the
+  `vendorConfirmed` attestation (the approvedByUser pattern) now rides
+  the gated cloud-facing tool schemas (VENDOR_GATED_TOOLS in src/tools.ts
+  — the measured entry set plus the claim siblings; the deliberately
+  ungated remainder is enumerated there), and `callTool`'s gate throws
+  the teaching rejection before dispatch when the attestation is absent. The negative case's
+  contract reflects the two honest green paths (never called, or called
+  unasserted → gate-rejected → the model turns to the user); the blade
+  is a FALSE assertion (vendorConfirmed:true on a vendor-unknown
+  request), pinned by the toolCall args match. gateway_call stays
+  ungated by design (its own policy engine is its consent plane). The
+  next rung if false assertions appear at night: tighten the parameter
+  descriptions' wording, never remove the gate. A first-call
+  `_decorateResult` vendor-boundary reminder remains an undeclared
+  alternative should the attestation itself measure insufficient.
 
 CI (`.github/workflows/e2e-nightly.yml`): the only required repository
 setting is the `E2E_TEST_MODEL_APIKEY` secret. Provider/model/baseURL default

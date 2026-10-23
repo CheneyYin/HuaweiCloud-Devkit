@@ -129,7 +129,7 @@ test('remote MCP server initializes, lists tools, and plans CLI commands', async
 
   const planned = await rpc('tools/call', {
     name: 'huaweicloud_plan_cli_command',
-    arguments: { args: ['ECS', 'NovaListServers'] },
+    arguments: { vendorConfirmed: true, args: ['ECS', 'NovaListServers'] },
   });
   assert.equal(planned.body.result.isError, false);
   assert.match(planned.body.result.content[0].text, /NovaListServers/);

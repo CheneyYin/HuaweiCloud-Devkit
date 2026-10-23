@@ -164,6 +164,26 @@ test('TOOL_SCHEMAS keys exactly match TOOL_DEFINITIONS names (no orphans either 
   );
 });
 
+test('the vendorConfirmed gate rejects unasserted cloud-facing calls and teaches the two exits', async () => {
+  // The enforcement rung: a gated tool called without the attestation
+  // throws BEFORE dispatch (no hcloud spawn, no HTTP), the message names
+  // the inference list and the ask-first exit, and the attested call
+  // dispatches normally. service_catalog is the side-effect-free face for
+  // the positive arm; auth_status the measured first move for the
+  // negative arm.
+  await assert.rejects(callTool('huaweicloud_auth_status', {}), (error: Error) => {
+    assert.match(error.message, /Vendor gate: this tool operates on Huawei Cloud/);
+    assert.match(error.message, /vendorConfirmed: true ONLY when/);
+    assert.match(error.message, /ask which cloud they mean, then retry once established/);
+    return true;
+  });
+  const cataloged = (await callTool('huaweicloud_service_catalog', {
+    vendorConfirmed: true,
+    intent: 'deploy an ecs instance',
+  })) as unknown;
+  assert.ok(cataloged, 'the attested call must dispatch');
+});
+
 test('huaweicloud_hook_check_command returns deny finding', async () => {
   const result = (await callTool('huaweicloud_hook_check_command', {
     command:
@@ -219,6 +239,7 @@ test('callTool rejects invalid numeric timeoutMs instead of silently ignoring it
   await assert.rejects(
     () =>
       callTool('huaweicloud_run_readonly_command', {
+        vendorConfirmed: true,
         args: ['ECS', 'ListServersDetails'],
         timeoutMs: 'not-a-number',
       } as unknown as ToolArgs),
@@ -229,7 +250,12 @@ test('callTool rejects invalid numeric timeoutMs instead of silently ignoring it
 test('callTool accepts maxRetries 0 and integer timeoutMs (no false rejection)', async () => {
   // maxRetries: 0 is legitimate ("no retries") and must pass normalization (#530)
   await assert.doesNotReject(() =>
-    callTool('huaweicloud_plan_cli_command', { args: ['ECS', 'ListServersDetails'], maxRetries: 0, timeoutMs: 30000 }),
+    callTool('huaweicloud_plan_cli_command', {
+      vendorConfirmed: true,
+      args: ['ECS', 'ListServersDetails'],
+      maxRetries: 0,
+      timeoutMs: 30000,
+    }),
   );
 });
 
@@ -260,17 +286,20 @@ test('huaweicloud_hook_check_deploy_plan warns on sandbox without ttl', async ()
 
 test('service_catalog recommends sandbox first for static website deployment intent', async () => {
   const en = (await callTool('huaweicloud_service_catalog', {
+    vendorConfirmed: true,
     intent: 'deploy a static website',
   })) as ServiceCatalogResult;
   assert.equal(en.recommendedSkills[0], 'huawei-sandbox');
   assert.ok(en.recommendedSkills.includes('huawei-obs'));
 
   const zh = (await callTool('huaweicloud_service_catalog', {
+    vendorConfirmed: true,
     intent: '部署静态网站到华为云',
   })) as ServiceCatalogResult;
   assert.equal(zh.recommendedSkills[0], 'huawei-sandbox');
 
   const webApp = (await callTool('huaweicloud_service_catalog', {
+    vendorConfirmed: true,
     intent: 'host a web app for preview',
   })) as ServiceCatalogResult;
   assert.equal(webApp.recommendedSkills[0], 'huawei-sandbox');
@@ -278,6 +307,7 @@ test('service_catalog recommends sandbox first for static website deployment int
 
 test('service_catalog keeps storage routing for pure storage intent', async () => {
   const result = (await callTool('huaweicloud_service_catalog', {
+    vendorConfirmed: true,
     intent: 'store files in an obs bucket',
   })) as ServiceCatalogResult;
   assert.ok(result.recommendedSkills.includes('huawei-obs'));
@@ -377,6 +407,7 @@ test('auth_switch temporary sets runtime credentials for api path', async () => 
   delete process.env.HW_SECRET_KEY;
   try {
     const out = (await callTool('huaweicloud_auth_switch', {
+      vendorConfirmed: true,
       mode: 'memory',
       action: 'temporary',
       ak: 'RUNTIME_AK',
@@ -401,7 +432,10 @@ test('auth_switch clear resets runtime', async () => {
   process.env.HUAWEICLOUD_HOME = isolatedHome;
   try {
     setRuntimeCredentials('A', 'B', undefined, 'cn-north-4');
-    const out = (await callTool('huaweicloud_auth_switch', { action: 'clear' })) as AuthSwitchResult;
+    const out = (await callTool('huaweicloud_auth_switch', {
+      vendorConfirmed: true,
+      action: 'clear',
+    })) as AuthSwitchResult;
     assert.equal(out.status, 'cleared');
     let threw = false;
     try {
@@ -427,7 +461,11 @@ test('auth_switch persist(mode=import) rejects missing region and keeps import f
     const importFile = join(cfgDir, 'creds-import.json');
     writeFileSync(importFile, JSON.stringify({ ak: 'IMPORT_AK', sk: 'IMPORT_SK' }), 'utf8');
 
-    const out = (await callTool('huaweicloud_auth_switch', { mode: 'import', action: 'persist' })) as AuthSwitchResult;
+    const out = (await callTool('huaweicloud_auth_switch', {
+      vendorConfirmed: true,
+      mode: 'import',
+      action: 'persist',
+    })) as AuthSwitchResult;
 
     assert.equal(out.status, 'error');
     assert.equal(out.scope, 'invalid_region');
@@ -455,6 +493,7 @@ test('auth_switch temporary(mode=import) clears import file on success', async (
     writeFileSync(importFile, JSON.stringify({ ak: 'TMP_AK', sk: 'TMP_SK' }), 'utf8');
 
     const out = (await callTool('huaweicloud_auth_switch', {
+      vendorConfirmed: true,
       mode: 'import',
       action: 'temporary',
     })) as AuthSwitchResult;
@@ -484,7 +523,11 @@ test('auth_switch persist(mode=import) with STS token is rejected and clears imp
       'utf8',
     );
 
-    const out = (await callTool('huaweicloud_auth_switch', { mode: 'import', action: 'persist' })) as AuthSwitchResult;
+    const out = (await callTool('huaweicloud_auth_switch', {
+      vendorConfirmed: true,
+      mode: 'import',
+      action: 'persist',
+    })) as AuthSwitchResult;
 
     assert.equal(out.status, 'error');
     assert.equal(out.scope, 'rejected');

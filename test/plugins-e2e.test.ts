@@ -533,6 +533,7 @@ test('huaweicloud_service_catalog returns capability recommendations', async () 
       mcpServerPath,
       makeEnv(home, cwd),
       callTool('huaweicloud_service_catalog', {
+        vendorConfirmed: 'test: vendor established by the harness',
         intent: 'deploy a static website',
       }),
     );
@@ -554,6 +555,7 @@ test('huaweicloud_service_catalog returns capability recommendations', async () 
       mcpServerPath,
       makeEnv(home, cwd),
       callTool('huaweicloud_service_catalog', {
+        vendorConfirmed: 'test: vendor established by the harness',
         intent: '部署静态网站到华为云',
       }),
     );
@@ -570,6 +572,7 @@ test('huaweicloud_service_catalog returns capability recommendations', async () 
       mcpServerPath,
       makeEnv(home, cwd),
       callTool('huaweicloud_service_catalog', {
+        vendorConfirmed: 'test: vendor established by the harness',
         intent: 'store files in an obs bucket',
       }),
     );

@@ -1,6 +1,6 @@
 ---
 name: huaweicloud-capability-discovery
-description: Discover Huawei Cloud capabilities for an agent task. Use when the user asks what Huawei Cloud service, Skill, CLI command, API, SDK, or document should be used, or when a Huawei Cloud request is scenario-shaped and needs capability selection before implementation. A request that names no cloud vendor is not thereby a Huawei Cloud task: when the vendor is unknown and cannot be inferred (explicit mention, hcloud/KooCLI artifacts, myhuaweicloud endpoints, Huawei region IDs, earlier turns), ask which cloud the user means before routing here — scenario shape alone is not vendor evidence.
+description: Discover Huawei Cloud capabilities for an agent task. Use when the user asks what Huawei Cloud service, Skill, CLI command, API, SDK, or document should be used, or when a Huawei Cloud request is scenario-shaped and needs capability selection before implementation. A request that names no cloud vendor is not thereby a Huawei Cloud task: when the vendor is unknown and cannot be inferred (explicit mention, hcloud/KooCLI artifacts, myhuaweicloud endpoints, Huawei region IDs, earlier turns), ask which cloud the user means before routing here — scenario shape alone is not vendor evidence. Cloud-facing tools take a vendorConfirmed flag — assert it only once the vendor is established.
 ---
 
 # Huawei Cloud Capability Discovery

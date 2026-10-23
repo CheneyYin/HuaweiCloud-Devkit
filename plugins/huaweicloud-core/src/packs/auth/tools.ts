@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { vendorConfirmed } from '../../lib/tool-schema-parts.ts';
+
 import { getAuthStatus, syncAuth } from '../../auth/service.ts';
 import {
   setRuntimeCredentials,
@@ -173,6 +175,7 @@ async function handleAuthConfirm(args: ToolArgs = {}, _opts: CallToolOptions = {
 }
 
 const authStatusSchema = z.looseObject({
+  vendorConfirmed,
   target: z
     .string()
     .optional()
@@ -191,6 +194,7 @@ const authSyncSchema = z.looseObject({
 });
 
 const authInitSchema = z.looseObject({
+  vendorConfirmed,
   ak: z.string().optional().describe('Huawei Cloud Access Key (required unless clear=true)'),
   sk: z.string().optional().describe('Huawei Cloud Secret Key (required unless clear=true)'),
   region: z.string().optional().describe('Default region (optional)'),
@@ -198,6 +202,7 @@ const authInitSchema = z.looseObject({
 });
 
 const authSwitchSchema = z.looseObject({
+  vendorConfirmed,
   mode: z.enum(['import', 'memory', 'mcp-config']).optional().describe('Credential source channel'),
   action: z.enum(['persist', 'temporary', 'clear']).optional().describe('Apply scope'),
   ak: z.string().optional(),
@@ -215,7 +220,7 @@ export const AUTH_TOOLS = [
   {
     name: 'huaweicloud_auth_status',
     description:
-      'Check unified Huawei Cloud authentication status across the global credential vault, OBS, KooCLI, and all supported agent MCP registrations. Returns only redacted/status information, never credentials.',
+      'Check unified Huawei Cloud authentication status across the global credential vault, OBS, KooCLI, and all supported agent MCP registrations. Returns only redacted/status information, never credentials. Vendor-gated (vendorConfirmed): call only when the vendor is established — see the vendorConfirmed parameter description; when unknown, ask which cloud the user means first.',
     schema: authStatusSchema,
     handler: handleAuthStatus,
   },
@@ -229,14 +234,14 @@ export const AUTH_TOOLS = [
   {
     name: 'huaweicloud_auth_init',
     description:
-      'Set or clear runtime Huawei Cloud credentials (AK/SK) for this MCP session. Runtime credentials take highest priority over environment variables and config files for all subsequent API calls. Use when switching accounts within the same Agent session — call with AK/SK to switch, or with clear=true to fall back to env/file credentials.',
+      'Set or clear runtime Huawei Cloud credentials (AK/SK) for this MCP session. Runtime credentials take highest priority over environment variables and config files for all subsequent API calls. Use when switching accounts within the same Agent session — call with AK/SK to switch, or with clear=true to fall back to env/file credentials. Vendor-gated (vendorConfirmed): call only when the vendor is established — see the vendorConfirmed parameter description; when unknown, ask which cloud the user means first.',
     schema: authInitSchema,
     handler: handleAuthInit,
   },
   {
     name: 'huaweicloud_auth_switch',
     description:
-      'Switch Huawei Cloud credentials within the current session. action=temporary keeps AK/SK in memory only (restart loses them; hcloud commands are unaffected and an A+C warning will be raised). action=persist writes S1 (single source of truth) with configuredBySession flag and propagates to S2 (KooCLI current profile) and S3 (OBS). action=clear resets runtime credentials. mode=import reads AK/SK from ~/.config/huaweicloud/creds-import.json then wipes it (SK never enters conversation). mode=memory passes AK/SK as tool arguments (SK is visible to model - prefer import). mode=mcp-config reads the injected mcp_settings environment.',
+      'Switch Huawei Cloud credentials within the current session. action=temporary keeps AK/SK in memory only (restart loses them; hcloud commands are unaffected and an A+C warning will be raised). action=persist writes S1 (single source of truth) with configuredBySession flag and propagates to S2 (KooCLI current profile) and S3 (OBS). action=clear resets runtime credentials. mode=import reads AK/SK from ~/.config/huaweicloud/creds-import.json then wipes it (SK never enters conversation). mode=memory passes AK/SK as tool arguments (SK is visible to model - prefer import). mode=mcp-config reads the injected mcp_settings environment. Vendor-gated (vendorConfirmed): call only when the vendor is established — see the vendorConfirmed parameter description; when unknown, ask which cloud the user means first.',
     schema: authSwitchSchema,
     handler: handleAuthSwitch,
   },

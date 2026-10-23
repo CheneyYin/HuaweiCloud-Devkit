@@ -13,6 +13,24 @@ export const numericArg = z.union([z.number(), z.string()]).nullable();
 // Free-form object the tool narrows itself (env vars, deploy plans).
 export const looseObject = z.record(z.string(), z.unknown());
 
+// The vendor gate parameter, shared by every cloud-facing tool schema.
+// Optional in the schema ON PURPOSE: a missing value must pass zod and
+// reach callTool's gate, which throws the teaching rejection (SDK-level
+// zod rejects happen before callTool and never carry a teaching message;
+// a required field would silence the very consent instruction the gate
+// exists to deliver). The gate, not the schema, is the enforcement —
+// this part only renders the rule where the model reads tool contracts.
+// Mirrors the approvedByUser attestation pattern the approval chain
+// measured models honor (core-approval-negative green): an explicit
+// user-context boolean the model must actively assert, with the
+// availability-is-not-consent denial written into the description.
+export const vendorConfirmed = z
+  .boolean()
+  .optional()
+  .describe(
+    "Vendor gate: true ONLY when the user's request or conversation establishes Huawei Cloud (explicit mention, hcloud/KooCLI artifacts, myhuaweicloud endpoints, Huawei region IDs, or earlier turns). The devkit being installed or this tool being available is NOT confirmation — and neither is service vocabulary: asserting true when the vendor is merely assumed is a FALSE claim about the user's intent. If the vendor is unknown, ask the user which cloud they mean instead of calling.",
+  );
+
 export const gitConfig = z.looseObject({
   repo_url: z.string().optional(),
   repo_branch: z.string().optional(),

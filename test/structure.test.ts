@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { join, sep } from 'node:path';
 import test from 'node:test';
 
-import { TOOL_DEFINITIONS, SKILLS_ROOT } from '../plugins/huaweicloud-core/src/tools.ts';
+import { TOOL_DEFINITIONS, SKILLS_ROOT, VENDOR_GATED_TOOLS } from '../plugins/huaweicloud-core/src/tools.ts';
+import { getToolSchema } from '../plugins/huaweicloud-core/src/tool-schemas.ts';
 import { instructionsFor } from '../plugins/huaweicloud-core/src/mcp-protocol.ts';
 import { PACK_OF, PACKS } from '../plugins/huaweicloud-core/src/packs/registry.ts';
 import { parseSkillFrontmatter } from '../plugins/huaweicloud-core/src/lib/skill-frontmatter.ts';
@@ -909,6 +910,70 @@ test('server instructions carry the three-form skillRoot disclosure contract', (
     /huaweicloud_packs_configure/,
     'packs_configure is stdio-only and must not be taught on the remote form',
   );
+});
+
+test('the vendorConfirmed gate is pinned on every gated tool face', () => {
+  // The enforcement rung of the vendor boundary (landed after the measured
+  // post-teaching re-run still fired the probe/execution chain on a
+  // vendor-neutral prompt). Roster-derived, never hand-listed: the loop
+  // reads VENDOR_GATED_TOOLS — the same set callTool's gate reads — so
+  // adding a tool to the gate automatically extends this pin. Two checks
+  // per face: the description carries the gate sentence (the surface a
+  // model reads when choosing tools), and the schema TYPES the parameter
+  // (a wrong-typed vendorConfirmed fails zod — passthrough would swallow
+  // it, so the safeParse failure is the property-presence proof). The
+  // converse pin holds the exemption boundary: a devkit meta tool
+  // (check_update) passes the wrong-typed value through, proving the gate
+  // set did not silently grow over the meta family.
+  assert.ok(VENDOR_GATED_TOOLS.size >= 13, 'the measured entry set must stay gated');
+  for (const name of VENDOR_GATED_TOOLS) {
+    const def = TOOL_DEFINITIONS.find((tool) => tool.name === name);
+    assert.ok(def, `gated tool ${name} must exist in TOOL_DEFINITIONS`);
+    assert.match(
+      def.description,
+      /Vendor-gated \(vendorConfirmed\)/,
+      `${name}'s description must carry the gate sentence`,
+    );
+    // Required fields are supplied per face so the failure is attributable
+    // to vendorConfirmed alone — a bare wrong-type probe is vacuous for
+    // the four schemas with required keys (they fail on the missing
+    // required long before the parameter is examined).
+    const requireds: Record<string, Record<string, unknown>> = {
+      huaweicloud_plan_cli_command: { args: ['X'] },
+      huaweicloud_run_readonly_command: { args: ['X'] },
+      huaweicloud_list_operations: { service: 'X' },
+      huaweicloud_run_approved_command: { args: ['X'], approvalToken: 't', approvedByUser: true },
+    };
+    const parsed = getToolSchema(name).safeParse({
+      vendorConfirmed: 'not-a-boolean',
+      ...(requireds[name] ?? {}),
+    });
+    assert.equal(parsed.success, false, `${name}'s schema must type the vendorConfirmed parameter`);
+    assert.ok(
+      !parsed.success && parsed.error.issues.some((issue) => issue.path[0] === 'vendorConfirmed'),
+      `${name}'s parse failure must point at vendorConfirmed, not a missing required key`,
+    );
+  }
+  assert.ok(VENDOR_GATED_TOOLS.has('huaweicloud_auth_status'), 'the measured first move stays gated');
+  assert.ok(!VENDOR_GATED_TOOLS.has('huaweicloud_check_update'), 'devkit meta tools stay outside the gate');
+  // Full-roster converse (round-5 finding: a shared schema leaked the
+  // attestation onto an ungated sibling — competition_voucher_claim —
+  // advertising a gate that never fires): every tool whose schema types
+  // the parameter must be in the gate set. Sampled per name with a bare
+  // probe; schemas with required keys parse as typed (the required keys
+  // are absent, but the check only needs the property-typing signal, so
+  // it asserts on the property not the overall outcome).
+  for (const tool of TOOL_DEFINITIONS) {
+    const schema = getToolSchema(tool.name);
+    const probe = schema.safeParse({ vendorConfirmed: 'not-a-boolean' });
+    const typed = !probe.success && probe.error.issues.some((issue) => issue.path[0] === 'vendorConfirmed');
+    if (typed) {
+      assert.ok(
+        VENDOR_GATED_TOOLS.has(tool.name),
+        `${tool.name} types vendorConfirmed but is not gated — split the schema or extend the gate`,
+      );
+    }
+  }
 });
 
 test('retrieve_skill description frames the fallback, not the default', () => {

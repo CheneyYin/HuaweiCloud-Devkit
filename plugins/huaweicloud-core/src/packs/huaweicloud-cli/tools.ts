@@ -5,7 +5,7 @@ import { hcloudProbeNextStep, probeHcloud, type ProbeHcloudOptions } from '../..
 import { redactSecrets } from '../../safety-policy.ts';
 import { asText } from '../../lib/as-text.ts';
 import { consumeApprovalToken, hashArgs } from '../../lib/approval-tokens.ts';
-import { numericArg } from '../../lib/tool-schema-parts.ts';
+import { numericArg, vendorConfirmed } from '../../lib/tool-schema-parts.ts';
 import type { PackToolDefinition, LooseToolSchema } from '../../lib/pack-types.ts';
 import type { CallToolOptions, ToolArgs } from '../../tools.ts';
 import { asRecord } from '../../lib/as-record.ts';
@@ -233,22 +233,26 @@ async function handleListRegions(_args: ToolArgs = {}, _opts: CallToolOptions = 
   return listRegions();
 }
 
-const checkCliSchema = z.looseObject({});
+const checkCliSchema = z.looseObject({ vendorConfirmed });
 const planCliCommandSchema = z.looseObject({
+  vendorConfirmed,
   args: z.array(z.string()).describe('hcloud arguments, excluding the hcloud executable.'),
   allowWrites: z.boolean().optional().describe('Only true after explicit user approval for this exact operation.'),
 });
 const runReadonlyCommandSchema = z.looseObject({
+  vendorConfirmed,
   args: z.array(z.string()),
   timeoutMs: numericArg.optional().describe('Optional timeout in milliseconds. Defaults to 60000.'),
   maxRetries: numericArg.optional().describe('Optional retry count for transient network errors. Defaults to 1.'),
   cwd: z.string().optional().describe('Optional working directory for the hcloud process.'),
 });
 const listOperationsSchema = z.looseObject({
+  vendorConfirmed,
   service: z.string().describe('KooCLI service name, such as ECS, VPC, IMS, OBS, RDS, or CDN.'),
   timeoutMs: numericArg.optional().describe('Optional timeout in milliseconds. Defaults to 60000.'),
 });
 const runApprovedCommandSchema = z.looseObject({
+  vendorConfirmed,
   args: z.array(z.string()).describe('hcloud arguments, excluding the hcloud executable.'),
   approvalToken: z.string().describe('The approvalToken returned by huaweicloud_plan_cli_command.'),
   approvedByUser: z.boolean().describe('Must be true only after the user explicitly approves this exact command.'),
@@ -257,54 +261,58 @@ const runApprovedCommandSchema = z.looseObject({
   cwd: z.string().optional().describe('Optional working directory for the hcloud process.'),
 });
 const showProfileRedactedSchema = z.looseObject({
+  vendorConfirmed,
   profile: z.string().optional().describe('Optional KooCLI profile name.'),
 });
-const listRegionsSchema = z.looseObject({});
+const listRegionsSchema = z.looseObject({ vendorConfirmed });
 
 export const HUAWEICLOUD_CLI_TOOLS = [
   {
     name: 'huaweicloud_check_cli',
     description:
-      'Check whether Huawei Cloud KooCLI hcloud is installed and whether its version matches the plugin paired version. Returns redacted output.',
+      'Check whether Huawei Cloud KooCLI hcloud is installed and whether its version matches the plugin paired version. Returns redacted output. Vendor-gated (vendorConfirmed): call only when the vendor is established — see the vendorConfirmed parameter description; when unknown, ask which cloud the user means first.',
     schema: checkCliSchema,
     handler: handleCheckCli,
   },
   {
     name: 'huaweicloud_plan_cli_command',
-    description: 'Classify and plan a Huawei Cloud hcloud command without executing it.',
+    description:
+      'Classify and plan a Huawei Cloud hcloud command without executing it. Vendor-gated (vendorConfirmed): call only when the vendor is established — see the vendorConfirmed parameter description; when unknown, ask which cloud the user means first.',
     schema: planCliCommandSchema,
     handler: handlePlanCliCommand,
   },
   {
     name: 'huaweicloud_run_readonly_command',
-    description: 'Run a read-only hcloud command through the toolkit safety policy and redact output.',
+    description:
+      'Run a read-only hcloud command through the toolkit safety policy and redact output. Vendor-gated (vendorConfirmed): call only when the vendor is established — see the vendorConfirmed parameter description; when unknown, ask which cloud the user means first.',
     schema: runReadonlyCommandSchema,
     handler: handleRunReadonlyCommand,
   },
   {
     name: 'huaweicloud_list_operations',
     description:
-      'List KooCLI operations for a Huawei Cloud service by running local/read-only hcloud <Service> --help.',
+      'List KooCLI operations for a Huawei Cloud service by running local/read-only hcloud <Service> --help. Vendor-gated (vendorConfirmed): call only when the vendor is established — see the vendorConfirmed parameter description; when unknown, ask which cloud the user means first.',
     schema: listOperationsSchema,
     handler: handleListOperations,
   },
   {
     name: 'huaweicloud_run_approved_command',
     description:
-      'Run a write-capable hcloud command only after the exact command has been shown and explicitly approved by the user.',
+      'Run a write-capable hcloud command only after the exact command has been shown and explicitly approved by the user. Vendor-gated (vendorConfirmed): call only when the vendor is established — see the vendorConfirmed parameter description; when unknown, ask which cloud the user means first.',
     schema: runApprovedCommandSchema,
     handler: handleRunApprovedCommand,
   },
   {
     name: 'huaweicloud_show_profile_redacted',
-    description: 'Inspect a KooCLI profile through hcloud configure show and return only redacted output.',
+    description:
+      'Inspect a KooCLI profile through hcloud configure show and return only redacted output. Vendor-gated (vendorConfirmed): call only when the vendor is established — see the vendorConfirmed parameter description; when unknown, ask which cloud the user means first.',
     schema: showProfileRedactedSchema,
     handler: handleShowProfileRedacted,
   },
   {
     name: 'huaweicloud_list_regions',
     description:
-      'List available Huawei Cloud regions. Returns region IDs, display names, and endpoints. Use when the agent needs to discover available regions before creating resources.',
+      'List available Huawei Cloud regions. Returns region IDs, display names, and endpoints. Use when the agent needs to discover available regions before creating resources. Vendor-gated (vendorConfirmed): call only when the vendor is established — see the vendorConfirmed parameter description; when unknown, ask which cloud the user means first.',
     schema: listRegionsSchema,
     handler: handleListRegions,
   },
