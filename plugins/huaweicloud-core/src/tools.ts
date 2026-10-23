@@ -188,7 +188,7 @@ const TOOL_DEFINITIONS_LITERALS = [
   {
     name: 'huaweicloud_retrieve_skill',
     description:
-      "Retrieve one Huawei Cloud skill by exact name (e.g. huawei-ecs, huawei-vpc, huawei-obs, huawei-sandbox) — the fallback loader, not the default: attempt the direct read first. When the skills tree location is known (stdio server instructions state it at initialize; huaweicloud_list_skills and this tool's own stdio payloads carry it as skillRoot), read <skillRoot>/<name>/SKILL.md and only the references/ files you need with your file tools — untruncated, and do not call this tool before the read is attempted (the attempt itself is the reachability check). Call it only after a direct read attempt fails or is denied, or when the tree location is unknown — it needs no file access. Returns the full SKILL.md content plus its reference files (each reference body capped at 4000 characters) and, on stdio sessions, skillRoot so the next skill can be a direct read. Service skills are server data — never installed into an agent's own skill directory — and this is the owner-pack-gated (a trimmed pack's skills are refused with remediation), telemetry-bearing path remote sessions rely on. The six core meta-skills (huaweicloud-*) are additionally disclosed as native skill copies on directory-loading agents; this tool serves them identically everywhere, so it stays the portable fallback. Browse the catalog first with huaweicloud_list_skills; candidates also come from huaweicloud_service_catalog, huaweicloud_search_docs, or huaweicloud_list_packs.",
+      "Retrieve one Huawei Cloud skill by exact name (e.g. huawei-ecs, huawei-vpc, huawei-obs, huawei-sandbox) — the fallback loader, not the default: attempt the direct read first. When the skills tree location is known (stdio server instructions state it at initialize; huaweicloud_list_skills and this tool's own stdio payloads carry it as skillRoot), read <skillRoot>/<name>/SKILL.md and only the references/ files you need with your file tools — untruncated, and do not call this tool before the read is attempted (the attempt itself is the reachability check). Call it only after a direct read attempt fails or is denied, or when the tree location is unknown — it needs no file access. Returns the full SKILL.md content plus its reference files (each reference body capped at 4000 characters; when a reference is cut, a [truncated] marker names the <skillRoot> direct-read path for the rest) and, on stdio sessions, skillRoot so the next skill can be a direct read. Service skills are server data — never installed into an agent's own skill directory — and this is the owner-pack-gated (a trimmed pack's skills are refused with remediation), telemetry-bearing path remote sessions rely on. The six core meta-skills (huaweicloud-*) are additionally disclosed as native skill copies on directory-loading agents; this tool serves them identically everywhere, so it stays the portable fallback. Browse the catalog first with huaweicloud_list_skills; candidates also come from huaweicloud_service_catalog, huaweicloud_search_docs, or huaweicloud_list_packs.",
   },
   {
     name: 'huaweicloud_list_regions',
@@ -1522,7 +1522,18 @@ async function retrieveSkill(name: string, opts: CallToolOptions = {}) {
   const references: Array<{ filename: string; content: string }> = [];
   for (const filename of referenceFilenames(skillName)) {
     const refPath = join(SKILLS_ROOT, skillName, 'references', filename);
-    references.push({ filename, content: readFileSync(refPath, 'utf8').substring(0, 4000) });
+    const raw = readFileSync(refPath, 'utf8');
+    // The 4000-char cap is silent no longer: cross-references deeper into a
+    // reference (e.g. the safety remediation citing §Bootstrap or a late
+    // diagnosis section) must be visibly unreachable here, not hollow —
+    // remote/file-less agents only have this fallback, so a bare truncation
+    // reads as "the section does not exist". The marker names the fix: direct
+    // file access to skillRoot (disclosed in the stdio payload below).
+    references.push({
+      filename,
+      content:
+        raw.length > 4000 ? `${raw.substring(0, 4000)}\n\n[truncated at 4000 chars — full file at <skillRoot>/${skillName}/references/${filename}]` : raw,
+    });
   }
   const frontmatter = parseSkillFrontmatter(content);
   const version: string | number = frontmatter.version ?? 1;

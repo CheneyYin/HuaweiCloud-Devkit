@@ -445,6 +445,24 @@ test('retrieve_skill returns the full multi-line description, quote-stripped', a
   );
 });
 
+// The truncation cap must be visible, not silent: a reference cut at 4000
+// chars carries a marker naming the <skillRoot> direct-read path, so a
+// cross-reference deeper than the cap (e.g. a safety remediation citing a
+// late section) reads as "beyond the cut", never as "does not exist".
+test('retrieve_skill marks truncated references and leaves short ones whole', async () => {
+  const result = (await callTool('huaweicloud_retrieve_skill', { name: 'huawei-ecs' })) as RetrieveSkillResult;
+  assert.equal(result.ok, true, result.error);
+  const long = result.references.find((ref) => ref.filename === 'create-instance.md')!;
+  assert.ok(long.content.length > 4000, 'create-instance.md exceeds the cap after the 1.1.10 port');
+  assert.match(
+    long.content,
+    /\[truncated at 4000 chars[^\]]*\]/,
+    'cut references must carry the truncation marker',
+  );
+  const short = result.references.find((ref) => ref.filename === 'evs.md')!;
+  assert.ok(!short.content.includes('[truncated'), 'short references must not carry the marker');
+});
+
 test('search_docs matches tokens from the multi-line description second paragraph', async () => {
   // 'Nginx部署' lives only in huawei-ecs's second paragraph: the CONTENT
   // index path found it even before the multi-line fix (whole-file match),

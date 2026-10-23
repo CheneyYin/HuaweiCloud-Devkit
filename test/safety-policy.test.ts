@@ -848,6 +848,11 @@ test('classifyTextCommand blocks approved public admin port exposure', () => {
   assert.equal(result.decision, 'deny');
   assert.equal(result.blockedByRiskRule, true);
   assert.equal(result.findings?.[0].ruleId, 'hwc-network-public-admin-port');
+  // The remediation rides the reason on every deny face (Node hook
+  // permissionDecisionReason, MCP assertLimited errors) — the same
+  // message + " Remediation: " + remediation format the py hook emits.
+  assert.match(result.reason ?? '', /Remediation: /);
+  assert.match(result.reason ?? '', /\/32 rule for your real direct egress IP/);
 });
 
 test('classifyTextCommand applies shared risk rules to non-hcloud commands', () => {

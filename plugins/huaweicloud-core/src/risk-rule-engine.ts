@@ -302,11 +302,18 @@ export function mergeRiskDecision(base: RiskDecision, risk: RiskEvaluation): Ris
   if (risk.decision === 'deny') {
     // findings was checked non-empty at the top of this function.
     const topFinding = risk.findings[0]!;
+    // The remediation rides the reason so every deny face that prints only the
+    // reason (Node hook permissionDecisionReason, MCP assertAllowed errors)
+    // still surfaces the actionable fix — the same format the py hook twin
+    // emits (message + " Remediation: " + remediation).
+    const reason = topFinding.remediation
+      ? `${topFinding.message} Remediation: ${topFinding.remediation}`
+      : topFinding.message;
     return {
       ...base,
       decision: 'deny',
       risk: topFinding.category,
-      reason: topFinding.message,
+      reason,
       blockedByRiskRule: true,
       findings: risk.findings,
     };
