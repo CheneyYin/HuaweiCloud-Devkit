@@ -455,7 +455,11 @@ test('classifyHcloudArgs blocks obsutil write commands', () => {
     'deny',
     'raw-text hcloud OBS cors -method=put should be blocked',
   );
-  assert.equal(classifyHcloudArgs(['obs', 'website', 'obs://bucket']).decision, 'deny', 'obs website should be blocked');
+  assert.equal(
+    classifyHcloudArgs(['obs', 'website', 'obs://bucket']).decision,
+    'deny',
+    'obs website should be blocked',
+  );
   assert.equal(
     classifyTextCommand('hcloud OBS website obs://bucket -method=put -localfile=w.xml').decision,
     'deny',

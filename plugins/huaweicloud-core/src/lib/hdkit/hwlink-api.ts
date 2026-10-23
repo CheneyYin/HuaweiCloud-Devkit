@@ -35,7 +35,24 @@ async function apiGet(
   const fullPath = qs ? `${path}?${qs}` : path;
   const headers = signSdkHmacRequest({ path, query, ak, sk, securityToken: securitytoken, baseUrl: BASE_URL });
   const resp = await fetchWithProxy(`${BASE_URL}${fullPath}`, { headers });
-  return { status: resp.status, data: await resp.json() };
+  return { status: resp.status, data: await readResponseBody(resp) };
+}
+
+// #997 hardening: a 5xx from a gateway typically returns HTML — resp.json()
+// would throw a SyntaxError BEFORE classifyConnectionError ever sees the
+// status, so the retryable_server class only fired for JSON bodies (the least
+// likely shape for a gateway error). Text-then-parse (the sibling
+// hdkitservice-api doctrine): a non-JSON body becomes a status-keyed synthetic
+// payload so 429/5xx still classify and retry. Transport-level fetch
+// rejections (ECONNRESET etc.) still propagate unclassified — a documented
+// residual, deliberately not retried.
+async function readResponseBody(resp: { status: number; text: () => Promise<string> }): Promise<unknown> {
+  const raw = await resp.text();
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return { error_code: `HTTP_${resp.status}`, error_msg: raw.slice(0, 200) };
+  }
 }
 
 async function apiPost(
@@ -60,7 +77,7 @@ async function apiPost(
     headers: { ...headers, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  return { status: resp.status, data: await resp.json() };
+  return { status: resp.status, data: await readResponseBody(resp) };
 }
 
 // #997: transient/restriction-class error codes from the connection API.
@@ -79,7 +96,11 @@ const TRANSIENT_CONNECTION_CODES = new Set(['HDKIT_SUB_ACCOUNT_RESTRICTED', 'HD.
 
 export type ConnectionErrorKind = 'transient_restricted' | 'retryable_server' | 'fatal';
 
-// #997: classify a connection-API failure (exported for tests).
+// #997: classify a connection-API failure (exported for tests). NB: the code
+// extraction is nullish (??), not falsy (||) — a falsy-but-present error_code
+// wins over a meaningful code, a deliberate divergence from main's || chain
+// (kept because v2 reads the same field pair in classify and err.code, which
+// main did not).
 export function classifyConnectionError(data: unknown, status: number): ConnectionErrorKind {
   const record = asRecord(data);
   const code = asText(record.error_code ?? record.code ?? '').toUpperCase();
@@ -101,6 +122,19 @@ const CONNECTION_RETRY_HINT =
 export interface CreateConnectionOptions {
   maxRetries?: number;
   backoffMs?: ReadonlyArray<number>;
+}
+
+// #997: the retry-exhausted error's enriched shape — named (the sibling
+// hdkitservice-api HdkitError idiom) so callers and tests import it instead
+// of re-declaring structural casts. The fields are a forward-facing seam:
+// today only err.message crosses the MCP tool boundary; code/kind/retryable/
+// suggestedRetryAfterMs exist for callers that want to skip futile outer
+// retries while the transient state settles.
+export interface ConnectionRetryError extends Error {
+  code?: string;
+  kind?: ConnectionErrorKind;
+  retryable?: boolean;
+  suggestedRetryAfterMs?: number;
 }
 
 export interface ConnectionResult {
@@ -148,19 +182,24 @@ export async function createConnection(
     lastFailure = { kind, status, data };
   }
 
-  // lastFailure is non-null whenever the loop exhausted its attempts without
-  // returning or throwing; the assertion keeps the JSON.stringify below honest.
-  const failure = lastFailure!;
+  // lastFailure is non-null whenever the loop ran at least once without
+  // returning or throwing; the guard below turns a degenerate maxRetries
+  // (< 0 ⇒ zero attempts) into an honest options error instead of a null
+  // TypeError masquerading as a server failure.
+  if (!lastFailure) {
+    throw new Error('createConnection: no attempts executed (maxRetries must be >= 0)');
+  }
+  const failure = lastFailure;
   const err = new Error(
     `Failed to create connection after ${maxAttempts} attempts (${failure.kind}): ${JSON.stringify(failure.data)}. ${CONNECTION_RETRY_HINT}`,
-  );
-  (
-    err as Error & { code?: string; kind?: ConnectionErrorKind; retryable?: boolean; suggestedRetryAfterMs?: number }
-  ).code = asText(asRecord(failure.data).error_code ?? asRecord(failure.data).code ?? `HTTP_${failure.status}`);
-  (err as Error & { kind?: ConnectionErrorKind }).kind = failure.kind;
-  (err as Error & { retryable?: boolean }).retryable = true;
-  (err as Error & { suggestedRetryAfterMs?: number }).suggestedRetryAfterMs =
-    backoff[Math.min(maxAttempts - 1, backoff.length - 1)] ?? 1000;
+  ) as ConnectionRetryError;
+  err.code = asText(asRecord(failure.data).error_code ?? asRecord(failure.data).code ?? `HTTP_${failure.status}`);
+  err.kind = failure.kind;
+  err.retryable = true;
+  // Deliberate divergence from main: main always suggests the largest backoff
+  // entry; v2 suggests the wait the NEXT attempt would actually use — the next
+  // attempt is maxAttempts + 1, whose wait index is maxAttempts - 1.
+  err.suggestedRetryAfterMs = backoff[Math.min(maxAttempts - 1, backoff.length - 1)] ?? 1000;
   throw err;
 }
 
