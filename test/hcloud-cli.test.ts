@@ -14,6 +14,7 @@ import {
   runHcloud,
   extractApiError,
   redactOutput,
+  stripKooCliUpdateBanner,
   type HcloudPlan,
   type HcloudRunResult,
 } from '../plugins/huaweicloud-core/src/hcloud-cli.ts';
@@ -1017,4 +1018,49 @@ test('KooCLI 7.3.12 pin: the OBS write-subcommand advisory covers the new names'
   // Read controls stay advisory-free.
   const read = planHcloudCommand(['OBS', 'get-public-access-block', 'obs://bucket'], { allowWrites: false });
   assert.equal(read.safeToRun, true);
+});
+
+// A4 (#935): the KooCLI 7.2.x per-command version-upgrade banner must never
+// reach agent-facing output; the DevKit one-shot upgrade hint (check_cli /
+// doctor's soft mismatch hint) is the only sanctioned upgrade nudge.
+test('stripKooCliUpdateBanner removes the KooCLI 7.2.x upgrade banner line (#935 A4)', () => {
+  const raw = ['可执行 hcloud update 更新至 7.3.12', '{', '  "servers": []', '}'].join('\n');
+  const cleaned = stripKooCliUpdateBanner(raw);
+  assert.ok(!cleaned.includes('可执行 hcloud update 更新至 7.3.12'), 'banner line must be removed');
+  assert.match(cleaned, /servers/, 'the real output must survive');
+});
+
+test('stripKooCliUpdateBanner keeps real output and the DevKit one-shot upgrade hint (#935 A4)', () => {
+  // The version-mismatch hint DevKit itself emits (check_cli/doctor soft hint)
+  // must NOT be stripped — only the per-command KooCLI banner is.
+  const hint =
+    'KooCLI version mismatch: installed 7.2.12, paired 7.3.12. Run "npx huaweicloud-devkit update" to upgrade.';
+  assert.equal(stripKooCliUpdateBanner(hint), hint, 'the DevKit upgrade hint must be preserved verbatim');
+
+  const normal = 'ListVpcs有多个版本,默认使用该API版本v3\n{"vpcs":[]}';
+  assert.equal(stripKooCliUpdateBanner(normal), normal, 'normal multi-version prefix lines are untouched here');
+});
+
+test('runHcloud strips the KooCLI update banner from command output (#935 A4)', async () => {
+  const dir = fixtureDir('huaweicloud-banner-');
+  const script = join(dir, 'fake-hcloud.mjs');
+  writeFileSync(
+    script,
+    'console.log("可执行 hcloud update 更新至 7.3.12");\nconsole.log(\'{"result":"ok"}\');\n',
+    'utf8',
+  );
+  const result = await runHcloud(['ECS', 'ListServersDetails'], {
+    executable: process.execPath,
+    executableArgs: [script],
+  });
+  assert.ok(!String(result.stdout).includes('hcloud update 更新至'), 'banner must not reach tool output');
+  assert.match(String(result.stdout), /result/, 'real output must survive');
+});
+
+test('redactOutput strips the banner before JSON extraction (#935 A4 wiring)', () => {
+  // The banner precedes the JSON body — redactOutput's bracket-slice must see
+  // output whose first line is already the real content.
+  const cleaned = redactOutput('可执行 hcloud update 更新至 7.3.12\n{"result":"ok"}');
+  assert.ok(!cleaned.includes('hcloud update'), 'the banner must be gone');
+  assert.match(cleaned, /"result"/);
 });
