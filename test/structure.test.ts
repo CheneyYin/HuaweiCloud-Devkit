@@ -1032,28 +1032,49 @@ test('telemetry hooks keep the shared classification surface in lockstep', () =>
     );
     assert.match(
       source,
-      /HUAWEICLOUD_DEVKIT_TELEMETRY[^\n]{0,40}(?:===?|==) ?['"]off['"]/,
+      /HUAWEICLOUD_DEVKIT_TELEMETRY[^\n]{0,40}===? ?['"]off['"]/,
       `${hookName} must gate the local spool on the telemetry opt-out`,
     );
   }
 
-  // The two documented capture families: the bounded 4-token capture
-  // (opencode + dsh) and the unbounded tail with flag stripping
-  // (atomcode + the Python hooks).
-  const bounded = (source: string): string => source.match(/HCLOUD_RE = (\/.*\/i)/)?.[1] ?? '';
-  assert.ok(bounded(jsHooks[0]![1]).includes('{0,3}'), 'opencode capture is bounded');
-  assert.equal(bounded(jsHooks[1]![1]), bounded(jsHooks[0]![1]), 'dsh and opencode capture bounds drifted');
-  for (const [hookName, source] of [...jsHooks.slice(2), ...pyHooks]) {
-    assert.match(source, /\(\.\+\)/, `${hookName} unbounded capture`);
-    assert.doesNotMatch(source, /\{0,3\}/, `${hookName} belongs to the unbounded-capture family`);
+  // The capture shapes: the bounded 4-token capture and the unbounded tail
+  // are the two known-good shapes. The guard pins family structure — every
+  // hook's HCLOUD_RE is one of the two shapes, at most two distinct shapes
+  // exist, and the deliberately-synced opencode+dsh pair stays identical —
+  // but deliberately NOT the direction: converging the unbounded family to
+  // the bounded capture is a privacy improvement this guard must allow
+  // (updating this test's family table is the only change it should need).
+  const hcloudPattern = (hookName: string, source: string): string => {
+    const js = source.match(/HCLOUD_RE\s*=\s*\/(.*)\/i/);
+    if (js) return js[1]!;
+    const py = source.match(/HCLOUD_RE\s*=\s*re\.compile\(\s*r'(.*)'/);
+    assert.ok(py, `${hookName}: HCLOUD_RE declaration not found`);
+    return py[1]!;
+  };
+  const BOUNDED_CAPTURE = String.raw`(?:^|[;&|]\s*)hcloud(?:\.exe)?\s+([^\s;&|"<>]+(?:\s+[^\s;&|"<>]+){0,3})`;
+  const UNBOUNDED_CAPTURE = String.raw`(?:^|[;&|]\s*)hcloud(?:\.exe)?\s+(.+)`;
+  for (const [hookName, source] of allHooks) {
+    const pattern = hcloudPattern(hookName, source);
+    assert.ok(
+      pattern === BOUNDED_CAPTURE || pattern === UNBOUNDED_CAPTURE,
+      `${hookName}: HCLOUD_RE is neither of the two known capture shapes (bounded 4-token or unbounded tail)`,
+    );
   }
+  const distinct = new Set(allHooks.map(([name, source]) => hcloudPattern(name, source)));
+  assert.ok(distinct.size <= 2, 'at most two capture families exist; a third shape means drift');
+  assert.equal(
+    hcloudPattern('dsh', jsHooks[1]![1]),
+    hcloudPattern('opencode', jsHooks[0]![1]),
+    'the deliberately-synced opencode+dsh capture pair drifted apart',
+  );
 
   // The 3-token value trim: every hook's spool path bounds cli:* values to
-  // the Service+Operation prefix.
+  // the Service+Operation prefix — exactly three tokens, pinned in both
+  // languages.
   for (const [hookName, source] of allHooks) {
     const jsTrim = source.match(/value\.split\([^)]*\)\.slice\(0, 3\)/);
-    const pyTrim = source.match(/value\.split\(\)\[:(?:3|\d+)\]/);
-    assert.ok(jsTrim || pyTrim, `${hookName} must trim cli:* values to the command prefix before spooling`);
+    const pyTrim = source.match(/value\.split\(\)\[:3\]/);
+    assert.ok(jsTrim || pyTrim, `${hookName} must trim cli:* values to exactly the 3-token command prefix`);
   }
 });
 
