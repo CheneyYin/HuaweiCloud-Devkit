@@ -43,6 +43,10 @@ export interface SdkRequestSigning {
   sk: string;
   securityToken?: string;
   baseUrl: string;
+  // The x-sdk-date value. Absent = wall-clock now; the characterization
+  // test injects a fixed value to pin exact signature vectors (the only
+  // non-deterministic input).
+  timestamp?: string;
 }
 
 export function signSdkHmacRequest({
@@ -54,8 +58,9 @@ export function signSdkHmacRequest({
   sk,
   securityToken,
   baseUrl,
+  timestamp,
 }: SdkRequestSigning): Record<string, string> {
-  const ts = sdkTimestamp();
+  const ts = timestamp ?? sdkTimestamp();
   const host = new URL(baseUrl).host;
 
   const cqs = Object.entries(query)
