@@ -73,7 +73,8 @@ CLI fallback (two read-only calls, no identity-policy permission required; works
 hcloud STS GetCallerIdentity --cli-region=<region>
 # -> principal_urn "iam::<account_id>:user:<username>" gives username; account_id gives domainId
 hcloud IAM KeystoneListAuthDomains
-# -> domains[0].name gives domainName (domains[0].id must equal account_id — consistency check)
+# -> find the domains[] entry whose id equals account_id (multi-domain lists exist —
+#    it is not always domains[0]); that entry's name is domainName
 ```
 
 Example: `principal_urn ...:user:dingchunlei` + domain name `es_hwcddbdt_OpenCapability_team` → names differ → IAM sub-user. `...:user:keco_1919aa` + domain name `keco_1919aa` → equal → primary account.

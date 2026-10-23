@@ -99,6 +99,8 @@ hcloud IAM AssociateAgencyWithDomainPermission --agency_id=<agency-id> --role_id
 # 3. 之后重试生成 STS 临时凭证
 ```
 
+排查顺序：先 hcloud IAM ListAgencies 确认 SELF_VERIFY 是否存在，不存在再按上面步骤预创建，创建后重试 STS 调用。
+
 ### FunctionGraph Agency (VPC Access)
 
 FunctionGraph needs an agency to access VPC resources (RDS, DCS, etc.):
@@ -120,6 +122,7 @@ Common roles for FunctionGraph: VPC Administrator, RDS Administrator, DCS Admini
 
 - huaweicloud_list_operations service=IAM
 - huaweicloud_run_readonly_command for user/policy discovery
+- huaweicloud_check_account_type for primary/sub-account judgment
 
 ## References
 

@@ -704,8 +704,11 @@ test('huawei-iam skill documents the validated primary-account judgment rule (#9
   // Both disproved judgment rules must be named so they are not rediscovered.
   assert.match(body, /ShowDomainPasswordPolicy/);
   assert.match(body, /principal_id == account_id/);
-  // The #935 SELF_VERIFY self-agency pre-creation trap stays taught.
+  // The #935 SELF_VERIFY self-agency pre-creation trap (newly ported with #954)
+  // — the ListAgencies check-before-create order is the part that matters.
   assert.match(body, /SELF_VERIFY/);
+  assert.match(body, /ListAgencies/);
+  assert.match(body, /check_account_type for primary\/sub-account judgment/);
 
   const quickRef = readFileSync(
     join(pluginRoot, 'src', 'packs', 'huaweicloud-cli', 'skills', 'huawei-iam', 'references', 'quick-ref.md'),
@@ -2679,7 +2682,7 @@ test('update pack registers version-update tools; registry carries the central d
 
 test('eight packs register their tools; the central map dispatches them', () => {
   // Same contract as the update pack, asserted for the packs materialized
-  // after P4: sandbox (12), auth (5), obs (2), voucher (3), discovery (3),
+  // after P4: sandbox (12), auth (6), obs (3), voucher (3), discovery (3),
   // huaweicloud-open-mcp (3), huaweicloud-cli (7), secrets (3). Their
   // handlers reach callTool only through the PACK_TOOL_HANDLERS merge in
   // packs/registry.ts.
