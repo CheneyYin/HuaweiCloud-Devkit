@@ -111,7 +111,11 @@ function readPacksEnv(
 // changed, so callers can fold it into their "unchanged" short-circuit.
 // The single warning site: a kept user value warns here, exactly once —
 // packsEntryPending is pure and never warns.
-export function applyPacksToEntry(entry: Record<string, unknown>, envKey: 'env' | 'environment', label: string): boolean {
+export function applyPacksToEntry(
+  entry: Record<string, unknown>,
+  envKey: 'env' | 'environment',
+  label: string,
+): boolean {
   const flag = resolvePacksFlag();
   if (flag.kind === 'unset') return false;
   const { existingEnv, current } = readPacksEnv(entry, envKey);
