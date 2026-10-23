@@ -85,7 +85,11 @@ async function runOneShot(workspaceId: string, command: string, username: string
 // DB_ATTEMPT_* lines are non-sensitive diagnostics for support escalation.
 export function buildDevbridgeAuthProbe(): string {
   return [
-    `export PATH="$HOME/.huawei/bin:$PATH"`,
+    // #999: /workspace/.local/bin FIRST — /workspace is the data disk and
+    // survives sandbox reboots; ~/.huawei/bin lives on the system disk and is
+    // wiped back to the image state on reboot. Prepended so a stale image
+    // binary in /usr/local/bin never wins.
+    `export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"`,
     `export HOME="\${HOME:-/root}"`,
     `DB_OK=0`,
     `db_login_ok() { devbridge auth status 2>/dev/null | grep -q "Logged in"; }`,

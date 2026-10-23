@@ -1591,6 +1591,13 @@ test('devbridge host launch survives the exec session (#919/#922): setsid guard,
   assert.match(sandbox, /Proxy trap on verify commands \(#1000\)/);
   assert.match(sandbox, /windows-ssh\.md §0\.1/);
   assert.match(sandbox, /localhost curls are unaffected/);
+  // #999: the data-disk-first PATH doctrine — /workspace survives reboots,
+  // ~/.huawei/bin is wiped to the image state; the persistence table teaches
+  // it and every PATH export carries the data-disk prefix.
+  assert.match(sandbox, /Sandbox filesystem persistence: what survives a reboot \(#999\)/);
+  assert.match(sandbox, /export PATH="\/workspace\/.local\/bin:\$HOME\/\.huawei\/bin:\$PATH"/);
+  assert.match(devbridgeTunnel, /export PATH="\/workspace\/.local\/bin:\$HOME\/\.huawei\/bin:\$PATH"/);
+  assert.match(sandbox, /stale ~\/\.huawei\/bin\/devbridge removed/);
 
   assert.doesNotMatch(devbridgeTunnel, /-e 8\b/);
 

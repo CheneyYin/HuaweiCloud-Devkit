@@ -94,7 +94,7 @@ const INTENT_TABLE: IntentRow[] = [
     // generic `export-path` row or the probe would match it and answer
     // empty stdout (authMode '' → ok:false UNKNOWN, silently wrong).
     intent: 'devbridge-auth-probe',
-    pattern: /^export PATH="\$HOME\/\.huawei\/bin:\$PATH"$/,
+    pattern: /^export PATH="\/workspace\/.local\/bin:\$HOME\/\.huawei\/bin:\$PATH"$/,
     run: () => ({ stdout: DEVBRIDGE_AUTH_KEYRING_STDOUT }),
   },
   {

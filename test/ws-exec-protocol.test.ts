@@ -27,6 +27,7 @@ import {
   parseDeployCheckOutput,
 } from '../plugins/huaweicloud-core/src/sandbox/session-manager.ts';
 import {
+  buildDevbridgeAuthProbe,
   buildDevbridgeVerifyScript,
   parseDevbridgeAuthOutput,
   parseDevbridgeExposeOutput,
@@ -107,7 +108,10 @@ test('fake shell intent table: echo answers its text, probes answer empty, unkno
   assert.equal(echo.exitCode, 0);
 
   assert.equal(runShellCommandWithFs('devbridge delete-all 2>/dev/null || true\n').intent, 'devbridge-delete-all');
-  assert.equal(runShellCommandWithFs('export PATH=$HOME/.huawei/bin${PATH:+:$PATH}\n').intent, 'export-path');
+  assert.equal(
+    runShellCommandWithFs('export PATH=/workspace/.local/bin:$HOME/.huawei/bin${PATH:+:$PATH}\n').intent,
+    'export-path',
+  );
   // Unrecognized commands record distinctly — the zero-unknown gate keys on
   // this so product script drift turns cases red instead of degrading.
   assert.equal(runShellCommandWithFs('some-future-script --flag\n').intent, 'unknown');
@@ -253,8 +257,12 @@ test('devbridge fake rows recognize the real scripts (first-line anchors)', () =
   // The auth probe's first line is the double-quoted PATH export — unique
   // to the probe; the expose script and cleanup share the pkill first line.
   const fs = new FakeFs();
+  // Builder-driven: the REAL auth probe's first line must stay recognizable —
+  // a PATH-form change the fake no longer matches reds here instead of only
+  // nightly (#999 moved the probe to the data-disk-first PATH).
   const auth = runShellCommand(
-    'export PATH="$HOME/.huawei/bin:$PATH"\nDB_OK=0\ndb_login_ok() { devbridge auth status 2>/dev/null | grep -q "Logged in"; }',
+    buildDevbridgeAuthProbe().split('\n', 1)[0]! +
+      '\nDB_OK=0\ndb_login_ok() { devbridge auth status 2>/dev/null | grep -q "Logged in"; }',
     fs,
   );
   assert.equal(auth.stdout, DEVBRIDGE_AUTH_KEYRING_STDOUT);
@@ -277,6 +285,6 @@ test('devbridge fake rows recognize the real scripts (first-line anchors)', () =
   assert.equal(verify.stdout, DEVBRIDGE_VERIFY_OK_STDOUT);
   // The connect flow's unquoted PATH export still hits the generic row,
   // not the auth-probe row.
-  const plain = runShellCommand('export PATH=$HOME/.huawei/bin${PATH:+:$PATH}', fs);
+  const plain = runShellCommand('export PATH=/workspace/.local/bin:$HOME/.huawei/bin${PATH:+:$PATH}', fs);
   assert.equal(plain.stdout, '');
 });

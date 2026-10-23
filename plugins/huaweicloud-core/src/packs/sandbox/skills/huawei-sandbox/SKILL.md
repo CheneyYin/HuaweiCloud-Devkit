@@ -235,7 +235,7 @@ Expose a deployed web app to a public URL and return that URL to the developer.
 **Check the version first.** Sandboxes created before Sep 2026 ship devbridge 0.1.13, whose hardcoded gateway (`cn-north-4-bridge.myhuaweicloud.com`) was migrated and now serves a 「服务已迁移」 placeholder page — 0.1.x can no longer connect:
 
 ```bash
-export PATH="$HOME/.huawei/bin:$PATH"   # PREPEND — appending lets a stale image binary in /usr/local/bin win
+export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"   # PREPEND — appending lets a stale image binary in /usr/local/bin win
 devbridge version 2>/dev/null || echo "not installed"
 ```
 
@@ -256,39 +256,61 @@ DB_TARGET=$(grep -m1 'DEFAULT_VERSION=' /tmp/devbridge-install.sh | cut -d'"' -f
 if ! bash /tmp/devbridge-install.sh -s -u "https://gitcode.com/CloudDeveloperDepartment/devbrige/releases/download/${DB_TARGET}" -v "${DB_TARGET}"; then
   bash /tmp/devbridge-install.sh -s   # fallback: GitHub (baked-in URL)
 fi
-export PATH="$HOME/.huawei/bin:$PATH"   # PREPEND (session shells do not re-source ~/.bashrc)
+export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"   # PREPEND (session shells do not re-source ~/.bashrc)
 # Layer 3 (both installer paths failed): direct GitHub release tar.gz.
 # Asset naming is fixed: devbridge_linux_arm64_<version>-release.tar.gz (the sandbox
 # is Linux aarch64). If DB_TARGET is empty the installer download itself failed —
 # resolve the latest tag from the GitHub releases API first. The PREPEND above runs
-# FIRST so `command -v` can see a freshly installed ~/.huawei/bin binary — otherwise
+# FIRST so `command -v` can see a freshly installed binary — otherwise
 # Layer 3 would needlessly re-download after a successful install.
+# Install to /workspace/.local/bin — /workspace is the sandbox's DATA disk and
+# survives reboots; ~/.huawei/bin lives on the SYSTEM disk and a reboot wipes it
+# back to the image state (measured 2026-10-22: an overnight reboot reverted
+# ~/.huawei/bin/devbridge 0.2.2 to the image's 0.1.13 — yesterday's success
+# replayed as today's unexplained failure). (#999)
 if ! command -v devbridge >/dev/null 2>&1; then
   [ -z "$DB_TARGET" ] && DB_TARGET=$(curl -fsSL --http1.1 --retry 2 --max-time 60 \
     https://api.github.com/repos/huaweicloud/devspace-devbridge/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)
-  mkdir -p "$HOME/.huawei/bin"
+  mkdir -p /workspace/.local/bin
   curl -fsSL --http1.1 --retry 3 --retry-all-errors --max-time 180 \
     "https://github.com/huaweicloud/devspace-devbridge/releases/download/${DB_TARGET}/devbridge_linux_arm64_${DB_TARGET}.tar.gz" \
     -o /tmp/devbridge.tar.gz \
     && rm -rf /tmp/devbridge-pkg && mkdir -p /tmp/devbridge-pkg \
     && tar -xzf /tmp/devbridge.tar.gz -C /tmp/devbridge-pkg \
-    && install -m 0755 /tmp/devbridge-pkg/devbridge "$HOME/.huawei/bin/devbridge"
-  export PATH="$HOME/.huawei/bin:$PATH"
+    && install -m 0755 /tmp/devbridge-pkg/devbridge /workspace/.local/bin/devbridge
+  export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"
 fi
 devbridge version                     # must print 0.2.x-release
 
 # Remove the stale image-installed binary so only ONE version remains.
-# (Image sandboxes ship 0.1.x at /usr/local/bin/devbridge; the installer writes ~/.huawei/bin.
-#  Compare against the explicit ~/.huawei/bin path — never `command -v`, which can resolve
-#  to the stale binary itself when PATH order differs.)
-if [ -x "$HOME/.huawei/bin/devbridge" ] && [ -f /usr/local/bin/devbridge ] && [ "$(readlink -f /usr/local/bin/devbridge)" != "$(readlink -f "$HOME/.huawei/bin/devbridge")" ]; then
+# (Image sandboxes ship 0.1.x at /usr/local/bin/devbridge; the installer writes
+# /workspace/.local/bin. Compare against the explicit install path — never
+# `command -v`, which can resolve to the stale binary itself when PATH order differs.)
+if [ -f /usr/local/bin/devbridge ] && [ -x /workspace/.local/bin/devbridge ] && [ "$(readlink -f /usr/local/bin/devbridge)" != "$(readlink -f /workspace/.local/bin/devbridge)" ]; then
   rm -f /usr/local/bin/devbridge && echo "stale /usr/local/bin/devbridge removed"
+fi
+# A leftover 0.2.x in ~/.huawei/bin (installed by older docs) is valid until the
+# next reboot — deduplicate it against the /workspace copy so the version check
+# above can never report the image's 0.1.x.
+if [ -x "$HOME/.huawei/bin/devbridge" ] && [ -x /workspace/.local/bin/devbridge ] && [ "$(readlink -f "$HOME/.huawei/bin/devbridge")" != "$(readlink -f /workspace/.local/bin/devbridge)" ]; then
+  rm -f "$HOME/.huawei/bin/devbridge" && echo "stale ~/.huawei/bin/devbridge removed"
 fi
 ```
 
 - `-s` (silent) is **required** in the sandbox — without it the installer blocks reading `/dev/tty`.
 - **Old tunnels do not survive the upgrade**: 0.1.x-created tunnels are not registered on the s2 gateway — always rebuild the tunnel after upgrading (the expose flow below does this via pre-cleanup).
 - If `10006: quota exceeded` appears after upgrading, stale pre-upgrade tunnels still count against the quota — `devbridge delete-all` and retry.
+
+### Sandbox filesystem persistence: what survives a reboot (#999)
+
+| Path                                         | Type           | After a sandbox reboot                                                               |
+| -------------------------------------------- | -------------- | ------------------------------------------------------------------------------------ |
+| `/workspace` (incl. `/workspace/.local/bin`) | Data disk      | **Survives** — install project code and the devbridge 0.2.x binary here              |
+| `$HOME` (incl. `~/.huawei/bin`)              | System disk    | **Rolled back to the image state** — an installed binary is lost, 0.1.13 returns     |
+| `/usr/local/bin`                             | System disk    | Rolled back — the image-preinstalled 0.1.x returns                                   |
+| `/tmp`                                       | Session-scoped | Cleared — `/tmp/hw_creds.sh`, `/tmp/hw_api_key`, `/tmp/tunnel-keepalive.sh` are gone |
+
+Measured (2026-10-22): an overnight reboot reverted `~/.huawei/bin/devbridge` 0.2.2 to the image's 0.1.13 — **yesterday's successful operation replayed as today's unexplained failure**. Recovery after a reboot: re-run the Step 0 install (or just re-export the PATH to the surviving `/workspace/.local/bin`), and re-run `huaweicloud_sandbox_credentials` to re-inject `/tmp` credentials.
 
 ### Step 1: Authenticate — verified waterfall, keyring first
 
@@ -301,7 +323,7 @@ Authentication tries three credential sources in order, each verified with a rea
 `huaweicloud_sandbox_expose_tunnel` runs this waterfall automatically and reports the winning mode (`API_KEY_KEYRING` / `AKSK_SUPPORTED` / `API_KEY_FILE`) or `NO_CREDENTIAL` with a non-sensitive per-tier `attempts` diagnostic. Manual equivalent:
 
 ```bash
-export PATH="$HOME/.huawei/bin:$PATH"
+export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"
 export HOME="${HOME:-/root}"
 # Tier 1: platform-injected keyring key (stderr! prefix filter!)
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/dbus-session}"
@@ -989,7 +1011,7 @@ Returns `complete: true/false`, `score`, and `nextStep` to fix missing items.
 | Never expose tunnel details            | Do not mention "DevBridge"/"tunnel"/"devbridge" to the developer — say "正在生成访问地址..." and hand over only the URL                                                                                                                                                                                                                                                                                                                                               |
 | devbridge auth: probe the build        | `0.2.2-release` has two builds: image builds retain AK/SK login + env auto-read (fully automatic via `/tmp/hw_creds.sh`); release builds accept only API Key (`/tmp/hw_api_key`). Never assume — probe with `devbridge auth login --help 2>&1 \| grep -q -- '--access-key'` (Step 1 of "Expose the deployed app")                                                                                                                                                     |
 | devbridge 0.1.x is dead                | Sandboxes created before Sep 2026 ship 0.1.13, which connects to a migrated gateway serving a 「服务已迁移」 placeholder with HTTP 200. Check `devbridge version` first and upgrade in place (Step 0) — old tunnels never survive the upgrade                                                                                                                                                                                                                         |
-| CLI PATH                               | The installer only writes `~/.bashrc`; run `export PATH="$HOME/.huawei/bin:$PATH"` (prepend) in the session before using `devbridge` — appending lets a stale image binary in `/usr/local/bin` win                                                                                                                                                                                                                                                                    |
+| CLI PATH                               | The installer only writes `~/.bashrc`; run `export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"` (prepend, data-disk first) in the session before using `devbridge` — appending lets a stale image binary in `/usr/local/bin` win, and `~/.huawei/bin` alone is wiped on reboot (#999)                                                                                                                                                                        |
 | Never install tunnel tooling locally   | If the sandbox cannot install it, report a generic error and stop — installing on the developer's machine defeats sandbox deployment                                                                                                                                                                                                                                                                                                                                  |
 | Return the deployment URL              | Always hand the public URL from the host log to the developer as the final result                                                                                                                                                                                                                                                                                                                                                                                     |
 | Deploy is not just nginx               | Configuring nginx does NOT complete the deployment. Steps 7 (DevBridge expose) and deploy_check are REQUIRED — `deploy_nginx` returns `nextStep: expose_via_devbridge` as a reminder. Do not stop after nginx.                                                                                                                                                                                                                                                        |

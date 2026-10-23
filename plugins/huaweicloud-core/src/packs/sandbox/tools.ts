@@ -314,7 +314,14 @@ async function handleConnect(args: ToolArgs = {}, _opts: CallToolOptions = {}) {
       // best-effort: a fresh sandbox may have no tunnels (or no devbridge) to delete
     }
     try {
-      await execWithSession(devStageId, 'export PATH=$HOME/.huawei/bin${PATH:+:$PATH}', 'root', 10000);
+      // #999: /workspace/.local/bin first — the data-disk install survives
+      // sandbox reboots; ~/.huawei/bin is wiped back to the image state.
+      await execWithSession(
+        devStageId,
+        'export PATH=/workspace/.local/bin:$HOME/.huawei/bin${PATH:+:$PATH}',
+        'root',
+        10000,
+      );
     } catch {
       // best-effort: the PATH export only aids later devbridge calls in this session
     }
