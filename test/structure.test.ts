@@ -1053,10 +1053,7 @@ test('telemetry hooks keep the shared classification surface in lockstep', () =>
   for (const [hookName, source] of allHooks) {
     const jsTrim = source.match(/value\.split\([^)]*\)\.slice\(0, 3\)/);
     const pyTrim = source.match(/value\.split\(\)\[:(?:3|\d+)\]/);
-    assert.ok(
-      jsTrim || pyTrim,
-      `${hookName} must trim cli:* values to the command prefix before spooling`,
-    );
+    assert.ok(jsTrim || pyTrim, `${hookName} must trim cli:* values to the command prefix before spooling`);
   }
 });
 
@@ -1374,7 +1371,8 @@ test('setup-cli.ts supports the codearts target end to end', () => {
   // membership the boot guard uses, so hollow claimed dirs count as
   // missing. The DSH package-root candidate is PLUGIN_ROOT itself because
   // serverSkillDirNames() appends 'skills'.
-  assert.match(setup, /return listSkillDirs\(join\(pluginDir, 'skills'\)\);/);
+  const payloadModule = readSource(join('src', 'install-payload.ts'));
+  assert.match(payloadModule, /return listSkillDirs\(join\(pluginDir, 'skills'\)\);/);
   assert.match(setup, /const expectedSkills = shippedSkillRoster\(\);/);
   assert.match(setup, /present\.size === expectedSkills\.length/);
   assert.match(setup, /expectedSkills\.every\(\(name\) => present\.has\(name\)\)/);
@@ -1383,12 +1381,12 @@ test('setup-cli.ts supports the codearts target end to end', () => {
   // doctor's native-dir check is the receipt-gated one: core names warn only
   // outside a dir a sync row manages, and a manifest without pack info warns
   // instead of crashing the diagnostic run.
-  assert.match(setup, /function tryCoreSkillNames\(\)/);
+  assert.match(payloadModule, /function tryCoreSkillNames\(\)/);
   assert.match(setup, /const corePack = tryCoreSkillNames\(\);/);
   assert.match(setup, /managedHere && corePack\.has\(entry\.name\)/);
   // The byte-equality comparator lives in the shared zod-free lib (doctor
   // and the install tests import the same one), not as a setup-cli local.
-  assert.match(setup, /import \{ listSkillDirs, skillTreeEquals \} from '\.\/lib\/skill-tree\.ts';/);
+  assert.match(setup, /import \{ skillTreeEquals \} from '\.\/lib\/skill-tree\.ts';/);
   const skillTreeSrc = readSource(join('src', 'lib', 'skill-tree.ts'));
   assert.match(skillTreeSrc, /export function skillTreeEquals\(a: string, b: string\): boolean/);
   // help text documents the target
@@ -1406,11 +1404,21 @@ test('setup-cli.ts supports the codearts target end to end', () => {
 // nativeSkills fields.
 test('nativeSkillDirs derives from PAYLOAD_TARGETS plus the officeace exception', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
+  const payloadModule = readSource(join('src', 'install-payload.ts'));
+  // The table binding stays in setup-cli (PAYLOAD_TARGETS lives there); the
+  // derivation itself lives in the payload module, which takes the rows as
+  // a parameter.
   const listBody = setup.match(/function nativeSkillDirs\(\): string\[\] \{([\s\S]*?)\n\}/)?.[1] ?? '';
   assert.ok(listBody.length > 0, 'nativeSkillDirs must exist');
-  assert.match(listBody, /PAYLOAD_TARGETS\.flatMap/, 'the scan list derives from the table');
+  assert.match(listBody, /PAYLOAD_TARGETS/, 'the scan list binds to the table');
   assert.match(listBody, /officeaceSkillsDir\(\)/, 'officeace stays the explicit foreign detector');
   assert.doesNotMatch(listBody, /opencodeSkillsDir\(\)/, 'no hand-listed row dirs remain');
+  const moduleBody = payloadModule.match(
+    /export function nativeSkillDirs\(rows: readonly NativeSyncRow\[\], foreignScanDirs: readonly string\[\]\): string\[\] \{([\s\S]*?)\n\}/,
+  )?.[1];
+  assert.ok(moduleBody, 'the payload module owns the derivation');
+  assert.match(moduleBody!, /rows\.flatMap/, 'the derivation walks the rows');
+  assert.match(moduleBody!, /foreignScanDirs/, 'the foreign scan dirs join the walk');
   const officeaceRow = setup.match(/\{\s*id: 'officeace',[\s\S]*?\n {2}\},/)?.[0] ?? '';
   assert.ok(officeaceRow.length > 0, 'officeace row found');
   assert.doesNotMatch(officeaceRow, /nativeSkills/, 'officeace stays without native skill copies');
@@ -1569,6 +1577,7 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
   const codeartsSandbox = readSource(join('src', 'codearts-sandbox.ts'));
   const depResolve = readSource(join('src', 'lib', 'dep-resolve.ts'));
   const targetsModule = readSource(join('src', 'targets.ts'));
+  const installPayload = readSource(join('src', 'install-payload.ts'));
   // The dep module tree is walked, not enumerated: every .ts file under
   // src/dep/ — including one a future dependency adds, at any depth — joins
   // the guard automatically, so the zod-free import graph cannot regress by
@@ -1593,6 +1602,7 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
     ['src/codearts-sandbox.ts', codeartsSandbox] as const,
     ['src/lib/dep-resolve.ts', depResolve] as const,
     ['src/targets.ts', targetsModule] as const,
+    ['src/install-payload.ts', installPayload] as const,
   ];
   for (const [name, source] of guarded) {
     assert.doesNotMatch(source, /from 'zod'/, `${name} must not import zod`);
@@ -1674,7 +1684,7 @@ test('setup-cli.ts supports the dsh target end to end', () => {
   assert.match(setup, /copyServerPayload\(pluginDest\)/);
   // No wholesale native copy ever returns: only core-pack names sync natively
   // (syncNativeCoreSkills), so DSH's dir can never carry service skills.
-  assert.match(setup, /function syncNativeCoreSkills\(dir: string\)/);
+  assert.match(readSource(join('src', 'install-payload.ts')), /function syncNativeCoreSkills\(dir: string\)/);
   assert.doesNotMatch(
     setup,
     /copyDir\(skillsSrc, (?:dsh|opencode|hermes|workbuddy|atomcode|openclaw|codearts|codeartsWork)SkillsDir\(\)\)/,
