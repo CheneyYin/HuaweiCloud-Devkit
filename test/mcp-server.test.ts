@@ -6,6 +6,14 @@ import { fileURLToPath } from 'node:url';
 import { isAbsolute, join } from 'node:path';
 import test from 'node:test';
 
+// Deterministic-tier seam: disable the once-per-session first-assertion
+// vendor challenge (HUAWEICLOUD_VENDOR_CHALLENGE=off, the installer-override
+// pattern) so cold-attested calls in this file dispatch without the
+// challenge bounce. The challenge itself is pinned where it is the subject
+// (tools.test.ts's gate test drives the dance; the selfcheck drives it on
+// the wire); the real-model e2e tier never sets this seam.
+process.env.HUAWEICLOUD_VENDOR_CHALLENGE = 'off';
+
 // Never let the spawned stdio server kick off a REAL background KooCLI
 // install from inside a test run (cold-cache boxes would download).
 process.env.HUAWEICLOUD_SKIP_HCLOUD_PREINSTALL = '1';
@@ -206,7 +214,7 @@ test('MCP server initializes, lists tools, and plans CLI commands', async () => 
 
     const planned = await client.request('tools/call', {
       name: 'huaweicloud_plan_cli_command',
-      arguments: { vendorConfirmed: true, args: ['ECS', 'NovaListServers'] },
+      arguments: { vendorConfirmed: 'test: vendor established by the harness', args: ['ECS', 'NovaListServers'] },
     });
     assert.equal(planned.result.isError, false);
     assert.match(planned.result.content[0].text, /NovaListServers/);
@@ -307,7 +315,7 @@ test('MCP server returns isError tool results for tools/call missing required pa
     // migration plan; this pins the new contract.
     const single = await client.request('tools/call', {
       name: 'huaweicloud_plan_cli_command',
-      arguments: { vendorConfirmed: true },
+      arguments: { vendorConfirmed: 'test: vendor established by the harness' },
     });
     assert.ok(single.result, 'missing required param must return a tool result');
     assert.equal(single.result.isError, true, 'missing required param must set isError');
@@ -596,7 +604,12 @@ test('tools/call accepts string numerics and passes unknown keys through (#530 l
     // string is still rejected by the tool itself with its #530 message.
     const ok = await client.request('tools/call', {
       name: 'huaweicloud_list_operations',
-      arguments: { vendorConfirmed: true, service: 'ECS', timeoutMs: '9999', unknownExtra: 'kept' },
+      arguments: {
+        vendorConfirmed: 'test: vendor established by the harness',
+        service: 'ECS',
+        timeoutMs: '9999',
+        unknownExtra: 'kept',
+      },
     });
     assert.equal(ok.result.isError, false, 'the acceptance arm must observe a successful dispatch');
     assert.ok(ok.result, `expected a result: ${JSON.stringify(ok).slice(0, 300)}`);
@@ -613,7 +626,11 @@ test('tools/call accepts string numerics and passes unknown keys through (#530 l
     // plan tool echoes the full command back.
     const planned = await client.request('tools/call', {
       name: 'huaweicloud_plan_cli_command',
-      arguments: { vendorConfirmed: true, args: ['ECS', 'NovaListServers'], unknownExtra: 'kept' },
+      arguments: {
+        vendorConfirmed: 'test: vendor established by the harness',
+        args: ['ECS', 'NovaListServers'],
+        unknownExtra: 'kept',
+      },
     });
     assert.ok(planned.result, `expected a plan result: ${JSON.stringify(planned).slice(0, 300)}`);
     assert.equal(planned.result.isError, false);

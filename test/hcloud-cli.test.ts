@@ -20,6 +20,14 @@ import { clearRuntimeCredentials, setRuntimeCredentials } from '../plugins/huawe
 import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
 import { fixtureDir } from './fixture-dir.ts';
 
+// Deterministic-tier seam: disable the once-per-session first-assertion
+// vendor challenge (HUAWEICLOUD_VENDOR_CHALLENGE=off, the installer-override
+// pattern) so cold-attested calls in this file dispatch without the
+// challenge bounce. The challenge itself is pinned where it is the subject
+// (tools.test.ts's gate test drives the dance; the selfcheck drives it on
+// the wire); the real-model e2e tier never sets this seam.
+process.env.HUAWEICLOUD_VENDOR_CHALLENGE = 'off';
+
 const isWin = process.platform === 'win32';
 
 interface FakeHcloudOutput {
@@ -325,7 +333,7 @@ process.exit(1);
     process.env.HCLOUD_BIN = fake;
     try {
       const plan = (await callTool('huaweicloud_plan_cli_command', {
-        vendorConfirmed: true,
+        vendorConfirmed: 'test: vendor established by the harness',
         args: ['BSS', 'ShowCustomerAccountBalances'],
         allowWrites: true,
       })) as HcloudPlan;
@@ -334,7 +342,7 @@ process.exit(1);
       assert.ok(!plan.args.includes('--cli-lang'), 'approved args carry no lang flag');
 
       const result = (await callTool('huaweicloud_run_approved_command', {
-        vendorConfirmed: true,
+        vendorConfirmed: 'test: vendor established by the harness',
         args: ['BSS', 'ShowCustomerAccountBalances'],
         approvalToken: plan.approvalToken,
         approvedByUser: true,
@@ -362,13 +370,13 @@ process.exit(1);
 
 test('koocli lang G4: approval token still rejects args that differ from the approved plan', async () => {
   const plan = (await callTool('huaweicloud_plan_cli_command', {
-    vendorConfirmed: true,
+    vendorConfirmed: 'test: vendor established by the harness',
     args: ['BSS', 'ShowCustomerAccountBalances'],
     allowWrites: true,
   })) as HcloudPlan;
   await assert.rejects(
     callTool('huaweicloud_run_approved_command', {
-      vendorConfirmed: true,
+      vendorConfirmed: 'test: vendor established by the harness',
       args: ['BSS', 'DifferentOperation'],
       approvalToken: plan.approvalToken,
       approvedByUser: true,

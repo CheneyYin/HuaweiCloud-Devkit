@@ -29,6 +29,14 @@ import { fingerprint, runHcloudConfigure, scanState } from '../plugins/huaweiclo
 import { syncAuth, type SyncAuthResult } from '../plugins/huaweicloud-core/src/auth/service.ts';
 import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
 
+// Deterministic-tier seam: disable the once-per-session first-assertion
+// vendor challenge (HUAWEICLOUD_VENDOR_CHALLENGE=off, the installer-override
+// pattern) so cold-attested calls in this file dispatch without the
+// challenge bounce. The challenge itself is pinned where it is the subject
+// (tools.test.ts's gate test drives the dance; the selfcheck drives it on
+// the wire); the real-model e2e tier never sets this seam.
+process.env.HUAWEICLOUD_VENDOR_CHALLENGE = 'off';
+
 const FAKE_HCLOUD = fileURLToPath(new URL('./fixtures/fake-hcloud.ts', import.meta.url));
 const FAKE_HCLOUD_FAIL = fileURLToPath(new URL('./fixtures/fake-hcloud-fail-config.ts', import.meta.url));
 
@@ -195,7 +203,7 @@ test('06 auth_switch temporary activates runtime; auth_sync is then rejected (R1
   await withTempHome(async () => {
     writeGlobalCredentials({ ak: 'E2E6_AK', sk: 'E2E6_SK', region: 'cn-north-4' });
     const out = (await callTool('huaweicloud_auth_switch', {
-      vendorConfirmed: true,
+      vendorConfirmed: 'test: vendor established by the harness',
       mode: 'memory',
       action: 'temporary',
       ak: 'E2E6_RT_AK',
@@ -221,7 +229,7 @@ test('07 auth_switch persist first time writes configuredBySession and keeps fil
     writeFakeKooCli('deploy', [{ name: 'deploy', accessKeyId: ak, secretAccessKey: sk, region }]);
 
     const out = (await callTool('huaweicloud_auth_switch', {
-      vendorConfirmed: true,
+      vendorConfirmed: 'test: vendor established by the harness',
       mode: 'memory',
       action: 'persist',
       ak,
@@ -244,7 +252,7 @@ test('08 auth_switch persist with conflicting S1 returns needs_confirmation and 
   await withTempHome(async () => {
     writeGlobalCredentials({ ak: 'E2E8_A_AK', sk: 'E2E8_A_SK', region: 'cn-north-4' });
     const out = (await callTool('huaweicloud_auth_switch', {
-      vendorConfirmed: true,
+      vendorConfirmed: 'test: vendor established by the harness',
       mode: 'memory',
       action: 'persist',
       ak: 'E2E8_B_AK',
@@ -268,7 +276,7 @@ test('09 auth_confirm decision=newImported applies the new account and backs up 
     writeGlobalCredentials({ ak: 'E2E9_A_AK', sk: 'E2E9_A_SK', region });
 
     const switched = (await callTool('huaweicloud_auth_switch', {
-      vendorConfirmed: true,
+      vendorConfirmed: 'test: vendor established by the harness',
       mode: 'memory',
       action: 'persist',
       ak: newAk,
@@ -299,7 +307,7 @@ test('10 auth_confirm decision=s1 aborts and leaves S1 unchanged', async () => {
   await withTempHome(async () => {
     writeGlobalCredentials({ ak: 'E2E10_A_AK', sk: 'E2E10_A_SK', region: 'cn-north-4' });
     const switched = (await callTool('huaweicloud_auth_switch', {
-      vendorConfirmed: true,
+      vendorConfirmed: 'test: vendor established by the harness',
       mode: 'memory',
       action: 'persist',
       ak: 'E2E10_B_AK',
@@ -332,7 +340,7 @@ test('10b auth_confirm(newImported) from import clears the import file on succes
     writeFileSync(importFile, JSON.stringify({ ak: newAk, sk: newSk, region }), 'utf8');
 
     const switched = (await callTool('huaweicloud_auth_switch', {
-      vendorConfirmed: true,
+      vendorConfirmed: 'test: vendor established by the harness',
       mode: 'import',
       action: 'persist',
     })) as AuthSwitchResult;
@@ -359,7 +367,7 @@ test('11 auth_switch clear empties runtime and lets syncAuth run again', async (
     setRuntimeCredentials('E2E11_RT_AK', 'E2E11_RT_SK');
 
     const out = (await callTool('huaweicloud_auth_switch', {
-      vendorConfirmed: true,
+      vendorConfirmed: 'test: vendor established by the harness',
       action: 'clear',
     })) as AuthSwitchResult;
     assert.equal(out.status, 'cleared');
@@ -389,7 +397,7 @@ test('12 auth_switch mode=import reads creds-import.json then wipes it', async (
     writeFileSync(importPath, JSON.stringify({ ak: 'E2E12_IMP_AK', sk: 'E2E12_IMP_SK', region: 'cn-north-4' }));
 
     const out = (await callTool('huaweicloud_auth_switch', {
-      vendorConfirmed: true,
+      vendorConfirmed: 'test: vendor established by the harness',
       mode: 'import',
       action: 'temporary',
     })) as AuthSwitchResult;
@@ -454,7 +462,7 @@ test('16 restoreGlobalCredentialsBackup restores the previous S1', () => {
 test('17 persist with securityToken is rejected (R3) and S1 is not written (mode=memory)', async () => {
   await withTempHome(async () => {
     const out = (await callTool('huaweicloud_auth_switch', {
-      vendorConfirmed: true,
+      vendorConfirmed: 'test: vendor established by the harness',
       mode: 'memory',
       action: 'persist',
       ak: 'E2E17_AK',
@@ -492,7 +500,7 @@ test('18 persist via mcp-config with platform STS token is rejected (R3) and S1 
     process.env.CODEARTS_PROJECT_DIR = mcpDir;
 
     const out = (await callTool('huaweicloud_auth_switch', {
-      vendorConfirmed: true,
+      vendorConfirmed: 'test: vendor established by the harness',
       mode: 'mcp-config',
       action: 'persist',
     })) as AuthSwitchResult;
@@ -513,7 +521,11 @@ test('19 malformed creds-import.json is still wiped even though the import is re
     writeFileSync(importPath, '{not-valid-json', 'utf8');
 
     await assert.rejects(
-      callTool('huaweicloud_auth_switch', { vendorConfirmed: true, mode: 'import', action: 'temporary' }),
+      callTool('huaweicloud_auth_switch', {
+        vendorConfirmed: 'test: vendor established by the harness',
+        mode: 'import',
+        action: 'temporary',
+      }),
       /ak and sk are required/,
     );
     assert.equal(existsSync(importPath), false, 'malformed import file must still be wiped');

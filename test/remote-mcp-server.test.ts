@@ -6,6 +6,14 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 import test from 'node:test';
 
+// Deterministic-tier seam: disable the once-per-session first-assertion
+// vendor challenge (HUAWEICLOUD_VENDOR_CHALLENGE=off, the installer-override
+// pattern) so cold-attested calls in this file dispatch without the
+// challenge bounce. The challenge itself is pinned where it is the subject
+// (tools.test.ts's gate test drives the dance; the selfcheck drives it on
+// the wire); the real-model e2e tier never sets this seam.
+process.env.HUAWEICLOUD_VENDOR_CHALLENGE = 'off';
+
 // Remote transport never preinstalls (by design); defensive anyway so a
 // transport-selection regression cannot download from a test run.
 process.env.HUAWEICLOUD_SKIP_HCLOUD_PREINSTALL = '1';
@@ -129,7 +137,7 @@ test('remote MCP server initializes, lists tools, and plans CLI commands', async
 
   const planned = await rpc('tools/call', {
     name: 'huaweicloud_plan_cli_command',
-    arguments: { vendorConfirmed: true, args: ['ECS', 'NovaListServers'] },
+    arguments: { vendorConfirmed: 'test: vendor established by the harness', args: ['ECS', 'NovaListServers'] },
   });
   assert.equal(planned.body.result.isError, false);
   assert.match(planned.body.result.content[0].text, /NovaListServers/);

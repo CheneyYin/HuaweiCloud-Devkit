@@ -594,7 +594,24 @@ async function selfcheck(bin: string, kooCliVersion: string): Promise<boolean> {
           jsonrpc: '2.0',
           id: 3,
           method: 'tools/call',
-          params: { name: 'huaweicloud_check_cli', arguments: { vendorConfirmed: true } },
+          params: {
+            name: 'huaweicloud_check_cli',
+            arguments: { vendorConfirmed: 'test: vendor established by the harness' },
+          },
+        },
+        {
+          // The challenge dance, driven on the wire: the session's FIRST
+          // asserted gated call (id 3) bounces once with the
+          // BY-THE-USER-or-assumed challenge; the retry (id 9) clears it.
+          // The selfcheck never sets HUAWEICLOUD_VENDOR_CHALLENGE, so this
+          // leg pins the real behavior the e2e tier exercises.
+          jsonrpc: '2.0',
+          id: 9,
+          method: 'tools/call',
+          params: {
+            name: 'huaweicloud_check_cli',
+            arguments: { vendorConfirmed: 'test: vendor established by the harness' },
+          },
         },
         {
           jsonrpc: '2.0',
@@ -602,7 +619,10 @@ async function selfcheck(bin: string, kooCliVersion: string): Promise<boolean> {
           method: 'tools/call',
           params: {
             name: 'huaweicloud_plan_cli_command',
-            arguments: { vendorConfirmed: true, args: ['VPC', 'ListSecurityGroups', '--cli-region=cn-north-4'] },
+            arguments: {
+              vendorConfirmed: 'test: vendor established by the harness',
+              args: ['VPC', 'ListSecurityGroups', '--cli-region=cn-north-4'],
+            },
           },
         },
         {
@@ -615,7 +635,10 @@ async function selfcheck(bin: string, kooCliVersion: string): Promise<boolean> {
           jsonrpc: '2.0',
           id: 6,
           method: 'tools/call',
-          params: { name: 'huaweicloud_sandbox_connect', arguments: { vendorConfirmed: true } },
+          params: {
+            name: 'huaweicloud_sandbox_connect',
+            arguments: { vendorConfirmed: 'test: vendor established by the harness' },
+          },
         },
         {
           jsonrpc: '2.0',
@@ -702,14 +725,30 @@ async function selfcheck(bin: string, kooCliVersion: string): Promise<boolean> {
       } else {
         out(`[selfcheck] tools/list: ${toolCount} tools`);
       }
-      const check = toolPayload(3);
-      if (!check || check.installed !== true) {
+      // The challenge bounce on the wire: the first asserted gated call is
+      // a proper tool result (never a protocol error) carrying the
+      // BY-THE-USER-or-assumed challenge text.
+      const bounce = responses.get(3) as { result?: { isError?: boolean; content?: { text?: string }[] } } | undefined;
+      const bounceText = bounce?.result?.content?.find((c) => 'text' in c)?.text ?? '';
+      if (
+        bounce?.result?.isError !== true ||
+        !/Vendor challenge: first Huawei Cloud tool call this session/.test(bounceText)
+      ) {
         out(
-          `[selfcheck] FAIL check_cli did not report the fake hcloud as installed: ${JSON.stringify(check).slice(0, 200)}`,
+          `[selfcheck] FAIL the first asserted call did not bounce with the vendor challenge: ${JSON.stringify(bounce).slice(0, 200)}`,
         );
         ok = false;
       } else {
-        out(`[selfcheck] check_cli sees the fake hcloud (version ${String(check.installedVersion)})`);
+        out('[selfcheck] the first asserted gated call bounced with the vendor challenge (wire-pinned)');
+      }
+      const check = toolPayload(9);
+      if (!check || check.installed !== true) {
+        out(
+          `[selfcheck] FAIL the retried check_cli did not report the fake hcloud as installed: ${JSON.stringify(check).slice(0, 200)}`,
+        );
+        ok = false;
+      } else {
+        out(`[selfcheck] the retried check_cli sees the fake hcloud (version ${String(check.installedVersion)})`);
       }
       const plan = toolPayload(4);
       if (!plan || !('approvalToken' in plan)) {

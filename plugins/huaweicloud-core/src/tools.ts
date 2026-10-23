@@ -371,9 +371,10 @@ export type ToolArgs = {
   args?: string[];
   allowWrites?: boolean;
   // The vendor-gate attestation (VENDOR_GATED_TOOLS faces only; see
-  // callTool's gate). Optional in the schema by design — the gate, not
-  // zod, is the enforcement, so the teaching rejection reaches the model.
-  vendorConfirmed?: boolean;
+  // callTool's gate): a QUOTE of the user's establishing words, not a
+  // boolean. Optional in the schema by design — the gate, not zod, is
+  // the enforcement, so the teaching rejection reaches the model.
+  vendorConfirmed?: string;
   timeoutMs?: number;
   maxRetries?: number;
   cwd?: string;
@@ -599,17 +600,60 @@ export const VENDOR_GATED_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
 
 // 295 chars — under call-trace's 300-char error cap, so the full teaching
 // (both honest exits) survives into devkit-trace.jsonl for nightly triage.
+// 292 chars — under call-trace's 300-char error cap, so the full teaching
+// (both honest exits) survives into devkit-trace.jsonl for nightly triage.
 const VENDOR_GATE_MESSAGE =
-  "Vendor gate: this tool operates on Huawei Cloud. Pass vendorConfirmed: true ONLY when the user's request or conversation establishes Huawei Cloud (explicit mention, hcloud/KooCLI artifacts, myhuaweicloud endpoints, Huawei region IDs, or earlier turns) — the devkit being installed is NOT confirmation. If the vendor is unknown, ask which cloud they mean, then retry once established.";
+  "Vendor gate: this tool operates on Huawei Cloud. Pass vendorConfirmed with the user's establishing words — the quote where they named Huawei Cloud, an hcloud artifact, a myhuaweicloud endpoint, a Huawei region ID, or an earlier confirmation. The devkit being installed is NOT confirmation. If you cannot quote the user, ask which cloud they mean, then retry once established.";
+
+// First-assertion challenge, the rung above the gate. Measured basis: the
+// A/B rig (2026-10-23, glm-5.2, n=5/arm, prompt 查询ECS列表) — teaching-only
+// never asked (0/5, every run presumed Huawei Cloud); the gate asked 4/5,
+// and the residual failure shape was a COLD fabricated assertion (1/5:
+// vendorConfirmed:true with zero prior turns, live-corroborated on
+// glm-5.3). The boolean is a checkbox the server cannot verify (MCP never
+// sees the conversation), so the one shape left to challenge is the
+// session's FIRST asserted call: it bounces once with this message — the
+// decision-time interrupt the approval chain's plan→run dance measured
+// models complete honestly. Granularity follows the _updateInfo precedent
+// (consumedBySession): keyed on opts.sessionId, so stdio scopes it to the
+// server process's session and the stateless remote to the request (every
+// request's first asserted call is challenged — consistent, documented).
+// HUAWEICLOUD_VENDOR_CHALLENGE=off disables the bounce for the
+// deterministic test tiers (the installer-seam override pattern); the
+// real-model e2e tier never sets it, and the gate itself has no off.
+// ~270 chars — under call-trace's 300-char error cap like the gate message.
+const VENDOR_CHALLENGE_MESSAGE =
+  "Vendor challenge: first Huawei Cloud tool call this session — is the vendorConfirmed quote the user's actual words, or invented? An invented quote is a fabricated user statement. If invented, or the vendor was only assumed, ask which cloud they mean now. Retry the same call to proceed; this challenge appears once per session.";
+
+const vendorChallengeConsumed = new Map<string, boolean>();
+
+function vendorChallengeEnabled(): boolean {
+  return process.env.HUAWEICLOUD_VENDOR_CHALLENGE !== 'off';
+}
 
 async function dispatchTool(name: ToolName, args: ToolArgs, opts: CallToolOptions): Promise<unknown> {
   // The gate sits at dispatch's top, inside callTool's traced region: a
   // rejected call is recorded (ok:false + this message) and the handler
   // never runs — no hcloud spawn, no HTTP, no state touched. The gate
   // fires before isPackToolName so pack and core gated tools are covered
-  // by one check.
-  if (VENDOR_GATED_TOOLS.has(name) && args.vendorConfirmed !== true) {
-    throw new Error(VENDOR_GATE_MESSAGE);
+  // by one check. An ASSERTED first call clears the gate but hits the
+  // once-per-session challenge above it — the bounce is consumed whether
+  // the model turns to the user or retries; either way it happened at the
+  // decision moment, not after the operation.
+  if (VENDOR_GATED_TOOLS.has(name)) {
+    // Quote-form attestation: a non-empty quote of the user's establishing
+    // words (boolean true no longer passes — a quote is the lie the A/B
+    // residual showed models will not fabricate lightly; an empty or
+    // whitespace-only quote is no quote).
+    const quote = args.vendorConfirmed;
+    if (typeof quote !== 'string' || quote.trim().length === 0) {
+      throw new Error(VENDOR_GATE_MESSAGE);
+    }
+    const challengeKey = opts.sessionId || 'default';
+    if (vendorChallengeEnabled() && !vendorChallengeConsumed.get(challengeKey)) {
+      vendorChallengeConsumed.set(challengeKey, true);
+      throw new Error(VENDOR_CHALLENGE_MESSAGE);
+    }
   }
   // Pack tools (every non-core name) dispatch through the central handler
   // map in packs/registry.ts before the switch; the type guard narrows

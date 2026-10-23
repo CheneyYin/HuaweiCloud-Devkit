@@ -110,7 +110,7 @@ const TRIMMED_CAPABILITY_RULE =
 const VENDOR_BOUNDARY_RULE =
   'Vendor boundary: tools or skills being available in this session is not evidence of which cloud the user means. ' +
   "For a request that involves cloud resources but names no vendor, infer the vendor only from an explicit mention, hcloud/KooCLI artifacts, myhuaweicloud endpoints, Huawei region IDs, or earlier turns of this conversation — generic service vocabulary (ECS, VPC, RDS, serverless) and the devkit's own presence do not infer it. " +
-  'When the vendor is still unknown, ask the user which cloud they mean before operating on cloud resources through any tool or hcloud command, and before probing Huawei Cloud tooling, credential, or account state (CLI install checks, profile reads, auth status). Cloud-facing tools enforce this with a vendorConfirmed parameter — assert it only when the vendor is established as above, never to skip the question. ' +
+  "When the vendor is still unknown, ask the user which cloud they mean before operating on cloud resources through any tool or hcloud command, and before probing Huawei Cloud tooling, credential, or account state (CLI install checks, profile reads, auth status). Cloud-facing tools enforce this with a vendorConfirmed parameter — pass the user's establishing words as its value, never an invented quote. " +
   "Requests that are not cloud tasks are outside this rule; tasks for other clouds remain answerable from general knowledge — the devkit's tools themselves only operate on Huawei Cloud. ";
 
 export function instructionsFor(remote: boolean, runtimePacks = false): string {

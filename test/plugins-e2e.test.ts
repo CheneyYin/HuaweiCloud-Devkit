@@ -6,6 +6,14 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
+// Deterministic-tier seam: disable the once-per-session first-assertion
+// vendor challenge (HUAWEICLOUD_VENDOR_CHALLENGE=off, the installer-override
+// pattern) so cold-attested calls in this file dispatch without the
+// challenge bounce. The challenge itself is pinned where it is the subject
+// (tools.test.ts's gate test drives the dance; the selfcheck drives it on
+// the wire); the real-model e2e tier never sets this seam.
+process.env.HUAWEICLOUD_VENDOR_CHALLENGE = 'off';
+
 const root = fileURLToPath(new URL('..', import.meta.url));
 const setupCli = join(root, 'bin', 'setup.cjs');
 

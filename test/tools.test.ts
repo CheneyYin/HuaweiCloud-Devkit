@@ -164,24 +164,80 @@ test('TOOL_SCHEMAS keys exactly match TOOL_DEFINITIONS names (no orphans either 
   );
 });
 
-test('the vendorConfirmed gate rejects unasserted cloud-facing calls and teaches the two exits', async () => {
-  // The enforcement rung: a gated tool called without the attestation
-  // throws BEFORE dispatch (no hcloud spawn, no HTTP), the message names
-  // the inference list and the ask-first exit, and the attested call
-  // dispatches normally. service_catalog is the side-effect-free face for
-  // the positive arm; auth_status the measured first move for the
-  // negative arm.
-  await assert.rejects(callTool('huaweicloud_auth_status', {}), (error: Error) => {
-    assert.match(error.message, /Vendor gate: this tool operates on Huawei Cloud/);
-    assert.match(error.message, /vendorConfirmed: true ONLY when/);
-    assert.match(error.message, /ask which cloud they mean, then retry once established/);
-    return true;
-  });
-  const cataloged = (await callTool('huaweicloud_service_catalog', {
-    vendorConfirmed: true,
-    intent: 'deploy an ecs instance',
-  })) as unknown;
-  assert.ok(cataloged, 'the attested call must dispatch');
+test('the vendorConfirmed gate rejects unasserted calls, and the first asserted call clears the challenge once', async () => {
+  // The enforcement rung plus the challenge rung above it (A/B-measured,
+  // 2026-10-23: teaching-only never asked 0/5; the gate asked 4/5 with the
+  // residual failure a COLD fabricated assertion — so the session's first
+  // asserted call bounces once with the BY-THE-USER-or-assumed challenge,
+  // the plan→run dance shape models complete honestly). service_catalog is
+  // the side-effect-free face for the positive arms; auth_status the
+  // measured first move for the negative arm. The seam is toggled ON here
+  // (file-top sets it off for the file's incidental cold asserts) and the
+  // sessionIds are unique so the consumed flag never leaks across tests.
+  process.env.HUAWEICLOUD_VENDOR_CHALLENGE = undefined;
+  try {
+    await assert.rejects(callTool('huaweicloud_auth_status', {}, { sessionId: 'vendor-dance' }), (error: Error) => {
+      assert.match(error.message, /Vendor gate: this tool operates on Huawei Cloud/);
+      assert.match(error.message, /Pass vendorConfirmed with the user's establishing words/);
+      assert.match(error.message, /ask which cloud they mean, then retry once established/);
+      return true;
+    });
+    // Quote-form regressions: the boolean shape no longer passes (the
+    // A/B residual showed a checkbox models will check on assumption —
+    // a quote is the statement they will not fabricate lightly), and an
+    // empty quote is no quote.
+    await assert.rejects(
+      // The old boolean shape is deliberately typed-out of ToolArgs; the
+      // cast sends it anyway to pin that the gate (not just the type)
+      // rejects it.
+      callTool('huaweicloud_auth_status', { vendorConfirmed: true } as unknown as ToolArgs, {
+        sessionId: 'vendor-dance',
+      }),
+      (error: Error) => {
+        assert.match(error.message, /Vendor gate: this tool operates on Huawei Cloud/);
+        return true;
+      },
+    );
+    await assert.rejects(
+      callTool('huaweicloud_auth_status', { vendorConfirmed: '   ' }, { sessionId: 'vendor-dance' }),
+      (error: Error) => {
+        assert.match(error.message, /Vendor gate: this tool operates on Huawei Cloud/);
+        return true;
+      },
+    );
+    // Unasserted rejections never consume the challenge: the next COLD
+    // quoted call still bounces.
+    await assert.rejects(
+      callTool(
+        'huaweicloud_auth_status',
+        { vendorConfirmed: 'test: vendor established by the harness' },
+        { sessionId: 'vendor-dance' },
+      ),
+      (error: Error) => {
+        assert.match(error.message, /Vendor challenge: first Huawei Cloud tool call this session/);
+        assert.match(error.message, /is the vendorConfirmed quote the user's actual words, or invented/);
+        assert.match(error.message, /Retry the same call to proceed/);
+        return true;
+      },
+    );
+    // The dance completes: the retried asserted call dispatches.
+    const cataloged = (await callTool(
+      'huaweicloud_service_catalog',
+      { vendorConfirmed: 'test: vendor established by the harness', intent: 'deploy an ecs instance' },
+      { sessionId: 'vendor-dance' },
+    )) as unknown;
+    assert.ok(cataloged, 'the retried attested call must dispatch');
+    // Once per session: the challenge is consumed — the next asserted call
+    // in the same session passes without a bounce.
+    const again = (await callTool(
+      'huaweicloud_service_catalog',
+      { vendorConfirmed: 'test: vendor established by the harness', intent: 'list obs buckets' },
+      { sessionId: 'vendor-dance' },
+    )) as unknown;
+    assert.ok(again, 'a second asserted call in the same session must not bounce');
+  } finally {
+    process.env.HUAWEICLOUD_VENDOR_CHALLENGE = 'off';
+  }
 });
 
 test('huaweicloud_hook_check_command returns deny finding', async () => {
@@ -239,7 +295,7 @@ test('callTool rejects invalid numeric timeoutMs instead of silently ignoring it
   await assert.rejects(
     () =>
       callTool('huaweicloud_run_readonly_command', {
-        vendorConfirmed: true,
+        vendorConfirmed: 'test: vendor established by the harness',
         args: ['ECS', 'ListServersDetails'],
         timeoutMs: 'not-a-number',
       } as unknown as ToolArgs),
@@ -251,7 +307,7 @@ test('callTool accepts maxRetries 0 and integer timeoutMs (no false rejection)',
   // maxRetries: 0 is legitimate ("no retries") and must pass normalization (#530)
   await assert.doesNotReject(() =>
     callTool('huaweicloud_plan_cli_command', {
-      vendorConfirmed: true,
+      vendorConfirmed: 'test: vendor established by the harness',
       args: ['ECS', 'ListServersDetails'],
       maxRetries: 0,
       timeoutMs: 30000,
@@ -286,20 +342,20 @@ test('huaweicloud_hook_check_deploy_plan warns on sandbox without ttl', async ()
 
 test('service_catalog recommends sandbox first for static website deployment intent', async () => {
   const en = (await callTool('huaweicloud_service_catalog', {
-    vendorConfirmed: true,
+    vendorConfirmed: 'test: vendor established by the harness',
     intent: 'deploy a static website',
   })) as ServiceCatalogResult;
   assert.equal(en.recommendedSkills[0], 'huawei-sandbox');
   assert.ok(en.recommendedSkills.includes('huawei-obs'));
 
   const zh = (await callTool('huaweicloud_service_catalog', {
-    vendorConfirmed: true,
+    vendorConfirmed: 'test: vendor established by the harness',
     intent: '部署静态网站到华为云',
   })) as ServiceCatalogResult;
   assert.equal(zh.recommendedSkills[0], 'huawei-sandbox');
 
   const webApp = (await callTool('huaweicloud_service_catalog', {
-    vendorConfirmed: true,
+    vendorConfirmed: 'test: vendor established by the harness',
     intent: 'host a web app for preview',
   })) as ServiceCatalogResult;
   assert.equal(webApp.recommendedSkills[0], 'huawei-sandbox');
@@ -307,7 +363,7 @@ test('service_catalog recommends sandbox first for static website deployment int
 
 test('service_catalog keeps storage routing for pure storage intent', async () => {
   const result = (await callTool('huaweicloud_service_catalog', {
-    vendorConfirmed: true,
+    vendorConfirmed: 'test: vendor established by the harness',
     intent: 'store files in an obs bucket',
   })) as ServiceCatalogResult;
   assert.ok(result.recommendedSkills.includes('huawei-obs'));
@@ -407,7 +463,7 @@ test('auth_switch temporary sets runtime credentials for api path', async () => 
   delete process.env.HW_SECRET_KEY;
   try {
     const out = (await callTool('huaweicloud_auth_switch', {
-      vendorConfirmed: true,
+      vendorConfirmed: 'test: vendor established by the harness',
       mode: 'memory',
       action: 'temporary',
       ak: 'RUNTIME_AK',
@@ -433,7 +489,7 @@ test('auth_switch clear resets runtime', async () => {
   try {
     setRuntimeCredentials('A', 'B', undefined, 'cn-north-4');
     const out = (await callTool('huaweicloud_auth_switch', {
-      vendorConfirmed: true,
+      vendorConfirmed: 'test: vendor established by the harness',
       action: 'clear',
     })) as AuthSwitchResult;
     assert.equal(out.status, 'cleared');
@@ -462,7 +518,7 @@ test('auth_switch persist(mode=import) rejects missing region and keeps import f
     writeFileSync(importFile, JSON.stringify({ ak: 'IMPORT_AK', sk: 'IMPORT_SK' }), 'utf8');
 
     const out = (await callTool('huaweicloud_auth_switch', {
-      vendorConfirmed: true,
+      vendorConfirmed: 'test: vendor established by the harness',
       mode: 'import',
       action: 'persist',
     })) as AuthSwitchResult;
@@ -493,7 +549,7 @@ test('auth_switch temporary(mode=import) clears import file on success', async (
     writeFileSync(importFile, JSON.stringify({ ak: 'TMP_AK', sk: 'TMP_SK' }), 'utf8');
 
     const out = (await callTool('huaweicloud_auth_switch', {
-      vendorConfirmed: true,
+      vendorConfirmed: 'test: vendor established by the harness',
       mode: 'import',
       action: 'temporary',
     })) as AuthSwitchResult;
@@ -524,7 +580,7 @@ test('auth_switch persist(mode=import) with STS token is rejected and clears imp
     );
 
     const out = (await callTool('huaweicloud_auth_switch', {
-      vendorConfirmed: true,
+      vendorConfirmed: 'test: vendor established by the harness',
       mode: 'import',
       action: 'persist',
     })) as AuthSwitchResult;

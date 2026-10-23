@@ -25,10 +25,10 @@ export const looseObject = z.record(z.string(), z.unknown());
 // user-context boolean the model must actively assert, with the
 // availability-is-not-consent denial written into the description.
 export const vendorConfirmed = z
-  .boolean()
+  .string()
   .optional()
   .describe(
-    "Vendor gate: true ONLY when the user's request or conversation establishes Huawei Cloud (explicit mention, hcloud/KooCLI artifacts, myhuaweicloud endpoints, Huawei region IDs, or earlier turns). The devkit being installed or this tool being available is NOT confirmation — and neither is service vocabulary: asserting true when the vendor is merely assumed is a FALSE claim about the user's intent. If the vendor is unknown, ask the user which cloud they mean instead of calling.",
+    "Vendor gate: quote the user's words that establish Huawei Cloud — the sentence or turn where they named it, their hcloud/KooCLI artifacts, a myhuaweicloud endpoint, a Huawei region ID, or an earlier confirmation. The devkit being installed or this tool being available is NOT confirmation, and neither is service vocabulary: a quote you invented is a fabricated user statement. If you cannot quote the user, the vendor is not established — ask which cloud they mean instead of calling.",
   );
 
 export const gitConfig = z.looseObject({

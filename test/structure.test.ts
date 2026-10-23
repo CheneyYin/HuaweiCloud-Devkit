@@ -1004,7 +1004,7 @@ test('the vendorConfirmed gate is pinned on every gated tool face', () => {
       huaweicloud_run_approved_command: { args: ['X'], approvalToken: 't', approvedByUser: true },
     };
     const parsed = getToolSchema(name).safeParse({
-      vendorConfirmed: 'not-a-boolean',
+      vendorConfirmed: 123,
       ...(requireds[name] ?? {}),
     });
     assert.equal(parsed.success, false, `${name}'s schema must type the vendorConfirmed parameter`);
@@ -1024,7 +1024,7 @@ test('the vendorConfirmed gate is pinned on every gated tool face', () => {
   // it asserts on the property not the overall outcome).
   for (const tool of TOOL_DEFINITIONS) {
     const schema = getToolSchema(tool.name);
-    const probe = schema.safeParse({ vendorConfirmed: 'not-a-boolean' });
+    const probe = schema.safeParse({ vendorConfirmed: 123 });
     const typed = !probe.success && probe.error.issues.some((issue) => issue.path[0] === 'vendorConfirmed');
     if (typed) {
       assert.ok(
