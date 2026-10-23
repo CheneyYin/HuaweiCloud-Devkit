@@ -71,16 +71,22 @@ function assertMcpEntry(configPath: string, mapKey: 'mcpServers' | 'mcp'): void 
   assert.match(rendered, /dist\/mcp-server\.js/, `entry does not point at the server: ${rendered}`);
 }
 
+// The install-mode contract every lifecycle test opens with: the command
+// succeeds under its target banner and leaves the payload triple in place.
+function assertInstallSucceeded(target: string, label: string, home: string, cwd: string, pluginDir: string): void {
+  const install = runCli(home, cwd, ['install', '--target', target]);
+  assert.equal(install.status, 0, install.stderr);
+  assert.match(install.stdout, new RegExp(`\\[${label}\\]`));
+  assertPayloadInstalled(pluginDir);
+}
+
 test('workbuddy lifecycle: install, update, uninstall', () => {
   const home = fixtureDir('wb-home-');
   const cwd = fixtureDir('wb-proj-');
   const pluginDir = join(home, '.workbuddy', 'huaweicloud-plugins');
   const configPath = join(home, '.workbuddy', 'mcp.json');
 
-  const install = runCli(home, cwd, ['install', '--target', 'workbuddy']);
-  assert.equal(install.status, 0, install.stderr);
-  assert.match(install.stdout, /\[WorkBuddy\]/);
-  assertPayloadInstalled(pluginDir);
+  assertInstallSucceeded('workbuddy', 'WorkBuddy', home, cwd, pluginDir);
   assertMcpEntry(configPath, 'mcpServers');
 
   const update = runCli(home, cwd, ['update', '--target', 'workbuddy']);
@@ -107,10 +113,7 @@ test('openclaw lifecycle: install, update, uninstall', () => {
   const pluginDir = join(home, '.agents', 'huaweicloud-plugins');
   const commandsDir = join(home, '.agents', 'commands');
 
-  const install = runCli(home, cwd, ['install', '--target', 'openclaw']);
-  assert.equal(install.status, 0, install.stderr);
-  assert.match(install.stdout, /\[OpenClaw\]/);
-  assertPayloadInstalled(pluginDir);
+  assertInstallSucceeded('openclaw', 'OpenClaw', home, cwd, pluginDir);
   assertMcpEntry(join(pluginDir, '.mcp.json'), 'mcpServers');
   assert.ok(existsSync(join(pluginDir, '.codex-plugin')), 'codex plugin manifest missing');
   const commands = existsSync(commandsDir) ? readdirSync(commandsDir) : [];
@@ -139,10 +142,7 @@ test('atomcode lifecycle: install, update, uninstall', () => {
   const configPath = join(atomcodeHome, 'mcp.json');
   const hooksConfigPath = join(atomcodeHome, 'hooks.json');
 
-  const install = runCli(home, cwd, ['install', '--target', 'atomcode']);
-  assert.equal(install.status, 0, install.stderr);
-  assert.match(install.stdout, /\[AtomCode\]/);
-  assertPayloadInstalled(pluginDir);
+  assertInstallSucceeded('atomcode', 'AtomCode', home, cwd, pluginDir);
   assertMcpEntry(configPath, 'mcpServers');
   assert.ok(existsSync(join(pluginDir, 'hooks', 'huaweicloud-telemetry.js')), 'telemetry hook script missing');
   const hooks = readJson(hooksConfigPath);

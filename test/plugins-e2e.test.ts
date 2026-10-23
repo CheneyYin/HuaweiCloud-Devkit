@@ -72,75 +72,13 @@ interface JsonRpcResponse {
   error?: unknown;
 }
 
-function invokeMcpTools(mcpServerPath: string, env: NodeJS.ProcessEnv, timeout = 15000): Promise<JsonRpcResponse[]> {
-  return new Promise<JsonRpcResponse[]>((resolve, reject) => {
-    const child = spawn(process.execPath, [mcpServerPath], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env,
-      timeout,
-    });
-    let buffer = '';
-    const responses: JsonRpcResponse[] = [];
-    let seq = 0;
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error('MCP timeout'));
-    }, timeout);
-
-    child.stdout.on('data', (chunk) => {
-      buffer += chunk.toString();
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-      for (const line of lines) {
-        if (line.trim()) {
-          try {
-            const msg = JSON.parse(line) as JsonRpcResponse;
-            if (msg.id !== undefined && msg.id !== null) {
-              responses.push(msg);
-              if (responses.length === 1) {
-                child.stdin.write(
-                  JSON.stringify({
-                    jsonrpc: '2.0',
-                    method: 'tools/list',
-                    params: {},
-                    id: ++seq,
-                  }) + '\n',
-                );
-              } else if (responses.length === 2) {
-                clearTimeout(timer);
-                child.kill();
-                resolve(responses);
-              }
-            }
-          } catch {
-            // skip a non-JSON stdout line; only the counted responses drive the handshake
-          }
-        }
-      }
-    });
-
-    child.stderr.on('data', () => {});
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      reject(e);
-    });
-
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'initialize',
-        params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'e2e-test', version: '1.0' } },
-        id: ++seq,
-      }) + '\n',
-    );
-  });
-}
-
-function invokeMcpToolCall(
+// One MCP handshake harness: spawn the server over newline JSON-RPC, send
+// initialize, then the caller's second request (tools/list or a tools/call),
+// resolving with both responses.
+function invokeMcpSequence(
   mcpServerPath: string,
   env: NodeJS.ProcessEnv,
-  toolName: string,
-  toolArgs: Record<string, unknown>,
+  secondRequest: { method: string; params: unknown },
   timeout = 15000,
 ): Promise<JsonRpcResponse[]> {
   return new Promise<JsonRpcResponse[]>((resolve, reject) => {
@@ -168,14 +106,7 @@ function invokeMcpToolCall(
             if (msg.id !== undefined && msg.id !== null) {
               responses.push(msg);
               if (responses.length === 1) {
-                child.stdin.write(
-                  JSON.stringify({
-                    jsonrpc: '2.0',
-                    method: 'tools/call',
-                    params: { name: toolName, arguments: toolArgs },
-                    id: ++seq,
-                  }) + '\n',
-                );
+                child.stdin.write(JSON.stringify({ jsonrpc: '2.0', ...secondRequest, id: ++seq }) + '\n');
               } else if (responses.length === 2) {
                 clearTimeout(timer);
                 child.kill();
@@ -205,6 +136,12 @@ function invokeMcpToolCall(
     );
   });
 }
+
+const listTools = { method: 'tools/list', params: {} } as const;
+const callTool = (name: string, args: Record<string, unknown>) => ({
+  method: 'tools/call',
+  params: { name, arguments: args },
+});
 
 // Core-pack tools that must always be present, including the pack meta tools
 // (both registered in the core pack). Keep in sync with tools.ts
@@ -368,7 +305,7 @@ for (const target of targets) {
       const mcpServerPath = join(target.pluginsDir(home), 'dist', 'mcp-server.js');
       assert.ok(existsSync(mcpServerPath), `${target.name}: MCP server file exists`);
 
-      const responses = await invokeMcpTools(mcpServerPath, makeEnv(home, cwd));
+      const responses = await invokeMcpSequence(mcpServerPath, makeEnv(home, cwd), listTools);
 
       assert.ok(responses[0].result, `${target.name}: initialize returned result`);
       assert.equal(responses[0].result.serverInfo.name, 'huaweicloud-devkit', `${target.name}: server name correct`);
@@ -395,7 +332,7 @@ test('MCP tools/list includes all required core tools with valid schemas', async
     assert.equal(install.status, 0, install.stderr);
 
     const mcpServerPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js');
-    const responses = await invokeMcpTools(mcpServerPath, makeEnv(home, cwd));
+    const responses = await invokeMcpSequence(mcpServerPath, makeEnv(home, cwd), listTools);
     const tools = responses[1].result.tools;
     const toolNames = tools.map((t) => t.name);
 
@@ -451,7 +388,11 @@ test('DEVKIT_PACKS=sandbox trims tools/list to core 12 + sandbox 12', async () =
     const mcpServerPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js');
     // DEVKIT_PACKS rides the spawn env into the stdio server; without it the
     // suite's other tests above still see the full 49.
-    const responses = await invokeMcpTools(mcpServerPath, { ...makeEnv(home, cwd), DEVKIT_PACKS: 'sandbox' });
+    const responses = await invokeMcpSequence(
+      mcpServerPath,
+      { ...makeEnv(home, cwd), DEVKIT_PACKS: 'sandbox' },
+      listTools,
+    );
 
     assert.ok(responses[0].result, 'initialize returned result');
     assert.ok(responses[1].result, 'tools/list returned result');
@@ -487,10 +428,14 @@ test('DEVKIT_PACKS=huaweicloud-open-mcp trims tools/list to core 12 + gateway 3'
     assert.equal(install.status, 0, install.stderr);
 
     const mcpServerPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js');
-    const responses = await invokeMcpTools(mcpServerPath, {
-      ...makeEnv(home, cwd),
-      DEVKIT_PACKS: 'huaweicloud-open-mcp',
-    });
+    const responses = await invokeMcpSequence(
+      mcpServerPath,
+      {
+        ...makeEnv(home, cwd),
+        DEVKIT_PACKS: 'huaweicloud-open-mcp',
+      },
+      listTools,
+    );
 
     assert.ok(responses[0].result, 'initialize returned result');
     assert.ok(responses[1].result, 'tools/list returned result');
@@ -525,9 +470,13 @@ test('huaweicloud_search_docs returns relevant skill results', async () => {
     const mcpServerPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js');
 
     // Search for ECS skills — should return results containing ECS-related content
-    const responses = await invokeMcpToolCall(mcpServerPath, makeEnv(home, cwd), 'huaweicloud_search_docs', {
-      query: 'ECS',
-    });
+    const responses = await invokeMcpSequence(
+      mcpServerPath,
+      makeEnv(home, cwd),
+      callTool('huaweicloud_search_docs', {
+        query: 'ECS',
+      }),
+    );
 
     assert.ok(responses[0].result, 'initialize returned result');
     assert.ok(responses[1].result, 'tools/call returned result');
@@ -552,9 +501,13 @@ test('huaweicloud_search_docs returns relevant skill results', async () => {
     assert.ok(resultCount > 0, `search for ECS should return > 0 results, got ${resultCount}`);
 
     // Search for OBS — verify different query also returns results
-    const obsResponses = await invokeMcpToolCall(mcpServerPath, makeEnv(home, cwd), 'huaweicloud_search_docs', {
-      query: 'OBS',
-    });
+    const obsResponses = await invokeMcpSequence(
+      mcpServerPath,
+      makeEnv(home, cwd),
+      callTool('huaweicloud_search_docs', {
+        query: 'OBS',
+      }),
+    );
     assert.ok(!obsResponses[1].error, `OBS search should not error: ${JSON.stringify(obsResponses[1].error)}`);
     const obsText = obsResponses[1].result.content.map((c) => c.text || '').join('');
     const obsParsed = JSON.parse(obsText) as { query?: string; results?: unknown[]; length?: number };
@@ -576,9 +529,13 @@ test('huaweicloud_service_catalog returns capability recommendations', async () 
     const mcpServerPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js');
 
     // Verify English intent: deploy a static website recommends sandbox first
-    const enResponses = await invokeMcpToolCall(mcpServerPath, makeEnv(home, cwd), 'huaweicloud_service_catalog', {
-      intent: 'deploy a static website',
-    });
+    const enResponses = await invokeMcpSequence(
+      mcpServerPath,
+      makeEnv(home, cwd),
+      callTool('huaweicloud_service_catalog', {
+        intent: 'deploy a static website',
+      }),
+    );
     assert.ok(!enResponses[1].error, `English intent should not error: ${JSON.stringify(enResponses[1].error)}`);
     const enText = enResponses[1].result.content.map((c) => c.text || '').join('');
     const enResult = JSON.parse(enText) as { recommendedSkills: string[] };
@@ -593,9 +550,13 @@ test('huaweicloud_service_catalog returns capability recommendations', async () 
     );
 
     // Verify Chinese intent: 部署静态网站到华为云
-    const zhResponses = await invokeMcpToolCall(mcpServerPath, makeEnv(home, cwd), 'huaweicloud_service_catalog', {
-      intent: '部署静态网站到华为云',
-    });
+    const zhResponses = await invokeMcpSequence(
+      mcpServerPath,
+      makeEnv(home, cwd),
+      callTool('huaweicloud_service_catalog', {
+        intent: '部署静态网站到华为云',
+      }),
+    );
     assert.ok(!zhResponses[1].error, `Chinese intent should not error: ${JSON.stringify(zhResponses[1].error)}`);
     const zhText = zhResponses[1].result.content.map((c) => c.text || '').join('');
     const zhResult = JSON.parse(zhText) as { recommendedSkills: string[] };
@@ -605,9 +566,13 @@ test('huaweicloud_service_catalog returns capability recommendations', async () 
     );
 
     // Verify storage routing for pure storage intent (aligned with tools.test.mjs)
-    const storageResponses = await invokeMcpToolCall(mcpServerPath, makeEnv(home, cwd), 'huaweicloud_service_catalog', {
-      intent: 'store files in an obs bucket',
-    });
+    const storageResponses = await invokeMcpSequence(
+      mcpServerPath,
+      makeEnv(home, cwd),
+      callTool('huaweicloud_service_catalog', {
+        intent: 'store files in an obs bucket',
+      }),
+    );
     assert.ok(
       !storageResponses[1].error,
       `Storage intent should not error: ${JSON.stringify(storageResponses[1].error)}`,
@@ -634,7 +599,11 @@ test('MCP tools/call with unknown tool name returns error', async () => {
     assert.equal(install.status, 0, install.stderr);
 
     const mcpServerPath = join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js');
-    const responses = await invokeMcpToolCall(mcpServerPath, makeEnv(home, cwd), 'huaweicloud_nonexistent_tool', {});
+    const responses = await invokeMcpSequence(
+      mcpServerPath,
+      makeEnv(home, cwd),
+      callTool('huaweicloud_nonexistent_tool', {}),
+    );
 
     assert.ok(responses[0].result, 'initialize returned result');
     // Unknown tool returns an isError CallToolResult (SDK high-level server
