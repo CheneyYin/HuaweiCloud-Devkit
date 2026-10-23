@@ -16,7 +16,7 @@ import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-import { getMarketplaceName } from '../plugins/huaweicloud-core/src/codex-probe.ts';
+import { getCodexPluginName, getMarketplaceName } from '../plugins/huaweicloud-core/src/codex-probe.ts';
 import { parseCoreSkillNames } from '../plugins/huaweicloud-core/src/lib/skill-manifest.ts';
 import { skillTreeEquals } from '../plugins/huaweicloud-core/src/lib/skill-tree.ts';
 
@@ -81,7 +81,13 @@ function runAuto(home: string, cwd: string, cmd: string, extraEnv: Record<string
 
 function fakeCodexEnv(
   cwd: string,
-  options: { failPluginAdd?: boolean; failMarketplaceRemove?: boolean; listOutput?: string; listJson?: string } = {},
+  options: {
+    failPluginAdd?: boolean;
+    failMarketplaceRemove?: boolean;
+    conflictOnce?: boolean;
+    listOutput?: string;
+    listJson?: string;
+  } = {},
 ) {
   const binDir = join(cwd, 'fake-bin');
   mkdirSync(binDir, { recursive: true });
@@ -90,7 +96,7 @@ function fakeCodexEnv(
   writeFileSync(
     scriptPath,
     `
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
 const args = process.argv.slice(2);
 appendFileSync(process.env.FAKE_CODEX_LOG, JSON.stringify(args) + '\\n');
 if (args[0] === '--version') {
@@ -108,6 +114,24 @@ if (args[0] === 'plugin' && args[1] === 'list') {
 if (process.env.FAKE_CODEX_FAIL_PLUGIN_ADD === '1' && args[0] === 'plugin' && args[1] === 'add') {
   console.error('fake plugin add failed');
   process.exit(1);
+}
+if (
+  process.env.FAKE_CODEX_CONFLICT_ONCE === '1' &&
+  args[0] === 'plugin' &&
+  args[1] === 'marketplace' &&
+  args[2] === 'add'
+) {
+  // One-shot: the first marketplace add answers with the exact codex-cli
+  // 0.162.1 different-source conflict (stderr, pinned wording — the
+  // installer's detection regex couples to it); every later call passes.
+  const fired = process.env.FAKE_CODEX_LOG + '.conflict-fired';
+  if (!existsSync(fired)) {
+    writeFileSync(fired, '1');
+    console.error(
+      "Error: marketplace 'huaweicloud-devkit' is already added from a different source; remove it before adding this source",
+    );
+    process.exit(1);
+  }
 }
 if (
   process.env.FAKE_CODEX_FAIL_MARKETPLACE_REMOVE === '1' &&
@@ -134,6 +158,7 @@ process.exit(0);
     FAKE_CODEX_LOG: logPath,
     ...(options.failPluginAdd ? { FAKE_CODEX_FAIL_PLUGIN_ADD: '1' } : {}),
     ...(options.failMarketplaceRemove ? { FAKE_CODEX_FAIL_MARKETPLACE_REMOVE: '1' } : {}),
+    ...(options.conflictOnce ? { FAKE_CODEX_CONFLICT_ONCE: '1' } : {}),
     ...(options.listOutput ? { FAKE_CODEX_LIST_OUTPUT: options.listOutput } : {}),
     ...(options.listJson ? { FAKE_CODEX_LIST_JSON: options.listJson } : {}),
     logPath,
@@ -1059,6 +1084,102 @@ test('codex install fails fast when plugin add fails', () => {
     assert.match(res.stdout, /Installation failed for: codex/);
     assert.doesNotMatch(res.stdout, /Installation complete/);
     assert.ok(!existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins', '.installed')));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+// The pre-fix poisoning sibling's location in the fake home: makeEnv clears
+// CODEX_HOME, so the installer's sweep resolves ~/.codex inside the temp home.
+function codexCacheStrayDir(home: string): string {
+  return join(home, '.codex', 'plugins', 'cache', getMarketplaceName(), getCodexPluginName(), 'telemetry');
+}
+
+function escapeRegExp(text: string): string {
+  return text.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+test('codex install sweep: heals provably-ours and empty strays, leaves foreign content warned', () => {
+  // The sweep's three branches, table-driven (the repo's repeated
+  // home/cwd/try heads are a baselined clone family — one instance here
+  // reuses that fingerprint instead of adding new twin fragments):
+  // - allowlisted stamps and an EMPTY dir are provably ours and healed. The
+  //   empty case is the crash-convergence pin: an empty stray poisons
+  //   codex's version-dir scan exactly like a full one, and is the shape a
+  //   killed prior sweep leaves behind (rmSync deleting entries, then dying
+  //   before the dir) — requiring non-emptiness would permanently disable
+  //   the healing for that cache.
+  // - Foreign content is not provably ours, so it stays — but the warning
+  //   must say WHY that matters (codex cannot load the plugin) and how to
+  //   remediate, because the install itself still exits green around the
+  //   poison.
+  const branches = [
+    { title: 'allowlisted stamps healed', files: ['install-counter', 'dau-stamp'], healed: true },
+    { title: 'empty stray healed', files: [] as string[], healed: true },
+    { title: 'foreign file left with consequence-named warning', files: ['user-notes.txt'], healed: false },
+  ];
+  for (const { title, files, healed } of branches) {
+    const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
+    try {
+      const stray = codexCacheStrayDir(home);
+      mkdirSync(stray, { recursive: true });
+      for (const file of files) writeFileSync(join(stray, file), 'x');
+      const env = fakeCodexEnv(cwd);
+      const res = run('codex', home, cwd, 'install', env);
+      assert.equal(res.status, 0, `${title}: ${res.stderr}`);
+      assert.match(res.stdout, /Installation complete/);
+      if (healed) {
+        assert.match(res.stdout, /Healed pre-fix telemetry sibling/);
+        assert.ok(!existsSync(stray), `${title}: the stray must be removed`);
+      } else {
+        assert.match(res.stdout, /codex cannot load the plugin while it exists/);
+        assert.match(res.stdout, new RegExp(`rm -rf .*${escapeRegExp(stray)}`));
+        assert.ok(existsSync(stray), `${title}: unrecognized content must be left untouched`);
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  }
+});
+
+test('codex install re-registers a same-name marketplace from a different source', () => {
+  // npm-cache → local-checkout transitions: codex refuses the add with the
+  // pinned 0.162.1 conflict wording; the installer must remove the stale
+  // plugin + marketplace registrations and retry the add once.
+  const home = mkdtempSync(join(tmpdir(), 'ai-home-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'ai-proj-'));
+  try {
+    const env = fakeCodexEnv(cwd, { conflictOnce: true });
+    const res = run('codex', home, cwd, 'install', env);
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.stdout, /Marketplace already registered from a different source; re-registering/);
+    assert.match(res.stdout, /Installation complete/);
+
+    const calls = readFileSync(env.logPath, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as string[]);
+    // `plugin list` (the post-install status probe) is read-only and not
+    // part of the sequence under test; the five mutation calls are.
+    const pluginCalls = calls.filter((a) => a[0] === 'plugin' && a[1] !== 'list');
+    const op = (a: string[]) => (a[1] === 'marketplace' ? `marketplace ${a[2]}` : a[1]);
+    assert.deepEqual(
+      pluginCalls.map((a) => op(a)),
+      [
+        'marketplace add', // conflicts (one-shot knob)
+        'remove', // stale plugin registration, best-effort
+        'marketplace remove', // the load-bearing step
+        'marketplace add', // retry succeeds
+        'add', // the payload install
+      ],
+    );
+    // Identity-bearing calls carry the exact pluginId / marketplace name.
+    assert.deepEqual(pluginCalls[1], ['plugin', 'remove', `${getCodexPluginName()}@${getMarketplaceName()}`]);
+    assert.deepEqual(pluginCalls[2], ['plugin', 'marketplace', 'remove', getMarketplaceName()]);
+    assert.deepEqual(pluginCalls[4], ['plugin', 'add', `${getCodexPluginName()}@${getMarketplaceName()}`]);
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });

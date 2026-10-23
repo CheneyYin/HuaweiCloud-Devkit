@@ -45,22 +45,30 @@ function frame(message: unknown) {
   return `Content-Length: ${Buffer.byteLength(json, 'utf8')}\r\n\r\n${json}`;
 }
 
-function createClient(server = serverPath) {
+function createClient(server = serverPath, envOverrides: Record<string, string | undefined> = {}) {
+  // Hermetic boot base: without these, every spawned server's initialize
+  // handshake awaits a REAL hdkitGenerateUserHash fetch (3s race against
+  // devkit.huaweicloud.com) and fires telemetry POSTs — a real-network
+  // latency spike under full-suite load delayed initialize past the
+  // split-frame test's 2s deadline (the 2026-10-16 flake). Port 1 on
+  // localhost refuses in milliseconds; the hash prewarm is best-effort.
+  // envOverrides: undefined deletes the key (the telemetry-ON wiring pin
+  // uses that to re-enable the stamp-writing path while keeping the
+  // endpoint pinned to the closed port).
+  const env: Record<string, string> = {
+    ...process.env,
+    HDKITSERVICE_ENDPOINT: 'http://127.0.0.1:1/',
+    HUAWEICLOUD_DEVKIT_TELEMETRY: 'off',
+    HUAWEICLOUD_DEVKIT_SKIP_UPDATE: '1',
+  };
+  for (const [key, value] of Object.entries(envOverrides)) {
+    if (value === undefined) delete env[key];
+    else env[key] = value;
+  }
   const child = spawn(process.execPath, [server], {
     cwd: root,
     stdio: ['pipe', 'pipe', 'pipe'],
-    // Hermetic boot: without these, every spawned server's initialize
-    // handshake awaits a REAL hdkitGenerateUserHash fetch (3s race against
-    // devkit.huaweicloud.com) and fires telemetry POSTs — a real-network
-    // latency spike under full-suite load delayed initialize past the
-    // split-frame test's 2s deadline (the 2026-10-16 flake). Port 1 on
-    // localhost refuses in milliseconds; the hash prewarm is best-effort.
-    env: {
-      ...process.env,
-      HDKITSERVICE_ENDPOINT: 'http://127.0.0.1:1/',
-      HUAWEICLOUD_DEVKIT_TELEMETRY: 'off',
-      HUAWEICLOUD_DEVKIT_SKIP_UPDATE: '1',
-    },
+    env,
   });
   let buffer = Buffer.alloc(0);
   const pending = new Map<number | string | null, (payload: JsonRpcResponse) => void>();
@@ -377,23 +385,32 @@ test('MCP server reports version from plugin package.json in installed layout', 
   }
 });
 
+// The codex marketplace cache layout the codex-side tests boot from:
+// <dir>/<marketplace>/<plugin>/<version>/ carrying the full payload a real
+// install ships. Codex marketplace installs are plain file copies with no
+// package.json anywhere in the version-resolution candidate paths (issue
+// #576) — the version must come from the plugin manifest, so the fixture
+// writes it there. The server fail-fasts on a missing skills tree
+// (verifySkillTree), so a bootable fixture models the full payload.
+function makeCodexCacheLayout(dir: string, version: string): { marketplace: string; versionDir: string } {
+  const marketplace = join(dir, 'huaweicloud-devkit', 'huaweicloud-devkit');
+  const versionDir = join(marketplace, version);
+  mkdirSync(versionDir, { recursive: true });
+  cpSync(join(root, 'plugins', 'huaweicloud-core', 'dist'), join(versionDir, 'dist'), { recursive: true });
+  cpSync(join(root, 'plugins', 'huaweicloud-core', 'safety'), join(versionDir, 'safety'), { recursive: true });
+  cpSync(join(root, 'plugins', 'huaweicloud-core', 'skills'), join(versionDir, 'skills'), { recursive: true });
+  mkdirSync(join(versionDir, '.codex-plugin'), { recursive: true });
+  writeFileSync(
+    join(versionDir, '.codex-plugin', 'plugin.json'),
+    JSON.stringify({ name: 'huaweicloud-devkit', version }),
+  );
+  return { marketplace, versionDir };
+}
+
 test('MCP server reports version from plugin manifest in Codex cache layout (#576)', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'hwc-codex-'));
   try {
-    // Codex marketplace layout: plugin dir only, no package.json anywhere in
-    // the candidate paths — the version must come from the plugin manifest.
-    const codexRoot = join(dir, 'huaweicloud-devkit', 'huaweicloud-devkit', '1.1.5');
-    mkdirSync(codexRoot, { recursive: true });
-    cpSync(join(root, 'plugins', 'huaweicloud-core', 'dist'), join(codexRoot, 'dist'), { recursive: true });
-    cpSync(join(root, 'plugins', 'huaweicloud-core', 'safety'), join(codexRoot, 'safety'), { recursive: true });
-    // The server fail-fasts on a missing skills tree (verifySkillTree), so
-    // a bootable fixture models the full payload a real install ships.
-    cpSync(join(root, 'plugins', 'huaweicloud-core', 'skills'), join(codexRoot, 'skills'), { recursive: true });
-    mkdirSync(join(codexRoot, '.codex-plugin'), { recursive: true });
-    writeFileSync(
-      join(codexRoot, '.codex-plugin', 'plugin.json'),
-      JSON.stringify({ name: 'huaweicloud-devkit', version: '1.1.5-codex' }),
-    );
+    const { versionDir: codexRoot } = makeCodexCacheLayout(dir, '1.1.5-codex');
     const client = createClient(join(codexRoot, 'dist', 'mcp-server.js'));
     try {
       const initialized = await client.request('initialize', {
@@ -405,6 +422,55 @@ test('MCP server reports version from plugin manifest in Codex cache layout (#57
     } finally {
       client.close();
     }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('telemetry ON in Codex cache layout: stamps land inside the version dir, never the parent (bundle wiring)', async () => {
+  // The wiring pin for the telemetry-sibling incident: the bug was never in
+  // resolvePluginDir's join logic (telemetry-plugin-dir.test.ts pins that
+  // pure function) — it was WHICH startDir the esbuild bundle implicitly
+  // passes (import.meta.url flattened to dist/mcp-server.js, __dirname =
+  // dist/). Only booting the real built bundle in the codex-cache layout
+  // executes that wiring. The #576 test above boots the same layout but
+  // pins telemetry off — which is exactly why the sibling writes stayed
+  // invisible to the suite while the bug shipped. Here telemetry is ON
+  // (the stamp-writing path), the endpoint stays pinned to the closed port
+  // (hermetic), and the global telemetry root is redirected into the
+  // fixture so nothing touches the real home.
+  const dir = mkdtempSync(join(tmpdir(), 'hwc-codex-tel-'));
+  try {
+    const { marketplace, versionDir: codexRoot } = makeCodexCacheLayout(dir, '2.0.0-test');
+    const client = createClient(join(codexRoot, 'dist', 'mcp-server.js'), {
+      HUAWEICLOUD_DEVKIT_TELEMETRY: undefined,
+      HUAWEICLOUD_DEVKIT_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/',
+      HUAWEICLOUD_DEVKIT_HOME: join(dir, 'devkit-home'),
+    });
+    try {
+      const initialized = await client.request('initialize', {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'codex', version: '0.162.1' },
+      });
+      assert.equal(initialized.result.serverInfo.version, '2.0.0-test');
+    } finally {
+      client.close();
+    }
+    // The incident assertion pair: the telemetry dir (initTelemetry ->
+    // trackInstall writes install-counter) must exist INSIDE the version
+    // dir, and the version PARENT — the directory codex scans for version
+    // dirs — must carry no 'telemetry' sibling. A depth regression in the
+    // bundle flips exactly this pair.
+    assert.ok(existsSync(join(codexRoot, 'telemetry')), 'telemetry dir must land inside the version dir');
+    assert.ok(
+      existsSync(join(codexRoot, 'telemetry', 'install-counter')),
+      'initTelemetry must have written its install counter inside the version dir',
+    );
+    assert.ok(
+      !existsSync(join(marketplace, 'telemetry')),
+      'no telemetry sibling in the version parent — codex resolves that stray as the plugin version and stops loading the plugin',
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

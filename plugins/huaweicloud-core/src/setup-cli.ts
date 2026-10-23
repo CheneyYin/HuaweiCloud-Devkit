@@ -1492,7 +1492,7 @@ function hasCodexCLI(): boolean {
 // stray 'telemetry' sibling then wins codex's version-dir scan — `codex
 // plugin list` reports version "telemetry" and no session loads the plugin's
 // manifest or .mcp.json. Only entries this allowlist proves ours are swept;
-// anything else is left untouched with a warning.
+// anything else is left untouched with a warning that names the consequence.
 const CODEX_TELEMETRY_STAMP_FILES = new Set([
   'install-stamp',
   'install-counter',
@@ -1515,18 +1515,32 @@ function sweepCodexCacheTelemetrySibling(): void {
   if (!existsSync(stray)) return;
   try {
     const entries = readdirSync(stray);
-    const provablyOurs =
-      entries.length > 0 &&
-      entries.every((name) => CODEX_TELEMETRY_STAMP_FILES.has(name) && statSync(join(stray, name)).isFile());
+    // An EMPTY dir is swept unconditionally: it is ours by location (this
+    // path is scoped to our own marketplace/plugin cache namespace, where
+    // codex only ever creates version-named dirs; an empty dir there has
+    // no content to lose and poisons codex's version scan exactly like a
+    // full one). entries.every is vacuously true for it — and that shape is
+    // reachable from a crashed prior sweep (rmSync deleting entries, then
+    // killed before the dir), so requiring non-emptiness would permanently
+    // disable the healing for that cache.
+    const provablyOurs = entries.every(
+      (name) => CODEX_TELEMETRY_STAMP_FILES.has(name) && statSync(join(stray, name)).isFile(),
+    );
     if (!provablyOurs) {
-      console.log(`  \x1b[33mStray telemetry dir left untouched (unrecognized content): ${stray}\x1b[0m`);
+      console.log(
+        `  \x1b[33mPre-fix telemetry sibling present but not provably ours — codex cannot load the plugin while it exists.\x1b[0m`,
+      );
+      console.log(`  \x1b[33mInspect and remove it manually: rm -rf "${stray}"\x1b[0m`);
       return;
     }
     rmSync(stray, { recursive: true, force: true });
     console.log(`  Healed pre-fix telemetry sibling: ${stray}`);
   } catch {
-    // unreadable content is not provably ours; leave it and let the warning path speak
-    console.log(`  \x1b[33mStray telemetry dir left untouched (unreadable): ${stray}\x1b[0m`);
+    // unreadable content is not provably ours; leave it and say what that means
+    console.log(
+      `  \x1b[33mPre-fix telemetry sibling present but unreadable — codex cannot load the plugin while it exists.\x1b[0m`,
+    );
+    console.log(`  \x1b[33mInspect and remove it manually: rm -rf "${stray}"\x1b[0m`);
   }
 }
 
