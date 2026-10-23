@@ -1052,6 +1052,44 @@ test('huawei-sandbox routes the PostgREST full-stack to references/fullstack-pos
   assert.match(ref, /db-anon-role/); // anon role gates writes
 });
 
+test('huawei-sandbox carries the Stack-Selection Gate (workbench ⇒ PostgREST default) (#1021)', () => {
+  const skill = readFileSync(join(pluginRoot, 'skills', 'huawei-sandbox', 'SKILL.md'), 'utf8');
+
+  // The gate must exist as a top-level section between the Target-Selection
+  // Gate and the Overview — not buried as a conditional branch inside the
+  // Web Application Deployment section.
+  const gateStart = skill.indexOf('## Stack-Selection Gate');
+  assert.ok(gateStart !== -1, 'Stack-Selection Gate section missing');
+  const targetGate = skill.indexOf('## Target-Selection Gate');
+  const overview = skill.indexOf('## Overview');
+  assert.ok(targetGate !== -1 && targetGate < gateStart, 'Stack-Selection Gate must follow the Target-Selection Gate');
+  assert.ok(overview !== -1 && gateStart < overview, 'Stack-Selection Gate must precede the Overview');
+
+  const nextHeading = skill.indexOf('\n## ', gateStart + 1);
+  const gate = nextHeading === -1 ? skill.slice(gateStart) : skill.slice(gateStart, nextHeading);
+  assert.match(
+    gate,
+    /MUST treat it as a\s+(\*\*)?full-stack workbench deployment/,
+    'gate must force the full-stack classification',
+  );
+  assert.match(gate, /defaults to \*\*PostgreSQL \+ PostgREST\*\*/, 'gate must state the PostgREST default');
+  assert.match(gate, /`question` tool/, 'gate must mandate the question tool for ambiguous backends');
+  assert.match(gate, /NEVER infer or default the stack to SPA/, 'gate must carry the never-default-to-SPA hard rule');
+  assert.match(gate, /Pre-code checkpoint/, 'gate must carry the pre-code checkpoint');
+  assert.match(
+    gate,
+    /fullstack-postgrest\.md|Full-Stack: REST API over PostgreSQL/,
+    'gate must route to the full-stack procedure',
+  );
+
+  // Trigger words in the frontmatter description so the model hits the skill
+  // on workbench-shaped requests without postgres/数据库 keywords.
+  assert.match(skill, /工作台, workbench, full-stack, 全栈, CRUD 应用, database-backed REST API, PostgREST, postgres/);
+
+  // The workflow carries the stack gate as an explicit step before any code upload.
+  assert.match(skill, /Step 0\.5 — Stack-Selection Gate/, 'workflow must sequence the stack gate before code upload');
+});
+
 test('fullstack-postgrest.md carries the 2026-10 retest field notes (#1016)', () => {
   const ref = readFileSync(
     join(pluginRoot, 'skills', 'huawei-sandbox', 'references', 'fullstack-postgrest.md'),

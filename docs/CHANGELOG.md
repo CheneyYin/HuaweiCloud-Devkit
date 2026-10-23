@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- feat(sandbox): Stack-Selection Gate in huawei-sandbox — 工作台/workbench/全栈/CRUD requests are classified as full-stack workbench deployments (PostgreSQL + PostgREST default) with a pre-code checkpoint that redirects SPA-only starts; frontmatter trigger words widened (#1021)
+
 ## 1.1.12-next.0 (2026-10-22)
 
 - chore: set version override to 1.1.12 for next preview release
