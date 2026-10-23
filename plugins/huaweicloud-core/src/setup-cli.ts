@@ -1010,15 +1010,6 @@ type DeployMode = 'install' | 'update';
 
 const deployWord = (mode: DeployMode): string => (mode === 'update' ? ' updated' : '');
 
-// The update-mode .installed marker. Install mode gets its marker from
-// runInstallStep at the command level, so only the deploy pipelines' update
-// paths write it themselves (dsh writes it in both modes, matching its
-// pre-unification behavior).
-function writeInstalledMarker(pluginDest: string): void {
-  mkdirSync(pluginDest, { recursive: true });
-  writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
-}
-
 async function deployOpenCode(mode: DeployMode): Promise<void> {
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
   const pluginSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'hooks', 'skill-tracker.js');
@@ -1035,7 +1026,7 @@ async function deployOpenCode(mode: DeployMode): Promise<void> {
   copyFileSync(pluginSrc, join(opcPlugins, 'skill-tracker.js'));
   console.log(`  Plugin${deployWord(mode)} -> ${opcPlugins}`);
   updateOpenCodeConfig(pluginDest);
-  if (mode === 'update') writeInstalledMarker(pluginDest);
+
   installRuntimeDeps(pluginDest);
 }
 
@@ -1168,7 +1159,6 @@ async function deployOpenClaw(mode: DeployMode): Promise<void> {
 
   writeMcpJsonAndCodexManifest(pluginDest, 'openclaw', mode);
 
-  if (mode === 'update') writeInstalledMarker(pluginDest);
   installRuntimeDeps(pluginDest);
 }
 
@@ -1235,7 +1225,6 @@ async function deployCodexDesktop(mode: DeployMode): Promise<void> {
     }
   }
 
-  if (mode === 'update') writeInstalledMarker(pluginDest);
   installRuntimeDeps(pluginDest);
 }
 
@@ -1368,7 +1357,7 @@ async function deployCodeArts(mode: DeployMode): Promise<void> {
 
   registerCodeartsMcp(codeartsMcpSettingsFile());
   registerCodeartsMcp(codeartsProjectMcpSettingsFile());
-  if (mode === 'update') writeInstalledMarker(pluginDest);
+
   installRuntimeDeps(pluginDest);
 }
 
@@ -1498,7 +1487,7 @@ async function deployCodeArtsWork(mode: DeployMode): Promise<void> {
 
   copyServerPayload(pluginDest);
   registerCodeartsWorkMcp();
-  if (mode === 'update') writeInstalledMarker(pluginDest);
+
   installRuntimeDeps(pluginDest);
 }
 
@@ -1690,7 +1679,7 @@ async function deployWorkBuddy(mode: DeployMode): Promise<void> {
 
   copyServerPayload(pluginDest);
   ensureWorkbuddyMcpConfig();
-  if (mode === 'update') writeInstalledMarker(pluginDest);
+
   installRuntimeDeps(pluginDest);
 
   // Deploy hook-based telemetry and safety hooks
@@ -1794,7 +1783,7 @@ async function deployAtomCode(mode: DeployMode): Promise<void> {
   copyServerPayload(pluginDest);
   ensureAtomcodeMcpConfig();
   deployAtomcodeHooks();
-  if (mode === 'update') writeInstalledMarker(pluginDest);
+
   installRuntimeDeps(pluginDest);
 }
 
@@ -2079,7 +2068,6 @@ async function deployDsh(mode: DeployMode): Promise<void> {
   ensureDshMcpPatch();
   tryInstallDshMcpClient();
   installRuntimeDeps(pluginDest);
-  writeInstalledMarker(pluginDest);
 }
 
 function uninstallDsh(): void {
@@ -2186,8 +2174,6 @@ async function updateOfficeAce(): Promise<void> {
   removeOfficeaceSkillCapabilities();
   const resolvedRoot = officeaceCapabilitiesDir();
   if (resolvedRoot) writeOfficeaceRootMarker(resolvedRoot);
-  mkdirSync(pluginDest, { recursive: true });
-  writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
 }
 
 function uninstallOfficeAce(): void {
@@ -2658,7 +2644,7 @@ async function deployHermes(mode: DeployMode): Promise<void> {
   ensureHermesHooksConfig();
   ensureHermesHookAllowlist();
   ensureHermesHookPlugin();
-  if (mode === 'update') writeInstalledMarker(pluginDest);
+
   if (!skipMcp) installRuntimeDeps(pluginDest);
   if (!skipMcp) ensureHermesMcpSdk();
 }
@@ -3088,6 +3074,13 @@ function installMarkerDirForTarget(target: string): string | null {
   return PAYLOAD_TARGETS.find((t) => t.id === target)?.dir() ?? null;
 }
 
+// The .installed marker, owned by the command layer in BOTH modes:
+// runInstallStep writes it after a successful install step, the update
+// dispatch writes it after a successful row.update(). Deploy pipelines never
+// write it themselves — a failed deploy (e.g. installRuntimeDeps throwing on
+// a network failure) leaves no marker, so doctor's restart hint never fires
+// for a half-installed target. dsh and officeace historically wrote it
+// mid-deploy; their internal writes are gone in favor of this single owner.
 function writeInstallMarker(target: string): void {
   const markerDir = installMarkerDirForTarget(target);
   if (!markerDir) return;
@@ -4966,6 +4959,7 @@ async function dispatchUpdateTarget(target: string): Promise<boolean> {
     console.log(`${all && row.id !== 'opencode' ? '\n' : ''}[${row.label}]`);
     await row.update();
     syncNativeSkillsForTarget(row.id);
+    writeInstallMarker(row.id);
     updatedAny = true;
     if (!all) {
       console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
