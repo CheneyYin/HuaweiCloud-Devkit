@@ -4211,7 +4211,7 @@ function cleanupNativeDirs(): number {
 }
 
 function removeOwnedSkillsFrom(dir: string): number {
-  return removeOwnedSkillsFromIn(dir, nativeSyncDirs());
+  return removeOwnedSkillsFromIn(dir, nativeSyncDirs(), dshSkillsDir());
 }
 
 async function cmdDoctor(): Promise<void> {

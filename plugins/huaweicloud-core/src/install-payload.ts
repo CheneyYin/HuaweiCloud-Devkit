@@ -23,7 +23,6 @@ import {
 } from './lib/native-receipt.ts';
 import { parseCoreSkillNames, parseSkillManifest } from './lib/skill-manifest.ts';
 import { listSkillDirs } from './lib/skill-tree.ts';
-import { dshSkillsDir } from './targets.ts';
 
 // The installer's payload machinery: the file operations every per-agent
 // deploy shares, the server payload (dist + safety + skills) placement, and
@@ -473,7 +472,7 @@ export function cleanupNativeDirs(rows: readonly NativeSyncRow[], foreignScanDir
 // A corrupt receipt cannot yield remembered names; its possible
 // retired-name leftovers are listed in a warning instead of deleted (they
 // may be user content in the huaweiicloud- namespace, which must survive).
-export function removeOwnedSkillsFrom(dir: string, syncDirs: Set<string>): number {
+export function removeOwnedSkillsFrom(dir: string, syncDirs: Set<string>, marketplaceNativeDir: string): number {
   if (!existsSync(dir)) return 0;
   // Crash residue is never maintainer-owned content: the sweep runs before
   // any attribution return, age-gated so a concurrent live writer's
@@ -482,15 +481,17 @@ export function removeOwnedSkillsFrom(dir: string, syncDirs: Set<string>): numbe
   const owned = devkitOwnedSkillNames();
   const receipt = readNativeReceipt(dir);
   // Dir-gated to the writer: only the marketplace postinstall writes
-  // package-root receipts, and it writes exclusively the DSH native dir —
-  // a package-root receipt anywhere else is hand-copied and earns nothing,
-  // the same invariant doctor enforces. Liveness: the postinstall died
-  // with the package when npm removed it; a root that no longer carries
-  // the payload tree (or was never recorded) cannot protect anything —
-  // fall through to normal removal. Multiple DSH profiles share the dir
-  // with per-profile roots (last writer wins): the probe sees only the
-  // recorded root, a known limitation.
-  if (receipt?.kind === 'ok' && receipt.receipt.layout === 'package-root' && dir === dshSkillsDir()) {
+  // package-root receipts, and it writes exclusively the one native dir the
+  // caller names (the DSH marketplace layout's dir, passed by the dispatch
+  // layer so this module stays target-agnostic) — a package-root receipt
+  // anywhere else is hand-copied and earns nothing, the same invariant
+  // doctor enforces. Liveness: the postinstall died with the package when
+  // npm removed it; a root that no longer carries the payload tree (or was
+  // never recorded) cannot protect anything — fall through to normal
+  // removal. Multiple DSH profiles share the dir with per-profile roots
+  // (last writer wins): the probe sees only the recorded root, a known
+  // limitation.
+  if (receipt?.kind === 'ok' && receipt.receipt.layout === 'package-root' && dir === marketplaceNativeDir) {
     const live =
       receipt.receipt.packageRoot !== undefined && existsSync(marketplacePayloadTree(receipt.receipt.packageRoot));
     if (live) {
