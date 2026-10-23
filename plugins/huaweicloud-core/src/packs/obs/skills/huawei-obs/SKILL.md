@@ -1,6 +1,6 @@
 ---
 name: huawei-obs
-description: 'Use when creating, configuring, or managing OBS buckets and objects on Huawei Cloud. Covers bucket creation, lifecycle policies, versioning, static website hosting, CORS, access control (IAM/bucket policy/ACL), cross-region replication, event notifications, and presigned URLs. Triggers on: OBS, bucket, object storage, lifecycle, versioning, static website, CORS, presigned, replication. NOT for: EVS block storage (use huawei-ecs), SFS file storage, CBR backup (use huawei-cbr).'
+description: 'Use when creating, configuring, or managing OBS buckets and objects on Huawei Cloud. Covers bucket creation, lifecycle policies, versioning, static website hosting, CORS, access control (IAM/bucket policy/ACL), cross-region replication, event notifications, and presigned URLs. Triggers on: OBS, bucket, object storage, lifecycle, versioning, static website, CORS, presigned, replication, 浏览器直传, browser direct upload, 预签名上传, 直传 OBS. NOT for: EVS block storage (use huawei-ecs), SFS file storage, CBR backup (use huawei-cbr).'
 version: 1
 ---
 
@@ -62,21 +62,21 @@ hcloud OBS config -e=<endpoint> -i=<AK> -k=<SK> -t=token
 
 ## Common Workflows
 
-| Task                         | Command                                                                                                                                        |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Create bucket                | `hcloud OBS mb obs://<bucket> -location=<region>`                                                                                              |
-| List buckets/objects         | `hcloud OBS ls [obs://<bucket>]`                                                                                                               |
-| Upload file                  | `hcloud OBS cp <file> obs://<bucket>/<key>`                                                                                                    |
-| Upload directory (recursive) | `hcloud OBS cp <dir>/ obs://<bucket>/ -r -f -flat`                                                                                             |
-| Download object              | `hcloud OBS cp obs://<bucket>/<key> <local-path>`                                                                                              |
-| Set bucket ACL               | `hcloud OBS chattri obs://<bucket> -acl=public-read`                                                                                           |
-| Set object ACL               | `hcloud OBS chattri obs://<bucket>/<key> -acl=public-read`                                                                                     | Bucket ACL does NOT cascade — anonymous reads need both |
-| Set lifecycle                | `hcloud OBS lifecycle obs://<bucket> -method=put -localfile=<json>`                                                                            |
-| Set bucket policy            | `hcloud OBS bucketpolicy obs://<bucket> -method=put -localfile=<json>`                                                                         |
-| Set CORS                     | KooCLI 7.3.12+ has `hcloud OBS cors obs://<bucket> -method=put -localfile=<xml>` (XML-file based); or use API/SDK (`SetBucketCors`) or console |
-| Delete bucket                | `hcloud OBS rm obs://<bucket> -r` (must be empty)                                                                                              |
-| Presigned URL                | `hcloud OBS sign obs://<bucket>/<key> -e=<seconds>`                                                                                            |
-| Object metadata              | `hcloud OBS stat obs://<bucket>/<key>`                                                                                                         |
+| Task                         | Command                                                                                                                                                                                                                                                         |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Create bucket                | `hcloud OBS mb obs://<bucket> -location=<region>`                                                                                                                                                                                                               |
+| List buckets/objects         | `hcloud OBS ls [obs://<bucket>]`                                                                                                                                                                                                                                |
+| Upload file                  | `hcloud OBS cp <file> obs://<bucket>/<key>`                                                                                                                                                                                                                     |
+| Upload directory (recursive) | `hcloud OBS cp <dir>/ obs://<bucket>/ -r -f -flat`                                                                                                                                                                                                              |
+| Download object              | `hcloud OBS cp obs://<bucket>/<key> <local-path>`                                                                                                                                                                                                               |
+| Set bucket ACL               | `hcloud OBS chattri obs://<bucket> -acl=public-read`                                                                                                                                                                                                            |
+| Set object ACL               | `hcloud OBS chattri obs://<bucket>/<key> -acl=public-read`                                                                                                                                                                                                      | Bucket ACL does NOT cascade — anonymous reads need both |
+| Set lifecycle                | `hcloud OBS lifecycle obs://<bucket> -method=put -localfile=<json>`                                                                                                                                                                                             |
+| Set bucket policy            | `hcloud OBS bucketpolicy obs://<bucket> -method=put -localfile=<json>`                                                                                                                                                                                          |
+| Set CORS                     | `huaweicloud_obs_set_cors` (set/get/delete, 推荐 — AWS4-signed `PUT /?cors` internally, no XML file needed); KooCLI 7.3.12+ has `hcloud OBS cors obs://<bucket> -method=put -localfile=<xml>` (XML-file based; 7.2.x 无此命令). allowedMethod MUST include HEAD |
+| Delete bucket                | `hcloud OBS rm obs://<bucket> -r` (must be empty)                                                                                                                                                                                                               |
+| Presigned URL                | `hcloud OBS sign obs://<bucket>/<key> -e=<seconds>`                                                                                                                                                                                                             |
+| Object metadata              | `hcloud OBS stat obs://<bucket>/<key>`                                                                                                                                                                                                                          |
 
 ## Static Website Deployment Workflow
 
@@ -132,3 +132,4 @@ See `references/single-file-share.md` for the full workflow to host one file and
 - Single-file share: references/single-file-share.md
 - Lifecycle: references/bucket-lifecycle.md
 - Common pitfalls (#899 Content-Disposition trap, obsutil metadata case): references/common-pitfalls.md
+- Browser direct upload & CORS (#992 BrowserJS SDK traps): references/common-pitfalls.md

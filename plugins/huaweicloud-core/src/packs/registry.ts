@@ -50,6 +50,7 @@ export const PACK_OF = {
   huaweicloud_detect_framework: 'discovery',
   huaweicloud_setup_obs_config: 'obs',
   huaweicloud_obs_set_website_config: 'obs',
+  huaweicloud_obs_set_cors: 'obs',
   huaweicloud_auth_status: 'auth',
   huaweicloud_auth_sync: 'auth',
   huaweicloud_auth_init: 'auth',

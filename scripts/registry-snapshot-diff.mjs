@@ -35,6 +35,7 @@ const EXEMPT_TOOLS = new Set([
   'huaweicloud_secret_delete',
   'huaweicloud_competition_voucher_claim',
   'huaweicloud_sandbox_expose_tunnel',
+  'huaweicloud_obs_set_cors',
 ]);
 
 // Declared, intentional drifts from the legacy literals. Each entry names the

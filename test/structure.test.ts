@@ -597,7 +597,11 @@ test('KooCLI 7.3.12 pin: the OBS website/cors capability claims are current, not
   // The bump swept the pre-7.3.12 "KooCLI OBS lacks website config" family out of
   // the skills — this guard keeps it out (the exact intra-file half-drift mode a
   // copy pass would reintroduce) and pins the new teaching on the hot surfaces.
-  const staleClaim = /KooCLI OBS does NOT support this|obsutil has no website command|lacks website config/;
+  // U0-informed: the cors phrasings main actually ships (its 7.2.x-measured
+  // claim) must not survive a copy pass — the pinned 7.3.12 live-serves the
+  // cors subcommand; the dual-path doctrine is the only true teaching.
+  const staleClaim =
+    /KooCLI OBS does NOT support this|obsutil has no website command|lacks website config|未暴露 obsutil 的 .?cors.? 子命令|has no cors subcommand|不支持 cors 子命令/;
   const surfaces = [
     join(pluginRoot, 'src', 'packs', 'obs', 'skills', 'huawei-obs', 'SKILL.md'),
     join(pluginRoot, 'src', 'packs', 'obs', 'skills', 'huawei-obs', 'references', 'static-website.md'),
@@ -2659,7 +2663,7 @@ test('eight packs register their tools; the central map dispatches them', () => 
   const packs = [
     { id: 'sandbox', tools: SANDBOX_TOOLS, count: 12 },
     { id: 'auth', tools: AUTH_TOOLS, count: 5 },
-    { id: 'obs', tools: OBS_TOOLS, count: 2 },
+    { id: 'obs', tools: OBS_TOOLS, count: 3 },
     { id: 'voucher', tools: VOUCHER_TOOLS, count: 3 },
     { id: 'discovery', tools: DISCOVERY_TOOLS, count: 3 },
     { id: 'huaweicloud-open-mcp', tools: HUAWEICLOUD_OPEN_MCP_TOOLS, count: 3 },
