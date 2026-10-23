@@ -47,6 +47,13 @@ export interface ExposeTunnelResult {
   error_code?: string;
   version?: string;
   remediation?: string;
+  keepalive?: {
+    enrolled: boolean;
+    tunnelCount: number | undefined;
+    watchdogPid: string | undefined;
+    logPath: string | undefined;
+    error: string | undefined;
+  };
   attempts?: Record<string, string>;
   hint?: string;
   loginOutput?: string;
@@ -490,6 +497,294 @@ export function validateTunnelPort(port: unknown): number {
   return n;
 }
 
+// Upper bound of devbridge's -e expiry, in hours (measured 2026-10: `-e 720` is
+// accepted and sets expiration = now + 2592001s; larger values are rejected).
+export const DEVBRIDGE_MAX_EXPIRY_HOURS = 720;
+
+// Default renewal horizon for renewTunnel / the keepalive watchdog: 720h gives a
+// 29-day window of tolerance if renewal ever stops firing.
+export const DEVBRIDGE_RENEW_HOURS = 720;
+
+// Validate and clamp a -e expiry value destined for shell interpolation in
+// `devbridge host -p <port> -e <hours>` / `devbridge update <id> -e <hours>`.
+// devbridge accepts 1..720 (30 days); anything else is rejected or clipped by
+// the gateway, so fail fast here instead of surfacing a misleading expiry.
+export function validateExpiryHours(hours: unknown): number {
+  const n = Number(hours);
+  if (!Number.isSafeInteger(n) || n < 1 || n > DEVBRIDGE_MAX_EXPIRY_HOURS) {
+    throw new Error(
+      `sandbox tunnel expiry: invalid expiry_hours ${JSON.stringify(hours)}. Expected an integer between 1 and ${DEVBRIDGE_MAX_EXPIRY_HOURS} (720 = the devbridge 30-day maximum).`,
+    );
+  }
+  return n;
+}
+
+// Validate a DevBridge tunnel ID destined for shell interpolation in
+// `devbridge update <id>` / `devbridge host <id>` / pgrep patterns. IDs are
+// short lowercase base36 tokens (e.g. nv2dvv6w, kag7rozs); the strict charset
+// keeps shell metacharacters out of the splice.
+export function validateTunnelId(tunnelId: unknown): string {
+  const id = asText(tunnelId ?? '');
+  if (!/^[A-Za-z0-9_-]{4,32}$/.test(id)) {
+    throw new Error(
+      `sandbox tunnel: invalid tunnel_id ${JSON.stringify(id.slice(0, 40))}. Expected the short ID from huaweicloud_sandbox_expose_tunnel's "tunnelId" field (URL-safe characters only).`,
+    );
+  }
+  return id;
+}
+
+// Build the script that renews a tunnel's lifetime: `devbridge update <id> -e
+// <hours>`. The expiry is a ROLLING WINDOW (measured 2026-10: renewal sets
+// expiration = now + hours regardless of remaining time, so renewing before
+// expiry keeps the same URL alive indefinitely). The absolute expiration
+// (tunnelExpiration, Unix seconds) is surfaced via show -v so callers get a
+// verifiable timestamp instead of a bare exit code.
+export function buildDevbridgeRenewScript(tunnelId: unknown, expiryHours: unknown = DEVBRIDGE_RENEW_HOURS): string {
+  const id = validateTunnelId(tunnelId);
+  const hours = validateExpiryHours(expiryHours);
+  return [
+    // #999: data-disk-first PATH (the surviving binary location).
+    `export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"`,
+    `devbridge update ${id} -e ${hours} > /tmp/db-renew-update.log 2>&1`,
+    `DB_RENEW_EXIT=$?`,
+    `DB_RENEW_ERROR=$(head -1 /tmp/db-renew-update.log 2>/dev/null)`,
+    `rm -f /tmp/db-renew-update.log`,
+    `DB_EXPIRATION=$(devbridge show ${id} -v 2>&1 | grep -oE 'tunnelExpiration[^0-9]+[0-9]+' | grep -oE '[0-9]+' | head -1)`,
+    `echo "DB_RENEW_EXIT=$DB_RENEW_EXIT"`,
+    `echo "DB_RENEW_ID=${id}"`,
+    `echo "DB_RENEW_HOURS=${hours}"`,
+    `echo "DB_EXPIRATION=$DB_EXPIRATION"`,
+    `echo "DB_RENEW_ERROR=$DB_RENEW_ERROR"`,
+  ].join('\n');
+}
+
+export interface RenewTunnelResult {
+  ok: boolean;
+  tunnelId: string;
+  renewedForHours: number | undefined;
+  expirationUnix: number | undefined;
+  expiresAt: string | undefined;
+  error: string | undefined;
+}
+
+// Parse the raw stdout of buildDevbridgeRenewScript into structured fields.
+// A renewal is ok only when the update exit code is 0 AND show -v reports the
+// absolute tunnelExpiration — the management plane can lose a tunnel's record
+// (10002 "tunnel not found") while the data plane keeps serving, which a bare
+// exit-code check would misread as success on the old process alone.
+export function parseDevbridgeRenewOutput(stdout: unknown): RenewTunnelResult {
+  const text = stripTerminalEscapes(stdout);
+  const getField = (key: string): string => {
+    const m = text.match(new RegExp(`^${key}=(.*)$`, 'm'));
+    return m ? (m[1] ?? '').trim() : '';
+  };
+  const renewExit = getField('DB_RENEW_EXIT');
+  const expirationUnix = Number(getField('DB_EXPIRATION')) || undefined;
+  const ok = renewExit === '0' && expirationUnix !== undefined;
+  const expiration = expirationUnix !== undefined ? new Date(expirationUnix * 1000).toISOString() : undefined;
+  return {
+    ok,
+    tunnelId: getField('DB_RENEW_ID'),
+    renewedForHours: Number(getField('DB_RENEW_HOURS')) || undefined,
+    expirationUnix,
+    expiresAt: expiration,
+    error: ok ? undefined : getField('DB_RENEW_ERROR') || `renewal failed (exit ${renewExit || 'unknown'})`,
+  };
+}
+
+// Renew a tunnel's lifetime via `devbridge update <id> -e <hours>`. Returns ok,
+// tunnelId, expiresAt (absolute ISO timestamp), renewedForHours. The URL does
+// not change — renewal only extends the lifetime of the existing tunnel ID.
+export async function renewTunnel(
+  workspaceId: string,
+  { tunnelId, expiryHours }: { tunnelId?: unknown; expiryHours?: unknown },
+  username = 'root',
+  timeoutMs = 60000,
+): Promise<RenewTunnelResult> {
+  if (!workspaceId) {
+    throw new Error('sandbox renew tunnel: workspace_id is required.');
+  }
+  const script = buildDevbridgeRenewScript(tunnelId, expiryHours);
+  const result = await runOneShot(workspaceId, script, username, timeoutMs);
+  return parseDevbridgeRenewOutput(result.stdout);
+}
+
+export interface KeepaliveTunnel {
+  tunnelId: string;
+  url: string;
+}
+
+// Build the keepalive watchdog script for a set of known tunnels (the
+// three-layer pattern proven in the 2026-10 tunnel-persistence test):
+//   1. host watchdog — re-attach with `devbridge host <id>` when the host
+//      process dies; the URL is bound to the tunnel ID, so it never changes
+//   2. daily renewal — `devbridge update <id> -e 720` (29-day failure tolerance)
+//   3. health check — curl each URL every 5 minutes, log on non-200/304
+// URLs are HARDCODED per tunnel (tunnel IDs never change), NOT derived from
+// `devbridge port list` — that table's lines are wrapped in OSC escapes on
+// integration-enabled shells, so anchored greps silently fail and the
+// constructed health URL 404s (measured 2026-10).
+// v2 divergences from main's script (recorded): the PATH export is
+// data-disk-first (#999), and the health-check curl carries --noproxy '*'
+// (#1000 — main's own keepalive missed it; without it the watchdog logs WARN
+// 502/404 fakes for healthy tunnels).
+export function buildDevbridgeKeepaliveScript(tunnels: unknown): string {
+  if (!Array.isArray(tunnels) || tunnels.length === 0) {
+    throw new Error('sandbox keepalive: tunnels must be a non-empty array of {tunnelId, url}.');
+  }
+  const entries = (tunnels as Array<Record<string, unknown>>)
+    .map((t) => `${validateTunnelId(t?.tunnelId)}:${asText(t?.url ?? '')}`)
+    .map((entry) => {
+      const url = entry.slice(entry.indexOf(':') + 1);
+      if (!/^https:\/\/[A-Za-z0-9:._/-]+$/.test(url)) {
+        throw new Error(
+          `sandbox keepalive: invalid tunnel URL ${JSON.stringify(url.slice(0, 80))} for the keepalive health check. Expected an https:// URL with URL-safe characters (from huaweicloud_sandbox_expose_tunnel's publicUrl).`,
+        );
+      }
+      return entry;
+    })
+    .join(' ');
+  // Heredoc is single-quoted ('DB_KEEPALIVE_EOF') so the writer shell expands
+  // nothing; all ${...} expansion happens inside the watchdog at runtime.
+  const body = [
+    `#!/bin/bash`,
+    `export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"`,
+    `# entries: tunnelId:url (URLs are stable — tunnel IDs never change)`,
+    `TUNNELS="${entries}"`,
+    `declare -A LAST_RENEW`,
+    `while true; do`,
+    `  NOW=$(date -u +%s)`,
+    `  TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)`,
+    `  for entry in $TUNNELS; do`,
+    `    ID="\${entry%%:*}"; URL="\${entry#*:}"`,
+    `    if ! pgrep -f "devbridge host $ID" > /dev/null 2>&1; then`,
+    `      if command -v setsid > /dev/null 2>&1; then setsid nohup devbridge host "$ID" > "/tmp/host-$ID.log" 2>&1 < /dev/null & else nohup devbridge host "$ID" > "/tmp/host-$ID.log" 2>&1 < /dev/null & fi`,
+    `      echo "$TS host $ID restarted (same tunnel, URL unchanged)" >> /tmp/tunnel-keepalive.log`,
+    `      sleep 8`,
+    `    fi`,
+    `    if [ $((\${LAST_RENEW[$ID]:-0})) -eq 0 ] || [ $((NOW - \${LAST_RENEW[$ID]})) -ge 86400 ]; then`,
+    `      if devbridge update "$ID" -e ${DEVBRIDGE_RENEW_HOURS} > /tmp/keepalive-last-update.log 2>&1; then`,
+    `        echo "$TS renew $ID ok (${DEVBRIDGE_RENEW_HOURS}h)" >> /tmp/tunnel-keepalive.log`,
+    `      else`,
+    `        echo "$TS renew $ID FAILED: $(head -1 /tmp/keepalive-last-update.log)" >> /tmp/tunnel-keepalive.log`,
+    `      fi`,
+    `      LAST_RENEW[$ID]=$NOW`,
+    `    fi`,
+    `    HC=$(curl -s --noproxy '*' -o /dev/null -w "%{http_code}" --max-time 10 "$URL/" 2>/dev/null)`,
+    `    if [ "$HC" != "200" ] && [ "$HC" != "304" ]; then`,
+    `      echo "$TS health $ID WARN http=$HC" >> /tmp/tunnel-keepalive.log`,
+    `    fi`,
+    `  done`,
+    `  sleep 300`,
+    `done`,
+  ].join('\n');
+  return [
+    `export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"`,
+    `pkill -f "tunnel-keepalive.sh" 2>/dev/null || true`,
+    `sleep 1`,
+    `cat > /tmp/tunnel-keepalive.sh << 'DB_KEEPALIVE_EOF'`,
+    body,
+    `DB_KEEPALIVE_EOF`,
+    `chmod +x /tmp/tunnel-keepalive.sh`,
+    `bash -n /tmp/tunnel-keepalive.sh > /dev/null 2>&1`,
+    `echo "DB_KEEPALIVE_SYNTAX=$?"`,
+    `if command -v setsid > /dev/null 2>&1; then setsid nohup /tmp/tunnel-keepalive.sh > /dev/null 2>&1 < /dev/null & else nohup /tmp/tunnel-keepalive.sh > /dev/null 2>&1 < /dev/null & fi`,
+    `disown 2>/dev/null || true`,
+    `sleep 3`,
+    `echo "DB_KEEPALIVE_PID=$(pgrep -f 'tunnel-keepalive.sh' | head -1)"`,
+    `echo "DB_KEEPALIVE_LOG=/tmp/tunnel-keepalive.log"`,
+  ].join('\n');
+}
+
+// Read the tunnel list of the INSTALLED watchdog (if any). The TUNNELS line in
+// /tmp/tunnel-keepalive.sh is the single source of truth for what is currently
+// protected; expose_tunnel reads it before installing so the new tunnel is
+// MERGED into the existing protection instead of replacing it.
+export function buildKeepaliveTunnelsReadScript(): string {
+  return [
+    `LINE=$(grep -m1 '^TUNNELS=' /tmp/tunnel-keepalive.sh 2>/dev/null | sed 's/^TUNNELS=//; s/^"//; s/"$//')`,
+    `echo "DB_KEEPALIVE_TUNNELS=$LINE"`,
+  ].join('\n');
+}
+
+// Parse the raw stdout of buildKeepaliveTunnelsReadScript. Empty output (no
+// watchdog installed yet) yields [].
+export function parseKeepaliveTunnelsOutput(stdout: unknown): KeepaliveTunnel[] {
+  const text = stripTerminalEscapes(stdout);
+  const m = text.match(/^DB_KEEPALIVE_TUNNELS=(.*)$/m);
+  const line = m ? (m[1] ?? '').trim() : '';
+  if (!line) return [];
+  return line
+    .split(/\s+/)
+    .map((entry) => {
+      const i = entry.indexOf(':');
+      return i > 0 ? { tunnelId: entry.slice(0, i), url: entry.slice(i + 1) } : null;
+    })
+    .filter((t): t is KeepaliveTunnel => t !== null);
+}
+
+// Merge the current watchdog tunnels with the incoming ones: dedupe by
+// tunnelId, incoming wins (same tunnel re-exposed refreshes its URL), existing
+// order preserved, new tunnels appended.
+export function mergeKeepaliveTunnels(existing: unknown, incoming: unknown): KeepaliveTunnel[] {
+  const byId = new Map<string, KeepaliveTunnel>();
+  for (const t of (Array.isArray(existing) ? existing : []) as Array<Record<string, unknown>>) {
+    if (t?.tunnelId && t?.url) byId.set(asText(t.tunnelId), { tunnelId: asText(t.tunnelId), url: asText(t.url) });
+  }
+  for (const t of (Array.isArray(incoming) ? incoming : []) as Array<Record<string, unknown>>) {
+    if (t?.tunnelId && t?.url) byId.set(asText(t.tunnelId), { tunnelId: asText(t.tunnelId), url: asText(t.url) });
+  }
+  return [...byId.values()];
+}
+
+export interface KeepaliveWatchdogResult {
+  ok: boolean;
+  scriptPath?: string;
+  logPath?: string;
+  watchdogPid?: string;
+  tunnels?: KeepaliveTunnel[];
+  error?: string;
+}
+
+// Install the keepalive watchdog in the sandbox. Validates every tunnel ID and
+// URL before splicing, aborts on a bash syntax error (DB_KEEPALIVE_SYNTAX != 0),
+// and reports the watchdog PID. Replacing the watchdog (re-running the tool)
+// kills the old loop first so two loops never double-renew.
+export async function installKeepaliveWatchdog(
+  workspaceId: string,
+  { tunnels }: { tunnels: unknown },
+  username = 'root',
+  timeoutMs = 60000,
+): Promise<KeepaliveWatchdogResult> {
+  if (!workspaceId) {
+    throw new Error('sandbox keepalive: workspace_id is required.');
+  }
+  const script = buildDevbridgeKeepaliveScript(tunnels);
+  const result = await runOneShot(workspaceId, script, username, timeoutMs);
+  const text = stripTerminalEscapes(result.stdout);
+  const getField = (key: string): string => {
+    const m = text.match(new RegExp(`^${key}=(.*)$`, 'm'));
+    return m ? (m[1] ?? '').trim() : '';
+  };
+  const syntax = getField('DB_KEEPALIVE_SYNTAX');
+  if (syntax !== '0') {
+    return {
+      ok: false,
+      error: `keepalive watchdog script failed the bash -n syntax check (exit ${syntax || 'unknown'}).`,
+    };
+  }
+  return {
+    ok: true,
+    scriptPath: '/tmp/tunnel-keepalive.sh',
+    logPath: getField('DB_KEEPALIVE_LOG') || '/tmp/tunnel-keepalive.log',
+    watchdogPid: getField('DB_KEEPALIVE_PID') || undefined,
+    tunnels: ((Array.isArray(tunnels) ? tunnels : []) as Array<Record<string, unknown>>).map((t) => ({
+      tunnelId: asText(t.tunnelId),
+      url: asText(t.url),
+    })),
+  };
+}
+
 // Expose a sandbox port to a public DevBridge tunnel URL. `port` MUST be the
 // ACTUAL port reported by deployNginx (deploy_nginx auto-increments on conflict),
 // otherwise the tunnel is bound to a dead port. Returns ok, publicUrl, port,
@@ -503,7 +798,7 @@ export function validateTunnelPort(port: unknown): number {
 // deployment result" contract.
 export async function exposeTunnel(
   workspaceId: string,
-  { port }: { port?: number | string },
+  { port, expiryHours, keepalive }: { port?: number | string; expiryHours?: number; keepalive?: boolean },
   username = 'root',
   timeoutMs = 90000,
 ): Promise<ExposeTunnelResult> {
@@ -511,6 +806,7 @@ export async function exposeTunnel(
     throw new Error('sandbox expose tunnel: workspace_id is required.');
   }
   const validatedPort = validateTunnelPort(port);
+  const validatedExpiryHours = validateExpiryHours(expiryHours ?? DEVBRIDGE_HOST_EXPIRY_HOURS);
 
   const authScript = buildDevbridgeAuthProbe();
   const authResult = await runOneShot(workspaceId, authScript, username, 30000);
@@ -571,7 +867,7 @@ export async function exposeTunnel(
   const maxAttempts = 2;
   while (attempt < maxAttempts) {
     attempt += 1;
-    const exposeScript = buildDevbridgeExposeScript(validatedPort);
+    const exposeScript = buildDevbridgeExposeScript(validatedPort, validatedExpiryHours);
     // A2 budget guard: the script's worst case is ~63s of bounded waits
     // (2s settle + up to 9s URL-extraction + 4×10s probes + 3×5s backoff) plus
     // the delete-all round-trip, inside one one-shot exec — a ws-exec timeout
@@ -775,6 +1071,27 @@ export async function exposeTunnel(
       parsed.expiryHours !== undefined
         ? new Date(Date.now() + parsed.expiryHours * 3_600_000).toISOString()
         : undefined;
+    // AUTO-ENROLL (see the return-shape comment below): read the installed
+    // watchdog's tunnel list and merge the new tunnel into it.
+    let keepaliveEnrollment: KeepaliveWatchdogResult | undefined;
+    if (keepalive !== false && parsed.tunnelUrl && parsed.tunnelId) {
+      try {
+        const readResult = await runOneShot(workspaceId, buildKeepaliveTunnelsReadScript(), username, 20000);
+        const existing = parseKeepaliveTunnelsOutput(readResult.stdout);
+        const merged = mergeKeepaliveTunnels(existing, [{ tunnelId: parsed.tunnelId, url: parsed.tunnelUrl }]);
+        keepaliveEnrollment = await installKeepaliveWatchdog(workspaceId, { tunnels: merged }, username, 30000);
+        if (!keepaliveEnrollment.ok) {
+          warnings.push(
+            `Keepalive watchdog enrollment failed: ${keepaliveEnrollment.error || 'unknown error'} — the tunnel works but will NOT be auto-renewed. Retry with huaweicloud_sandbox_keepalive_watchdog.`,
+          );
+        }
+      } catch (error) {
+        warnings.push(
+          `Keepalive watchdog enrollment failed (${error instanceof Error ? error.message : 'unknown error'}) — the tunnel works but will NOT be auto-renewed. Retry with huaweicloud_sandbox_keepalive_watchdog.`,
+        );
+      }
+    }
+
     return {
       ok: true,
       publicUrl: parsed.tunnelUrl,
@@ -787,6 +1104,23 @@ export async function exposeTunnel(
       persistent,
       expiresAt,
       expiresInHours: parsed.expiryHours,
+      // AUTO-ENROLL: every tunnel exposed through this tool is enrolled into
+      // the keepalive watchdog by default (user requirement: all devbridge
+      // tunnels deployed to the sandbox must be keepalive-protected —
+      // unattended renewal + host re-attach + health check). The new tunnel is
+      // MERGED into the existing watchdog tunnel list, never replacing other
+      // tunnels' coverage. keepalive:false opts out. Non-fatal: an enrollment
+      // failure is surfaced as a warning, not a failed expose — the tunnel
+      // itself is working.
+      keepalive: keepaliveEnrollment
+        ? {
+            enrolled: keepaliveEnrollment.ok === true,
+            tunnelCount: keepaliveEnrollment.ok ? (keepaliveEnrollment.tunnels ?? []).length : undefined,
+            watchdogPid: keepaliveEnrollment.watchdogPid,
+            logPath: keepaliveEnrollment.logPath,
+            error: keepaliveEnrollment.ok ? undefined : keepaliveEnrollment.error,
+          }
+        : undefined,
       warnings: warnings.length > 0 ? warnings.join(' ') : undefined,
       hostLog: String(result.stdout ?? '').slice(0, 400),
     };

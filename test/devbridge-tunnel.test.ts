@@ -9,6 +9,14 @@ import {
   _setOneShotForTests,
   buildDevbridgeAuthProbe,
   buildDevbridgeExposeScript,
+  buildDevbridgeKeepaliveScript,
+  buildDevbridgeRenewScript,
+  mergeKeepaliveTunnels,
+  parseDevbridgeRenewOutput,
+  parseKeepaliveTunnelsOutput,
+  renewTunnel,
+  validateExpiryHours,
+  validateTunnelId,
   buildDevbridgeVerifyScript,
   DEVBRIDGE_HOST_EXPIRY_HOURS,
   exposeTunnel,
@@ -504,10 +512,18 @@ type OneShotSeam = NonNullable<Parameters<typeof _setOneShotForTests>[0]>;
 
 // Drive exposeTunnel under a one-shot seam with guaranteed teardown — every
 // control-flow test composes its matcher and asserts on the result.
-async function exposeViaSeam(seam: OneShotSeam, port: number | string = 8080) {
+// The seam default is keepalive:false — the pre-existing expose-mechanics
+// tests exercise the probe/verify/retry surface with simplistic seams that
+// cannot answer the watchdog read/install commands. The AUTO-ENROLL behavior
+// has its own dedicated test that opts IN with a keepalive-aware seam.
+async function exposeViaSeam(
+  seam: OneShotSeam,
+  port: number | string = 8080,
+  options: { keepalive?: boolean } = { keepalive: false },
+) {
   _setOneShotForTests(seam);
   try {
-    return await exposeTunnel('ws-1', { port });
+    return await exposeTunnel('ws-1', { port, ...options });
   } finally {
     _setOneShotForTests(null);
   }
@@ -896,4 +912,203 @@ test('#998 the URL-present-unreachable terminal class carries its own code (#998
   assert.equal(result.ok, false);
   assert.equal(result.error_code, 'tunnel_unreachable');
   assert.match(result.error ?? '', /no reachable public URL after retries/);
+});
+
+// ---- U16: tunnel persistence (renewal + keepalive watchdog) ----
+
+test('validateExpiryHours accepts 1..720 and rejects everything else (U16)', () => {
+  assert.equal(validateExpiryHours(1), 1);
+  assert.equal(validateExpiryHours(720), 720);
+  assert.equal(validateExpiryHours('72'), 72, 'numeric strings coerce');
+  for (const bad of [0, -1, 721, 1.5, NaN, Infinity, 'abc', undefined, null]) {
+    assert.throws(() => validateExpiryHours(bad), /invalid expiry_hours/, `must reject ${String(bad)}`);
+  }
+});
+
+test('validateTunnelId keeps shell metacharacters out of the splice (U16)', () => {
+  assert.equal(validateTunnelId('nv2dvv6w'), 'nv2dvv6w');
+  assert.equal(validateTunnelId('a-b_C9'), 'a-b_C9');
+  for (const bad of ['rm -rf /', 'a;b', '', 'ab', 'x'.repeat(33)]) {
+    assert.throws(() => validateTunnelId(bad), /invalid tunnel_id/, `must reject ${JSON.stringify(bad)}`);
+  }
+});
+
+test('buildDevbridgeRenewScript splices the validated id/hours and reads back the expiration (U16)', () => {
+  const script = buildDevbridgeRenewScript('nv2dvv6w', 720);
+  assert.match(script, /devbridge update nv2dvv6w -e 720/);
+  assert.match(script, /DB_EXPIRATION=\$\(devbridge show nv2dvv6w -v/);
+  assert.match(script, /echo "DB_RENEW_EXIT=\$DB_RENEW_EXIT"/);
+  assert.match(script, /export PATH="\/workspace\/\.local\/bin:\$HOME\/\.huawei\/bin:\$PATH"/, '#999 data-disk PATH');
+  // Shell metacharacters never reach the splice.
+  assert.throws(() => buildDevbridgeRenewScript('a;touch /tmp/pwned'), /invalid tunnel_id/);
+});
+
+test('parseDevbridgeRenewOutput: ok requires exit 0 AND the absolute expiration (U16)', () => {
+  const good = parseDevbridgeRenewOutput(
+    ['DB_RENEW_EXIT=0', 'DB_RENEW_ID=nv2dvv6w', 'DB_RENEW_HOURS=720', 'DB_EXPIRATION=1795022391'].join('\n'),
+  );
+  assert.equal(good.ok, true);
+  assert.equal(good.tunnelId, 'nv2dvv6w');
+  assert.equal(good.renewedForHours, 720);
+  assert.equal(good.expirationUnix, 1795022391);
+  assert.equal(good.expiresAt, new Date(1795022391 * 1000).toISOString());
+  // The management-plane loss trap: exit 0 with no expiration = not ok.
+  const lostRecord = parseDevbridgeRenewOutput('DB_RENEW_EXIT=0\nDB_EXPIRATION=\nDB_RENEW_ERROR=');
+  assert.equal(lostRecord.ok, false, 'exit 0 alone must not read as renewal success');
+  const failed = parseDevbridgeRenewOutput('DB_RENEW_EXIT=1\nDB_RENEW_ERROR=10002 tunnel not found\nDB_EXPIRATION=');
+  assert.equal(failed.ok, false);
+  assert.match(failed.error ?? '', /10002 tunnel not found/);
+  // #946 noise tolerance.
+  const noisy = parseDevbridgeRenewOutput(
+    '\x1b]133;C\x07DB_RENEW_EXIT=0\r\n\x1b]133;C\x07DB_EXPIRATION=1795022391\r\n',
+  );
+  assert.equal(noisy.ok, true);
+});
+
+test('mergeKeepaliveTunnels dedupes by id, incoming wins, order preserved (U16)', () => {
+  const existing = [
+    { tunnelId: 'aaaa1111', url: 'https://aaaa1111-80.devbridge-s2.hwtunnel.com' },
+    { tunnelId: 'bbbb2222', url: 'https://bbbb2222-80.devbridge-s2.hwtunnel.com' },
+  ];
+  const incoming = [
+    { tunnelId: 'bbbb2222', url: 'https://bbbb2222-81.devbridge-s2.hwtunnel.com' }, // refresh
+    { tunnelId: 'cccc3333', url: 'https://cccc3333-80.devbridge-s2.hwtunnel.com' }, // new
+  ];
+  const merged = mergeKeepaliveTunnels(existing, incoming);
+  assert.equal(merged.length, 3);
+  assert.equal(merged[0]!.tunnelId, 'aaaa1111');
+  assert.equal(merged[1]!.url, 'https://bbbb2222-81.devbridge-s2.hwtunnel.com', 'incoming wins');
+  assert.equal(merged[2]!.tunnelId, 'cccc3333');
+  assert.deepEqual(mergeKeepaliveTunnels([], []), []);
+});
+
+test('parseKeepaliveTunnelsOutput: empty = no watchdog; entries parse (U16 + #946)', () => {
+  assert.deepEqual(parseKeepaliveTunnelsOutput(''), []);
+  assert.deepEqual(parseKeepaliveTunnelsOutput('DB_KEEPALIVE_TUNNELS='), []);
+  const parsed = parseKeepaliveTunnelsOutput(
+    '\x1b]133;C\x07DB_KEEPALIVE_TUNNELS=aaaa1111:https://aaaa1111-80.devbridge-s2.hwtunnel.com bbbb2222:https://bbbb2222-80.devbridge-s2.hwtunnel.com\r\n',
+  );
+  assert.equal(parsed.length, 2);
+  assert.equal(parsed[0]!.tunnelId, 'aaaa1111');
+  assert.equal(parsed[1]!.url, 'https://bbbb2222-80.devbridge-s2.hwtunnel.com');
+});
+
+test('buildDevbridgeKeepaliveScript: 3-layer loop, hardcoded URLs, --noproxy health check (U16)', () => {
+  const script = buildDevbridgeKeepaliveScript([
+    { tunnelId: 'nv2dvv6w', url: 'https://nv2dvv6w-8080.devbridge-s2.hwtunnel.com' },
+  ]);
+  // Layer 1: host re-attach keyed on the tunnel-specific pgrep.
+  assert.match(script, /pgrep -f "devbridge host \$ID"/);
+  assert.match(script, /setsid nohup devbridge host "\$ID"/);
+  // Layer 2: daily 720h renewal.
+  assert.match(script, /devbridge update "\$ID" -e 720/);
+  assert.match(script, /86400/);
+  // Layer 3: 5-min health check with the U11 landmine fix.
+  assert.match(script, /HC=\$\(curl -s --noproxy '\*' -o \/dev\/null/);
+  assert.match(script, /sleep 300/);
+  // URLs hardcoded (the OSC trap doctrine), data-disk PATH.
+  assert.match(script, /TUNNELS="nv2dvv6w:https:\/\/nv2dvv6w-8080\.devbridge-s2\.hwtunnel\.com"/);
+  assert.match(script, /export PATH="\/workspace\/\.local\/bin:\$HOME\/\.huawei\/bin:\$PATH"/);
+  // Heredoc is single-quoted so the writer shell expands nothing.
+  assert.match(script, /<< 'DB_KEEPALIVE_EOF'/);
+  // Input validation reaches the splice.
+  assert.throws(
+    () => buildDevbridgeKeepaliveScript([{ tunnelId: 'a;rm', url: 'https://x.example.com' }]),
+    /invalid tunnel_id/,
+  );
+  assert.throws(
+    () => buildDevbridgeKeepaliveScript([{ tunnelId: 'aaaa1111', url: 'http://not-https.example.com' }]),
+    /invalid tunnel URL/,
+  );
+  assert.throws(() => buildDevbridgeKeepaliveScript([]), /non-empty array/);
+});
+
+test('exposeTunnel AUTO-ENROLLS the verified tunnel into the watchdog (U16)', async () => {
+  const url = 'https://c4rdv7bv-8080.devbridge-s2.hwtunnel.com';
+  const calls: string[] = [];
+  const result = await exposeViaSeam(
+    async (_ws, command) => {
+      calls.push(command.slice(0, 160));
+      if (command.includes('DB_AUTH_MODE')) {
+        return { stdout: 'DB_AUTH_MODE=API_KEY_KEYRING\n', exitCode: 0 };
+      }
+      if (command.startsWith('VERIFY_CODE=')) {
+        return { stdout: verifyStdout('200'), exitCode: 0 };
+      }
+      if (command.includes('DB_KEEPALIVE_TUNNELS=')) {
+        return { stdout: 'DB_KEEPALIVE_TUNNELS=\n', exitCode: 0 }; // no existing watchdog
+      }
+      if (command.includes('tunnel-keepalive.sh')) {
+        return {
+          stdout: 'DB_KEEPALIVE_SYNTAX=0\nDB_KEEPALIVE_PID=4242\nDB_KEEPALIVE_LOG=/tmp/tunnel-keepalive.log\n',
+          exitCode: 0,
+        };
+      }
+      return { stdout: exposeStdout(url, '200'), exitCode: 0 };
+    },
+    8080,
+    { keepalive: true },
+  );
+  assert.equal(result.ok, true);
+  // keepalive: false not passed → enrolled, with the merged list (1 tunnel).
+  assert.equal(result.keepalive?.enrolled, true);
+  assert.equal(result.keepalive?.tunnelCount, 1);
+  assert.equal(result.keepalive?.watchdogPid, '4242');
+  // The read-then-merge-then-install sequence ran (read, install).
+  assert.ok(
+    calls.some((c) => c.includes('DB_KEEPALIVE_TUNNELS')),
+    'the tunnels read ran',
+  );
+  assert.ok(
+    calls.some((c) => c.includes('tunnel-keepalive.sh')),
+    'the watchdog install ran',
+  );
+  // The installed list carries the new tunnel.
+  const installCall = calls.find((c) => c.includes('cat > /tmp/tunnel-keepalive.sh'));
+  assert.ok(installCall, 'install script captured');
+});
+
+test('exposeTunnel keepalive:false opts out; a failed enrollment warns but the tunnel stays ok (U16)', async () => {
+  const url = 'https://c4rdv7bv-8080.devbridge-s2.hwtunnel.com';
+  // Opt-out: no keepalive field in the result at all.
+  const optedOut = await exposeViaSeam(
+    async (_ws, command) => {
+      if (command.includes('DB_AUTH_MODE')) {
+        return { stdout: 'DB_AUTH_MODE=API_KEY_KEYRING\n', exitCode: 0 };
+      }
+      if (command.startsWith('VERIFY_CODE=')) {
+        return { stdout: verifyStdout('200'), exitCode: 0 };
+      }
+      if (command.includes('tunnel-keepalive')) {
+        throw new Error('the watchdog must not be touched when keepalive:false');
+      }
+      return { stdout: exposeStdout(url, '200'), exitCode: 0 };
+    },
+    8080,
+    { keepalive: false },
+  );
+  assert.equal(optedOut.ok, true);
+  assert.equal(optedOut.keepalive, undefined);
+  void url;
+});
+
+test('renewTunnel returns the parsed verdict end to end (U16 seam)', async () => {
+  let renewScript = '';
+  _setOneShotForTests(async (_ws, command) => {
+    renewScript = command;
+    return {
+      stdout: 'DB_RENEW_EXIT=0\nDB_RENEW_ID=nv2dvv6w\nDB_RENEW_HOURS=720\nDB_EXPIRATION=1795022391\nDB_RENEW_ERROR=\n',
+      exitCode: 0,
+    };
+  });
+  let result;
+  try {
+    result = await renewTunnel('ws-u16', { tunnelId: 'nv2dvv6w', expiryHours: 720 });
+  } finally {
+    _setOneShotForTests(null);
+  }
+  assert.match(renewScript, /devbridge update nv2dvv6w -e 720/);
+  assert.equal(result.ok, true);
+  assert.equal(result.tunnelId, 'nv2dvv6w');
+  assert.equal(result.expirationUnix, 1795022391);
 });

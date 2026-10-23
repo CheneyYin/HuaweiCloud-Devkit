@@ -17,7 +17,12 @@ import {
   getCurrentWorkspaceId,
   setWorkspaceId,
 } from '../../sandbox/session-manager.ts';
-import { exposeTunnel } from '../../sandbox/devbridge-tunnel.ts';
+import {
+  exposeTunnel,
+  renewTunnel,
+  installKeepaliveWatchdog,
+  validateTunnelId,
+} from '../../sandbox/devbridge-tunnel.ts';
 import {
   hdkitCheckUser,
   hdkitSignAgreement,
@@ -64,6 +69,8 @@ export const SANDBOX_TIMEOUT_MS = {
   // slow-gateway days the probe loop exists for, and a timeout still folds
   // into the structured unreachable envelope (never a raw ws error).
   expose_tunnel: 90000,
+  renew_tunnel: 60000,
+  keepalive_watchdog: 60000,
 } as const;
 
 const execFilePromise = promisify(execFile);
@@ -265,7 +272,65 @@ async function handleExposeTunnel(args: ToolArgs = {}, _opts: CallToolOptions = 
   }
   const sandboxUser9 = args.username || 'root';
   const sandboxTimeout9 = args.timeout_ms || SANDBOX_TIMEOUT_MS.expose_tunnel;
-  return await exposeTunnel(sandboxWsId9, { port: args.port }, sandboxUser9, sandboxTimeout9);
+  return await exposeTunnel(
+    sandboxWsId9,
+    {
+      port: args.port,
+      expiryHours: typeof args.expiry_hours === 'number' ? args.expiry_hours : undefined,
+      keepalive: typeof args.keepalive === 'boolean' ? args.keepalive : undefined,
+    },
+    sandboxUser9,
+    sandboxTimeout9,
+  );
+}
+
+async function handleRenewTunnel(args: ToolArgs = {}, _opts: CallToolOptions = {}) {
+  if (!args.tunnel_id) {
+    throw new Error(
+      'tunnel_id is required. Get it from huaweicloud_sandbox_expose_tunnel or extract it from the public URL (https://<tunnel_id>-<port>.devbridge-s2.hwtunnel.com).',
+    );
+  }
+  const wsId = args.workspace_id || getCurrentWorkspaceId();
+  if (!wsId) {
+    throw new Error(
+      'workspace_id is required. No sandbox connected — call huaweicloud_sandbox_connect first, ' +
+        'or set HW_WORKSPACE_ID environment variable before starting the agent.',
+    );
+  }
+  // Fail fast on a malformed ID before any exec (the validator's error names
+  // the expected shape).
+  validateTunnelId(args.tunnel_id);
+  return await renewTunnel(
+    wsId,
+    { tunnelId: args.tunnel_id, expiryHours: typeof args.expiry_hours === 'number' ? args.expiry_hours : undefined },
+    args.username || 'root',
+    args.timeout_ms || SANDBOX_TIMEOUT_MS.renew_tunnel,
+  );
+}
+
+async function handleKeepaliveWatchdog(args: ToolArgs = {}, _opts: CallToolOptions = {}) {
+  if (!Array.isArray(args.tunnels) || args.tunnels.length === 0) {
+    throw new Error(
+      'tunnels is required — a non-empty array of {tunnel_id, url} from huaweicloud_sandbox_expose_tunnel results.',
+    );
+  }
+  const wsId = args.workspace_id || getCurrentWorkspaceId();
+  if (!wsId) {
+    throw new Error(
+      'workspace_id is required. No sandbox connected — call huaweicloud_sandbox_connect first, ' +
+        'or set HW_WORKSPACE_ID environment variable before starting the agent.',
+    );
+  }
+  const tunnels = (args.tunnels as Array<Record<string, unknown>>).map((t) => ({
+    tunnelId: t.tunnel_id ?? t.tunnelId,
+    url: t.url,
+  }));
+  return await installKeepaliveWatchdog(
+    wsId,
+    { tunnels },
+    args.username || 'root',
+    args.timeout_ms || SANDBOX_TIMEOUT_MS.keepalive_watchdog,
+  );
 }
 
 async function handleDeployCheck(args: ToolArgs = {}, _opts: CallToolOptions = {}) {
@@ -574,11 +639,67 @@ const exposeTunnelSchema = z.looseObject({
     .describe(
       'Port nginx actually serves on — use the "port" value returned by huaweicloud_sandbox_deploy_nginx, not the originally requested port.',
     ),
+  expiry_hours: z
+    .number()
+    .int()
+    .min(1)
+    .max(720)
+    .optional()
+    .describe(
+      'Tunnel lifetime in hours, 1-720 (default 72). 720 = the devbridge 30-day maximum; the keepalive watchdog renews to 720h daily.',
+    ),
+  keepalive: z
+    .boolean()
+    .optional()
+    .describe(
+      'Enroll the tunnel into the keepalive watchdog (default true — pass false to opt out). Returns keepalive.enrolled/tunnelCount/watchdogPid.',
+    ),
   workspace_id: workspaceId,
   username,
   timeout_ms: numericArg
     .optional()
     .describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.expose_tunnel})`),
+});
+
+const renewTunnelSchema = z.looseObject({
+  tunnel_id: z
+    .string()
+    .describe(
+      "DevBridge tunnel ID to renew (from expose_tunnel's tunnelId field, or extract from the URL https://<tunnel_id>-<port>.devbridge-s2.hwtunnel.com).",
+    ),
+  expiry_hours: z
+    .number()
+    .int()
+    .min(1)
+    .max(720)
+    .optional()
+    .describe(
+      'New lifetime in hours, 1-720 (default 720 = the 30-day maximum). Renewal is a rolling window — the same URL stays alive.',
+    ),
+  workspace_id: workspaceId,
+  username,
+  timeout_ms: numericArg
+    .optional()
+    .describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.renew_tunnel ?? 60000})`),
+});
+
+const keepaliveWatchdogSchema = z.looseObject({
+  tunnels: z
+    .array(
+      z.looseObject({
+        tunnel_id: z.string().describe('DevBridge tunnel ID (from expose_tunnel or the URL).'),
+        url: z.string().describe("The tunnel's public URL (from expose_tunnel's publicUrl)."),
+      }),
+    )
+    .min(1)
+    .describe(
+      'Tunnels for the watchdog to protect: {tunnel_id, url}. Replaces the current list (expose_tunnel MERGES; this tool sets).',
+    ),
+  workspace_id: workspaceId,
+  username,
+  timeout_ms: numericArg
+    .optional()
+    .describe(`Execution timeout in milliseconds (default: ${SANDBOX_TIMEOUT_MS.keepalive_watchdog ?? 60000})`),
 });
 
 const signAgreementSchema = z.looseObject({});
@@ -665,9 +786,23 @@ export const SANDBOX_TOOLS = [
   {
     name: 'huaweicloud_sandbox_expose_tunnel',
     description:
-      'Expose a port on the sandbox to a public DevBridge tunnel URL (devbridge 0.2.x). Authenticates automatically (probing AK/SK vs API-Key builds, using /tmp/hw_creds.sh and /tmp/hw_api_key as injected by huaweicloud_sandbox_credentials), pre-cleans stale tunnels to avoid quota errors, starts the host detached from the exec session (setsid/nohup/disown so it survives session teardown), extracts the public URL (https://<id>-<port>.devbridge-s2.hwtunnel.com), and health-checks it before returning. Use the ACTUAL port reported by huaweicloud_sandbox_deploy_nginx (its "port" field auto-increments on conflict) — never the originally requested port. This automates the manual "Expose the deployed app" flow (huawei-sandbox skill). Returns ok, publicUrl, port, tunnelId, authMode, expiresAt (72-hour tunnel lifetime), and warnings. The URL is re-verified from a second independent exec session: persistent/verifyHttpCode distinguish a session-surviving URL from one that dies with the deploying session, and a non-persistent URL carries a 请勿分享 warning. Gateway-level tunnel errors (404 "tunnel not found" / "port not configured", 502 "bad gateway") are classified by exact body — an app\'s own 404/502 page is never mistaken for them. When no usable URL is reachable after retries it returns ok:false instead of a dead URL. If the API Key is missing on a release build it returns ok:false with instructions to create one.',
+      'Expose a port on the sandbox to a public DevBridge tunnel URL (devbridge 0.2.x). Authenticates automatically (probing AK/SK vs API-Key builds, using /tmp/hw_creds.sh and /tmp/hw_api_key as injected by huaweicloud_sandbox_credentials), pre-cleans stale tunnels to avoid quota errors, starts the host detached from the exec session (setsid/nohup/disown so it survives session teardown), extracts the public URL (https://<id>-<port>.devbridge-s2.hwtunnel.com), and health-checks it before returning. Use the ACTUAL port reported by huaweicloud_sandbox_deploy_nginx (its "port" field auto-increments on conflict) — never the originally requested port. This automates the manual "Expose the deployed app" flow (huawei-sandbox skill). Returns ok, publicUrl, port, tunnelId, authMode, expiresAt (expiry_hours lifetime, default 72h; 1-720), keepalive.enrolled/tunnelCount/watchdogPid, and warnings. AUTO-ENROLLS the tunnel into the keepalive watchdog (unattended renewal + host re-attach + health check; pass keepalive:false to opt out). The URL is re-verified from a second independent exec session: persistent/verifyHttpCode distinguish a session-surviving URL from one that dies with the deploying session, and a non-persistent URL carries a 请勿分享 warning. Gateway-level tunnel errors (404 "tunnel not found" / "port not configured", 502 "bad gateway") are classified by exact body — an app\'s own 404/502 page is never mistaken for them. When no usable URL is reachable after retries it returns ok:false instead of a dead URL. If the API Key is missing on a release build it returns ok:false with instructions to create one.',
     schema: exposeTunnelSchema,
     handler: handleExposeTunnel,
+  },
+  {
+    name: 'huaweicloud_sandbox_renew_tunnel',
+    description:
+      "Renew a DevBridge tunnel's lifetime (devbridge update <id> -e <hours>) — a ROLLING window: expiration = now + hours regardless of remaining time, so renewing before expiry keeps the SAME public URL alive indefinitely (the URL is bound to the tunnel ID and never changes). Default 720h = the 30-day maximum. Returns ok, tunnelId, expiresAt (absolute ISO timestamp read back via show -v — a management-plane loss (10002 tunnel not found) is NOT misread as success), renewedForHours. Use the tunnelId from huaweicloud_sandbox_expose_tunnel or extract it from the URL. The keepalive watchdog renews automatically; this tool is the manual/one-off path.",
+    schema: renewTunnelSchema,
+    handler: handleRenewTunnel,
+  },
+  {
+    name: 'huaweicloud_sandbox_keepalive_watchdog',
+    description:
+      'Install or replace the 3-layer keepalive watchdog for a set of tunnels (the tunnel-persistence pattern): (1) host re-attach — restarts `devbridge host <id>` when the host process dies (URL unchanged); (2) daily renewal — `update <id> -e 720` (29-day failure tolerance); (3) health check — curls each URL every 5 minutes and logs WARN on non-200/304. URLs are hardcoded per tunnel (never derived from port-list output — OSC escapes make those greps fail silently). Replaces the current watchdog (expose_tunnel MERGES into it; this tool SETS the list). Returns ok, scriptPath, logPath, watchdogPid, tunnels. The watchdog lives at /tmp/tunnel-keepalive.sh — cleared on reboot; re-run this tool (or expose_tunnel, which re-enrolls) after a reboot.',
+    schema: keepaliveWatchdogSchema,
+    handler: handleKeepaliveWatchdog,
   },
   {
     name: 'huaweicloud_sandbox_check_user',
@@ -713,6 +848,8 @@ export const SANDBOX_TOOL_SCHEMAS: Readonly<Record<SandboxToolName, LooseToolSch
   huaweicloud_sandbox_deploy_nginx: deployNginxSchema,
   huaweicloud_sandbox_deploy_check: deployCheckSchema,
   huaweicloud_sandbox_expose_tunnel: exposeTunnelSchema,
+  huaweicloud_sandbox_renew_tunnel: renewTunnelSchema,
+  huaweicloud_sandbox_keepalive_watchdog: keepaliveWatchdogSchema,
   huaweicloud_sandbox_check_user: checkUserSchema,
   huaweicloud_sandbox_sign_agreement: signAgreementSchema,
   huaweicloud_sandbox_connect: connectSchema,
@@ -731,6 +868,8 @@ export const SANDBOX_TOOL_HANDLERS: Readonly<Record<SandboxToolName, PackToolDef
   huaweicloud_sandbox_deploy_nginx: handleDeployNginx,
   huaweicloud_sandbox_deploy_check: handleDeployCheck,
   huaweicloud_sandbox_expose_tunnel: handleExposeTunnel,
+  huaweicloud_sandbox_renew_tunnel: handleRenewTunnel,
+  huaweicloud_sandbox_keepalive_watchdog: handleKeepaliveWatchdog,
   huaweicloud_sandbox_check_user: handleCheckUser,
   huaweicloud_sandbox_sign_agreement: handleSignAgreement,
   huaweicloud_sandbox_connect: handleConnect,

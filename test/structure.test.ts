@@ -1666,6 +1666,10 @@ test('devbridge host launch survives the exec session (#919/#922): setsid guard,
 test('expose_tunnel re-verifies from an independent exec session and classifies gateway tunnel errors (#919)', () => {
   const devbridgeTunnel = readSource(join('src', 'sandbox', 'devbridge-tunnel.ts'));
   const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
+  const sandbox = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'SKILL.md'),
+    'utf8',
+  );
 
   // Fresh-session GET re-verify with the dedicated parser and output fields.
   assert.match(devbridgeTunnel, /export function buildDevbridgeVerifyScript/);
@@ -1684,6 +1688,25 @@ test('expose_tunnel re-verifies from an independent exec session and classifies 
   // #1000 (v2 completion): the deploy_check tunnel probe also bypasses the
   // injected sandbox proxy — every curl against *.hwtunnel.com carries it.
   assert.match(sessionManager, /curl -s --noproxy '\*' -o \/tmp\/\.dc_tunnel_body/);
+  // U16: the tunnel-persistence subsystem — renewal, the watchdog, and the
+  // #998/#999/#1000 hardening all ride devbridge-tunnel.ts.
+  assert.match(devbridgeTunnel, /export function validateExpiryHours/);
+  assert.match(devbridgeTunnel, /export function validateTunnelId/);
+  assert.match(devbridgeTunnel, /export function buildDevbridgeRenewScript/);
+  assert.match(devbridgeTunnel, /export function buildDevbridgeKeepaliveScript/);
+  assert.match(devbridgeTunnel, /export function mergeKeepaliveTunnels/);
+  // The keepalive health check carries --noproxy (U11 landmine — main missed it).
+  assert.match(devbridgeTunnel, /HC=\$\(curl -s --noproxy '\*' -o \/dev\/null/);
+  // The persistence reference and the tool rows exist.
+  assert.ok(
+    existsSync(
+      join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'references', 'tunnel-persistence.md'),
+    ),
+  );
+  assert.match(sandbox, /huaweicloud_sandbox_renew_tunnel/);
+  assert.match(sandbox, /huaweicloud_sandbox_keepalive_watchdog/);
+  assert.match(sandbox, /AUTO-enrolls into the keepalive watchdog/);
+  assert.match(sandbox, /tunnel-persistence\.md/);
   assert.match(sessionManager, /\[ "\$code" = "404" \] && \[ "\$body" = "\$\{DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER\}" \]/);
 
   // Retry exhaustion on a gateway-dead URL must fail, not soften to a warning.
@@ -2563,7 +2586,7 @@ test('sandbox timeout defaults stay single-sourced (no raw numeric fallbacks)', 
   const src = readSource(join('src', 'packs', 'sandbox', 'tools.ts'));
   assert.doesNotMatch(src, /args\.timeout_ms \|\| \d/, 'handler fallbacks must read SANDBOX_TIMEOUT_MS');
   const fallbacks = src.match(/args\.timeout_ms \|\| SANDBOX_TIMEOUT_MS\.\w+/g);
-  assert.equal(fallbacks?.length ?? 0, 7, 'seven tool handlers apply the shared defaults');
+  assert.equal(fallbacks?.length ?? 0, 9, 'nine tool handlers apply the shared defaults');
 });
 
 test('setup-cli.ts supports the version command', () => {
@@ -2682,12 +2705,12 @@ test('update pack registers version-update tools; registry carries the central d
 
 test('eight packs register their tools; the central map dispatches them', () => {
   // Same contract as the update pack, asserted for the packs materialized
-  // after P4: sandbox (12), auth (6), obs (3), voucher (3), discovery (3),
+  // after P4: sandbox (14), auth (6), obs (3), voucher (3), discovery (3),
   // huaweicloud-open-mcp (3), huaweicloud-cli (7), secrets (3). Their
   // handlers reach callTool only through the PACK_TOOL_HANDLERS merge in
   // packs/registry.ts.
   const packs = [
-    { id: 'sandbox', tools: SANDBOX_TOOLS, count: 12 },
+    { id: 'sandbox', tools: SANDBOX_TOOLS, count: 14 },
     { id: 'auth', tools: AUTH_TOOLS, count: 6 },
     { id: 'obs', tools: OBS_TOOLS, count: 3 },
     { id: 'voucher', tools: VOUCHER_TOOLS, count: 3 },

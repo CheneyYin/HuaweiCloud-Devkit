@@ -37,6 +37,8 @@ const EXEMPT_TOOLS = new Set([
   'huaweicloud_sandbox_expose_tunnel',
   'huaweicloud_obs_set_cors',
   'huaweicloud_check_account_type',
+  'huaweicloud_sandbox_renew_tunnel',
+  'huaweicloud_sandbox_keepalive_watchdog',
 ]);
 
 // Declared, intentional drifts from the legacy literals. Each entry names the

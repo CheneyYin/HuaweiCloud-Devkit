@@ -63,6 +63,14 @@ Domain expertise for Huawei Cloud Sandbox (DevStation) instances and workspace t
 | `huaweicloud_sandbox_connect`     | Connect to sandbox (one user one instance, reuses existing if available) |
 | `huaweicloud_sandbox_credentials` | Inject temporary AK/SK into a running sandbox                            |
 
+### Tunnel Persistence (public URL lifetime)
+
+| Tool                                     | Purpose                                                                                                                                                                                                    |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `huaweicloud_sandbox_expose_tunnel`      | Expose a port → public tunnel URL (auth, pre-clean, health check; `expiry_hours` 1-720, def 72). **AUTO-enrolls into the keepalive watchdog** (merged into existing coverage; `keepalive: false` opts out) |
+| `huaweicloud_sandbox_renew_tunnel`       | Renew a tunnel lifetime (`update -e`, rolling window; returns absolute expiresAt)                                                                                                                          |
+| `huaweicloud_sandbox_keepalive_watchdog` | Install/replace the 3-layer watchdog: host re-attach + daily 720h renewal + 5-min health check                                                                                                             |
+
 ### Terminal Execution
 
 | Tool                                    | Purpose                                                                     |
@@ -86,6 +94,8 @@ Domain expertise for Huawei Cloud Sandbox (DevStation) instances and workspace t
 | Deployment scripts                 | `exec_one_shot+shot`               | Long script, fresh connection avoids session timeouts        |
 | nginx configuration                | `deploy_nginx`                     | Auto-generates correct template + permissions + reload       |
 | Deployment completeness check      | `deploy_check`                     | Verifies nginx, DevBridge, URL, QR before reporting success  |
+| Tunnel lifetime renewal            | `renew_tunnel`                     | Rolling-window renewal, same URL stays alive                 |
+| URL must outlive the session       | `keepalive_watchdog`               | Unattended host re-attach + daily renewal + health check     |
 | Single file upload (<1MB)          | `upload_file`                      | Base64 chunked, reliable for small files                     |
 | Project directory upload (>1MB)    | `upload_project`                   | HTTP tunnel, much faster than base64 for multi-file projects |
 
@@ -308,14 +318,14 @@ fi
 
 ### Sandbox filesystem persistence: what survives a reboot (#999)
 
-| Path                                         | Type           | After a sandbox reboot                                                           |
-| -------------------------------------------- | -------------- | -------------------------------------------------------------------------------- |
-| `/workspace` (incl. `/workspace/.local/bin`) | Data disk      | **Survives** — install project code and the devbridge 0.2.x binary here          |
-| `$HOME` (incl. `~/.huawei/bin`)              | System disk    | **Rolled back to the image state** — an installed binary is lost, 0.1.13 returns |
-| `/usr/local/bin`                             | System disk    | Rolled back — the image-preinstalled 0.1.x returns                               |
-| `/tmp`                                       | Session-scoped | Cleared — `/tmp/hw_creds.sh`, `/tmp/hw_api_key` are gone                         |
+| Path                                         | Type           | After a sandbox reboot                                                               |
+| -------------------------------------------- | -------------- | ------------------------------------------------------------------------------------ |
+| `/workspace` (incl. `/workspace/.local/bin`) | Data disk      | **Survives** — install project code and the devbridge 0.2.x binary here              |
+| `$HOME` (incl. `~/.huawei/bin`)              | System disk    | **Rolled back to the image state** — an installed binary is lost, 0.1.13 returns     |
+| `/usr/local/bin`                             | System disk    | Rolled back — the image-preinstalled 0.1.x returns                                   |
+| `/tmp`                                       | Session-scoped | Cleared — `/tmp/hw_creds.sh`, `/tmp/hw_api_key`, `/tmp/tunnel-keepalive.sh` are gone |
 
-Measured (2026-10-22): an overnight reboot reverted `~/.huawei/bin/devbridge` 0.2.2 to the image's 0.1.13 — **yesterday's successful operation replayed as today's unexplained failure**. Recovery after a reboot: re-run the Step 0 install (or just re-export the PATH to the surviving `/workspace/.local/bin`), and re-run `huaweicloud_sandbox_credentials` to re-inject `/tmp` credentials.
+Measured (2026-10-22): an overnight reboot reverted `~/.huawei/bin/devbridge` 0.2.2 to the image's 0.1.13 — **yesterday's successful operation replayed as today's unexplained failure**. Recovery after a reboot: re-run the Step 0 install (or just re-export the PATH to the surviving `/workspace/.local/bin`), and re-run `huaweicloud_sandbox_credentials` to re-inject `/tmp` credentials. Re-run `huaweicloud_sandbox_keepalive_watchdog` (or any `huaweicloud_sandbox_expose_tunnel`, which re-enrolls) to restore the keepalive loop.
 
 ### Step 1: Authenticate — verified waterfall, keyring first
 
@@ -1005,6 +1015,7 @@ Returns `complete: true/false`, `score`, and `nextStep` to fix missing items.
 
 - [Framework Commands](references/framework-commands.md) — command mapping for all supported frameworks
 - [Nginx Templates](references/nginx-templates.md) — nginx configuration templates and fallback
+- Tunnel persistence (renewal, re-attach, keepalive watchdog): references/tunnel-persistence.md
 
 ## Critical Warnings
 
