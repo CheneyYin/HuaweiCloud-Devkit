@@ -52,6 +52,11 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
     'deny',
   ],
   ['hcloud OBS rm obs://bucket/obj -f', 'deny'],
+  // cors/website: real write-capable subcommands on the pinned 7.3.12 (live
+  // -method=get reaches OBS and returns NoSuchBucket) — upstream #1001's
+  // removal was measured on 7.2.x. Both layers keep the deny.
+  ['hcloud OBS cors obs://b -method=put', 'deny'],
+  ['hcloud OBS website obs://b -method=put -localfile=w.xml', 'deny'],
   // KooCLI 7.3.12 obsutil write subcommands — the pin keeps the TS and py
   // OBSUTIL_WRITES vocabularies from drifting apart on the new names.
   ['hcloud OBS bucket-tagging obs://b -method=put', 'deny'],

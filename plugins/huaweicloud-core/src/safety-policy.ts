@@ -688,6 +688,14 @@ const OBSUTIL_WRITES = new Set([
   'chattri',
   'bucketpolicy',
   'lifecycle',
+  // cors/website materialized as real write-capable subcommands in KooCLI
+  // 7.3.12 (the pinned version): live-measured `OBS help cors|website` exits 0
+  // with -method=[get,put,delete], and `-method=get` on a nonexistent bucket
+  // returns an OBS-side NoSuchBucket 404 — a service-reaching command, not a
+  // stub. KooCLI 7.2.x rejects both with "No such command" (exit 3), which is
+  // where upstream main's #1001 "nonexistent subcommands" removal was measured;
+  // keep them denied so a future three-way merge resolves by this evidence,
+  // not by main's stale comment.
   'cors',
   'website',
   'sign',

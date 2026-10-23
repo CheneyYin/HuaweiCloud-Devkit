@@ -444,6 +444,23 @@ test('classifyHcloudArgs blocks obsutil write commands', () => {
   for (const op of writes) {
     assert.equal(classifyHcloudArgs(['obs', op, 'obs://bucket']).decision, 'deny', `obs ${op} should be blocked`);
   }
+  // Regression pin for the cors/website entries: upstream main's #1001 removed
+  // them as "nonexistent subcommands", but that was measured on a 7.2.x binary —
+  // the pinned 7.3.12 live-serves both (`OBS help cors` exit 0; `-method=get` on
+  // a nonexistent bucket returns OBS-side NoSuchBucket, so the commands reach
+  // the service). They are write-capable via -method=put and must stay denied.
+  assert.equal(classifyHcloudArgs(['obs', 'cors', 'obs://bucket']).decision, 'deny', 'obs cors should be blocked');
+  assert.equal(
+    classifyTextCommand('hcloud OBS cors obs://bucket -method=put -localfile=c.xml').decision,
+    'deny',
+    'raw-text hcloud OBS cors -method=put should be blocked',
+  );
+  assert.equal(classifyHcloudArgs(['obs', 'website', 'obs://bucket']).decision, 'deny', 'obs website should be blocked');
+  assert.equal(
+    classifyTextCommand('hcloud OBS website obs://bucket -method=put -localfile=w.xml').decision,
+    'deny',
+    'raw-text hcloud OBS website -method=put should be blocked',
+  );
 });
 
 test('classifyHcloudArgs blocks the KooCLI 7.3.12 obsutil write subcommands (7.3.12 pin)', () => {
