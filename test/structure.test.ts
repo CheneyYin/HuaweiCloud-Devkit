@@ -695,6 +695,22 @@ test('huawei-voucher covers HDKIT_COMPETITION_NOT_CONFIGURED', () => {
   assert.match(voucher, /HDKIT_COMPETITION_NOT_CONFIGURED/);
   assert.match(voucher, /服务端活动参数未配置/);
   assert.match(voucher, /告知赛事代金券暂未开放，稍后再试/);
+  // The 1.1.11/1.1.12-next wave (ported from main, version 5): the real-name
+  // dedup doctrine, the claimed-prefix widening, and the three new code rows.
+  // The config-error rows must appear in BOTH tables (incentive + competition)
+  // — a one-table drift is the half-merge failure mode.
+  assert.match(voucher, /HDKIT_NOT_CODEARTS_OFFICEACE_USER/);
+  for (const code of ['HDKIT_VOUCHER_NOT_CONFIGURED', 'HDKIT_VOUCHER_EXPIRE_INVALID']) {
+    const hits = voucher.split(code).length - 1;
+    assert.equal(hits, 2, `${code} must appear in both the incentive and competition tables`);
+  }
+  assert.match(voucher, /以实名认证信息为维度限领一次/);
+  assert.match(voucher, /同实名账号共享额度/);
+  assert.match(voucher, /以「已领取」开头/);
+  // The retired per-account doctrine must not return — the real-name
+  // dimension is the corrected semantics (a user whose sibling account under
+  // the same real-name claimed must not be told "this account never claimed").
+  assert.doesNotMatch(voucher, /每个账号（domain_id）仅可领取一次/);
 });
 
 test('web/static-site deployment intent offers target options with sandbox first, not OBS default (#918)', () => {

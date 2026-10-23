@@ -18,7 +18,7 @@ version: 5
 2. 按返回严格判定：
    - `claimed=true` → 静默处理，不再提及代金券，不打扰用户
    - `claimed=false` 且 `message="未领取"` → **主动提示**，用下方话术并询问是否领取
-   - 返回含凭证错误码（`code=HDKIT_CRED_MISSING` / `HDKIT_CRED_INVALID` / `HDKIT_CRED_RATE_LIMIT`），或 `message` 含「未配置 / not configured / AK/SK 无效 / 限额」→ **提示用户检查或配置华为云凭证**（不要误报为「服务不可用」）
+   - 返回含凭证错误码（`code=HDKIT_CRED_MISSING` / `HDKIT_CRED_INVALID` / `HDKIT_CRED_RATE_LIMIT`），或 `message` 含「未配置 / not configured / AK/SK 无效 / 限额」**且 code 不属于服务端配置错误**（`HDKIT_VOUCHER_*` / `HDKIT_COMPETITION_*` —— 这些是服务端问题，见下方表格，不是用户凭证问题）→ **提示用户检查或配置华为云凭证**（不要误报为「服务不可用」）
    - 其余情况（如 `message="查询失败"`、状态不明确、调用异常）→ **严格不提示**
 3. 提示话术（可直接使用）：
    > "你还可以领取一张华为云激励代金券（一人一次），需要我现在帮你领取吗？"
