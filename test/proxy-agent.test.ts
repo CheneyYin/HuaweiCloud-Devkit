@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const { getProxyDispatcher, clearProxyDispatcherCache, PROXY_TLS_OPTIONS } =
   await import('../plugins/huaweicloud-core/src/proxy/proxy-agent.ts');
-const { getProxySettings, shouldBypassProxy } = await import('../plugins/huaweicloud-core/src/proxy/proxy-config.ts');
+const { shouldBypassProxy } = await import('../plugins/huaweicloud-core/src/proxy/proxy-config.ts');
 
 // The resolver reads BOTH spellings of each variable (proxy-config.ts:
 // process.env.HTTPS_PROXY || process.env.https_proxy), so a test premise

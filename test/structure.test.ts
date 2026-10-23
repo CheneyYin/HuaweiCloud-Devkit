@@ -1707,6 +1707,18 @@ test('expose_tunnel re-verifies from an independent exec session and classifies 
   assert.match(sandbox, /huaweicloud_sandbox_keepalive_watchdog/);
   assert.match(sandbox, /AUTO-enrolls into the keepalive watchdog/);
   assert.match(sandbox, /tunnel-persistence\.md/);
+  // The 1.1.12 full-stack knowledge (the terminal review's one completeness
+  // find — it arrived under no issue number and fell through the per-unit
+  // checkpoints): the PostgREST reference, the routing section, and the
+  // backend-present integration note.
+  assert.ok(
+    existsSync(
+      join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'references', 'fullstack-postgrest.md'),
+    ),
+  );
+  assert.match(sandbox, /## Full-Stack: REST API over PostgreSQL \(PostgREST\)/);
+  assert.match(sandbox, /Backend present\?/);
+  assert.match(sandbox, /fullstack-postgrest\.md/);
   assert.match(sessionManager, /\[ "\$code" = "404" \] && \[ "\$body" = "\$\{DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER\}" \]/);
 
   // Retry exhaustion on a gateway-dead URL must fail, not soften to a warning.

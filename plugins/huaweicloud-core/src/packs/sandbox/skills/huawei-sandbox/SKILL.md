@@ -456,9 +456,22 @@ Every tunnel deployed to the sandbox is keepalive-protected by default — `huaw
 - **Host dies (sandbox restart / session teardown)** — the watchdog re-attaches with `devbridge host <id>`; the URL is bound to the tunnel ID and never changes.
 - **Manual install / full-list replacement** — `huaweicloud_sandbox_keepalive_watchdog` with the `{tunnel_id, url}` list (it SETS the list; expose MERGES into it). Full doctrine: `references/tunnel-persistence.md`.
 
+## Full-Stack: REST API over PostgreSQL (PostgREST)
+
+When deploying a **full-stack workbench project** (前后端工作台) or asking for a database-backed REST API inside the sandbox (postgres, postgrest, 数据库, RESTful 接口, 工作台后端):
+
+1. **PostgreSQL 16 from PGDG** — the OS repo only ships PG 13, and PostgREST 16.x requires PG ≥ 14. HCE is NOT el8-lib-compatible: hand-write the repo file (the el8 path is `rhel-8-aarch64` WITH a hyphen), install the RPMs one-per-call with `--nodeps`, and shim the sonames — including the REAL `libicu-60` package (ICU symlinks load but crash on versioned symbols).
+2. **PostgREST `linux-static-aarch64`** — dynamic Ubuntu builds fail on HCE glibc. Create the schema and a read-only `api_user` role (the anon role gates all writes; POST/PATCH → 401).
+3. **Nginx single-origin** — `/` serves the frontend, `/api/` reverse-proxies to PostgREST (no CORS, same origin). The frontend dir needs `chmod o+x` on the whole path chain or nginx returns 403.
+4. **Expose + keep alive (automatic)** — `huaweicloud_sandbox_expose_tunnel` with the nginx port; it AUTO-enrolls the tunnel into the keepalive watchdog. Prefer `expiry_hours: 720` for long-lived workbench deployments.
+
+Complete measured procedure (with the full command chain): see `references/fullstack-postgrest.md`.
+
 ## Web Application Deployment
 
 When deploying a web application to the sandbox, build the app inside the sandbox before exposing it. Source code is uploaded, dependencies installed, and the framework built in the sandbox environment.
+
+**Backend present?** If the project includes a PostgreSQL + PostgREST backend (or the developer asks for one), set up the backend FIRST by following [Full-Stack: REST API over PostgreSQL](#full-stack-rest-api-over-postgresql-postgrest) — install PostgreSQL/PostgREST, create the schema, and point the frontend's nginx `/api/` location at PostgREST — then continue with the steps below. Every tunnel exposed afterwards is auto-enrolled into the keepalive watchdog.
 
 **沙箱无 systemd（实测 #935 报告3 问题3）**：沙箱为无 systemd 的容器环境，`systemctl` 全部失效（`System has not been booted with systemd`）—— 不要用 `systemctl start/reload/restart nginx`。Nginx 配置变更直接使用 `nginx -t` 验证 + `nginx -s reload` 热加载，或直接执行 nginx 二进制（`sudo nginx` 启动 / `nginx -s stop` 停止）。`huaweicloud_sandbox_deploy_nginx` 工具返回的 nextStep 文案与该语义一致（配置写入后自动回验存在性与 `nginx -t`，通过后即生效，无需 systemctl）。
 
@@ -1024,6 +1037,7 @@ Returns `complete: true/false`, `score`, and `nextStep` to fix missing items.
 - [Framework Commands](references/framework-commands.md) — command mapping for all supported frameworks
 - [Nginx Templates](references/nginx-templates.md) — nginx configuration templates and fallback
 - [Tunnel persistence](references/tunnel-persistence.md) — renewal, re-attach, and the keepalive watchdog
+- [Full-stack PostgREST](references/fullstack-postgrest.md) — the measured PostgreSQL 16 + PostgREST + nginx procedure
 
 ## Critical Warnings
 

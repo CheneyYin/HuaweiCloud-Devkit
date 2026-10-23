@@ -5,7 +5,6 @@ import {
   parseCallerIdentity,
   parseAuthDomains,
   judgeAccountType,
-  checkAccountType,
 } from '../plugins/huaweicloud-core/src/auth/account-type.ts';
 
 // Real captured outputs from six live credentials (2026-10-19, issue #954):

@@ -106,8 +106,16 @@ import {
 } from './hcloud-probe.ts';
 import { asText } from './lib/as-text.ts';
 import { asRecord } from './lib/as-record.ts';
-import { skillTreeEquals } from './lib/skill-tree.ts';
-import { readNativeReceipt, marketplacePayloadTree } from './lib/native-receipt.ts';
+import { parseSkillManifest, parseCoreSkillNames } from './lib/skill-manifest.ts';
+import { listSkillDirs, skillTreeEquals } from './lib/skill-tree.ts';
+import {
+  nativeReceiptPath,
+  readNativeReceipt,
+  writeNativeReceipt,
+  sweepReceiptTmpFiles,
+  marketplacePayloadTree,
+  isCoreNameShape,
+} from './lib/native-receipt.ts';
 import { PACK_IDS, type PackId } from './lib/pack-types.ts';
 import {
   DEPENDENCIES,
