@@ -1030,10 +1030,15 @@ test('telemetry hooks keep the shared classification surface in lockstep', () =>
       referenceWrite,
       `${hookName} WRITE_VERBS drifted from the shared list`,
     );
-    assert.match(
-      source,
-      /HUAWEICLOUD_DEVKIT_TELEMETRY[^\n]{0,40}===? ?['"]off['"]/,
-      `${hookName} must gate the local spool on the telemetry opt-out`,
+    // The opt-out gate, polarity pinned: the JS hooks skip the spool on
+    // === 'off', the Python hooks on os.environ.get(...) == "off" — a hook
+    // that inverted the comparison (spooling only when the user opted OUT)
+    // must fail here, not pass on a polarity-agnostic substring.
+    const jsOptOut = source.match(/HUAWEICLOUD_DEVKIT_TELEMETRY === 'off'/);
+    const pyOptOut = source.match(/HUAWEICLOUD_DEVKIT_TELEMETRY"\) == "off"/);
+    assert.ok(
+      jsOptOut || pyOptOut,
+      `${hookName} must gate the local spool on the telemetry opt-out (skip-when-off only)`,
     );
   }
 
@@ -1383,7 +1388,14 @@ test('setup-cli.ts supports the codearts target end to end', () => {
   // installMarkerDirForTarget is a PAYLOAD_TARGETS lookup (its own test pins
   // the derivation, every non-codex row, and codex's natural null).
   assert.match(setup, /function installMarkerDirForTarget\(target: string\)/);
-  assert.match(setup, /function writeInstallMarker\(target: string\)/);
+  // The .installed marker is written at payload placement, inside
+  // copyServerPayload — and only when the server itself shipped (skipDist
+  // writes no marker: nothing will run from that dir to consume one).
+  const payloadModuleMarker = readSource(join('src', 'install-payload.ts'));
+  assert.match(
+    payloadModuleMarker,
+    /if \(!opts\.skipDist\) \{\s*\n\s*writeFileSync\(join\(pluginDest, '\.installed'\)/,
+  );
   // doctor checks the skills tree inside installed plugin dirs, and native
   // skill dirs only for stale-copy detection. The tree check is set
   // equality against the shipped manifest (both directions — an extra dir

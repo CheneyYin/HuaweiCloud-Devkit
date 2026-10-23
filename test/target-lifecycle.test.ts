@@ -18,6 +18,13 @@ const setupCli = join(root, 'bin', 'setup.cjs');
 // uninstall. The install/update pair unification in setup-cli.ts must keep
 // every one of these green without edits.
 
+// One warm npm cache shared by the lifecycle tests: every install spawns
+// installRuntimeDeps (npm install undici), and a cold per-fixture cache
+// puts ~10 registry fetches on the suite's critical path (AGENTS.md
+// documents 79s on a bad registry day). npm's cache is content-addressed;
+// sharing it across fixtures is safe.
+const sharedNpmCache = fixtureDir('tl-npm-cache-');
+
 function makeEnv(home: string) {
   const env: Record<string, string | undefined> = {
     ...process.env,
@@ -28,6 +35,7 @@ function makeEnv(home: string) {
     HERMES_HOME: join(home, '.hermes'),
     HUAWEICLOUD_HOME: home,
     HUAWEICLOUD_DEVKIT_SKIP_OFFICEACE_DETECT: '1',
+    npm_config_cache: sharedNpmCache,
   };
   for (const key of [
     'ATOMCODE_HOME',
@@ -206,6 +214,23 @@ test('codex-desktop install does not destroy an existing openclaw installation',
   const res2 = runCli(residueHome, cwd, ['install', '--target', 'codex-desktop']);
   assert.equal(res2.status, 0, res2.stderr);
   assert.ok(!existsSync(residueDir), 'pre-marketplace residue without a payload is still cleaned');
+});
+
+test('hermes --skip-mcp-server install ships no marker: nothing will run from that dir', () => {
+  // The .installed marker means "a server payload was placed — restart to
+  // activate". A clone-based skip-mcp install ships skills+safety but no
+  // dist/, and no server ever runs from the plugin dir to consume the
+  // marker (the running server deletes it at boot) — a marker there would
+  // print doctor's restart banner forever for a legitimate flow.
+  const home = fixtureDir('hm-skip-home-');
+  const cwd = fixtureDir('hm-skip-proj-');
+  const pluginDir = join(home, '.hermes', 'huaweicloud-plugins');
+
+  const res = runCli(home, cwd, ['install', '--target', 'hermes', '--skip-mcp-server']);
+  assert.equal(res.status, 0, res.stderr);
+  assert.ok(existsSync(join(pluginDir, 'skills', '.manifest.json')), 'skills still ship as server data');
+  assert.ok(!existsSync(join(pluginDir, 'dist')), 'no server shipped');
+  assert.ok(!existsSync(join(pluginDir, '.installed')), 'no payload placement, no restart marker');
 });
 
 test('hermes update refreshes payload, config, and hooks', () => {

@@ -1,9 +1,10 @@
 // Collapse an unknown parsed value to a record shape, arrays and null
 // included, so follow-up property reads never throw. The canonical home for
-// the setup-cli graph (setup-cli, agent-registration, packs-policy migrated);
-// ~15 private copies remain elsewhere (auth/credentials, the hdkit clients'
-// siblings, secret-vault, risk-rule-engine, ...) as baselined legacy —
-// migrate them here when touched (a one-line import + delete).
+// the whole src tree — the consolidation is complete (every byte-identical
+// private copy migrated, including the hdkit clients, auth, the vault
+// store, and the packs). lib/opencode-permission-seam.ts keeps its own
+// isRecord type predicate (a guard, not a collapse) and imports this for
+// the collapse itself.
 export function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }

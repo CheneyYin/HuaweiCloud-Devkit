@@ -1425,7 +1425,12 @@ test('install --target all still installs every supported agent', () => {
     join(home, '.atomcode', 'huaweicloud-plugins'),
   ];
   try {
-    const res = run('all', home, cwd, 'install');
+    // OfficeAce needs a usable config root to install for real (the marker
+    // now means "payload placed" — a no-op officeace step correctly leaves
+    // none, where the old command layer wrote a lying marker).
+    mkdirSync(join(home, '.office-claw'), { recursive: true });
+    writeFileSync(join(home, '.office-claw', 'capabilities.json'), '{}');
+    const res = run('all', home, cwd, 'install', { OFFICE_CLAW_CONFIG_ROOT: join(home, '.office-claw') });
     assert.equal(res.status, 0, res.stderr);
     for (const dir of pluginDirs) {
       assert.ok(existsSync(join(dir, '.installed')), `install marker missing for ${dir}`);

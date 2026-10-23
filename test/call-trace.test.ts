@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { fixtureDir } from './fixture-dir.ts';
-
 import {
   recordDisclosure,
   recordToolCall,

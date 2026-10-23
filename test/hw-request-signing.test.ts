@@ -13,10 +13,17 @@ import { signSdkHmacRequest } from '../plugins/huaweicloud-core/src/lib/hw-reque
 // caller shapes: GET with/without security token, POST with body with/without
 // token, plus the falsy-body contract.
 //
-// The literals were generated once from the merged implementation at
-// behavior-parity with both legacy signers (traced line-by-line during the
-// unification) and are frozen: any change to the signing algebra must be
-// deliberate and update these vectors in the same commit.
+// Parity provenance: the literals below were cross-verified against BOTH
+// pre-merge signers extracted from git history (befa0a6:
+// auth/credential-validator.ts signIamRequest and lib/hdkit/hwlink-api.ts
+// signRequest), each re-implemented with the timestamp pinned to
+// FIXED_TS — 4/4 signatures byte-identical. FIXED_TS uses a single
+// trailing Z, a form neither legacy wall-clock emits (the real clock
+// produces the double-Z quirk pinned in the last test); the timestamp is
+// opaque to the signing algebra, so this is fine — do not "reconcile" it.
+// Any change to the signing algebra must be deliberate and update these
+// vectors in the same commit; the legacy cross-check is re-runnable from
+// git history with the same recipe.
 
 const IAM_BASE = 'https://iam.myhuaweicloud.com';
 const HWLINK_BASE = 'https://devstation.myhuaweicloud.com';

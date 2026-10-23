@@ -33,16 +33,20 @@ import { listSkillDirs } from './lib/skill-tree.ts';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = resolve(__dirname, '..');
 
-let pkgVersion = '0.0.0';
-try {
-  const pkg = JSON.parse(readFileSync(resolve(PLUGIN_ROOT, '..', '..', 'package.json'), 'utf8')) as {
-    version?: unknown;
-  };
-  if (typeof pkg.version === 'string') pkgVersion = pkg.version;
-} catch {
-  // missing or corrupt package.json keeps the 0.0.0 default — the generated
-  // plugin-dir package.json only carries it for npm's benefit
-}
+// The installed package's version — one read for the whole setup-cli graph
+// (the banner, the generated plugin-dir package.json, and doctor's
+// X-HW-Client-Version comparisons). Missing or corrupt package.json keeps
+// the 0.0.0 default.
+export const pkgVersion: string = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync(resolve(PLUGIN_ROOT, '..', '..', 'package.json'), 'utf8')) as {
+      version?: unknown;
+    };
+    return typeof pkg.version === 'string' ? pkg.version : '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+})();
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -141,6 +145,17 @@ export function copyServerPayload(pluginDest: string, opts: { skipDist?: boolean
   console.log(
     `  Skills (server data; MCP catalog + stdio skillRoot instructions) -> ${join(pluginDest, 'skills')}${stale > 0 ? ` (removed ${stale} stale)` : ''}`,
   );
+  // The .installed marker means "a server payload was placed here — restart
+  // the agent to activate it". It tracks PAYLOAD PLACEMENT, not overall
+  // deploy success: a deploy that fails after this point (e.g.
+  // installRuntimeDeps on a network failure) still swapped the on-disk
+  // payload, and the restart banner is exactly what doctor should print.
+  // A payload placed with skipDist ships no server, so it writes no marker —
+  // nothing will ever run from that dir to consume one (the running server
+  // deletes the marker at boot, mcp-server.ts).
+  if (!opts.skipDist) {
+    writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
+  }
 }
 
 // Remove huawei* entries in targetDir that no longer exist in sourceDir (stale files from an older version).

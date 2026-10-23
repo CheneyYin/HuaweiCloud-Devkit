@@ -35,6 +35,19 @@ let packsFlagCache: PacksFlag | undefined;
 // Parse and validate --packs once per process; bogus input exits non-zero on
 // stderr with the unknown id(s) and the valid id list, mirroring --target.
 // Call before any file is copied so a typo cannot half-install.
+// Parse a comma-separated pack id list, the shared core of --packs flag
+// validation and the packs command family's argv parse. Returns the trimmed
+// non-empty ids, or the bogus ones for the caller to report (the callers
+// differ in failure mode: the flag exits the process, the command sets
+// exitCode and returns).
+export function parsePackIdList(raw: string): { ids: string[]; bogus: string[] } {
+  const ids = raw
+    .split(',')
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+  return { ids, bogus: ids.filter((id) => !PACK_ID_SET.has(id)) };
+}
+
 export function resolvePacksFlag(): PacksFlag {
   if (packsFlagCache) return packsFlagCache;
   const idx = process.argv.indexOf('--packs');
@@ -49,11 +62,7 @@ export function resolvePacksFlag(): PacksFlag {
     if (raw.trim().toLowerCase() === 'all') {
       result = { kind: 'all' };
     } else {
-      const ids = raw
-        .split(',')
-        .map((id) => id.trim())
-        .filter((id) => id.length > 0);
-      const bogus = ids.filter((id) => !PACK_ID_SET.has(id));
+      const { ids, bogus } = parsePackIdList(raw);
       if (bogus.length > 0) {
         console.error(`Unknown pack id(s): ${bogus.join(', ')}`);
         console.error(`Valid pack ids: ${PACK_IDS.join(', ')} (or "all")`);

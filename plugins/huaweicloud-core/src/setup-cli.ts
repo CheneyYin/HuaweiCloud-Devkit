@@ -134,6 +134,7 @@ import {
   nativeSkillDirs as nativeSkillDirsOf,
   nativeSyncDirs as nativeSyncDirsOf,
   payloadCoreNames,
+  pkgVersion,
   pruneStale,
   removeIfExists,
   removeOwnedSkillsFrom as removeOwnedSkillsFromIn,
@@ -149,7 +150,7 @@ import {
   applyPacksToEntry,
   packsCarryValue,
   packsEntryPending,
-  PACK_ID_SET,
+  parsePackIdList,
   readDevkitPacksFromJson,
   readDevkitPacksFromYaml,
   resolvePacksFlag,
@@ -191,14 +192,6 @@ const { DatabaseSync } = sqliteModule;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = resolve(__dirname, '..');
 const PACKAGE_ROOT = resolve(PLUGIN_ROOT, '..', '..');
-
-let pkgVersion = '0.0.0';
-try {
-  const pkg = asRecord(JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8')));
-  if (typeof pkg.version === 'string') pkgVersion = pkg.version;
-} catch {
-  // missing or corrupt package.json keeps the 0.0.0 default — banner display only
-}
 
 const BANNER = `
 ╔══════════════════════════════════════════════╗
@@ -1154,8 +1147,12 @@ async function deployOpenClaw(mode: DeployMode): Promise<void> {
   const pluginDest = openclawPluginsDir();
 
   mkdirSync(pluginDest, { recursive: true });
-  copyDir(commandsSrc, join(homedir(), '.agents', 'commands'));
-  console.log(`  Commands${deployWord(mode)} -> ${join(homedir(), '.agents', 'commands')}`);
+  const commandsDir = join(homedir(), '.agents', 'commands');
+  copyDir(commandsSrc, commandsDir);
+  const staleCommands = mode === 'update' ? pruneStale(commandsDir, commandsSrc) : 0;
+  console.log(
+    `  Commands${deployWord(mode)} -> ${commandsDir}${staleCommands > 0 ? ` (removed ${staleCommands} stale)` : ''}`,
+  );
   copyServerPayload(pluginDest);
 
   writeMcpJsonAndCodexManifest(pluginDest, 'openclaw', mode);
@@ -1221,7 +1218,12 @@ async function deployCodexDesktop(mode: DeployMode): Promise<void> {
     // cleanupNativeDirs() at the command level. The plugin dir itself IS
     // OpenClaw's live install location (openclawPluginsDir is the same
     // path), so the cleanup fires only when no server payload lives there —
-    // a live OpenClaw install must survive a codex-desktop install.
+    // a live OpenClaw install must survive a codex-desktop install. Known
+    // trade-off: a genuine pre-marketplace devkit install in that dir also
+    // carried a payload and is now indistinguishable from a live OpenClaw
+    // install, so it is deliberately left in place (destroying it is
+    // irreversible; doctor's stale-tree check flags hollow trees); a
+    // payload-less dir is unambiguous residue and still goes.
     const legacyPluginsDir = join(homedir(), '.agents', 'huaweicloud-plugins');
     if (existsSync(legacyPluginsDir) && !mcpServerInstalled(legacyPluginsDir)) {
       removeIfExists(legacyPluginsDir);
@@ -1493,7 +1495,7 @@ function isPlainLocal(value: unknown): boolean {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-async function deployCodeArtsWork(mode: DeployMode): Promise<void> {
+async function deployCodeArtsWork(_mode: DeployMode): Promise<void> {
   const pluginDest = codeartsWorkPluginsDir();
 
   copyServerPayload(pluginDest);
@@ -1685,7 +1687,7 @@ function removeAtomcodeHooks(): void {
   }
 }
 
-async function deployWorkBuddy(mode: DeployMode): Promise<void> {
+async function deployWorkBuddy(_mode: DeployMode): Promise<void> {
   const pluginDest = workbuddyPluginsDir();
 
   copyServerPayload(pluginDest);
@@ -1788,7 +1790,7 @@ function ensureAtomcodeMcpConfig(): boolean {
   });
 }
 
-async function deployAtomCode(mode: DeployMode): Promise<void> {
+async function deployAtomCode(_mode: DeployMode): Promise<void> {
   const pluginDest = atomcodePluginsDir();
 
   copyServerPayload(pluginDest);
@@ -3079,24 +3081,11 @@ async function checkForUpdate(): Promise<void> {
 // The .installed marker directory for a target. A lookup over
 // PAYLOAD_TARGETS, not a second hand list: codex (CLI-managed, no plugin
 // dir) and any unknown target are absent from the table, so they naturally
-// return null. writeInstallMarker and the single-target willPlacePayload
-// gate both consume this.
+// return null. The single-target willPlacePayload gate consumes this. The
+// .installed marker itself is written by copyServerPayload at payload
+// placement (install-payload.ts owns its semantics).
 function installMarkerDirForTarget(target: string): string | null {
   return PAYLOAD_TARGETS.find((t) => t.id === target)?.dir() ?? null;
-}
-
-// The .installed marker, owned by the command layer in BOTH modes:
-// runInstallStep writes it after a successful install step, the update
-// dispatch writes it after a successful row.update(). Deploy pipelines never
-// write it themselves — a failed deploy (e.g. installRuntimeDeps throwing on
-// a network failure) leaves no marker, so doctor's restart hint never fires
-// for a half-installed target. dsh and officeace historically wrote it
-// mid-deploy; their internal writes are gone in favor of this single owner.
-function writeInstallMarker(target: string): void {
-  const markerDir = installMarkerDirForTarget(target);
-  if (!markerDir) return;
-  mkdirSync(markerDir, { recursive: true });
-  writeFileSync(join(markerDir, '.installed'), new Date().toISOString());
 }
 
 async function cmdInstall(): Promise<void> {
@@ -3154,7 +3143,6 @@ async function cmdInstall(): Promise<void> {
         return false;
       }
       syncNativeSkillsForTarget(stepTarget);
-      writeInstallMarker(stepTarget);
       return true;
     } catch (error) {
       installFailures.push(stepTarget);
@@ -4970,7 +4958,6 @@ async function dispatchUpdateTarget(target: string): Promise<boolean> {
     console.log(`${all && row.id !== 'opencode' ? '\n' : ''}[${row.label}]`);
     await row.update();
     syncNativeSkillsForTarget(row.id);
-    writeInstallMarker(row.id);
     updatedAny = true;
     if (!all) {
       console.log(`\n\x1b[32mUpdate complete.\x1b[0m`);
@@ -5727,13 +5714,10 @@ function cmdPacksWrite(mode: 'enable' | 'disable' | 'all'): void {
       process.exitCode = 1;
       return;
     }
-    ids = raw
-      .split(',')
-      .map((id) => id.trim())
-      .filter((id) => id.length > 0);
-    const bogus = ids.filter((id) => !PACK_ID_SET.has(id));
-    if (bogus.length > 0) {
-      console.error(`Unknown pack id(s): ${bogus.join(', ')}`);
+    const parsed = parsePackIdList(raw);
+    ids = parsed.ids;
+    if (parsed.bogus.length > 0) {
+      console.error(`Unknown pack id(s): ${parsed.bogus.join(', ')}`);
       console.error(`Valid pack ids: ${PACK_IDS.join(', ')}`);
       process.exitCode = 1;
       return;
