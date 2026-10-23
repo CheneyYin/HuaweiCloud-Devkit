@@ -132,7 +132,21 @@ const INTENT_TABLE: IntentRow[] = [
     run: () => ({ stdout: '' }),
   },
   {
-    // upload_file reset: `rm -f "<tmp>"` (double-quoted path).
+    // upload_file reset (#953): `mkdir -p "$(dirname "<remote>")" && rm -f "<tmp>"`
+    // — the compound form since the remote-parent-mkdir fix; the `rm` intent
+    // is preserved so the case expectation and the fs.delete semantics carry
+    // over unchanged.
+    intent: 'rm',
+    pattern: /^mkdir -p "\$\(dirname "[^"]*"\)" && rm -f "([^"]+)"$/,
+    run: (m, fs) => {
+      fs.delete(m[1]!);
+      return { stdout: '' };
+    },
+  },
+  {
+    // upload_file reset, pre-#953 shape: bare `rm -f "<tmp>"`. Kept so
+    // hand-written older scripts still recognize (the protocol pin feeds
+    // both shapes).
     intent: 'rm',
     pattern: /^rm -f "([^"]+)"$/,
     run: (m, fs) => {

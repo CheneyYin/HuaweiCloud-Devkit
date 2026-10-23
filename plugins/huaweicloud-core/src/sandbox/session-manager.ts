@@ -461,7 +461,10 @@ export function classifyLocalUploadPath(localPath: string, kind: 'file' | 'direc
 // chunk writes — the `printf >>` appends land in "${remotePath}.b64tmp" next to the
 // target, so an absent directory (e.g. /workspace/game2048/) would fail the very first
 // batch. This aligns base64-path behavior with upload_project's file server (which
-// already makedirs). Both paths are quoted; "path with spaces" is covered by tests.
+// already makedirs). Paths are double-quoted for SPACES only — remote_path is
+// agent-supplied and $/"/` shapes are not sanitized here (same house quoting as every
+// other upload splice site; not a privilege boundary — exec_one_shot runs arbitrary
+// commands as the same principal). "path with spaces" is covered by tests.
 export function buildUploadResetCommand(remotePath: string, tmpPath: string): string {
   return `mkdir -p "$(dirname "${remotePath}")" && rm -f "${tmpPath}"`;
 }

@@ -1,12 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-
 import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 
 import { fixtureDir } from './fixture-dir.ts';
-
 import {
   resolveWsExecIndexUrl,
   splitBase64Chunks,
@@ -324,9 +322,12 @@ test('953: classifyLocalUploadPath distinguishes missing file vs missing parent 
   assert.match(err.message, /directory not found/);
   assert.match(err.message, new RegExp(escapeRegExp(dir + sep + 'no')));
   assert.match(err.message, /temp directory/);
+  assert.ok(err.message.includes(tmpdir()), 'the hint must name the real OS temp dir');
 
-  // Directory kind mirrors the three states for upload_project.
+  // Directory kind mirrors the three states for upload_project — including
+  // the file-as-local_dir type error uploadProjectWithSession throws.
   assert.equal(classifyLocalUploadPath(dir, 'directory'), null);
+  assert.match((classifyLocalUploadPath(existingFile, 'directory') as Error).message, /path is not a directory/);
   assert.match((classifyLocalUploadPath(join(dir, 'no', 'dir'), 'directory') as Error).message, /directory not found/);
 });
 
@@ -338,7 +339,7 @@ test('953: uploadFileWithSession creates the remote parent directory on the rese
   writeFileSync(local, 'hello-953');
   const seen: string[] = [];
   class ResetRecordingSession {
-    state: 'ready' = 'ready';
+    state: 'opening' | 'ready' | 'closed' = 'ready';
     close() {}
     async exec(command: string): Promise<{ stdout: string; exitCode: number }> {
       seen.push(command);
@@ -353,6 +354,7 @@ test('953: uploadFileWithSession creates the remote parent directory on the rese
     await uploadFileWithSession('ws-953', local, '/workspace/game2048/index.html');
   } finally {
     _setSessionConnectorForTests(null);
+    closeAllSessions();
   }
   const reset = seen.find((c) => c.includes('b64tmp'));
   assert.ok(reset, 'a reset command targeting the b64tmp file must have run');

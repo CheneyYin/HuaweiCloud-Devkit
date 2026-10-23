@@ -22,7 +22,10 @@ import {
   DEVBRIDGE_VERIFY_OK_STDOUT,
   FakeFs,
 } from './e2e/ws-fake/fake-shell.ts';
-import { parseDeployCheckOutput } from '../plugins/huaweicloud-core/src/sandbox/session-manager.ts';
+import {
+  buildUploadResetCommand,
+  parseDeployCheckOutput,
+} from '../plugins/huaweicloud-core/src/sandbox/session-manager.ts';
 import {
   buildDevbridgeVerifyScript,
   parseDevbridgeAuthOutput,
@@ -119,8 +122,17 @@ test('fake fs round-trip: printf batches → base64 decode → real md5', () => 
   const content = Buffer.from('Hello from the e2e upload case — line two for body mass.\n'.repeat(40), 'utf8');
   const b64 = content.toString('base64');
   const chunks = [b64.slice(0, 30000), b64.slice(30000)].filter(Boolean);
-  const reset = runShellCommand(`rm -f "/tmp/hello.b64tmp"`, fs);
-  assert.equal(reset.intent, 'rm');
+  // The reset pin feeds the PRODUCT's builder output through the recognizer —
+  // a buildUploadResetCommand shape change the fake no longer recognizes
+  // turns this red instead of silently degrading the e2e drift guard.
+  const resetCmd = buildUploadResetCommand('/tmp/hello.txt', '/tmp/hello.b64tmp');
+  assert.equal(
+    resetCmd,
+    'mkdir -p "$(dirname "/tmp/hello.txt")" && rm -f "/tmp/hello.b64tmp"',
+    'the #953 compound reset shape is pinned on the product side',
+  );
+  const reset = runShellCommand(resetCmd, fs);
+  assert.equal(reset.intent, 'rm', 'the fake must recognize the product reset shape');
   for (const chunk of chunks) {
     const append = runShellCommand(`printf '%s' '${chunk}' >> "/tmp/hello.b64tmp"`, fs);
     assert.equal(append.intent, 'printf-append');
