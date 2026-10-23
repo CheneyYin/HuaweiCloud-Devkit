@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { getProxyDispatcher } from './proxy/proxy-agent.ts';
+import { fetchWithProxy } from './proxy/proxy-agent.ts';
 import { asRecord } from './lib/as-record.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -115,13 +115,10 @@ async function fetchLiveManifest(): Promise<IconManifest> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
   try {
-    const dispatcher = await getProxyDispatcher(MANIFEST_URL);
-    const fetchOpts: RequestInit & { dispatcher?: unknown } = {
+    const resp = await fetchWithProxy(MANIFEST_URL, {
       headers: { 'User-Agent': 'huaweicloud-devkit/1.0' },
       signal: controller.signal,
-    };
-    if (dispatcher) fetchOpts.dispatcher = dispatcher;
-    const resp = await fetch(MANIFEST_URL, fetchOpts);
+    });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data: unknown = await resp.json();
     const manifest = parseManifest(data);

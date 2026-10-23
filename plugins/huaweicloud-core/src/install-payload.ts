@@ -121,7 +121,18 @@ export function copyDir(src: string, dest: string): void {
 // the dispatch layer).
 export function copyServerPayload(pluginDest: string, opts: { skipDist?: boolean } = {}): void {
   if (!opts.skipDist) {
-    copyDir(join(PLUGIN_ROOT, 'dist'), join(pluginDest, 'dist'));
+    const distSrc = join(PLUGIN_ROOT, 'dist');
+    // A missing dist/ must abort like a missing skills tree below: copyDir's
+    // existsSync guard would silently no-op the copy while this function
+    // still prints the success line AND writes the restart marker for a
+    // dir no server can start from (a fresh clone without npm run build).
+    if (!existsSync(distSrc)) {
+      throw new Error(
+        `dist/ missing at ${distSrc} — the payload cannot ship without the server. ` +
+          'From a git checkout run: npm run build; from a broken install run: npx huaweicloud-devkit install',
+      );
+    }
+    copyDir(distSrc, join(pluginDest, 'dist'));
     console.log(`  MCP Server -> ${join(pluginDest, 'dist')}`);
   }
   copyDir(join(PLUGIN_ROOT, 'safety'), join(pluginDest, 'safety'));

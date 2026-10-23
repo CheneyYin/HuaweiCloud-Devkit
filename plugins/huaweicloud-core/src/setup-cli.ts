@@ -996,10 +996,10 @@ function codexStatus(): boolean {
 }
 
 // One deploy pipeline per directory-based target, run in both modes. Install
-// and update are the same artifact flow; update additionally prunes stale
-// files, writes the .installed marker itself (install mode gets its marker
-// from runInstallStep at the command level), and logs the same lines with an
-// "updated" marker on the copied artifacts.
+// and update are the same artifact flow; both get the .installed restart
+// marker from copyServerPayload at payload placement (a skipDist payload
+// ships no server and writes none). Update additionally prunes stale files
+// and logs the same lines with an "updated" marker on the copied artifacts.
 type DeployMode = 'install' | 'update';
 
 const deployWord = (mode: DeployMode): string => (mode === 'update' ? ' updated' : '');
