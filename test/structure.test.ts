@@ -626,6 +626,67 @@ test('KooCLI 7.3.12 pin: the OBS website/cors capability claims are current, not
   assert.match(iacRow, /KooCLI 7\.3\.12\+ ships `hcloud OBS website/);
 });
 
+test('the #935/#971 ECS+iac field knowledge keeps its live-verified command forms', () => {
+  // The 1.1.10/1.1.12 wave was ported from main with every command dry-run
+  // verified against the pinned 7.3.12 binary — main's own forms USE_ERROR on
+  // it (missing required params, v2-era flag names, wrong operation names).
+  // Main still carries the broken forms, so a future sync copy pass is the
+  // concrete regression vector; these pins keep the corrected doctrine in.
+  const iac = readFileSync(join(pluginRoot, 'src', 'packs', 'huaweicloud-cli', 'skills', 'huawei-iac', 'SKILL.md'), 'utf8');
+  const ecsCreate = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'huaweicloud-cli', 'skills', 'huawei-ecs', 'references', 'create-instance.md'),
+    'utf8',
+  );
+  const ecsTrouble = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'huaweicloud-cli', 'skills', 'huawei-ecs', 'references', 'troubleshooting.md'),
+    'utf8',
+  );
+  const ecsWin = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'huaweicloud-cli', 'skills', 'huawei-ecs', 'references', 'windows-ssh.md'),
+    'utf8',
+  );
+  // UpdateSubnet requires --vpc_id + --subnet.name on 7.3.12, and the DNS
+  // pair is cn-north-4's, not universal (main's rows omit both facts).
+  for (const [label, text] of [
+    ['iac SKILL.md', iac],
+    ['create-instance.md', ecsCreate],
+  ] as const) {
+    assert.match(
+      text,
+      /--vpc_id=<vpc-id> --subnet_id=<(?:subnet-)?id> --subnet\.name=<name>/,
+      `${label}: the UpdateSubnet DNS pre-fix must carry the required params`,
+    );
+    assert.doesNotMatch(
+      text,
+      /UpdateSubnet --subnet_id=[^ ]+ --subnet\.dnsList/,
+      `${label}: the bare main form (USE_ERRORs on 7.3.12) must not return`,
+    );
+  }
+  // The cash-balance risk-control doctrine (vouchers do not participate).
+  assert.match(iac, /代金券不参与按量付费下单风控/);
+  // v3 CreateSecurityGroupRule takes multiport; the v2-era port_range pair
+  // must not appear as a command flag (the explanatory mention is fine).
+  assert.match(ecsWin, /security_group_rule\.multiport=22/);
+  for (const [label, text] of [
+    ['windows-ssh.md', ecsWin],
+    ['troubleshooting.md', ecsTrouble],
+  ] as const) {
+    assert.doesNotMatch(
+      text,
+      /security_group_rule\.port_range_(?:min|max)=/,
+      `${label}: the v2-era flag form must not return as a command`,
+    );
+  }
+  // ListSecurityGroupRules v3 takes the array form; the job-status operation
+  // is ECS ShowJob (NovaShowJob is a wrong spelling); ListServersDetails
+  // filters by --server_id (never a bare --id).
+  assert.match(ecsTrouble, /--security_group_id\.1=<sg-id>/);
+  assert.doesNotMatch(ecsTrouble, /ListSecurityGroupRules --security_group_id=(?!\.)/);
+  assert.match(ecsTrouble, /ECS ShowJob --job_id=<job-id>/);
+  assert.match(ecsTrouble, /ListServersDetails[^\n]*--server_id=/);
+  assert.doesNotMatch(ecsTrouble, /ListServersDetails [^\n]* --id=/);
+});
+
 test('huawei-voucher covers HDKIT_COMPETITION_NOT_CONFIGURED', () => {
   const voucher = readFileSync(
     join(pluginRoot, 'src', 'packs', 'voucher', 'skills', 'huawei-voucher', 'SKILL.md'),
