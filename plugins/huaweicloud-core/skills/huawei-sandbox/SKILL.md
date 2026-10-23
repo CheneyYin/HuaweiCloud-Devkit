@@ -1,6 +1,6 @@
 ---
 name: huawei-sandbox
-description: 'Use when creating, connecting, or managing Huawei Cloud Sandbox instances and workspace terminals, or when a task needs a temporary runtime to deploy, run, or preview a web application. Covers sandbox lifecycle (check-user, sign-agreement, connect, release), session-based terminal execution, and credential injection. Triggers on: sandbox, workspace, terminal, web app deployment, deploy web app, preview app, deploy github, github repo, deploy repo, website, static site, web application, hwlink, devstation, hdkitservice, remote exec. NOT for: ECS instances (use huawei-ecs), CCE clusters (use huawei-cce).'
+description: 'Use when creating, connecting, or managing Huawei Cloud Sandbox instances and workspace terminals, or when a task needs a temporary runtime to deploy, run, or preview a web application, backend service, or full-stack workbench. Covers sandbox lifecycle (check-user, sign-agreement, connect, release), session-based terminal execution, and credential injection. Triggers on: sandbox, workspace, terminal, web app deployment, deploy web app, preview app, deploy github, github repo, deploy repo, website, static site, web application, backend service, 工作台, workbench, full-stack, 全栈, CRUD 应用, database-backed REST API, PostgREST, postgres, hwlink, devstation, hdkitservice, remote exec. NOT for: ECS instances (use huawei-ecs), CCE clusters (use huawei-cce).'
 version: 1
 ---
 
@@ -26,6 +26,22 @@ Hard rules:
 - "部署到华为云" / "deploy to Huawei Cloud" / "上线" alone is NOT a named target — still run the gate.
 - Include the OBS domain reminder and the ECS EIP pairing reminder in the options as presented.
 - After the choice: sandbox → continue with this skill; OBS → `huawei-obs`; ECS → `huawei-ecs` / `huawei-iac`; CCE → `huawei-cce`.
+
+## Stack-Selection Gate (MANDATORY — do not skip)
+
+When the request involves a **workbench / 工作台 / 全栈 / full-stack project** — front-end plus back-end, CRUD with persistence, or a database-backed app — you MUST treat it as a **full-stack workbench deployment**: the back end defaults to **PostgreSQL + PostgREST** even when the developer never mentions 数据库/postgres/CRUD. Do NOT silently fall through to the SPA/nginx-only path.
+
+Use the `question` tool to confirm the stack whenever the backend is ambiguous, presenting the PostgREST default first:
+
+1. **PostgreSQL + PostgREST 全栈 (recommended)** — schema + read-only `api_user` role, nginx `/api/` reverse proxy; the REST layer needs zero application code
+2. **应用自带后端** — the project ships its own server (Express/Next API/Nuxt server routes); deploy it inside the sandbox per its framework
+3. **纯静态/SPA** — no persistence; nginx-only
+
+Hard rules:
+
+- **NEVER infer or default the stack to SPA** when persistence is implied: 工作台/workbench/全栈/full-stack/CRUD/数据库/持久化 ⇒ full-stack (PostgREST default) unless the developer explicitly picks otherwise.
+- **Pre-code checkpoint (MANDATORY)**: before uploading or writing ANY application code, verify the backend choice matches this gate. If an SPA-only deployment already started and persistence turns out to be implied, STOP, tell the developer, and redirect to the full-stack path — do not paper over it with a bolted-on static backend.
+- After the choice: PostgREST → follow [Full-Stack: REST API over PostgreSQL](#full-stack-rest-api-over-postgresql-postgrest) **FIRST** (backend before any frontend code), then continue with the web deployment steps; 自带后端 / 纯静态 → continue with [Web Application Deployment](#web-application-deployment).
 
 ## Overview
 
@@ -116,6 +132,8 @@ Domain expertise for Huawei Cloud Sandbox (DevStation) instances and workspace t
 ## Workflow
 
 **Step 0 — Target-Selection Gate (MANDATORY)**: before any sandbox lifecycle tool, confirm the target. If the developer asked to deploy/host/publish a site without naming a target, STOP and run the [Target-Selection Gate](#target-selection-gate-mandatory--do-not-skip) first; do NOT call `huaweicloud_sandbox_connect` until it is resolved. Proceed with this workflow only if the target is already confirmed as sandbox (or a temporary runtime).
+
+**Step 0.5 — Stack-Selection Gate (MANDATORY)**: before uploading or writing any application code, confirm the backend stack via the [Stack-Selection Gate](#stack-selection-gate-mandatory--do-not-skip). 工作台/workbench/全栈/full-stack/CRUD/持久化 ⇒ full-stack (PostgreSQL + PostgREST default) — do NOT start an SPA-only deployment for a workbench request.
 
 Setup is a **plugin-side preflight** — the developer should be asked a question only once, when the agreement actually needs signing:
 
@@ -468,7 +486,7 @@ Complete measured procedure (full command chain) plus the 2026-10 field notes (A
 
 When deploying a web application to the sandbox, build the app inside the sandbox before exposing it. Source code is uploaded, dependencies installed, and the framework built in the sandbox environment.
 
-**Backend present?** If the project includes a PostgreSQL + PostgREST backend (or the developer asks for one), set up the backend FIRST by following [Full-Stack: REST API over PostgreSQL](#full-stack-rest-api-over-postgresql-postgrest) — install PostgreSQL/PostgREST, create the schema, and point the frontend's nginx `/api/` location at PostgREST — then continue with the steps below. Every tunnel exposed afterwards is auto-enrolled into the keepalive watchdog.
+**Backend selection (Stack-Selection Gate)**: the backend choice was already confirmed by the [Stack-Selection Gate](#stack-selection-gate-mandatory--do-not-skip) before any code was uploaded. If the project includes a PostgreSQL + PostgREST backend (or the developer asked for one), set up the backend FIRST by following [Full-Stack: REST API over PostgreSQL](#full-stack-rest-api-over-postgresql-postgrest) — install PostgreSQL/PostgREST, create the schema, and point the frontend's nginx `/api/` location at PostgREST — then continue with the steps below. Every tunnel exposed afterwards is auto-enrolled into the keepalive watchdog.
 
 **沙箱无 systemd（实测 #935 报告3 问题3）**：沙箱为无 systemd 的容器环境，`systemctl` 全部失效（`System has not been booted with systemd`）—— 不要用 `systemctl start/reload/restart nginx`。Nginx 配置变更直接使用 `nginx -t` 验证 + `nginx -s reload` 热加载，或直接执行 nginx 二进制（`sudo nginx` 启动 / `nginx -s stop` 停止）。`huaweicloud_sandbox_deploy_nginx` 工具返回的 nextStep 文案与该语义一致（配置写入后自动回验存在性与 `nginx -t`，通过后即生效，无需 systemctl）。
 

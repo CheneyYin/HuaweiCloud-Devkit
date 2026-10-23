@@ -258,25 +258,25 @@ Step 1 above.
 
 ### Lost on reboot (系统盘 — must rebuild)
 
-| Component               | Location                 | Recovery action                                          |
-| ----------------------- | ------------------------ | -------------------------------------------------------- |
-| PostgreSQL 16 RPMs      | `/usr/pgsql-16/`         | Re-run the Step 1 `rpm -ivh --nodeps` block              |
-| Soname shims            | `/usr/lib64/lib*.so.*`   | Re-run the Step 1 symlink + `ldconfig` block             |
-| `postgres` user         | `/etc/passwd` entry      | `useradd -r -m postgres` then `chown postgres:postgres /workspace/pgsql/16/data` |
-| PostgREST binary        | `/opt/postgrest/`        | Re-download + sha256-verify + extract (Step 2)           |
-| pgrst.conf              | `/opt/postgrest/`        | Re-upload via `huaweicloud_sandbox_upload_file`          |
-| nginx config            | `/etc/nginx/conf.d/`     | Re-create via `huaweicloud_sandbox_deploy_nginx`         |
-| DevBridge 0.2.x binary  | `~/.huawei/bin/` (系统盘) | Re-install to `/workspace/.local/bin` (see #999)         |
-| DevBridge tunnel        | in-memory                | Re-run `huaweicloud_sandbox_expose_tunnel`               |
-| `/tmp` credentials      | `/tmp/hw_creds.sh` etc.  | Re-run `huaweicloud_sandbox_credentials`                 |
+| Component              | Location                  | Recovery action                                                                  |
+| ---------------------- | ------------------------- | -------------------------------------------------------------------------------- |
+| PostgreSQL 16 RPMs     | `/usr/pgsql-16/`          | Re-run the Step 1 `rpm -ivh --nodeps` block                                      |
+| Soname shims           | `/usr/lib64/lib*.so.*`    | Re-run the Step 1 symlink + `ldconfig` block                                     |
+| `postgres` user        | `/etc/passwd` entry       | `useradd -r -m postgres` then `chown postgres:postgres /workspace/pgsql/16/data` |
+| PostgREST binary       | `/opt/postgrest/`         | Re-download + sha256-verify + extract (Step 2)                                   |
+| pgrst.conf             | `/opt/postgrest/`         | Re-upload via `huaweicloud_sandbox_upload_file`                                  |
+| nginx config           | `/etc/nginx/conf.d/`      | Re-create via `huaweicloud_sandbox_deploy_nginx`                                 |
+| DevBridge 0.2.x binary | `~/.huawei/bin/` (系统盘) | Re-install to `/workspace/.local/bin` (see #999)                                 |
+| DevBridge tunnel       | in-memory                 | Re-run `huaweicloud_sandbox_expose_tunnel`                                       |
+| `/tmp` credentials     | `/tmp/hw_creds.sh` etc.   | Re-run `huaweicloud_sandbox_credentials`                                         |
 
 ### Survives reboot (/workspace — no rebuild needed)
 
-| Component              | Location                      | Notes                                              |
-| ---------------------- | ----------------------------- | -------------------------------------------------- |
-| Frontend pages         | `/workspace/<repo>/`          | Uploaded project persists                          |
-| PG data directory      | `/workspace/pgsql/16/data`    | Schema, roles, tables, seed data ALL survive       |
-| DevBridge 0.2.x binary | `/workspace/.local/bin/`      | If installed per #999 guidance                     |
+| Component              | Location                   | Notes                                        |
+| ---------------------- | -------------------------- | -------------------------------------------- |
+| Frontend pages         | `/workspace/<repo>/`       | Uploaded project persists                    |
+| PG data directory      | `/workspace/pgsql/16/data` | Schema, roles, tables, seed data ALL survive |
+| DevBridge 0.2.x binary | `/workspace/.local/bin/`   | If installed per #999 guidance               |
 
 Because PG data lives on `/workspace`, a restart does **NOT** require rebuilding
 the schema (`schema.sql`) or re-seeding data — `initdb` is also unnecessary.
