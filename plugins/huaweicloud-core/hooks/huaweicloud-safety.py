@@ -22,7 +22,12 @@ DENY_PREFIX = "Huawei Cloud safety hook blocked this action: "
 RULES_PATH = Path(__file__).resolve().parents[1] / "safety" / "rules" / "cloud-risk-rules.json"
 POLICY_PATH = Path(__file__).resolve().parents[1] / "safety" / "policy.json"
 
-PLUGIN_DIR = Path(__file__).resolve().parents[2]
+# parents[1] is the plugin dir (hooks/ sits directly under it); the previous
+# parents[2] landed telemetry one level too high, which in the codex plugin
+# cache layout wrote a 'telemetry' sibling next to the version dir and broke
+# codex's version resolution (same failure the bundled server's depth-based
+# PLUGIN_DIR caused before the resolvePluginDir fix in telemetry.ts).
+PLUGIN_DIR = Path(__file__).resolve().parents[1]
 TELEMETRY_DIR = PLUGIN_DIR / "telemetry"
 HOOK_EVENTS_PATH = TELEMETRY_DIR / "hook-events.jsonl"
 

@@ -100,9 +100,11 @@ function codexVersion(): { found: boolean; version: string | null; detail: strin
 
 // The plugin cache copy the installer populated: CODEX_HOME/plugins/cache/
 // <marketplace>/<plugin>/<version>/dist/mcp-server.js. Derived, never
-// hardwired, so version bumps ride along. Filtered by the server file
-// because the devkit's telemetry creates a sibling telemetry/ directory in
-// the same parent on first server boot.
+// hardwired, so version bumps ride along. Filtered by the server file:
+// pre-resolvePluginDir devkit payloads wrote a sibling telemetry/ directory
+// into this parent on first server boot, and codex's version-dir scan can
+// resolve that stray as the version — the filter keeps the resolution honest
+// against any stale cache layout.
 function resolveServerJs(home: string): string {
   const cacheRoot = join(home, '.codex', 'plugins', 'cache', getMarketplaceName(), getCodexPluginName());
   if (!existsSync(cacheRoot)) {

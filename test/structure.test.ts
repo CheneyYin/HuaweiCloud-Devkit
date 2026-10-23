@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import test from 'node:test';
 
 import { TOOL_DEFINITIONS, SKILLS_ROOT } from '../plugins/huaweicloud-core/src/tools.ts';
@@ -1403,6 +1403,36 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
   assert.match(setup, /hasCliFlag\('--skip-binaries'\)/);
   assert.match(setup, /const updated = await dispatchUpdateTarget\(target\);/);
   assert.match(setup, /--skip-binaries {3}\(with: install\/update\) skip provisioning host binaries/);
+});
+
+test('src subdir modules never climb __dirname more than one level (bundle depth trap)', () => {
+  // The esbuild server bundle collapses every inlined module's
+  // import.meta.url to the bundle file (<plugin>/dist/mcp-server.js), so a
+  // module under src/<subdir>/ has a DIFFERENT __dirname depth in the bundle
+  // than in the tsc/source tree: join(__dirname, '..', '..') resolves to the
+  // plugin root in the tsc tree and to the plugin root's PARENT in the
+  // bundle. That off-by-one wrote the telemetry dir into the codex plugin
+  // cache's version parent, where codex's version-dir scan resolved the
+  // stray 'telemetry' sibling as the version and stopped loading the plugin
+  // (fixed by resolvePluginDir in telemetry.ts; behavior pinned in
+  // telemetry-plugin-dir.test.ts). src ROOT modules are exempt: src/ and
+  // dist/ are siblings under the plugin root, so any N-up join from a root
+  // module resolves identically in both shapes (koocli-version.ts).
+  const srcRoot = join(pluginRoot, 'src');
+  const subdirModules = (readdirSync(srcRoot, { recursive: true }) as string[])
+    .filter((name) => name.endsWith('.ts') && name.includes(sep))
+    .sort((a, b) => a.localeCompare(b));
+  assert.ok(subdirModules.length >= 10, `expected the src subdir module family, found: ${subdirModules.length}`);
+  for (const name of subdirModules) {
+    const source = readSource(join('src', name));
+    for (const match of source.matchAll(/(?:join|resolve)\(\s*__dirname\b([^)]*)\)/g)) {
+      const climbs = (match[1]!.match(/'\.\.'/g) ?? []).length;
+      assert.ok(
+        climbs <= 1,
+        `src/${name}: __dirname-anchored join climbs ${climbs} levels — the bundle shape resolves one too high; derive layout-dependent dirs by marker (resolvePluginDir in telemetry.ts)`,
+      );
+    }
+  }
 });
 
 test('setup-cli.ts supports the dsh target end to end', () => {

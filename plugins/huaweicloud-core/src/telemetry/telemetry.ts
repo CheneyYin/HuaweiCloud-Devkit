@@ -18,7 +18,28 @@ import { asText } from '../lib/as-text.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const PLUGIN_DIR = join(__dirname, '..', '..');
+
+// The plugin dir must be resolved by marker, never by depth. This module runs
+// in three shapes whose __dirname sits at different depths under the plugin
+// dir: the tsc tree (<plugin>/dist/telemetry/), the TypeScript source
+// (<plugin>/src/telemetry/), and — the shape that broke — the esbuild bundle,
+// where every inlined module's import.meta.url collapses to the bundle file
+// itself (<plugin>/dist/mcp-server.js). A depth-based two-level parent join
+// from __dirname is correct for the first two and one level too high for the
+// bundle: it dropped the telemetry dir into the codex plugin cache's version
+// PARENT, codex 0.162.1 scanned that directory for version dirs, resolved the
+// stray 'telemetry' sibling as the version, and stopped loading the plugin's
+// manifest and .mcp.json — "installed and enabled" in `codex plugin list`
+// with no MCP server in any session afterwards. Markers: every runtime
+// layout keeps dist/ and/or safety/ directly under the plugin dir (dist in
+// built layouts, safety in a raw source checkout).
+export function resolvePluginDir(startDir: string): string {
+  for (const candidate of [join(startDir, '..'), join(startDir, '..', '..')]) {
+    if (existsSync(join(candidate, 'dist')) || existsSync(join(candidate, 'safety'))) return candidate;
+  }
+  return join(startDir, '..', '..');
+}
+const PLUGIN_DIR = resolvePluginDir(__dirname);
 const AGENT_TELEMETRY_DIR = join(PLUGIN_DIR, 'telemetry');
 const GLOBAL_TELEMETRY_DIR = join(
   (process.env.HUAWEICLOUD_DEVKIT_HOME || '').trim() || homedir(),

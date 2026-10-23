@@ -1487,6 +1487,58 @@ function hasCodexCLI(): boolean {
   return false;
 }
 
+// Pre-resolvePluginDir payloads wrote their telemetry stamps to the codex
+// plugin cache's version PARENT (see resolvePluginDir in telemetry.ts): the
+// stray 'telemetry' sibling then wins codex's version-dir scan — `codex
+// plugin list` reports version "telemetry" and no session loads the plugin's
+// manifest or .mcp.json. Only entries this allowlist proves ours are swept;
+// anything else is left untouched with a warning.
+const CODEX_TELEMETRY_STAMP_FILES = new Set([
+  'install-stamp',
+  'install-counter',
+  'dau-stamp',
+  'first-use-stamp',
+  'hook-events.jsonl',
+  'hook-events.jsonl.processing',
+  'telemetry-debug.log',
+]);
+
+function sweepCodexCacheTelemetrySibling(): void {
+  const stray = join(
+    process.env.CODEX_HOME || join(homedir(), '.codex'),
+    'plugins',
+    'cache',
+    getMarketplaceName(),
+    getCodexPluginName(),
+    'telemetry',
+  );
+  if (!existsSync(stray)) return;
+  try {
+    const entries = readdirSync(stray);
+    const provablyOurs =
+      entries.length > 0 &&
+      entries.every((name) => CODEX_TELEMETRY_STAMP_FILES.has(name) && statSync(join(stray, name)).isFile());
+    if (!provablyOurs) {
+      console.log(`  \x1b[33mStray telemetry dir left untouched (unrecognized content): ${stray}\x1b[0m`);
+      return;
+    }
+    rmSync(stray, { recursive: true, force: true });
+    console.log(`  Healed pre-fix telemetry sibling: ${stray}`);
+  } catch {
+    // unreadable content is not provably ours; leave it and let the warning path speak
+    console.log(`  \x1b[33mStray telemetry dir left untouched (unreadable): ${stray}\x1b[0m`);
+  }
+}
+
+// One spawn+print shape for every `codex plugin …` / `codex plugin
+// marketplace …` call: output (stdout, else stderr) is echoed either way so
+// the transcript shows what the CLI answered even on failure.
+function runCodexCliCommand(command: string): SpawnSyncReturns<string> {
+  const r = spawnSync(command, [], { shell: true, windowsHide: true, stdio: 'pipe', encoding: 'utf8' });
+  console.log(`  ${r.stdout ? r.stdout.toString().trim() : r.stderr.toString().trim()}`);
+  return r;
+}
+
 function installCodex(): boolean {
   // --packs has no write path here: the codex CLI owns this target's MCP
   // config. Say so once and continue; the install itself is unaffected.
@@ -1498,12 +1550,21 @@ function installCodex(): boolean {
   const marketplaceName = getMarketplaceName();
 
   console.log(`  Registering Codex marketplace: ${marketplaceRoot}`);
-  const r1 = spawnSync(`codex plugin marketplace add "${marketplaceRoot}"`, [], {
-    shell: true,
-    windowsHide: true,
-    stdio: 'pipe',
-  });
-  console.log(`  ${r1.stdout ? r1.stdout.toString().trim() : r1.stderr.toString().trim()}`);
+  let r1 = runCodexCliCommand(`codex plugin marketplace add "${marketplaceRoot}"`);
+
+  if (r1.status !== 0 && /already added.*different source/i.test((r1.stderr || '').toString())) {
+    // A same-name marketplace registered from another source (an npm-cache
+    // install being replaced by a local checkout, or the reverse) blocks the
+    // add. Re-registering over it is the install intent, so remove the stale
+    // registration and retry once. The plugin removal is best-effort (the
+    // marketplace remove is the load-bearing step; a plugin that was never
+    // installed under this name must not block the transition), and the
+    // retry copies a fresh payload into the cache either way.
+    console.log(`  Marketplace already registered from a different source; re-registering`);
+    runCodexCliCommand(`codex plugin remove "${pluginName}@${marketplaceName}"`);
+    runCodexCliCommand(`codex plugin marketplace remove "${marketplaceName}"`);
+    r1 = runCodexCliCommand(`codex plugin marketplace add "${marketplaceRoot}"`);
+  }
 
   if (r1.status !== 0 && /Access is denied/i.test((r1.stderr || '').toString())) {
     console.log(`  \x1b[33mWindowsApps codex.exe permission denied.\x1b[0m`);
@@ -1515,13 +1576,12 @@ function installCodex(): boolean {
     return false;
   }
 
+  // Heal any pre-fix telemetry sibling before `codex plugin add` so the add
+  // operates on a sane cache; the fixed payload never recreates it.
+  sweepCodexCacheTelemetrySibling();
+
   console.log(`  Installing plugin: ${pluginName}@${marketplaceName}`);
-  const r2 = spawnSync(`codex plugin add "${pluginName}@${marketplaceName}"`, [], {
-    shell: true,
-    windowsHide: true,
-    stdio: 'pipe',
-  });
-  console.log(`  ${r2.stdout ? r2.stdout.toString().trim() : r2.stderr.toString().trim()}`);
+  const r2 = runCodexCliCommand(`codex plugin add "${pluginName}@${marketplaceName}"`);
 
   if (r2.status !== 0 && /Access is denied/i.test((r2.stderr || '').toString())) {
     console.log(`  \x1b[33mWindowsApps codex.exe permission denied.\x1b[0m`);
