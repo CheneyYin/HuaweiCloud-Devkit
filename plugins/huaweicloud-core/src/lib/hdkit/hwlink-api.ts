@@ -82,7 +82,7 @@ export type ConnectionErrorKind = 'transient_restricted' | 'retryable_server' | 
 // #997: classify a connection-API failure (exported for tests).
 export function classifyConnectionError(data: unknown, status: number): ConnectionErrorKind {
   const record = asRecord(data);
-  const code = String(record.error_code ?? record.code ?? '').toUpperCase();
+  const code = asText(record.error_code ?? record.code ?? '').toUpperCase();
   if (TRANSIENT_CONNECTION_CODES.has(code)) return 'transient_restricted';
   if (status === 429 || (status >= 500 && status < 600)) return 'retryable_server';
   return 'fatal';
@@ -156,7 +156,7 @@ export async function createConnection(
   );
   (
     err as Error & { code?: string; kind?: ConnectionErrorKind; retryable?: boolean; suggestedRetryAfterMs?: number }
-  ).code = String(asRecord(failure.data).error_code ?? asRecord(failure.data).code ?? `HTTP_${failure.status}`);
+  ).code = asText(asRecord(failure.data).error_code ?? asRecord(failure.data).code ?? `HTTP_${failure.status}`);
   (err as Error & { kind?: ConnectionErrorKind }).kind = failure.kind;
   (err as Error & { retryable?: boolean }).retryable = true;
   (err as Error & { suggestedRetryAfterMs?: number }).suggestedRetryAfterMs =
