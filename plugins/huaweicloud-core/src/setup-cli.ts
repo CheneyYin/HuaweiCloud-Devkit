@@ -20,9 +20,48 @@ import { createRequire } from 'node:module';
 
 import { getAuthStatus, syncAuth } from './auth/service.ts';
 import { resolveAndApplyProjectId } from './auth/project-id.ts';
-import { SUPPORTED_AGENT_TARGETS, xdgConfigHome } from './auth/agent-registration.ts';
+import { SUPPORTED_AGENT_TARGETS } from './auth/agent-registration.ts';
 import { readKooCliProfiles, resolveManagedProfile } from './auth/reconcile.ts';
 import { redactSecrets } from './safety-policy.ts';
+// Where every supported agent target lives: the pure-path family shared by
+// the deploy/uninstall/status/doctor flows.
+import {
+  atomcodeHome,
+  atomcodeMcpConfigFile,
+  atomcodePluginsDir,
+  atomcodeSkillsDir,
+  codeartsMcpSettingsFile,
+  codeartsPluginsDir,
+  codeartsProjectMcpSettingsFile,
+  codeartsProjectSkillsDir,
+  codeartsSkillsDir,
+  codeartsWorkMcpSettingsFile,
+  codeartsWorkPluginsDir,
+  codeartsWorkSkillsDir,
+  codexDesktopPluginsDir,
+  codexMarketplacePath,
+  configRoot,
+  dshPatchFile,
+  dshPluginsDir,
+  dshProfileDir,
+  dshRoot,
+  dshSkillsDir,
+  hermesConfigFile,
+  hermesHomeDir,
+  hermesPluginsDir,
+  hermesPythonPluginsDir,
+  hermesSafetyPluginDir,
+  hermesSkillsDir,
+  opencodeCommandsDir,
+  opencodeConfigFile,
+  opencodePluginsDir,
+  opencodeSkillsDir,
+  openclawPluginsDir,
+  openclawSkillsDir,
+  workbuddyMcpConfigFile,
+  workbuddyPluginsDir,
+  workbuddySkillsDir,
+} from './targets.ts';
 import {
   globalCredentialsPath,
   readGlobalCredentials,
@@ -153,118 +192,6 @@ const BANNER = `
 ║     https://github.com/huaweicloud   ║
 ╚══════════════════════════════════════════════╝
 `;
-
-// Every opencode surface (payload dir, skills, commands, config file,
-// status/doctor probes) derives from this root. It follows XDG_CONFIG_HOME
-// so the installer writes where opencode reads — the shared resolution and
-// its rationale live in xdgConfigHome() (auth/agent-registration.ts).
-function configRoot(target = 'opencode'): string {
-  return join(xdgConfigHome(), target);
-}
-
-function opencodeSkillsDir(): string {
-  return join(configRoot('opencode'), 'skills');
-}
-function opencodeCommandsDir(): string {
-  return join(configRoot('opencode'), 'commands');
-}
-function opencodePluginsDir(): string {
-  return join(configRoot('opencode'), 'huaweicloud-plugins');
-}
-function opencodeConfigFile(): string {
-  const jsonc = join(configRoot('opencode'), 'opencode.jsonc');
-  if (existsSync(jsonc)) return jsonc;
-  return join(configRoot('opencode'), 'opencode.json');
-}
-
-function codexDesktopPluginsDir(): string {
-  return join(homedir(), 'plugins', 'huaweicloud-devkit');
-}
-
-// OpenClaw paths (separate from Codex Desktop)
-function openclawSkillsDir(): string {
-  return join(homedir(), '.agents', 'skills');
-}
-function openclawPluginsDir(): string {
-  return join(homedir(), '.agents', 'huaweicloud-plugins');
-}
-
-function codeartsSkillsDir(): string {
-  return join(homedir(), '.codeartsdoer', 'skills');
-}
-function codeartsMcpSettingsDir(): string {
-  return join(homedir(), '.codeartsdoer', 'mcp');
-}
-function codeartsMcpSettingsFile(): string {
-  return join(codeartsMcpSettingsDir(), 'mcp_settings.json');
-}
-function codeartsProjectDir(): string {
-  return join(process.cwd(), '.codeartsdoer');
-}
-function codeartsProjectSkillsDir(): string {
-  return join(codeartsProjectDir(), 'skills');
-}
-function codeartsProjectMcpSettingsFile(): string {
-  return join(codeartsProjectDir(), 'mcp', 'mcp_settings.json');
-}
-function codeartsPluginsDir(): string {
-  return join(homedir(), '.codeartsdoer', 'huaweicloud-plugins');
-}
-
-// CodeArts Work (CodeArts Space) — user-level only
-function codeartsWorkSkillsDir(): string {
-  return join(homedir(), '.codeartswork', 'skills');
-}
-function codeartsWorkMcpSettingsFile(): string {
-  // Post platform migration the marketplace presets the plugin under ~/.codearts
-  // (new layout); legacy ~/.codeartswork is kept as fallback while still in
-  // service. Default to the new dir when it exists, otherwise legacy.
-  const newDir = join(homedir(), '.codearts', 'mcp');
-  const legacy = join(homedir(), '.codeartswork', 'mcp', 'mcp_settings.json');
-  return existsSync(newDir) ? join(newDir, 'mcp_settings.json') : legacy;
-}
-function codeartsWorkPluginsDir(): string {
-  return join(homedir(), '.codeartswork', 'huaweicloud-plugins');
-}
-
-function workbuddySkillsDir(): string {
-  return join(homedir(), '.workbuddy', 'skills');
-}
-function workbuddyMcpConfigFile(): string {
-  return join(homedir(), '.workbuddy', 'mcp.json');
-}
-function workbuddyPluginsDir(): string {
-  return join(homedir(), '.workbuddy', 'huaweicloud-plugins');
-}
-
-function atomcodeHome(): string {
-  return process.env.ATOMCODE_HOME || join(homedir(), '.atomcode');
-}
-function atomcodeSkillsDir(): string {
-  return join(atomcodeHome(), 'skills');
-}
-function atomcodeMcpConfigFile(): string {
-  return join(atomcodeHome(), 'mcp.json');
-}
-function atomcodePluginsDir(): string {
-  return join(atomcodeHome(), 'huaweicloud-plugins');
-}
-
-function dshRoot(): string {
-  return process.env.DSH_HOME || join(homedir(), '.dsh');
-}
-function dshSkillsDir(): string {
-  return join(dshRoot(), 'skills');
-}
-function dshProfileDir(): string {
-  return join(dshRoot(), 'profiles', 'web');
-}
-function dshPatchFile(): string {
-  return join(dshProfileDir(), 'cordis.patch.yml');
-}
-function dshPluginsDir(): string {
-  return join(dshRoot(), 'huaweicloud-plugins');
-}
 
 function readOfficeaceRegistryInstallDir(): string | null {
   if (platform() !== 'win32') return null;
@@ -1761,10 +1688,6 @@ function pruneStale(targetDir: string, sourceDir: string): number {
   return removed;
 }
 
-function codexMarketplacePath(): string {
-  return join(homedir(), '.agents', 'plugins', 'marketplace.json');
-}
-
 function ensureCodexMarketplaceEntry(): void {
   const mpPath = codexMarketplacePath();
   // The canonical plugin name: status (codexDesktopStatus), install, and
@@ -2929,37 +2852,6 @@ function officeaceStatus(): void {
 }
 
 // ── Hermes Agent ──
-
-// Home directory resolution precedence:
-// 1. HERMES_HOME env var — explicit override, highest priority
-// 2. homedir() fallback — respects USERPROFILE (Windows) / HOME (Unix)
-// Default: ~/.hermes (i.e., join(homedir(), '.hermes'))
-// No --home CLI option exists; home redirection is via env vars only.
-// This matches the pattern used by other agents (ATOMCODE_HOME, DSH_HOME, etc.)
-function hermesHomeDir(): string {
-  if (process.env.HERMES_HOME) return process.env.HERMES_HOME;
-  return join(homedir(), '.hermes');
-}
-
-function hermesSkillsDir(): string {
-  return join(hermesHomeDir(), 'skills');
-}
-
-function hermesPluginsDir(): string {
-  return join(hermesHomeDir(), 'huaweicloud-plugins');
-}
-
-function hermesPythonPluginsDir(): string {
-  return join(hermesHomeDir(), 'plugins');
-}
-
-function hermesSafetyPluginDir(): string {
-  return join(hermesPythonPluginsDir(), 'huaweicloud-safety');
-}
-
-function hermesConfigFile(): string {
-  return join(hermesHomeDir(), 'config.yaml');
-}
 
 // Returns true when the config file was written, false when it was already correct.
 function ensureHermesMcpConfig(): boolean {

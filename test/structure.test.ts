@@ -1241,6 +1241,7 @@ test('.mcp.json is valid and references existing server script', () => {
 
 test('setup-cli.ts supports the codearts target end to end', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
+  const targets = readSource(join('src', 'targets.ts'));
   // parseTarget accepts codearts
   assert.match(setup, /'codearts'/);
   // deploy (install+update) / uninstall / status functions exist
@@ -1248,11 +1249,11 @@ test('setup-cli.ts supports the codearts target end to end', () => {
   assert.match(setup, /function uninstallCodeArts\(\)/);
   assert.match(setup, /function codeartsStatus\(\)/);
   // path helpers for user-level and project-level codearts dirs
-  assert.match(setup, /function codeartsSkillsDir\(\)/);
-  assert.match(setup, /function codeartsMcpSettingsFile\(\)/);
-  assert.match(setup, /function codeartsProjectSkillsDir\(\)/);
-  assert.match(setup, /function codeartsProjectMcpSettingsFile\(\)/);
-  assert.match(setup, /function codeartsPluginsDir\(\)/);
+  assert.match(targets, /function codeartsSkillsDir\(\)/);
+  assert.match(targets, /function codeartsMcpSettingsFile\(\)/);
+  assert.match(targets, /function codeartsProjectSkillsDir\(\)/);
+  assert.match(targets, /function codeartsProjectMcpSettingsFile\(\)/);
+  assert.match(targets, /function codeartsPluginsDir\(\)/);
   // deploy ships the server payload (dist + safety + skills server data)
   // into the codearts plugin dir and registers both MCP configs
   assert.match(setup, /async function deployCodeArts\(mode: DeployMode\): Promise<void> \{\s*\n\s*const pluginSrc/);
@@ -1335,6 +1336,7 @@ test('nativeSkillDirs derives from PAYLOAD_TARGETS plus the officeace exception'
 // XDG_CONFIG_HOME happened (each seam fixed separately drifted back).
 test('opencode config root is XDG-aware through one shared resolver', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
+  const targets = readSource(join('src', 'targets.ts'));
   const registration = readSource(join('src', 'auth', 'agent-registration.ts'));
   assert.match(
     registration,
@@ -1352,7 +1354,7 @@ test('opencode config root is XDG-aware through one shared resolver', () => {
   assert.match(registrationConfigFile, /xdgConfigHome\(\)/);
   assert.doesNotMatch(registrationConfigFile, /homedir\(\)/, 'detection must not re-derive the default root');
   // The installer's configRoot delegates instead of re-deriving ~/.config.
-  const configRootBody = setup.match(/function configRoot\(target = 'opencode'\): string \{[\s\S]*?\n\}/)?.[0] ?? '';
+  const configRootBody = targets.match(/function configRoot\(target = 'opencode'\): string \{[\s\S]*?\n\}/)?.[0] ?? '';
   assert.ok(configRootBody.length > 0, 'configRoot body found');
   assert.match(configRootBody, /xdgConfigHome\(\)/);
   assert.doesNotMatch(
@@ -1476,6 +1478,7 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
   const setup = readSource(join('src', 'setup-cli.ts'));
   const codeartsSandbox = readSource(join('src', 'codearts-sandbox.ts'));
   const depResolve = readSource(join('src', 'lib', 'dep-resolve.ts'));
+  const targetsModule = readSource(join('src', 'targets.ts'));
   // The dep module tree is walked, not enumerated: every .ts file under
   // src/dep/ — including one a future dependency adds, at any depth — joins
   // the guard automatically, so the zod-free import graph cannot regress by
@@ -1499,6 +1502,7 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
     ),
     ['src/codearts-sandbox.ts', codeartsSandbox] as const,
     ['src/lib/dep-resolve.ts', depResolve] as const,
+    ['src/targets.ts', targetsModule] as const,
   ];
   for (const [name, source] of guarded) {
     assert.doesNotMatch(source, /from 'zod'/, `${name} must not import zod`);
@@ -1561,14 +1565,15 @@ test('src subdir modules never climb __dirname more than one level (bundle depth
 
 test('setup-cli.ts supports the dsh target end to end', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
+  const targets = readSource(join('src', 'targets.ts'));
   // SUPPORTED_AGENT_TARGETS includes dsh and parseTarget uses it
   assert.match(setup, /'dsh'/);
   // DSH path helpers and managed patch constants exist
-  assert.match(setup, /function dshRoot\(\)/);
-  assert.match(setup, /function dshSkillsDir\(\)/);
-  assert.match(setup, /function dshProfileDir\(\)/);
-  assert.match(setup, /function dshPatchFile\(\)/);
-  assert.match(setup, /function dshPluginsDir\(\)/);
+  assert.match(targets, /function dshRoot\(\)/);
+  assert.match(targets, /function dshSkillsDir\(\)/);
+  assert.match(targets, /function dshProfileDir\(\)/);
+  assert.match(targets, /function dshPatchFile\(\)/);
+  assert.match(targets, /function dshPluginsDir\(\)/);
   assert.match(setup, /const DSH_MCP_PATCH_START = '# HuaweiCloud DevKit DSH integration start';/);
   assert.match(setup, /const DSH_MCP_PATCH_END = '# HuaweiCloud DevKit DSH integration end';/);
   // deploy (install+update) / uninstall / status functions exist
@@ -1671,22 +1676,23 @@ test('setup-cli.ts supports the officeace target end to end', () => {
 
 test('setup-cli.ts supports the hermes target end to end', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
+  const targets = readSource(join('src', 'targets.ts'));
   assert.match(setup, /'hermes'/);
   assert.match(setup, /async function deployHermes\(mode: DeployMode\)/);
   assert.match(setup, /function uninstallHermes\(\)/);
   assert.match(setup, /function hermesStatus\(\)/);
-  assert.match(setup, /function hermesHomeDir\(\)/);
-  assert.match(setup, /function hermesSkillsDir\(\)/);
-  assert.match(setup, /function hermesPluginsDir\(\)/);
-  assert.match(setup, /function hermesConfigFile\(\)/);
+  assert.match(targets, /function hermesHomeDir\(\)/);
+  assert.match(targets, /function hermesSkillsDir\(\)/);
+  assert.match(targets, /function hermesPluginsDir\(\)/);
+  assert.match(targets, /function hermesConfigFile\(\)/);
   assert.match(setup, /function ensureHermesMcpConfig\(\)/);
   assert.match(setup, /function removeHermesMcpConfigBlock\(\)/);
   assert.match(setup, /function ensureHermesHooksConfig\(\)/);
   assert.match(setup, /function removeHermesHooksConfigBlock\(\)/);
   assert.match(setup, /function ensureHermesHookAllowlist\(\)/);
   assert.match(setup, /function hermesHookCommand\(\)/);
-  assert.match(setup, /function hermesPythonPluginsDir\(\)/);
-  assert.match(setup, /function hermesSafetyPluginDir\(\)/);
+  assert.match(targets, /function hermesPythonPluginsDir\(\)/);
+  assert.match(targets, /function hermesSafetyPluginDir\(\)/);
   assert.match(setup, /function ensureHermesHookPlugin\(\)/);
   assert.match(setup, /function removeHermesHookPlugin\(\)/);
   assert.match(setup, /copyServerPayload\(pluginDest, \{ skipDist: skipMcp \}\)/);
@@ -1714,7 +1720,7 @@ test('setup-cli.ts supports the hermes target end to end', () => {
     `hermes dispatch branches: ${(branches?.length ?? 0) + (installDispatch?.length ?? 0)}`,
   );
   assert.match(setup, /install --target hermes/);
-  assert.match(setup, /HERMES_HOME/);
+  assert.match(targets, /HERMES_HOME/);
   assert.match(setup, /LOCALAPPDATA/);
   assert.match(setup, /--skip-mcp-server/);
   assert.match(setup, /function ensureHermesMcpSdk\(\)/);
