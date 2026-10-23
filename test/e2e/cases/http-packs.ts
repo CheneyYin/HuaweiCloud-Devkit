@@ -204,8 +204,7 @@ export const sandboxCases: E2eCase[] = [
     // against the fake IAM before injecting via hdkitservice.
     id: 'sandbox-credentials-iam-validated',
     pack: 'sandbox',
-    prompt:
-      '给华为云沙箱工作区 dev_stage_id=ds-e2e-002 注入临时凭证(标准流程:先校验再注入),把注入结果告诉我。',
+    prompt: '给华为云沙箱工作区 dev_stage_id=ds-e2e-002 注入临时凭证(标准流程:先校验再注入),把注入结果告诉我。',
     fixtures: {
       home: {
         '.config/huaweicloud/credentials.json': S1_SEED,
