@@ -294,6 +294,12 @@ ARGLESS_DUMP_RE = re.compile(
 BARE_SET_RE = re.compile(r"(?:^|[;&|\n\r)]|\|\||&&)\s*set\s*$", re.I)
 DUMP_PIPE_RE = re.compile(r"(?:^|[;&|\n\r)]|\|\||&&)\s*(?:env|printenv|set)(?![A-Za-z0-9_-])\s*(?:\||>)", re.I)
 OBFUSCATION_RE = re.compile(r"\$['\"]|\$\(|`")
+# Write-operation vocabulary for the obfuscation gate's fail-closed clause —
+# the policy.json writeOperationPrefixes mirrored as one alternation.
+WRITE_VOCAB_RE = re.compile(
+    r"(^|[^a-z])(?:create|batchcreate|delete|batchdelete|update|modify|resize|reboot|stop|start|restart|apply|authorize|revoke|add|remove|associate|disassociate|attach|detach)",
+    re.I,
+)
 CLOUD_BIN_RE = re.compile(
     r"(^|[^a-z0-9.-])(?:huaweicloud-devkit|setup-cli\.(?:js|mjs|ts|cjs)|setup\.cjs)|(^|[^a-z0-9.-])hcloud(\.exe)?\s",
     re.I,
@@ -1469,8 +1475,16 @@ def evaluate(tool_name, tool_input):
         return "printing vault secrets into the agent context is blocked. Use secret exec so the value reaches only the child process environment."
     # Obfuscated cloud-command invocation: ANSI-C escapes and command
     # substitution build argv the shadow cannot reconstruct. Canonical
-    # devkit/hcloud commands never carry them.
-    if (CLOUD_BIN_RE.search(unquoted) or re.search(r"secret://", unquoted)) and OBFUSCATION_RE.search(text):
+    # devkit/hcloud commands never carry them. The WRITE_VOCAB_RE clause
+    # closes ANSI-C KEYWORD mangling ($'\x68'cloud — the h exists only inside
+    # the escape, so no layer sees 'hcloud', but the unquoted text still
+    # carries 'deleteservers'): expansion + a write-op word denies fail-closed.
+    # Mirrors the TS gate's writeVocabHit clause (the #927 audit bypass fix).
+    if (
+        CLOUD_BIN_RE.search(unquoted)
+        or re.search(r"secret://", unquoted)
+        or WRITE_VOCAB_RE.search(unquoted)
+    ) and OBFUSCATION_RE.search(text):
         return "an obfuscated cloud CLI invocation (shell expansion inside the command) is blocked. Write the command in plain form."
     if (
         ENV_DUMP_RE.search(unquoted)

@@ -832,10 +832,13 @@ test('A2: an expose-exec timeout folds into the unreachable envelope, never a ra
 
 // ---- #998: devbridge version probe + gate ----
 
-test('the auth probe reads the version in the same exec (#998)', () => {
+test('the auth probe reads the version in the same exec, data-disk PATH first (#998 + #999)', () => {
   const script = buildDevbridgeAuthProbe();
   assert.match(script, /DB_VERSION=\$\(devbridge version 2>\/dev\/null \| head -1\)/);
   assert.match(script, /echo "DB_VERSION=\$\{DB_VERSION\}"/);
+  // #999: the auth probe itself prepends the data-disk bin dir (main's #998
+  // test pinned this function-scoped; the v2 port had it only source-level).
+  assert.match(script, /export PATH="\/workspace\/.local\/bin:\$HOME\/\.huawei\/bin:\$PATH"/);
 });
 
 test('parseDevbridgeAuthOutput reads the version field, OSC-noise tolerant (#998 + #946)', () => {

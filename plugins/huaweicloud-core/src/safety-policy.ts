@@ -1940,11 +1940,24 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
   // from every presence pattern. Canonical devkit and hcloud commands never
   // contain `$'`, `$"`, `$(`, or a backtick, so a cloud-command-bearing
   // payload carrying one is denied as obfuscated rather than parsed.
+  // The cloud-command-bearing clause below misses ANSI-C KEYWORD mangling
+  // ($'\x68'cloud — the h exists only inside the escape, so no layer sees
+  // 'hcloud'; stripShellQuotes keeps the hex digits, giving shadow 'x68cloud').
+  // The write-vocabulary clause closes it fail-closed WITHOUT decoding
+  // escapes: the shadow of `$'\x68'cloud ECS DeleteServers` still carries
+  // 'deleteservers', so an expansion-bearing line with a write-op vocabulary
+  // hit denies even when the cloud-CLI marker itself was destroyed (#927
+  // audit: v2 and main both allowed this class before — the sibling
+  // operation-token form `$'\x43'reateServers` was already denied).
+  const writeVocabHit = DEFAULT_POLICY.writeOperationPrefixes.some((prefix) =>
+    new RegExp(`(^|[^a-z])${prefix}`, 'i').test(shadowText),
+  );
   if (
     (/(^|[^a-z0-9.-])(?:huaweicloud-devkit|setup-cli\.(?:js|mjs|ts|cjs)|setup\.cjs)|(^|[^a-z0-9.-])hcloud(\.exe)?\s/i.test(
       shadowText,
     ) ||
-      /secret:\/\//i.test(shadowText)) &&
+      /secret:\/\//i.test(shadowText) ||
+      writeVocabHit) &&
     /\$['"]|\$\(|`/.test(text)
   ) {
     return {

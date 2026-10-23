@@ -52,6 +52,10 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
     'deny',
   ],
   ['hcloud OBS rm obs://bucket/obj -f', 'deny'],
+  // #927 audit bypass fix: ANSI-C keyword mangling ($'\x68'cloud = hcloud) —
+  // both layers deny via the write-vocabulary clause of the obfuscation gate.
+  ["$'\\x68'cloud ECS DeleteServers --server.name=x", 'deny'],
+  ["hcl$'\\x6f'ud ECS DeleteServers --server.name=x", 'deny'],
   // cors/website: real write-capable subcommands on the pinned 7.3.12 (live
   // -method=get reaches OBS and returns NoSuchBucket) — upstream #1001's
   // removal was measured on 7.2.x. Both layers keep the deny.

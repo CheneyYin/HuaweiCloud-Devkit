@@ -139,3 +139,65 @@ test('judgeAccountType: account_id not present in domains -> inconsistent error 
     assert.match(result.error, /Inconsistent identity response/);
   }
 });
+
+test('checkAccountType orchestrates the two read-only calls end to end (#954)', async () => {
+  // Drive through runHcloud's executable override — the fake-hcloud doctrine
+  // the version-check tests use. The fake emits the two captured payloads.
+  const { writeFileSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { fixtureDir } = await import('./fixture-dir.ts');
+  const dir = fixtureDir('account-type-orchestrator-');
+  const script = join(dir, 'fake-hcloud.mjs');
+  writeFileSync(
+    script,
+    `const args = process.argv.slice(2);
+const op = args[1];
+if (op === 'GetCallerIdentity') {
+  console.log(${JSON.stringify(IDENTITY_SUB)});
+} else if (op === 'KeystoneListAuthDomains') {
+  console.log(${JSON.stringify(DOMAINS_SUB)});
+} else {
+  console.error('unexpected op: ' + op);
+  process.exit(1);
+}
+`,
+    'utf8',
+  );
+  // Set HCLOUD_BIN-style resolution via runHcloud's executable override —
+  // checkAccountType calls runHcloud directly, so patch the probe chain via
+  // the resolution seam the CLI exposes (executable/executableArgs ride the
+  // resolveHcloudCommand chain).
+  const { runHcloud } = await import('../plugins/huaweicloud-core/src/hcloud-cli.ts');
+  const realRunHcloud = runHcloud;
+  const mod = await import('../plugins/huaweicloud-core/src/auth/account-type.ts');
+  // Monkey-patching a module export is brittle; instead drive via the same
+  // seam runHcloud honors: HCLOUD_BIN pointing at a wrapper script.
+  const wrapper = join(dir, 'hcloud-wrapper.mjs');
+  writeFileSync(
+    wrapper,
+    `import { spawnSync } from 'node:child_process';
+const r = spawnSync(process.execPath, [${JSON.stringify(script)}, ...process.argv.slice(2)], {
+  stdio: ['ignore', 'pipe', 'inherit'],
+  encoding: 'utf8',
+});
+process.stdout.write(r.stdout ?? '');
+process.exit(r.status ?? 1);
+`,
+    'utf8',
+  );
+  process.env.HCLOUD_BIN = process.execPath;
+  process.env.HCLOUD_BIN_ARGS_JSON = JSON.stringify([wrapper]);
+  try {
+    const result = (await mod.checkAccountType({})) as Record<string, unknown>;
+    assert.equal(result.ok, true);
+    assert.equal(result.applicable, true);
+    assert.equal(result.isPrimaryAccount, false, 'dingchunlei is a sub-user');
+    assert.equal(result.username, 'dingchunlei');
+    assert.equal(result.domainName, 'es_hwcddbdt_OpenCapability_team');
+    assert.match(String(result.evidence), /IAM user under the domain/);
+  } finally {
+    delete process.env.HCLOUD_BIN;
+    delete process.env.HCLOUD_BIN_ARGS_JSON;
+    void realRunHcloud;
+  }
+});

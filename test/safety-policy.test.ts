@@ -844,6 +844,67 @@ test('the env-credential family covers SECRET_ACCESS_KEY spellings (#770)', () =
   assert.equal(classifyTextCommand('echo $HUAWEICLOUD_REGION').decision, 'allow');
 });
 
+// ---- #927/#928 audit pins (U17): in-word keyword splits, sudo+mangled,
+// Delete/Reboot-class mangled ops, the argv secret form, newline-READ allow,
+// CRLF+indent, unquoted prose allows — all live-verified before pinning; and
+// the ANSI-C KEYWORD-mangling bypass the audit found (v2 AND main both
+// allowed it — the write-vocab clause of the obfuscation gate closes it).
+test('in-word hcloud keyword splits still route and classify (#927 audit)', () => {
+  for (const cmd of [
+    "hc'loud ECS DeleteServer --server_id=i-1",
+    "h'cloud ECS DeleteServer --server_id=i-1",
+    "sudo h'cloud ECS DeleteServer --server_id=i-1",
+  ]) {
+    assert.equal(classifyTextCommand(cmd).decision, 'deny', `${cmd} must deny`);
+  }
+  assert.equal(classifyTextCommand("hc'loud ECS ListServers").decision, 'allow', 'mangled-keyword read stays allowed');
+});
+
+test('Delete/Reboot-class mangled operations deny by the quote-stripped shadow (#927 audit)', () => {
+  assert.equal(classifyTextCommand("hcloud ECS De'leteServer --server.id=x").decision, 'deny');
+  assert.equal(classifyTextCommand("hcloud IAM Dele'teUser --user.id=x").decision, 'deny');
+  // Reboot denies (label: write via the shadow — the execution label tests
+  // the raw token only; decision is what matters, pinned as deliberate).
+  assert.equal(classifyTextCommand("hcloud ECS Re'bootServer --server.id=x").decision, 'deny');
+  assert.equal(classifyTextCommand("hcloud ECS Li'stServers").decision, 'allow', 'mangled read op stays allowed');
+});
+
+test('the argv form of a mangled secret operation denies (#927 audit)', () => {
+  const result = classifyHcloudArgs(['hcloud', 'DEW', "Show'Secret'Version", '--body.kms_key_id=x']);
+  assert.equal(result.decision, 'deny');
+  assert.equal(result.risk, 'secret');
+});
+
+test('newline payloads: a READ line routes as read, CRLF+indent classified (#928 audit)', () => {
+  assert.equal(classifyTextCommand('echo hello\nhcloud ECS ListServers').decision, 'allow');
+  assert.equal(classifyTextCommand('echo hello\nhcloud ECS ListServers').risk, 'read_only');
+  assert.equal(classifyTextCommand('echo hello\r\n  hcloud ECS DeleteServer --server.id=x').decision, 'deny');
+});
+
+test('unquoted prose mentioning hcloud stays allowed (#927 audit)', () => {
+  assert.equal(classifyTextCommand('see hcloud docs').decision, 'allow');
+  assert.equal(classifyTextCommand('echo hcloud is a CLI').decision, 'allow');
+});
+
+test('ANSI-C KEYWORD mangling denies via the write-vocabulary clause (#927 audit bypass fix)', () => {
+  // $'\x68'cloud = hcloud in POSIX shells — the h exists only inside the
+  // escape, so neither the raw form nor the quote-stripped shadow carries
+  // 'hcloud'. The shadow DOES carry 'deleteservers', so the
+  // expansion-bearing + write-vocab-hit line denies fail-closed.
+  for (const cmd of [
+    "$'\x68'cloud ECS DeleteServers --server.name=x",
+    "hcl$'\x6f'ud ECS DeleteServers --server.name=x",
+    "h$'\x63'loud ECS DeleteServers --server.name=x",
+  ]) {
+    const result = classifyTextCommand(cmd);
+    assert.equal(result.decision, 'deny', `${cmd} must deny (ANSI-C keyword bypass)`);
+    assert.equal(result.risk, 'secret');
+  }
+  // Benign expansion + write-word in prose must NOT trip the clause.
+  assert.equal(classifyTextCommand('echo $HOME/docs/CreateNotes.md').decision, 'allow');
+  assert.equal(classifyTextCommand('grep "Delete" $FILE').decision, 'allow');
+});
+
 test('classifyTextCommand blocks approved public admin port exposure', () => {
   const result = classifyTextCommand(
     'hcloud VPC CreateSecurityGroupRule --security_group_rule.protocol=tcp --security_group_rule.port_range_min=22 --security_group_rule.port_range_max=22 --security_group_rule.remote_ip_prefix=0.0.0.0/0',
