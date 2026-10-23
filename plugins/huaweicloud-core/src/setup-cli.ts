@@ -1217,10 +1217,13 @@ async function deployCodexDesktop(mode: DeployMode): Promise<void> {
     // ~/.agents/skills nor ~/.agents/commands is removed wholesale: OpenClaw
     // installs share both, and user-authored content must survive —
     // devkit-owned skill names are reconciled precisely by
-    // cleanupNativeDirs() at the command level.
-    const oldPluginsDir = join(homedir(), '.agents', 'huaweicloud-plugins');
-    if (existsSync(oldPluginsDir)) {
-      removeIfExists(oldPluginsDir);
+    // cleanupNativeDirs() at the command level. The plugin dir itself IS
+    // OpenClaw's live install location (openclawPluginsDir is the same
+    // path), so the cleanup fires only when no server payload lives there —
+    // a live OpenClaw install must survive a codex-desktop install.
+    const legacyPluginsDir = join(homedir(), '.agents', 'huaweicloud-plugins');
+    if (existsSync(legacyPluginsDir) && !mcpServerInstalled(legacyPluginsDir)) {
+      removeIfExists(legacyPluginsDir);
       console.log('  Cleaned old install location');
     }
   }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -174,6 +174,38 @@ test('atomcode lifecycle: install, update, uninstall', () => {
       'mcp.json entry survived uninstall',
     );
   }
+});
+
+test('codex-desktop install does not destroy an existing openclaw installation', () => {
+  // The pre-marketplace-era cleanup in deployCodexDesktop removes
+  // ~/.agents/huaweicloud-plugins — which is openclawPluginsDir(), OpenClaw's
+  // LIVE install location. A codex-desktop install on a machine with OpenClaw
+  // silently destroyed it; the cleanup now fires only when no server payload
+  // lives there.
+  const home = fixtureDir('cx-home-');
+  const cwd = fixtureDir('cx-proj-');
+  const openclawDir = join(home, '.agents', 'huaweicloud-plugins');
+
+  // A live OpenClaw install: payload present.
+  mkdirSync(join(openclawDir, 'dist'), { recursive: true });
+  writeFileSync(join(openclawDir, 'dist', 'mcp-server.js'), '// live openclaw server');
+
+  const res = runCli(home, cwd, ['install', '--target', 'codex-desktop']);
+  assert.equal(res.status, 0, res.stderr);
+  assert.ok(
+    existsSync(join(openclawDir, 'dist', 'mcp-server.js')),
+    'a live openclaw installation must survive a codex-desktop install',
+  );
+
+  // Residue (no server payload) is still cleaned: the pre-marketplace-era
+  // behavior the block exists for.
+  const residueHome = fixtureDir('cx-res-home-');
+  const residueDir = join(residueHome, '.agents', 'huaweicloud-plugins');
+  mkdirSync(residueDir, { recursive: true });
+  writeFileSync(join(residueDir, 'stale-marker.txt'), 'pre-marketplace residue');
+  const res2 = runCli(residueHome, cwd, ['install', '--target', 'codex-desktop']);
+  assert.equal(res2.status, 0, res2.stderr);
+  assert.ok(!existsSync(residueDir), 'pre-marketplace residue without a payload is still cleaned');
 });
 
 test('hermes update refreshes payload, config, and hooks', () => {
