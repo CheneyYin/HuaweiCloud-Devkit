@@ -230,7 +230,10 @@ export interface DevbridgeVersionVerdict {
 export function evaluateDevbridgeVersion(version: unknown): DevbridgeVersionVerdict {
   const v = asText(version ?? '').trim();
   if (!v) return { blocked: false };
-  if (/^0\.1($|[.-])/.test(v)) {
+  // v?-tolerant: a hypothetical v-prefixed tag must not slip the gate. The
+  // terminator class ($|[.-]) is load-bearing — bare ^0\.1 would mis-block a
+  // future 0.10.x (semver-newer than 0.2).
+  if (/^v?0\.1($|[.-])/.test(v)) {
     return {
       blocked: true,
       error:
@@ -527,7 +530,16 @@ export async function exposeTunnel(
       version: authVersion,
       authMode,
       attempts,
-      remediation: versionCheck.remediation,
+      // The combined case (0.1.x AND no usable credential): the version is the
+      // permanent blocker and keeps precedence, but the caller must not lose
+      // the credential half of the diagnosis.
+      remediation:
+        versionCheck.remediation +
+        (authMode === 'NO_CREDENTIAL' || authMode === ''
+          ? ' Note: authMode ' +
+            (authMode || '(none)') +
+            ' indicates a SEPARATE credential issue — after upgrading, re-run huaweicloud_sandbox_credentials.'
+          : ''),
     };
   }
 
@@ -614,6 +626,13 @@ export async function exposeTunnel(
           error: gatewayTunnelError
             ? 'DevBridge gateway reports the fresh tunnel URL as dead (404 "tunnel not found" / "port not configured") — the host session is not registered on the gateway. A rebuild was already attempted.'
             : 'DevBridge gateway serves a migration placeholder page (服务已迁移) — the URL points at the retired pre-migration gateway and cannot work.',
+          // #998: the migration marker is the 0.1.x signature (the retired
+          // gateway is what 0.1.x hardcodes) — this branch preempts the
+          // read-back, so the Step-0 remediation rides here directly.
+          error_code: migration ? 'devbridge_too_old' : undefined,
+          remediation: migration
+            ? 'A 0.1.x devbridge produced this URL. Upgrade in place per the huawei-sandbox skill Step 0 (install 0.2.x with -p /workspace/.local/bin), then re-run huaweicloud_sandbox_expose_tunnel.'
+            : undefined,
           authMode,
           httpCode: parsed.httpCode,
           hostLog: String(result.stdout ?? '').slice(0, 400),
@@ -630,7 +649,7 @@ export async function exposeTunnel(
       );
     if (exposeFailed) {
       warnings.push(
-        'The expose script exec failed or timed out — the probe loop never completed; the attempt was treated as unreachable.',
+        'The expose script exec failed or timed out — the probe loop never completed; the attempt failed as unobserved (see the error for the timeout taxonomy).',
       );
     }
     // v2 deviation (the Q2 ruling): a final attempt with no usable URL is a
@@ -643,17 +662,24 @@ export async function exposeTunnel(
       // return body — the gate above catches 0.1.x upfront, but a binary that
       // changed mid-flow (or an empty probe version) lands here, and in the
       // measured incident a single version field would have saved the whole
-      // credentials/network/port misdiagnosis.
+      // credentials/network/port misdiagnosis. The command reuses the DB_VERSION
+      // field grammar (echo + anchored parse through stripTerminalEscapes — the
+      // #946 doctrine; a raw stdout read would be OSC-blind on exactly the
+      // shells that lose the probe line in the first place).
       let noUrlVersion = authVersion;
       if (parsed.tunnelUrl === '') {
         try {
           const versionResult = await runOneShot(
             workspaceId,
-            `export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"; devbridge version 2>/dev/null | head -1`,
+            `export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"; echo "DB_VERSION=$(devbridge version 2>/dev/null | head -1)"`,
             username,
             15000,
           );
-          noUrlVersion = String(versionResult.stdout ?? '').trim() || authVersion;
+          const readBack =
+            stripTerminalEscapes(versionResult.stdout)
+              .match(/^DB_VERSION=(.*)$/m)?.[1]
+              ?.trim() ?? '';
+          noUrlVersion = readBack || authVersion;
         } catch {
           // best-effort: the auth probe's version stands
         }
@@ -664,15 +690,27 @@ export async function exposeTunnel(
           `devbridge version is ${noUrlVersion} — too old to serve tunnels; upgrade per Step 0 before retrying.`,
         );
       }
+      // #998 taxonomy: too_old (blocked) / no_tunnel_url (no URL observed —
+      // host did not start, or the exec timed out before the log was read) /
+      // tunnel_unreachable (URL present, probes exhausted). The timeout-fold
+      // case gets its own hedged wording — a timeout lost the observation, it
+      // did not prove the host never started.
+      const timedOut = exposeFailed && parsed.tunnelUrl === '';
       return {
         ok: false,
         port: validatedPort,
         error: noUrlCheck.blocked
           ? noUrlCheck.error
+          : timedOut
+            ? 'Failed to expose a working DevBridge tunnel: the expose exec timed out or died before a Tunnel URL could be extracted — host state unknown (see warnings). Retry, or raise timeout_ms.'
+            : parsed.tunnelUrl === ''
+              ? 'Failed to expose a working DevBridge tunnel: the host log contains no Tunnel URL — the host did not start. Check the hostLog below for the real cause.'
+              : 'Failed to expose a working DevBridge tunnel: no reachable public URL after retries.',
+        error_code: noUrlCheck.blocked
+          ? 'devbridge_too_old'
           : parsed.tunnelUrl === ''
-            ? 'Failed to expose a working DevBridge tunnel: the host log contains no Tunnel URL — the host did not start. Check the hostLog below for the real cause.'
-            : 'Failed to expose a working DevBridge tunnel: no reachable public URL after retries.',
-        error_code: noUrlCheck.blocked ? 'devbridge_too_old' : parsed.tunnelUrl === '' ? 'no_tunnel_url' : undefined,
+            ? 'no_tunnel_url'
+            : 'tunnel_unreachable',
         version: noUrlVersion || undefined,
         authMode,
         httpCode: parsed.httpCode,

@@ -98,6 +98,15 @@ const INTENT_TABLE: IntentRow[] = [
     run: () => ({ stdout: DEVBRIDGE_AUTH_KEYRING_STDOUT }),
   },
   {
+    // exposeTunnel's #998 version read-back one-shot: the data-disk PATH export
+    // riding the same line as the DB_VERSION echo (the field grammar — the
+    // auth probe's $-anchored row cannot match it, and the generic export-path
+    // row would silently answer '').
+    intent: 'devbridge-version-probe',
+    pattern: /^export PATH="\/workspace\/.local\/bin:\$HOME\/\.huawei\/bin:\$PATH"; echo "DB_VERSION=/,
+    run: () => ({ stdout: 'DB_VERSION=0.2.2-release\n' }),
+  },
+  {
     // exposeTunnel's expose script AND its retry-cleanup blob — the latter
     // is a single ;-joined line whose prefix is the same pkill, so the
     // anchor must NOT be $-terminated. Synthesizes a healthy tunnel

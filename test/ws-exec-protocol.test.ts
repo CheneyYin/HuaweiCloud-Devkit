@@ -277,6 +277,14 @@ test('devbridge fake rows recognize the real scripts (first-line anchors)', () =
     fs,
   );
   assert.equal(cleanup.stdout, DEVBRIDGE_EXPOSE_OK_STDOUT);
+  // The #998 version read-back one-shot — its own row, not the generic
+  // export-path fall-through.
+  const versionProbe = runShellCommand(
+    'export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"; echo "DB_VERSION=$(devbridge version 2>/dev/null | head -1)"',
+    fs,
+  );
+  assert.equal(versionProbe.intent, 'devbridge-version-probe');
+  assert.match(versionProbe.stdout, /DB_VERSION=0\.2\.2-release/);
   // The #919 re-verify script is built by the product's own builder — feed the
   // REAL script through the fake so the anchor and the pin stay honest.
   const verify = runShellCommand(buildDevbridgeVerifyScript('https://e2e-tunnel-1-8080.devbridge-s2.hwtunnel.com'), fs);
