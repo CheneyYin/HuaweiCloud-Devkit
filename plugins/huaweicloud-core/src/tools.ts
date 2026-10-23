@@ -1481,6 +1481,12 @@ async function searchDocs(query: string, topic: string = 'all') {
   return { ok: true, query: q, topic, count: results.length, results: results.slice(0, 10) };
 }
 
+// The per-reference body cap in retrieve_skill payloads. Named so the
+// structure guard can pin the taught description ("capped at N characters")
+// to this single constant — and so the truncation marker interpolates the
+// same number instead of restating it.
+const REFERENCE_CAP = 4000;
+
 async function retrieveSkill(name: string, opts: CallToolOptions = {}) {
   const skillName = String(name || '').trim();
   if (!skillName) return { ok: false, error: 'Skill name is required.' };
@@ -1523,16 +1529,18 @@ async function retrieveSkill(name: string, opts: CallToolOptions = {}) {
   for (const filename of referenceFilenames(skillName)) {
     const refPath = join(SKILLS_ROOT, skillName, 'references', filename);
     const raw = readFileSync(refPath, 'utf8');
-    // The 4000-char cap is silent no longer: cross-references deeper into a
-    // reference (e.g. the safety remediation citing §Bootstrap or a late
-    // diagnosis section) must be visibly unreachable here, not hollow —
-    // remote/file-less agents only have this fallback, so a bare truncation
-    // reads as "the section does not exist". The marker names the fix: direct
-    // file access to skillRoot (disclosed in the stdio payload below).
+    // The cap is silent no longer: cross-references deeper into a reference
+    // (e.g. the safety remediation citing §Bootstrap or a late diagnosis
+    // section) must be visibly unreachable here, not hollow — remote/file-less
+    // agents only have this fallback, so a bare truncation reads as "the
+    // section does not exist". The marker names the fix: direct file access
+    // to skillRoot (disclosed in the stdio payload below).
     references.push({
       filename,
       content:
-        raw.length > 4000 ? `${raw.substring(0, 4000)}\n\n[truncated at 4000 chars — full file at <skillRoot>/${skillName}/references/${filename}]` : raw,
+        raw.length > REFERENCE_CAP
+          ? `${raw.substring(0, REFERENCE_CAP)}\n\n[truncated at ${REFERENCE_CAP} chars — full file at <skillRoot>/${skillName}/references/${filename}]`
+          : raw,
     });
   }
   const frontmatter = parseSkillFrontmatter(content);

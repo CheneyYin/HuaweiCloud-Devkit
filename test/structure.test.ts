@@ -907,16 +907,26 @@ test('the vendor boundary survives copy passes on every disclosure surface', () 
 });
 
 test('retrieve_skill reference cap stays in sync between code and description', () => {
-  // The description teaches "each reference body capped at 4000 characters";
+  // The description teaches "each reference body capped at N characters";
   // this pins the taught number to the truncation constant so neither can
   // drift silently (the repo's own description-literal pinning pattern).
+  // The marker must interpolate the same constant — a restated literal in
+  // the marker string drifts independently of the taught cap.
   const tools = readSource(join('src', 'tools.ts'));
-  const cap = tools.match(/\.substring\(0, (\d+)\) \}\)/)?.[1];
+  const cap = tools.match(/const REFERENCE_CAP = (\d+);/)?.[1];
   assert.ok(cap, 'the reference truncation constant must be found');
   assert.match(
     tools,
     new RegExp(`capped at ${cap} characters`),
     'the retrieve_skill description must teach the actual reference cap',
+  );
+  assert.ok(
+    tools.includes('truncated at ${REFERENCE_CAP} chars'),
+    'the truncation marker must interpolate the cap constant, not restate it',
+  );
+  assert.ok(
+    !tools.includes(`truncated at ${cap} chars`),
+    'no literal restatement of the cap may appear in the marker template',
   );
 });
 
