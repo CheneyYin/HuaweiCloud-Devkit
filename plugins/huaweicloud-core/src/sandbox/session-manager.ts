@@ -1465,7 +1465,10 @@ export async function deployCheck(
     `# the expose/verify probes' 10) keeps 5 bounded probes inside the timeout budget.`,
     `probe_tunnel() {`,
     `  local url="$1" code body`,
-    `  code=$(curl -s -o /tmp/.dc_tunnel_body -w "%{http_code}" --max-time 5 "$url" 2>/dev/null)`,
+    // #1000 (v2 completion — main missed this probe): --noproxy — the injected
+    // sandbox proxy does not route the tunnel domain; a proxied probe returns
+    // 502/404 fakes for a working tunnel, same trap as the expose/verify curls.
+    `  code=$(curl -s --noproxy '*' -o /tmp/.dc_tunnel_body -w "%{http_code}" --max-time 5 "$url" 2>/dev/null)`,
     `  PROBE_FAIL_REASON=""`,
     `  if [ -z "$code" ] || [ "$code" = "000" ]; then PROBE_FAIL_REASON="unreachable"; rm -f /tmp/.dc_tunnel_body; return 1; fi`,
     `  body=$(tr -d '\\r\\n' < /tmp/.dc_tunnel_body 2>/dev/null)`,

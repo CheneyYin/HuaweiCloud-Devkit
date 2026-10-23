@@ -1623,6 +1623,9 @@ test('expose_tunnel re-verifies from an independent exec session and classifies 
   assert.match(sessionManager, /DEVBRIDGE_PORT_NOT_CONFIGURED_MARKER = 'port not configured'/);
   assert.match(sessionManager, /DEVBRIDGE_BAD_GATEWAY_MARKER = 'bad gateway'/);
   assert.match(sessionManager, /body=\$\(tr -d '[^']*' < \/tmp\/\.dc_tunnel_body/);
+  // #1000 (v2 completion): the deploy_check tunnel probe also bypasses the
+  // injected sandbox proxy — every curl against *.hwtunnel.com carries it.
+  assert.match(sessionManager, /curl -s --noproxy '\*' -o \/tmp\/\.dc_tunnel_body/);
   assert.match(sessionManager, /\[ "\$code" = "404" \] && \[ "\$body" = "\$\{DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER\}" \]/);
 
   // Retry exhaustion on a gateway-dead URL must fail, not soften to a warning.

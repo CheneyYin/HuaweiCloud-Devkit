@@ -112,7 +112,10 @@ test('D: buildDevbridgeExposeScript starts a session-surviving host with port-an
 test('D: buildDevbridgeVerifyScript emits a fresh-session GET with the not-found body check', () => {
   const url = 'https://c4rdv7bv-8081.devbridge-s2.hwtunnel.com';
   const script = buildDevbridgeVerifyScript(url);
-  assert.ok(script.includes(`curl -s -o /tmp/devbridge_verify_body -w "%{http_code}" --max-time 10 "${url}"`));
+  // #1000: the verify curl must bypass the injected sandbox proxy.
+  assert.ok(
+    script.includes(`curl -s --noproxy '*' -o /tmp/devbridge_verify_body -w "%{http_code}" --max-time 10 "${url}"`),
+  );
   // Exact whole-content body match via tr (CRLF-tolerant) — NOT a grep -q form:
   // command substitution captures stdout, and -q prints none, so the verdict
   // would be stuck at "not found = no" forever (round-2 review critical).

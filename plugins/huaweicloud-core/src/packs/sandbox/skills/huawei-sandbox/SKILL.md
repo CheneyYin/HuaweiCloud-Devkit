@@ -363,7 +363,10 @@ sleep 10 && cat /tmp/host.log
 # 2. Extract tunnel URL (port-anchored: a multi-port host prints one URL line
 #    per port — never a port-blind extraction) and health-check before returning
 TUNNEL_URL=$(grep -oE "https://[A-Za-z0-9_-]+-<port>\.devbridge-s2\.hwtunnel\.com" /tmp/host.log | head -1)
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$TUNNEL_URL" 2>/dev/null)
+# --noproxy is MANDATORY (#1000): the sandbox injects an HTTP proxy that does NOT
+# route the tunnel domain — without it a working tunnel verifies as 502/404 and
+# sends you chasing credentials/version/port.
+HTTP_CODE=$(curl -s --noproxy '*' -o /dev/null -w "%{http_code}" --max-time 10 "$TUNNEL_URL" 2>/dev/null)
 if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "304" ]; then
   echo "Tunnel verified: $TUNNEL_URL (HTTP $HTTP_CODE)"
 else
@@ -374,12 +377,14 @@ else
   disown 2>/dev/null || true
   sleep 10
   TUNNEL_URL=$(grep -oE "https://[A-Za-z0-9_-]+-<port>\.devbridge-s2\.hwtunnel\.com" /tmp/host.log | head -1)
-  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$TUNNEL_URL" 2>/dev/null)
+  HTTP_CODE=$(curl -s --noproxy '*' -o /dev/null -w "%{http_code}" --max-time 10 "$TUNNEL_URL" 2>/dev/null)
   echo "Retry tunnel: $TUNNEL_URL (HTTP $HTTP_CODE)"
 fi
 ```
 
 **Never return a tunnel URL without verifying it first** — a stale URL (from a killed tunnel process) will silently fail. Always curl-check before giving the URL to the developer. Note: a migrated gateway serves its placeholder page with **HTTP 200** — a bare status check is not enough when diagnosing "200 but wrong content".
+
+**Proxy trap on verify commands (#1000)**: every curl against `*.hwtunnel.com` MUST pass `--noproxy '*'` — the sandbox injects an HTTP/HTTPS proxy that does not route the tunnel domain, so a proxied verify returns 502/404 fakes while the tunnel is actually serving. If a tunnel "fails" verification, re-test with `--noproxy '*'` BEFORE checking versions/credentials/ports (same trap on the SSH path: huawei-ecs skill references/windows-ssh.md §0.1).
 
 **Quota recovery**: if the tunnel creation fails with `10006: quota exceeded`:
 

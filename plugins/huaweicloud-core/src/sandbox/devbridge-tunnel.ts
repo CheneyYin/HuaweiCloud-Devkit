@@ -248,7 +248,10 @@ export function buildDevbridgeExposeScript(port: number, expiryHours: number = D
     `HTTP_CODE="000"`,
     `if [ -n "$TUNNEL_URL" ]; then`,
     `  for i in 1 2 3 4; do`,
-    `    HTTP_CODE=$(curl -s -o /tmp/.db_probe_body -w "%{http_code}" --max-time 10 "$TUNNEL_URL" 2>/dev/null)`,
+    // #1000: --noproxy — the sandbox injects an HTTP proxy that does NOT route
+    // the tunnel domain; without it the probe returns 502/404 fakes and a
+    // working tunnel is judged dead.
+    `    HTTP_CODE=$(curl -s --noproxy '*' -o /tmp/.db_probe_body -w "%{http_code}" --max-time 10 "$TUNNEL_URL" 2>/dev/null)`,
     `    echo "DB_PROBE_$i=$HTTP_CODE"`,
     `    if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "304" ]; then break; fi`,
     `    if [ "$i" != "4" ]; then sleep 5; fi`,
@@ -294,9 +297,9 @@ export function buildDevbridgeVerifyScript(tunnelUrl: string): string {
   }
   const bodyFile = '/tmp/devbridge_verify_body';
   return [
-    // No `|| echo "000"` (see buildDevbridgeExposeScript): transport failure
-    // already prints 000 and exits non-zero; `|| echo` would double it.
-    `VERIFY_CODE=$(curl -s -o ${bodyFile} -w "%{http_code}" --max-time 10 "${url}" 2>/dev/null)`,
+    // #1000: --noproxy — the injected proxy does not route the tunnel domain;
+    // a proxied verify returns 502/404 fakes (working tunnel judged dead).
+    `VERIFY_CODE=$(curl -s --noproxy '*' -o ${bodyFile} -w "%{http_code}" --max-time 10 "${url}" 2>/dev/null)`,
     // Exact whole-content body match (CRLF-tolerant, case-sensitive — the same
     // doctrine as the expose parser's === and deploy_check's probe): an app
     // page that merely MENTIONS the phrase never trips the false-success

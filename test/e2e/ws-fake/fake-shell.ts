@@ -111,7 +111,7 @@ const INTENT_TABLE: IntentRow[] = [
     // exposed URL, emitted by buildDevbridgeVerifyScript. Synthesizes the
     // healthy persistent answer (HTTP 200, body is NOT "tunnel not found").
     intent: 'devbridge-verify-script',
-    pattern: /^VERIFY_CODE=\$\(curl -s -o \/tmp\/devbridge_verify_body /,
+    pattern: /^VERIFY_CODE=\$\(curl -s --noproxy '\*' -o \/tmp\/devbridge_verify_body /,
     run: () => ({ stdout: DEVBRIDGE_VERIFY_OK_STDOUT }),
   },
   {
