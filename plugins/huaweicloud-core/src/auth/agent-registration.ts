@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
 import { codexPluginProbe } from '../codex-probe.ts';
+import { asRecord } from '../lib/as-record.ts';
 
 export const SUPPORTED_AGENT_TARGETS: string[] = [
   'opencode',
@@ -50,10 +51,6 @@ function readJsonSafe(path: string): unknown {
   } catch {
     return null;
   }
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 function opencodeRegistered(): boolean {

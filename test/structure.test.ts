@@ -1578,6 +1578,7 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
   const depResolve = readSource(join('src', 'lib', 'dep-resolve.ts'));
   const targetsModule = readSource(join('src', 'targets.ts'));
   const installPayload = readSource(join('src', 'install-payload.ts'));
+  const packsPolicy = readSource(join('src', 'packs-policy.ts'));
   // The dep module tree is walked, not enumerated: every .ts file under
   // src/dep/ — including one a future dependency adds, at any depth — joins
   // the guard automatically, so the zod-free import graph cannot regress by
@@ -1603,6 +1604,7 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
     ['src/lib/dep-resolve.ts', depResolve] as const,
     ['src/targets.ts', targetsModule] as const,
     ['src/install-payload.ts', installPayload] as const,
+    ['src/packs-policy.ts', packsPolicy] as const,
   ];
   for (const [name, source] of guarded) {
     assert.doesNotMatch(source, /from 'zod'/, `${name} must not import zod`);
