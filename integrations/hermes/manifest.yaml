@@ -6,10 +6,14 @@ description: >
   (ECS, OBS, VPC, RDS, CCE, ModelArts, and more) ship as server data and are
   disclosed through the MCP tools (huaweicloud_list_packs,
   huaweicloud_list_skills, huaweicloud_retrieve_skill) instead of
-  ~/.hermes/skills/ copies; the stdio MCP server instructions state skillRoot
-  (the tree's location) at initialize — the default load path is
-  action-first: attempt the direct read, the attempt itself is the
-  reachability check — and huaweicloud_list_skills is the effective
+  ~/.hermes/skills/ copies (that native directory holds only the six
+  huaweicloud-* meta-skill copies and is never a root for pack-owned
+  service skills — never guess a service skill's path by analogy to it);
+  the stdio MCP server instructions state skillRoot (the tree's location)
+  at initialize — the default load path is action-first: attempt the
+  direct read with skillRoot in hand before the first service-skill read
+  (never a guessed read in parallel with the catalog call), the attempt
+  itself is the reachability check — and huaweicloud_list_skills is the effective
   catalog (which skills are ENABLED is pack-gated and can change at runtime),
   with huaweicloud_retrieve_skill as the fallback when the attempted read
   fails or is denied.

@@ -141,6 +141,18 @@ export function instructionsFor(remote: boolean, runtimePacks = false): string {
     `To load a skill, attempt the direct read first: read ${SKILLS_ROOT}/<name>/SKILL.md and the references/ files you need with your file tools — untruncated and selective. ` +
     'Do not pre-check reachability and do not call huaweicloud_retrieve_skill before attempting — the attempt itself is the check. ' +
     'If a direct read of the tree fails or is denied, load the skill with huaweicloud_retrieve_skill instead — it needs no file access. ' +
+    // Measured miss (2026-10-23, live session): with the six meta-skill
+    // native copies listed in the agent's own skills directory, a session
+    // guessed a service skill's path by analogy to that directory and
+    // fired the guessed read in parallel with list_skills instead of
+    // waiting for skillRoot — File not found on the first move. The
+    // clause names the two roots and the sequencing rule. Scoped to
+    // pack-owned service skills (marketplace-installed skills legitimately
+    // live in the agent skills directory); the native-copy reference is
+    // conditional because only the eight directory-loading agents carry
+    // those copies — the manifest-surface harnesses have no such
+    // directory, and the stdio instructions render on both.
+    "Root disambiguation: huawei-* pack-owned service skills live only in this tree — on directory-loading agents, the native skills directory carrying the six huaweicloud-* meta-skill copies in your context is a different root, so never guess a service skill's path by analogy to it; the tree location stated above (skillRoot, the field a huaweicloud_list_skills payload carries) must be in hand before the first service-skill read, never fetched in parallel with a guessed one. " +
     VENDOR_BOUNDARY_RULE +
     'Route Huawei Cloud tasks through the huaweicloud-core skill; browse packs with huaweicloud_list_packs.'
   );

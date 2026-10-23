@@ -622,6 +622,41 @@ test('the action-first load teaching survives copy passes on every load-path sur
     reactive,
     'the list_skills description must teach the reactive permission fallback',
   );
+  // Root disambiguation pins (the 2026-10-23 measured miss): the two
+  // routing skills' step-3 load paths and the list_skills description
+  // (the tool that carries skillRoot) each name the only-service-skill-root
+  // rule — a copy pass reverting any one keeps the others green.
+  const rootDisambiguation = /never guess a service skill's path by analogy to it/;
+  assert.match(core, rootDisambiguation, 'huaweicloud-core must teach the root disambiguation');
+  assert.match(discovery, rootDisambiguation, 'capability-discovery must teach the root disambiguation');
+  // The description string escapes its apostrophe (\u2019 house style for
+  // single-quoted TS literals), so its pin matches the curly form; the
+  // markdown/manifest pins match the straight form their files carry.
+  assert.match(
+    listSkillsDescription.description,
+    /never guess a service skill\u2019s path by analogy to it/,
+    'the list_skills description must teach the root disambiguation (it was the tool in flight when the measured miss fired)',
+  );
+  assert.match(
+    listSkillsDescription.description,
+    /ONLY root for pack-owned service skills/,
+    'the list_skills description must scope skillRoot to pack-owned service skills',
+  );
+  // The sequencing half of the measured miss (the guessed read fired IN
+  // PARALLEL with list_skills): pinned on both routing skills and the
+  // hermes manifest (a native-copy harness where the failure transfers
+  // verbatim) — a copy pass reverting the sequencing sentence while
+  // keeping the guess prohibition must not stay green.
+  const noParallelGuess = /guessed read in parallel with/;
+  assert.match(core, noParallelGuess, 'huaweicloud-core must teach the no-parallel-guess sequencing');
+  assert.match(discovery, noParallelGuess, 'capability-discovery must teach the no-parallel-guess sequencing');
+  const hermes = readFileSync(join(root, 'integrations', 'hermes', 'manifest.yaml'), 'utf8');
+  assert.match(
+    hermes,
+    rootDisambiguation,
+    'the hermes manifest must teach the root disambiguation (hermes is a native-copy harness)',
+  );
+  assert.match(hermes, noParallelGuess, 'the hermes manifest must teach the no-parallel-guess sequencing');
   const manifest = readFileSync(join(root, 'integrations', 'hermes', 'manifest.yaml'), 'utf8');
   assert.match(manifest, attemptFirst, 'the hermes manifest must teach the attempt-first imperative');
   assert.match(manifest, reactive, 'the hermes manifest must teach the reactive permission fallback');
@@ -809,6 +844,21 @@ test('server instructions carry the three-form skillRoot disclosure contract', (
       /If a direct read of the tree fails or is denied, load the skill with huaweicloud_retrieve_skill instead/,
       `the ${label} stdio form must teach the reactive fallback sentence verbatim`,
     );
+    // Root disambiguation (measured miss, 2026-10-23: a session guessed a
+    // service skill's path by analogy to the agent-native meta-skill
+    // directory and fired the guessed read in parallel with list_skills):
+    // both stdio forms name the two roots and the skillRoot-before-first-
+    // read sequencing; the remote form teaches no path at all.
+    assert.match(
+      form,
+      /never guess a service skill's path by analogy to it/,
+      `the ${label} stdio form must teach the root disambiguation`,
+    );
+    assert.match(
+      form,
+      /never fetched in parallel with a guessed one/,
+      `the ${label} stdio form must teach skillRoot-before-first-read sequencing`,
+    );
     assert.match(form, /it needs no file access/, `the ${label} stdio form must state the loader needs no file access`);
     assert.doesNotMatch(
       form,
@@ -827,6 +877,15 @@ test('server instructions carry the three-form skillRoot disclosure contract', (
     'the remote form reads no tree and must not teach the reactive fallback',
   );
   assert.doesNotMatch(remote, /the skills tree lives at/, 'the remote form must not state a host tree path');
+  // The root-disambiguation clause is stdio-only (it presupposes the tree
+  // path this form withholds); pin the absence so a future branch
+  // harmonization cannot teach "the tree location stated above" on the
+  // face that states no location.
+  assert.doesNotMatch(
+    remote,
+    /never guess a service skill's path by analogy to it/,
+    'the remote form must not carry the stdio root-disambiguation clause',
+  );
   assert.match(remote, /skillRoot is withheld/, 'the remote form must state skillRoot is withheld');
   assert.match(remote, /huaweicloud_list_skills/, 'the remote form must name the effective-catalog tool');
   assert.match(remote, /fallback/, 'the remote form must frame retrieve_skill as the loader');
