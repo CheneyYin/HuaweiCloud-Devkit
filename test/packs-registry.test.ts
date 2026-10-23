@@ -38,7 +38,7 @@ test('pack tool counts match the P0 grouping', () => {
     'huaweicloud-cli': 7,
     sandbox: 12,
     auth: 5,
-    obs: 2,
+    obs: 3,
     voucher: 3,
     update: 2,
     discovery: 3,
@@ -50,7 +50,7 @@ test('pack tool counts match the P0 grouping', () => {
     assert.equal(pack.tools.length, expected[pack.id], `${pack.id} tool count`);
     total += pack.tools.length;
   }
-  assert.equal(total, 52);
+  assert.equal(total, 53);
 });
 
 test('the central pack handler map keys equal the pack-owned tool names', () => {
@@ -64,7 +64,7 @@ test('the central pack handler map keys equal the pack-owned tool names', () => 
   );
   const mapKeys = Object.keys(PACK_TOOL_HANDLERS).sort((a, b) => a.localeCompare(b));
   assert.deepEqual(mapKeys, packOwned);
-  assert.equal(mapKeys.length, 40);
+  assert.equal(mapKeys.length, 41);
 });
 
 test('every skills/ directory is claimed by exactly one pack', () => {

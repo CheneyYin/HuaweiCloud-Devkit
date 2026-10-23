@@ -97,7 +97,8 @@ test(
 
       const after = await toolNames(client);
       assert.ok(after.includes('huaweicloud_setup_obs_config'), 'client re-list shows the newly enabled pack tool');
-      assert.ok(after.includes('huaweicloud_obs_set_website_config'), 'both obs tools re-disclose together');
+      assert.ok(after.includes('huaweicloud_obs_set_website_config'), 'all obs tools re-disclose together');
+      assert.ok(after.includes('huaweicloud_obs_set_cors'), 'all obs tools re-disclose together');
 
       const listed = await callJson(client, 'huaweicloud_list_packs', {});
       const flags = new Map((listed.packs ?? []).map((pack) => [pack.id, pack.enabled]));

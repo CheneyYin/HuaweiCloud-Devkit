@@ -13,12 +13,16 @@ test('TOOL_DEFINITIONS exposes huaweicloud_obs_set_cors with set/get/delete + ru
   const tool = TOOL_DEFINITIONS.find((t) => t.name === 'huaweicloud_obs_set_cors');
   assert.ok(tool, 'tool must be registered');
   // v2's ToolDefinition carries name+description; the zod schema is the
-  // single source of truth for shape (descriptions do not render into the
-  // LooseToolSchema JSON) — pin the shape there and the HEAD doctrine on the
-  // tool description.
-  const schema = JSON.stringify(getToolSchema('huaweicloud_obs_set_cors'));
-  assert.match(schema, /options":\["set","get","delete"\]/);
-  assert.match(schema, /allowedOrigin/);
+  // single source of truth — pin the RENDERED JSON Schema (toJSONSchema is the
+  // stable surface; the zod def internals are not) plus main's required-set
+  // pins, and the HEAD doctrine on the tool description.
+  const schema = getToolSchema('huaweicloud_obs_set_cors').toJSONSchema() as {
+    properties?: Record<string, { enum?: string[]; items?: { required?: string[] } }>;
+    required?: string[];
+  };
+  assert.deepEqual(schema.properties?.action?.enum, ['set', 'get', 'delete']);
+  assert.deepEqual(schema.properties?.rules?.items?.required, ['allowedOrigin', 'allowedMethod']);
+  assert.deepEqual(schema.required, ['action', 'bucket', 'region']);
   assert.match(tool.description, /allowedMethod 必须含 HEAD/);
   assert.match(tool.description, /BrowserJS SDK/);
 });
@@ -163,6 +167,79 @@ test('set without credentials points at huaweicloud_auth_init (website-config pa
             rules: fullRules,
           }),
           /huaweicloud_auth_init/,
+        );
+      } finally {
+        clearRuntimeCredentials();
+      }
+    },
+  );
+});
+
+test('set applies the documented defaults (allowedHeader *, maxAgeSeconds 3000) and escapes XML (#1003)', async () => {
+  const calls: Array<{ body: unknown }> = [];
+  await withMockedFetch(
+    async (_url, opts) => {
+      calls.push({ body: (opts as { body?: string } | undefined)?.body });
+      return { status: 200, text: async () => '' };
+    },
+    async () => {
+      await callTool('huaweicloud_obs_set_cors', {
+        action: 'set',
+        bucket: 'my-bucket',
+        region: 'cn-north-4',
+        rules: [{ allowedOrigin: 'https://a.com?x=1&y=<2>', allowedMethod: ['GET', 'HEAD'] }],
+      });
+      const body = String(calls[0]!.body);
+      assert.match(
+        body,
+        /<AllowedOrigin>https:\/\/a\.com\?x=1&amp;y=&lt;2&gt;<\/AllowedOrigin>/,
+        'XML metacharacters must be escaped',
+      );
+      assert.match(body, /<AllowedHeader>\*<\/AllowedHeader>/, 'the * header default applies');
+      assert.match(body, /<MaxAgeSeconds>3000<\/MaxAgeSeconds>/, 'the documented 3000 default applies when omitted');
+    },
+  );
+});
+
+test('set surfaces the OBS error body on non-200 for self-diagnosis (#1003)', async () => {
+  await withMockedFetch(
+    async () => ({ status: 400, text: async () => '<Error><Code>InvalidRequest</Code></Error>' }),
+    async () => {
+      const res = (await callTool('huaweicloud_obs_set_cors', {
+        action: 'set',
+        bucket: 'my-bucket',
+        region: 'cn-north-4',
+        rules: fullRules,
+      })) as Record<string, unknown>;
+      assert.equal(res.ok, false);
+      assert.equal(res.status, 400);
+      assert.match(String(res.errorDetail), /InvalidRequest/);
+    },
+  );
+});
+
+test('STS credentials sign the x-amz-security-token header (#1003 hardening)', async () => {
+  let auth = '';
+  await withMockedFetch(
+    async (_url, opts) => {
+      auth = String((opts as { headers?: Record<string, string> } | undefined)?.headers?.Authorization ?? '');
+      return { status: 200, text: async () => '' };
+    },
+    async () => {
+      // Runtime credentials win over env AND the machine's real vault/S1 —
+      // the only hermetic way to test the STS path on a credentialed host.
+      setRuntimeCredentials('test-ak', 'test-sk', 'sts-token');
+      try {
+        const res = (await callTool('huaweicloud_obs_set_cors', {
+          action: 'get',
+          bucket: 'my-bucket',
+          region: 'cn-north-4',
+        })) as Record<string, unknown>;
+        assert.equal(res.ok, true);
+        assert.match(
+          auth,
+          /SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token/,
+          'the token header must be signed',
         );
       } finally {
         clearRuntimeCredentials();

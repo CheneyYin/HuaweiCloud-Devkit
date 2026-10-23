@@ -147,7 +147,18 @@ async function setupObsConfigFromHcloud(profile?: string) {
 // Shared preamble for the AWS4-signed bucket-config handlers (website/CORS):
 // credential resolution (with the auth_init pointer) and the bucket endpoint.
 function obsSignedContext(bucket: string, region: string, what: string) {
-  const creds = asCredentialRecord(resolveCredentialsWithRuntime({}));
+  // Propagating consumers fold the strict S1 seam (AGENTS.md doctrine): a
+  // broken vault ref surfaces with its remediation shape, not a raw throw.
+  let creds: ReturnType<typeof asCredentialRecord>;
+  try {
+    creds = asCredentialRecord(resolveCredentialsWithRuntime({}));
+  } catch (error) {
+    throw new Error(
+      `OBS ${what} could not resolve credentials: ${error instanceof Error ? error.message : String(error)}. ` +
+        'Fix the S1 credential vault (or re-run huaweicloud_auth_init) and retry.',
+      { cause: error },
+    );
+  }
   const obsAk = creds?.ak;
   const obsSk = creds?.sk;
   if (!obsAk || !obsSk) {
@@ -165,7 +176,7 @@ async function handleObsWebsiteConfig(args: ToolArgs, _opts: CallToolOptions = {
   if (!bucket || !region) {
     throw new Error('bucket and region are required');
   }
-  const { signedCreds, host, endpoint } = obsSignedContext(bucket, region, 'website config');
+  const { signedCreds, endpoint } = obsSignedContext(bucket, region, 'website config');
 
   if (action === 'get') {
     const res = await obsSignedRequest('GET', endpoint, '/?website', '', signedCreds, region);
@@ -222,7 +233,7 @@ async function handleObsCorsConfig(args: ToolArgs = {}, _opts: CallToolOptions =
 
   if (action === 'get') {
     const res = await obsSignedRequest('GET', endpoint, '/?cors', '', signedCreds, region, 'cors');
-    return { ok: res.status === 200, status: res.status, rules: res.body, verify: preflightHint };
+    return { ok: res.status === 200, status: res.status, body: res.body, verify: preflightHint };
   }
 
   if (action === 'delete') {
@@ -234,9 +245,10 @@ async function handleObsCorsConfig(args: ToolArgs = {}, _opts: CallToolOptions =
     if (!Array.isArray(rules) || rules.length === 0) {
       throw new Error('rules array is required for action=set (allowedOrigin + allowedMethod, HEAD included)');
     }
+    const VALID_METHODS = new Set(['GET', 'PUT', 'POST', 'DELETE', 'HEAD']);
     for (const rule of rules as Array<Record<string, unknown>>) {
-      const allowedOrigin = rule.allowedOrigin;
-      const allowedMethod = rule.allowedMethod;
+      const allowedOrigin = rule?.allowedOrigin;
+      const allowedMethod = rule?.allowedMethod;
       if (
         typeof allowedOrigin !== 'string' ||
         !allowedOrigin ||
@@ -244,6 +256,13 @@ async function handleObsCorsConfig(args: ToolArgs = {}, _opts: CallToolOptions =
         allowedMethod.length === 0
       ) {
         throw new Error('each CORS rule needs allowedOrigin and a non-empty allowedMethod array');
+      }
+      for (const method of allowedMethod) {
+        if (typeof method !== 'string' || !VALID_METHODS.has(method)) {
+          throw new Error(
+            `allowedMethod entries must be one of GET/PUT/POST/DELETE/HEAD (got ${JSON.stringify(method)})`,
+          );
+        }
       }
       if (!(allowedMethod as unknown[]).includes('HEAD')) {
         // p01: the BrowserJS SDK's HEAD ?apiversion probe gets swallowed by the
@@ -264,11 +283,24 @@ async function handleObsCorsConfig(args: ToolArgs = {}, _opts: CallToolOptions =
       for (const method of (rule.allowedMethod as unknown[]) ?? []) {
         xmlParts.push(`    <AllowedMethod>${escapeXml(method)}</AllowedMethod>`);
       }
-      for (const header of (rule.allowedHeader as unknown[]) ?? ['*']) {
+      const headers = rule?.allowedHeader;
+      if (headers != null && !Array.isArray(headers)) {
+        throw new Error(`allowedHeader must be an array (got ${JSON.stringify(headers)})`);
+      }
+      for (const header of (headers as unknown[] | undefined) ?? ['*']) {
         xmlParts.push(`    <AllowedHeader>${escapeXml(header)}</AllowedHeader>`);
       }
-      if (rule.maxAgeSeconds != null) {
-        xmlParts.push(`    <MaxAgeSeconds>${Number(rule.maxAgeSeconds)}</MaxAgeSeconds>`);
+      const maxAge = rule.maxAgeSeconds;
+      if (maxAge != null) {
+        const n = Number(maxAge);
+        if (!Number.isSafeInteger(n) || n < 0) {
+          throw new Error(`maxAgeSeconds must be a non-negative integer (got ${JSON.stringify(maxAge)})`);
+        }
+        xmlParts.push(`    <MaxAgeSeconds>${n}</MaxAgeSeconds>`);
+      } else {
+        // The documented default (schema description) — omitting the element
+        // would leave the preflight cache to browser defaults, not 3000.
+        xmlParts.push('    <MaxAgeSeconds>3000</MaxAgeSeconds>');
       }
       xmlParts.push('  </CORSRule>');
     }
@@ -282,6 +314,7 @@ async function handleObsCorsConfig(args: ToolArgs = {}, _opts: CallToolOptions =
         res.status === 200
           ? `CORS configured for ${bucket} (${rules.length} rule(s)).`
           : `Failed to configure CORS: HTTP ${res.status}`,
+      errorDetail: res.status === 200 ? undefined : res.body.slice(0, 400),
       verify: preflightHint,
     };
   }
@@ -310,8 +343,15 @@ async function obsSignedRequest(
   const url = new URL(endpoint + pathAndQuery);
   const canonicalUri = '/';
   const canonicalQueryString = `${subresource}=`;
-  const canonicalHeaders = `host:${url.host}\n` + `x-amz-content-sha256:${payloadHash}\n` + `x-amz-date:${amzDate}\n`;
-  const signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
+  // SigV4 requires every sent x-amz-* header to be signed — an unsigned
+  // x-amz-security-token 403s for STS-credential calls. The header list stays
+  // sorted (host, x-amz-content-sha256, x-amz-date, x-amz-security-token).
+  const tokenHeader = creds.securityToken ? `x-amz-security-token:${creds.securityToken}\n` : '';
+  const canonicalHeaders =
+    `host:${url.host}\n` + `x-amz-content-sha256:${payloadHash}\n` + `x-amz-date:${amzDate}\n` + tokenHeader;
+  const signedHeaders = creds.securityToken
+    ? 'host;x-amz-content-sha256;x-amz-date;x-amz-security-token'
+    : 'host;x-amz-content-sha256;x-amz-date';
   const canonicalRequest = [
     method,
     canonicalUri,
@@ -385,7 +425,7 @@ const obsCorsConfigSchema = z.looseObject({
           .array(z.string())
           .describe('允许的 HTTP 方法（GET/PUT/POST/DELETE/HEAD，必须含 HEAD — BrowserJS SDK 探测依赖）'),
         allowedHeader: z.array(z.string()).optional().describe('允许的请求头，默认 ["*"]'),
-        maxAgeSeconds: z.number().optional().describe('预检结果缓存秒数，默认 3000'),
+        maxAgeSeconds: z.number().int().min(0).optional().describe('预检结果缓存秒数，默认 3000'),
       }),
     )
     .optional()

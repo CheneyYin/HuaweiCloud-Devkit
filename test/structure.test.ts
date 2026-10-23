@@ -601,7 +601,7 @@ test('KooCLI 7.3.12 pin: the OBS website/cors capability claims are current, not
   // claim) must not survive a copy pass — the pinned 7.3.12 live-serves the
   // cors subcommand; the dual-path doctrine is the only true teaching.
   const staleClaim =
-    /KooCLI OBS does NOT support this|obsutil has no website command|lacks website config|未暴露 obsutil 的 .?cors.? 子命令|has no cors subcommand|不支持 cors 子命令/;
+    /KooCLI OBS does NOT support this|obsutil has no website command|lacks website config|未暴露 obsutil 的 .?cors.? 子命令|has no cors subcommand|does not expose a cors subcommand|不支持 cors 子命令/;
   const surfaces = [
     join(pluginRoot, 'src', 'packs', 'obs', 'skills', 'huawei-obs', 'SKILL.md'),
     join(pluginRoot, 'src', 'packs', 'obs', 'skills', 'huawei-obs', 'references', 'static-website.md'),
