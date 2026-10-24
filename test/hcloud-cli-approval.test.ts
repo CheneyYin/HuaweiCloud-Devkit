@@ -1,36 +1,23 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { fixtureDir } from './fixture-dir.ts';
-import { delimiter, join } from 'node:path';
+
+// Deterministic-tier seam: disable the once-per-session first-assertion
+// vendor challenge (HUAWEICLOUD_VENDOR_CHALLENGE=off, the installer-override
+// pattern). Set before the src imports: the gate captures the env at module
+// load, so the harness import's seam is order-dependent — this line is not.
+process.env.HUAWEICLOUD_VENDOR_CHALLENGE = 'off';
+
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import {
   consumeApprovalToken,
   createApprovalToken,
   hashArgs,
   inspectApprovalToken,
-  planHcloudCommand,
-  redactArgsWithObs,
   type HcloudPlan,
 } from '../plugins/huaweicloud-core/src/hcloud-cli.ts';
-
-import {
-  fakeHcloudExecutable,
-  fakeHcloudScript,
-  isWin,
-  withMetaRepo,
-  withTempAuthHome,
-  type ApprovedRunResult,
-  type FakeHcloudOutput,
-} from './hcloud-cli-harness.ts';
-import {
-  runHcloud,
-  redactOutput,
-  stripKooCliUpdateBanner,
-  type HcloudRunResult,
-} from '../plugins/huaweicloud-core/src/hcloud-cli.ts';
-import { clearRuntimeCredentials, setRuntimeCredentials } from '../plugins/huaweicloud-core/src/auth/credentials.ts';
-import { classifyHcloudProbe } from '../plugins/huaweicloud-core/src/hcloud-probe.ts';
-import { getKooCliVersion } from '../plugins/huaweicloud-core/src/koocli-version.ts';
+import { fakeHcloudExecutable, withTempAuthHome, type ApprovedRunResult } from './hcloud-cli-harness.ts';
 import { callTool, type ToolArgs } from '../plugins/huaweicloud-core/src/tools.ts';
 
 test('inspectApprovalToken classifies a fresh token as valid', async () => {

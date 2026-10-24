@@ -1,18 +1,24 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+
+// Deterministic-tier seam: disable the once-per-session first-assertion
+// vendor challenge (HUAWEICLOUD_VENDOR_CHALLENGE=off, the installer-override
+// pattern). Set before the src imports: the gate captures the env at module
+// load, so the harness import's seam is order-dependent — this line is not.
+process.env.HUAWEICLOUD_VENDOR_CHALLENGE = 'off';
+
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { fixtureDir } from './fixture-dir.ts';
 import { delimiter, join } from 'node:path';
+
+import { fixtureDir } from './fixture-dir.ts';
 import {
-  consumeApprovalToken,
-  createApprovalToken,
-  hashArgs,
-  inspectApprovalToken,
   planHcloudCommand,
   redactArgsWithObs,
   type HcloudPlan,
+  runHcloud,
+  redactOutput,
+  type HcloudRunResult,
 } from '../plugins/huaweicloud-core/src/hcloud-cli.ts';
-
 import {
   fakeHcloudExecutable,
   fakeHcloudScript,
@@ -22,21 +28,14 @@ import {
   type ApprovedRunResult,
   type FakeHcloudOutput,
 } from './hcloud-cli-harness.ts';
-import {
-  runHcloud,
-  redactOutput,
-  stripKooCliUpdateBanner,
-  type HcloudRunResult,
-} from '../plugins/huaweicloud-core/src/hcloud-cli.ts';
 import { clearRuntimeCredentials, setRuntimeCredentials } from '../plugins/huaweicloud-core/src/auth/credentials.ts';
 import { classifyHcloudProbe } from '../plugins/huaweicloud-core/src/hcloud-probe.ts';
-import { getKooCliVersion } from '../plugins/huaweicloud-core/src/koocli-version.ts';
-import { callTool, type ToolArgs } from '../plugins/huaweicloud-core/src/tools.ts';
+import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
 
 test('runHcloud retries transient network errors and reports retry count', async () => {
   const stateFile = join(fixtureDir('huaweicloud-toolkit-state-'), 'count.txt');
   const script = fakeHcloudScript(`
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 const stateFile = ${JSON.stringify(stateFile)};
 const count = existsSync(stateFile) ? Number(readFileSync(stateFile, 'utf8')) : 0;
 writeFileSync(stateFile, String(count + 1));
@@ -74,7 +73,7 @@ test('runHcloud respects cwd parameter', async () => {
   const cwdDir = fixtureDir('huaweicloud-toolkit-cwd-');
   writeFileSync(join(cwdDir, 'test.txt'), 'works', 'utf8');
   const script = fakeHcloudScript(`
-import { readFileSync } from 'node:fs';
+import {readFileSync} from 'node:fs';
 const content = readFileSync('test.txt', 'utf8');
 console.log(content);
 `);
@@ -192,7 +191,7 @@ test(
     const binDir = fixtureDir('appr-bin-');
     const logFile = join(binDir, 'calls.txt');
     const fake = fakeHcloudExecutable(`
-import { appendFileSync } from 'node:fs';
+import {appendFileSync} from 'node:fs';
 const logFile = ${JSON.stringify(logFile)};
 const args = process.argv.slice(2);
 appendFileSync(logFile, JSON.stringify(args) + '\\n');
@@ -385,7 +384,7 @@ test('A: runHcloud fails fast with CREDENTIAL_EXPIRED for expired temp STS (no e
   await withTempAuthHome(async () => {
     const marker = join(fixtureDir('hcdk-gate-'), 'ran.txt');
     const script = fakeHcloudScript(`
-import { writeFileSync } from 'node:fs';
+import {writeFileSync} from 'node:fs';
 writeFileSync(${JSON.stringify(marker)}, 'executed', 'utf8');
 console.log(JSON.stringify({ ok: true }));
 `);

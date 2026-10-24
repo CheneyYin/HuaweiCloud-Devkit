@@ -1,17 +1,21 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+
+// Deterministic-tier seam: disable the once-per-session first-assertion
+// vendor challenge (HUAWEICLOUD_VENDOR_CHALLENGE=off, the installer-override
+// pattern). Set before the src imports: the gate captures the env at module
+// load, so the harness import's seam is order-dependent — this line is not.
+process.env.HUAWEICLOUD_VENDOR_CHALLENGE = 'off';
+
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
 
-import { fakeHcloudExecutable, fakeHcloudScript, isWin, withMetaRepo, withTempAuthHome } from './hcloud-cli-harness.ts';
+import { withTempAuthHome } from './hcloud-cli-harness.ts';
 import {
   consumeApprovalToken,
   createApprovalToken,
   hashArgs,
-  inspectApprovalToken,
   planHcloudCommand,
-  redactArgsWithObs,
   type HcloudPlan,
 } from '../plugins/huaweicloud-core/src/hcloud-cli.ts';
 
