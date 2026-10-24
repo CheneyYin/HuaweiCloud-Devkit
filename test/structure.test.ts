@@ -3156,7 +3156,7 @@ test('test fixtures: raw mkdtempSync is denied by default across the suite', () 
     'hdkitservice-api.test.ts',
     'hook-node.test.ts',
     'issue-443-fix.test.ts',
-    'mcp-server.test.ts',
+    'mcp-server-tools.test.ts',
     'officeace-adaptation.test.ts',
     'packs-command.test.ts',
     'plugins-e2e.test.ts',
