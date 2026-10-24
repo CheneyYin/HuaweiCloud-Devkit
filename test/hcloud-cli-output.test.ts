@@ -1,15 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { runHcloud, redactOutput, stripKooCliUpdateBanner } from '../plugins/huaweicloud-core/src/hcloud-cli.ts';
+import { fakeHcloudScript } from './hcloud-cli-harness.ts';
+import { getKooCliVersion } from '../plugins/huaweicloud-core/src/koocli-version.ts';
+
 // Deterministic-tier seam: disable the once-per-session first-assertion
 // vendor challenge (HUAWEICLOUD_VENDOR_CHALLENGE=off, the installer-override
 // pattern). Set before the src imports: the gate captures the env at module
 // load, so the harness import's seam is order-dependent — this line is not.
 process.env.HUAWEICLOUD_VENDOR_CHALLENGE = 'off';
-
-import { runHcloud, redactOutput, stripKooCliUpdateBanner } from '../plugins/huaweicloud-core/src/hcloud-cli.ts';
-import { fakeHcloudScript } from './hcloud-cli-harness.ts';
-import { getKooCliVersion } from '../plugins/huaweicloud-core/src/koocli-version.ts';
 
 test('#921: exit 0 with a KooCLI parameter error reports ok:false with PARAM_ERROR', async () => {
   const script = fakeHcloudScript(`

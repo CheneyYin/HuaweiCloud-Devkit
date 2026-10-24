@@ -37,7 +37,11 @@ test('test fixtures: raw mkdtempSync is denied by default across the suite', () 
   // adopts fixtureDir or joins the allowlist with cleanup of its own;
   // nothing passes silently by default.
   const perTestCleaners = new Set([
-    'agent-install.test.ts',
+    'agent-install-agents.test.ts',
+    'agent-install-codex.test.ts',
+    'agent-install-misc.test.ts',
+    'agent-install-native.test.ts',
+    'agent-install-opencode.test.ts',
     'auth-agent-registration.test.ts',
     'auth-credentials.test.ts',
     'codearts-adaptation.test.ts',
@@ -55,7 +59,12 @@ test('test fixtures: raw mkdtempSync is denied by default across the suite', () 
     'plugins-e2e.test.ts',
     'proxy-agent.test.ts',
     'reconcile.test.ts',
+    'safety-hcloud-args.test.ts',
+    'safety-redact.test.ts',
+    'safety-secret-gates.test.ts',
     'safety-policy.test.ts',
+    'safety-text-command.test.ts',
+    'safety-vocabulary.test.ts',
     'setup-packs.test.ts',
     'telemetry.test.ts',
     'uninstall-cleanup.test.ts',

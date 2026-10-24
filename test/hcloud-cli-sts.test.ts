@@ -1,15 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
+import { extractApiError, resolveStsInjectArgs, type HcloudPlan } from '../plugins/huaweicloud-core/src/hcloud-cli.ts';
+import { clearRuntimeCredentials, setRuntimeCredentials } from '../plugins/huaweicloud-core/src/auth/credentials.ts';
+
 // Deterministic-tier seam: disable the once-per-session first-assertion
 // vendor challenge (HUAWEICLOUD_VENDOR_CHALLENGE=off, the installer-override
 // pattern). Set before the src imports: the gate captures the env at module
 // load, so the harness import's seam is order-dependent — this line is not.
 process.env.HUAWEICLOUD_VENDOR_CHALLENGE = 'off';
-
-import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
-import { extractApiError, resolveStsInjectArgs, type HcloudPlan } from '../plugins/huaweicloud-core/src/hcloud-cli.ts';
-import { clearRuntimeCredentials, setRuntimeCredentials } from '../plugins/huaweicloud-core/src/auth/credentials.ts';
 
 test('koocli lang G4: approval token still rejects args that differ from the approved plan', async () => {
   const plan = (await callTool('huaweicloud_plan_cli_command', {
