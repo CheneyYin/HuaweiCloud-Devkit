@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
-import { callTool, TOOL_DEFINITIONS, listSkillDirs, type ToolArgs } from '../plugins/huaweicloud-core/src/tools.ts';
+
+import { callTool, listSkillDirs, type ToolArgs } from '../plugins/huaweicloud-core/src/tools.ts';
 import type { RiskFinding } from '../plugins/huaweicloud-core/src/risk-rule-engine.ts';
 import { fixtureDir } from './fixture-dir.ts';
 

@@ -2,13 +2,21 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { join } from 'node:path';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import {
-  clearRuntimeCredentials,
-  isCodeArtsContext,
-  setRuntimeCredentials,
-} from '../plugins/huaweicloud-core/src/auth/credentials.ts';
 
-import { FAKE_HCLOUD, isWin, withCodeArtsHome, withCodeArtsProject, withTempHome } from './auth-credentials-harness.ts';
+import {
+  backupGlobalCredentials,
+  resolveCredentials,
+  globalCredentialsPath,
+  obsConfigPath,
+  readGlobalCredentials,
+  readLastSync,
+  restoreGlobalCredentialsBackup,
+  writeGlobalCredentials,
+  writeLastSync,
+  writeObsConfig,
+} from '../plugins/huaweicloud-core/src/auth/credentials.ts';
+import { FAKE_HCLOUD, withTempHome } from './auth-credentials-harness.ts';
+import { getAuthStatus, syncAuth } from '../plugins/huaweicloud-core/src/auth/service.ts';
 
 interface ThrownCredentialError extends Error {
   code?: string;
@@ -26,21 +34,6 @@ function resolveCredentialsThrowing(): ThrownCredentialError {
   }
   throw new Error('expected resolveCredentials to throw HDKIT_CRED_MISSING');
 }
-import {
-  backupGlobalCredentials,
-  resolveCredentials,
-  globalCredentialsPath,
-  obsConfigPath,
-  readGlobalCredentials,
-  readLastSync,
-  restoreGlobalCredentialsBackup,
-  writeGlobalCredentials,
-  writeLastSync,
-  writeObsConfig,
-} from '../plugins/huaweicloud-core/src/auth/credentials.ts';
-import { getAgentRegistrationStatuses } from '../plugins/huaweicloud-core/src/auth/agent-registration.ts';
-import { getAuthStatus, syncAuth, computeOnboarding } from '../plugins/huaweicloud-core/src/auth/service.ts';
-import { buildOnboardingSteps } from '../plugins/huaweicloud-core/src/auth/error-table.ts';
 
 test('global credentials round-trip with secure file path', () => {
   withTempHome((home) => {

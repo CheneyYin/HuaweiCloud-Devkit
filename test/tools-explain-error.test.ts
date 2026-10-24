@@ -1,11 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fixtureDir } from './fixture-dir.ts';
-import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { clearRuntimeCredentials, setRuntimeCredentials } from '../plugins/huaweicloud-core/src/auth/credentials.ts';
 
-import { callTool, type ToolArgs } from '../plugins/huaweicloud-core/src/tools.ts';
+import { clearRuntimeCredentials, setRuntimeCredentials } from '../plugins/huaweicloud-core/src/auth/credentials.ts';
+import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
 
 test('huaweicloud_explain_error maps APIGW.0301 to credential/project_id guidance', async () => {
   const result = await callTool('huaweicloud_explain_error', {

@@ -4,7 +4,12 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { hcloudReceipt, tempDir } from './dep-receipts-helpers.ts';
-import { readReceipt, removeReceipt, writeReceipt, type DepReceipt } from '../plugins/huaweicloud-core/src/dep/receipts.ts';
+import {
+  readReceipt,
+  removeReceipt,
+  writeReceipt,
+  type DepReceipt,
+} from '../plugins/huaweicloud-core/src/dep/receipts.ts';
 
 test('receipts: write then read round-trips the receipt', () => {
   const dir = tempDir();

@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 
-import { countSkills, invokeMcpSequence, listTools, makeEnv, root, runCli, setupCli } from './plugins-e2e-harness.ts';
+import { countSkills, invokeMcpSequence, listTools, makeEnv, runCli } from './plugins-e2e-harness.ts';
 import { assertTrimmedToolsList, PER_PACK_TOOLS, REQUIRED_TOOLS, targets } from './plugins-e2e-roster.ts';
 
 test('MCP tools/list includes all required core tools with valid schemas', async () => {

@@ -2,20 +2,20 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { globalCredentialsPath, writeGlobalCredentials } from '../plugins/huaweicloud-core/src/auth/credentials.ts';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import { FAKE_HCLOUD, isWin, withCodeArtsHome, withCodeArtsProject, withTempHome } from './auth-credentials-harness.ts';
 import {
+  globalCredentialsPath,
+  writeGlobalCredentials,
   clearRuntimeCredentials,
   getParentCwd,
-  isCodeArtsContext,
   parseStsExpiry,
   pickDevkitMcpServer,
   resolveCredentials,
   resolveCredentialsWithRuntime,
   setRuntimeCredentials,
 } from '../plugins/huaweicloud-core/src/auth/credentials.ts';
+import { withCodeArtsHome, withCodeArtsProject, withTempHome } from './auth-credentials-harness.ts';
 
 test('resolveCredentials prefers environment and falls back to vault', () => {
   withTempHome((home) => {

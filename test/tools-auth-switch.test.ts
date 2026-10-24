@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fixtureDir } from './fixture-dir.ts';
 import { join } from 'node:path';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 
-import { callTool, type ToolArgs } from '../plugins/huaweicloud-core/src/tools.ts';
+import { fixtureDir } from './fixture-dir.ts';
+import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
+import {
+  clearRuntimeCredentials,
+  resolveCredentialsWithRuntime,
+  setRuntimeCredentials,
+} from '../plugins/huaweicloud-core/src/auth/credentials.ts';
 
 // Deterministic-tier seam: disable the once-per-session first-assertion
 // vendor challenge (HUAWEICLOUD_VENDOR_CHALLENGE=off, the installer-override
@@ -19,11 +24,6 @@ interface AuthSwitchResult {
   scope?: string;
   error?: string;
 }
-import {
-  clearRuntimeCredentials,
-  resolveCredentialsWithRuntime,
-  setRuntimeCredentials,
-} from '../plugins/huaweicloud-core/src/auth/credentials.ts';
 
 test('auth_switch temporary sets runtime credentials for api path', async () => {
   const prev = {

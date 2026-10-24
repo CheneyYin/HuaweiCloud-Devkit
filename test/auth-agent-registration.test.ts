@@ -1,12 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { tmpdir } from 'node:os';
-import { syncAuth } from '../plugins/huaweicloud-core/src/auth/service.ts';
 import { delimiter, join } from 'node:path';
-import { writeGlobalCredentials } from '../plugins/huaweicloud-core/src/auth/credentials.ts';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import { FAKE_HCLOUD, isWin, withCodeArtsHome, withCodeArtsProject, withTempHome } from './auth-credentials-harness.ts';
+import { isWin, withTempHome } from './auth-credentials-harness.ts';
 import { getAgentRegistrationStatuses } from '../plugins/huaweicloud-core/src/auth/agent-registration.ts';
 
 test('agent registration detects OpenCode MCP config', () => {

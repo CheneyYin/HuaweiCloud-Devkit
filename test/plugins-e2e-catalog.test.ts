@@ -4,8 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdtempSync, rmSync } from 'node:fs';
 
-import { callTool, invokeMcpSequence, listTools, makeEnv, root, runCli, setupCli } from './plugins-e2e-harness.ts';
-import { assertTrimmedToolsList, PER_PACK_TOOLS, REQUIRED_TOOLS } from './plugins-e2e-roster.ts';
+import { callTool, invokeMcpSequence, makeEnv, runCli } from './plugins-e2e-harness.ts';
 
 test('huaweicloud_search_docs returns relevant skill results', async () => {
   const home = mkdtempSync(join(tmpdir(), 'mcp-search-'));

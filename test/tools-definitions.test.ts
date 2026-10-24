@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { join } from 'node:path';
-import { fixtureDir } from './fixture-dir.ts';
 import { writeFileSync } from 'node:fs';
 
+import { fixtureDir } from './fixture-dir.ts';
 import { TOOL_DEFINITIONS } from '../plugins/huaweicloud-core/src/tools.ts';
 import { runVersionCheck } from '../plugins/huaweicloud-core/src/packs/huaweicloud-cli/tools.ts';
 import { getToolSchema, TOOL_SCHEMAS } from '../plugins/huaweicloud-core/src/tool-schemas.ts';

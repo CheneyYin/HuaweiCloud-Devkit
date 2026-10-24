@@ -2,29 +2,12 @@
 // hcloud-cli.test.ts: the deterministic vendor-challenge seam, the temp
 // auth-home isolation, and the fake binary/script/meta-repo builders.
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { delimiter, join } from 'node:path';
+import { chmodSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import test from 'node:test';
 
-import type { HcloudRunResult } from '../plugins/huaweicloud-core/src/hcloud-cli.ts';
-import {
-  consumeApprovalToken,
-  createApprovalToken,
-  hashArgs,
-  inspectApprovalToken,
-  planHcloudCommand,
-  redactArgsWithObs,
-  resolveStsInjectArgs,
-  runHcloud,
-  extractApiError,
-  redactOutput,
-  stripKooCliUpdateBanner,
-  type HcloudPlan,
-} from '../plugins/huaweicloud-core/src/hcloud-cli.ts';
-import { clearRuntimeCredentials, setRuntimeCredentials } from '../plugins/huaweicloud-core/src/auth/credentials.ts';
-import { classifyHcloudProbe } from '../plugins/huaweicloud-core/src/hcloud-probe.ts';
-import { getKooCliVersion } from '../plugins/huaweicloud-core/src/koocli-version.ts';
-import { callTool, type ToolArgs } from '../plugins/huaweicloud-core/src/tools.ts';
+import { type HcloudRunResult } from '../plugins/huaweicloud-core/src/hcloud-cli.ts';
+import { clearRuntimeCredentials } from '../plugins/huaweicloud-core/src/auth/credentials.ts';
 import { fixtureDir } from './fixture-dir.ts';
 
 // Deterministic-tier seam: disable the once-per-session first-assertion

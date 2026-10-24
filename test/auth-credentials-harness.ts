@@ -2,34 +2,11 @@
 // auth-credentials.test.ts: CodeArts project/home isolation and the shared
 // temp-home env snapshot/restore.
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-
-import {
-  backupGlobalCredentials,
-  clearRuntimeCredentials,
-  getParentCwd,
-  globalCredentialsPath,
-  isCodeArtsContext,
-  obsConfigPath,
-  parseStsExpiry,
-  pickDevkitMcpServer,
-  readGlobalCredentials,
-  readLastSync,
-  resolveCredentials,
-  resolveCredentialsWithRuntime,
-  restoreGlobalCredentialsBackup,
-  setRuntimeCredentials,
-  writeGlobalCredentials,
-  writeLastSync,
-  writeObsConfig,
-} from '../plugins/huaweicloud-core/src/auth/credentials.ts';
-import { getAgentRegistrationStatuses } from '../plugins/huaweicloud-core/src/auth/agent-registration.ts';
-import { getAuthStatus, syncAuth, computeOnboarding } from '../plugins/huaweicloud-core/src/auth/service.ts';
-import { buildOnboardingSteps } from '../plugins/huaweicloud-core/src/auth/error-table.ts';
 
 export const isWin = process.platform === 'win32';
 

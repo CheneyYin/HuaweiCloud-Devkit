@@ -5,7 +5,12 @@ import test from 'node:test';
 
 import { freshRoot, opts, vaultErrorCode } from './secret-vault-helpers.ts';
 import { clearCustodyCache } from '../plugins/huaweicloud-core/src/lib/secret-vault/custody.ts';
-import { resolveSecretValue, vaultDelete, vaultGet, vaultSet } from '../plugins/huaweicloud-core/src/lib/secret-vault/store.ts';
+import {
+  resolveSecretValue,
+  vaultDelete,
+  vaultGet,
+  vaultSet,
+} from '../plugins/huaweicloud-core/src/lib/secret-vault/store.ts';
 import { isSecretRef, parseSecretRef } from '../plugins/huaweicloud-core/src/lib/secret-vault/refs.ts';
 
 test('refs: grammar accepts the canonical shape only', () => {
