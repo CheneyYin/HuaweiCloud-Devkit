@@ -31,7 +31,13 @@ import { listSkillDirs } from './lib/skill-tree.ts';
 // parameter so this module stays a leaf — the dispatch layer owns the table.
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PLUGIN_ROOT = resolve(__dirname, '..');
+export const PLUGIN_ROOT = resolve(__dirname, '..');
+export const PACKAGE_ROOT = resolve(PLUGIN_ROOT, '..', '..');
+
+// Every per-agent deploy runs in one of two modes; the word suffix keeps
+// the deploy log lines ('installed' vs ' updated') uniform across agents.
+export type DeployMode = 'install' | 'update';
+export const deployWord = (mode: DeployMode): string => (mode === 'update' ? ' updated' : '');
 
 // The installed package's version — one read for the whole setup-cli graph
 // (the banner, the generated plugin-dir package.json, and doctor's
@@ -534,6 +540,22 @@ export function cleanupNativeDirs(rows: readonly NativeSyncRow[], foreignScanDir
 // A corrupt receipt cannot yield remembered names; its possible
 // retired-name leftovers are listed in a warning instead of deleted (they
 // may be user content in the huaweiicloud- namespace, which must survive).
+// The huawei-prefixed command-file sweep shared by the OpenClaw and Codex
+// Desktop uninstalls (~/.agents/commands and <plugin>/commands): every
+// command file this devkit deployed carries the huawei prefix, and no
+// receipt or roster exists for them — the prefix IS the ownership record.
+export function removeHuaweiCommandsFrom(dir: string): number {
+  let removed = 0;
+  if (existsSync(dir)) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith('huawei')) {
+        if (removeIfExists(join(dir, entry.name))) removed++;
+      }
+    }
+  }
+  return removed;
+}
+
 export function removeOwnedSkillsFrom(dir: string, syncDirs: Set<string>, marketplaceNativeDir: string): number {
   if (!existsSync(dir)) return 0;
   // Crash residue is never maintainer-owned content: the sweep runs before
@@ -589,4 +611,34 @@ export function removeOwnedSkillsFrom(dir: string, syncDirs: Set<string>, market
     // best-effort purge: an unreadable dir is skipped, removal continues elsewhere
   }
   return removed;
+}
+
+// The payload triple every directory-based status section reports: server
+// bundle, safety policy, skills tree. dshStatus and hermesStatus keep
+// inline variants because their hook lines interleave with the triple.
+export function payloadStatusLines(pluginDir: string): void {
+  console.log(
+    `  MCP Server: ${mcpServerInstalled(pluginDir) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
+  );
+  console.log(
+    `  Safety Policy: ${existsSync(join(pluginDir, 'safety', 'policy.json')) ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`,
+  );
+  const skillCount = serverSkillCount(pluginDir);
+  console.log(
+    `  Skills: ${skillCount > 0 ? `\x1b[32m${skillCount} installed\x1b[0m` : '\x1b[31mNot installed\x1b[0m'}`,
+  );
+}
+
+// Remove the skills dir itself when the owned-skill removal emptied it (the
+// dsh/officeace/hermes uninstalls) — an empty leftover dir is residue.
+export function removeSkillsDirIfEmpty(skillsDir: string, removed: number): void {
+  if (removed === 0) return;
+  try {
+    if (existsSync(skillsDir) && readdirSync(skillsDir).length === 0) {
+      rmSync(skillsDir, { recursive: true, force: true });
+      console.log(`  Removed empty skills directory: ${skillsDir}`);
+    }
+  } catch {
+    // best-effort cleanup: an empty skills dir left behind is harmless
+  }
 }

@@ -1970,15 +1970,16 @@ test('.mcp.json is valid and references existing server script', () => {
   assert.ok(mcpConfig.mcpServers || mcpConfig.mcp);
 });
 
-test('setup-cli.ts supports the codearts target end to end', () => {
+test('agents/codearts.ts supports the codearts target end to end', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
   const targets = readSource(join('src', 'targets.ts'));
+  const codearts = readSource(join('src', 'agents', 'codearts.ts'));
   // parseTarget accepts codearts
   assert.match(setup, /'codearts'/);
   // deploy (install+update) / uninstall / status functions exist
-  assert.match(setup, /async function deployCodeArts\(mode: DeployMode\)/);
-  assert.match(setup, /function uninstallCodeArts\(\)/);
-  assert.match(setup, /function codeartsStatus\(\)/);
+  assert.match(codearts, /async function deployCodeArts\(mode: DeployMode\)/);
+  assert.match(codearts, /function uninstallCodeArts\(removeOwnedSkills: \(dir: string\) => number\)/);
+  assert.match(codearts, /function codeartsStatus\(\)/);
   // path helpers for user-level and project-level codearts dirs
   assert.match(targets, /function codeartsSkillsDir\(\)/);
   assert.match(targets, /function codeartsMcpSettingsFile\(\)/);
@@ -1987,14 +1988,17 @@ test('setup-cli.ts supports the codearts target end to end', () => {
   assert.match(targets, /function codeartsPluginsDir\(\)/);
   // deploy ships the server payload (dist + safety + skills server data)
   // into the codearts plugin dir and registers both MCP configs
-  assert.match(setup, /async function deployCodeArts\(mode: DeployMode\): Promise<void> \{\s*\n\s*const pluginSrc/);
-  assert.match(setup, /copyServerPayload\(pluginDest\)/);
-  assert.match(setup, /registerCodeartsMcp\(codeartsMcpSettingsFile\(\)\)/);
-  assert.match(setup, /registerCodeartsMcp\(codeartsProjectMcpSettingsFile\(\)\)/);
-  // MCP registration writes an enabled server with local mode env
+  assert.match(codearts, /async function deployCodeArts\(mode: DeployMode\): Promise<void> \{\s*\n\s*const pluginSrc/);
+  assert.match(codearts, /copyServerPayload\(pluginDest\)/);
+  assert.match(codearts, /registerCodeartsMcp\(codeartsMcpSettingsFile\(\)\)/);
+  assert.match(codearts, /registerCodeartsMcp\(codeartsProjectMcpSettingsFile\(\)\)/);
+  // MCP registration writes an enabled server with local mode env; the
+  // ensureMcpServersConfig writer lives in mcp-config-io.ts (setup-cli calls
+  // it through registerCodeartsMcp with enabledByDefault).
+  const mcpConfigIo = readSource(join('src', 'mcp-config-io.ts'));
   assert.match(setup, /config\.mcpServers\['huaweicloud-devkit'\] = \{/);
-  assert.match(setup, /HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local'/);
-  assert.match(setup, /entry\.enabled = true;/);
+  assert.match(codearts, /HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local'/);
+  assert.match(mcpConfigIo, /entry\.enabled = true;/);
   // command dispatch covers codearts for install / uninstall / status
   const branches = setup.match(/target === 'codearts' \|\| target === 'all'/g);
   const installDispatch = setup.match(/shouldInstall\('codearts'\)/g);
@@ -2190,8 +2194,12 @@ test('KooCLI sandbox blockers and privacy agreement live in their extracted modu
   assert.match(depHcloud, /非交互会话：请稍后在终端运行 hcloud version/);
   // the caller computes the gate; the installer stays testable
   assert.match(setup, /process\.stdin\.isTTY === true && process\.stdout\.isTTY === true/);
-  // MCP env injects HCLOUD_BIN when an hcloud binary is found
-  assert.match(setup, /if \(hcloudBin\) env\.HCLOUD_BIN = hcloudBin\.replace/);
+  // MCP env injects HCLOUD_BIN when an hcloud binary is found (the agent
+  // registration modules own the env assembly now)
+  assert.match(
+    readSource(join('src', 'agents', 'codearts.ts')),
+    /if \(hcloudBin\) env\.HCLOUD_BIN = hcloudBin\.replace/,
+  );
   // doctor warns about sandbox mode with the accurate settings path (#261)
   assert.match(setup, /KooCLI 可能无法写入 ~/);
   assert.match(setup, /设置 → 对话流 → 智能体 终端命令运行模式 → 自动运行/);
@@ -2339,6 +2347,13 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
     .filter((name) => name.endsWith('.ts'))
     .sort((a, b) => a.localeCompare(b));
   assert.ok(authModules.length >= 7, `expected the auth module family, found: ${authModules.join(', ')}`);
+  // Same walk for the agent lifecycle modules: every .ts file under
+  // src/agents/ joins the zod-free guard automatically — they compile into
+  // the unbundled dist/setup-cli.js graph.
+  const agentModules = (readdirSync(join(pluginRoot, 'src', 'agents'), { recursive: true }) as string[])
+    .filter((name) => name.endsWith('.ts'))
+    .sort((a, b) => a.localeCompare(b));
+  assert.ok(agentModules.length >= 2, `expected the agents module family, found: ${agentModules.join(', ')}`);
   // These compile into the unbundled dist/setup-cli.js graph, where only
   // undici exists at runtime: no zod, no SDK, ever.
   const guarded = [
@@ -2347,11 +2362,15 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
       (name) => [`src/lib/secret-vault/${name}`, readSource(join('src', 'lib', 'secret-vault', name))] as const,
     ),
     ...authModules.map((name) => [`src/auth/${name}`, readSource(join('src', 'auth', name))] as const),
+    ...agentModules.map((name) => [`src/agents/${name}`, readSource(join('src', 'agents', name))] as const),
     ['src/codearts-sandbox.ts', codeartsSandbox] as const,
     ['src/lib/dep-resolve.ts', depResolve] as const,
     ['src/targets.ts', targetsModule] as const,
     ['src/install-payload.ts', installPayload] as const,
     ['src/packs-policy.ts', packsPolicy] as const,
+    ['src/mcp-config-io.ts', readSource(join('src', 'mcp-config-io.ts'))] as const,
+    ['src/lib/cli-io.ts', readSource(join('src', 'lib', 'cli-io.ts'))] as const,
+    ['src/officeace-paths.ts', readSource(join('src', 'officeace-paths.ts'))] as const,
   ];
   for (const [name, source] of guarded) {
     assert.doesNotMatch(source, /from 'zod'/, `${name} must not import zod`);
@@ -2415,6 +2434,7 @@ test('src subdir modules never climb __dirname more than one level (bundle depth
 test('setup-cli.ts supports the dsh target end to end', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
   const targets = readSource(join('src', 'targets.ts'));
+  const dsh = readSource(join('src', 'agents', 'dsh.ts'));
   // SUPPORTED_AGENT_TARGETS includes dsh and parseTarget uses it
   assert.match(setup, /'dsh'/);
   // DSH path helpers and managed patch constants exist
@@ -2423,14 +2443,14 @@ test('setup-cli.ts supports the dsh target end to end', () => {
   assert.match(targets, /function dshProfileDir\(\)/);
   assert.match(targets, /function dshPatchFile\(\)/);
   assert.match(targets, /function dshPluginsDir\(\)/);
-  assert.match(setup, /const DSH_MCP_PATCH_START = '# HuaweiCloud DevKit DSH integration start';/);
-  assert.match(setup, /const DSH_MCP_PATCH_END = '# HuaweiCloud DevKit DSH integration end';/);
+  assert.match(dsh, /const DSH_MCP_PATCH_START = '# HuaweiCloud DevKit DSH integration start';/);
+  assert.match(dsh, /const DSH_MCP_PATCH_END = '# HuaweiCloud DevKit DSH integration end';/);
   // deploy (install+update) / uninstall / status functions exist
-  assert.match(setup, /async function deployDsh\(mode: DeployMode\)/);
-  assert.match(setup, /function uninstallDsh\(\)/);
-  assert.match(setup, /function dshStatus\(\)/);
+  assert.match(dsh, /async function deployDsh\(mode: DeployMode\)/);
+  assert.match(dsh, /function uninstallDsh\(removeOwnedSkills: \(dir: string\) => number\)/);
+  assert.match(dsh, /function dshStatus\(\)/);
   // install ships the server payload and registers MCP through cordis.patch.yml
-  assert.match(setup, /copyServerPayload\(pluginDest\)/);
+  assert.match(dsh, /copyServerPayload\(pluginDest\)/);
   // No wholesale native copy ever returns: only core-pack names sync natively
   // (syncNativeCoreSkills), so DSH's dir can never carry service skills.
   assert.match(readSource(join('src', 'install-payload.ts')), /function syncNativeCoreSkills\(dir: string\)/);
@@ -2440,16 +2460,16 @@ test('setup-cli.ts supports the dsh target end to end', () => {
     'no wholesale native copy; only core-pack names sync natively',
   );
   assert.match(setup, /nativeSkills: \(\) => \[dshSkillsDir\(\)\]/, 'DSH row declares its native dir');
-  assert.match(setup, /ensureDshMcpPatch\(\)/);
-  assert.match(setup, /tryInstallDshMcpClient\(\)/);
+  assert.match(dsh, /ensureDshMcpPatch\(\)/);
+  assert.match(dsh, /tryInstallDshMcpClient\(\)/);
   // DSH MCP patch uses dsh-mcp-client with stdio local server mode
-  assert.match(setup, /name: '@deepseek-ai\/dsh-mcp-client'/);
-  assert.match(setup, /serverName: huaweicloud/);
-  assert.match(setup, /transport: stdio/);
-  assert.match(setup, /failOnStartupError: false/);
-  assert.match(setup, /HUAWEICLOUD_AGENT_TOOLKIT_MODE: local/);
+  assert.match(dsh, /name: '@deepseek-ai\/dsh-mcp-client'/);
+  assert.match(dsh, /serverName: huaweicloud/);
+  assert.match(dsh, /transport: stdio/);
+  assert.match(dsh, /failOnStartupError: false/);
+  assert.match(dsh, /HUAWEICLOUD_AGENT_TOOLKIT_MODE: local/);
   // uninstall removes only the managed patch block
-  assert.match(setup, /removeDshMcpPatch\(\)/);
+  assert.match(dsh, /removeDshMcpPatch\(\)/);
   // command dispatch covers dsh for install / uninstall / status / update
   const branches = setup.match(/target === 'dsh' \|\| target === 'all'/g);
   const installDispatch = setup.match(/shouldInstall\('dsh'\)/g);
@@ -2462,7 +2482,7 @@ test('setup-cli.ts supports the dsh target end to end', () => {
   // doctor and the update dispatch reach DSH through the payload-target table
   assert.match(setup, /id: 'dsh',\s+label: 'DSH',\s+dir: dshPluginsDir,/);
   assert.match(setup, /update: \(\) => deployDsh\('update'\),/);
-  assert.match(setup, /dshPatchConfigured\(\)/);
+  assert.match(dsh, /function dshPatchConfigured\(\)/);
   // help text documents the target
   assert.match(
     setup,
@@ -2487,33 +2507,38 @@ test('tools.ts resolves skills from the server-relative tree only (dsh fallback 
   );
 });
 
-test('setup-cli.ts keeps officeace capability cleanup (no native skill registration)', () => {
-  const setup = readSource(join('src', 'setup-cli.ts'));
-  assert.match(setup, /function removeOfficeaceSkillCapabilities\(\)/);
-  assert.match(setup, /function officeaceSkillsDir\(\)/);
+test('agents/officeace.ts keeps officeace capability cleanup (no native skill registration)', () => {
+  const officeace = readSource(join('src', 'agents', 'officeace.ts'));
+  assert.match(officeace, /function removeOfficeaceSkillCapabilities\(\)/);
+  assert.match(officeace, /function officeaceSkillsDir\(\)/);
 });
 
-test('setup-cli.ts supports the officeace target end to end', () => {
+test('agents/officeace.ts supports the officeace target end to end', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
+  const officeace = readSource(join('src', 'agents', 'officeace.ts'));
   assert.match(setup, /'officeace'/);
-  assert.match(setup, /async function installOfficeAce\(\)/);
-  assert.match(setup, /function uninstallOfficeAce\(\)/);
-  assert.match(setup, /function officeaceStatus\(\)/);
-  assert.match(setup, /async function updateOfficeAce\(\)/);
-  assert.match(setup, /function officeaceCapabilitiesDir\(\)/);
-  assert.match(setup, /function officeaceCapabilitiesFile\(\)/);
-  assert.match(setup, /function officeaceSkillsDir\(\)/);
-  assert.match(setup, /function officeacePluginsDir\(\)/);
-  assert.match(setup, /function readOfficeaceRegistryInstallDir\(\)/);
-  assert.match(setup, /function ensureOfficeaceMcpInSqlite\(\)/);
-  assert.match(setup, /function removeOfficeaceMcpFromSqlite\(\)/);
+  assert.match(officeace, /async function installOfficeAce\(\)/);
+  assert.match(officeace, /function uninstallOfficeAce\(removeOwnedSkills: \(dir: string\) => number\)/);
+  assert.match(officeace, /function officeaceStatus\(\)/);
+  assert.match(officeace, /async function updateOfficeAce\(\)/);
+  assert.match(officeace, /function officeaceCapabilitiesDir\(\)/);
+  assert.match(officeace, /function officeaceCapabilitiesFile\(\)/);
+  assert.match(officeace, /function officeaceSkillsDir\(\)/);
+  assert.match(officeace, /function officeacePluginsDir\(\)/);
+  // The registry probe is shared with the MCP-side detection
+  // (auth/agent-registration.ts) through officeace-paths.ts.
+  const officeacePaths = readSource(join('src', 'officeace-paths.ts'));
+  assert.match(officeacePaths, /export function readOfficeaceRegistryInstallDir\(\)/);
+  assert.match(officeacePaths, /export function probeOfficeaceSystemDirs\(/);
+  assert.match(officeace, /function ensureOfficeaceMcpInSqlite\(\)/);
+  assert.match(officeace, /function removeOfficeaceMcpFromSqlite\(\)/);
   // Native skill registration is gone; install/update actively clean the
   // capabilities entries older versions wrote.
-  assert.doesNotMatch(setup, /registerOfficeaceSkillEntries/, 'no native skill registration');
-  assert.match(setup, /copyServerPayload\(pluginDest\)/);
-  assert.match(setup, /removeOfficeaceSkillCapabilities\(\)/);
-  assert.match(setup, /mcpServer.*command.*node/s);
-  assert.match(setup, /capabilities\.json/);
+  assert.doesNotMatch(officeace, /registerOfficeaceSkillEntries/, 'no native skill registration');
+  assert.match(officeace, /copyServerPayload\(pluginDest\)/);
+  assert.match(officeace, /removeOfficeaceSkillCapabilities\(\)/);
+  assert.match(officeace, /existing\.command === 'node'/);
+  assert.match(officeace, /capabilities\.json/);
   const branches = setup.match(/target === 'officeace' \|\| target === 'all'/g);
   const installDispatch = setup.match(/shouldInstall\('officeace'\)/g);
   assert.ok(
@@ -2523,45 +2548,46 @@ test('setup-cli.ts supports the officeace target end to end', () => {
   assert.match(setup, /install --target officeace/);
 });
 
-test('setup-cli.ts supports the hermes target end to end', () => {
+test('agents/hermes.ts supports the hermes target end to end', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
   const targets = readSource(join('src', 'targets.ts'));
+  const hermes = readSource(join('src', 'agents', 'hermes.ts'));
   assert.match(setup, /'hermes'/);
-  assert.match(setup, /async function deployHermes\(mode: DeployMode\)/);
-  assert.match(setup, /function uninstallHermes\(\)/);
-  assert.match(setup, /function hermesStatus\(\)/);
+  assert.match(hermes, /async function deployHermes\(mode: DeployMode\)/);
+  assert.match(hermes, /function uninstallHermes\(removeOwnedSkills: \(dir: string\) => number\)/);
+  assert.match(hermes, /function hermesStatus\(\)/);
   assert.match(targets, /function hermesHomeDir\(\)/);
   assert.match(targets, /function hermesSkillsDir\(\)/);
   assert.match(targets, /function hermesPluginsDir\(\)/);
   assert.match(targets, /function hermesConfigFile\(\)/);
-  assert.match(setup, /function ensureHermesMcpConfig\(\)/);
-  assert.match(setup, /function removeHermesMcpConfigBlock\(\)/);
-  assert.match(setup, /function ensureHermesHooksConfig\(\)/);
-  assert.match(setup, /function removeHermesHooksConfigBlock\(\)/);
-  assert.match(setup, /function ensureHermesHookAllowlist\(\)/);
-  assert.match(setup, /function hermesHookCommand\(\)/);
+  assert.match(hermes, /function ensureHermesMcpConfig\(\)/);
+  assert.match(hermes, /function removeHermesMcpConfigBlock\(\)/);
+  assert.match(hermes, /function ensureHermesHooksConfig\(\)/);
+  assert.match(hermes, /function removeHermesHooksConfigBlock\(\)/);
+  assert.match(hermes, /function ensureHermesHookAllowlist\(\)/);
+  assert.match(hermes, /function hermesHookCommand\(\)/);
   assert.match(targets, /function hermesPythonPluginsDir\(\)/);
   assert.match(targets, /function hermesSafetyPluginDir\(\)/);
-  assert.match(setup, /function ensureHermesHookPlugin\(\)/);
-  assert.match(setup, /function removeHermesHookPlugin\(\)/);
-  assert.match(setup, /copyServerPayload\(pluginDest, \{ skipDist: skipMcp \}\)/);
-  assert.match(setup, /copyDir\(hooksDir, join\(pluginDest, 'hooks'\)\)/);
-  assert.match(setup, /ensureHermesMcpConfig\(\)/);
-  assert.match(setup, /ensureHermesHooksConfig\(\)/);
-  assert.match(setup, /ensureHermesHookAllowlist\(\)/);
-  assert.match(setup, /ensureHermesHookPlugin\(\)/);
-  assert.match(setup, /mcp_servers:/);
-  assert.match(setup, /huaweicloud-devkit:/);
-  assert.match(setup, /HUAWEICLOUD_AGENT_TOOLKIT_MODE: "local"/);
-  assert.match(setup, /hooks:/);
-  assert.match(setup, /pre_tool_call:/);
-  assert.match(setup, /matcher: "terminal"/);
-  assert.match(setup, /fail_closed: true/);
-  assert.match(setup, /shell-hooks-allowlist\.json/);
-  assert.match(setup, /name: huaweicloud-safety/);
-  assert.match(setup, /register_hook\("pre_tool_call"/);
-  assert.match(setup, /evaluate\(tool_name, args\)/);
-  assert.match(setup, /huaweicloud-safety\.py/);
+  assert.match(hermes, /function ensureHermesHookPlugin\(\)/);
+  assert.match(hermes, /function removeHermesHookPlugin\(\)/);
+  assert.match(hermes, /copyServerPayload\(pluginDest, \{ skipDist: skipMcp \}\)/);
+  assert.match(hermes, /copyDir\(hooksDir, join\(pluginDest, 'hooks'\)\)/);
+  assert.match(hermes, /ensureHermesMcpConfig\(\)/);
+  assert.match(hermes, /ensureHermesHooksConfig\(\)/);
+  assert.match(hermes, /ensureHermesHookAllowlist\(\)/);
+  assert.match(hermes, /ensureHermesHookPlugin\(\)/);
+  assert.match(hermes, /mcp_servers:/);
+  assert.match(hermes, /huaweicloud-devkit:/);
+  assert.match(hermes, /HUAWEICLOUD_AGENT_TOOLKIT_MODE: "local"/);
+  assert.match(hermes, /hooks:/);
+  assert.match(hermes, /pre_tool_call:/);
+  assert.match(hermes, /matcher: "terminal"/);
+  assert.match(hermes, /fail_closed: true/);
+  assert.match(hermes, /shell-hooks-allowlist\.json/);
+  assert.match(hermes, /name: huaweicloud-safety/);
+  assert.match(hermes, /register_hook\("pre_tool_call"/);
+  assert.match(hermes, /evaluate\(tool_name, args\)/);
+  assert.match(hermes, /huaweicloud-safety\.py/);
   const branches = setup.match(/target === 'hermes' \|\| target === 'all'/g);
   const installDispatch = setup.match(/shouldInstall\('hermes'\)/g);
   assert.ok(
@@ -2570,10 +2596,12 @@ test('setup-cli.ts supports the hermes target end to end', () => {
   );
   assert.match(setup, /install --target hermes/);
   assert.match(targets, /HERMES_HOME/);
-  assert.match(setup, /LOCALAPPDATA/);
-  assert.match(setup, /--skip-mcp-server/);
-  assert.match(setup, /function ensureHermesMcpSdk\(\)/);
-  assert.match(setup, /function hermesMcpSdkOk\(\)/);
+  // The Windows Program Files probe (LOCALAPPDATA bases) lives in the shared
+  // officeace-paths probe, not setup-cli.
+  assert.match(readSource(join('src', 'officeace-paths.ts')), /LOCALAPPDATA/);
+  assert.match(hermes, /--skip-mcp-server/);
+  assert.match(hermes, /function ensureHermesMcpSdk\(\)/);
+  assert.match(hermes, /function hermesMcpSdkOk\(\)/);
 });
 
 test('PAYLOAD_TARGETS is the single id→dir map for payload targets', () => {
