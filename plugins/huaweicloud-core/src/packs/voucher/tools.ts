@@ -1,7 +1,6 @@
 import { z } from 'zod';
 
 import { vendorConfirmed } from '../../lib/tool-schema-parts.ts';
-
 import {
   hdkitVoucherStatus,
   hdkitVoucherClaim,

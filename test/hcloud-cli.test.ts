@@ -792,6 +792,7 @@ async function withFakeHcloudBin<T>(fn: () => Promise<T>): Promise<T> {
 async function planApproval(): Promise<string> {
   const plan = (await callTool('huaweicloud_plan_cli_command', {
     args: ['ECS', 'ListServersDetails'],
+    vendorConfirmed: 'test: vendor established by the harness',
   })) as HcloudPlan;
   assert.ok(plan.approvalToken);
   return plan.approvalToken;
@@ -803,6 +804,7 @@ async function runApproved(token: string): Promise<ToolArgs> {
     approvalToken: token,
     approvedByUser: true,
     maxRetries: 0,
+    vendorConfirmed: 'test: vendor established by the harness',
   })) as ToolArgs;
 }
 
@@ -841,6 +843,7 @@ test('runApprovedCommand: unknown token returns {status:rejected, code:CONFIRM_T
       approvalToken: 'never-created-uuid',
       approvedByUser: true,
       maxRetries: 0,
+      vendorConfirmed: 'test: vendor established by the harness',
     })) as { status: string; code: string };
     assert.equal(result.status, 'rejected');
     assert.equal(result.code, 'CONFIRM_TOKEN_NOT_FOUND');

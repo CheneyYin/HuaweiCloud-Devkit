@@ -132,7 +132,10 @@ const AGENT_RULES_FILE = 'huawei-agent-rules.mdc';
 // precedent: a silent skip is exactly the invisibility this unit exists to
 // remove.
 function injectAgentRules(pluginDest: string): void {
-  const rulesSrcDir = join(PLUGIN_ROOT, 'rules');
+  // rules/ is a package-root artifact (repo-root rules/, shipped via the
+  // package.json files list) — PLUGIN_ROOT here is plugins/huaweicloud-core,
+  // so resolve the package root the same way setup-cli does.
+  const rulesSrcDir = join(PLUGIN_ROOT, '..', '..', 'rules');
   const rulesSrc = join(rulesSrcDir, AGENT_RULES_FILE);
   if (!existsSync(rulesSrc)) {
     throw new Error(

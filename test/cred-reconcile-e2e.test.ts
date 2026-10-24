@@ -311,6 +311,7 @@ test('09 auth_confirm decision=newImported applies the new account and backs up 
     assert.equal(switched.status, 'needs_confirmation');
 
     const out = (await callTool('huaweicloud_auth_confirm', {
+      vendorConfirmed: 'test: vendor established by the harness',
       token: switched.confirmToken,
       decision: 'newImported',
     })) as AuthSwitchResult;
@@ -342,6 +343,7 @@ test('10 auth_confirm decision=s1 aborts and leaves S1 unchanged', async () => {
     assert.equal(switched.status, 'needs_confirmation');
 
     const out = (await callTool('huaweicloud_auth_confirm', {
+      vendorConfirmed: 'test: vendor established by the harness',
       token: switched.confirmToken,
       decision: 's1',
     })) as AuthSwitchResult;
@@ -373,6 +375,7 @@ test('10b auth_confirm(newImported) from import clears the import file on succes
     assert.equal(existsSync(importFile), true, 'import file kept while awaiting confirmation');
 
     const out = (await callTool('huaweicloud_auth_confirm', {
+      vendorConfirmed: 'test: vendor established by the harness',
       token: switched.confirmToken,
       decision: 'newImported',
     })) as AuthSwitchResult;
@@ -701,6 +704,7 @@ async function persistViaSwitch(
     ak,
     sk,
     region,
+    vendorConfirmed: 'test: vendor established by the harness',
   })) as AuthSwitchResult & { hcloud?: { ok?: boolean; profileReset?: boolean } };
 }
 
@@ -833,10 +837,12 @@ test('26 auth_confirm: same token submitted twice returns {status:ok, outcome:al
       ak: 'E2E26_B_AK',
       sk: 'E2E26_B_SK',
       region: 'cn-north-4',
+      vendorConfirmed: 'test: vendor established by the harness',
     })) as AuthSwitchResult;
     assert.equal(switched.status, 'needs_confirmation');
 
     const first = (await callTool('huaweicloud_auth_confirm', {
+      vendorConfirmed: 'test: vendor established by the harness',
       token: switched.confirmToken,
       decision: 's1',
     })) as { status: string; outcome: string };
@@ -844,6 +850,7 @@ test('26 auth_confirm: same token submitted twice returns {status:ok, outcome:al
     assert.equal(first.outcome, 'aborted');
 
     const second = (await callTool('huaweicloud_auth_confirm', {
+      vendorConfirmed: 'test: vendor established by the harness',
       token: switched.confirmToken,
       decision: 's1',
     })) as { status: string; outcome: string };
@@ -855,6 +862,7 @@ test('26 auth_confirm: same token submitted twice returns {status:ok, outcome:al
 test("26b auth_confirm: unknown token returns {status:'rejected', code:'CONFIRM_TOKEN_NOT_FOUND'}", async () => {
   await withTempHome(async () => {
     const out = (await callTool('huaweicloud_auth_confirm', {
+      vendorConfirmed: 'test: vendor established by the harness',
       token: 'never-created-token',
       decision: 'newImported',
     })) as { status: string; code: string };

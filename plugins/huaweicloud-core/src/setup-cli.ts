@@ -20,7 +20,7 @@ import { createRequire } from 'node:module';
 
 import { getAuthStatus, syncAuth } from './auth/service.ts';
 import { resolveAndApplyProjectId } from './auth/project-id.ts';
-import { SUPPORTED_AGENT_TARGETS, xdgConfigHome } from './auth/agent-registration.ts';
+import { SUPPORTED_AGENT_TARGETS } from './auth/agent-registration.ts';
 import { readKooCliProfiles, resolveManagedProfile, runHcloudProfileDelete } from './auth/reconcile.ts';
 import { redactSecrets } from './safety-policy.ts';
 // Where every supported agent target lives: the pure-path family shared by
@@ -106,16 +106,8 @@ import {
 } from './hcloud-probe.ts';
 import { asText } from './lib/as-text.ts';
 import { asRecord } from './lib/as-record.ts';
-import { parseSkillManifest, parseCoreSkillNames } from './lib/skill-manifest.ts';
-import { listSkillDirs, skillTreeEquals } from './lib/skill-tree.ts';
-import {
-  nativeReceiptPath,
-  readNativeReceipt,
-  writeNativeReceipt,
-  sweepReceiptTmpFiles,
-  marketplacePayloadTree,
-  isCoreNameShape,
-} from './lib/native-receipt.ts';
+import { skillTreeEquals } from './lib/skill-tree.ts';
+import { readNativeReceipt, marketplacePayloadTree } from './lib/native-receipt.ts';
 import { PACK_IDS, type PackId } from './lib/pack-types.ts';
 import {
   DEPENDENCIES,

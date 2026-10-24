@@ -1,7 +1,6 @@
 import { z } from 'zod';
 
 import { vendorConfirmed } from '../../lib/tool-schema-parts.ts';
-
 import { getAuthStatus, syncAuth } from '../../auth/service.ts';
 import { checkAccountType } from '../../auth/account-type.ts';
 import {

@@ -811,6 +811,7 @@ test('list_operations fans DMS/DEW out to their KooCLI sub-services', async () =
         service: aggregate,
         maxRetries: 0,
         timeoutMs: 30000,
+        vendorConfirmed: 'test: vendor established by the harness',
       })) as {
         service: string;
         aggregate: boolean;
@@ -836,6 +837,7 @@ test('list_operations carries BSS identity notes (Customer vs Partner API split)
       service: 'BSS',
       maxRetries: 0,
       timeoutMs: 30000,
+      vendorConfirmed: 'test: vendor established by the harness',
     })) as {
       identityNotes: Array<{ identity: string; apis: string[]; note: string }>;
     };
@@ -848,7 +850,10 @@ test('list_operations carries BSS identity notes (Customer vs Partner API split)
 });
 
 async function assertSkillForIntent(intent: string, expectedSkill: string): Promise<void> {
-  const result = (await callTool('huaweicloud_service_catalog', { intent })) as {
+  const result = (await callTool('huaweicloud_service_catalog', {
+    intent,
+    vendorConfirmed: 'test: vendor established by the harness',
+  })) as {
     recommendedSkills?: string[];
   };
   assert.ok(
