@@ -3147,6 +3147,7 @@ test('test fixtures: raw mkdtempSync is denied by default across the suite', () 
   // nothing passes silently by default.
   const perTestCleaners = new Set([
     'agent-install.test.ts',
+    'auth-agent-registration.test.ts',
     'auth-credentials.test.ts',
     'codearts-adaptation.test.ts',
     'cred-reconcile-e2e.test.ts',
@@ -3159,6 +3160,7 @@ test('test fixtures: raw mkdtempSync is denied by default across the suite', () 
     'mcp-server-tools.test.ts',
     'officeace-adaptation.test.ts',
     'packs-command.test.ts',
+    'plugins-e2e-catalog.test.ts',
     'plugins-e2e.test.ts',
     'proxy-agent.test.ts',
     'reconcile.test.ts',

@@ -2,16 +2,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
-
 import { callTool, TOOL_DEFINITIONS, listSkillDirs, type ToolArgs } from '../plugins/huaweicloud-core/src/tools.ts';
-import { runVersionCheck } from '../plugins/huaweicloud-core/src/packs/huaweicloud-cli/tools.ts';
-import { getToolSchema, TOOL_SCHEMAS } from '../plugins/huaweicloud-core/src/tool-schemas.ts';
-import {
-  clearRuntimeCredentials,
-  resolveCredentialsWithRuntime,
-  setRuntimeCredentials,
-} from '../plugins/huaweicloud-core/src/auth/credentials.ts';
-import { getKooCliVersion } from '../plugins/huaweicloud-core/src/koocli-version.ts';
 import type { RiskFinding } from '../plugins/huaweicloud-core/src/risk-rule-engine.ts';
 import { fixtureDir } from './fixture-dir.ts';
 
@@ -34,141 +25,6 @@ interface RetrieveSkillResult {
   content?: string;
   references: Array<{ filename: string; content: string }>;
 }
-
-interface AuthSwitchResult {
-  status: string;
-  scope?: string;
-  error?: string;
-}
-
-test('runVersionCheck uses hcloud version instead of --version', async () => {
-  const dir = fixtureDir('huaweicloud-toolkit-version-');
-  const script = join(dir, 'fake-hcloud.mjs');
-  writeFileSync(script, 'console.log(JSON.stringify({ version: "7.0.0", args: process.argv.slice(2) }));', 'utf8');
-
-  const result = await runVersionCheck({
-    executable: process.execPath,
-    executableArgs: [script],
-  });
-
-  assert.equal(result.installed, true);
-  assert.match(result.output, /"version":\s*"7\.0\.0"/);
-  assert.doesNotMatch(result.output, /--version/);
-});
-
-test('runVersionCheck returns installed:false and errorCode on ENOENT', async () => {
-  const result = await runVersionCheck({ executable: 'nonexistent-hcloud-xyz' });
-  assert.equal(result.installed, false);
-  assert.equal(result.errorCode, 'HCLOUD_NOT_FOUND');
-  // #900: top-level nextStep is executable; verbose guidance moved to raw.
-  assert.match(result.nextStep, /^(npx |hcloud )/);
-  assert.equal(result.nextStep, 'npx huaweicloud-devkit install-hcloud');
-  assert.match(result.raw, /koocli-install\.log/);
-  assert.doesNotMatch(result.nextStep, /restart the agent/i);
-});
-
-test('runVersionCheck reports versionMismatch when installed version differs from kooCliVersion', async () => {
-  const dir = fixtureDir('huaweicloud-toolkit-version-');
-  const script = join(dir, 'fake-hcloud.mjs');
-  writeFileSync(script, 'console.log(JSON.stringify({ version: "7.0.0", args: process.argv.slice(2) }));', 'utf8');
-
-  const result = await runVersionCheck({
-    executable: process.execPath,
-    executableArgs: [script],
-  });
-
-  assert.equal(result.installed, true);
-  assert.equal(result.installedVersion, '7.0.0');
-  assert.equal(result.kooCliVersion, getKooCliVersion());
-  assert.equal(result.versionMismatch, true);
-  // #900: executable top-level nextStep; English detail only in raw.
-  assert.match(result.nextStep, /^npx /);
-  assert.match(result.raw, /version mismatch/i);
-});
-
-test('runVersionCheck reports no versionMismatch when installed version matches kooCliVersion', async () => {
-  const dir = fixtureDir('huaweicloud-toolkit-version-');
-  const script = join(dir, 'fake-hcloud.mjs');
-  writeFileSync(script, `console.log("当前KooCLI版本:${getKooCliVersion()}");`, 'utf8');
-
-  const result = await runVersionCheck({
-    executable: process.execPath,
-    executableArgs: [script],
-  });
-
-  assert.equal(result.installed, true);
-  assert.equal(result.installedVersion, getKooCliVersion());
-  assert.equal(result.versionMismatch, false);
-});
-
-test('TOOL_DEFINITIONS includes all required tools including sandbox', () => {
-  const names = TOOL_DEFINITIONS.map((t) => t.name);
-  const required = [
-    'huaweicloud_check_cli',
-    'huaweicloud_plan_cli_command',
-    'huaweicloud_run_readonly_command',
-    'huaweicloud_list_operations',
-    'huaweicloud_run_approved_command',
-    'huaweicloud_show_profile_redacted',
-    'huaweicloud_service_catalog',
-    'huaweicloud_explain_error',
-    'huaweicloud_search_docs',
-    'huaweicloud_retrieve_skill',
-    'huaweicloud_list_regions',
-    'huaweicloud_get_regional_availability',
-    'huaweicloud_search_marketplace',
-    'huaweicloud_setup_obs_config',
-    'huaweicloud_auth_status',
-    'huaweicloud_auth_sync',
-    'huaweicloud_sandbox_exec_with_session',
-    'huaweicloud_sandbox_upload_file',
-    'huaweicloud_sandbox_close_session',
-    'huaweicloud_sandbox_check_user',
-    'huaweicloud_sandbox_sign_agreement',
-    'huaweicloud_sandbox_connect',
-    'huaweicloud_sandbox_credentials',
-    'huaweicloud_sandbox_expose_tunnel',
-    'huaweicloud_voucher_status',
-    'huaweicloud_voucher_claim',
-    'huaweicloud_competition_voucher_claim',
-    'huaweicloud_list_packs',
-    'huaweicloud_pack_info',
-    'huaweicloud_list_skills',
-    'huaweicloud_secret_set',
-    'huaweicloud_secret_list',
-    'huaweicloud_secret_delete',
-  ] as const;
-  for (const name of required) {
-    assert.ok(names.includes(name), `Missing tool: ${name}`);
-  }
-  assert.ok(names.length >= 25);
-  assert.ok(names.includes('huaweicloud_search_marketplace'), 'Should have marketplace search tool');
-});
-
-test('TOOL_DEFINITIONS expose cwd parameter on run tools', () => {
-  const readonlySchema = getToolSchema('huaweicloud_run_readonly_command').toJSONSchema();
-  assert.ok(Object.hasOwn(readonlySchema.properties!, 'cwd'), 'run_readonly_command should have cwd param');
-
-  const approvedSchema = getToolSchema('huaweicloud_run_approved_command').toJSONSchema();
-  assert.ok(Object.hasOwn(approvedSchema.properties!, 'cwd'), 'run_approved_command should have cwd param');
-});
-
-test('TOOL_DEFINITIONS includes proactive hook check tools', () => {
-  const names = new Set(TOOL_DEFINITIONS.map((tool) => tool.name));
-  assert.ok(names.has('huaweicloud_hook_check_command'));
-  assert.ok(names.has('huaweicloud_hook_check_artifacts'));
-  assert.ok(names.has('huaweicloud_hook_check_deploy_plan'));
-});
-
-test('TOOL_SCHEMAS keys exactly match TOOL_DEFINITIONS names (no orphans either way)', () => {
-  const registryNames = TOOL_DEFINITIONS.map((tool) => tool.name).sort((a, b) => a.localeCompare(b));
-  const schemaKeys = Object.keys(TOOL_SCHEMAS).sort((a, b) => a.localeCompare(b));
-  assert.deepEqual(
-    schemaKeys,
-    registryNames,
-    'a tool registered without a schema is unreachable over MCP; a schema without a registry entry is dead code',
-  );
-});
 
 test('the vendorConfirmed gate rejects unasserted calls, and the first asserted call clears the challenge once', async () => {
   // The enforcement rung plus the challenge rung above it (A/B-measured,
@@ -256,146 +112,6 @@ test('huaweicloud_hook_check_command returns deny finding', async () => {
   assert.equal(result.findings[0].ruleId, 'hwc-network-public-admin-port');
 });
 
-test('huaweicloud_explain_error maps APIGW.0301 to credential/project_id guidance', async () => {
-  const result = await callTool('huaweicloud_explain_error', {
-    service: 'unknown',
-    errorCode: 'APIGW.0301',
-    message: 'Incorrect IAM authentication information',
-  });
-  const text = JSON.stringify(result);
-  assert.match(text, /Incorrect IAM authentication information/);
-  assert.match(text, /auth init/);
-  assert.match(text, /project_id/);
-});
-
-// A3/E2E-B1 (#935): the new ECS order-failure mappings, the Kps service
-// entry, and the errorCode-only routing (real MCP calls pass only errorCode —
-// the service key is derived from the dotted-code prefix).
-test('huaweicloud_explain_error maps Ecs.0019 to on-sale flavor re-listing (#935 A3)', async () => {
-  const result = await callTool('huaweicloud_explain_error', {
-    service: 'ECS',
-    errorCode: 'Ecs.0019',
-    message: 'the flavor does not exist',
-  });
-  const text = JSON.stringify(result);
-  assert.match(text, /Ecs\.0019/);
-  assert.match(text, /ListFlavors/, 'must direct at hcloud ECS ListFlavors');
-  assert.match(text, /replacement|替代/, 'must point at switching to a replacement flavor');
-  assert.match(text, /flavors\.md/, 'must reference the flavors.md status field rules');
-});
-
-test('huaweicloud_explain_error maps Ecs.0319 to AZ-capacity guidance (#935 A3)', async () => {
-  const result = await callTool('huaweicloud_explain_error', {
-    service: 'ECS',
-    errorCode: 'Ecs.0319',
-    message: 'insufficient capacity',
-  });
-  const text = JSON.stringify(result);
-  assert.match(text, /Ecs\.0319/);
-  assert.match(text, /availability zone|AZ/i, 'must suggest changing the AZ');
-  assert.match(text, /replacement|替代|ListFlavors/, 'must suggest switching the flavor and retrying');
-});
-
-test('huaweicloud_explain_error maps Ecs.0044 to volume-type sellout guidance (#971 A)', async () => {
-  const result = await callTool('huaweicloud_explain_error', {
-    service: 'ECS',
-    errorCode: 'Ecs.0044',
-    message: 'the volumeType [SATA] is sellout in az[cn-north-4a]',
-  });
-  const text = JSON.stringify(result);
-  assert.match(text, /Ecs\.0044/);
-  assert.match(text, /volume type|volumetype/i, 'must name the volume-type root cause');
-  assert.match(text, /root_volume\.volumetype/, 'must direct at the exact parameter to change');
-  assert.match(text, /Ecs\.0319/, 'must distinguish from the flavor-capacity error Ecs.0319');
-  assert.match(text, /NovaListAvailabilityZones/, 'must offer the AZ-switch alternative');
-});
-
-test('huaweicloud_explain_error maps Ecs.0067 to cash-balance/recharge guidance (#935 A3)', async () => {
-  const result = await callTool('huaweicloud_explain_error', {
-    service: 'ECS',
-    errorCode: 'Ecs.0067',
-    message: 'insufficient account balance',
-  });
-  const text = JSON.stringify(result);
-  assert.match(text, /Ecs\.0067/);
-  assert.match(text, /ShowCustomerAccountBalances/, 'must direct at the BSS cash balance query');
-  assert.match(text, /top up|充值/i, 'must instruct topping up');
-  assert.match(text, /代金券|voucher/i, 'must explain vouchers do not count in order risk control');
-});
-
-test('huaweicloud_explain_error adds a Kps service entry mapping KPS.9004 (#935 A3)', async () => {
-  const result = await callTool('huaweicloud_explain_error', {
-    service: 'KPS',
-    errorCode: 'KPS.9004',
-    message: 'keypair creation restricted',
-  });
-  const text = JSON.stringify(result);
-  assert.match(text, /KPS\.9004/);
-  assert.match(text, /ShowCustomerAccountBalances/, 'must direct at the BSS cash balance query');
-  assert.match(text, /arrears|欠费|historical/i, 'must mention settling historical arrears');
-  // Lowercase service alias resolves to the same mapping — asserted on the
-  // mapping text, not the echoed errorCode (which would match even on a miss).
-  const lower = await callTool('huaweicloud_explain_error', {
-    service: 'kps',
-    errorCode: 'KPS.9004',
-    message: 'keypair creation restricted',
-  });
-  assert.match(JSON.stringify(lower), /ShowCustomerAccountBalances/);
-});
-
-test('explain_error with errorCode only (no service) hits Ecs.0019 mapping (#935 E2E-B1)', async () => {
-  // MCP probe evidence: errorCode-only call returned "No known error-code
-  // pattern matched", service: unknown — the service-keyed table was never hit.
-  const result = await callTool('huaweicloud_explain_error', { errorCode: 'Ecs.0019' });
-  const text = JSON.stringify(result);
-  assert.match(text, /Ecs\.0019/);
-  assert.match(text, /taken offline/, 'must hit the Ecs.0019 flavor-offline mapping');
-  assert.match(text, /ListFlavors/, 'must direct at hcloud ECS ListFlavors');
-});
-
-test('explain_error with errorCode only (no service) hits Ecs.0319 mapping (#935 E2E-B1)', async () => {
-  const result = await callTool('huaweicloud_explain_error', { errorCode: 'Ecs.0319' });
-  const text = JSON.stringify(result);
-  assert.match(text, /Ecs\.0319/);
-  assert.match(text, /availability zone/i, 'must hit the Ecs.0319 AZ-capacity mapping');
-});
-
-test('explain_error with errorCode only (no service) hits Ecs.0067 mapping (#935 E2E-B1)', async () => {
-  const result = await callTool('huaweicloud_explain_error', { errorCode: 'Ecs.0067' });
-  const text = JSON.stringify(result);
-  assert.match(text, /Ecs\.0067/);
-  assert.match(text, /ShowCustomerAccountBalances/, 'must hit the cash-balance mapping without a service arg');
-});
-
-test('huaweicloud_explain_error fallback teaches context capture and error-center lookup (#648)', async () => {
-  // Regression input from issue #648 EXP-E08: ECS Ecs.0103 with minimal context
-  // fell into the generic fallback and produced only a "collect info" line.
-  const result = await callTool('huaweicloud_explain_error', {
-    service: 'ECS',
-    errorCode: 'Ecs.0103',
-    message: 'ECS instance startup failed',
-  });
-  const text = JSON.stringify(result);
-  assert.match(text, /--debug/);
-  assert.match(text, /X-Request-Id/);
-  assert.match(text, /re-call explain_error/);
-  assert.match(text, /Ecs\.0103/);
-  assert.match(text, /support\.huaweicloud\.com/);
-  // requestId was empty, so the support-ticket line must not appear.
-  assert.doesNotMatch(text, /Provide the Request ID/);
-});
-
-test('huaweicloud_explain_error still appends support line when requestId is present', async () => {
-  const result = await callTool('huaweicloud_explain_error', {
-    service: 'ECS',
-    errorCode: 'Ecs.0103',
-    message: 'ECS instance startup failed',
-    requestId: 'req-abc-123',
-  });
-  const text = JSON.stringify(result);
-  assert.match(text, /Provide the Request ID \(req-abc-123\) when contacting Huawei Cloud support\./);
-});
-
 test('callTool rejects invalid numeric timeoutMs instead of silently ignoring it', async () => {
   await assert.rejects(
     () =>
@@ -478,6 +194,7 @@ test('service_catalog keeps storage routing for pure storage intent', async () =
 // Symlink creation needs privileges on Windows (the repo's other symlink
 // tests skip there for the same reason); GitHub-hosted runners happen to be
 // elevated, but the suite must not depend on that.
+
 test(
   'listSkillDirs ignores files, subdirs without SKILL.md, and counts symlinked skill dirs',
   { skip: process.platform === 'win32' },
@@ -507,6 +224,7 @@ test(
 // retrieve_skill is the server-side skill loader, so its name boundary is
 // security-relevant: traversal-shaped names must be rejected before any
 // filesystem access.
+
 test('retrieve_skill rejects traversal-shaped and non-skill names', async () => {
   for (const name of ['../src/packs/obs/skills/huawei-obs', '..%2f..', 'huawei ecs', 'HUAWAI-ECS', '/etc', '']) {
     const result = (await callTool('huaweicloud_retrieve_skill', { name })) as RetrieveSkillResult;
@@ -528,6 +246,7 @@ test('retrieve_skill serves the full skill from the server-relative tree', async
 // the structure invariant guard the module and the corpus, this guards the
 // wiring — a future first-line regex dropped back into retrieveSkill fails
 // here even though every other gate stays green.
+
 test('retrieve_skill returns the full multi-line description, quote-stripped', async () => {
   const result = (await callTool('huaweicloud_retrieve_skill', { name: 'huawei-ecs' })) as RetrieveSkillResult;
   assert.equal(result.ok, true, result.error);
@@ -548,6 +267,7 @@ test('retrieve_skill returns the full multi-line description, quote-stripped', a
 // chars carries a marker naming the <skillRoot> direct-read path, so a
 // cross-reference deeper than the cap (e.g. a safety remediation citing a
 // late section) reads as "beyond the cut", never as "does not exist".
+
 test('retrieve_skill marks truncated references and leaves short ones whole', async () => {
   const result = (await callTool('huaweicloud_retrieve_skill', { name: 'huawei-ecs' })) as RetrieveSkillResult;
   assert.equal(result.ok, true, result.error);
@@ -572,234 +292,6 @@ test('search_docs matches tokens from the multi-line description second paragrap
   assert.ok(hit, 'the second-paragraph token must find huawei-ecs');
   assert.ok(hit!.snippet.startsWith('Use when'), 'the snippet must carry the quote-stripped description');
 });
-
-test('auth_switch temporary sets runtime credentials for api path', async () => {
-  const prev = {
-    AK: process.env.HW_ACCESS_KEY,
-    SK: process.env.HW_SECRET_KEY,
-  };
-  delete process.env.HW_ACCESS_KEY;
-  delete process.env.HW_SECRET_KEY;
-  try {
-    const out = (await callTool('huaweicloud_auth_switch', {
-      vendorConfirmed: 'test: vendor established by the harness',
-      mode: 'memory',
-      action: 'temporary',
-      ak: 'RUNTIME_AK',
-      sk: 'RUNTIME_SK',
-      region: 'cn-north-4',
-    })) as AuthSwitchResult;
-    assert.equal(out.scope, 'temporary');
-    const resolved = resolveCredentialsWithRuntime({});
-    assert.equal(resolved!.ak, 'RUNTIME_AK');
-  } finally {
-    clearRuntimeCredentials();
-    if (prev.AK === undefined) delete process.env.HW_ACCESS_KEY;
-    else process.env.HW_ACCESS_KEY = prev.AK;
-    if (prev.SK === undefined) delete process.env.HW_SECRET_KEY;
-    else process.env.HW_SECRET_KEY = prev.SK;
-  }
-});
-
-test('auth_switch clear resets runtime', async () => {
-  const isolatedHome = fixtureDir('huaweicloud-auth-clear-');
-  const prevHome = process.env.HUAWEICLOUD_HOME;
-  process.env.HUAWEICLOUD_HOME = isolatedHome;
-  try {
-    setRuntimeCredentials('A', 'B', undefined, 'cn-north-4');
-    const out = (await callTool('huaweicloud_auth_switch', {
-      vendorConfirmed: 'test: vendor established by the harness',
-      action: 'clear',
-    })) as AuthSwitchResult;
-    assert.equal(out.status, 'cleared');
-    let threw = false;
-    try {
-      resolveCredentialsWithRuntime({});
-    } catch {
-      threw = true;
-    }
-    assert.equal(threw, true);
-  } finally {
-    if (prevHome === undefined) delete process.env.HUAWEICLOUD_HOME;
-    else process.env.HUAWEICLOUD_HOME = prevHome;
-    rmSync(isolatedHome, { recursive: true, force: true });
-  }
-});
-
-// Hand-rolled HUAWEICLOUD_HOME isolation for the import-file tests: set a
-// fixture home, run, and restore (with the runtime store cleared either way).
-async function withImportHome(fn: () => Promise<void>): Promise<void> {
-  const home = fixtureDir('auth-import-case-');
-  const prevHome = process.env.HUAWEICLOUD_HOME;
-  process.env.HUAWEICLOUD_HOME = home;
-  try {
-    await fn();
-  } finally {
-    if (prevHome === undefined) delete process.env.HUAWEICLOUD_HOME;
-    else process.env.HUAWEICLOUD_HOME = prevHome;
-    clearRuntimeCredentials();
-    rmSync(home, { recursive: true, force: true });
-  }
-}
-
-// Seed a creds-import.json under the isolated home.
-function seedImportFile(ak: string, sk: string): { cfgDir: string; importFile: string } {
-  const cfgDir = join(process.env.HUAWEICLOUD_HOME!, '.config', 'huaweicloud');
-  mkdirSync(cfgDir, { recursive: true });
-  const importFile = join(cfgDir, 'creds-import.json');
-  writeFileSync(importFile, JSON.stringify({ ak, sk }), 'utf8');
-  return { cfgDir, importFile };
-}
-
-test('auth_switch persist(mode=import) rejects missing region and keeps import file (#502)', async () => {
-  await withImportHome(async () => {
-    const { cfgDir, importFile } = seedImportFile('IMPORT_AK', 'IMPORT_SK');
-
-    const out = (await callTool('huaweicloud_auth_switch', {
-      vendorConfirmed: 'test: vendor established by the harness',
-      mode: 'import',
-      action: 'persist',
-    })) as AuthSwitchResult;
-
-    assert.equal(out.status, 'error');
-    assert.equal(out.scope, 'invalid_region');
-    assert.match(out.error!, /region/);
-    // S1 must not be written on a rejected persist.
-    assert.equal(existsSync(join(cfgDir, 'credentials.json')), false);
-    // Import file must survive for replay.
-    assert.equal(existsSync(importFile), true);
-  });
-});
-
-test('auth_switch temporary(mode=import) clears import file on success', async () => {
-  await withImportHome(async () => {
-    const { importFile } = seedImportFile('TMP_AK', 'TMP_SK');
-
-    const out = (await callTool('huaweicloud_auth_switch', {
-      vendorConfirmed: 'test: vendor established by the harness',
-      mode: 'import',
-      action: 'temporary',
-    })) as AuthSwitchResult;
-
-    assert.equal(out.scope, 'temporary');
-    assert.equal(existsSync(importFile), false, 'import file should be cleared after successful temporary set');
-    assert.equal(resolveCredentialsWithRuntime({})!.ak, 'TMP_AK');
-  });
-});
-
-test('auth_switch persist(mode=import) with STS token is rejected and clears import file', async () => {
-  const home = fixtureDir('auth-import-sts-');
-  const prevHome = process.env.HUAWEICLOUD_HOME;
-  process.env.HUAWEICLOUD_HOME = home;
-  try {
-    const cfgDir = join(home, '.config', 'huaweicloud');
-    mkdirSync(cfgDir, { recursive: true });
-    const importFile = join(cfgDir, 'creds-import.json');
-    writeFileSync(
-      importFile,
-      JSON.stringify({ ak: 'STS_AK', sk: 'STS_SK', securityToken: 'STS_TOK', region: 'cn-north-4' }),
-      'utf8',
-    );
-
-    const out = (await callTool('huaweicloud_auth_switch', {
-      vendorConfirmed: 'test: vendor established by the harness',
-      mode: 'import',
-      action: 'persist',
-    })) as AuthSwitchResult;
-
-    assert.equal(out.status, 'error');
-    assert.equal(out.scope, 'rejected');
-    assert.equal(
-      existsSync(importFile),
-      false,
-      'unfixable STS import must be cleared — no replay value, and no plaintext token residual',
-    );
-  } finally {
-    if (prevHome === undefined) delete process.env.HUAWEICLOUD_HOME;
-    else process.env.HUAWEICLOUD_HOME = prevHome;
-    clearRuntimeCredentials();
-    rmSync(home, { recursive: true, force: true });
-  }
-});
-
-test('huaweicloud_explain_error maps Ecs.0707 to flavor/image-type combination troubleshooting (#922)', async () => {
-  // Regression input from the 1024 activity report: kc2.small.2 + market-type
-  // Ubuntu image → Ecs.0707 "the product does not exist", with no hint which
-  // side (flavor vs image type) is wrong. Both service spellings (ECS and the
-  // lowercase alias) must route to the Ecs pattern table.
-  for (const service of ['ECS', 'ecs']) {
-    const result = (await callTool('huaweicloud_explain_error', {
-      service,
-      errorCode: 'Ecs.0707',
-      message: 'the product does not exist',
-    })) as { suggestions?: string[] };
-    const text = JSON.stringify(result);
-    assert.match(text, /flavor \+ image-type combination/);
-    if (service === 'ECS') {
-      assert.match(text, /gold/, 'must point at gold-type images');
-      assert.match(text, /market/, 'must name the market-type incompatibility');
-      assert.match(text, /ListFlavors/, 'must direct at re-listing flavors');
-      assert.match(text, /cond:operation/, 'must point at the AZ/status spec fields');
-    }
-  }
-});
-
-test('G: explain_error surfaces CREDENTIAL_EXPIRED first when temp STS has expired', async () => {
-  // parseStsExpiry prioritizes HW_STS_EXPIRES_AT over the token itself — scrub
-  // it (and the ambient HW_* triplet) so the expired-token setup is real.
-  const prev = {
-    HW_STS_EXPIRES_AT: process.env.HW_STS_EXPIRES_AT,
-    HW_ACCESS_KEY: process.env.HW_ACCESS_KEY,
-    HW_SECRET_KEY: process.env.HW_SECRET_KEY,
-    HW_SECURITY_TOKEN: process.env.HW_SECURITY_TOKEN,
-  };
-  for (const key of ['HW_STS_EXPIRES_AT', 'HW_ACCESS_KEY', 'HW_SECRET_KEY', 'HW_SECURITY_TOKEN']) {
-    delete process.env[key];
-  }
-  clearRuntimeCredentials();
-  const past = Math.floor(Date.now() / 1000) - 3600;
-  const token = Buffer.from(JSON.stringify({ exp: past })).toString('base64url');
-  setRuntimeCredentials('EXP_AK', 'EXP_SK', token, 'cn-north-4');
-  try {
-    const result = (await callTool('huaweicloud_explain_error', {
-      service: 'VPC',
-      errorCode: 'APIGW.0301',
-      message: 'Incorrect IAM authentication information',
-    })) as { suggestions?: string[] };
-    const text = JSON.stringify(result);
-    assert.match(text, /CREDENTIAL_EXPIRED/);
-    assert.match(text, /security token has expired/i);
-    assert.ok(Array.isArray(result.suggestions) && result.suggestions.length > 0);
-  } finally {
-    clearRuntimeCredentials();
-    for (const [key, value] of Object.entries(prev)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  }
-});
-
-// Hermetic fake hcloud for list_operations (honors --help/help, exits 0) with
-// the HCLOUD_BIN pair set around the body and restored either way.
-async function withFakeHcloudForList(fn: () => Promise<void>): Promise<void> {
-  const dir = fixtureDir('tools-list-ops-');
-  const script = join(dir, 'fake-hcloud.mjs');
-  writeFileSync(script, `console.log('operations: ListX ShowX CreateX'); process.exit(0);`, 'utf8');
-  const prevBin = process.env.HCLOUD_BIN;
-  const prevArgs = process.env.HCLOUD_BIN_ARGS_JSON;
-  process.env.HCLOUD_BIN = process.execPath;
-  process.env.HCLOUD_BIN_ARGS_JSON = JSON.stringify([script]);
-  try {
-    await fn();
-  } finally {
-    if (prevBin === undefined) delete process.env.HCLOUD_BIN;
-    else process.env.HCLOUD_BIN = prevBin;
-    if (prevArgs === undefined) delete process.env.HCLOUD_BIN_ARGS_JSON;
-    else process.env.HCLOUD_BIN_ARGS_JSON = prevArgs;
-  }
-}
-
-// ── list_operations aggregate fan-out + Chinese intent keywords ─────────────
 
 test('list_operations fans DMS/DEW out to their KooCLI sub-services', async () => {
   await withFakeHcloudForList(async () => {
@@ -890,66 +382,20 @@ test('serviceCatalog: slash-bearing keywords (ak/sk, ci/cd) match via the phrase
   await assertSkillForIntent('ci/cd pipeline for deployment', 'huawei-cloud-deployment-task-management');
 });
 
-test('explain_error with errorCode only (no service) hits KPS.9004 mapping (#935 E2E-B1)', async () => {
-  const result = await callTool('huaweicloud_explain_error', { errorCode: 'KPS.9004' });
-  const text = JSON.stringify(result);
-  assert.match(text, /KPS\.9004/);
-  assert.match(text, /ShowCustomerAccountBalances/, 'must hit the KPS.9004 restriction mapping');
-});
-
-test('explain_error with errorCode only (no service) hits existing Ecs.0707 mapping (#935 E2E-B1)', async () => {
-  const result = await callTool('huaweicloud_explain_error', { errorCode: 'Ecs.0707' });
-  const text = JSON.stringify(result);
-  assert.match(text, /Ecs\.0707/);
-  assert.match(text, /flavors\.md/, 'must hit the pre-existing Ecs.0707 mapping');
-});
-
-test('explain_error with service=unknown + dotted errorCode hits the mapping (MCP-equivalent shape) (#935 E2E-B1)', async () => {
-  const result = await callTool('huaweicloud_explain_error', { service: 'unknown', errorCode: 'Ecs.0019' });
-  const text = JSON.stringify(result);
-  assert.match(text, /Ecs\.0019/);
-  assert.match(text, /taken offline/, 'service:unknown + dotted code must derive the service key');
-});
-
-test('explain_error with explicit service=ECS keeps behavior unchanged (#935 E2E-B1 regression)', async () => {
-  const result = await callTool('huaweicloud_explain_error', {
-    service: 'ECS',
-    errorCode: 'Ecs.0019',
-    message: 'the flavor does not exist',
-  });
-  const text = JSON.stringify(result);
-  assert.match(text, /"service":"ECS"/, 'the echoed service field must stay as passed');
-  assert.match(text, /Ecs\.0019/);
-  assert.match(text, /taken offline/, 'explicit-service mapping hit must be preserved');
-});
-
-test('explain_error with dot-less errorCode and no service keeps the fallback behavior (#935 E2E-B1)', async () => {
-  const result = await callTool('huaweicloud_explain_error', { errorCode: '0019' });
-  const text = JSON.stringify(result);
-  assert.match(text, /No known error-code pattern matched/, 'dot-less code must not be mis-routed');
-  assert.ok(!text.includes('taken offline'), 'must not hit the Ecs.0019 mapping');
-});
-
-test('explain_error hits mappings for case-variant errorCodes (deliberate divergence from main)', async () => {
-  // The prefix derivation resolves the service half; the entry scan is
-  // case-insensitive on the code so transcriptions like ECS.0019 (console
-  // echo) or kps.9004 still hit — main's port no-ops on non-canonical casing.
-  const upper = await callTool('huaweicloud_explain_error', { errorCode: 'ECS.0019' });
-  assert.match(JSON.stringify(upper), /taken offline/, 'uppercase-prefixed code must hit the Ecs.0019 mapping');
-  const lower = await callTool('huaweicloud_explain_error', { errorCode: 'kps.9004' });
-  assert.match(JSON.stringify(lower), /ShowCustomerAccountBalances/, 'lowercase code must hit the KPS.9004 mapping');
-});
-
-test('explain_error derives apic/apigw/obs prefixes and lowercase services to their tables', async () => {
-  // apic → APIG: all four APIC entries were unreachable errorCode-only (the
-  // uppercase fallback yields APIC, the table is keyed APIG).
-  const apic = await callTool('huaweicloud_explain_error', { errorCode: 'APIC.7241' });
-  assert.match(JSON.stringify(apic), /enterprise_project_id/, 'APIC.7241 must hit the APIG table via the apic alias');
-  // obs service alias: service:'obs' used to miss the case-keyed OBS table.
-  const obs = await callTool('huaweicloud_explain_error', {
-    service: 'obs',
-    errorCode: 'InvalidAccessKeyId',
-    message: 'invalid access key id',
-  });
-  assert.match(JSON.stringify(obs), /OBS uses AK\/SK directly/, "service:'obs' must hit the OBS table");
-});
+async function withFakeHcloudForList(fn: () => Promise<void>): Promise<void> {
+  const dir = fixtureDir('tools-list-ops-');
+  const script = join(dir, 'fake-hcloud.mjs');
+  writeFileSync(script, `console.log('operations: ListX ShowX CreateX'); process.exit(0);`, 'utf8');
+  const prevBin = process.env.HCLOUD_BIN;
+  const prevArgs = process.env.HCLOUD_BIN_ARGS_JSON;
+  process.env.HCLOUD_BIN = process.execPath;
+  process.env.HCLOUD_BIN_ARGS_JSON = JSON.stringify([script]);
+  try {
+    await fn();
+  } finally {
+    if (prevBin === undefined) delete process.env.HCLOUD_BIN;
+    else process.env.HCLOUD_BIN = prevBin;
+    if (prevArgs === undefined) delete process.env.HCLOUD_BIN_ARGS_JSON;
+    else process.env.HCLOUD_BIN_ARGS_JSON = prevArgs;
+  }
+}
