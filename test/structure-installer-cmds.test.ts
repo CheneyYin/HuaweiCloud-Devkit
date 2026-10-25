@@ -130,6 +130,12 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
     .filter((name) => name.endsWith('.ts'))
     .sort((a, b) => a.localeCompare(b));
   assert.ok(packsCliModules.length >= 5, `expected the packs-cli module family, found: ${packsCliModules.join(', ')}`);
+  // And the proxy family (the config module + the CLI — the CLI joined the
+  // unbundled graph with the proxy command extraction).
+  const proxyModules = (readdirSync(join(pluginRoot, 'src', 'proxy'), { recursive: true }) as string[])
+    .filter((name) => name.endsWith('.ts'))
+    .sort((a, b) => a.localeCompare(b));
+  assert.ok(proxyModules.length >= 2, `expected the proxy module family, found: ${proxyModules.join(', ')}`);
   // These compile into the unbundled dist/setup-cli.js graph, where only
   // undici exists at runtime: no zod, no SDK, ever.
   const guarded = [
@@ -141,6 +147,7 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
     ...agentModules.map((name) => [`src/agents/${name}`, readSource(join('src', 'agents', name))] as const),
     ...safetyModules.map((name) => [`src/safety/${name}`, readSource(join('src', 'safety', name))] as const),
     ...packsCliModules.map((name) => [`src/packs-cli/${name}`, readSource(join('src', 'packs-cli', name))] as const),
+    ...proxyModules.map((name) => [`src/proxy/${name}`, readSource(join('src', 'proxy', name))] as const),
     ['src/codearts-sandbox.ts', codeartsSandbox] as const,
     ['src/lib/dep-resolve.ts', depResolve] as const,
     ['src/targets.ts', targetsModule] as const,
