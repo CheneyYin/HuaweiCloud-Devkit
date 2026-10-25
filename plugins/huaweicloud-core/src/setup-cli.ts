@@ -142,16 +142,8 @@ import {
 import { installOfficeAce, officeaceStatus, uninstallOfficeAce, updateOfficeAce } from './agents/officeace.ts';
 import { deployHermes, hermesMcpSdkOk, hermesStatus, uninstallHermes } from './agents/hermes.ts';
 import { writeHermesMcpConfig } from './agents/hermes-config.ts';
-import {
-  codexDesktopStatus,
-  codexSectionStatus,
-  codexStatus,
-  deployCodexDesktop,
-  hasCodexCLI,
-  installCodex,
-  uninstallCodex,
-  uninstallCodexDesktop,
-} from './agents/codex.ts';
+import { codexSectionStatus, codexStatus, hasCodexCLI, installCodex, uninstallCodex } from './agents/codex.ts';
+import { codexDesktopStatus, deployCodexDesktop, uninstallCodexDesktop } from './agents/codex-desktop.ts';
 import { deployDsh, dshStatus, uninstallDsh } from './agents/dsh.ts';
 import {
   DSH_MCP_PATCH_END,

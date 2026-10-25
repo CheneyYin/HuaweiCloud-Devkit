@@ -1,6 +1,6 @@
 // The OpenClaw agent module, extracted from setup-cli.ts: the ~/.agents
 // commands + plugin-dir deploy with the codex-discoverable .mcp.json shape
-// (shared with Codex Desktop through agents/codex.ts).
+// (shared with Codex Desktop through agents/codex-desktop.ts).
 
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -20,7 +20,7 @@ import {
   type DeployMode,
 } from '../install-payload.ts';
 import { backupDeltaFromMcpServersFile } from '../mcp-config-io.ts';
-import { writeMcpJsonAndCodexManifest } from './codex.ts';
+import { writeMcpJsonAndCodexManifest } from './codex-desktop.ts';
 
 export async function deployOpenClaw(mode: DeployMode): Promise<void> {
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');
