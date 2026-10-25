@@ -13,6 +13,13 @@ import { packsCarryValue, readDevkitPacksFromYaml } from '../packs-policy.ts';
 import { findHcloudBin } from '../hcloud-probe.ts';
 import { asText } from '../lib/as-text.ts';
 import { PLUGIN_ROOT } from '../install-payload.ts';
+import {
+  payloadDoctorSection,
+  skillsTreeMatches,
+  type DoctorSharedState,
+  type PayloadDoctorRow,
+  type PayloadDoctorSection,
+} from '../doctor-payload.ts';
 
 export const DSH_MCP_PATCH_START = '# HuaweiCloud DevKit DSH integration start';
 export const DSH_MCP_PATCH_END = '# HuaweiCloud DevKit DSH integration end';
@@ -163,4 +170,20 @@ export function dshPatchConfigured(): boolean {
   } catch {
     return false;
   }
+}
+
+// The dsh row's doctor binding: the generic payload section plus the DSH
+// package-root skills-tree candidate. Skills are server data disclosed over
+// MCP, and the DSH layout resolves them from the running package root:
+// serverSkillDirNames() appends 'skills' to its argument, so the candidate
+// is PLUGIN_ROOT itself — probing PLUGIN_ROOT/skills/skills would never
+// exist (the pre-fix shape: the fallback was inert and a DSH-only healthy
+// install false-FAILED the tree check).
+export function dshPayloadDoctorSection(row: PayloadDoctorRow, shared: DoctorSharedState): PayloadDoctorSection {
+  const base = payloadDoctorSection(row, shared);
+  const packageRootTree = dshPatchConfigured() && skillsTreeMatches(PLUGIN_ROOT, shared.expectedSkills);
+  return {
+    ...base,
+    triple: { ...base.triple, skillsTree: base.triple.skillsTree || packageRootTree },
+  };
 }

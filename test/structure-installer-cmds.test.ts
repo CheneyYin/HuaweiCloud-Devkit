@@ -142,6 +142,11 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
     ['src/mcp-config-io.ts', readSource(join('src', 'mcp-config-io.ts'))] as const,
     ['src/lib/cli-io.ts', readSource(join('src', 'lib', 'cli-io.ts'))] as const,
     ['src/officeace-paths.ts', readSource(join('src', 'officeace-paths.ts'))] as const,
+    // The doctor section modules compile into the unbundled setup-cli graph
+    // (the table binds them), so they join the zod-free guard.
+    ['src/doctor-report.ts', readSource(join('src', 'doctor-report.ts'))] as const,
+    ['src/doctor-payload.ts', readSource(join('src', 'doctor-payload.ts'))] as const,
+    ['src/doctor-native.ts', readSource(join('src', 'doctor-native.ts'))] as const,
   ];
   for (const [name, source] of guarded) {
     assert.doesNotMatch(source, /from 'zod'/, `${name} must not import zod`);

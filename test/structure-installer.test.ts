@@ -60,23 +60,29 @@ test('agents/codearts.ts supports the codearts target end to end', () => {
   // shared SKILL.md-aware predicate from src/lib/skill-tree.ts — the same
   // membership the boot guard uses, so hollow claimed dirs count as
   // missing. The DSH package-root candidate is PLUGIN_ROOT itself because
-  // serverSkillDirNames() appends 'skills'.
+  // serverSkillDirNames() appends 'skills' (bound by the dsh row's doctor
+  // section in agents/dsh-patch.ts).
   const payloadModule = readSource(join('src', 'install-payload.ts'));
+  const doctorPayloadModule = readSource(join('src', 'doctor-payload.ts'));
   assert.match(payloadModule, /return listSkillDirs\(join\(pluginDir, 'skills'\)\);/);
-  assert.match(setup, /const expectedSkills = shippedSkillRoster\(\);/);
-  assert.match(setup, /present\.size === expectedSkills\.length/);
-  assert.match(setup, /expectedSkills\.every\(\(name\) => present\.has\(name\)\)/);
-  assert.match(setup, /skillsTreeDirs\.push\(PLUGIN_ROOT\)/);
+  assert.match(setup, /expectedSkills: shippedSkillRoster\(\)/);
+  assert.match(doctorPayloadModule, /present\.size === expectedSkills\.length/);
+  assert.match(doctorPayloadModule, /expectedSkills\.every\(\(name\) => present\.has\(name\)\)/);
+  assert.match(
+    readSource(join('src', 'agents', 'dsh-patch.ts')),
+    /skillsTreeMatches\(PLUGIN_ROOT, shared\.expectedSkills\)/,
+    'the DSH package-root candidate stays bound in the dsh row section',
+  );
   assert.doesNotMatch(setup, /serverSkillCount\(dir\) >= 6/, 'count-floor doctor check must be gone');
   // doctor's native-dir check is the receipt-gated one: core names warn only
   // outside a dir a sync row manages, and a manifest without pack info warns
   // instead of crashing the diagnostic run.
   assert.match(payloadModule, /function tryCoreSkillNames\(\)/);
-  assert.match(setup, /const corePack = tryCoreSkillNames\(\);/);
-  assert.match(setup, /managedHere && corePack\.has\(entry\.name\)/);
+  assert.match(setup, /corePack: tryCoreSkillNames\(\)/);
+  assert.match(readSource(join('src', 'doctor-native.ts')), /managedHere && corePack\.has\(entry\.name\)/);
   // The byte-equality comparator lives in the shared zod-free lib (doctor
   // and the install tests import the same one), not as a setup-cli local.
-  assert.match(setup, /import \{ skillTreeEquals \} from '\.\/lib\/skill-tree\.ts';/);
+  assert.match(readSource(join('src', 'doctor-native.ts')), /import \{ skillTreeEquals \} from '\.\/lib\/skill-tree\.ts';/);
   const skillTreeSrc = readSource(join('src', 'lib', 'skill-tree.ts'));
   assert.match(skillTreeSrc, /export function skillTreeEquals\(a: string, b: string\): boolean/);
   // help text documents the target
@@ -326,6 +332,29 @@ test('PAYLOAD_TARGETS is the single id→dir map for payload targets', () => {
     if (id === 'codex') continue;
     assert.match(table[0], new RegExp(`\\bid: '${id}',`), `${id} must have a PAYLOAD_TARGETS row`);
   }
+  // Table-driven doctor shape: every payload row binds a doctor section, so
+  // a new row cannot appear without its payload-triple + native-freshness
+  // coverage (the atomcode undici / openclaw-wide drift class, now pinned
+  // per row). The generic rows bind payloadDoctorSection; agent-owned
+  // overrides must come from the owning agents module (dsh's package-root
+  // candidate is the precedent).
+  const rows = table[0]!.split(/\n {2}\},/);
+  assert.ok(rows.length >= 10, `expected the payload rows, found ${rows.length}`);
+  for (const row of rows) {
+    const id = /\bid: '([a-z-]+)',/.exec(row)?.[1];
+    if (!id) continue;
+    const binding = /doctor: ([A-Za-z]+),/.exec(row)?.[1];
+    assert.ok(binding, `${id} row must bind a doctor section`);
+    if (id === 'dsh') {
+      assert.equal(binding, 'dshPayloadDoctorSection', 'the dsh row binds its agent-owned section');
+    } else {
+      assert.equal(binding, 'payloadDoctorSection', `${id} row binds the generic payload section`);
+    }
+  }
+  assert.match(readSource(join('src', 'doctor-payload.ts')), /export function payloadDoctorSection\(/);
+  assert.match(readSource(join('src', 'agents', 'dsh-patch.ts')), /export function dshPayloadDoctorSection\(/);
+  // The reporter contract is the sections' only emission path.
+  assert.match(readSource(join('src', 'doctor-report.ts')), /export interface DoctorReporter/);
 });
 
 test('tools.ts no longer probes hermes/atomcode native skill dirs', () => {

@@ -79,8 +79,6 @@ import {
 } from './hcloud-probe.ts';
 import { asText } from './lib/as-text.ts';
 import { asRecord } from './lib/as-record.ts';
-import { skillTreeEquals } from './lib/skill-tree.ts';
-import { readNativeReceipt, marketplacePayloadTree } from './lib/native-receipt.ts';
 import { PACK_IDS, type PackId } from './lib/pack-types.ts';
 import {
   DEPENDENCIES,
@@ -103,16 +101,20 @@ import {
   mcpServerInstalled,
   nativeSkillDirs as nativeSkillDirsOf,
   nativeSyncDirs as nativeSyncDirsOf,
-  payloadCoreNames,
   pkgVersion,
   PLUGIN_ROOT,
   removeIfExists,
   removeOwnedSkillsFrom as removeOwnedSkillsFromIn,
-  serverSkillDirNames,
   shippedSkillRoster,
   syncNativeSkillsForTarget as syncNativeSkillsForRow,
   tryCoreSkillNames,
 } from './install-payload.ts';
+// The doctor section modules: the reporter contract, the per-row payload
+// triple + native-freshness bindings the PAYLOAD_TARGETS table carries, and
+// the stale-copy scan.
+import type { DoctorReporter } from './doctor-report.ts';
+import { payloadDoctorSection, type DoctorSharedState, type PayloadDoctorBinding } from './doctor-payload.ts';
+import { scanStaleNativeCopies } from './doctor-native.ts';
 // The --packs install-time selection policy (DEVKIT_PACKS resolution,
 // per-entry application, and the wholesale-rewrite carry value).
 import { parsePackIdList, readDevkitPacksFromJson, readDevkitPacksFromYaml, resolvePacksFlag } from './packs-policy.ts';
@@ -151,6 +153,7 @@ import {
   dshPatchBlock,
   dshPatchConfigured,
   dshPatchHasOnlyCommentsOrEmptyList,
+  dshPayloadDoctorSection,
   removeManagedDshPatchBlock,
 } from './agents/dsh-patch.ts';
 import { deployOpenCode, opencodeStatus, uninstallOpenCode } from './agents/opencode.ts';
@@ -1465,6 +1468,12 @@ type PayloadTarget = {
   // officeace's native surface is the capabilities.json registration
   // 4a030c0 removed.
   nativeSkills?: () => string[];
+  // The row's doctor section: the payload triple (server/undici/safety/
+  // skills-tree set-equality) plus the receipt-gated native-freshness
+  // checks. Every row binds one — the generic payloadDoctorSection, or an
+  // agent-owned override (the dsh row's package-root candidate) — so a new
+  // row cannot appear without its doctor coverage.
+  doctor: PayloadDoctorBinding;
 };
 
 const PAYLOAD_TARGETS: readonly PayloadTarget[] = [
@@ -1475,6 +1484,7 @@ const PAYLOAD_TARGETS: readonly PayloadTarget[] = [
     update: () => deployOpenCode('update'),
     hint: 'MCP 工具在重启 OpenCode 会话后才生效。',
     nativeSkills: () => [opencodeSkillsDir()],
+    doctor: payloadDoctorSection,
   },
   {
     id: 'codex-desktop',
@@ -1482,6 +1492,7 @@ const PAYLOAD_TARGETS: readonly PayloadTarget[] = [
     dir: codexDesktopPluginsDir,
     update: () => deployCodexDesktop('update'),
     hint: 'MCP 工具在重启 Codex Desktop 会话后才生效。',
+    doctor: payloadDoctorSection,
   },
   {
     id: 'codearts',
@@ -1492,6 +1503,7 @@ const PAYLOAD_TARGETS: readonly PayloadTarget[] = [
     // Mirrors registerCodeartsMcp: user level plus the project dir of the
     // tree the install runs in.
     nativeSkills: () => [codeartsSkillsDir(), codeartsProjectSkillsDir()],
+    doctor: payloadDoctorSection,
   },
   {
     id: 'codearts-work',
@@ -1500,6 +1512,7 @@ const PAYLOAD_TARGETS: readonly PayloadTarget[] = [
     update: () => deployCodeArtsWork('update'),
     hint: 'MCP 工具在重启 CodeArts Work 会话后才生效。',
     nativeSkills: () => [codeartsWorkSkillsDir()],
+    doctor: payloadDoctorSection,
   },
   {
     id: 'workbuddy',
@@ -1508,6 +1521,7 @@ const PAYLOAD_TARGETS: readonly PayloadTarget[] = [
     update: () => deployWorkBuddy('update'),
     hint: 'MCP 工具在重启 WorkBuddy 会话后才生效。',
     nativeSkills: () => [workbuddySkillsDir()],
+    doctor: payloadDoctorSection,
   },
   {
     id: 'dsh',
@@ -1516,6 +1530,9 @@ const PAYLOAD_TARGETS: readonly PayloadTarget[] = [
     update: () => deployDsh('update'),
     hint: 'Restart the DSH session for changes to take effect.',
     nativeSkills: () => [dshSkillsDir()],
+    // The dsh row's own binding: the generic triple plus the DSH
+    // package-root skills-tree candidate (agents/dsh-patch.ts).
+    doctor: dshPayloadDoctorSection,
   },
   {
     id: 'officeace',
@@ -1523,6 +1540,7 @@ const PAYLOAD_TARGETS: readonly PayloadTarget[] = [
     dir: officeacePluginsDir,
     update: updateOfficeAce,
     hint: '打开连接器 → 我的连接器 → huaweicloud-devkit → 连接 → 回到对话 → 输入框开启连接器',
+    doctor: payloadDoctorSection,
   },
   {
     id: 'hermes',
@@ -1531,6 +1549,7 @@ const PAYLOAD_TARGETS: readonly PayloadTarget[] = [
     update: () => deployHermes('update'),
     hint: 'Restart Hermes Agent for changes to take effect.',
     nativeSkills: () => [hermesSkillsDir()],
+    doctor: payloadDoctorSection,
   },
   {
     id: 'openclaw',
@@ -1542,6 +1561,7 @@ const PAYLOAD_TARGETS: readonly PayloadTarget[] = [
     // opencode deduplicating by name across both dirs, so the overlap
     // costs no duplicate disclosure.
     nativeSkills: () => [openclawSkillsDir()],
+    doctor: payloadDoctorSection,
   },
   {
     id: 'atomcode',
@@ -1550,6 +1570,7 @@ const PAYLOAD_TARGETS: readonly PayloadTarget[] = [
     update: () => deployAtomCode('update'),
     hint: 'Restart the AtomCode session for changes to take effect.',
     nativeSkills: () => [atomcodeSkillsDir()],
+    doctor: payloadDoctorSection,
   },
 ];
 
@@ -1595,16 +1616,45 @@ async function cmdDoctor(): Promise<void> {
     }
   }
 
+  // The reporter every extracted doctor section emits through — the single
+  // source of the [PASS]/[WARN]/[INFO]/[SKIP] line shapes and the counters.
+  const ctx: DoctorReporter = {
+    check,
+    pass: (line) => {
+      console.log(`  \x1b[32m[PASS]\x1b[0m ${line}`);
+      pass++;
+    },
+    warn: (line) => {
+      console.log(`  \x1b[33m[WARN]\x1b[0m ${line}`);
+      warn++;
+    },
+    info: (line) => {
+      console.log(`  \x1b[36m[INFO]\x1b[0m ${line}`);
+    },
+    skip: (line) => {
+      console.log(`  \x1b[33m[SKIP]\x1b[0m ${line}`);
+    },
+  };
+
   // Node.js — the same 22.18 floor engines declares (the build chain's
   // type-stripping requirement); a 22.0-22.17 Node must FAIL, not PASS.
   const nodeParts = process.versions.node.split('.').map(Number);
   const nodeOk = nodeParts[0]! > 22 || (nodeParts[0]! === 22 && nodeParts[1]! >= 18);
   check('Node.js >= 22.18', nodeOk, 'Run: nvm install 22.18 && nvm use 22.18');
 
-  // MCP server — derived from PAYLOAD_TARGETS (one membership table for
-  // every payload check in this doctor run).
-  const payloadDirs = PAYLOAD_TARGETS.map((target) => target.dir());
-  const installedPayload = PAYLOAD_TARGETS.find((target) => mcpServerInstalled(target.dir()));
+  // MCP server — derived from the per-row doctor bindings (one membership
+  // table for every payload check in this doctor run). The bindings run the
+  // pure triple probes here; their native-freshness halves run late, after
+  // the skills-tree check, exactly where their warnings printed inline
+  // before the extraction.
+  const shared: DoctorSharedState = {
+    expectedSkills: shippedSkillRoster(),
+    corePack: tryCoreSkillNames(),
+    owned: devkitOwnedSkillNames(),
+    syncDirs: nativeSyncDirs(),
+  };
+  const sections = PAYLOAD_TARGETS.map((row) => row.doctor(row, shared));
+  const installedPayload = PAYLOAD_TARGETS.find((_target, index) => sections[index]!.triple.server);
   const mcpOk = installedPayload !== undefined;
   const mcpTarget = installedPayload ? installedPayload.label : '';
   check('MCP server installed', mcpOk, 'Run: npx huaweicloud-devkit install');
@@ -1613,10 +1663,10 @@ async function cmdDoctor(): Promise<void> {
     check(`MCP server can start (${mcpTarget})`, true, '');
   }
 
-  const undiciOk = payloadDirs.some((d) => existsSync(join(d, 'node_modules', 'undici')));
+  const undiciOk = sections.some((section) => section.triple.undici);
   check('Runtime deps (undici) installed', undiciOk, 'Run: npx huaweicloud-devkit install');
 
-  const safetyOk = payloadDirs.some((d) => existsSync(join(d, 'safety', 'policy.json')));
+  const safetyOk = sections.some((section) => section.triple.safety);
   check('Safety policy installed', safetyOk, 'Run: npx huaweicloud-devkit install');
 
   // Secret vault — custody tier and inventory only; doctor never decrypts.
@@ -1942,16 +1992,9 @@ async function cmdDoctor(): Promise<void> {
   // Skills are server data disclosed over MCP: the health signal is the
   // tree sitting in an installed plugin dir, never agent-native dirs. The
   // tree check is decoupled from the bundled server (the Hermes clone flow
-  // --skip-mcp-server ships skills without dist), and accepts the running
-  // package root when the DSH npm-in-profile patch is configured (that
-  // layout resolves skills from the package root).
-  const skillsTreeDirs = [...payloadDirs];
-  // serverSkillDirNames() appends 'skills' to its argument, so the DSH
-  // package-root candidate is PLUGIN_ROOT itself — pushing the skills
-  // subdir would probe PLUGIN_ROOT/skills/skills, which never exists (the
-  // pre-fix shape: the fallback was inert and a DSH-only healthy install
-  // false-FAILED here).
-  if (dshPatchConfigured()) skillsTreeDirs.push(PLUGIN_ROOT);
+  // --skip-mcp-server ships skills without dist), and the DSH
+  // npm-in-profile package root joins the candidates through the dsh row's
+  // doctor binding (that layout resolves skills from the package root).
   // Set equality against the shipped manifest, not a count floor and not a
   // one-direction subset: verifySkillTree (boot) rejects missing, hollow
   // (name present, SKILL.md absent), and unclaimed entries, so doctor must
@@ -1959,195 +2002,21 @@ async function cmdDoctor(): Promise<void> {
   // is the same shared predicate the boot guard uses. The expected roster
   // is a file the build wrote beside the tree, so a candidate listing can
   // never trivially validate itself.
-  const expectedSkills = shippedSkillRoster();
-  const skillsTreeOk =
-    expectedSkills.length > 0 &&
-    skillsTreeDirs.some((dir) => {
-      const present = new Set(serverSkillDirNames(dir));
-      return present.size === expectedSkills.length && expectedSkills.every((name) => present.has(name));
-    });
+  const skillsTreeOk = shared.expectedSkills.length > 0 && sections.some((section) => section.triple.skillsTree);
   check(
     'Skills tree (server data; MCP catalog + stdio skillRoot instructions)',
     skillsTreeOk,
     'Run: npx huaweicloud-devkit install (from a git checkout: npm run build first)',
   );
 
-  // Native disclosure: the core meta-skills may sit natively only in a dir a
-  // PAYLOAD_TARGETS sync row manages (receipt present — a torn receipt file
-  // still proves placement); any other owned name — residue, a hand-placed
-  // copy, or a foreign dir like officeace's — warns, as do remembered names
-  // the core set no longer claims. Installed targets additionally get
-  // freshness: the native copies must equal the payload the target actually
-  // runs.
-  const corePack = tryCoreSkillNames();
-  if (corePack === null) {
-    warn++;
-    console.log(
-      '  \x1b[33m[WARN]\x1b[0m skills tree or manifest lacks usable core-pack info — re-run: npx huaweicloud-devkit install',
-    );
+  // Native disclosure: the stale-copy scan over every native dir plus the
+  // per-row receipt-gated freshness checks, all through the reporter (the
+  // extracted bodies live in src/doctor-native.ts and the row bindings).
+  if (shared.corePack === null) {
+    ctx.warn('skills tree or manifest lacks usable core-pack info — re-run: npx huaweicloud-devkit install');
   } else {
-    const owned = devkitOwnedSkillNames();
-    const syncDirs = nativeSyncDirs();
-    let staleNative = 0;
-    for (const dir of nativeSkillDirs()) {
-      if (!existsSync(dir)) continue;
-      const receipt = readNativeReceipt(dir);
-      if (receipt?.kind === 'corrupt') {
-        warn++;
-        // For the DSH native dir the plain `install` remediation is the
-        // layout-converting one (it would layer a plugin-dir install over a
-        // possibly-live marketplace package): the profile's package install
-        // rewrites the receipt too, so both remediations are named. Every
-        // other dir was only ever written by this CLI.
-        const dshHint =
-          `  \x1b[33m[WARN]\x1b[0m unreadable native receipt in ${dir} — ` +
-          (dir === dshSkillsDir()
-            ? "re-run the DSH profile's package install or npx huaweicloud-devkit install (either rewrites it)"
-            : 're-run: npx huaweicloud-devkit install');
-        console.log(dshHint);
-      }
-      const remembered = receipt?.kind === 'ok' ? new Set(receipt.receipt.names) : new Set<string>();
-      const managedHere = syncDirs.has(dir) && receipt !== null;
-      try {
-        for (const entry of readdirSync(dir, { withFileTypes: true })) {
-          if (!entry.isDirectory()) continue;
-          if (owned.has(entry.name)) {
-            if (managedHere && corePack.has(entry.name)) continue;
-            staleNative++;
-          } else if (managedHere && remembered.has(entry.name) && !corePack.has(entry.name)) {
-            // A retired core skill living only in the receipt: cleanup
-            // deletes it on the next install; doctor must see it too.
-            staleNative++;
-          }
-        }
-      } catch {
-        // unreadable dir cannot confirm stale copies
-      }
-    }
-    if (staleNative > 0) {
-      warn++;
-      console.log(
-        `  \x1b[33m[WARN]\x1b[0m ${staleNative} stale native skill cop${staleNative === 1 ? 'y' : 'ies'} from an older or hand-made install — re-run: npx huaweicloud-devkit install`,
-      );
-    }
-    for (const row of PAYLOAD_TARGETS) {
-      if (!row.nativeSkills) continue;
-      for (const dir of row.nativeSkills()) {
-        const receipt = readNativeReceipt(dir);
-        // The marketplace layout (DSH npm-in-profile): the postinstall —
-        // the only actor that runs in that layout — records it in the
-        // receipt together with the package root it serves from. A detector
-        // built on patch-file markers would not fire for real marketplace
-        // installs: the bundled cordis.patch.yml DSH consumes never carries
-        // the CLI-managed block's markers. The row guard matches the
-        // writer: only the dsh row's dir can legitimately carry this
-        // layout, so a hand-copied receipt elsewhere earns nothing.
-        const packageRoot =
-          receipt?.kind === 'ok' &&
-          row.id === 'dsh' &&
-          receipt.receipt.layout === 'package-root' &&
-          typeof receipt.receipt.packageRoot === 'string'
-            ? receipt.receipt.packageRoot
-            : null;
-        const installed = mcpServerInstalled(row.dir()) || packageRoot !== null;
-        if (!existsSync(dir)) {
-          // Absent without a receipt stays silent: the codearts project dir
-          // only exists for the tree the install ran in.
-          if (receipt !== null) {
-            warn++;
-            console.log(
-              `  \x1b[33m[WARN]\x1b[0m Native core skills (${row.label}): receipt present but the dir is gone — re-run: npx huaweicloud-devkit install --target ${row.id}`,
-            );
-          }
-          continue;
-        }
-        if (!installed) {
-          // A corrupt receipt erases the layout knowledge this branch needs:
-          // the marketplace would be false-orphaned and the remediation
-          // would layer a second install — the corrupt-receipt warning in
-          // the scan above carries the remediation, so this branch speaks
-          // only for readable receipts. The hedge fires when the receipt
-          // names a maintainer this run cannot resolve: a layout-less
-          // receipt (written before the layout field existed) or a
-          // marketplace receipt whose root was dropped as malformed —
-          // less layout knowledge must never earn a MORE confident
-          // prescription. The marketplace half of the hedge is scoped to
-          // the dsh row: the postinstall only ever writes ~/.dsh/skills,
-          // so for every other row a layout-less receipt can only be a
-          // plugin-dir install and the precise remediation is correct.
-          if (receipt?.kind === 'ok' && row.id === 'dsh' && receipt.receipt.layout !== 'plugin-dir') {
-            warn++;
-            console.log(
-              `  \x1b[33m[WARN]\x1b[0m Native core skills (${row.label}) present without a plugin-dir MCP server and no resolvable layout — the marketplace install (DSH profile package) is also a possible owner; if it is stale, re-run the DSH profile's package install or npx huaweicloud-devkit install --target ${row.id}`,
-            );
-          } else if (receipt?.kind === 'ok') {
-            warn++;
-            console.log(
-              `  \x1b[33m[WARN]\x1b[0m Native core skills (${row.label}) present without an installed MCP server — re-run: npx huaweicloud-devkit install --target ${row.id}`,
-            );
-          }
-          continue;
-        }
-        // The honest comparator is the payload the target actually runs —
-        // never this CLI's tree, or `npx huaweicloud-devkit@latest doctor`
-        // would false-report drift on an older healthy payload. The
-        // marketplace layout resolves its payload from the recorded package
-        // root; the plugin-dir layout reads the installed plugin dir. A
-        // remediation is only honest if the command it names can run on
-        // that layout, so the marketplace points at the package upgrade
-        // (update --target would refuse: no plugin dir to update).
-        let payloadTree: string | null;
-        let fixHint: string;
-        if (packageRoot !== null) {
-          // packageRoot is control-character-stripped at READ time in the
-          // shared receipt module (the single entry point for the untrusted
-          // field), so every echo here is already forgery-safe.
-          const shownRoot = packageRoot;
-          const tree = marketplacePayloadTree(packageRoot);
-          payloadTree = existsSync(tree) ? tree : null;
-          fixHint = 'upgrade the huaweicloud-devkit package inside the DSH profile';
-          if (payloadTree === null) {
-            warn++;
-            console.log(
-              `  \x1b[33m[WARN]\x1b[0m Native core skills (${row.label}): the recorded package root ${shownRoot} no longer carries a skills tree — reinstall the huaweicloud-devkit package in the DSH profile`,
-            );
-            continue;
-          }
-        } else if (existsSync(join(row.dir(), 'skills'))) {
-          payloadTree = join(row.dir(), 'skills');
-          fixHint = `re-run: npx huaweicloud-devkit update --target ${row.id}`;
-        } else {
-          // Installed (dist present) but no skills tree: the payload is
-          // broken. The global skills-tree check is a some() across every
-          // candidate dir, so a healthy target can mask this one — name it
-          // here instead of silently skipping freshness.
-          warn++;
-          console.log(
-            `  \x1b[33m[WARN]\x1b[0m Native core skills (${row.label}): the installed payload has no skills tree — re-run: npx huaweicloud-devkit install --target ${row.id}`,
-          );
-          continue;
-        }
-        // The checked roster comes from the payload's own manifest, so a
-        // newer doctor CLI never demands a core skill the installed payload
-        // never shipped; only an unreadable payload manifest falls back to
-        // this CLI's roster.
-        const rosterCore = payloadCoreNames(payloadTree) ?? corePack;
-        for (const name of rosterCore) {
-          const nativeCopy = join(dir, name);
-          if (!existsSync(nativeCopy)) {
-            warn++;
-            console.log(`  \x1b[33m[WARN]\x1b[0m Native core skills (${row.label}): ${name} missing — ${fixHint}`);
-            continue;
-          }
-          if (!skillTreeEquals(nativeCopy, join(payloadTree, name))) {
-            warn++;
-            console.log(
-              `  \x1b[33m[WARN]\x1b[0m Native core skills (${row.label}): ${name} diverges from the installed payload — ${fixHint}`,
-            );
-          }
-        }
-      }
-    }
+    scanStaleNativeCopies(ctx, nativeSkillDirs(), shared.corePack, shared.owned, shared.syncDirs);
+    for (const section of sections) section.nativeFreshness(ctx);
   }
 
   // Pack status — DEVKIT_PACKS is read from each installed target's MCP
