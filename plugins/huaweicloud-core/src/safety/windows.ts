@@ -1,4 +1,4 @@
-import { isHcloudToken, matchesBinName } from './tokens.ts';
+import { matchesBinName } from './tokens.ts';
 
 // Windows script-taking wrappers (`cmd /c "hcloud …"`, `cmd /k …`,
 // `powershell -Command|-c "hcloud …"`, `pwsh …`, plus .exe, path-qualified,
@@ -130,30 +130,4 @@ function windowsScriptArgAtRaw(args: string[], idx: number): string | null {
     return payloadOf(j - 1, null);
   }
   return null;
-}
-
-// cmd/PS payload words glue shell separators to the bin (`x&&hcloud`,
-// `ListServers}catch{hcloud`): split candidate tokens on separator runs
-// before the head checks, re-basing to the piece bin + the pieces and
-// tokens that follow. Tokens carrying quote characters are NOT split —
-// their separators are quote-protected argument VALUES
-// (`--description='a;hcloud;DeleteServers'`), not live command sites.
-export function hcloudPieceAt(tokens: string[], i: number): string[] | null {
-  const tok = String(tokens[i] ?? '');
-  let stream: string[];
-  if (isHcloudToken(tok)) {
-    stream = tokens.slice(i).map(String);
-  } else {
-    if (/['"]/.test(tok)) return null;
-    const pieces = tok.split(/[;&|]+/).filter(Boolean);
-    const at = pieces.findIndex((p) => isHcloudToken(p));
-    if (at < 0) return null;
-    stream = [...pieces.slice(at).map(String), ...tokens.slice(i + 1).map(String)];
-  }
-  // Drop pure-closer tokens that follow the bin (`.( 'hcloud' )`
-  // tokenizes the `)` standalone) — they would occupy the service slot
-  // and mask the operation behind them.
-  let k = 1;
-  while (k < stream.length && /^[)\]}]+$/.test(String(stream[k]))) k++;
-  return stream.slice(0, 1).concat(stream.slice(k));
 }

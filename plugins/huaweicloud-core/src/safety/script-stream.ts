@@ -5,13 +5,7 @@
 // onto these; the wrappers consult them for their fallbacks.
 
 import { splitSimpleCommand } from './shell-text.ts';
-import {
-  basenameOf,
-  COMMAND_POSITION_PREFIXES,
-  isHcloudToken,
-  SHELL_FIRST_TOKENS,
-  skipPrefixArguments,
-} from './tokens.ts';
+import { basenameOf, COMMAND_POSITION_PREFIXES, isHcloudToken, SHELL_FIRST_TOKENS } from './tokens.ts';
 import { windowsScriptArgAt } from './windows.ts';
 
 // A shell/eval token that actually heads a SCRIPT command (bash -c
@@ -62,25 +56,40 @@ export function evalScriptStream(current: string[]): string[] {
   return [...scriptTokens, ...current.slice(2).map(String)];
 }
 
-// cmd.exe's `start` consumes an optional quoted TITLE before the child
-// (`start "t" hcloud …`); quoting is lost in the token stream, so when the
-// token after start's flags is not itself a command head and the one after
-// it is, the title is skipped (fail-closed toward the child interpretation).
-// Null: no title to skip — the caller falls through to prefix stripping.
-export function startTitleRebase(current: string[]): string[] | null {
-  const afterFlags = skipPrefixArguments('start', current.slice(1));
-  if (afterFlags.length > 1) {
-    const isHeadish = (tokens: string[], at: number): boolean => {
-      const tok = String(tokens[at] ?? '').toLowerCase();
-      return (
-        isHcloudToken(String(tokens[at] ?? '')) ||
-        windowsScriptArgAt(tokens, at) !== null ||
-        COMMAND_POSITION_PREFIXES.has(tok) ||
-        SHELL_FIRST_TOKENS.has(tok) ||
-        tok === 'eval'
-      );
-    };
-    if (!isHeadish(afterFlags, 0) && isHeadish(afterFlags, 1)) return afterFlags.slice(1);
+export function segmentScriptOf(tokens: string[]): string | null {
+  if (!tokens.length) return null;
+  const first = String(tokens[0] || '').toLowerCase();
+  const base = basenameOf(String(tokens[0] || '')).toLowerCase();
+  const shellLike = SHELL_FIRST_TOKENS.has(first) || (base !== first && SHELL_FIRST_TOKENS.has(base));
+  // `-c`, `-lc`, `-xc` … any option cluster ending in c takes the
+  // script; the script argument's `\"` pairs are span-internal escapes,
+  // resolved at this consumption point. When the script word is ITSELF
+  // a bin or wrapper head (`bash -c hcloud ECS …` — the flattened join
+  // of the real `bash -c "hcloud ECS …"`), the tail tokens belong to
+  // the same command: return them joined, or the nested scan sees a
+  // bare bin and hits the empty-args guard on a legitimate read.
+  const isScriptFlag = /^-[a-z]*c$/i.test(String(tokens[1] || ''));
+  const resolveSpan = (s: string): string => String(s).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+  if (shellLike && isScriptFlag && tokens[2]) {
+    const script = resolveSpan(tokens[2]);
+    const scriptHeadTok = splitSimpleCommand(script)[0];
+    const headIsCommandish =
+      isHcloudToken(String(scriptHeadTok ?? '')) ||
+      SHELL_FIRST_TOKENS.has(String(scriptHeadTok ?? '').toLowerCase()) ||
+      String(scriptHeadTok ?? '').toLowerCase() === 'eval' ||
+      COMMAND_POSITION_PREFIXES.has(String(scriptHeadTok ?? '').toLowerCase());
+    if (headIsCommandish && tokens.length > 3) {
+      return [script, ...tokens.slice(3).map(String)].join(' ');
+    }
+    return script;
   }
-  return null;
+  // eval evaluates the JOIN of all its arguments — the script string is
+  // the whole tail, not just the first word.
+  if (first === 'eval' && tokens[1]) {
+    return tokens
+      .slice(1)
+      .map((t) => resolveSpan(t))
+      .join(' ');
+  }
+  return windowsScriptArgAt(tokens, 0);
 }

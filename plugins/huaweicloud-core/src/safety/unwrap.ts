@@ -1,4 +1,4 @@
-import { evalScriptStream, shellScriptStream, startTitleRebase } from './script-stream.ts';
+import { evalScriptStream, shellScriptStream } from './script-stream.ts';
 import { splitSimpleCommand } from './shell-text.ts';
 import { unwrapSecretExecWrapper } from './secret-exec.ts';
 import { unwrapSkillQualityCli } from './skill-quality-cli.ts';
@@ -11,7 +11,8 @@ import {
   SHELL_FIRST_TOKENS,
   skipPrefixArguments,
 } from './tokens.ts';
-import { hcloudPieceAt, windowsScriptArgAt } from './windows.ts';
+import { windowsScriptArgAt } from './windows.ts';
+import { hcloudPieceAt, startTitleRebase } from './windows-rebase.ts';
 
 // Unwrap with the windows-payload context exposed: the segment scanner
 // needs to know the stream passed through a cmd/powershell payload (every
