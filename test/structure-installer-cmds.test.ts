@@ -116,6 +116,14 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
     .filter((name) => name.endsWith('.ts'))
     .sort((a, b) => a.localeCompare(b));
   assert.ok(agentModules.length >= 2, `expected the agents module family, found: ${agentModules.join(', ')}`);
+  // And for the safety family: the internal split of safety-policy.ts. The
+  // family feeds BOTH graphs — the hook's Node require path (unbundled
+  // dist/safety-policy.js) and the bundled mcp-server — so every module
+  // stays zod-free and SDK-free exactly like the face it was split from.
+  const safetyModules = (readdirSync(join(pluginRoot, 'src', 'safety'), { recursive: true }) as string[])
+    .filter((name) => name.endsWith('.ts'))
+    .sort((a, b) => a.localeCompare(b));
+  assert.ok(safetyModules.length >= 5, `expected the safety module family, found: ${safetyModules.join(', ')}`);
   // These compile into the unbundled dist/setup-cli.js graph, where only
   // undici exists at runtime: no zod, no SDK, ever.
   const guarded = [
@@ -125,6 +133,7 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
     ),
     ...authModules.map((name) => [`src/auth/${name}`, readSource(join('src', 'auth', name))] as const),
     ...agentModules.map((name) => [`src/agents/${name}`, readSource(join('src', 'agents', name))] as const),
+    ...safetyModules.map((name) => [`src/safety/${name}`, readSource(join('src', 'safety', name))] as const),
     ['src/codearts-sandbox.ts', codeartsSandbox] as const,
     ['src/lib/dep-resolve.ts', depResolve] as const,
     ['src/targets.ts', targetsModule] as const,
