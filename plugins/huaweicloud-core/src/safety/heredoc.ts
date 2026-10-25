@@ -98,4 +98,3 @@ export function scanHeredocStart(text: string, i: number, separators: Set<string
   if (delim && closed) return { delim, delimQuote, next: j };
   return null;
 }
-
