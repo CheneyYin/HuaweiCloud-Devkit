@@ -1,5 +1,6 @@
 // Service region descriptor, migrated verbatim from the inline `known` table
-// in tools.ts getRegionalAvailability. TS-as-data, same as PACK_IDS/PACK_OF.
+// in the former tools.ts getRegionalAvailability (the handler now lives in
+// services/availability.ts). TS-as-data, same as PACK_IDS/PACK_OF.
 //
 // Guarantee scope, stated honestly:
 //   - the `satisfies` check pins only the VALUE shape (every entry is a

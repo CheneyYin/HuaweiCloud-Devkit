@@ -4,12 +4,12 @@ import test from 'node:test';
 import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
 import { SERVICE_REGIONS } from '../plugins/huaweicloud-core/src/services/regions.ts';
 
-// The 17-service list of the pre-migration `known` table in tools.ts
-// getRegionalAvailability, order included. The hardcode is the migration
-// voucher and the only pin on key-set completeness: the `satisfies` check on
-// SERVICE_REGIONS covers the value shape only (Record<string, ...> is
-// open-keyed), so this reconciliation is what fails when a service is added,
-// dropped, or renamed in the descriptor.
+// The 17-service list of the pre-migration `known` table in the former
+// tools.ts getRegionalAvailability, order included. The hardcode is the
+// migration voucher and the only pin on key-set completeness: the
+// `satisfies` check on SERVICE_REGIONS covers the value shape only
+// (Record<string, ...> is open-keyed), so this reconciliation is what
+// fails when a service is added, dropped, or renamed in the descriptor.
 const EXPECTED_SERVICES = [
   'ecs',
   'obs',

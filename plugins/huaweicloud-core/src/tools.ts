@@ -1,3 +1,11 @@
+// The callTool dispatch shell and the re-export face of the former tools
+// monolith, split along knowledge lines for the jscpd complex-file bar
+// (cx < 50 per file; see REPORT.md for the module map). The knowledge
+// modules live behind the imports below; this file keeps the dispatch
+// closure (pack map + core switch + never-guard), the numeric-arg
+// normalization, the trace seam, the ToolArgs/CallToolOptions contracts,
+// and every exported name its importers (mcp-protocol, tests, scripts)
+// already target — same names, same paths, same behavior.
 import { evaluateArtifacts, evaluateCommandRisk, evaluateDeployPlan, type RiskEvaluation } from './risk-rule-engine.ts';
 import { classifyTextCommand } from './safety-policy.ts';
 import { trackToolInvoke, trackSkillRetrieve } from './telemetry/telemetry.ts';

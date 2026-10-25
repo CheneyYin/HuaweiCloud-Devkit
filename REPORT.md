@@ -136,12 +136,13 @@ Measured with arrows counted, that grouping could not fit under cx 50, so:
 3. `2f02dda` — refactor(tools): extract the capability catalog and session pack configuration
 4. `d8a1daa` — refactor(tools): extract the skills-serving family into skill-disclosure.ts and search-docs.ts
 5. `b33f0f7` — refactor(tools): extract explain-error, the telemetry invoke value, regional availability, and the tree boot guard
-6. (this commit) — docs: AGENTS.md module map + stale test comments + REPORT.md
+6. `2ecee6c` — docs: tools-split module map, stale comment fixes, and the wave report
+7. (this commit) — final interrogate sweep: three stale location comments, the tools.ts module header, report round count
 
 ## Interrogate rounds
 
-Six execute→interrogate→fix rounds (one per unit), plus a final stack-wide pass.
-Findings caught and fixed by interrogation:
+Seven execute→interrogate→fix rounds (one per unit plus a final stack-wide
+sweep over a8b484c..HEAD). Findings caught and fixed by interrogation:
 
 - Unit 2: a challenge-consumption comment sentence duplicated into both
   `dispatchTool` and `enforceVendorGate` — trimmed from the call site (the
@@ -156,6 +157,21 @@ Findings caught and fixed by interrogation:
   write and an unused `ToolArgs` import — both fixed before commit.
 - Unit 5: my own Unit-4 import-shape pin (exact import list) went stale when
   `verifySkillTree` joined the import — updated same-commit.
+- Final sweep: three stale location comments naming tools.ts as the home of
+  moved code (UPDATE_TOOLS derivation in structure-packs, the `known`-table
+  provenance in services/regions.ts and service-regions.test.ts) — retargeted
+  to the current homes; tools.ts gained the module header every other new
+  module carries.
+
+The final sweep also verified, mechanically: every moved function body
+byte-identical to a8b484c (the only code delta in the whole stack is
+dispatchTool's gate body → the `enforceVendorGate` call); the full export face
+preserved (declarations became same-name re-exports); `__dirname` present in
+exactly one new place (skill-disclosure.ts, ROOT-level); the SDK imported only
+by the doctrine trio; and the release artifact itself — the spawned
+`dist/mcp-server.js` bundle — serving `list_skills` with `skillRoot` resolved
+to `<plugin-root>/skills`, proving the depth-safety end-to-end through the
+flattened `import.meta.url`.
 
 ## Deliberately NOT done
 

@@ -100,8 +100,9 @@ test('update pack registers version-update tools; registry carries the central d
   assert.match(tools, /PACK_TOOL_HANDLERS\[name\]\(args, opts\)/);
 
   // Behavioral lockstep: the pack tool list equals the PACK_OF ownership for
-  // 'update'. Descriptions are derived from UPDATE_TOOLS in tools.ts itself,
-  // so no byte-equality pin is needed here anymore.
+  // 'update'. Descriptions are derived from UPDATE_TOOLS in
+  // tool-definitions.ts's packDescription, so no byte-equality pin is needed
+  // here anymore.
   const ownedByUpdate = (Object.keys(PACK_OF) as Array<keyof typeof PACK_OF>).filter(
     (tool) => PACK_OF[tool] === 'update',
   );
