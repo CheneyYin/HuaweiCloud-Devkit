@@ -156,6 +156,7 @@ export const callTool = (name: string, args: Record<string, unknown>) => ({
 });
 
 // Core-pack tools that must always be present, including the pack meta tools
-// (both registered in the core pack). Keep in sync with tools.ts
-// TOOL_DEFINITIONS and packs/registry.ts. When a new tool is added to tools.ts,
-// add it here or under its pack below.
+// (both registered in the core pack). Keep in sync with tool-definitions.ts
+// TOOL_DEFINITIONS (re-exported by tools.ts) and packs/registry.ts. When a
+// new tool is added to tool-definitions.ts, add it here or under its pack
+// below.

@@ -1,193 +1,176 @@
-# Wave 4 — cmdDoctor table-driven refactor: REPORT
+# REPORT — tools.ts modularization (bundled-graph-safe)
 
-Branch `doctor-refactor`, stacked on jscpd@d1833ef. 12 commits, all gates
-green at every commit, doctor output pinned byte-for-byte throughout.
+Branch `tools-split`, stacked on a8b484c. Goal: `plugins/huaweicloud-core/src/tools.ts`
+(1690 lines, jscpd cx 269) below the complex-file bar (cx < 50) via an internal
+module split that keeps the bundled mcp-server graph working identically.
 
-## Success criteria
+## The cx metric (measured, not assumed)
 
-| Criterion          | Target        | Measured (final)                                           |
-| ------------------ | ------------- | ---------------------------------------------------------- |
-| Every touched file | cx < 50       | max 48 (`agents/codex.ts`, `agents/officeace-registry.ts`) |
-| `setup-cli.ts`     | cx < 400      | **379** (from 879; 3334 → 1560 lines)                      |
-| Gates              | all green     | see below                                                  |
-| Behavior           | byte-for-byte | goldens a/b/c exact at every commit                        |
+jscpd's `--complexity` cx is per-file cyclomatic-ish complexity:
+`1 + count(if, else, for, while, case, catch, &&, ||, ??, ?., ternary, arrow function)`
+(comments and strings excluded; verified empirically — a file of N `if`s
+measures cx N+1, 200 straight-line statements measure cx 1, and three arrow
+constants measure cx 4). **Arrow callbacks count**, which the original
+grouping estimates missed: the first capability-catalog cut measured cx 70,
+not the estimated 38. That measurement forced two boundary adaptations (see
+below).
 
-## Per-file final cx (measured with `npx jscpd <file> --complexity --reporters ai`)
+## Final per-file cx (measured with `npx jscpd <file> --complexity --reporters ai`)
+
+| File | Lines | cx | Role |
+| --- | --- | --- | --- |
+| `src/tools.ts` | 295 | 43 | dispatch shell + re-export face (was 1690 / cx 269) |
+| `src/skill-disclosure.ts` | 242 | 47 | SKILLS_ROOT, verifySkillTree, retrieve_skill, list_skills, REFERENCE_CAP, referenceFilenames |
+| `src/capability-catalog.ts` | 418 | 40 | service_catalog, list_packs, pack_info, SKILL_OWNER, pack-refusal helpers |
+| `src/explain-error.ts` | 194 | 36 | explain_error |
+| `src/telemetry/invoke-value.ts` | 47 | 34 | the telemetry invoke-value derivation callTool records |
+| `src/packs-configure.ts` | 104 | 30 | packs_configure (the one mutating pack tool) |
+| `src/search-docs.ts` | 64 | 21 | search_docs |
+| `src/services/availability.ts` | 47 | 8 | get_regional_availability (beside SERVICE_REGIONS in services/regions.ts) |
+| `src/vendor-gate.ts` | 103 | 7 | VENDOR_GATED_TOOLS, gate/challenge messages, challenge state, enforceVendorGate |
+| `src/tool-definitions.ts` | 294 | 4 | TOOL_DEFINITIONS_LITERALS, packDescription, ToolName/ToolDefinition/TOOL_DEFINITIONS |
+
+Every touched test/guard file also measures below the bar (max:
+tools.test.ts cx 45, unchanged; structure-packs.test.ts cx 40 after retargets).
+Every moved function body was verified byte-identical against its git-HEAD
+source (modulo the added `export` keyword) — mechanically, per commit.
+
+## Module map (runtime value edges, no cycles)
 
 ```
- 379  src/setup-cli.ts                     (was 879)
-  48  src/agents/codex.ts                  (was 90)
-  48  src/agents/officeace-registry.ts     (new, split out of officeace.ts)
-  47  src/agents/codex-desktop.ts          (new, split out of codex.ts)
-  47  src/agents/hermes-hooks.ts           (new, split out of hermes.ts)
-  44  src/agents/workbuddy.ts              (was 39, + candidate)
-  44  src/agents/officeace.ts              (was 121)
-  43  src/agents/officeace-sqlite.ts       (new, + packs writer)
-  43  src/officeace-paths.ts               (was ~15, + path family)
-  42  src/agents/hermes.ts                 (was 140)
-  42  src/agents/dsh-patch.ts              (new, split out of dsh.ts + binding)
-  42  src/doctor-native.ts                 (new)
-  41  src/proxy/cli.ts                     (new)
-  39  src/mcp-config-io.ts                 (was 37, + manifest writer)
-  39  src/agents/opencode-config.ts        (new, split out of opencode.ts)
-  38  src/auth/init-cli.ts                 (new)
-  38  src/packs-cli/write-command.ts       (new)
-  37  test/structure-deps.test.ts          (touched: retargets)
-  36  src/agents/dsh.ts                    (was 73)
-  36  src/install-prompts.ts               (new)
-  36  src/agents/hermes-config.ts          (new, split out of hermes.ts)
-  34  src/packs-cli/slots.ts               (new)
-  33  src/packs-cli/writers.ts             (new)
-  32  src/agents/opencode.ts               (was 49)
-  32  src/install-plan.ts                  (new)
-  32  src/packs-cli/report.ts              (new)
-  31  src/mcp-config-io.ts — see above
-  30  src/packs-cli/commands.ts            (new)
-  29  src/agents/codearts-work.ts          (was 24, + candidate)
-  28  src/auth/cli.ts                      (new)
-  22  src/agents/atomcode.ts               (was 17, + candidate)
-  21  src/auth/hcloud-profile.ts           (new)
-  19  src/mcp-agent-config.ts              (new)
-  19  src/packs-cli/doctor.ts              (new)
-  15  src/agents/hermes-sdk.ts             (new, split out of hermes.ts)
-  15  src/agents/codearts.ts               (was 10, + candidate)
-  14  src/agents/openclaw.ts               (was 9, + candidate)
-  13  src/agents/hermes-hook-plugin.ts     (new, split out of hermes.ts)
-   6  src/doctor-payload.ts                (new)
-   1  src/doctor-report.ts                 (new)
-   1  src/lib/banner.ts                    (new)
-  20  scripts/doctor-golden.mjs            (new capture CLI)
-   8  scripts/lib/doctor-golden.mjs        (new harness, measured 20 for the CLI twin)
-   9  test/doctor-golden.test.ts           (new)
-  37/44/46/29  the four touched structure test files
+tools.ts ──> tool-definitions.ts (re-export face: TOOL_DEFINITIONS, ToolName, ToolDefinition)
+tools.ts ──> vendor-gate.ts      (re-export face: VENDOR_GATED_TOOLS; dispatch calls enforceVendorGate)
+tools.ts ──> capability-catalog.ts (serviceCatalog, listPacks, packInfo; SKILL_OWNER)
+tools.ts ──> packs-configure.ts  (configurePacks)
+tools.ts ──> skill-disclosure.ts (re-export faces: SKILLS_ROOT, verifySkillTree; retrieveSkill, listSkills)
+tools.ts ──> search-docs.ts      (searchDocs)
+tools.ts ──> explain-error.ts    (explainError)
+tools.ts ──> telemetry/invoke-value.ts (toolInvokeValue)
+tools.ts ──> services/availability.ts  (getRegionalAvailability)
+skill-disclosure.ts ──> capability-catalog.ts (SKILL_OWNER, packNotFound, packNotEnabled, packEnablementRemediation)
+search-docs.ts ──> skill-disclosure.ts (SKILLS_ROOT), capability-catalog.ts (SKILL_OWNER)
+capability-catalog.ts ──> tool-definitions.ts (TOOL_DEFINITIONS for pack_info)
 ```
 
-## Golden status
+All new modules take `ToolArgs` / `CallToolOptions` / `ToolName` from `tools.ts`
+via `import type` only — the same type-only back-edge pattern the pack modules
+and `lib/pack-types.ts` already use (no runtime cycle; eslint `import/no-cycle`
+stays at zero findings). tools.ts itself is now free of `node:fs`, `node:path`,
+and `node:url` — it derives no paths at all.
 
-All three fixtures are **byte-exact** on this machine at every commit:
-(a) empty fake HOME, (b) fake HOME after a real `install --target opencode`,
-(c) hermes + officeace markers staged (capabilities.json + dist marker +
-sqlite DEVKIT_PACKS row). No fixture degraded to structural assertions.
+## Where SKILLS_ROOT landed and why it is depth-safe
 
-Determinism contract (scripts/lib/doctor-golden.mjs, shared by the capture
-CLI and `test/doctor-golden.test.ts`): fake-HOME env per the
-doctor-helpers pattern; `HCLOUD_BIN` = node with
-`HCLOUD_BIN_ARGS_JSON` pointing at a committed `fake-hcloud.mjs` shim
-(mirrors `kooCliVersion` from package.json); the doctor run's cwd pinned to
-the fixtures dir so the shell-spawned `"<node>" configure list` resolves the
-extensionless `configure` entry (pins credentials-PASS); `PATH` = the
-fixtures dir only (pins Hermes-SDK FAIL via unreachable python3, absent
-codex attribution, and the open-mcp-gateway not-found WARN — on every
-machine, Windows included); `HW_VAULT_MASTER_KEY` = fixed 32-byte env-tier
-key (custody never probes the host keychain → the deterministic
-"Secret vault ready (env custody, 0 secret(s))" PASS);
-`HUAWEICLOUD_OPENCODE_PERMISSION_SEAM=on` at both install and doctor time.
+`SKILLS_ROOT = join(__dirname, '..', 'skills')` moved from `tools.ts` to
+**`src/skill-disclosure.ts`, a src/ROOT-level module** — the depth-safe home the
+task brief sanctions. The esbuild bundle inlines every module and flattens
+`import.meta.url` to the bundle file's own URL, so `__dirname` inside
+`dist/mcp-server.js` is `dist/` for every inlined module; the one-level climb
+resolves to the plugin root in BOTH the tsc tree (`dist/skill-disclosure.js` →
+`dist/` → one climb) and the bundle, only because `src/` and `dist/` are
+siblings under the plugin root — exactly the property `tools.ts` had at src/
+root depth. The module carries a header comment stating the constraint, and the
+retargeted structure guards pin the literal join at the new canonical home plus
+the `tools.ts` re-export face. No other `__dirname`-derived path existed in the
+split scope. The pre-existing one-climb structure guard (src subdir modules
+never climb more than one level) is untouched and green — all new subdir
+modules (`telemetry/invoke-value.ts`, `services/availability.ts`) use no
+`__dirname` at all.
 
-Documented normalization list (the ONLY accepted diffs): ANSI escapes; the
-banner's version line (pkgVersion changes width-dependent padding); the
-hcloud `Version:` line. A pkgVersion/kooCliVersion bump is absorbed; any
-other output change is a defect or a deliberate regen
-(`node scripts/doctor-golden.mjs --regen`, documented in AGENTS.md).
+## Guard retargets (same-strength, same commit as each move)
 
-Caveat, honestly stated: the goldens are designed cross-platform (the
-node-launch shim and the extensionless `configure` entry work under
-cmd.exe), but this run could not EXECUTE the suite on Windows — CI's
-windows-latest lane is the proof. The suite (including the golden test)
-passed here on linux/Node 24.
+- `test/structure-manifests.test.ts` — get_service_icon name pin → `tool-definitions.ts`.
+- `test/structure-load-path.test.ts` — the "fails or is denied" vocabulary pin → `tool-definitions.ts`
+  (the description literals' home); the REFERENCE_CAP sync pin reads
+  `tool-definitions.ts` (taught number) + `skill-disclosure.ts` (constant and
+  interpolating marker) — a cross-module sync check, strictly stronger than the
+  old single-file version.
+- `test/structure-packs.test.ts` — the serviceCatalog routeMap scan →
+  `capability-catalog.ts`; the SKILLS_ROOT resolution test retargeted to
+  `skill-disclosure.ts` with the same const regex and absence pins, plus NEW
+  face pins (the exact import line and `export { SKILLS_ROOT };` in tools.ts).
+- `test/structure-installer.test.ts` — both SKILLS_ROOT pins retargeted to
+  `skill-disclosure.ts` (const + dsh/hermes/atomcode absence pins) with a
+  tools.ts re-export face pin.
+- No guard was weakened; each kept its regex/assertion strength at the new
+  canonical location, and the moved-code tests (tools/mcp-server/pack-meta/
+  packs-configure/skills-tree/service-regions families) ran untouched and green.
 
-## Gate results (final tree, and at every commit)
+## Boundary adaptations forced by the measured cx
+
+The approved design grouped "capability catalog handlers (service_catalog /
+list_packs / pack_info)" and left "remaining core handlers grouped coherently".
+Measured with arrows counted, that grouping could not fit under cx 50, so:
+
+1. `packs_configure` split from the catalog into `src/packs-configure.ts`
+   (merged module measured cx 70; the read-only catalog and the one mutating
+   pack tool are separate concerns anyway).
+2. `search_docs` split from the disclosure family into `src/search-docs.ts`
+   (merged module would measure cx 56).
+3. `verifySkillTree` moved from tools.ts into `skill-disclosure.ts` (the tree
+   boot guard beside the tree knowledge; SKILLS_ROOT becomes a local default)
+   and `get_regional_availability` into `src/services/availability.ts` — these
+   two moves took tools.ts from cx 50 (exactly at the bar) to 43.
+
+## Gate results (final state)
 
 - `npm run typecheck` — green (src + strict test projects).
-- `npx eslint .` — 0 errors; 73 warnings vs the 74-problem pre-wave
-  baseline (no new problems; two stale unused-vars in test files removed).
-- `node --experimental-test-module-mocks --test "test/structure*.test.ts"`
-  — 114 pass, 0 fail (113 pre-wave + the new chain-coverage guard).
-- `npm test` — 1412 tests: 1410 pass + 2 skip (the pre-wave 1408/1406+2
-  contract plus the 3 new golden tests and 1 new structure guard test).
-- `npm run lint:dup` — green; 179 clones throughout, identical to
-  baseline; the `.jscpd-baseline.json` was NOT regenerated (no
-  moved-not-deleted clones were flagged at any step).
-- Extra (AGENTS.md commit checklist): `npm run validate` ✓,
-  `npm run pack:verify` ✓ (450 files, install OK — the new modules ship),
-  `npm run format:check` ✓, `npm run lint:md` ✓.
+- `npx eslint .` — 0 errors; 73 warnings, all pre-existing (baseline captured
+  before the change: identical 73; zero new). `import/no-cycle`: zero.
+- `npm run build` — green; the esbuild bundle builds with the new graph, dist +
+  skills tree regenerated.
+- `node --experimental-test-module-mocks --test "test/structure*.test.ts"` —
+  114 pass, 0 fail.
+- `npm test` — 1412 tests: **1410 pass + 2 skip, 0 fail** (the contract).
+- `npm run lint:dup` — exit 0; the committed `.jscpd-baseline.json` stayed in
+  sync (the in-sync gate inside `npm test` passed), so **no baseline
+  regeneration was needed** — the moves created no new clones.
+- `npm run lint` (markdownlint + eslint) — green at the pre-existing warning
+  count (AGENTS.md edit included).
+- Telemetry stamp residue after each full `npm test` run was removed (per the
+  brief); `git status` clean of untracked stamp files.
 
-## Commit list
+## Commits (one per verified unit)
 
-1. `9907533` test(doctor): pin doctor output byte-for-byte; split
-   agents/hermes under the cx bar — the golden pin (script + harness +
-   fixtures + `test/doctor-golden.test.ts` joining the suite) lands together
-   with the first refactor step (hermes → hermes-config/-hooks/-hook-plugin).
-2. `1b90681` refactor(dsh): split the cordis.patch.yml managed-block family
-   into agents/dsh-patch.ts.
-3. `05e14e6` refactor(officeace): split the sqlite and registry families
-   out of agents/officeace.ts (path family → officeace-paths.ts).
-4. `7ec0ff6` refactor(codex): split the Codex Desktop family into
-   agents/codex-desktop.ts.
-5. `ec82b45` refactor(opencode): split the config writers and seam
-   machinery into agents/opencode-config.ts.
-6. `29d0135` refactor(doctor): bind the payload triple and native freshness
-   to PAYLOAD_TARGETS rows (doctor-report/-payload/-native + the
-   every-row-binds-a-doctor guard).
-7. `bff6aa6` refactor(doctor): move the MCP-configured candidates, seam,
-   and hermes SDK sections to their agent modules (+ chain-coverage guard).
-8. `40b3b65` refactor(packs): extract the packs-cli family (slots, writers,
-   union, doctor face, commands) — includes the `raw`/`countWarn` reporter
-   additions (autosquash-fixed into this commit).
-9. `f513c55` refactor(install): extract the install-planning family
-   (detect, prompts, generic MCP config).
-10. `47a6b18` refactor(auth): extract the auth CLI family (dispatch, init
-    flow, profile helpers) + lib/banner.ts.
-11. `cd77949` refactor(proxy): extract the proxy CLI family — setup-cli
-    lands at cx 379.
-12. `051c7aa` docs(AGENTS): describe the table-driven doctor and the
-    extracted command families.
+1. `386048f` — refactor(tools): extract the tool registry literals into tool-definitions.ts
+2. `e0508aa` — refactor(tools): extract the vendorConfirmed gate into vendor-gate.ts
+3. `2f02dda` — refactor(tools): extract the capability catalog and session pack configuration
+4. `d8a1daa` — refactor(tools): extract the skills-serving family into skill-disclosure.ts and search-docs.ts
+5. `b33f0f7` — refactor(tools): extract explain-error, the telemetry invoke value, regional availability, and the tree boot guard
+6. (this commit) — docs: AGENTS.md module map + stale test comments + REPORT.md
 
 ## Interrogate rounds
 
-12 (one full adversarial pass per commit over the diff since the last
-commit). Defects caught and fixed inside the loop, among others: hermes-hooks
-over the cx bar (plugin family split out); codex-desktop over the bar after
-its candidate (codexDesktopStatus relocated to the status-face module);
-`import/no-duplicates` + unused-import churn; a `no-regex-spaces` error in
-the new guard; four stale source-text guards (retargeted, none weakened);
-the byte-exactness catch that the unknown-id advisory line is a RAW 8-space
-line (not INFO) and that `renderSecretsPackNote` returns a warn COUNT the
-shell must add — both fixed via the `raw`/`countWarn` reporter methods
-before any golden-detectable drift; and one commit-hygiene defect found in
-the final round — the reporter additions were never staged into the packs
-commit, leaving it non-building in isolation — repaired with an
-`--autosquash` fixup. The final (12th) pass over the complete diff yields
-ZERO findings.
+Six execute→interrogate→fix rounds (one per unit), plus a final stack-wide pass.
+Findings caught and fixed by interrogation:
+
+- Unit 2: a challenge-consumption comment sentence duplicated into both
+  `dispatchTool` and `enforceVendorGate` — trimmed from the call site (the
+  internals are documented where they live).
+- Unit 2: stale message-length comments claimed the gate/challenge messages
+  fit call-trace's 300-char cap (actual lengths 375/327) — replaced with one
+  accurate note (the trace copy truncates; the wire message does not).
+- Unit 5: the #530 numeric-args comment was swept into
+  `telemetry/invoke-value.ts` by a marker-based cut — restored above
+  `NUMERIC_ARG_KEYS` in tools.ts.
+- Unit 5: a double-brace splice defect in the first `services/availability.ts`
+  write and an unused `ToolArgs` import — both fixed before commit.
+- Unit 5: my own Unit-4 import-shape pin (exact import list) went stale when
+  `verifySkillTree` joined the import — updated same-commit.
 
 ## Deliberately NOT done
 
-- **No `dshMcpClientAvailable` doctor check.** The design bullet names it
-  ("the dsh patch / mcp-client package checks"), but today's doctor has no
-  such check, and the byte-for-byte golden contract forbids adding output.
-  The dsh doctor section therefore covers the MCP-configured candidate
-  (dshPatchConfigured) and the row's package-root binding — the surface
-  that exists. `dshMcpClientAvailable` stays in dsh.ts for dshStatus.
-- **No new officeace sqlite check.** Read the same way: the officeace
-  section's "sqlite-connector check" is the existing PACK_SLOTS
-  readOfficeaceDevkitPacks path; it is now pinned byte-exactly by golden
-  fixture (c) (the "Packs (OfficeAce): core, huaweicloud-cli" line and the
-  secrets WARN) instead of gaining a new check.
-- **The `--clean-*` AccountLevelArtifact family untouched** (out of scope
-  per the brief) — verified still in setup-cli verbatim.
-- **cmdInstall / cmdStatus / cmdUninstall / cmdUpdate / main dispatch stay
-  in setup-cli** — the cx-400 gate was reached without moving them, and the
-  table + dispatch are doctrine-owned there.
-- **The PACK_SLOTS family moved wholesale** (including the command bodies).
-  The brief allowed this "only if it falls out naturally — do not force
-  it": the doctor refactor moved the pack-status section INTO the family,
-  leaving the slots/writers/report in setup-cli as an orphaned island while
-  the mandated cx-400 gate still required ~145 more cx out — the family
-  unity fell out at that point. Documented here as the one judgment call
-  that went beyond the doctor design proper (auth/proxy/install-plan
-  extractions were pure cx-budget needs, each a cohesive self-contained
-  command family).
-- **`rosterCore ?? []`** in doctor-native.ts — an unreachable-path type
-  tweak (the shell runs freshness only inside its non-null corePack guard),
-  documented inline; no reachable behavior change.
-- **jscpd baseline not regenerated** — no new duplication was ever flagged.
-- **Windows execution unverified locally** — see the golden caveat above.
+- No behavior change of any kind: every moved function body is byte-identical
+  (verified per commit); dispatch order, gate order, trace seam, and all
+  message strings are untouched.
+- No zod schema moves (`tool-schemas.ts` untouched; `npm run registry:diff`
+  stays green through the tools.ts re-export face).
+- No import rewrites for existing importers (mcp-protocol, tests, scripts keep
+  importing from `src/tools.ts`); only guard files that read tools.ts source
+  were retargeted.
+- `classifyRawCommand` (an exported re-export of `classifyTextCommand` with no
+  in-repo importers) was kept as-is: removing a public export is a face change
+  beyond this task's scope. Flagged here for a future decision.
+- The pre-existing 73 eslint warnings (8 `import/order`, 65
+  `no-unused-vars` in hook fixtures) were left alone — the brief allows them.
+- No `.jscpd-baseline.json` regeneration (in-sync gate passed without it).
+- `hooks/`, `src/packs/` internals, `bin/`, and `integrations/` untouched.

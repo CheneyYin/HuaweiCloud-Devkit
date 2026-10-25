@@ -110,8 +110,8 @@ test('huaweicloud_pack_info returns the 14 sandbox tools with name, description,
 });
 
 // pack_info and list_skills serve the same refusal for an unknown pack id
-// (they share the packNotFound helper in tools.ts); one assertion body pins
-// both surfaces instead of a parallel test pair.
+// (they share the packNotFound helper in capability-catalog.ts); one
+// assertion body pins both surfaces instead of a parallel test pair.
 async function assertBogusPackError(toolName: 'huaweicloud_pack_info' | 'huaweicloud_list_skills'): Promise<void> {
   const result = (await callTool(toolName, { pack: 'bogus' })) as ToolErrorPayload;
   assert.equal(result.ok, false);
