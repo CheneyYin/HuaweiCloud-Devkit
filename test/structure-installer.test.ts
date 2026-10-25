@@ -31,7 +31,7 @@ test('agents/codearts.ts supports the codearts target end to end', () => {
   // ensureMcpServersConfig writer lives in mcp-config-io.ts (setup-cli calls
   // it through registerCodeartsMcp with enabledByDefault).
   const mcpConfigIo = readSource(join('src', 'mcp-config-io.ts'));
-  assert.match(setup, /config\.mcpServers\['huaweicloud-devkit'\] = \{/);
+  assert.match(readSource(join('src', 'mcp-agent-config.ts')), /config\.mcpServers\['huaweicloud-devkit'\] = \{/);
   assert.match(codearts, /HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local'/);
   assert.match(mcpConfigIo, /entry\.enabled = true;/);
   // command dispatch covers codearts for install / uninstall / status
@@ -163,7 +163,7 @@ test('opencode config root is XDG-aware through one shared resolver', () => {
   );
   // Agent-presence detection probes the same root the installer writes.
   assert.match(
-    setup,
+    readSource(join('src', 'install-plan.ts')),
     /\['opencode', \(\) => existsSync\(configRoot\('opencode'\)\)\]/,
     'detectAgents must probe the shared opencode config root',
   );
