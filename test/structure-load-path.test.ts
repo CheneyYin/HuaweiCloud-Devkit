@@ -257,11 +257,12 @@ test('retrieve_skill reference cap stays in sync between code and description', 
   // the marker string drifts independently of the taught cap.
   // The description literal lives in tool-definitions.ts and the
   // truncation constant (REFERENCE_CAP, with the marker that interpolates
-  // it) in the tools.ts handler family — the split of the former tools.ts
-  // monolith; the pin reads both homes at their canonical locations.
+  // it) in skill-disclosure.ts's retrieveSkill — the split of the former
+  // tools.ts monolith; the pin reads both homes at their canonical
+  // locations.
   const definitions = readSource(join('src', 'tool-definitions.ts'));
-  const tools = readSource(join('src', 'tools.ts'));
-  const cap = tools.match(/const REFERENCE_CAP = (\d+);/)?.[1];
+  const disclosure = readSource(join('src', 'skill-disclosure.ts'));
+  const cap = disclosure.match(/const REFERENCE_CAP = (\d+);/)?.[1];
   assert.ok(cap, 'the reference truncation constant must be found');
   assert.match(
     definitions,
@@ -269,11 +270,11 @@ test('retrieve_skill reference cap stays in sync between code and description', 
     'the retrieve_skill description must teach the actual reference cap',
   );
   assert.ok(
-    tools.includes('truncated at ${REFERENCE_CAP} chars'),
+    disclosure.includes('truncated at ${REFERENCE_CAP} chars'),
     'the truncation marker must interpolate the cap constant, not restate it',
   );
   assert.ok(
-    !tools.includes(`truncated at ${cap} chars`),
+    !disclosure.includes(`truncated at ${cap} chars`),
     'no literal restatement of the cap may appear in the marker template',
   );
 });

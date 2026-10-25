@@ -40,12 +40,26 @@ test('every serviceCatalog route names a skill a pack actually owns', () => {
   }
 });
 
-test('tools.ts resolves skills from the server-relative tree only', () => {
-  const tools = readSource(join('src', 'tools.ts'));
+test('skills resolve from the server-relative tree only (skill-disclosure.ts)', () => {
+  // SKILLS_ROOT moved to skill-disclosure.ts in the tools.ts split. The
+  // module MUST stay src/ROOT-level: the esbuild bundle flattens every
+  // inlined module's import.meta.url to the bundle file's own, so
+  // __dirname is dist/ for every module there and the one-level climb
+  // resolves to the plugin root in both the tsc tree and the bundle only
+  // from a src/ root file (src/ and dist/ are siblings). The pin reads
+  // the canonical home and holds tools.ts to the re-export face.
+  const disclosure = readSource(join('src', 'skill-disclosure.ts'));
   // SKILLS_ROOT is server data next to dist/ — no agent-native dir probing
-  assert.match(tools, /const SKILLS_ROOT = join\(__dirname, '\.\.', 'skills'\);/);
-  assert.doesNotMatch(tools, /function opencodeSkillsDir\(\)/, 'native dir probe must be gone');
-  assert.doesNotMatch(tools, /findSkillsRoot/, 'multi-root fallback must be gone');
+  assert.match(disclosure, /const SKILLS_ROOT = join\(__dirname, '\.\.', 'skills'\);/);
+  assert.doesNotMatch(disclosure, /function opencodeSkillsDir\(\)/, 'native dir probe must be gone');
+  assert.doesNotMatch(disclosure, /findSkillsRoot/, 'multi-root fallback must be gone');
+  const tools = readSource(join('src', 'tools.ts'));
+  assert.match(
+    tools,
+    /import \{ SKILLS_ROOT, retrieveSkill, listSkills \} from '\.\/skill-disclosure\.ts';/,
+    'tools.ts must keep the SKILLS_ROOT import behind its re-export face',
+  );
+  assert.match(tools, /export \{ SKILLS_ROOT \};/, 'tools.ts must keep the SKILLS_ROOT re-export face');
   // The listing itself lives in the shared zod-free module so the boot
   // guard, doctor, and the --check stray scan hold one membership
   // predicate; tools.ts re-exports it for its existing importers.

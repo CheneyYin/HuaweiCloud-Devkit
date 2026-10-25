@@ -189,12 +189,17 @@ test('cmdStatus covers every supported agent target', () => {
   }
 });
 
-test('tools.ts resolves skills from the server-relative tree only (dsh fallback removed)', () => {
-  const tools = readSource(join('src', 'tools.ts'));
+test('skills resolve from the server-relative tree only (dsh fallback removed)', () => {
+  // SKILLS_ROOT moved to skill-disclosure.ts (src/ROOT-level — the
+  // depth-safe home beside tools.ts) in the tools.ts split; the pin reads
+  // the canonical home and holds tools.ts to the re-export face.
+  const disclosure = readSource(join('src', 'skill-disclosure.ts'));
   // No DSH (or any agent) dir probing survives in the server: skills are
   // server data resolved next to dist/.
-  assert.doesNotMatch(tools, /function dshSkillsDir\(\)/, 'dsh dir probe must be gone');
-  assert.match(tools, /const SKILLS_ROOT = join\(__dirname, '\.\.', 'skills'\);/);
+  assert.doesNotMatch(disclosure, /function dshSkillsDir\(\)/, 'dsh dir probe must be gone');
+  assert.match(disclosure, /const SKILLS_ROOT = join\(__dirname, '\.\.', 'skills'\);/);
+  const tools = readSource(join('src', 'tools.ts'));
+  assert.match(tools, /export \{ SKILLS_ROOT \};/, 'tools.ts must keep the SKILLS_ROOT re-export face');
   // The agent-target list moved to the zod schema descriptions when the
   // JSON-Schema registry was replaced, and into the auth pack when the
   // schemas were materialized per pack (src/packs/auth/tools.ts).
@@ -395,9 +400,9 @@ test('the doctor MCP-configured chain covers every agent-owned candidate', () =>
   assert.match(setup, /if \(mcpCfgTarget !== null\) break;/);
 });
 
-test('tools.ts no longer probes hermes/atomcode native skill dirs', () => {
-  const tools = readSource(join('src', 'tools.ts'));
-  assert.doesNotMatch(tools, /function hermesSkillsDir\(\)/, 'hermes dir probe must be gone');
-  assert.doesNotMatch(tools, /function atomcodeSkillsDir\(\)/, 'atomcode dir probe must be gone');
-  assert.match(tools, /const SKILLS_ROOT = join\(__dirname, '\.\.', 'skills'\);/);
+test('the server no longer probes hermes/atomcode native skill dirs', () => {
+  const disclosure = readSource(join('src', 'skill-disclosure.ts'));
+  assert.doesNotMatch(disclosure, /function hermesSkillsDir\(\)/, 'hermes dir probe must be gone');
+  assert.doesNotMatch(disclosure, /function atomcodeSkillsDir\(\)/, 'atomcode dir probe must be gone');
+  assert.match(disclosure, /const SKILLS_ROOT = join\(__dirname, '\.\.', 'skills'\);/);
 });
