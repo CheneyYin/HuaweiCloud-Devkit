@@ -107,7 +107,11 @@ test('the action-first load teaching survives copy passes on every load-path sur
   const doctor = readFileSync(join(root, 'integrations', 'opencode', 'commands', 'huaweicloud-doctor.md'), 'utf8');
   assert.match(doctor, attemptFirst, 'the doctor command must teach the attempt-first imperative');
   assert.match(doctor, reactive, 'the doctor command must teach the reactive permission fallback');
-  const tools = readSource(join('src', 'tools.ts'));
+  // The description literals moved to src/tool-definitions.ts in the
+  // tools.ts split; the vocabulary pin follows the registry's canonical
+  // home (the exported TOOL_DEFINITIONS value still flows through the
+  // tools.ts re-export face the import at the top of this file targets).
+  const tools = readSource(join('src', 'tool-definitions.ts'));
   const listSkillsDescription = TOOL_DEFINITIONS.find((tool) => tool.name === 'huaweicloud_list_skills');
   assert.ok(listSkillsDescription, 'the list_skills definition must exist');
   assert.match(
@@ -251,11 +255,16 @@ test('retrieve_skill reference cap stays in sync between code and description', 
   // drift silently (the repo's own description-literal pinning pattern).
   // The marker must interpolate the same constant — a restated literal in
   // the marker string drifts independently of the taught cap.
+  // The description literal lives in tool-definitions.ts and the
+  // truncation constant (REFERENCE_CAP, with the marker that interpolates
+  // it) in the tools.ts handler family — the split of the former tools.ts
+  // monolith; the pin reads both homes at their canonical locations.
+  const definitions = readSource(join('src', 'tool-definitions.ts'));
   const tools = readSource(join('src', 'tools.ts'));
   const cap = tools.match(/const REFERENCE_CAP = (\d+);/)?.[1];
   assert.ok(cap, 'the reference truncation constant must be found');
   assert.match(
-    tools,
+    definitions,
     new RegExp(`capped at ${cap} characters`),
     'the retrieve_skill description must teach the actual reference cap',
   );

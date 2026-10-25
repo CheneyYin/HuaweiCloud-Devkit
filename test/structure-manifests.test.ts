@@ -99,7 +99,9 @@ test('.mcp.json is valid and references existing server script', () => {
 });
 
 test('official Huawei Cloud Icons library is integrated', () => {
-  const tools = readSource(join('src', 'tools.ts'));
+  // The tool name/description literals moved to src/tool-definitions.ts in
+  // the tools.ts split; the pin follows the registry's canonical home.
+  const tools = readSource(join('src', 'tool-definitions.ts'));
   assert.match(tools, /name: 'huaweicloud_get_service_icon'/);
 
   const discoveryPack = readSource(join('src', 'packs', 'discovery', 'tools.ts'));
