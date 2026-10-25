@@ -150,10 +150,15 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
     ['src/lib/cli-io.ts', readSource(join('src', 'lib', 'cli-io.ts'))] as const,
     ['src/officeace-paths.ts', readSource(join('src', 'officeace-paths.ts'))] as const,
     // The doctor section modules compile into the unbundled setup-cli graph
-    // (the table binds them), so they join the zod-free guard.
+    // (the table binds them), so they join the zod-free guard. So do the
+    // banner leaf and the install-planning family.
     ['src/doctor-report.ts', readSource(join('src', 'doctor-report.ts'))] as const,
     ['src/doctor-payload.ts', readSource(join('src', 'doctor-payload.ts'))] as const,
     ['src/doctor-native.ts', readSource(join('src', 'doctor-native.ts'))] as const,
+    ['src/lib/banner.ts', readSource(join('src', 'lib', 'banner.ts'))] as const,
+    ['src/install-plan.ts', readSource(join('src', 'install-plan.ts'))] as const,
+    ['src/install-prompts.ts', readSource(join('src', 'install-prompts.ts'))] as const,
+    ['src/mcp-agent-config.ts', readSource(join('src', 'mcp-agent-config.ts'))] as const,
   ];
   for (const [name, source] of guarded) {
     assert.doesNotMatch(source, /from 'zod'/, `${name} must not import zod`);
@@ -294,18 +299,20 @@ test('setup-cli.ts supports the version command', () => {
 
 test('setup-cli.ts wires the auth reconcile subcommand', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
-  assert.match(setup, /function cmdAuthReconcile\(\)/);
-  assert.match(setup, /sub === 'reconcile'/);
-  assert.match(setup, /return cmdAuthReconcile\(\)/);
+  const authCli = readSource(join('src', 'auth', 'cli.ts'));
+  assert.match(setup, /case 'auth':\s*\n\s*await cmdAuth\(\)/, 'the shell dispatches to the auth CLI module');
+  assert.match(authCli, /function cmdAuthReconcile\(\)/);
+  assert.match(authCli, /sub === 'reconcile'/);
+  assert.match(authCli, /return cmdAuthReconcile\(\)/);
 });
 
 test('setup-cli.ts resolves the active KooCLI profile for configureHcloud', () => {
-  const setup = readSource(join('src', 'setup-cli.ts'));
-  assert.match(setup, /function configuredProfileName\(\)/);
-  assert.match(setup, /resolveManagedProfile\(\)/);
-  assert.match(setup, /return name \|\| 'default'/);
-  assert.match(setup, /--cli-profile=\$\{configuredProfileName\(\)\}/);
-  assert.doesNotMatch(setup, /hcloud configure init/);
+  const hcloudProfile = readSource(join('src', 'auth', 'hcloud-profile.ts'));
+  assert.match(hcloudProfile, /function configuredProfileName\(\)/);
+  assert.match(hcloudProfile, /resolveManagedProfile\(\)/);
+  assert.match(hcloudProfile, /return name \|\| 'default'/);
+  assert.match(hcloudProfile, /--cli-profile=\$\{configuredProfileName\(\)\}/);
+  assert.doesNotMatch(hcloudProfile, /hcloud configure init/);
 });
 
 test('setup-cli.ts checks for updates on install/update via shared query', () => {

@@ -4,10 +4,9 @@ import { join, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import { purgeBackup } from './mcp-config-backup.ts';
-import { getAuthStatus, syncAuth } from './auth/service.ts';
-import { resolveAndApplyProjectId } from './auth/project-id.ts';
-import { readKooCliProfiles, resolveManagedProfile, runHcloudProfileDelete } from './auth/reconcile.ts';
-import { redactSecrets } from './safety-policy.ts';
+import { cmdAuth } from './auth/cli.ts';
+import { BANNER } from './lib/banner.ts';
+
 // Where every supported agent target lives: the pure-path family shared by
 // the deploy/uninstall/status/doctor flows.
 import {
@@ -30,12 +29,7 @@ import {
   workbuddyPluginsDir,
   workbuddySkillsDir,
 } from './targets.ts';
-import {
-  globalCredentialsPath,
-  readGlobalCredentials,
-  writeGlobalCredentials,
-  writeObsConfig,
-} from './auth/credentials.ts';
+import { globalCredentialsPath } from './auth/credentials.ts';
 import {
   proxyConfigPath,
   readProxyConfig,
@@ -48,22 +42,14 @@ import { removeKooCli, removeObsConfig } from './sandbox/uninstall-cleanup.ts';
 import { readReceipt, removeReceipt } from './dep/receipts.ts';
 import { runSecretCommand } from './lib/secret-vault/cli.ts';
 import { custodyReport } from './lib/secret-vault/custody.ts';
-import { vaultList, resolveSecretValue } from './lib/secret-vault/store.ts';
-import { preserveRefForm } from './lib/credentials.ts';
+import { vaultList } from './lib/secret-vault/store.ts';
 import { detectCodeartsSandbox } from './codearts-sandbox.ts';
 import { installKooCli } from './dep/installers/hcloud.ts';
 import { installerFor } from './dep/installers/table.ts';
 import { uninstallDependency, uninstallPlacedDependency } from './dep/provision.ts';
 import { queryDistTagsFetch, determineTarget, semverCompare } from './update-check.ts';
 import { getKooCliVersion, compareVersion, kooCliDownloadBase } from './koocli-version.ts';
-import {
-  findHcloudBin,
-  hcloudProbeNextStep,
-  hcloudProbeRaw,
-  probeHcloud,
-  resolveHcloudCommand,
-} from './hcloud-probe.ts';
-import { asText } from './lib/as-text.ts';
+import { hcloudProbeNextStep, hcloudProbeRaw, probeHcloud } from './hcloud-probe.ts';
 import { asRecord } from './lib/as-record.ts';
 import { DEPENDENCIES, DEPENDENCY_IDS, requiredDependencies, type DependencyId } from './lib/dependency-model.ts';
 import { resolveDependencyCommand } from './lib/dep-resolve.ts';
@@ -109,7 +95,7 @@ import { parseTarget, resolveInstallTarget } from './install-plan.ts';
 import { configureGenericMCP } from './mcp-agent-config.ts';
 // Interactive-terminal IO: the one-shot confirmation, line questions, and
 // raw-mode secret reads.
-import { confirm, markConfirmed, readLineQuestion, readSecret } from './lib/cli-io.ts';
+import { confirm, markConfirmed, readLineQuestion } from './lib/cli-io.ts';
 // The per-agent lifecycle modules: each owns its deploy/uninstall/status
 // knowledge; the PAYLOAD_TARGETS table below binds them into one dispatch.
 // The officeace path family lives in officeace-paths.ts (the shared leaf);
@@ -157,13 +143,6 @@ import {
   workbuddyStatus,
 } from './agents/workbuddy.ts';
 import { atomcodeDoctorMcpConfigured, atomcodeStatus, deployAtomCode, uninstallAtomCode } from './agents/atomcode.ts';
-
-const BANNER = `
-╔══════════════════════════════════════════════╗
-║     HuaweiCloud DevKit v${pkgVersion}${' '.repeat(Math.max(0, 22 - String(pkgVersion).length))}║
-║     https://github.com/huaweicloud   ║
-╚══════════════════════════════════════════════╝
-`;
 
 // Detect CodeArts sandbox mode (bash_mode in permission config).
 // The implementation lives in ./codearts-sandbox.ts, shared with the KooCLI
@@ -1313,370 +1292,6 @@ async function cmdInstallHcloud(): Promise<void> {
   console.log('  Unified credentials (recommended): npx huaweicloud-devkit auth init');
   console.log('  NEVER: hcloud configure set --cli-access-key=xxx  (AK/SK in shell history!)');
   console.log('\nThen run: npx huaweicloud-devkit doctor');
-}
-
-// Narrow the parsed vault shape at this boundary. The guard returns the same
-// object reference, so callers that pass it back to writeObsConfig/writeGlobalCredentials
-// behave exactly as before.
-interface StoredCredentials {
-  ak?: unknown;
-  sk?: unknown;
-  securityToken?: unknown;
-  region?: unknown;
-}
-
-function asStoredCredentials(value: unknown): StoredCredentials | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : null;
-}
-
-function configuredProfileName(): string {
-  const name = resolveManagedProfile();
-  return name || 'default';
-}
-
-function configureHcloud(credentials: { ak: unknown; sk: unknown; region?: unknown }): {
-  ok: boolean;
-  code: number | null;
-  error: string;
-} {
-  // resolveHcloudCommand (not a bare findHcloudBin): honors the
-  // HCLOUD_BIN_ARGS_JSON node-launch convention — critical now that the
-  // #920 purge deletes the profile BEFORE this write; a bare-binary spawn
-  // that deterministically fails would leave the deleted profile unrestored.
-  const { executable, argsPrefix } = resolveHcloudCommand();
-  const args = [
-    'configure',
-    'set',
-    `--cli-profile=${configuredProfileName()}`,
-    `--cli-access-key=${asText(credentials.ak)}`,
-    `--cli-secret-key=${asText(credentials.sk)}`,
-    `--cli-region=${asText(credentials.region || '')}`,
-  ];
-  const r = spawnSync(executable, [...argsPrefix, ...args], {
-    shell: false,
-    windowsHide: true,
-    stdio: 'pipe',
-    timeout: 30000,
-  });
-  return {
-    ok: r.status === 0,
-    code: r.status,
-    error: redactSecrets(
-      String(r.stderr || '')
-        .trim()
-        .slice(0, 240),
-    ),
-  };
-}
-
-// Verify that the freshly written KooCLI profile can actually authenticate
-// (#920): a stale/expired security token in the profile survives
-// `configure set` (it refuses empty values) and poisons every hcloud call with
-// APIGW.0301 — while the setup output still claims success. Probe with a real
-// `hcloud STS GetCallerIdentity` and only report synchronized when it passes.
-function verifyHcloudIdentity(region: string): { ok: boolean; code: number | null; error: string } {
-  // An empty region must be omitted entirely — `--cli-region=` sends a
-  // literal empty value that KooCLI rejects as an invalid region.
-  const args = ['STS', 'GetCallerIdentity'];
-  if (region) args.push(`--cli-region=${region}`);
-  // resolveHcloudCommand (not a bare findHcloudBin): honors the
-  // HCLOUD_BIN_ARGS_JSON node-launch convention every other spawn in this
-  // flow uses — a bare binary path would run `node STS GetCallerIdentity`.
-  const { executable, argsPrefix } = resolveHcloudCommand();
-  const r = spawnSync(executable, [...argsPrefix, ...args], {
-    shell: false,
-    windowsHide: true,
-    stdio: 'pipe',
-    timeout: 30000,
-  });
-  const output = `${String(r.stdout || '')}${String(r.stderr || '')}`;
-  return {
-    ok: r.status === 0 && !/APIGW\.0301|Incorrect IAM authentication/i.test(output),
-    code: r.status,
-    error: redactSecrets(
-      String(r.stderr || r.stdout || '')
-        .trim()
-        .slice(0, 240),
-    ),
-  };
-}
-
-function printAuthAgents(agents: Record<string, unknown> = {}): void {
-  for (const [agent, info] of Object.entries(agents)) {
-    console.log(`  ${agent}: ${asRecord(info).configured ? '[OK]' : '[MISSING]'}`);
-  }
-}
-
-// getAuthStatus returns an inferred shape; only the fields printed here are
-// consumed, so the printer declares just those.
-interface AuthStatusSummary {
-  credentialsConfigured: unknown;
-  credentialsPath: unknown;
-  obsConfigured: unknown;
-  obsConfigPath: unknown;
-  kooCliInstalled: unknown;
-  agents: unknown;
-  reconciled?: { s1RefError?: unknown };
-}
-
-function printAuthStatus(status: AuthStatusSummary): void {
-  console.log(
-    `Credentials vault: ${status.credentialsConfigured ? 'configured' : 'missing'} (${String(status.credentialsPath)})`,
-  );
-  const rawS1RefError = asRecord(status.reconciled).s1RefError;
-  const s1RefError = typeof rawS1RefError === 'string' ? rawS1RefError : null;
-  if (s1RefError) {
-    console.log(
-      `\x1b[31mS1 vault ref error: ${s1RefError}\x1b[0m — fix the vault (npx huaweicloud-devkit secret list) or replace the refs in ~/.config/huaweicloud/credentials.json with plaintext.`,
-    );
-  }
-  console.log(`OBS config: ${status.obsConfigured ? 'configured' : 'missing'} (${String(status.obsConfigPath)})`);
-  console.log(`KooCLI: ${status.kooCliInstalled ? 'installed' : 'missing'}`);
-  console.log('Agent MCP registration:');
-  printAuthAgents(asRecord(status.agents));
-}
-
-async function cmdAuthInit(): Promise<void> {
-  console.log(BANNER);
-  console.log('HuaweiCloud DevKit Unified Authentication Setup\n');
-  console.log('\x1b[1m获取 AK/SK（如果还没有）：\x1b[0m');
-  console.log('  1. 打开华为云"访问密钥"页签：');
-  console.log('     https://console.huaweicloud.com/iam/?region=cn-north-4#/mine/accessKey');
-  console.log('  2. 点击"新增访问密钥"，完成身份验证');
-  console.log('  3. 下载凭证文件（内含 AK 和 SK）。');
-  console.log('     注意：SK 只在创建密钥时显示一次，请妥善保存该文件。\n');
-
-  try {
-    const kooCli = readKooCliProfiles();
-    if (!('error' in kooCli)) {
-      const currentProfile = kooCli.profiles.find((p) => p.name === kooCli.current);
-      if (currentProfile?.accessKeyId) {
-        console.log(
-          `\x1b[33m检测到 KooCLI 已配置 profile "${currentProfile.name}"（AK 已存储）。SK 为加密存储无法导出，请直接输入或通过环境变量提供凭据。\x1b[0m\n`,
-        );
-      }
-    }
-  } catch {
-    // best-effort hint: unreadable KooCLI config skips the existing-profile notice
-  }
-
-  let ak = process.env.HW_ACCESS_KEY || '';
-  let sk = process.env.HW_SECRET_KEY || '';
-  let securityToken = process.env.HW_SECURITY_TOKEN || '';
-  let region = process.env.HW_REGION || process.env.HUAWEICLOUD_REGION || '';
-
-  const interactive = process.stdin.isTTY && process.stdout.isTTY;
-  if (!interactive && (!ak || !sk)) {
-    console.error(
-      '\x1b[31mNon-interactive session detected. Provide credentials via environment variables instead:\x1b[0m',
-    );
-    console.error(
-      '  export HW_ACCESS_KEY=<ak> HW_SECRET_KEY=<sk>   then re-run "npx huaweicloud-devkit auth init" to continue',
-    );
-    console.error(
-      '  (Agents: prefer huaweicloud_auth_switch mode=import — reads ~/.config/huaweicloud/creds-import.json and wipes it, so the SK never enters the conversation.)',
-    );
-    console.error('  (Or run "npx huaweicloud-devkit auth init" in a real terminal.)');
-    process.exitCode = 1;
-    return;
-  }
-
-  if (!ak) ak = await readLineQuestion('Access Key ID (AK): ');
-  if (!sk) sk = await readSecret('Secret Access Key (SK): ');
-  if (interactive && !securityToken)
-    securityToken = await readLineQuestion('Security Token (optional, press Enter to skip): ');
-  if (!region) region = 'cn-north-4';
-
-  if (!ak || !sk) {
-    console.error('\nAK and SK are required.');
-    process.exitCode = 1;
-    return;
-  }
-
-  // Incoming values may be secret:// refs (env-delivered or typed). Resolve
-  // for the mirrors, keep the ref representation in S1 when the resolved
-  // value matches — same preserveRefForm contract as auth_switch persist.
-  const akValue = resolveSecretValue(ak) ?? ak;
-  const skValue = resolveSecretValue(sk) ?? sk;
-  const rawStored = readGlobalCredentials();
-  writeGlobalCredentials({
-    ak: preserveRefForm(akValue, rawStored?.ak),
-    sk: preserveRefForm(skValue, rawStored?.sk),
-    securityToken,
-    region,
-  });
-
-  try {
-    writeObsConfig({ ak: akValue, sk: skValue, securityToken, region });
-  } catch (error) {
-    console.log(`OBS config sync failed: ${errorMessage(error)}`);
-  }
-
-  if (findHcloudBin()) {
-    // #920: `configure set` refuses empty --cli-security-token values, so a
-    // stale token already in the profile survives the write. When auth init
-    // runs WITHOUT a token, delete the profile first (documented manual
-    // bypass, shared seam with the auth_switch persist path) so the recreated
-    // profile cannot keep poisoning calls with APIGW.0301. A missing profile
-    // ("nothing to clean") is not an error.
-    if (!securityToken) {
-      const purge = runHcloudProfileDelete(configuredProfileName());
-      if (!purge.ok && !/not (exist|found)/i.test(purge.error || '')) {
-        console.error(`KooCLI profile reset skipped: ${purge.error || 'unknown error'}`);
-      }
-    }
-    const result = configureHcloud({ ak: akValue, sk: skValue, region });
-    if (!result.ok) console.log(`KooCLI update failed: ${result.error || result.code}`);
-    else {
-      const proj = resolveAndApplyProjectId({ region });
-      if (proj.ok) {
-        console.log(`  Project ID auto-set: ${proj.projectId}`);
-      } else {
-        // #920: an unconfigured project_id is an ERROR, not a warning — most
-        // hcloud calls fail with APIGW.0301 until it is set.
-        console.error(
-          `\x1b[31m  ERROR: Project ID not auto-set (${proj.reason}). hcloud API calls (ECS/VPC/OBS API paths, sandbox exec) will fail with APIGW.0301 Incorrect IAM authentication information until it is configured. Recover with:\x1b[0m`,
-        );
-        console.error(`    hcloud IAM KeystoneListProjects --cli-region=${region} --name=${region}`);
-        console.error(`    hcloud configure set --cli-project-id=<project_id>`);
-        console.error(`    (or re-run "npx huaweicloud-devkit auth init", which auto-sets it)`);
-      }
-
-      // #920: verify the profile can actually authenticate before claiming
-      // success — a poisoned profile must never print "synchronized".
-      // Temporary-credential inputs skip the probe: the profile deliberately
-      // carries no security token (tokens are not written at rest), so
-      // GetCallerIdentity with the AK/SK alone cannot succeed — verifying
-      // would deterministically fail and the recovery text would mislead.
-      const identity = securityToken ? null : verifyHcloudIdentity(region);
-      if (identity === null) {
-        console.log(
-          '\nCredentials written. Temporary tokens are never written to the KooCLI profile, so identity verification was skipped (a pre-existing profile token, if any, is left in place this run).',
-        );
-      } else if (identity.ok) {
-        console.log('\nCredentials synchronized.');
-      } else {
-        console.error(
-          `\x1b[31m  ERROR: credentials were written but the KooCLI profile FAILED the hcloud STS GetCallerIdentity verification (exit ${identity.code}). hcloud calls will fail with APIGW.0301 — "Credentials synchronized" is NOT confirmed. Typical cause: a stale/expired security token in the profile or wrong AK/SK. Recover with:\x1b[0m`,
-        );
-        console.error(`    hcloud configure delete --cli-profile=${configuredProfileName()}`);
-        console.error(`    then re-run "npx huaweicloud-devkit auth init" with AK/SK only (no token)`);
-        console.error(`    Last error: ${identity.error || 'unknown'}`);
-        process.exitCode = 1;
-      }
-    }
-  } else {
-    console.log('KooCLI not found. Run "npx huaweicloud-devkit install-hcloud" and then "auth sync".');
-  }
-
-  if (process.exitCode !== 1) {
-    console.log('\nNext steps:');
-    console.log('  npx huaweicloud-devkit install --target all');
-    console.log('  Restart your agent sessions.');
-  }
-}
-
-async function cmdAuthReconcile(): Promise<void> {
-  console.log(BANNER);
-  console.log('HuaweiCloud DevKit Credential Reconciliation\n');
-
-  const { scanState } = await import('./auth/reconcile.ts');
-  const state = scanState();
-  // A broken S1 vault link suppresses the drift fingerprints, so it would
-  // otherwise read as "consistent" while every credential consumer throws.
-  if (state.s1RefError) {
-    console.error(`  \x1b[31mS1 holds a secret ref the vault cannot resolve: ${state.s1RefError}\x1b[0m`);
-    console.error(
-      '  Fix the vault (npx huaweicloud-devkit secret list; check the master key) or replace the refs in ~/.config/huaweicloud/credentials.json with plaintext.',
-    );
-    process.exitCode = 1;
-    return;
-  }
-  if (state.inconsistencies.length === 0) {
-    console.log('All credential files are consistent. ✓');
-    return;
-  }
-
-  const interactive = process.stdin.isTTY && process.stdout.isTTY;
-  if (!interactive) {
-    console.error(
-      '\x1b[31mNon-interactive session. Cannot run interactive reconciliation. Use "npx huaweicloud-devkit auth sync" or run reconciliation in a real terminal.\x1b[0m',
-    );
-    process.exitCode = 1;
-    return;
-  }
-
-  for (const inc of state.inconsistencies) {
-    console.log(
-      `  [${inc.store}] fingerprint ${inc.fingerprint} differs from S1 ${state.stores.s1Fingerprint}${inc.manualModified ? ' (manual modified)' : ''}`,
-    );
-  }
-  const ask = await readLineQuestion('以 S1 为准同步到不一致文件? (y/N) ');
-  if (!['y', 'Y', 'yes'].includes(ask.trim())) {
-    console.log('Aborted.');
-    return;
-  }
-  // Propagation delegates to syncAuth — the same seam-tested fan-out (S1
-  // refs resolved BEFORE writing ~/.obsutilconfig and the KooCLI profile,
-  // .last_sync fingerprinted from resolved values). A hand-rolled copy here
-  // once escaped the seam and wrote literal secret:// refs into both
-  // mirrors. Result interpretation keeps reconcile's best-effort contract:
-  // a mirror-partial sync (OBS written, KooCLI absent/failed) is a soft
-  // outcome with detail, not a hard failure — the same exit code the
-  // hand-rolled version produced.
-  const result = syncAuth('all');
-  if (result.ok) {
-    console.log('Done. .last_sync refreshed.');
-    return;
-  }
-  if (result.obs?.configured) {
-    console.log('  OBS synced ✓.');
-    console.log(`  KooCLI sync did not complete: ${result.error}`);
-    if (result.nextStep) console.log(`  Next: ${result.nextStep}`);
-    console.log('Done. .last_sync was not refreshed because KooCLI sync did not complete.');
-    return;
-  }
-  console.error(`  \x1b[31m${result.error}\x1b[0m`);
-  if (result.nextStep) console.error(`  Next: ${result.nextStep}`);
-  process.exitCode = 1;
-}
-
-async function cmdAuthSync(): Promise<void> {
-  const target = parseTarget();
-  console.log(BANNER);
-  console.log('Synchronizing Huawei Cloud authentication...\n');
-
-  const credentials = asStoredCredentials(readGlobalCredentials());
-  if (!credentials?.ak || !credentials?.sk) {
-    console.error('No global credentials found. Run "npx huaweicloud-devkit auth init" first.');
-    process.exitCode = 1;
-    return;
-  }
-
-  const result = syncAuth(target);
-  if (result.ok) {
-    // Print the honest sync message, not an unconditional success line: the
-    // #920 purge outcomes (profile reset failed / project-id not restored)
-    // ride in hcloud.message and must reach the CLI user.
-    console.log(result.hcloud.message);
-  } else {
-    console.error(result.error);
-  }
-}
-
-async function cmdAuthStatus(): Promise<void> {
-  const target = parseTarget();
-  console.log(BANNER);
-  console.log('HuaweiCloud DevKit Authentication Status\n');
-  printAuthStatus(getAuthStatus(target));
-}
-
-async function cmdAuth(): Promise<void> {
-  const sub = (process.argv[3] || 'status').toLowerCase();
-  if (sub === 'init' || sub === 'setup') return cmdAuthInit();
-  if (sub === 'sync' || sub === 'refresh') return cmdAuthSync();
-  if (sub === 'reconcile') return cmdAuthReconcile();
-  return cmdAuthStatus();
 }
 
 async function cmdProxyInit(): Promise<void> {

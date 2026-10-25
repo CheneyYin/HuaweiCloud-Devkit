@@ -13,10 +13,10 @@ test('auth reconcile propagates through syncAuth (the seam-tested fan-out)', () 
   // ~/.obsutilconfig and the KooCLI profile. Delegation to syncAuth is the
   // structural fix; this guard pins it so the propagation cannot be
   // re-hand-rolled off the seam.
-  const setup = readSource(join('src', 'setup-cli.ts'));
-  const reconcileBody = setup.slice(
-    setup.indexOf('async function cmdAuthReconcile'),
-    setup.indexOf('async function cmdAuthSync'),
+  const authCli = readSource(join('src', 'auth', 'cli.ts'));
+  const reconcileBody = authCli.slice(
+    authCli.indexOf('async function cmdAuthReconcile'),
+    authCli.indexOf('async function cmdAuthSync'),
   );
   assert.match(reconcileBody, /syncAuth\(/);
   assert.doesNotMatch(reconcileBody, /writeObsConfig\(/, 'reconcile must not hand-roll the OBS fan-out');

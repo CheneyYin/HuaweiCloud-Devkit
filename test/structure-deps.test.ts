@@ -35,28 +35,31 @@ test('auth/error-table is a zod-free, IO-free, sibling-free leaf (#900)', () => 
 });
 
 test('auth init implements the #920 gates: shared purge seam, identity verification, exit codes', () => {
-  const setup = readSource(join('src', 'setup-cli.ts'));
   const reconcile = readSource(join('src', 'auth', 'reconcile.ts'));
   const libCredentials = readSource(join('src', 'lib', 'credentials.ts'));
+  // The auth CLI family moved out of setup-cli: the init flow lives in
+  // auth/init-cli.ts, the profile helpers in auth/hcloud-profile.ts.
+  const initCli = readSource(join('src', 'auth', 'init-cli.ts'));
+  const hcloudProfile = readSource(join('src', 'auth', 'hcloud-profile.ts'));
 
   // The purge is ONE implementation in the shared module; both write paths
-  // call it (setup-cli auth init + the auth_switch persist tool path).
+  // call it (auth init + the auth_switch persist tool path).
   assert.match(reconcile, /export function runHcloudProfileDelete\(profile: string\)/);
-  assert.match(setup, /import \{[^}]*runHcloudProfileDelete[^}]*\} from '\.\/auth\/reconcile\.ts'/);
+  assert.match(initCli, /import \{[^}]*runHcloudProfileDelete[^}]*\} from '\.\/reconcile\.ts'/);
   assert.match(libCredentials, /import \{[^}]*runHcloudProfileDelete[^}]*\} from '\.\.\/auth\/reconcile\.ts'/);
 
   // cmdAuthInit: purge before configure when no token; identity verification
   // (STS GetCallerIdentity + the APIGW.0301 output scan) gates the
   // "Credentials synchronized" claim; failure sets exitCode 1 and suppresses
   // the Next steps block; project-id failure escalates to ERROR.
-  assert.match(setup, /if \(!securityToken\) \{/);
-  assert.match(setup, /function verifyHcloudIdentity\(region: string\)/);
-  assert.match(setup, /\['STS', 'GetCallerIdentity'\]/);
-  assert.match(setup, /APIGW\\.0301\|Incorrect IAM authentication/);
-  assert.match(setup, /if \(identity\.ok\) \{\s*\n\s*console\.log\('\\nCredentials synchronized\.'\)/);
-  assert.match(setup, /process\.exitCode = 1;/);
-  assert.match(setup, /if \(process\.exitCode !== 1\) \{/);
-  assert.match(setup, /ERROR: Project ID not auto-set/);
+  assert.match(initCli, /if \(!securityToken\) \{/);
+  assert.match(hcloudProfile, /function verifyHcloudIdentity\(region: string\)/);
+  assert.match(hcloudProfile, /\['STS', 'GetCallerIdentity'\]/);
+  assert.match(hcloudProfile, /APIGW\\.0301\|Incorrect IAM authentication/);
+  assert.match(initCli, /if \(identity\.ok\) \{\s*\n\s*console\.log\('\\nCredentials synchronized\.'\)/);
+  assert.match(initCli, /process\.exitCode = 1;/);
+  assert.match(initCli, /if \(process\.exitCode !== 1\) \{/);
+  assert.match(initCli, /ERROR: Project ID not auto-set/);
 
   // The tool-side persist re-applies project-id after the purge wiped every
   // profile setting (the round-1 critical: rotation must not break
@@ -112,7 +115,11 @@ test('doctor renders the pack-binary section from the dependency model', () => {
     'the section iterates requiredDependencies over the enabled union',
   );
   assert.match(packsDoctor, /sandbox-resident, not probed host-side/);
-  assert.match(packsDoctor, /dep install \$\{id\}/, 'the gateway WARNs point at dep install for the missing dependency');
+  assert.match(
+    packsDoctor,
+    /dep install \$\{id\}/,
+    'the gateway WARNs point at dep install for the missing dependency',
+  );
   assert.match(packsDoctor, /Object\.entries\(PACK_USES\)/, 'PACK_USES soft edges warn in the same section');
   assert.match(
     setupCli,

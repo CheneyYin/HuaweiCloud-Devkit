@@ -134,7 +134,6 @@ test('nativeSkillDirs derives from PAYLOAD_TARGETS plus the officeace exception'
 // XDG_CONFIG_HOME happened (each seam fixed separately drifted back).
 
 test('opencode config root is XDG-aware through one shared resolver', () => {
-  const setup = readSource(join('src', 'setup-cli.ts'));
   const targets = readSource(join('src', 'targets.ts'));
   const registration = readSource(join('src', 'auth', 'agent-registration.ts'));
   assert.match(
