@@ -139,7 +139,8 @@ import {
   updateOfficeAce,
   type SqliteDatabase,
 } from './agents/officeace.ts';
-import { deployHermes, hermesMcpSdkOk, hermesStatus, uninstallHermes, writeHermesMcpConfig } from './agents/hermes.ts';
+import { deployHermes, hermesMcpSdkOk, hermesStatus, uninstallHermes } from './agents/hermes.ts';
+import { writeHermesMcpConfig } from './agents/hermes-config.ts';
 import {
   codexDesktopStatus,
   codexSectionStatus,

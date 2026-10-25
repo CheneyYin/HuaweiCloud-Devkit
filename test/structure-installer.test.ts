@@ -241,7 +241,13 @@ test('agents/officeace.ts supports the officeace target end to end', () => {
 test('agents/hermes.ts supports the hermes target end to end', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
   const targets = readSource(join('src', 'targets.ts'));
+  // The hermes module family: the lifecycle + SDK live in hermes.ts, the
+  // config.yaml mcp_servers block family in hermes-config.ts, and the
+  // hooks/allowlist/plugin family in hermes-hooks.ts (the complex-file split).
   const hermes = readSource(join('src', 'agents', 'hermes.ts'));
+  const hermesConfig = readSource(join('src', 'agents', 'hermes-config.ts'));
+  const hermesHooks = readSource(join('src', 'agents', 'hermes-hooks.ts'));
+  const hermesHookPlugin = readSource(join('src', 'agents', 'hermes-hook-plugin.ts'));
   assert.match(setup, /'hermes'/);
   assert.match(hermes, /async function deployHermes\(mode: DeployMode\)/);
   assert.match(hermes, /function uninstallHermes\(removeOwnedSkills: \(dir: string\) => number\)/);
@@ -250,34 +256,34 @@ test('agents/hermes.ts supports the hermes target end to end', () => {
   assert.match(targets, /function hermesSkillsDir\(\)/);
   assert.match(targets, /function hermesPluginsDir\(\)/);
   assert.match(targets, /function hermesConfigFile\(\)/);
-  assert.match(hermes, /function ensureHermesMcpConfig\(\)/);
-  assert.match(hermes, /function removeHermesMcpConfigBlock\(\)/);
-  assert.match(hermes, /function ensureHermesHooksConfig\(\)/);
-  assert.match(hermes, /function removeHermesHooksConfigBlock\(\)/);
-  assert.match(hermes, /function ensureHermesHookAllowlist\(\)/);
-  assert.match(hermes, /function hermesHookCommand\(\)/);
+  assert.match(hermesConfig, /function ensureHermesMcpConfig\(\)/);
+  assert.match(hermesConfig, /function removeHermesMcpConfigBlock\(\)/);
+  assert.match(hermesHooks, /function ensureHermesHooksConfig\(\)/);
+  assert.match(hermesHooks, /function removeHermesHooksConfigBlock\(\)/);
+  assert.match(hermesHooks, /function ensureHermesHookAllowlist\(\)/);
+  assert.match(hermesHooks, /function hermesHookCommand\(\)/);
+  assert.match(hermesHookPlugin, /function ensureHermesHookPlugin\(\)/);
+  assert.match(hermesHookPlugin, /function removeHermesHookPlugin\(\)/);
   assert.match(targets, /function hermesPythonPluginsDir\(\)/);
   assert.match(targets, /function hermesSafetyPluginDir\(\)/);
-  assert.match(hermes, /function ensureHermesHookPlugin\(\)/);
-  assert.match(hermes, /function removeHermesHookPlugin\(\)/);
   assert.match(hermes, /copyServerPayload\(pluginDest, \{ skipDist: skipMcp \}\)/);
   assert.match(hermes, /copyDir\(hooksDir, join\(pluginDest, 'hooks'\)\)/);
   assert.match(hermes, /ensureHermesMcpConfig\(\)/);
   assert.match(hermes, /ensureHermesHooksConfig\(\)/);
   assert.match(hermes, /ensureHermesHookAllowlist\(\)/);
   assert.match(hermes, /ensureHermesHookPlugin\(\)/);
-  assert.match(hermes, /mcp_servers:/);
-  assert.match(hermes, /huaweicloud-devkit:/);
-  assert.match(hermes, /HUAWEICLOUD_AGENT_TOOLKIT_MODE: "local"/);
-  assert.match(hermes, /hooks:/);
-  assert.match(hermes, /pre_tool_call:/);
-  assert.match(hermes, /matcher: "terminal"/);
-  assert.match(hermes, /fail_closed: true/);
-  assert.match(hermes, /shell-hooks-allowlist\.json/);
-  assert.match(hermes, /name: huaweicloud-safety/);
-  assert.match(hermes, /register_hook\("pre_tool_call"/);
-  assert.match(hermes, /evaluate\(tool_name, args\)/);
-  assert.match(hermes, /huaweicloud-safety\.py/);
+  assert.match(hermesConfig, /mcp_servers:/);
+  assert.match(hermesConfig, /huaweicloud-devkit:/);
+  assert.match(hermesConfig, /HUAWEICLOUD_AGENT_TOOLKIT_MODE: "local"/);
+  assert.match(hermesHooks, /hooks:/);
+  assert.match(hermesHooks, /pre_tool_call:/);
+  assert.match(hermesHooks, /matcher: "terminal"/);
+  assert.match(hermesHooks, /fail_closed: true/);
+  assert.match(hermesHooks, /shell-hooks-allowlist\.json/);
+  assert.match(hermesHookPlugin, /name: huaweicloud-safety/);
+  assert.match(hermesHookPlugin, /register_hook\("pre_tool_call"/);
+  assert.match(hermesHookPlugin, /evaluate\(tool_name, args\)/);
+  assert.match(hermesHooks, /huaweicloud-safety\.py/);
   const branches = setup.match(/target === 'hermes' \|\| target === 'all'/g);
   const installDispatch = setup.match(/shouldInstall\('hermes'\)/g);
   assert.ok(
