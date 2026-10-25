@@ -26,7 +26,6 @@ import {
   codeartsWorkPluginsDir,
   codeartsWorkSkillsDir,
   codexDesktopPluginsDir,
-  codexMarketplacePath,
   configRoot,
   dshPatchFile,
   dshPluginsDir,
@@ -89,7 +88,7 @@ import {
   type DependencyId,
 } from './lib/dependency-model.ts';
 import { resolveDependencyCommand } from './lib/dep-resolve.ts';
-import { codexPluginProbe, getCodexPluginName, type CodexPluginProbe } from './codex-probe.ts';
+import { codexPluginProbe, type CodexPluginProbe } from './codex-probe.ts';
 // The installer's payload machinery: file ops, server payload placement,
 // and the native core-skill disclosure seam. The table-consuming functions
 // arrive aliased (-Of/-ForRow/-In) because setup-cli binds them to
@@ -129,40 +128,64 @@ import { confirm, markConfirmed, readLineQuestion, readSecret } from './lib/cli-
 // knowledge; the PAYLOAD_TARGETS table below binds them into one dispatch.
 // The officeace path family lives in officeace-paths.ts (the shared leaf);
 // the sqlite module surface in agents/officeace-sqlite.ts.
-import {
-  officeaceCapabilitiesDir,
-  officeaceCapabilitiesFile,
-  officeacePluginsDir,
-  officeaceSkillsDir,
-} from './officeace-paths.ts';
+import { officeaceCapabilitiesDir, officeacePluginsDir, officeaceSkillsDir } from './officeace-paths.ts';
 import {
   openOfficeaceDb,
   officeaceSqlitePath,
   readOfficeaceDevkitPacks,
   type SqliteDatabase,
 } from './agents/officeace-sqlite.ts';
-import { installOfficeAce, officeaceStatus, uninstallOfficeAce, updateOfficeAce } from './agents/officeace.ts';
-import { deployHermes, hermesMcpSdkOk, hermesStatus, uninstallHermes } from './agents/hermes.ts';
+import {
+  installOfficeAce,
+  officeaceDoctorMcpConfigured,
+  officeaceStatus,
+  uninstallOfficeAce,
+  updateOfficeAce,
+} from './agents/officeace.ts';
+import { deployHermes, hermesDoctorMcpConfigured, hermesStatus, uninstallHermes } from './agents/hermes.ts';
 import { writeHermesMcpConfig } from './agents/hermes-config.ts';
-import { codexSectionStatus, codexStatus, hasCodexCLI, installCodex, uninstallCodex } from './agents/codex.ts';
-import { codexDesktopStatus, deployCodexDesktop, uninstallCodexDesktop } from './agents/codex-desktop.ts';
+import { hermesDoctorSdkCheck } from './agents/hermes-sdk.ts';
+import {
+  codexDesktopStatus,
+  codexSectionStatus,
+  codexStatus,
+  hasCodexCLI,
+  installCodex,
+  uninstallCodex,
+} from './agents/codex.ts';
+import { codexDesktopDoctorMcpConfigured, deployCodexDesktop, uninstallCodexDesktop } from './agents/codex-desktop.ts';
 import { deployDsh, dshStatus, uninstallDsh } from './agents/dsh.ts';
 import {
   DSH_MCP_PATCH_END,
   DSH_MCP_PATCH_START,
+  dshDoctorMcpConfigured,
   dshPatchBlock,
-  dshPatchConfigured,
   dshPatchHasOnlyCommentsOrEmptyList,
   dshPayloadDoctorSection,
   removeManagedDshPatchBlock,
 } from './agents/dsh-patch.ts';
-import { deployOpenCode, opencodeStatus, uninstallOpenCode } from './agents/opencode.ts';
-import { openCodeSeamGate, openCodeSeamGlobs } from './agents/opencode-config.ts';
-import { deployOpenClaw, openclawStatus, uninstallOpenClaw } from './agents/openclaw.ts';
-import { codeartsStatus, deployCodeArts, uninstallCodeArts } from './agents/codearts.ts';
-import { codeartsWorkStatus, deployCodeArtsWork, uninstallCodeArtsWork } from './agents/codearts-work.ts';
-import { deployWorkBuddy, uninstallWorkBuddy, workbuddyStatus } from './agents/workbuddy.ts';
-import { atomcodeStatus, deployAtomCode, uninstallAtomCode } from './agents/atomcode.ts';
+import {
+  deployOpenCode,
+  opencodeDoctorMcpConfigured,
+  opencodeDoctorSeam,
+  opencodeStatus,
+  uninstallOpenCode,
+} from './agents/opencode.ts';
+import { deployOpenClaw, openclawDoctorMcpConfigured, openclawStatus, uninstallOpenClaw } from './agents/openclaw.ts';
+import { codeartsDoctorMcpConfigured, codeartsStatus, deployCodeArts, uninstallCodeArts } from './agents/codearts.ts';
+import {
+  codeartsWorkDoctorMcpConfigured,
+  codeartsWorkStatus,
+  deployCodeArtsWork,
+  uninstallCodeArtsWork,
+} from './agents/codearts-work.ts';
+import {
+  deployWorkBuddy,
+  uninstallWorkBuddy,
+  workbuddyDoctorMcpConfigured,
+  workbuddyStatus,
+} from './agents/workbuddy.ts';
+import { atomcodeDoctorMcpConfigured, atomcodeStatus, deployAtomCode, uninstallAtomCode } from './agents/atomcode.ts';
 
 const BANNER = `
 ╔══════════════════════════════════════════════╗
@@ -1718,213 +1741,40 @@ async function cmdDoctor(): Promise<void> {
     'hooks/hooks.json should invoke node hooks/huaweicloud-safety.mjs, not python3',
   );
 
-  // MCP config — check OpenCode, Codex Desktop, CodeArts, WorkBuddy, and DSH
-  let mcpConfigured = false;
-  let mcpCfgTarget = '';
-  const opencodeCfg = opencodeConfigFile();
-  if (existsSync(opencodeCfg)) {
-    try {
-      const cfg = asRecord(JSON.parse(readFileSync(opencodeCfg, 'utf8')));
-      if (cfg.mcp && asRecord(cfg.mcp)['huaweicloud-devkit']) {
-        mcpConfigured = true;
-        mcpCfgTarget = 'OpenCode';
-      }
-    } catch {
-      // corrupt OpenCode config skips this candidate — the probe continues
-    }
+  // MCP config — every agent-owned candidate in chain order; the first hit
+  // wins (each candidate lives in its agent module, next to the config file
+  // it reads; a corrupt or absent config skips that candidate).
+  let mcpCfgTarget: string | null = null;
+  for (const candidate of [
+    opencodeDoctorMcpConfigured,
+    codexDesktopDoctorMcpConfigured,
+    codeartsDoctorMcpConfigured,
+    codeartsWorkDoctorMcpConfigured,
+    workbuddyDoctorMcpConfigured,
+    dshDoctorMcpConfigured,
+    officeaceDoctorMcpConfigured,
+    hermesDoctorMcpConfigured,
+    atomcodeDoctorMcpConfigured,
+    openclawDoctorMcpConfigured,
+  ]) {
+    mcpCfgTarget = candidate();
+    if (mcpCfgTarget !== null) break;
   }
-  const mpPath = codexMarketplacePath();
-  if (!mcpConfigured && existsSync(mpPath)) {
-    try {
-      const mp = asRecord(JSON.parse(readFileSync(mpPath, 'utf8')));
-      if (
-        mp.plugins &&
-        // Canonical plugin name — the same getCodexPluginName() reader
-        // ensureCodexMarketplaceEntry writes and codexDesktopStatus reads,
-        // so a marketplace.json rename moves all of them together.
-        (Array.isArray(mp.plugins) ? mp.plugins : []).some((p) => asRecord(p).name === getCodexPluginName())
-      ) {
-        mcpConfigured = true;
-        mcpCfgTarget = 'Codex Desktop';
-      }
-    } catch {
-      // corrupt marketplace file skips this candidate — the probe continues
-    }
-  }
-  const codeartsCfg = codeartsMcpSettingsFile();
-  if (!mcpConfigured && existsSync(codeartsCfg)) {
-    try {
-      const cfg = asRecord(JSON.parse(readFileSync(codeartsCfg, 'utf8')));
-      if (cfg.mcpServers && asRecord(cfg.mcpServers)['huaweicloud-devkit']) {
-        mcpConfigured = true;
-        mcpCfgTarget = 'CodeArts';
-      }
-    } catch {
-      // corrupt CodeArts config skips this candidate — the probe continues
-    }
-  }
-  const codeartsWorkCfg = codeartsWorkMcpSettingsFile();
-  if (!mcpConfigured && existsSync(codeartsWorkCfg)) {
-    try {
-      const cfg = asRecord(JSON.parse(readFileSync(codeartsWorkCfg, 'utf8')));
-      if (cfg.mcp && asRecord(cfg.mcp)['huaweicloud-devkit']) {
-        mcpConfigured = true;
-        mcpCfgTarget = 'CodeArts Work';
-      }
-    } catch {
-      // corrupt CodeArts Work config skips this candidate — the probe continues
-    }
-  }
-  const workbuddyCfg = workbuddyMcpConfigFile();
-  if (!mcpConfigured && existsSync(workbuddyCfg)) {
-    try {
-      const cfg = asRecord(JSON.parse(readFileSync(workbuddyCfg, 'utf8')));
-      if (cfg.mcpServers && asRecord(cfg.mcpServers)['huaweicloud-devkit']) {
-        mcpConfigured = true;
-        mcpCfgTarget = 'WorkBuddy';
-      }
-    } catch {
-      // corrupt WorkBuddy config skips this candidate — the probe continues
-    }
-  }
-  if (!mcpConfigured && dshPatchConfigured()) {
-    mcpConfigured = true;
-    mcpCfgTarget = 'DSH';
-  }
-  if (!mcpConfigured) {
-    const officeaceCfg = officeaceCapabilitiesFile();
-    if (existsSync(officeaceCfg)) {
-      try {
-        const cfg = asRecord(JSON.parse(readFileSync(officeaceCfg, 'utf8')));
-        const capabilities: unknown[] = Array.isArray(cfg.capabilities) ? cfg.capabilities : [];
-        if (capabilities.some((c) => asRecord(c).id === 'huaweicloud-devkit' && asRecord(c).type === 'mcp')) {
-          mcpConfigured = true;
-          mcpCfgTarget = 'OfficeAce';
-        }
-      } catch {
-        // corrupt capabilities file skips this candidate — the probe continues
-      }
-    }
-  }
-  if (!mcpConfigured) {
-    const hermesCfg = hermesConfigFile();
-    if (existsSync(hermesCfg)) {
-      try {
-        const cfg = readFileSync(hermesCfg, 'utf8');
-        if (cfg.includes('mcp_servers:') && cfg.includes('huaweicloud-devkit')) {
-          mcpConfigured = true;
-          mcpCfgTarget = 'Hermes Agent';
-        }
-      } catch {
-        // unreadable Hermes config skips this candidate — the probe continues
-      }
-    }
-  }
-  if (!mcpConfigured) {
-    const atomcodeCfg = atomcodeMcpConfigFile();
-    if (existsSync(atomcodeCfg)) {
-      try {
-        const cfg = asRecord(JSON.parse(readFileSync(atomcodeCfg, 'utf8')));
-        if (cfg.mcpServers && asRecord(cfg.mcpServers)['huaweicloud-devkit']) {
-          mcpConfigured = true;
-          mcpCfgTarget = 'AtomCode';
-        }
-      } catch {
-        // corrupt AtomCode config skips this candidate — the probe continues
-      }
-    }
-  }
-  if (!mcpConfigured) {
-    // OpenClaw's .mcp.json is written by the same writeMcpServersFile the
-    // codex-desktop flow uses (mcpServers key).
-    const openclawCfg = join(openclawPluginsDir(), '.mcp.json');
-    if (existsSync(openclawCfg)) {
-      try {
-        const cfg = asRecord(JSON.parse(readFileSync(openclawCfg, 'utf8')));
-        if (cfg.mcpServers && asRecord(cfg.mcpServers)['huaweicloud-devkit']) {
-          mcpConfigured = true;
-          mcpCfgTarget = 'OpenClaw';
-        }
-      } catch {
-        // corrupt OpenClaw config exhausts the candidates — the check reports its advice
-      }
-    }
-  }
+  const mcpConfigured = mcpCfgTarget !== null;
   check(
     'MCP configured',
     mcpConfigured,
     mcpCfgTarget ? `Found in ${mcpCfgTarget} config` : 'Run: npx huaweicloud-devkit install',
   );
 
-  // Skills-tree permission seam — OpenCode installs only (the seam is the
-  // installer's zero-prompt path for direct skill reads on that harness).
-  // Doctor verifies the two keys and their values, honoring the ownership
-  // contract: a user-owned value on a devkit glob is reported as kept, not
-  // broken; a below-floor or absent opencode is a SKIP, never a FAIL.
+  // Skills-tree permission seam — OpenCode installs only (the section in
+  // agents/opencode.ts owns the per-glob kept/missing evaluation).
   if (installedPayload?.id === 'opencode') {
-    if (openCodeSeamGate() === 'off') {
-      console.log(
-        '  \x1b[33m[SKIP]\x1b[0m Skills-tree permission seam (opencode not verifiably at or above the measured permission floor)',
-      );
-    } else {
-      // Per-glob evaluation, matching the installer's per-section/per-glob
-      // contract exactly: user-owned globs (any non-devkit value) are
-      // reported as kept, missing globs as healable — one user-owned glob
-      // must never mask a missing edit deny. Configs the installer itself
-      // refuses to touch (scalar-shaped permission, unparseable file — the
-      // parse-fail skip is the install path's ONLY skip) get a SKIP with
-      // the manual pointer, never a FAIL whose re-run-install remediation
-      // cannot succeed.
-      const globs = openCodeSeamGlobs(opencodePluginsDir());
-      let cfg: Record<string, unknown> | null;
-      try {
-        cfg = asRecord(JSON.parse(readFileSync(opencodeCfg, 'utf8')));
-      } catch {
-        cfg = null;
-      }
-      const permission = cfg !== null ? cfg.permission : undefined;
-      if (
-        cfg === null ||
-        (permission !== undefined &&
-          (typeof permission !== 'object' || permission === null || Array.isArray(permission)))
-      ) {
-        console.log(
-          '  \x1b[33m[SKIP]\x1b[0m Skills-tree permission seam: opencode config unreadable or scalar-shaped — the installer keeps it untouched; add the rules manually (see README, Harness permission notes)',
-        );
-      } else {
-        const permRecord = asRecord(permission);
-        const ext = asRecord(permRecord.external_directory);
-        const editRules = asRecord(permRecord.edit);
-        const kept = globs.filter(
-          (g) => (g in ext && ext[g] !== 'allow') || (g in editRules && editRules[g] !== 'deny'),
-        );
-        const missing = globs.filter((g) => ext[g] !== 'allow' || editRules[g] !== 'deny');
-        if (missing.length === 0) {
-          check('Skills-tree permission seam (allow + edit deny)', true, '');
-        } else if (kept.length === 0) {
-          check(
-            'Skills-tree permission seam (allow + edit deny)',
-            false,
-            'Run: npx huaweicloud-devkit install (writes the missing skills-tree rules; see README, Harness permission notes)',
-          );
-        } else {
-          check(
-            'Skills-tree permission seam (allow + edit deny)',
-            false,
-            `${missing.length} rule(s) missing (re-run: npx huaweicloud-devkit install); ${kept.length} user-owned glob(s) kept as-is (see README, Harness permission notes)`,
-          );
-        }
-      }
-    }
+    opencodeDoctorSeam(ctx);
   }
 
-  // Hermes MCP Python SDK (only checked when Hermes config is found)
-  if (
-    mcpCfgTarget === 'Hermes Agent' ||
-    (existsSync(hermesConfigFile()) && readFileSync(hermesConfigFile(), 'utf8').includes('mcp_servers'))
-  ) {
-    check('Hermes MCP Python SDK', hermesMcpSdkOk(), 'Run: pip3 install mcp');
-  }
+  // Hermes MCP Python SDK (only checked when Hermes config is found).
+  hermesDoctorSdkCheck(ctx, mcpCfgTarget);
 
   // hcloud CLI
   const hcloudProbe = probeHcloud();

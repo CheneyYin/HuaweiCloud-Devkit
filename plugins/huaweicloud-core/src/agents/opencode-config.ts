@@ -6,7 +6,6 @@
 // (deliberately fs/spawn-free); the deploy/uninstall/status lifecycle and
 // the doctor sections stay in agents/opencode.ts.
 
-import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -16,7 +15,7 @@ import { opencodeConfigFile, opencodePluginsDir, opencodeSkillsDir } from '../ta
 import { applyPacksToEntry } from '../packs-policy.ts';
 import { mergeCommandStyle, extractUserDelta, applyUserDelta } from '../mcp-config-merge.ts';
 import { saveAgentDelta, takeAgentDelta } from '../mcp-config-backup.ts';
-import { printMcpConfigStatus, readJsonRecord, writeMcpSettingsFile } from '../mcp-config-io.ts';
+import { readJsonRecord, writeMcpSettingsFile } from '../mcp-config-io.ts';
 import {
   applySkillTreePermissionSeam,
   opencodeSeamVersionSupported,

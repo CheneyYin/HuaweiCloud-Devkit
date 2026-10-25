@@ -20,13 +20,34 @@ import {
   deployWord,
   installRuntimeDeps,
   mcpServerInstalled,
-  payloadStatusLines,
   pruneStale,
   removeHuaweiCommandsFrom,
   removeIfExists,
   type DeployMode,
 } from '../install-payload.ts';
-import { backupDeltaFromMcpServersFile, writeMcpServersFile } from '../mcp-config-io.ts';
+import { backupDeltaFromMcpServersFile, writeMcpJsonAndCodexManifest } from '../mcp-config-io.ts';
+
+// Doctor: the Codex Desktop MCP-configured candidate — the personal
+// marketplace registration under ~/.agents/plugins/marketplace.json. The
+// canonical plugin name — the same getCodexPluginName() reader
+// ensureCodexMarketplaceEntry writes and removeCodexMarketplaceEntry
+// filters on, so a marketplace.json rename moves all of them together.
+export function codexDesktopDoctorMcpConfigured(): string | null {
+  const mpPath = codexMarketplacePath();
+  if (!existsSync(mpPath)) return null;
+  try {
+    const mp = asRecord(JSON.parse(readFileSync(mpPath, 'utf8')));
+    if (
+      mp.plugins &&
+      (Array.isArray(mp.plugins) ? mp.plugins : []).some((p) => asRecord(p).name === getCodexPluginName())
+    ) {
+      return 'Codex Desktop';
+    }
+  } catch {
+    // corrupt marketplace file skips this candidate — the probe continues
+  }
+  return null;
+}
 
 export function ensureCodexMarketplaceEntry(): void {
   const mpPath = codexMarketplacePath();
@@ -104,43 +125,6 @@ export function removeCodexMarketplaceEntry(): void {
   marketplace.plugins = filtered;
   writeFileSync(mpPath, JSON.stringify(marketplace, null, 2) + '\n');
   console.log('  Marketplace entry removed');
-}
-
-// openclaw and codex-desktop both ship a .mcp.json plus the .codex-plugin
-// manifest into their plugin dir — the codex-discoverable plugin-dir shape;
-// the agentKey spells the delta-backup bucket in writeMcpServersFile.
-export function writeMcpJsonAndCodexManifest(pluginDest: string, agentKey: string, mode: DeployMode): void {
-  const mcpServerAbsPath = join(pluginDest, 'dist', 'mcp-server.js').replace(/\\/g, '/');
-  writeMcpServersFile(pluginDest, mcpServerAbsPath, agentKey);
-  const codexPluginSrc = join(PLUGIN_ROOT, '.codex-plugin');
-  if (existsSync(codexPluginSrc)) {
-    copyDir(codexPluginSrc, join(pluginDest, '.codex-plugin'));
-    console.log(`  Plugin Manifest${deployWord(mode)} -> ${join(pluginDest, '.codex-plugin')}`);
-  }
-}
-
-// Codex Desktop serves the payload from its own plugin dir plus a
-// marketplace registration under ~/.agents/plugins/marketplace.json —
-// status reports both surfaces (previously the one target cmdStatus did
-// not cover at all; the release smoke had to skip its status check).
-export function codexDesktopStatus(): void {
-  payloadStatusLines(codexDesktopPluginsDir());
-  const mpPath = codexMarketplacePath();
-  if (existsSync(mpPath)) {
-    try {
-      const marketplace = asRecord(JSON.parse(readFileSync(mpPath, 'utf8')));
-      const plugins: unknown[] = Array.isArray(marketplace.plugins) ? marketplace.plugins : [];
-      // The canonical plugin name — the same derived value
-      // ensureCodexMarketplaceEntry writes and removeCodexMarketplaceEntry
-      // filters on (all three ride getCodexPluginName).
-      const registered = plugins.some((p) => asRecord(p).name === getCodexPluginName());
-      console.log(`  Marketplace: ${registered ? '\x1b[32mRegistered\x1b[0m' : '\x1b[31mNot registered\x1b[0m'}`);
-    } catch {
-      console.log(`  Marketplace: \x1b[31mInvalid\x1b[0m`);
-    }
-  } else {
-    console.log(`  Marketplace: \x1b[31mNot registered\x1b[0m`);
-  }
 }
 
 // Codex Desktop deploy: commands, assets, and the marketplace entry. Install

@@ -17,6 +17,20 @@ import {
   type DeployMode,
 } from '../install-payload.ts';
 
+// Doctor: the AtomCode MCP-configured candidate — hooks.json-adjacent mcp
+// config's mcpServers.huaweicloud-devkit entry.
+export function atomcodeDoctorMcpConfigured(): string | null {
+  const atomcodeCfg = atomcodeMcpConfigFile();
+  if (!existsSync(atomcodeCfg)) return null;
+  try {
+    const cfg = asRecord(JSON.parse(readFileSync(atomcodeCfg, 'utf8')));
+    if (cfg.mcpServers && asRecord(cfg.mcpServers)['huaweicloud-devkit']) return 'AtomCode';
+  } catch {
+    // corrupt AtomCode config skips this candidate — the probe continues
+  }
+  return null;
+}
+
 // ── AtomCode hooks deployment ────────────────────────────────
 
 function deployAtomcodeHooks(): void {

@@ -1,7 +1,7 @@
 // The CodeArts agent module, extracted from setup-cli.ts: user- and
 // project-level mcp_settings.json registration and the skill-tracker hook.
 
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -13,6 +13,7 @@ import {
   codeartsSkillsDir,
 } from '../targets.ts';
 import { findHcloudBin } from '../hcloud-probe.ts';
+import { asRecord } from '../lib/as-record.ts';
 import { ensureMcpServersConfig, printMcpConfigStatus, removeMcpServerEntry } from '../mcp-config-io.ts';
 import {
   PACKAGE_ROOT,
@@ -23,6 +24,21 @@ import {
   removeIfExists,
   type DeployMode,
 } from '../install-payload.ts';
+
+// Doctor: the CodeArts MCP-configured candidate — the user-level mcp settings
+// file's mcpServers.huaweicloud-devkit entry (status reads user-level only,
+// matching the packs slot).
+export function codeartsDoctorMcpConfigured(): string | null {
+  const codeartsCfg = codeartsMcpSettingsFile();
+  if (!existsSync(codeartsCfg)) return null;
+  try {
+    const cfg = asRecord(JSON.parse(readFileSync(codeartsCfg, 'utf8')));
+    if (cfg.mcpServers && asRecord(cfg.mcpServers)['huaweicloud-devkit']) return 'CodeArts';
+  } catch {
+    // corrupt CodeArts config skips this candidate — the probe continues
+  }
+  return null;
+}
 
 function registerCodeartsMcp(configPath: string, agentKey = 'codearts'): void {
   const mcpPath = join(codeartsPluginsDir(), 'dist', 'mcp-server.js').replace(/\\/g, '/');

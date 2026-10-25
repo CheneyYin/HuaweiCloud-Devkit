@@ -22,7 +22,6 @@ import { asRecord } from '../lib/as-record.ts';
 import {
   copyServerPayload,
   devkitOwnedSkillNames,
-  errorMessage,
   installRuntimeDeps,
   payloadStatusLines,
   removeIfExists,
@@ -30,6 +29,24 @@ import {
 } from '../install-payload.ts';
 import { officeaceSqlitePath, openOfficeaceDb } from './officeace-sqlite.ts';
 import { ensureOfficeaceMcpInSqlite, removeOfficeaceMcpFromSqlite } from './officeace-registry.ts';
+
+// Doctor: the OfficeAce MCP-configured candidate — the capabilities.json
+// registration face (the sqlite connector registry is the packs slot's read,
+// joined through PACK_SLOTS' officeace row).
+export function officeaceDoctorMcpConfigured(): string | null {
+  const officeaceCfg = officeaceCapabilitiesFile();
+  if (!existsSync(officeaceCfg)) return null;
+  try {
+    const cfg = asRecord(JSON.parse(readFileSync(officeaceCfg, 'utf8')));
+    const capabilities: unknown[] = Array.isArray(cfg.capabilities) ? cfg.capabilities : [];
+    if (capabilities.some((c) => asRecord(c).id === 'huaweicloud-devkit' && asRecord(c).type === 'mcp')) {
+      return 'OfficeAce';
+    }
+  } catch {
+    // corrupt capabilities file skips this candidate — the probe continues
+  }
+  return null;
+}
 
 // capabilities.json is written back verbatim apart from the managed entries, so
 // every non-`capabilities` field stays unknown and round-trips untouched.

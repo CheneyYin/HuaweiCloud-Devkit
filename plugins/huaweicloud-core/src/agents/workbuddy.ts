@@ -21,6 +21,20 @@ import {
   type DeployMode,
 } from '../install-payload.ts';
 
+// Doctor: the WorkBuddy MCP-configured candidate — mcp.json's
+// mcpServers.huaweicloud-devkit entry.
+export function workbuddyDoctorMcpConfigured(): string | null {
+  const workbuddyCfg = workbuddyMcpConfigFile();
+  if (!existsSync(workbuddyCfg)) return null;
+  try {
+    const cfg = asRecord(JSON.parse(readFileSync(workbuddyCfg, 'utf8')));
+    if (cfg.mcpServers && asRecord(cfg.mcpServers)['huaweicloud-devkit']) return 'WorkBuddy';
+  } catch {
+    // corrupt WorkBuddy config skips this candidate — the probe continues
+  }
+  return null;
+}
+
 function ensureWorkbuddyMcpConfig(): boolean {
   const env: Record<string, string> = { HUAWEICLOUD_AGENT_TOOLKIT_MODE: 'local' };
   const hcloudBin = findHcloudBin();

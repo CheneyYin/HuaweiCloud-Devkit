@@ -19,6 +19,23 @@ import { asRecord } from './lib/as-record.ts';
 import { applyUserDelta, extractUserDelta, mergeArgsStyle } from './mcp-config-merge.ts';
 import { saveAgentDelta, takeAgentDelta } from './mcp-config-backup.ts';
 import { applyPacksToEntry } from './packs-policy.ts';
+import { copyDir, deployWord, PLUGIN_ROOT, type DeployMode } from './install-payload.ts';
+
+// openclaw and codex-desktop both ship a .mcp.json plus the .codex-plugin
+// manifest into their plugin dir — the codex-discoverable plugin-dir shape;
+// the agentKey spells the delta-backup bucket in writeMcpServersFile. Moved
+// here from agents/codex-desktop.ts: it wraps this module's own
+// writeMcpServersFile, and both deploy faces import it from the writer
+// family.
+export function writeMcpJsonAndCodexManifest(pluginDest: string, agentKey: string, mode: DeployMode): void {
+  const mcpServerAbsPath = join(pluginDest, 'dist', 'mcp-server.js').replace(/\\/g, '/');
+  writeMcpServersFile(pluginDest, mcpServerAbsPath, agentKey);
+  const codexPluginSrc = join(PLUGIN_ROOT, '.codex-plugin');
+  if (existsSync(codexPluginSrc)) {
+    copyDir(codexPluginSrc, join(pluginDest, '.codex-plugin'));
+    console.log(`  Plugin Manifest${deployWord(mode)} -> ${join(pluginDest, '.codex-plugin')}`);
+  }
+}
 
 // R5: write an MCP settings JSON file with least-privilege permissions
 // (parent dir 0700, file 0600) so the platform-injected temporary credentials

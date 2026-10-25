@@ -82,7 +82,10 @@ test('agents/codearts.ts supports the codearts target end to end', () => {
   assert.match(readSource(join('src', 'doctor-native.ts')), /managedHere && corePack\.has\(entry\.name\)/);
   // The byte-equality comparator lives in the shared zod-free lib (doctor
   // and the install tests import the same one), not as a setup-cli local.
-  assert.match(readSource(join('src', 'doctor-native.ts')), /import \{ skillTreeEquals \} from '\.\/lib\/skill-tree\.ts';/);
+  assert.match(
+    readSource(join('src', 'doctor-native.ts')),
+    /import \{ skillTreeEquals \} from '\.\/lib\/skill-tree\.ts';/,
+  );
   const skillTreeSrc = readSource(join('src', 'lib', 'skill-tree.ts'));
   assert.match(skillTreeSrc, /export function skillTreeEquals\(a: string, b: string\): boolean/);
   // help text documents the target
@@ -310,8 +313,8 @@ test('agents/hermes.ts supports the hermes target end to end', () => {
   // officeace-paths probe, not setup-cli.
   assert.match(readSource(join('src', 'officeace-paths.ts')), /LOCALAPPDATA/);
   assert.match(hermes, /--skip-mcp-server/);
-  assert.match(hermes, /function ensureHermesMcpSdk\(\)/);
-  assert.match(hermes, /function hermesMcpSdkOk\(\)/);
+  assert.match(readSource(join('src', 'agents', 'hermes-sdk.ts')), /function ensureHermesMcpSdk\(\)/);
+  assert.match(readSource(join('src', 'agents', 'hermes-sdk.ts')), /function hermesMcpSdkOk\(\)/);
 });
 
 test('PAYLOAD_TARGETS is the single id→dir map for payload targets', () => {
@@ -355,6 +358,42 @@ test('PAYLOAD_TARGETS is the single id→dir map for payload targets', () => {
   assert.match(readSource(join('src', 'agents', 'dsh-patch.ts')), /export function dshPayloadDoctorSection\(/);
   // The reporter contract is the sections' only emission path.
   assert.match(readSource(join('src', 'doctor-report.ts')), /export interface DoctorReporter/);
+});
+
+// The MCP-configured chain is table-driven over agent-owned candidates: the
+// shell keeps the chain driver and the check line, and every candidate
+// (the config-file knowledge) lives in the agent module that owns the file
+// it reads — in a fixed order, so a new agent joins by exporting its
+// candidate and adding it here, not by growing an inline probe.
+test('the doctor MCP-configured chain covers every agent-owned candidate', () => {
+  const setup = readSource(join('src', 'setup-cli.ts'));
+  const driver = setup.match(
+    /let mcpCfgTarget: string \| null = null;\n  for \(const candidate of \[([\s\S]*?)\]\) \{/,
+  );
+  assert.ok(driver, 'the chain driver must exist in cmdDoctor');
+  const chain = driver[1]!;
+  const candidates = [
+    ['opencodeDoctorMcpConfigured', 'agents/opencode.ts'],
+    ['codexDesktopDoctorMcpConfigured', 'agents/codex-desktop.ts'],
+    ['codeartsDoctorMcpConfigured', 'agents/codearts.ts'],
+    ['codeartsWorkDoctorMcpConfigured', 'agents/codearts-work.ts'],
+    ['workbuddyDoctorMcpConfigured', 'agents/workbuddy.ts'],
+    ['dshDoctorMcpConfigured', 'agents/dsh-patch.ts'],
+    ['officeaceDoctorMcpConfigured', 'agents/officeace.ts'],
+    ['hermesDoctorMcpConfigured', 'agents/hermes.ts'],
+    ['atomcodeDoctorMcpConfigured', 'agents/atomcode.ts'],
+    ['openclawDoctorMcpConfigured', 'agents/openclaw.ts'],
+  ] as const;
+  for (const [name, module] of candidates) {
+    assert.match(chain, new RegExp(`\\b${name},`), `${name} must sit in the chain, in order`);
+    assert.match(
+      readSource(join('src', module)),
+      new RegExp(`export function ${name}\\(\\): string \\| null`),
+      `${name} must be exported by ${module}`,
+    );
+  }
+  // The chain short-circuits on the first hit, like the inline guards did.
+  assert.match(setup, /if \(mcpCfgTarget !== null\) break;/);
 });
 
 test('tools.ts no longer probes hermes/atomcode native skill dirs', () => {

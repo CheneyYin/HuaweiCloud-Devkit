@@ -156,6 +156,12 @@ export function removeDshMcpPatch(): boolean {
   return true;
 }
 
+// Doctor: the DSH MCP-configured candidate — the configured patch (either
+// the CLI-managed block or the bundle-provided one).
+export function dshDoctorMcpConfigured(): string | null {
+  return dshPatchConfigured() ? 'DSH' : null;
+}
+
 export function dshPatchConfigured(): boolean {
   const patchFile = dshPatchFile();
   if (!existsSync(patchFile)) return false;

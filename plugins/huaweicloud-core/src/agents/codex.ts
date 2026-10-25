@@ -5,14 +5,16 @@
 // manifest writer (also used by OpenClaw's deploy), and the desktop
 // status/uninstall live in agents/codex-desktop.ts.
 
-import { existsSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 
-import { PACKAGE_ROOT, removeIfExists } from '../install-payload.ts';
+import { PACKAGE_ROOT, payloadStatusLines, removeIfExists } from '../install-payload.ts';
 import { resolvePacksFlag } from '../packs-policy.ts';
 import { codexPluginProbe, getCodexPluginName, getMarketplaceName } from '../codex-probe.ts';
+import { asRecord } from '../lib/as-record.ts';
+import { codexDesktopPluginsDir, codexMarketplacePath } from '../targets.ts';
 
 export function hasCodexCLI(): boolean {
   const r = spawnSync('codex --version', [], { shell: true, windowsHide: true, stdio: 'pipe', timeout: 5000 });
@@ -198,5 +200,31 @@ export function codexSectionStatus(): void {
     console.log('  \x1b[33mCodex CLI not found.\x1b[0m');
   } else {
     console.log(`  Plugin: ${codexStatus() ? '\x1b[32mInstalled\x1b[0m' : '\x1b[31mNot installed\x1b[0m'}`);
+  }
+}
+
+// Codex Desktop serves the payload from its own plugin dir plus a
+// marketplace registration under ~/.agents/plugins/marketplace.json —
+// status reports both surfaces (previously the one target cmdStatus did
+// not cover at all; the release smoke had to skip its status check). Lives
+// beside the other codex status faces (agents/codex-desktop.ts owns the
+// deploy/marketplace-write family).
+export function codexDesktopStatus(): void {
+  payloadStatusLines(codexDesktopPluginsDir());
+  const mpPath = codexMarketplacePath();
+  if (existsSync(mpPath)) {
+    try {
+      const marketplace = asRecord(JSON.parse(readFileSync(mpPath, 'utf8')));
+      const plugins: unknown[] = Array.isArray(marketplace.plugins) ? marketplace.plugins : [];
+      // The canonical plugin name — the same derived value
+      // ensureCodexMarketplaceEntry writes and removeCodexMarketplaceEntry
+      // filters on (all three ride getCodexPluginName).
+      const registered = plugins.some((p) => asRecord(p).name === getCodexPluginName());
+      console.log(`  Marketplace: ${registered ? '\x1b[32mRegistered\x1b[0m' : '\x1b[31mNot registered\x1b[0m'}`);
+    } catch {
+      console.log(`  Marketplace: \x1b[31mInvalid\x1b[0m`);
+    }
+  } else {
+    console.log(`  Marketplace: \x1b[31mNot registered\x1b[0m`);
   }
 }

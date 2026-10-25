@@ -2,11 +2,12 @@
 // commands + plugin-dir deploy with the codex-discoverable .mcp.json shape
 // (shared with Codex Desktop through agents/codex-desktop.ts).
 
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
 import { openclawPluginsDir, openclawSkillsDir } from '../targets.ts';
+import { asRecord } from '../lib/as-record.ts';
 import {
   PACKAGE_ROOT,
   copyDir,
@@ -19,8 +20,22 @@ import {
   removeIfExists,
   type DeployMode,
 } from '../install-payload.ts';
-import { backupDeltaFromMcpServersFile } from '../mcp-config-io.ts';
-import { writeMcpJsonAndCodexManifest } from './codex-desktop.ts';
+import { backupDeltaFromMcpServersFile, writeMcpJsonAndCodexManifest } from '../mcp-config-io.ts';
+
+// Doctor: the OpenClaw MCP-configured candidate — the plugin dir's .mcp.json
+// (written by the same writeMcpServersFile the codex-desktop flow uses;
+// mcpServers key).
+export function openclawDoctorMcpConfigured(): string | null {
+  const openclawCfg = join(openclawPluginsDir(), '.mcp.json');
+  if (!existsSync(openclawCfg)) return null;
+  try {
+    const cfg = asRecord(JSON.parse(readFileSync(openclawCfg, 'utf8')));
+    if (cfg.mcpServers && asRecord(cfg.mcpServers)['huaweicloud-devkit']) return 'OpenClaw';
+  } catch {
+    // corrupt OpenClaw config exhausts the candidates — the check reports its advice
+  }
+  return null;
+}
 
 export async function deployOpenClaw(mode: DeployMode): Promise<void> {
   const commandsSrc = join(PACKAGE_ROOT, 'integrations', 'opencode', 'commands');

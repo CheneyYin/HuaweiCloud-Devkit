@@ -2,7 +2,7 @@
 // setup-cli.ts: the `mcp` + `command`/`environment` config dialect with
 // peer-env inheritance for market-preset STS credentials.
 
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 
 import { codeartsWorkMcpSettingsFile, codeartsWorkPluginsDir, codeartsWorkSkillsDir } from '../targets.ts';
@@ -19,6 +19,20 @@ import {
   removeIfExists,
   type DeployMode,
 } from '../install-payload.ts';
+
+// Doctor: the CodeArts Work MCP-configured candidate — the mcp settings
+// file's mcp.huaweicloud-devkit entry.
+export function codeartsWorkDoctorMcpConfigured(): string | null {
+  const codeartsWorkCfg = codeartsWorkMcpSettingsFile();
+  if (!existsSync(codeartsWorkCfg)) return null;
+  try {
+    const cfg = asRecord(JSON.parse(readFileSync(codeartsWorkCfg, 'utf8')));
+    if (cfg.mcp && asRecord(cfg.mcp)['huaweicloud-devkit']) return 'CodeArts Work';
+  } catch {
+    // corrupt CodeArts Work config skips this candidate — the probe continues
+  }
+  return null;
+}
 
 // --- CodeArts Work (CodeArts Space) ---
 
