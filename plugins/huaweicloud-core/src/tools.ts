@@ -1,7 +1,13 @@
 import { evaluateArtifacts, evaluateCommandRisk, evaluateDeployPlan, type RiskEvaluation } from './risk-rule-engine.ts';
 import { classifyTextCommand } from './safety-policy.ts';
-import { parseStsExpiry, resolveCredentialsWithRuntime } from './auth/credentials.ts';
 import { trackToolInvoke, trackSkillRetrieve } from './telemetry/telemetry.ts';
+// The telemetry invoke-value derivation (the auditable fact callTool records
+// per tool call) lives in the telemetry family; explain_error's handler in
+// explain-error.ts; get_regional_availability's in the services family
+// beside the SERVICE_REGIONS table it reads.
+import { toolInvokeValue } from './telemetry/invoke-value.ts';
+import { explainError } from './explain-error.ts';
+import { getRegionalAvailability } from './services/availability.ts';
 // The update tool handlers live in the update pack's handler map (merged
 // into PACK_TOOL_HANDLERS); only the DistTags type for the CallToolOptions
 // doQuery seam is still needed here.
@@ -15,10 +21,6 @@ import { PACK_TOOL_HANDLERS, isPackToolName, type PackToolName } from './packs/r
 // hold one membership predicate (dir-or-symlink with a SKILL.md).
 import { listSkillDirs } from './lib/skill-tree.ts';
 import { recordToolCall, traceEnabled } from './lib/call-trace.ts';
-// Service region descriptor (the old inline `known` table in
-// getRegionalAvailability, migrated verbatim — see services/regions.ts for
-// its guarantee scope).
-import { SERVICE_REGIONS } from './services/regions.ts';
 // The tool name/description registry (TOOL_DEFINITIONS_LITERALS and its
 // derived types) lives in tool-definitions.ts; this module keeps the
 // re-export face every importer (mcp-protocol, tests, scripts) already
@@ -32,52 +34,30 @@ import { TOOL_DEFINITIONS, type ToolName } from './tool-definitions.ts';
 import { VENDOR_GATED_TOOLS, enforceVendorGate } from './vendor-gate.ts';
 // The capability catalog (service_catalog / list_packs / pack_info
 // handlers, the SKILL_OWNER inversion, and the shared pack-refusal
-// helpers) lives in capability-catalog.ts; dispatchTool switches into it
-// and verifySkillTree cross-checks SKILL_OWNER. Session pack configuration
-// (packs_configure) is its own module — the one mutating pack tool.
-import { SKILL_OWNER, serviceCatalog, listPacks, packInfo } from './capability-catalog.ts';
+// helpers) lives in capability-catalog.ts; dispatchTool switches into it.
+// Session pack configuration (packs_configure) is its own module — the one
+// mutating pack tool.
+import { serviceCatalog, listPacks, packInfo } from './capability-catalog.ts';
 import { configurePacks } from './packs-configure.ts';
-// The skills-serving family: SKILLS_ROOT, retrieve_skill, and list_skills
-// live in skill-disclosure.ts (a src/ROOT-level module — the depth-safe
-// home for the tree path, per the comment there); search_docs lives in
-// search-docs.ts. This module keeps the SKILLS_ROOT re-export face for
-// mcp-protocol and the tests.
-import { SKILLS_ROOT, retrieveSkill, listSkills } from './skill-disclosure.ts';
+// The skills-serving family: SKILLS_ROOT, verifySkillTree (the boot guard
+// over the tree), retrieve_skill, and list_skills live in
+// skill-disclosure.ts (a src/ROOT-level module — the depth-safe home for
+// the tree path, per the comment there); search_docs lives in
+// search-docs.ts. This module keeps the SKILLS_ROOT and verifySkillTree
+// re-export faces for mcp-protocol and the tests.
+import { SKILLS_ROOT, verifySkillTree, retrieveSkill, listSkills } from './skill-disclosure.ts';
 import { searchDocs } from './search-docs.ts';
 
 export { TOOL_DEFINITIONS };
 export type { ToolDefinition, ToolName } from './tool-definitions.ts';
 export { VENDOR_GATED_TOOLS };
 export { SKILLS_ROOT };
+export { verifySkillTree };
 
 // Re-exported for the existing test importers (test/tools.test.ts); the
-// boot guard below consumes the local binding. The predicate itself lives
-// in src/lib/skill-tree.ts.
+// predicate itself lives in src/lib/skill-tree.ts and its consumer (the
+// verifySkillTree boot guard) in skill-disclosure.ts.
 export { listSkillDirs };
-
-// Boot-time cross-check between the registry's skill claims and the
-// generated tree. A server that advertises skills retrieve_skill cannot
-// serve (registry-driven list_packs beside an empty or partial tree) is
-// worse than one that refuses to start, so the factory calls this before
-// registering anything — mirroring the loudness of a missing dist/.
-// The tree must EQUAL the registry roster, not merely contain it: an
-// unclaimed directory is served ungated (SKILL_OWNER.get returns undefined,
-// so retrieve_skill skips the pack-enablement gate), so extras are as
-// dangerous as gaps. The root is injectable for tests.
-export function verifySkillTree(root: string = SKILLS_ROOT): void {
-  const present = new Set(listSkillDirs(root));
-  const missing = [...SKILL_OWNER.keys()].filter((skill) => !present.has(skill));
-  const unclaimed = [...present].filter((skill) => !SKILL_OWNER.has(skill));
-  if (missing.length > 0 || unclaimed.length > 0) {
-    const parts: string[] = [];
-    if (missing.length > 0) parts.push(`missing ${missing.join(', ')}`);
-    if (unclaimed.length > 0) parts.push(`unclaimed ${unclaimed.join(', ')}`);
-    throw new Error(
-      `skills tree invalid at ${root}: ${parts.join('; ')} — ` +
-        'from a git checkout run: npm run build; from an install run: npx huaweicloud-devkit install',
-    );
-  }
-}
 
 // Tool arguments as declared by the per-tool inputSchemas above. Only
 // required-field presence is validated upstream (mcp-protocol) and the numeric
@@ -191,45 +171,6 @@ export interface CallToolOptions {
   // mcp-protocol.ts. Its absence is the guard that keeps the stateless remote
   // from mutating process-shared pack state through a direct unlisted call.
   onPacksChanged?: () => void;
-}
-
-function toolInvokeValue(name: ToolName, args: ToolArgs): string {
-  if (name === 'huaweicloud_run_readonly_command' || name === 'huaweicloud_run_approved_command') {
-    const cmdArgs = args.args || [];
-    const filtered = cmdArgs.filter((a) => !a.startsWith('--') && !a.startsWith('-') && !a.includes('='));
-    if (filtered.length >= 2) return `hcloud ${filtered.slice(0, 2).join(' ')}`;
-  }
-  if (name === 'huaweicloud_list_operations' && args.service) {
-    return args.service;
-  }
-  if (name === 'huaweicloud_list_skills' && args.pack) {
-    return args.pack;
-  }
-  if (name === 'huaweicloud_retrieve_skill' && args.name) {
-    return args.name;
-  }
-  if (name === 'huaweicloud_packs_configure') {
-    // The delta is the telemetry value: which packs crossed the operator
-    // posture line in this session is the auditable fact.
-    const parts: string[] = [];
-    const enabled = (args.enable ?? []).map((id) => String(id));
-    const disabled = (args.disable ?? []).map((id) => String(id));
-    if (enabled.length > 0) parts.push('+' + enabled.join(','));
-    if (disabled.length > 0) parts.push('-' + disabled.join(','));
-    if (args.reset === true) parts.push('reset');
-    if (parts.length > 0) return parts.join(' ');
-  }
-  if (name === 'huaweicloud_hook_check_command' && args.command) {
-    const parts = args.command.split(/\s+/).filter((p) => !p.startsWith('--'));
-    if (parts[0] === 'hcloud' && parts[1]) return `hcloud ${parts.slice(1, 3).join(' ')}`;
-    return parts.slice(0, 2).join(' ');
-  }
-  // The auditable fact for vault mutations is the ref (and scope), never the
-  // value or any channel payload.
-  if (name === 'huaweicloud_secret_set' && args.ref) return args.ref;
-  if (name === 'huaweicloud_secret_list' && args.scope) return args.scope;
-  if (name === 'huaweicloud_secret_delete' && args.ref) return args.ref;
-  return '1';
 }
 
 // Reject invalid numeric args up front instead of silently coercing them to
@@ -346,237 +287,6 @@ function hookResult(result: RiskEvaluation) {
         : result.decision === 'warn'
           ? 'Review the warnings with the user before proceeding.'
           : 'No Huawei Cloud hook risk rule matched.',
-  };
-}
-
-function explainError({ service = 'unknown', errorCode = '', message = '', requestId = '' }: ToolArgs = {}) {
-  const combined = `${errorCode} ${message}`.toLowerCase();
-  const suggestions: string[] = [];
-  const svc = String(service).toLowerCase();
-
-  const SERVICE_ALIASES: Record<string, string> = {
-    functiongraph: 'FSS',
-    fgs: 'FSS',
-    ecs: 'Ecs',
-    ECS: 'Ecs',
-    kps: 'Kps',
-    KPS: 'Kps',
-    apic: 'APIG',
-    apigw: 'APIGW',
-    obs: 'OBS',
-  };
-  // #935 E2E-B1: real MCP calls pass only errorCode (e.g. Ecs.0019, KPS.9004)
-  // with no service — derive the service key from the dotted-code prefix so the
-  // service-keyed mapping table is hit. Behavior for an explicit real service
-  // name is unchanged; absent/empty/'unknown' service derives from the prefix.
-  let resolvedService = service;
-  if ((!service || svc === 'unknown') && /^[A-Za-z]+\.\w+/.test(errorCode)) {
-    const prefix = errorCode.split('.')[0]!.toLowerCase();
-    resolvedService = SERVICE_ALIASES[prefix] ?? errorCode.split('.')[0]!.toUpperCase();
-  }
-  const patternKey = SERVICE_ALIASES[svc] || resolvedService;
-
-  const hwErrorPatterns: Record<string, Record<string, string>> = {
-    OBS: {
-      InvalidAccessKeyId:
-        'OBS uses AK/SK directly (not IAM tokens). Verify AK/SK validity, OBS endpoint, and OBS permissions.',
-      UserRestricted:
-        'This IAM user is restricted from OBS operations (403). Check IAM console → Users → Permissions: grant OBS bucket/object actions, or use an unrestricted account. If the account is a sub-account, the main account may have imposed restrictions.',
-    },
-    APIG: {
-      'APIC.7241': 'The enterprise_project_id is required for enterprise accounts. Add --enterprise_project_id=0.',
-      'APIC.7242':
-        'The EIP binding method depends on loadbalancer_provider. Use AddIngressEipV2 for elb, AddEipV2 for lvs.',
-      'APIC.7256': 'Bandwidth minimum is 5 Mbps. Use --bandwidth_size=5 or higher.',
-      'APIC.7310': 'available_zone_ids must use AZ codes (e.g. ap-southeast-3a), NOT UUIDs from ListAvailableZonesV2.',
-    },
-    FSS: {
-      'FSS.0403':
-        'Missing FunctionGraph IAM permissions. Attach FunctionGraph FullAccess role or grant specific actions.',
-      'FSS.1078': '--code_filename is filename-only (no path). cd to the file directory before running the command.',
-      'FSS.1417':
-        'event_data field validation failed. Check parameter format: use dotted key=value, verify required hidden-optional fields.',
-    },
-    VPC: {
-      'VPC.0301': 'Bandwidth name is required for PER type EIPs, even though --help marks it optional.',
-    },
-    Ecs: {
-      'Ecs.0707':
-        'The flavor + image-type combination does not exist ("the product does not exist") — the error does not say which side is wrong, so check BOTH (#922): (1) the flavor is abandoned/sellout in this region/AZ (check os_extra_specs.cond:operation:status and cond:operation:az; see the huawei-ecs skill references/flavors.md for the AZ-vs-global-status conflict rule); (2) the image TYPE is incompatible with the flavor — market-type images fail with KunPeng flavors (kc1/kc2 etc.). Fix: switch the image to a gold-type image or switch to a compatible general-purpose flavor (verified: kc2.small.2 + market Ubuntu → Ecs.0707; s6.medium.2 + gold Ubuntu works), re-listing with hcloud ECS ListFlavors / hcloud IMS ListImages --__imagetype=gold first.',
-      // #935 (report 4 problem 1 / report 1 坑5): real-world ECS order failures
-      // with no mapping — flavor offline, AZ capacity, balance, keypair restriction.
-      'Ecs.0019':
-        'The flavor has been taken offline (Ecs.0019). Run `hcloud ECS ListFlavors --cli-region=<region>` to query currently on-sale flavors and switch to a replacement flavor (see the huawei-ecs skill references/flavors.md for the cond:operation:status field rules — a flavor marked 卖光/下线 keeps failing until you pick an on-sale one), then recreate.',
-      'Ecs.0319':
-        'The requested flavor has insufficient capacity in the selected availability zone (Ecs.0319). Fix: retry in a different availability zone, or switch to a replacement flavor (list on-sale flavors with `hcloud ECS ListFlavors --cli-region=<region>`), then recreate.',
-      'Ecs.0044':
-        'The requested volume type is sold out in the selected availability zone (Ecs.0044, e.g. "the volumeType [SATA] is sellout in az[cn-north-4a]"). This is the ROOT VOLUME/DISK type being unavailable — a different failure from Ecs.0319 (flavor capacity). Fix: switch `--server.root_volume.volumetype` to an available type (SAS/SSD/GPSSD — query availability first) or retry in a different availability zone (`hcloud ECS NovaListAvailabilityZones --cli-region=<region>`). ListFlavors does NOT pre-warn about volume-type sellouts — you only find out at order time.',
-      'Ecs.0067':
-        'Order submission rejected for balance reasons (Ecs.0067). Check the cash balance with `hcloud BSS ShowCustomerAccountBalances --cli-region=cn-north-1` and top up if needed — pay-per-use order risk control checks the CASH balance only (代金券/vouchers do NOT participate in order risk control; they only offset the bill at settlement). Also settle any historical arrears, however small, before retrying.',
-    },
-    Kps: {
-      // #935 (report 1 坑5): KPS keypair creation has its own restriction code —
-      // the Kps service had no entry at all, so the error fell through to generic advice.
-      'KPS.9004':
-        'Keypair creation rejected for account restrictions (KPS.9004). Check the cash balance with `hcloud BSS ShowCustomerAccountBalances --cli-region=cn-north-1` and top up if needed, and settle any historical arrears (even a small unpaid amount triggers this) — then retry `hcloud ECS NovaCreateKeypair` or create the keypair in the console.',
-    },
-    APIGW: {
-      'APIGW.0301':
-        'Incorrect IAM authentication information. The AK/SK is invalid (check the SK for typos), the security token is missing or expired, or the profile lacks project_id. Fix: re-run "npx huaweicloud-devkit auth init" (it auto-sets project_id), or set it manually: hcloud configure set --cli-project-id=<project_id> after finding it via hcloud IAM KeystoneListProjects --cli-region=<region> --name=<region>.',
-      'APIGW.0802':
-        'The current IAM user has no permissions in the requested region. Go to IAM console → Users → Permissions → add the target region, or switch to a different region.',
-    },
-  };
-  const patternTable = hwErrorPatterns[patternKey];
-  if (patternTable) {
-    const exact: string | undefined = patternTable[errorCode];
-    if (exact) {
-      suggestions.push(exact);
-    } else {
-      // Case-variant transcriptions (e.g. ECS.0019 echoed from console output)
-      // derive the right service key but used to miss the case-sensitive entry —
-      // the exact-hit scan is case-insensitive on the code. Deliberate divergence
-      // from main: without it the prefix-derivation feature no-ops on any
-      // non-canonical casing.
-      const lowerCode = errorCode.toLowerCase();
-      for (const [code, tip] of Object.entries(patternTable)) {
-        if (code.toLowerCase() === lowerCode) {
-          suggestions.push(tip);
-          break;
-        }
-      }
-    }
-  }
-  const svcPatterns: Record<string, string> = patternTable || {};
-  const lowerErrorCode = errorCode.toLowerCase();
-  for (const [code, tip] of Object.entries(svcPatterns)) {
-    if (errorCode && code.toLowerCase().includes(lowerErrorCode)) {
-      if (!suggestions.includes(tip)) suggestions.push(tip);
-    }
-  }
-
-  // When the active credential set is a temporary STS token that has already
-  // expired, surface that as the PRIMARY cause before generic auth guidance.
-  let activeCreds;
-  try {
-    activeCreds = resolveCredentialsWithRuntime({ allowMissing: true });
-  } catch {
-    activeCreds = null;
-  }
-  if (activeCreds?.ak && activeCreds?.sk && activeCreds.securityToken) {
-    const expiry = parseStsExpiry({ securityToken: activeCreds.securityToken });
-    if (expiry !== null && expiry <= Date.now()) {
-      suggestions.push(
-        'CREDENTIAL_EXPIRED: the temporary STS security token has expired. Re-authenticate to obtain fresh credentials (e.g. run "npx huaweicloud-devkit auth init" or re-login / restart the session).',
-      );
-    }
-  }
-
-  if (/auth|token|credential|ak|sk|401|403|unauthorized|forbidden|Incorrect IAM/i.test(combined)) {
-    if (svc === 'obs') {
-      suggestions.push(
-        'OBS uses AK/SK directly, not IAM tokens. Verify AK/SK validity and OBS bucket permissions via hcloud configure list or the Huawei Cloud console.',
-      );
-    } else {
-      suggestions.push('Check KooCLI profile, region, project_id, and IAM permissions without printing secrets.');
-    }
-  }
-  if (/APIGW\.(\d+)/i.test(errorCode)) {
-    suggestions.push(
-      'APIGW.' +
-        (errorCode.match(/APIGW\.(\d+)/i) || [])[1] +
-        ': API Gateway layer error. ' +
-        (errorCode === 'APIGW.0802'
-          ? 'IAM user has no region permissions — check IAM console → User → Permissions → add target region.'
-          : errorCode === 'APIGW.0301'
-            ? 'Incorrect IAM authentication information — verify AK/SK (SK typos are the usual cause), security token expiry, and that project_id is configured (auth init auto-sets it).'
-            : 'Verify the API request, region endpoint, and IAM permissions.'),
-    );
-  }
-  if (/region|endpoint|project/i.test(combined)) {
-    suggestions.push('Confirm the service endpoint, region, and project_id match the target resource.');
-  }
-  if (/quota|limit|insufficient|reach the limit/i.test(combined)) {
-    suggestions.push(
-      'Check quota and resource limits before retrying a create or scale operation. Consider switching accounts or requesting a quota increase.',
-    );
-  }
-  if (/not.?found|404/i.test(combined)) {
-    if (/list.?regions/i.test(svc)) {
-      suggestions.push('Use hcloud IAM KeystoneListRegions (not list-regions).');
-    } else {
-      suggestions.push('List resources in the same region/project and verify the resource identifier.');
-    }
-  }
-  if (!suggestions.length) {
-    suggestions.push(
-      'No known error-code pattern matched. Re-run the failing command with --debug to capture ' +
-        'X-Request-Id from the response headers, then re-call explain_error with service, operation, ' +
-        'region, the full redacted message, and requestId.',
-    );
-    if (errorCode) {
-      suggestions.push(
-        `Search the error code "${errorCode}" in the Huawei Cloud error center (support.huaweicloud.com) for the authoritative cause.`,
-      );
-    }
-  }
-
-  if (requestId) {
-    suggestions.push('Provide the Request ID (' + requestId + ') when contacting Huawei Cloud support.');
-  }
-
-  const uniqueSuggestions = suggestions.filter((s, i, arr) => {
-    return !arr.slice(0, i).some((prev) => prev.substring(0, 50).toLowerCase() === s.substring(0, 50).toLowerCase());
-  });
-
-  return {
-    service,
-    errorCode,
-    requestId,
-    suggestions: uniqueSuggestions,
-  };
-}
-
-async function getRegionalAvailability(service: string, region: string) {
-  const svc = String(service || '')
-    .toLowerCase()
-    .trim();
-  const reg = String(region || '')
-    .toLowerCase()
-    .trim();
-  if (!svc || !reg) return { ok: false, error: 'Both service and region are required.' };
-  // svc is an arbitrary string at this boundary; the explicit Record view is
-  // what keeps the string index legal under strict mode (SERVICE_REGIONS is a
-  // closed object literal with no index signature).
-  const table: Record<string, readonly string[]> = SERVICE_REGIONS;
-  if (!table[svc])
-    return {
-      ok: false,
-      service: svc,
-      region: reg,
-      available: false,
-      note:
-        'Service ' +
-        svc +
-        ' is not in the regional availability cache. Run hcloud ' +
-        svc.toUpperCase() +
-        ' --help to verify, or check https://developer.huaweicloud.com/endpoint.',
-    };
-  const available = table[svc].includes(reg) || table[svc].includes('global');
-  return {
-    ok: true,
-    service: svc,
-    region: reg,
-    available,
-    note: available
-      ? svc + ' is available in ' + reg + '.'
-      : svc +
-        ' availability in ' +
-        reg +
-        ' could not be confirmed. Verify at https://developer.huaweicloud.com/endpoint.',
-    sourcedFrom: 'static cache, update via npm package upgrade',
-    disclaimer:
-      'This result reflects service-level availability only. It does NOT guarantee that your IAM user has permissions in this region. Account-level restrictions (e.g., APIGW.0802) may block actual API calls even when the service is available.',
   };
 }
 

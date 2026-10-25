@@ -43,6 +43,30 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // the path at runtime (never baked at build time) from this same constant.
 export const SKILLS_ROOT = join(__dirname, '..', 'skills');
 
+// Boot-time cross-check between the registry's skill claims and the
+// generated tree. A server that advertises skills retrieve_skill cannot
+// serve (registry-driven list_packs beside an empty or partial tree) is
+// worse than one that refuses to start, so the factory calls this before
+// registering anything — mirroring the loudness of a missing dist/.
+// The tree must EQUAL the registry roster, not merely contain it: an
+// unclaimed directory is served ungated (SKILL_OWNER.get returns undefined,
+// so retrieve_skill skips the pack-enablement gate), so extras are as
+// dangerous as gaps. The root is injectable for tests.
+export function verifySkillTree(root: string = SKILLS_ROOT): void {
+  const present = new Set(listSkillDirs(root));
+  const missing = [...SKILL_OWNER.keys()].filter((skill) => !present.has(skill));
+  const unclaimed = [...present].filter((skill) => !SKILL_OWNER.has(skill));
+  if (missing.length > 0 || unclaimed.length > 0) {
+    const parts: string[] = [];
+    if (missing.length > 0) parts.push(`missing ${missing.join(', ')}`);
+    if (unclaimed.length > 0) parts.push(`unclaimed ${unclaimed.join(', ')}`);
+    throw new Error(
+      `skills tree invalid at ${root}: ${parts.join('; ')} — ` +
+        'from a git checkout run: npm run build; from an install run: npx huaweicloud-devkit install',
+    );
+  }
+}
+
 // Deterministic (codepoint, not locale) reference listing shared by the
 // skill disclosure tools. Regular files plus symlinks — the same read
 // exposure the unfiltered readdir it replaced had (a symlink to a

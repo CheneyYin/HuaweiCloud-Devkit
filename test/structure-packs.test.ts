@@ -56,7 +56,7 @@ test('skills resolve from the server-relative tree only (skill-disclosure.ts)', 
   const tools = readSource(join('src', 'tools.ts'));
   assert.match(
     tools,
-    /import \{ SKILLS_ROOT, retrieveSkill, listSkills \} from '\.\/skill-disclosure\.ts';/,
+    /import \{ SKILLS_ROOT, verifySkillTree, retrieveSkill, listSkills \} from '\.\/skill-disclosure\.ts';/,
     'tools.ts must keep the SKILLS_ROOT import behind its re-export face',
   );
   assert.match(tools, /export \{ SKILLS_ROOT \};/, 'tools.ts must keep the SKILLS_ROOT re-export face');
