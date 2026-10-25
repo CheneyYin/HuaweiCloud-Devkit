@@ -151,17 +151,15 @@ import {
   uninstallCodex,
   uninstallCodexDesktop,
 } from './agents/codex.ts';
+import { deployDsh, dshStatus, uninstallDsh } from './agents/dsh.ts';
 import {
-  deployDsh,
   DSH_MCP_PATCH_END,
   DSH_MCP_PATCH_START,
   dshPatchBlock,
   dshPatchConfigured,
   dshPatchHasOnlyCommentsOrEmptyList,
-  dshStatus,
   removeManagedDshPatchBlock,
-  uninstallDsh,
-} from './agents/dsh.ts';
+} from './agents/dsh-patch.ts';
 import {
   deployOpenCode,
   openCodeSeamGate,

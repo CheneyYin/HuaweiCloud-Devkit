@@ -205,7 +205,11 @@ test('src subdir modules never climb __dirname more than one level (bundle depth
 test('setup-cli.ts supports the dsh target end to end', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
   const targets = readSource(join('src', 'targets.ts'));
+  // The dsh module family: the lifecycle + mcp-client package detection live
+  // in dsh.ts, the cordis.patch.yml managed-block family in dsh-patch.ts
+  // (the complex-file split).
   const dsh = readSource(join('src', 'agents', 'dsh.ts'));
+  const dshPatch = readSource(join('src', 'agents', 'dsh-patch.ts'));
   // SUPPORTED_AGENT_TARGETS includes dsh and parseTarget uses it
   assert.match(setup, /'dsh'/);
   // DSH path helpers and managed patch constants exist
@@ -214,8 +218,8 @@ test('setup-cli.ts supports the dsh target end to end', () => {
   assert.match(targets, /function dshProfileDir\(\)/);
   assert.match(targets, /function dshPatchFile\(\)/);
   assert.match(targets, /function dshPluginsDir\(\)/);
-  assert.match(dsh, /const DSH_MCP_PATCH_START = '# HuaweiCloud DevKit DSH integration start';/);
-  assert.match(dsh, /const DSH_MCP_PATCH_END = '# HuaweiCloud DevKit DSH integration end';/);
+  assert.match(dshPatch, /const DSH_MCP_PATCH_START = '# HuaweiCloud DevKit DSH integration start';/);
+  assert.match(dshPatch, /const DSH_MCP_PATCH_END = '# HuaweiCloud DevKit DSH integration end';/);
   // deploy (install+update) / uninstall / status functions exist
   assert.match(dsh, /async function deployDsh\(mode: DeployMode\)/);
   assert.match(dsh, /function uninstallDsh\(removeOwnedSkills: \(dir: string\) => number\)/);
@@ -234,11 +238,11 @@ test('setup-cli.ts supports the dsh target end to end', () => {
   assert.match(dsh, /ensureDshMcpPatch\(\)/);
   assert.match(dsh, /tryInstallDshMcpClient\(\)/);
   // DSH MCP patch uses dsh-mcp-client with stdio local server mode
-  assert.match(dsh, /name: '@deepseek-ai\/dsh-mcp-client'/);
-  assert.match(dsh, /serverName: huaweicloud/);
-  assert.match(dsh, /transport: stdio/);
-  assert.match(dsh, /failOnStartupError: false/);
-  assert.match(dsh, /HUAWEICLOUD_AGENT_TOOLKIT_MODE: local/);
+  assert.match(dshPatch, /name: '@deepseek-ai\/dsh-mcp-client'/);
+  assert.match(dshPatch, /serverName: huaweicloud/);
+  assert.match(dshPatch, /transport: stdio/);
+  assert.match(dshPatch, /failOnStartupError: false/);
+  assert.match(dshPatch, /HUAWEICLOUD_AGENT_TOOLKIT_MODE: local/);
   // uninstall removes only the managed patch block
   assert.match(dsh, /removeDshMcpPatch\(\)/);
   // command dispatch covers dsh for install / uninstall / status / update
@@ -253,7 +257,7 @@ test('setup-cli.ts supports the dsh target end to end', () => {
   // doctor and the update dispatch reach DSH through the payload-target table
   assert.match(setup, /id: 'dsh',\s+label: 'DSH',\s+dir: dshPluginsDir,/);
   assert.match(setup, /update: \(\) => deployDsh\('update'\),/);
-  assert.match(dsh, /function dshPatchConfigured\(\)/);
+  assert.match(dshPatch, /function dshPatchConfigured\(\)/);
   // help text documents the target
   assert.match(
     setup,
