@@ -22,11 +22,12 @@ import { pluginRoot, readSource, root } from './structure-helpers.ts';
 test('every serviceCatalog route names a skill a pack actually owns', () => {
   // The S-series adoption loop twice shipped a staged tree whose routeMap
   // still pointed at a deleted legacy skill (S5/S6 reviews caught the
-  // unstaged-rename class). The routing data lives inline in tools.ts's
-  // serviceCatalog, so the guard scans the source and cross-checks every
-  // `skills: ['...']` entry against the pack registry's union.
+  // unstaged-rename class). The routing data lives inline in
+  // capability-catalog.ts's serviceCatalog (split out of tools.ts), so the
+  // guard scans that source and cross-checks every `skills: ['...']` entry
+  // against the pack registry's union.
   const known = new Set(PACKS.flatMap((pack) => pack.skills));
-  const source = readSource(join('src', 'tools.ts'));
+  const source = readSource(join('src', 'capability-catalog.ts'));
   const routed = [...source.matchAll(/skills: \[([^\]]+)\]/g)].flatMap((m) =>
     m[1]!
       .split(',')

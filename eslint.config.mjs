@@ -127,6 +127,7 @@ export default [
       'plugins/huaweicloud-core/src/mcp-server-remote.ts',
       'plugins/huaweicloud-core/src/tool-schemas.ts',
       'plugins/huaweicloud-core/src/tools.ts',
+      'plugins/huaweicloud-core/src/capability-catalog.ts',
       'plugins/huaweicloud-core/src/lib/pack-types.ts',
       'plugins/huaweicloud-core/src/lib/tool-schema-parts.ts',
       'plugins/huaweicloud-core/src/packs/*/tools.ts',
