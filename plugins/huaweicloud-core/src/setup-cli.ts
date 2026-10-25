@@ -125,20 +125,21 @@ import { writeMcpSettingsFile } from './mcp-config-io.ts';
 import { confirm, markConfirmed, readLineQuestion, readSecret } from './lib/cli-io.ts';
 // The per-agent lifecycle modules: each owns its deploy/uninstall/status
 // knowledge; the PAYLOAD_TARGETS table below binds them into one dispatch.
+// The officeace path family lives in officeace-paths.ts (the shared leaf);
+// the sqlite module surface in agents/officeace-sqlite.ts.
 import {
-  installOfficeAce,
   officeaceCapabilitiesDir,
   officeaceCapabilitiesFile,
-  openOfficeaceDb,
   officeacePluginsDir,
   officeaceSkillsDir,
+} from './officeace-paths.ts';
+import {
+  openOfficeaceDb,
   officeaceSqlitePath,
-  officeaceStatus,
   readOfficeaceDevkitPacks,
-  uninstallOfficeAce,
-  updateOfficeAce,
   type SqliteDatabase,
-} from './agents/officeace.ts';
+} from './agents/officeace-sqlite.ts';
+import { installOfficeAce, officeaceStatus, uninstallOfficeAce, updateOfficeAce } from './agents/officeace.ts';
 import { deployHermes, hermesMcpSdkOk, hermesStatus, uninstallHermes } from './agents/hermes.ts';
 import { writeHermesMcpConfig } from './agents/hermes-config.ts';
 import {

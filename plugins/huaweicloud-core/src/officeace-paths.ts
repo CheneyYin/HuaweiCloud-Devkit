@@ -7,6 +7,13 @@
 // persisted in a marker file so a non-standard directory (entered via prompt,
 // whose OFFICE_CLAW_CONFIG_ROOT env does not survive across processes) is
 // still found by later uninstall/update runs.
+//
+// The capabilities-dir path family (the env/marker/skip ordering and the
+// derived file/dir helpers) lives here too — the leaf position below the
+// agents/officeace* family, so the sqlite and registry siblings can resolve
+// paths without a sibling cycle. auth/agent-registration.ts deliberately
+// keeps its own smaller private copy of this resolution: it is the MCP
+// graph's read-side probe and must stay lazily loaded there.
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
@@ -100,4 +107,40 @@ export function probeOfficeaceSystemDirs(rootUsable: (dir: string) => boolean): 
     }
   }
   return null;
+}
+
+// ── The capabilities-dir path family ──
+// The env/marker/skip ordering (moved from agents/officeace.ts so the
+// sqlite/registry siblings resolve paths through this leaf without a sibling
+// cycle): OFFICE_CLAW_CONFIG_ROOT, then the persisted marker, then — unless
+// hermetic runs opt out (#654) — the Windows system probes.
+
+export function officeaceCapabilitiesDir(): string | null {
+  const configRoot = process.env.OFFICE_CLAW_CONFIG_ROOT;
+  // isUsableOfficeaceRoot rejects empty/undefined roots, so the truthiness guard
+  // preserves the original call's outcome for a missing env var.
+  if (configRoot && isUsableOfficeaceRoot(configRoot)) return configRoot;
+  const markerRoot = readOfficeaceRootMarker();
+  if (markerRoot) return markerRoot;
+  // Skip system probes (registry / Program Files) so automated environments can
+  // keep OfficeAce detection hermetic — those probes can leak a real OfficeAce
+  // install into a sandboxed/fake HOME (#654).
+  if (process.env.HUAWEICLOUD_DEVKIT_SKIP_OFFICEACE_DETECT === '1') return null;
+  return probeOfficeaceSystemDirs(isUsableOfficeaceRoot);
+}
+
+export function officeaceCapabilitiesDirSafe(): string {
+  return officeaceCapabilitiesDir() || join(homedir(), '.office-claw');
+}
+
+export function officeaceCapabilitiesFile(): string {
+  return join(officeaceCapabilitiesDirSafe(), 'capabilities.json');
+}
+
+export function officeaceSkillsDir(): string {
+  return join(officeaceCapabilitiesDirSafe(), 'skills');
+}
+
+export function officeacePluginsDir(): string {
+  return join(officeaceCapabilitiesDirSafe(), 'huaweicloud-plugins');
 }

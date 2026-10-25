@@ -200,34 +200,40 @@ test('tools.ts resolves skills from the server-relative tree only (dsh fallback 
 test('agents/officeace.ts keeps officeace capability cleanup (no native skill registration)', () => {
   const officeace = readSource(join('src', 'agents', 'officeace.ts'));
   assert.match(officeace, /function removeOfficeaceSkillCapabilities\(\)/);
-  assert.match(officeace, /function officeaceSkillsDir\(\)/);
+  assert.match(readSource(join('src', 'officeace-paths.ts')), /export function officeaceSkillsDir\(\)/);
 });
 
 test('agents/officeace.ts supports the officeace target end to end', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
+  // The officeace module family: the capabilities-root path family lives in
+  // officeace-paths.ts (the shared leaf), the sqlite module surface + readers
+  // in agents/officeace-sqlite.ts, the connector-row write/remove in
+  // agents/officeace-registry.ts, the lifecycle in agents/officeace.ts.
   const officeace = readSource(join('src', 'agents', 'officeace.ts'));
+  const officeacePaths = readSource(join('src', 'officeace-paths.ts'));
+  const officeaceSqlite = readSource(join('src', 'agents', 'officeace-sqlite.ts'));
+  const officeaceRegistry = readSource(join('src', 'agents', 'officeace-registry.ts'));
   assert.match(setup, /'officeace'/);
   assert.match(officeace, /async function installOfficeAce\(\)/);
   assert.match(officeace, /function uninstallOfficeAce\(removeOwnedSkills: \(dir: string\) => number\)/);
   assert.match(officeace, /function officeaceStatus\(\)/);
   assert.match(officeace, /async function updateOfficeAce\(\)/);
-  assert.match(officeace, /function officeaceCapabilitiesDir\(\)/);
-  assert.match(officeace, /function officeaceCapabilitiesFile\(\)/);
-  assert.match(officeace, /function officeaceSkillsDir\(\)/);
-  assert.match(officeace, /function officeacePluginsDir\(\)/);
+  assert.match(officeacePaths, /function officeaceCapabilitiesDir\(\)/);
+  assert.match(officeacePaths, /function officeaceCapabilitiesFile\(\)/);
+  assert.match(officeacePaths, /function officeaceSkillsDir\(\)/);
+  assert.match(officeacePaths, /function officeacePluginsDir\(\)/);
   // The registry probe is shared with the MCP-side detection
   // (auth/agent-registration.ts) through officeace-paths.ts.
-  const officeacePaths = readSource(join('src', 'officeace-paths.ts'));
   assert.match(officeacePaths, /export function readOfficeaceRegistryInstallDir\(\)/);
   assert.match(officeacePaths, /export function probeOfficeaceSystemDirs\(/);
-  assert.match(officeace, /function ensureOfficeaceMcpInSqlite\(\)/);
-  assert.match(officeace, /function removeOfficeaceMcpFromSqlite\(\)/);
+  assert.match(officeaceRegistry, /function ensureOfficeaceMcpInSqlite\(\)/);
+  assert.match(officeaceRegistry, /function removeOfficeaceMcpFromSqlite\(\)/);
   // Native skill registration is gone; install/update actively clean the
   // capabilities entries older versions wrote.
   assert.doesNotMatch(officeace, /registerOfficeaceSkillEntries/, 'no native skill registration');
   assert.match(officeace, /copyServerPayload\(pluginDest\)/);
   assert.match(officeace, /removeOfficeaceSkillCapabilities\(\)/);
-  assert.match(officeace, /existing\.command === 'node'/);
+  assert.match(officeaceRegistry, /existing\.command === 'node'/);
   assert.match(officeace, /capabilities\.json/);
   const branches = setup.match(/target === 'officeace' \|\| target === 'all'/g);
   const installDispatch = setup.match(/shouldInstall\('officeace'\)/g);
@@ -236,6 +242,8 @@ test('agents/officeace.ts supports the officeace target end to end', () => {
     `officeace dispatch branches: ${(branches?.length ?? 0) + (installDispatch?.length ?? 0)}`,
   );
   assert.match(setup, /install --target officeace/);
+  // The sqlite reader stays exported for the packs slot read.
+  assert.match(officeaceSqlite, /export function readOfficeaceDevkitPacks\(\)/);
 });
 
 test('agents/hermes.ts supports the hermes target end to end', () => {
