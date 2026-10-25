@@ -275,7 +275,7 @@ export function basenameOf(token: string): string {
   return idx < 0 ? t : t.slice(idx + 1);
 }
 
-export function isFlagOrDuration(token: string): boolean {
+function isFlagOrDuration(token: string): boolean {
   return token.startsWith('-') || /^\d*\.?\d+[smh]?$/i.test(token);
 }
 
