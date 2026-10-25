@@ -368,7 +368,7 @@ test('PAYLOAD_TARGETS is the single id→dir map for payload targets', () => {
 test('the doctor MCP-configured chain covers every agent-owned candidate', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
   const driver = setup.match(
-    /let mcpCfgTarget: string \| null = null;\n  for \(const candidate of \[([\s\S]*?)\]\) \{/,
+    /let mcpCfgTarget: string \| null = null;\n {2}for \(const candidate of \[([\s\S]*?)\]\) \{/,
   );
   assert.ok(driver, 'the chain driver must exist in cmdDoctor');
   const chain = driver[1]!;

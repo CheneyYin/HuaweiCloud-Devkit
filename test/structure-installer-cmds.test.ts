@@ -124,6 +124,12 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
     .filter((name) => name.endsWith('.ts'))
     .sort((a, b) => a.localeCompare(b));
   assert.ok(safetyModules.length >= 5, `expected the safety module family, found: ${safetyModules.join(', ')}`);
+  // And the packs-cli family (the slot table, writers, union, doctor face,
+  // and command bodies — all in the unbundled setup-cli graph).
+  const packsCliModules = (readdirSync(join(pluginRoot, 'src', 'packs-cli'), { recursive: true }) as string[])
+    .filter((name) => name.endsWith('.ts'))
+    .sort((a, b) => a.localeCompare(b));
+  assert.ok(packsCliModules.length >= 5, `expected the packs-cli module family, found: ${packsCliModules.join(', ')}`);
   // These compile into the unbundled dist/setup-cli.js graph, where only
   // undici exists at runtime: no zod, no SDK, ever.
   const guarded = [
@@ -134,6 +140,7 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
     ...authModules.map((name) => [`src/auth/${name}`, readSource(join('src', 'auth', name))] as const),
     ...agentModules.map((name) => [`src/agents/${name}`, readSource(join('src', 'agents', name))] as const),
     ...safetyModules.map((name) => [`src/safety/${name}`, readSource(join('src', 'safety', name))] as const),
+    ...packsCliModules.map((name) => [`src/packs-cli/${name}`, readSource(join('src', 'packs-cli', name))] as const),
     ['src/codearts-sandbox.ts', codeartsSandbox] as const,
     ['src/lib/dep-resolve.ts', depResolve] as const,
     ['src/targets.ts', targetsModule] as const,
@@ -170,8 +177,14 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
     /await installKooCli\(\{ tty: process\.stdin\.isTTY === true && process\.stdout\.isTTY === true \}\)/,
     'cmdInstallHcloud is the thin wrapper',
   );
-  // Install and update both provision after payload placement, gated on the flag.
-  assert.match(setup, /Provisioning pack binaries \(enabled packs: \$\{union\.size\}\)/);
+  // Install and update both provision after payload placement, gated on the
+  // flag. The provisioning body moved with the packs family
+  // (packs-cli/report.ts); setup-cli keeps the call sites.
+  assert.match(
+    readSource(join('src', 'packs-cli', 'report.ts')),
+    /Provisioning pack binaries \(enabled packs: \$\{union\.size\}\)/,
+  );
+  assert.match(setup, /await provisionPackBinaries\(\)/);
   assert.match(setup, /hasCliFlag\('--skip-binaries'\)/);
   assert.match(setup, /const updated = await dispatchUpdateTarget\(target\);/);
   assert.match(setup, /--skip-binaries {3}\(with: install\/update\) skip provisioning host binaries/);

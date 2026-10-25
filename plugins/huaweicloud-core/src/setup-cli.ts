@@ -14,32 +14,24 @@ import { redactSecrets } from './safety-policy.ts';
 // the deploy/uninstall/status/doctor flows.
 import {
   atomcodeHome,
-  atomcodeMcpConfigFile,
   atomcodePluginsDir,
   atomcodeSkillsDir,
-  codeartsMcpSettingsFile,
   codeartsPluginsDir,
-  codeartsProjectMcpSettingsFile,
   codeartsProjectSkillsDir,
   codeartsSkillsDir,
-  codeartsWorkMcpSettingsFile,
   codeartsWorkPluginsDir,
   codeartsWorkSkillsDir,
   codexDesktopPluginsDir,
   configRoot,
-  dshPatchFile,
   dshPluginsDir,
   dshSkillsDir,
-  hermesConfigFile,
   hermesHomeDir,
   hermesPluginsDir,
   hermesSkillsDir,
-  opencodeConfigFile,
   opencodePluginsDir,
   opencodeSkillsDir,
   openclawPluginsDir,
   openclawSkillsDir,
-  workbuddyMcpConfigFile,
   workbuddyPluginsDir,
   workbuddySkillsDir,
 } from './targets.ts';
@@ -66,7 +58,7 @@ import { preserveRefForm } from './lib/credentials.ts';
 import { detectCodeartsSandbox } from './codearts-sandbox.ts';
 import { installKooCli } from './dep/installers/hcloud.ts';
 import { installerFor } from './dep/installers/table.ts';
-import { provisionDependencies, uninstallDependency, uninstallPlacedDependency } from './dep/provision.ts';
+import { uninstallDependency, uninstallPlacedDependency } from './dep/provision.ts';
 import { queryDistTagsFetch, determineTarget, semverCompare } from './update-check.ts';
 import { getKooCliVersion, compareVersion, kooCliDownloadBase } from './koocli-version.ts';
 import {
@@ -78,17 +70,8 @@ import {
 } from './hcloud-probe.ts';
 import { asText } from './lib/as-text.ts';
 import { asRecord } from './lib/as-record.ts';
-import { PACK_IDS, type PackId } from './lib/pack-types.ts';
-import {
-  DEPENDENCIES,
-  DEPENDENCY_IDS,
-  PACK_USES,
-  parseDevkitPacks,
-  requiredDependencies,
-  type DependencyId,
-} from './lib/dependency-model.ts';
+import { DEPENDENCIES, DEPENDENCY_IDS, requiredDependencies, type DependencyId } from './lib/dependency-model.ts';
 import { resolveDependencyCommand } from './lib/dep-resolve.ts';
-import { codexPluginProbe, type CodexPluginProbe } from './codex-probe.ts';
 // The installer's payload machinery: file ops, server payload placement,
 // and the native core-skill disclosure seam. The table-consuming functions
 // arrive aliased (-Of/-ForRow/-In) because setup-cli binds them to
@@ -116,11 +99,15 @@ import { payloadDoctorSection, type DoctorSharedState, type PayloadDoctorBinding
 import { scanStaleNativeCopies } from './doctor-native.ts';
 // The --packs install-time selection policy (DEVKIT_PACKS resolution,
 // per-entry application, and the wholesale-rewrite carry value).
-import { parsePackIdList, readDevkitPacksFromJson, readDevkitPacksFromYaml, resolvePacksFlag } from './packs-policy.ts';
+import { resolvePacksFlag } from './packs-policy.ts';
+// The packs-cli family: the slot table, the effective pack union + its
+// renderers + provisioning, the doctor pack face, and the command bodies.
+import { packUnionReport, provisionPackBinaries, renderUnknownPackIds } from './packs-cli/report.ts';
+import { renderPacksDoctorSection } from './packs-cli/doctor.ts';
+import { cmdPacks } from './packs-cli/commands.ts';
 // The MCP-config writer family (file IO around mcp-config-merge's entry
 // semantics, mcp-config-backup's deltas, and packs-policy's DEVKIT_PACKS
 // contract).
-import { writeMcpSettingsFile } from './mcp-config-io.ts';
 // Interactive-terminal IO: the one-shot confirmation, line questions, and
 // raw-mode secret reads.
 import { confirm, markConfirmed, readLineQuestion, readSecret } from './lib/cli-io.ts';
@@ -130,12 +117,6 @@ import { confirm, markConfirmed, readLineQuestion, readSecret } from './lib/cli-
 // the sqlite module surface in agents/officeace-sqlite.ts.
 import { officeaceCapabilitiesDir, officeacePluginsDir, officeaceSkillsDir } from './officeace-paths.ts';
 import {
-  openOfficeaceDb,
-  officeaceSqlitePath,
-  readOfficeaceDevkitPacks,
-  type SqliteDatabase,
-} from './agents/officeace-sqlite.ts';
-import {
   installOfficeAce,
   officeaceDoctorMcpConfigured,
   officeaceStatus,
@@ -143,7 +124,6 @@ import {
   updateOfficeAce,
 } from './agents/officeace.ts';
 import { deployHermes, hermesDoctorMcpConfigured, hermesStatus, uninstallHermes } from './agents/hermes.ts';
-import { writeHermesMcpConfig } from './agents/hermes-config.ts';
 import { hermesDoctorSdkCheck } from './agents/hermes-sdk.ts';
 import {
   codexDesktopStatus,
@@ -155,15 +135,7 @@ import {
 } from './agents/codex.ts';
 import { codexDesktopDoctorMcpConfigured, deployCodexDesktop, uninstallCodexDesktop } from './agents/codex-desktop.ts';
 import { deployDsh, dshStatus, uninstallDsh } from './agents/dsh.ts';
-import {
-  DSH_MCP_PATCH_END,
-  DSH_MCP_PATCH_START,
-  dshDoctorMcpConfigured,
-  dshPatchBlock,
-  dshPatchHasOnlyCommentsOrEmptyList,
-  dshPayloadDoctorSection,
-  removeManagedDshPatchBlock,
-} from './agents/dsh-patch.ts';
+import { dshDoctorMcpConfigured, dshPayloadDoctorSection } from './agents/dsh-patch.ts';
 import {
   deployOpenCode,
   opencodeDoctorMcpConfigured,
@@ -1044,425 +1016,6 @@ async function cmdStatus(): Promise<void> {
   console.log(`  Platform: ${platform()}`);
 }
 
-// --- Post-install pack management (the `packs` command family) -------------
-//
-// Install-time --packs never overwrites an existing DEVKIT_PACKS value (the
-// keptUserValue contract, issue #615): a re-run with a different flag keeps
-// what the operator typed. The `packs` commands are the one write path
-// allowed to overwrite, because the command is the operator's explicit
-// management action. One slot table owns the per-target knowledge (where the
-// config lives, which env spelling it reads, how to surgically write the
-// DEVKIT_PACKS key); doctor's pack status display derives from the same
-// table, so the read and write paths can never disagree.
-
-type PackWriteResult =
-  | { ok: true; changed: boolean }
-  | { ok: false; reason: 'parse-failed' | 'bundle-owned' | 'not-installed'; detail: string };
-
-interface PackSlot {
-  /** SUPPORTED_AGENT_TARGETS member; codex has no slot (display-only). */
-  id: string;
-  /** Doctor's per-target label spelling. */
-  label: string;
-  installed(): boolean;
-  /** Raw DEVKIT_PACKS value; null when the key (or its file) is absent. */
-  read(): string | null;
-  write(_next: string | null): PackWriteResult;
-}
-
-// Surgical DEVKIT_PACKS write into one MCP settings JSON file: parse, touch
-// only the DEVKIT_PACKS key under the entry's canonical env spelling (a copy
-// under the opposite spelling is removed so exactly one key remains), write
-// through the 0600/0700 path. readDevkitPacksFromJson checks both spellings
-// in the same order, so a write followed by a read round-trips.
-function writeDevkitPacksInJson(
-  configPath: string,
-  mapKey: 'mcp' | 'mcpServers',
-  envKey: 'env' | 'environment',
-  next: string | null,
-): PackWriteResult {
-  if (!existsSync(configPath)) {
-    return { ok: false, reason: 'not-installed', detail: `config file missing: ${configPath}` };
-  }
-  let config: Record<string, unknown>;
-  try {
-    config = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
-  } catch {
-    return { ok: false, reason: 'parse-failed', detail: `${configPath} is not valid JSON (jsonc comments?)` };
-  }
-  const servers = asRecord(config[mapKey]);
-  const entry: unknown = servers['huaweicloud-devkit'];
-  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
-    return { ok: false, reason: 'not-installed', detail: `no mcp.huaweicloud-devkit entry in ${configPath}` };
-  }
-  const entryRecord = entry as Record<string, unknown>;
-  if (readDevkitPacksFromJson(configPath, mapKey) === next) return { ok: true, changed: false };
-  const otherKey: 'env' | 'environment' = envKey === 'env' ? 'environment' : 'env';
-  for (const key of [envKey, otherKey]) {
-    const rawEnv: unknown = entryRecord[key];
-    if (rawEnv === null || typeof rawEnv !== 'object' || Array.isArray(rawEnv)) continue;
-    const envRecord = rawEnv as Record<string, unknown>;
-    if (!Object.hasOwn(envRecord, 'DEVKIT_PACKS')) continue;
-    delete envRecord.DEVKIT_PACKS;
-    if (Object.keys(envRecord).length === 0) delete entryRecord[key];
-  }
-  if (next !== null) {
-    const rawEnv: unknown = entryRecord[envKey];
-    const base =
-      rawEnv !== null && typeof rawEnv === 'object' && !Array.isArray(rawEnv)
-        ? (rawEnv as Record<string, unknown>)
-        : {};
-    entryRecord[envKey] = { ...base, DEVKIT_PACKS: next };
-  }
-  writeMcpSettingsFile(configPath, config);
-  return { ok: true, changed: true };
-}
-
-// CodeArts writes user-level always and the cwd-relative project-level file
-// only when it already carries the devkit entry (mirroring the install pair
-// registerCodeartsMcp(user) + registerCodeartsMcp(project)). Status reads
-// user-level only, matching doctor.
-function writeCodeartsDevkitPacks(next: string | null): PackWriteResult {
-  const result = writeDevkitPacksInJson(codeartsMcpSettingsFile(), 'mcpServers', 'env', next);
-  const projectFile = codeartsProjectMcpSettingsFile();
-  if (existsSync(projectFile)) {
-    const project = writeDevkitPacksInJson(projectFile, 'mcpServers', 'env', next);
-    if (!project.ok && project.reason === 'parse-failed') {
-      console.log(`  \x1b[33m[WARN]\x1b[0m Could not parse ${projectFile}; project-level DEVKIT_PACKS not written.`);
-    }
-  }
-  return result;
-}
-
-// DSH managed-block rewrite, parameterized with the next value instead of
-// re-reading it. The bundle-provided patch has no managed block and is not
-// ours to rewrite, so it is refused.
-function writeDevkitPacksInDshPatch(next: string | null): PackWriteResult {
-  const patchFile = dshPatchFile();
-  if (!existsSync(patchFile)) {
-    return { ok: false, reason: 'not-installed', detail: `patch file missing: ${patchFile}` };
-  }
-  let existing: string;
-  try {
-    existing = readFileSync(patchFile, 'utf8');
-  } catch (error) {
-    return { ok: false, reason: 'parse-failed', detail: errorMessage(error) };
-  }
-  if (!existing.includes(DSH_MCP_PATCH_START) || !existing.includes(DSH_MCP_PATCH_END)) {
-    if (existing.includes('@deepseek-ai/dsh-mcp-client') && existing.includes('serverName: huaweicloud')) {
-      return { ok: false, reason: 'bundle-owned', detail: 'the bundled DSH patch provides the MCP config' };
-    }
-    return { ok: false, reason: 'not-installed', detail: `no managed block in ${patchFile}` };
-  }
-  const cleaned = removeManagedDshPatchBlock(existing);
-  const block = dshPatchBlock(next);
-  let nextContent: string;
-  if (dshPatchHasOnlyCommentsOrEmptyList(cleaned)) {
-    const prefix = cleaned
-      .split(/\r?\n/)
-      .filter((line) => line.trim() !== '[]')
-      .join('\n')
-      .trimEnd();
-    nextContent = `${prefix ? `${prefix}\n` : ''}${block}\n`;
-  } else {
-    nextContent = `${cleaned}\n\n${block}\n`;
-  }
-  if (existing.replace(/\r\n/g, '\n') === nextContent) return { ok: true, changed: false };
-  writeFileSync(patchFile, nextContent);
-  return { ok: true, changed: true };
-}
-
-// OfficeAce stores DEVKIT_PACKS as an env_json row. The write touches only
-// that row: replace its value, insert it, or delete it.
-function writeDevkitPacksInOfficeace(next: string | null): PackWriteResult {
-  const dbPath = officeaceSqlitePath();
-  if (!existsSync(dbPath)) {
-    return { ok: false, reason: 'not-installed', detail: `database not found: ${dbPath}` };
-  }
-  let db: SqliteDatabase | null = null;
-  try {
-    db = openOfficeaceDb();
-    const row: unknown = db.prepare("SELECT id, env_json FROM mcp_connectors WHERE name = 'huaweicloud-devkit'").get();
-    const existing = asRecord(row);
-    if (!('id' in existing)) {
-      return { ok: false, reason: 'not-installed', detail: `no huaweicloud-devkit connector in ${dbPath}` };
-    }
-    let env: unknown = [];
-    try {
-      env = JSON.parse(asText(existing.env_json || '[]'));
-    } catch {
-      // parse failure falls back to an empty env list — no packs row means insert
-    }
-    const rows: unknown[] = Array.isArray(env) ? env : [];
-    const idx = rows.findIndex((e) => asRecord(e).key === 'DEVKIT_PACKS');
-    const current = idx >= 0 ? asRecord(rows[idx]).value : null;
-    if ((typeof current === 'string' ? current : null) === next) return { ok: true, changed: false };
-    let nextRows: unknown[];
-    if (next === null) {
-      nextRows = rows.filter((e) => asRecord(e).key !== 'DEVKIT_PACKS');
-    } else if (idx >= 0) {
-      nextRows = rows.map((e, i) =>
-        i === idx ? { ...asRecord(e), key: 'DEVKIT_PACKS', value: next, sensitive: false } : e,
-      );
-    } else {
-      nextRows = [...rows, { key: 'DEVKIT_PACKS', value: next, sensitive: false }];
-    }
-    db.prepare('UPDATE mcp_connectors SET env_json = ?, updated_at = ? WHERE id = ?').run(
-      JSON.stringify(nextRows),
-      Date.now(),
-      existing.id,
-    );
-    return { ok: true, changed: true };
-  } catch (error) {
-    return { ok: false, reason: 'parse-failed', detail: errorMessage(error) };
-  } finally {
-    try {
-      db?.close();
-    } catch {
-      // best-effort close: the packs write result is already resolved
-    }
-  }
-}
-
-const PACK_SLOTS: PackSlot[] = [
-  {
-    id: 'opencode',
-    label: 'OpenCode',
-    installed: () => mcpServerInstalled(opencodePluginsDir()),
-    read: () => readDevkitPacksFromJson(opencodeConfigFile(), 'mcp'),
-    write: (next) => writeDevkitPacksInJson(opencodeConfigFile(), 'mcp', 'environment', next),
-  },
-  {
-    id: 'codex-desktop',
-    label: 'Codex Desktop',
-    installed: () => mcpServerInstalled(codexDesktopPluginsDir()),
-    read: () => readDevkitPacksFromJson(join(codexDesktopPluginsDir(), '.mcp.json'), 'mcpServers'),
-    write: (next) => writeDevkitPacksInJson(join(codexDesktopPluginsDir(), '.mcp.json'), 'mcpServers', 'env', next),
-  },
-  {
-    id: 'codearts',
-    label: 'CodeArts',
-    installed: () => mcpServerInstalled(codeartsPluginsDir()),
-    read: () => readDevkitPacksFromJson(codeartsMcpSettingsFile(), 'mcpServers'),
-    write: (next) => writeCodeartsDevkitPacks(next),
-  },
-  {
-    id: 'codearts-work',
-    label: 'CodeArts Work',
-    installed: () => mcpServerInstalled(codeartsWorkPluginsDir()),
-    read: () => readDevkitPacksFromJson(codeartsWorkMcpSettingsFile(), 'mcp'),
-    write: (next) => writeDevkitPacksInJson(codeartsWorkMcpSettingsFile(), 'mcp', 'environment', next),
-  },
-  {
-    id: 'workbuddy',
-    label: 'WorkBuddy',
-    installed: () => mcpServerInstalled(workbuddyPluginsDir()),
-    read: () => readDevkitPacksFromJson(workbuddyMcpConfigFile(), 'mcpServers'),
-    write: (next) => writeDevkitPacksInJson(workbuddyMcpConfigFile(), 'mcpServers', 'env', next),
-  },
-  {
-    id: 'openclaw',
-    label: 'OpenClaw',
-    installed: () => mcpServerInstalled(openclawPluginsDir()),
-    read: () => readDevkitPacksFromJson(join(openclawPluginsDir(), '.mcp.json'), 'mcpServers'),
-    write: (next) => writeDevkitPacksInJson(join(openclawPluginsDir(), '.mcp.json'), 'mcpServers', 'env', next),
-  },
-  {
-    id: 'atomcode',
-    label: 'AtomCode',
-    installed: () => mcpServerInstalled(atomcodePluginsDir()),
-    read: () => readDevkitPacksFromJson(atomcodeMcpConfigFile(), 'mcpServers'),
-    write: (next) => writeDevkitPacksInJson(atomcodeMcpConfigFile(), 'mcpServers', 'env', next),
-  },
-  {
-    id: 'dsh',
-    label: 'DSH',
-    installed: () => mcpServerInstalled(dshPluginsDir()),
-    read: () => readDevkitPacksFromYaml(dshPatchFile()),
-    write: (next) => writeDevkitPacksInDshPatch(next),
-  },
-  {
-    id: 'hermes',
-    label: 'Hermes Agent',
-    installed: () => mcpServerInstalled(hermesPluginsDir()),
-    read: () => readDevkitPacksFromYaml(hermesConfigFile()),
-    write: (next) => ({ ok: true, changed: writeHermesMcpConfig(next) }),
-  },
-  {
-    id: 'officeace',
-    label: 'OfficeAce',
-    installed: () => mcpServerInstalled(officeacePluginsDir()),
-    read: () => readOfficeaceDevkitPacks(),
-    write: (next) => writeDevkitPacksInOfficeace(next),
-  },
-];
-
-// Reader-backed pack status: one entry per installable agent target that
-// has an MCP config to read DEVKIT_PACKS from. Shared by doctor (per-target
-// pack status) and install-time provisioning (the effective pack union);
-// derived from PACK_SLOTS so it cannot drift from the write path.
-function packStatusReaders(): Array<{ label: string; installed: boolean; read: () => string | null }> {
-  return PACK_SLOTS.map((slot) => ({ label: slot.label, installed: slot.installed(), read: () => slot.read() }));
-}
-
-// The Codex CLI attribution line shared by doctor and `packs status`: codex
-// has no DEVKIT_PACKS write path (the codex CLI owns its MCP config), so it
-// always contributes the full surface when the plugin is verifiably
-// installed or the probe fails (fail-safe polarity).
-function renderCodexPacksLine(contributes: boolean, probeOk: boolean): void {
-  if (!contributes) return;
-  const why = probeOk
-    ? 'the devkit plugin is installed for codex'
-    : 'codex plugin list could not be read, assuming the full surface (fail-safe)';
-  console.log(`  \x1b[36m[INFO]\x1b[0m Packs (Codex CLI): all — ${why}`);
-}
-
-// The effective pack union for provisioning, `dep status`, doctor's
-// pack-dependency section, and the uninstall requirement check: every
-// reader-backed installed target contributes its parsed closure
-// (blank/unset config means the full surface), and codex contributes the
-// full surface only when the devkit plugin is verifiably installed for codex
-// (codexPluginProbe's `codex plugin list --json` signal) — the codex server
-// boots with no DEVKIT_PACKS because the --packs flag has no write path
-// there, so it always needs whatever the full surface needs, but a codex
-// CLI that merely exists on PATH proves nothing about this devkit's
-// footprint and must not widen the union (over-provisioned `--packs core`
-// trims, phantom uninstall refusals). An UNREADABLE plugin list also widens
-// the union (fail-safe, the same direction unknown DEVKIT_PACKS ids widen):
-// a probe failure must never read as "not installed". Unknown ids in a
-// target's DEVKIT_PACKS count as the full surface (fail-safe): skipping the
-// target would under-provision its binaries. packUnionReport is the one
-// derivation and is side-effect free — it returns per-target parse results
-// and the per-target attribution `dep uninstall` names when it refuses, and
-// each caller (provisioning, doctor, dep status, dep uninstall) renders its
-// own flavor of warning.
-interface PackUnionTargetResult {
-  label: string;
-  /** The raw DEVKIT_PACKS value the target's config carried (null = absent). */
-  raw: string | null;
-  /** Closed under requires with core force-included; blank config means full surface. */
-  enabled: ReadonlySet<PackId>;
-  /** Ids not in PACK_IDS; non-empty means the target contributed the full surface. */
-  unknown: readonly string[];
-}
-
-interface PackUnionReport {
-  union: ReadonlySet<PackId>;
-  carriers: ReadonlyArray<{ label: string; packs: ReadonlySet<PackId> }>;
-  /** Per-target parse results for callers that render (doctor, provisioning). */
-  targets: ReadonlyArray<PackUnionTargetResult>;
-  /** Why codex contributed to the union, when it did; null when it did not. */
-  codex: { reason: 'plugin-installed' | 'probe-failed' } | null;
-}
-
-function packUnionReport(): PackUnionReport {
-  const union = new Set<PackId>();
-  const carriers: Array<{ label: string; packs: ReadonlySet<PackId> }> = [];
-  const targets: PackUnionTargetResult[] = [];
-  for (const target of packStatusReaders()) {
-    if (!target.installed) continue;
-    const raw = target.read();
-    const parsed = parseDevkitPacks(raw);
-    targets.push({ label: target.label, raw, enabled: parsed.enabled, unknown: parsed.unknown });
-    if (parsed.unknown.length > 0) {
-      const full = new Set(PACK_IDS);
-      for (const id of full) union.add(id);
-      carriers.push({ label: target.label, packs: full });
-      continue;
-    }
-    for (const id of parsed.enabled) union.add(id);
-    carriers.push({ label: target.label, packs: parsed.enabled });
-  }
-  const codex = codexPluginProbe();
-  // Polarity rule: a failed probe fails safe — it widens the union exactly
-  // like an unknown DEVKIT_PACKS id and must never read as "not installed".
-  const codexContributes = codex.ok ? codex.installed : true;
-  if (codexContributes) {
-    const full = new Set(PACK_IDS);
-    for (const id of full) union.add(id);
-    carriers.push({ label: 'Codex CLI', packs: full });
-  }
-  return {
-    union,
-    carriers,
-    targets,
-    codex: codexContributes ? { reason: codex.ok ? 'plugin-installed' : 'probe-failed' } : null,
-  };
-}
-
-// The neutral unknown-id WARN the union consumers without their own flavor
-// render (dep status, dep uninstall): a fail-safe widening must never be
-// silent — a user whose DEVKIT_PACKS="bogus,core" shows 9 effective packs
-// needs the line that explains why.
-function renderUnknownPackIds(report: PackUnionReport): void {
-  for (const target of report.targets) {
-    if (target.unknown.length === 0) continue;
-    console.log(
-      `  \x1b[33m[WARN]\x1b[0m Packs (${target.label}): unknown id(s) in DEVKIT_PACKS="${target.raw}": ${target.unknown.join(', ')} — treating the target as the full surface (fail-safe)`,
-    );
-  }
-}
-
-// The secrets-pack discoverability note, shared by doctor's pack block and
-// `packs status`. Existing installs that pinned DEVKIT_PACKS before the
-// secrets pack shipped keep their seed — the new pack is silently opt-in
-// for them. Two shapes: a stored seed missing `secrets` gets a one-line
-// INFO announcement (a new capability, not a fault); a seed missing
-// `secrets` WHILE the vault is initialized is a real mismatch — the user
-// stores secret:// refs but the MCP face is trimmed — and warns with the
-// fix. Unset (full surface) or already-included seeds print nothing, and
-// the vault probe never throws (a failing keychain tier reads as not
-// initialized here — the dedicated vault block in doctor owns failure
-// rendering).
-function renderSecretsPackNote(report: PackUnionReport, limitLabels?: ReadonlySet<string>): number {
-  let vaultInitialized = false;
-  try {
-    vaultInitialized = custodyReport().initialized;
-  } catch {
-    // an unreadable custody tier is the vault block's story, not this note's
-  }
-  let warns = 0;
-  for (const target of report.targets) {
-    // `packs status --target X` narrows its slot loop; the note follows the
-    // same filter so a filtered view does not advise on other agents' seeds.
-    if (limitLabels && !limitLabels.has(target.label)) continue;
-    if (target.raw === null || target.raw.trim() === '') continue;
-    if (target.unknown.length > 0) continue;
-    if (target.enabled.has('secrets')) continue;
-    if (vaultInitialized) {
-      warns++;
-      console.log(
-        `  \x1b[33m[WARN]\x1b[0m Packs (${target.label}): the secret vault is initialized but the secrets pack is trimmed — the vault MCP tools (huaweicloud_secret_set/list/delete) are not disclosed on this target; secret:// refs still resolve wherever their consumers are enabled. Enable: npx huaweicloud-devkit packs enable secrets --target <agent>`,
-      );
-    } else {
-      console.log(
-        `  \x1b[36m[INFO]\x1b[0m Packs (${target.label}): new pack available — secrets (encrypted local vault, secret:// refs, npx huaweicloud-devkit secret set ...). Disclose it: npx huaweicloud-devkit packs enable secrets --target <agent>`,
-      );
-    }
-  }
-  return warns;
-}
-
-// Provision the enabled packs' host binaries right after payload placement.
-// No output at all when nothing is required (empty union, e.g. a
-// DEVKIT_PACKS=core-only install with no codex CLI).
-async function provisionPackBinaries(): Promise<void> {
-  const report = packUnionReport();
-  for (const target of report.targets) {
-    if (target.unknown.length === 0) continue;
-    console.log(
-      `  \x1b[33m[WARN]\x1b[0m Packs (${target.label}): unknown id(s) in DEVKIT_PACKS="${target.raw}": ${target.unknown.join(', ')} — provisioning the full surface (fail-safe)`,
-    );
-  }
-  const union = report.union;
-  const deps = requiredDependencies(union);
-  if (deps.size === 0) return;
-  console.log(`\nProvisioning pack binaries (enabled packs: ${union.size})`);
-  await provisionDependencies(deps, {
-    tty: process.stdin.isTTY === true && process.stdout.isTTY === true,
-  });
-}
-
 // Every agent whose installer ships the server payload (dist + safety +
 // skills + undici + .installed marker) into a plugin dir. Doctor's payload
 // checks (MCP server, undici, safety policy, skills tree, restart markers),
@@ -1656,6 +1209,12 @@ async function cmdDoctor(): Promise<void> {
     },
     skip: (line) => {
       console.log(`  \x1b[33m[SKIP]\x1b[0m ${line}`);
+    },
+    raw: (line) => {
+      console.log(line);
+    },
+    countWarn: (count) => {
+      warn += count;
     },
   };
 
@@ -1869,87 +1428,10 @@ async function cmdDoctor(): Promise<void> {
     for (const section of sections) section.nativeFreshness(ctx);
   }
 
-  // Pack status — DEVKIT_PACKS is read from each installed target's MCP
-  // config file, not the process env: the value reaches the server process
-  // only after the agent harness injects the config env. Unknown ids warn
-  // because the server boot fail-fasts on them (src/packs/enable.ts).
-  // The per-target lines below render from the SAME packUnionReport()
-  // derivation provisioning, `dep status`, and `dep uninstall` use — the
-  // display loop consumes the report's per-target parse results, so no
-  // config file is read twice in one doctor run and each unknown id warns
-  // exactly once, counted in `warn`. hcloud is deliberately absent here —
-  // the dedicated hcloud block above owns it as the explicit plugin-level
-  // rule (deriving it was rejected: a core⇒hcloud edge would auto-provision
-  // CLI-less trims, and the union is empty on zero-target machines, exactly
-  // where the check matters most). devbridge is sandbox-resident and never
-  // probed host-side; the gateway renders through the shared resolution
-  // chain. PACK_USES soft edges warn once per pair when a used pack sits
-  // disabled in the union.
-  const packReport = packUnionReport();
-  for (const target of packReport.targets) {
-    if (target.raw === null || target.raw.trim() === '') {
-      console.log(`  \x1b[36m[INFO]\x1b[0m Packs (${target.label}): all — DEVKIT_PACKS not set`);
-      continue;
-    }
-    if (target.unknown.length > 0) {
-      warn++;
-      console.log(
-        `  \x1b[33m[WARN]\x1b[0m Packs (${target.label}): unknown id(s) in DEVKIT_PACKS="${target.raw}": ${target.unknown.join(', ')}`,
-      );
-      console.log(
-        `        The MCP server will refuse to start until the value is fixed. Clear it: npx huaweicloud-devkit packs all --target <agent>`,
-      );
-      continue;
-    }
-    console.log(`  \x1b[36m[INFO]\x1b[0m Packs (${target.label}): ${[...target.enabled].join(', ')}`);
-  }
-  // Attribution for the codex contribution to the union above: a widened
-  // union with no explaining line reads as a phantom.
-  if (packReport.codex) {
-    renderCodexPacksLine(true, packReport.codex.reason === 'plugin-installed');
-  }
-  // Discoverability for the secrets pack on pinned-seed installs; a real
-  // mismatch (vault in use, pack trimmed) warns here and counts like the
-  // other inline warns above.
-  warn += renderSecretsPackNote(packReport);
-  const { union: enabledPacksUnion, carriers } = packReport;
-  if (carriers.length > 0) {
-    const requiredDeps = requiredDependencies(enabledPacksUnion);
-    if (requiredDeps.size === 0) {
-      console.log(`  \x1b[36m[INFO]\x1b[0m Pack dependencies: none required`);
-    } else {
-      for (const id of DEPENDENCY_IDS.filter((entry) => requiredDeps.has(entry))) {
-        if (id === 'hcloud') continue; // the dedicated hcloud block above owns this check
-        if (DEPENDENCIES[id].kind === 'sandbox-resident') {
-          console.log(`  \x1b[36m[INFO]\x1b[0m ${id}: sandbox-resident, not probed host-side`);
-          continue;
-        }
-        const resolved = resolveDependencyCommand(DEPENDENCIES[id].resolution);
-        if (resolved && resolved.tier !== 'fallback') {
-          console.log(`  \x1b[32m[PASS]\x1b[0m ${id} available (${resolved.tier}: ${resolved.command})`);
-          pass++;
-        } else if (resolved) {
-          warn++;
-          console.log(
-            `  \x1b[33m[WARN]\x1b[0m ${id} resolves only via ${resolved.command} (no persistent install) — npx huaweicloud-devkit dep install ${id}`,
-          );
-        } else {
-          warn++;
-          console.log(`  \x1b[33m[WARN]\x1b[0m ${id} not found — npx huaweicloud-devkit dep install ${id}`);
-        }
-      }
-    }
-    for (const [user, used] of Object.entries(PACK_USES)) {
-      if (!enabledPacksUnion.has(user as PackId)) continue;
-      for (const dep of used) {
-        if (enabledPacksUnion.has(dep)) continue;
-        warn++;
-        console.log(
-          `  \x1b[33m[WARN]\x1b[0m Pack ${user} uses ${dep} (soft dependency) but it is disabled — its tools fall back to manual paths (npx huaweicloud-devkit install --packs <ids> to enable)`,
-        );
-      }
-    }
-  }
+  // Pack status — the doctor face of the packs family
+  // (packs-cli/doctor.ts), rendered from the same packUnionReport()
+  // derivation provisioning, `dep status`, and `dep uninstall` use.
+  renderPacksDoctorSection(ctx, packUnionReport());
 
   const proxyConfig = readProxyConfig();
   const proxyEnv: string | undefined =
@@ -2709,211 +2191,6 @@ async function cmdDep(): Promise<void> {
   }
   console.error('Usage: npx huaweicloud-devkit dep <status | install <id> | uninstall <id>>');
   console.error(`Valid dependency ids: ${DEPENDENCY_IDS.join(', ')}`);
-  process.exitCode = 1;
-}
-
-// --- the `packs` command family (post-install pack management) -------------
-
-function printPacksUsage(): void {
-  console.error(
-    'Usage: npx huaweicloud-devkit packs <status | enable <id,...> | disable <id,...> | all> [--target <agent>|all]',
-  );
-  console.error(`Valid pack ids: ${PACK_IDS.join(', ')}`);
-}
-
-// Target selection for the packs commands. parseTarget's
-// auto-detect-single-target semantics are wrong here: the useful default is
-// every installed agent, not whichever one happens to be detected alone.
-function resolvePacksCommandTarget(): PackSlot[] | null {
-  const idx = process.argv.indexOf('--target');
-  if (idx < 0 || (process.argv[idx + 1] || '').toLowerCase() === 'all') {
-    return PACK_SLOTS.filter((slot) => slot.installed());
-  }
-  const val = (process.argv[idx + 1] || '').toLowerCase();
-  if (val === 'codex') {
-    console.error('codex target is managed by codex CLI; set DEVKIT_PACKS in its MCP config manually');
-    process.exitCode = 1;
-    return null;
-  }
-  if (!SUPPORTED_AGENT_TARGETS.includes(val)) {
-    console.error(`Unknown target: ${val}`);
-    console.error(`Supported: ${SUPPORTED_AGENT_TARGETS.join(', ')} (or "all")`);
-    process.exitCode = 1;
-    return null;
-  }
-  const slot = PACK_SLOTS.find((s) => s.id === val);
-  if (!slot || !slot.installed()) {
-    console.error(`${val} not installed — run install first`);
-    process.exitCode = 1;
-    return null;
-  }
-  return [slot];
-}
-
-// The unknown-id WARN in doctor's wording, shared by `packs status` and the
-// enable/disable refusals: the server boot fail-fasts on unknown ids, and
-// the fix hint is the `packs all` reset hatch.
-function warnPacksUnknownIds(slot: PackSlot, raw: string, unknown: readonly string[]): void {
-  console.log(
-    `  \x1b[33m[WARN]\x1b[0m Packs (${slot.label}): unknown id(s) in DEVKIT_PACKS="${raw}": ${unknown.join(', ')}`,
-  );
-  console.log(
-    `        The MCP server will refuse to start until the value is fixed. Clear it: npx huaweicloud-devkit packs all --target <agent>`,
-  );
-}
-
-function cmdPacksStatus(): void {
-  const slots = resolvePacksCommandTarget();
-  if (!slots) return;
-  if (slots.length === 0) {
-    console.log('No installed targets found; run install first.');
-    return;
-  }
-  for (const slot of slots) {
-    const raw = slot.read() ?? '';
-    if (raw.trim() === '') {
-      console.log(`  \x1b[36m[INFO]\x1b[0m Packs (${slot.label}): all — DEVKIT_PACKS not set`);
-      continue;
-    }
-    const parsed = parseDevkitPacks(raw);
-    if (parsed.unknown.length > 0) {
-      warnPacksUnknownIds(slot, raw, parsed.unknown);
-      continue;
-    }
-    console.log(`  \x1b[36m[INFO]\x1b[0m Packs (${slot.label}): ${[...parsed.enabled].join(', ')}`);
-  }
-  // Discoverability note for pinned seeds missing the secrets pack — the
-  // same packUnionReport() derivation doctor uses, so the two faces cannot
-  // drift. One probe serves both the note and the codex attribution line
-  // (report.codex carries the probe outcome; a second codexPluginProbe()
-  // call would spawn the codex CLI twice per status run).
-  const report = packUnionReport();
-  renderSecretsPackNote(report, new Set(slots.map((slot) => slot.label)));
-  renderCodexPacksLine(report.codex !== null, report.codex?.reason !== 'probe-failed');
-}
-
-// Write modes stay silent about codex by design (no write path there), but
-// the silence needs one visible line when the plugin is installed or the
-// probe fails, or the operator cannot tell the target was skipped.
-function renderCodexPacksWriteNote(probe: CodexPluginProbe): void {
-  const contributes = probe.ok ? probe.installed : true;
-  if (!contributes) return;
-  console.log(
-    `  \x1b[36m[INFO]\x1b[0m Packs (Codex CLI): codex target is managed by codex CLI; set DEVKIT_PACKS in its MCP config manually`,
-  );
-}
-
-function joinPackIds(ids: Iterable<PackId>): string {
-  const set = new Set(ids);
-  return PACK_IDS.filter((id) => set.has(id)).join(',');
-}
-
-// A requested seed that, with core force-included, spans every pack is
-// stored as the unset full surface instead of a ten-id list.
-function coversFullSurface(ids: ReadonlySet<PackId>): boolean {
-  return PACK_IDS.every((id) => id === 'core' || ids.has(id));
-}
-
-function cmdPacksWrite(mode: 'enable' | 'disable' | 'all'): void {
-  let ids: string[] = [];
-  if (mode !== 'all') {
-    const raw = process.argv[4];
-    if (raw === undefined || raw === '' || raw.startsWith('--')) {
-      printPacksUsage();
-      process.exitCode = 1;
-      return;
-    }
-    const parsed = parsePackIdList(raw);
-    ids = parsed.ids;
-    if (parsed.bogus.length > 0) {
-      console.error(`Unknown pack id(s): ${parsed.bogus.join(', ')}`);
-      console.error(`Valid pack ids: ${PACK_IDS.join(', ')}`);
-      process.exitCode = 1;
-      return;
-    }
-    if (mode === 'disable' && ids.includes('core')) {
-      console.error(
-        'core is always enabled (the pack meta, safety, and discovery surface is force-included) and cannot be disabled',
-      );
-      process.exitCode = 1;
-      return;
-    }
-  }
-  const slots = resolvePacksCommandTarget();
-  if (!slots) return;
-  let written = 0;
-  let refusals = 0;
-  for (const slot of slots) {
-    const raw = slot.read() ?? '';
-    const unset = raw.trim() === '';
-    const parsed = parseDevkitPacks(raw);
-    // `all` is the reset hatch: it clears even a value this command cannot
-    // interpret. Enable and disable refuse instead, so operator-typed
-    // information is never destroyed by set math the ids do not support.
-    if (mode !== 'all' && parsed.unknown.length > 0) {
-      warnPacksUnknownIds(slot, raw, parsed.unknown);
-      refusals++;
-      continue;
-    }
-    let next: string | null;
-    if (mode === 'all') {
-      if (unset) {
-        console.log(`Packs (${slot.label}): unchanged (DEVKIT_PACKS not set)`);
-        continue;
-      }
-      next = null;
-    } else if (mode === 'enable') {
-      if (unset) {
-        console.log(`Packs (${slot.label}): already the full surface (DEVKIT_PACKS not set)`);
-        continue;
-      }
-      const nextSet = new Set<PackId>(parsed.requested);
-      for (const id of ids) nextSet.add(id as PackId);
-      next = coversFullSurface(nextSet) ? null : joinPackIds(nextSet);
-    } else {
-      const base = unset ? new Set<PackId>(PACK_IDS) : new Set<PackId>(parsed.requested);
-      const nextSet = new Set(base);
-      for (const id of ids) nextSet.delete(id as PackId);
-      if (nextSet.size === base.size) {
-        console.log(`Packs (${slot.label}): ${ids.join(', ')} ${ids.length === 1 ? 'was' : 'were'} not enabled`);
-        continue;
-      }
-      next = nextSet.size === 0 || (nextSet.size === 1 && nextSet.has('core')) ? 'core' : joinPackIds(nextSet);
-    }
-    const result = slot.write(next);
-    if (result.ok) {
-      if (result.changed) {
-        written++;
-        const from = unset ? 'not set' : `"${raw}"`;
-        console.log(
-          next === null
-            ? `Packs (${slot.label}): DEVKIT_PACKS ${from} → all (key removed)`
-            : `Packs (${slot.label}): DEVKIT_PACKS ${from} → "${next}"`,
-        );
-      } else {
-        console.log(`Packs (${slot.label}): unchanged`);
-      }
-      continue;
-    }
-    refusals++;
-    const detail = result.reason === 'parse-failed' ? `could not write DEVKIT_PACKS (${result.detail})` : result.detail;
-    console.log(`  \x1b[33m[WARN]\x1b[0m Packs (${slot.label}): ${detail}`);
-  }
-  renderCodexPacksWriteNote(codexPluginProbe());
-  if (written === 0 && refusals > 0) process.exitCode = 1;
-}
-
-function cmdPacks(): void {
-  const sub = (process.argv[3] || '').toLowerCase();
-  if (sub === 'status') {
-    cmdPacksStatus();
-    return;
-  }
-  if (sub === 'enable' || sub === 'disable' || sub === 'all') {
-    cmdPacksWrite(sub);
-    return;
-  }
-  printPacksUsage();
   process.exitCode = 1;
 }
 

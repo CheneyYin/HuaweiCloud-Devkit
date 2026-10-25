@@ -17,4 +17,14 @@ export interface DoctorReporter {
   info(line: string): void;
   /** A [SKIP] line (uncounted). */
   skip(line: string): void;
+  /**
+   * A raw console.log passthrough — lines that carry no [PASS]/[WARN]/[INFO]
+   * marker (the 8-space advisory lines under a WARN). Uncounted.
+   */
+  raw(line: string): void;
+  /**
+   * Bump the warn counter WITHOUT printing — for shared renderers that
+   * print their own warn lines and return the count (renderSecretsPackNote).
+   */
+  countWarn(count: number): void;
 }

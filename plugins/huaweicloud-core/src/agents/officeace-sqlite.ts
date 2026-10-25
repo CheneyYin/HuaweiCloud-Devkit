@@ -15,6 +15,8 @@ import { createRequire } from 'node:module';
 import { asText } from '../lib/as-text.ts';
 import { asRecord } from '../lib/as-record.ts';
 import { officeaceCapabilitiesDirSafe } from '../officeace-paths.ts';
+import { errorMessage } from '../install-payload.ts';
+import type { PackWriteResult } from '../packs-cli/slots.ts';
 
 // node:sqlite is a runtime-only builtin loaded through createRequire; only the
 // DatabaseSync surface this module calls is modeled (see auth/agent-registration.ts).
@@ -69,6 +71,60 @@ export function officeaceGetOwnerUserId(): string | number | null {
     return typeof value === 'string' || typeof value === 'number' ? value : null;
   } catch {
     return null;
+  }
+}
+
+// The OfficeAce DEVKIT_PACKS write — sqlite-connector I/O, the write side
+// of readOfficeaceDevkitPacks (the PACK_SLOTS officeace row's write field).
+// The write touches only that env_json row: replace its value, insert it,
+// or delete it.
+export function writeDevkitPacksInOfficeace(next: string | null): PackWriteResult {
+  const dbPath = officeaceSqlitePath();
+  if (!existsSync(dbPath)) {
+    return { ok: false, reason: 'not-installed', detail: `database not found: ${dbPath}` };
+  }
+  let db: SqliteDatabase | null = null;
+  try {
+    db = openOfficeaceDb();
+    const row: unknown = db.prepare("SELECT id, env_json FROM mcp_connectors WHERE name = 'huaweicloud-devkit'").get();
+    const existing = asRecord(row);
+    if (!('id' in existing)) {
+      return { ok: false, reason: 'not-installed', detail: `no huaweicloud-devkit connector in ${dbPath}` };
+    }
+    let env: unknown = [];
+    try {
+      env = JSON.parse(asText(existing.env_json || '[]'));
+    } catch {
+      // parse failure falls back to an empty env list — no packs row means insert
+    }
+    const rows: unknown[] = Array.isArray(env) ? env : [];
+    const idx = rows.findIndex((e) => asRecord(e).key === 'DEVKIT_PACKS');
+    const current = idx >= 0 ? asRecord(rows[idx]).value : null;
+    if ((typeof current === 'string' ? current : null) === next) return { ok: true, changed: false };
+    let nextRows: unknown[];
+    if (next === null) {
+      nextRows = rows.filter((e) => asRecord(e).key !== 'DEVKIT_PACKS');
+    } else if (idx >= 0) {
+      nextRows = rows.map((e, i) =>
+        i === idx ? { ...asRecord(e), key: 'DEVKIT_PACKS', value: next, sensitive: false } : e,
+      );
+    } else {
+      nextRows = [...rows, { key: 'DEVKIT_PACKS', value: next, sensitive: false }];
+    }
+    db.prepare('UPDATE mcp_connectors SET env_json = ?, updated_at = ? WHERE id = ?').run(
+      JSON.stringify(nextRows),
+      Date.now(),
+      existing.id,
+    );
+    return { ok: true, changed: true };
+  } catch (error) {
+    return { ok: false, reason: 'parse-failed', detail: errorMessage(error) };
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      // best-effort close: the packs write result is already resolved
+    }
   }
 }
 

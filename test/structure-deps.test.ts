@@ -102,15 +102,23 @@ test('ERROR_TABLE carries the #900 code set with executable actions', () => {
 
 test('doctor renders the pack-binary section from the dependency model', () => {
   const setupCli = readSource(join('src', 'setup-cli.ts'));
+  // The pack-binary section moved with the packs family to
+  // packs-cli/doctor.ts; the shell keeps the section call.
+  const packsDoctor = readSource(join('src', 'packs-cli', 'doctor.ts'));
   assert.doesNotMatch(setupCli, /PACK_BINARIES|PackBinary/, 'doctor must not read the deleted binaries table');
   assert.match(
-    setupCli,
+    packsDoctor,
     /requiredDependencies\(enabledPacksUnion\)/,
     'the section iterates requiredDependencies over the enabled union',
   );
-  assert.match(setupCli, /sandbox-resident, not probed host-side/);
-  assert.match(setupCli, /dep install \$\{id\}/, 'the gateway WARNs point at dep install for the missing dependency');
-  assert.match(setupCli, /Object\.entries\(PACK_USES\)/, 'PACK_USES soft edges warn in the same section');
+  assert.match(packsDoctor, /sandbox-resident, not probed host-side/);
+  assert.match(packsDoctor, /dep install \$\{id\}/, 'the gateway WARNs point at dep install for the missing dependency');
+  assert.match(packsDoctor, /Object\.entries\(PACK_USES\)/, 'PACK_USES soft edges warn in the same section');
+  assert.match(
+    setupCli,
+    /renderPacksDoctorSection\(ctx, packUnionReport\(\)\)/,
+    'the doctor shell calls the packs section with the shared union derivation',
+  );
   // The dedicated hcloud block stays the explicit plugin-level rule, never
   // derived from the dependency graph (see the section's comment).
   assert.match(setupCli, /check\('hcloud CLI installed'/, 'the dedicated hcloud check is untouched');
