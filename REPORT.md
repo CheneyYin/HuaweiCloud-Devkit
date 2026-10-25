@@ -17,18 +17,18 @@ below).
 
 ## Final per-file cx (measured with `npx jscpd <file> --complexity --reporters ai`)
 
-| File | Lines | cx | Role |
-| --- | --- | --- | --- |
-| `src/tools.ts` | 295 | 43 | dispatch shell + re-export face (was 1690 / cx 269) |
-| `src/skill-disclosure.ts` | 242 | 47 | SKILLS_ROOT, verifySkillTree, retrieve_skill, list_skills, REFERENCE_CAP, referenceFilenames |
-| `src/capability-catalog.ts` | 418 | 40 | service_catalog, list_packs, pack_info, SKILL_OWNER, pack-refusal helpers |
-| `src/explain-error.ts` | 194 | 36 | explain_error |
-| `src/telemetry/invoke-value.ts` | 47 | 34 | the telemetry invoke-value derivation callTool records |
-| `src/packs-configure.ts` | 104 | 30 | packs_configure (the one mutating pack tool) |
-| `src/search-docs.ts` | 64 | 21 | search_docs |
-| `src/services/availability.ts` | 47 | 8 | get_regional_availability (beside SERVICE_REGIONS in services/regions.ts) |
-| `src/vendor-gate.ts` | 103 | 7 | VENDOR_GATED_TOOLS, gate/challenge messages, challenge state, enforceVendorGate |
-| `src/tool-definitions.ts` | 294 | 4 | TOOL_DEFINITIONS_LITERALS, packDescription, ToolName/ToolDefinition/TOOL_DEFINITIONS |
+| File                            | Lines | cx  | Role                                                                                         |
+| ------------------------------- | ----- | --- | -------------------------------------------------------------------------------------------- |
+| `src/tools.ts`                  | 295   | 43  | dispatch shell + re-export face (was 1690 / cx 269)                                          |
+| `src/skill-disclosure.ts`       | 242   | 47  | SKILLS_ROOT, verifySkillTree, retrieve_skill, list_skills, REFERENCE_CAP, referenceFilenames |
+| `src/capability-catalog.ts`     | 418   | 40  | service_catalog, list_packs, pack_info, SKILL_OWNER, pack-refusal helpers                    |
+| `src/explain-error.ts`          | 194   | 36  | explain_error                                                                                |
+| `src/telemetry/invoke-value.ts` | 47    | 34  | the telemetry invoke-value derivation callTool records                                       |
+| `src/packs-configure.ts`        | 104   | 30  | packs_configure (the one mutating pack tool)                                                 |
+| `src/search-docs.ts`            | 64    | 21  | search_docs                                                                                  |
+| `src/services/availability.ts`  | 47    | 8   | get_regional_availability (beside SERVICE_REGIONS in services/regions.ts)                    |
+| `src/vendor-gate.ts`            | 103   | 7   | VENDOR_GATED_TOOLS, gate/challenge messages, challenge state, enforceVendorGate              |
+| `src/tool-definitions.ts`       | 294   | 4   | TOOL_DEFINITIONS_LITERALS, packDescription, ToolName/ToolDefinition/TOOL_DEFINITIONS         |
 
 Every touched test/guard file also measures below the bar (max:
 tools.test.ts cx 45, unchanged; structure-packs.test.ts cx 40 after retargets).
