@@ -153,13 +153,8 @@ import {
   dshPatchHasOnlyCommentsOrEmptyList,
   removeManagedDshPatchBlock,
 } from './agents/dsh-patch.ts';
-import {
-  deployOpenCode,
-  openCodeSeamGate,
-  openCodeSeamGlobs,
-  opencodeStatus,
-  uninstallOpenCode,
-} from './agents/opencode.ts';
+import { deployOpenCode, opencodeStatus, uninstallOpenCode } from './agents/opencode.ts';
+import { openCodeSeamGate, openCodeSeamGlobs } from './agents/opencode-config.ts';
 import { deployOpenClaw, openclawStatus, uninstallOpenClaw } from './agents/openclaw.ts';
 import { codeartsStatus, deployCodeArts, uninstallCodeArts } from './agents/codearts.ts';
 import { codeartsWorkStatus, deployCodeArtsWork, uninstallCodeArtsWork } from './agents/codearts-work.ts';
