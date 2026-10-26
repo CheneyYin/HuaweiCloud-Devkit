@@ -1,18 +1,12 @@
 // Version-update detection & auto-upgrade for huaweicloud-devkit (session-level).
 // Spec: docs/superpowers/specs/2026-09-07-version-upgrade-design.md (internal, not committed).
 //
-// The semver channel logic lives in ./update-semver.ts, the installed-version
-// reader in ./update-installed.ts, the skip-state persistence in ./update-skip.ts,
-// the four-state verdict in ./update-hint.ts, the registry IO in
-// ./update-registry.ts, and the single-flight cache in ./update-cache.ts (all
-// re-exported below); the upgrade act still lives here.
-import { spawnSync, type SpawnSyncOptionsWithStringEncoding } from 'node:child_process';
-
-import { SUPPORTED_AGENT_TARGETS } from './auth/agent-registration.ts';
-import { determineTarget, semverCompare, type DistTags } from './update-semver.ts';
-import { readInstalledVersion } from './update-installed.ts';
-import { queryDistTags, errorMessage } from './update-registry.ts';
-import { invalidateUpdateCache } from './update-cache.ts';
+// Stable public face of the update-check subsystem. The internals live in the
+// src/update-* family (the semver channel logic, the installed-version reader,
+// the skip-state persistence, the four-state verdict, the registry IO, the
+// single-flight cache, and the upgrade act); this module is the re-export seam
+// every consumer imports — same exported names, same import path, same
+// behavior (the safety-policy.ts precedent).
 
 // The semver channel logic family (parsing, prerelease precedence, target election).
 export {
@@ -53,114 +47,5 @@ export {
   type GetCachedUpdateInfoOptions,
 } from './update-cache.ts';
 
-const NPX_BIN = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-
-interface SpawnResultLike {
-  status?: number | null;
-  stdout?: string;
-  stderr?: string;
-  error?: { message?: string } | null;
-}
-
-type UpgradeSpawnFn = (
-  _command: string,
-  _args: readonly string[],
-  _options: SpawnSyncOptionsWithStringEncoding,
-) => SpawnResultLike;
-
-function defaultSpawn(
-  command: string,
-  args: readonly string[],
-  options: SpawnSyncOptionsWithStringEncoding,
-): SpawnResultLike {
-  return spawnSync(command, args, options);
-}
-
-function restartMessage(target: string): string {
-  if (target === 'officeace') {
-    return '升级完成，请打开连接器 → 我的连接器 → huaweicloud-devkit → 重新连接后使用新版本。';
-  }
-  return '升级完成，请重启当前会话使新版本生效。';
-}
-
-export interface UpgradeOptions {
-  doQuery?: () => Promise<DistTags | null>;
-  spawnFn?: UpgradeSpawnFn;
-  currentVersion?: string;
-}
-
-export async function upgradePackage(
-  { target = 'all', version = 'latest' }: { target?: string; version?: string } = {},
-  options: UpgradeOptions = {},
-) {
-  if (version !== 'latest') {
-    return { success: false, error: 'version 参数仅支持 latest。目标版本由插件自动判定。' };
-  }
-  // The target is interpolated into an npx command spawned with shell:true;
-  // reject anything outside the known agent set + 'all' so a crafted value
-  // cannot be interpreted as shell operators (review #717).
-  const targetStr = String(target);
-  if (targetStr !== 'all' && !SUPPORTED_AGENT_TARGETS.includes(targetStr)) {
-    return { success: false, error: `不支持的升级目标：${targetStr}` };
-  }
-  const { doQuery = queryDistTags, spawnFn = defaultSpawn } = options;
-  // Tests inject currentVersion explicitly - the repo package.json version changes
-  // between prerelease and stable lines, which must not flip the upgrade-tag logic.
-  const previousVersion = options.currentVersion || readInstalledVersion();
-  let distTags: DistTags | null;
-  try {
-    distTags = await doQuery();
-  } catch (error) {
-    return {
-      success: false,
-      error: errorMessage(error) || '无法确认最新版本（registry 查询失败）。',
-      manual: `npx --yes huaweicloud-devkit@latest update --target ${target}`,
-    };
-  }
-  const targetVersion = determineTarget(previousVersion, distTags ?? {});
-  if (distTags === null) {
-    return {
-      success: false,
-      error: '无法确认最新版本（registry 查询失败）。',
-      manual: `npx --yes huaweicloud-devkit@latest update --target ${target}`,
-    };
-  }
-  if (!targetVersion) {
-    return { success: false, message: '已是最新版本，无需升级。', requiresRestart: false };
-  }
-  const isNextTarget = Boolean(distTags.next && semverCompare(targetVersion, distTags.next) === 0);
-  const tag = isNextTarget ? 'next' : 'latest';
-  const command = ['--yes', `huaweicloud-devkit@${tag}`, 'update', '--target', String(target)];
-  let execResult: SpawnResultLike;
-  try {
-    execResult = spawnFn(NPX_BIN, command, { encoding: 'utf8', timeout: 300000, windowsHide: true, shell: true });
-  } catch (error) {
-    return {
-      success: false,
-      error: errorMessage(error) || '升级命令执行失败。',
-      manual: `npx --yes huaweicloud-devkit@${tag} update --target ${target}`,
-    };
-  }
-  if (execResult.status === 0) {
-    invalidateUpdateCache();
-    return {
-      success: true,
-      previousVersion,
-      installedVersion: targetVersion,
-      requiresRestart: true,
-      message: restartMessage(target),
-    };
-  }
-  const errObj = execResult.error;
-  const stderr = String(execResult.stderr || '').trim();
-  const reason = errObj?.message
-    ? errObj.message
-    : stderr
-      ? stderr.split(/\r?\n/).filter(Boolean).slice(-2).join(' ')
-      : `exit ${execResult.status}`;
-  return {
-    success: false,
-    error: reason,
-    manual: `npx --yes huaweicloud-devkit@${tag} update --target ${target}`,
-  };
-}
+// The upgrade act (tag election, the npx spawn, restart/manual guidance).
+export { upgradePackage, type UpgradeOptions } from './update-upgrade.ts';
