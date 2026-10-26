@@ -9,7 +9,9 @@
 // identity-stamps.ts (machine finger, installation id, user hash, install
 // counter, DAU/first-use stamps), hook-ingest.ts (the hook spool seam),
 // event-pipeline.ts (queue, flush, retry, the opt-out gate) — plus the
-// pre-existing agent-detect.ts / agent-registry.ts / invoke-value.ts.
+// pre-existing agent-detect.ts / invoke-value.ts and the detection data
+// face agent-registry.ts (AGENTS + matcher; the version detectors live in
+// agent-versions.ts / agent-versions-desktop.ts).
 //
 // This module deliberately KEEPS the family's load-bearing module-scope
 // state: resolvePluginDir and every derived path constant, the
