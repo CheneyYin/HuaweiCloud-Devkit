@@ -215,9 +215,12 @@ test('expose_tunnel re-verifies from an independent exec session and classifies 
   // U16: the tunnel-persistence subsystem — renewal, the watchdog, and the
   // #998/#999/#1000 hardening all ride devbridge-tunnel.ts.
   const devbridgeValidation = readSource(join('src', 'sandbox', 'devbridge-validation.ts'));
+  // The renew family lives in devbridge-renew.ts since the devbridge-tunnel
+  // modularization.
+  const devbridgeRenew = readSource(join('src', 'sandbox', 'devbridge-renew.ts'));
   assert.match(devbridgeValidation, /export function validateExpiryHours/);
   assert.match(devbridgeValidation, /export function validateTunnelId/);
-  assert.match(devbridgeTunnel, /export function buildDevbridgeRenewScript/);
+  assert.match(devbridgeRenew, /export function buildDevbridgeRenewScript/);
   assert.match(devbridgeTunnel, /export function buildDevbridgeKeepaliveScript/);
   assert.match(devbridgeTunnel, /export function mergeKeepaliveTunnels/);
   // The keepalive health check carries --noproxy (U11 landmine — main missed it).
@@ -283,6 +286,7 @@ test('stripTerminalEscapes is the single escape-stripping seam for sandbox outpu
   const devbridgeAuth = readSource(join('src', 'sandbox', 'devbridge-auth.ts'));
   const devbridgeExpose = readSource(join('src', 'sandbox', 'devbridge-expose.ts'));
   const devbridgeVerify = readSource(join('src', 'sandbox', 'devbridge-verify.ts'));
+  const devbridgeRenew = readSource(join('src', 'sandbox', 'devbridge-renew.ts'));
   const sandboxFamily = readdirSync(join(pluginRoot, 'src', 'sandbox'))
     .filter((name) => name.endsWith('.ts'))
     .map((name) => [`sandbox/${name}`, readSource(join('src', 'sandbox', name))] as const);
@@ -298,6 +302,7 @@ test('stripTerminalEscapes is the single escape-stripping seam for sandbox outpu
   assert.match(devbridgeAuth, /import \{ stripTerminalEscapes \} from '\.\/sandbox-output\.ts';/);
   assert.match(devbridgeExpose, /import \{ stripTerminalEscapes \} from '\.\/sandbox-output\.ts';/);
   assert.match(devbridgeVerify, /import \{ stripTerminalEscapes \} from '\.\/sandbox-output\.ts';/);
+  assert.match(devbridgeRenew, /import \{ stripTerminalEscapes \} from '\.\/sandbox-output\.ts';/);
   assert.match(devbridgeTunnel, /import \{[^}]*stripTerminalEscapes[^}]*\} from '\.\/session-manager\.ts';/);
   const csiConstruction = "ESC + '\\\\[[0-9:;<=>?]*[ -/]*[a-zA-Z]'";
   assert.equal(sandboxOutput.split(csiConstruction).length - 1, 1, 'CSI regex must be constructed once');
