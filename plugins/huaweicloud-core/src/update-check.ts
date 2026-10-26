@@ -3,22 +3,16 @@
 //
 // The semver channel logic lives in ./update-semver.ts, the installed-version
 // reader in ./update-installed.ts, the skip-state persistence in ./update-skip.ts,
-// and the four-state verdict in ./update-hint.ts (all re-exported below); the
-// registry IO, cache, and upgrade families still live here.
-import {
-  spawn,
-  spawnSync,
-  type ChildProcessWithoutNullStreams,
-  type SpawnSyncOptionsWithStringEncoding,
-} from 'node:child_process';
+// the four-state verdict in ./update-hint.ts, the registry IO in
+// ./update-registry.ts, and the single-flight cache in ./update-cache.ts (all
+// re-exported below); the upgrade act still lives here.
+import { spawnSync, type SpawnSyncOptionsWithStringEncoding } from 'node:child_process';
 
-import { fetchWithProxy } from './proxy/proxy-agent.ts';
 import { SUPPORTED_AGENT_TARGETS } from './auth/agent-registration.ts';
-import { asText } from './lib/as-text.ts';
 import { determineTarget, semverCompare, type DistTags } from './update-semver.ts';
 import { readInstalledVersion } from './update-installed.ts';
-import { readSkipState, resolveSkipFilePath } from './update-skip.ts';
-import { judgeUpdate, type UpdateHint, type UpdateHintLike } from './update-hint.ts';
+import { queryDistTags, errorMessage } from './update-registry.ts';
+import { invalidateUpdateCache } from './update-cache.ts';
 
 // The semver channel logic family (parsing, prerelease precedence, target election).
 export {
@@ -46,11 +40,20 @@ export {
 // The four-state verdict (cooldown matrix) and the UpdateHint payload shape.
 export { judgeUpdate, type UpdateResult, type UpdateHint, type UpdateHintLike } from './update-hint.ts';
 
-const IS_WINDOWS = process.platform === 'win32';
-const NPM_BIN = IS_WINDOWS ? 'npm.cmd' : 'npm';
-const NPX_BIN = IS_WINDOWS ? 'npx.cmd' : 'npx';
-const TTL_MS = 60 * 60 * 1000;
-const FAIL_THROTTLE_MS = 5 * 60 * 1000;
+// The dist-tags registry IO family (npm view sync/async, the undici fetch override).
+export { queryDistTagsFetch, queryDistTagsSync, queryDistTags, parseDistTagsOutput } from './update-registry.ts';
+
+// The single-flight cache family (TTL, failure throttling, the hint memo).
+export {
+  invalidateUpdateCache,
+  getCachedUpdateInfo,
+  peekCachedUpdateInfo,
+  getUpdateDistTags,
+  applyUpdateHint,
+  type GetCachedUpdateInfoOptions,
+} from './update-cache.ts';
+
+const NPX_BIN = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
 interface SpawnResultLike {
   status?: number | null;
@@ -64,225 +67,6 @@ type UpgradeSpawnFn = (
   _args: readonly string[],
   _options: SpawnSyncOptionsWithStringEncoding,
 ) => SpawnResultLike;
-
-// One-property read with validation, for the JS boundary of thrown values:
-// only a non-empty `message` string is surfaced.
-function errorMessage(error: unknown): string | undefined {
-  if (error instanceof Error && error.message) return error.message;
-  if (error && typeof error === 'object' && !Array.isArray(error)) {
-    const record = error as Record<string, unknown>;
-    if (typeof record.message === 'string' && record.message) return record.message;
-  }
-  return undefined;
-}
-
-function toDistTags(value: unknown): DistTags | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  return {
-    latest: typeof record.latest === 'string' ? record.latest : null,
-    next: typeof record.next === 'string' ? record.next : null,
-  };
-}
-
-export function parseDistTagsOutput(stdout: unknown): DistTags | null {
-  try {
-    const text = asText(stdout || '').trim();
-    if (!text) return null; // 空输出视为 npm view 失败
-    return toDistTags(JSON.parse(text));
-  } catch {
-    return null;
-  }
-}
-
-function debugLog(message: string): void {
-  if (process.env.HUAWEICLOUD_DEVKIT_DEBUG === '1' || process.env.HUAWEICLOUD_DEVKIT_DEBUG === 'true') {
-    console.error(`[debug] ${message}`);
-  }
-}
-
-export async function queryDistTagsFetch({ timeoutMs = 15000 }: { timeoutMs?: number } = {}): Promise<DistTags | null> {
-  let registry = 'https://registry.npmjs.org';
-  if (process.env.HUAWEICLOUD_NPM_REGISTRY) {
-    registry = process.env.HUAWEICLOUD_NPM_REGISTRY.replace(/\/+$/, '');
-  }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const resp = await fetchWithProxy(`${registry}/-/package/huaweicloud-devkit/dist-tags`);
-    clearTimeout(timer);
-    if (!resp || !resp.ok) return null;
-    return toDistTags(await resp.json().catch(() => null));
-  } catch (error) {
-    clearTimeout(timer);
-    debugLog(`queryDistTagsFetch: ${errorMessage(error) || String(error)}`);
-    return null;
-  }
-}
-
-export function queryDistTagsSync({
-  timeoutMs = 15000,
-  cwd,
-}: { timeoutMs?: number; cwd?: string } = {}): DistTags | null {
-  try {
-    const result = spawnSync(NPM_BIN, ['view', 'huaweicloud-devkit', 'dist-tags', '--json'], {
-      encoding: 'utf8',
-      timeout: timeoutMs,
-      windowsHide: true,
-      cwd,
-      // Windows + Node 22: spawning `npm.cmd` directly throws EINVAL (CVE-2024-27980
-      // mitigation); shell:true routes the .cmd through cmd.exe like other spawns (#643).
-      shell: true,
-    });
-    if (result.status !== 0) {
-      debugLog(`queryDistTagsSync: npm view exited with status ${result.status}`);
-      return null;
-    }
-    return parseDistTagsOutput(result.stdout);
-  } catch (error) {
-    debugLog(`queryDistTagsSync: ${errorMessage(error) || String(error)}`);
-    return null;
-  }
-}
-
-export function queryDistTags({
-  timeoutMs = 15000,
-  cwd,
-}: { timeoutMs?: number; cwd?: string } = {}): Promise<DistTags | null> {
-  // Registry seam: the CLI face already honors HUAWEICLOUD_NPM_REGISTRY
-  // (setup-cli's update command); the tool face silently ignored it — this
-  // delegation closes that inconsistency, so every default consumer
-  // (getCachedUpdateInfo, upgradePackage) honors the operator/E2E override
-  // without spawning npm.
-  if (process.env.HUAWEICLOUD_NPM_REGISTRY) {
-    return queryDistTagsFetch({ timeoutMs });
-  }
-  return new Promise<DistTags | null>((resolve) => {
-    let child: ChildProcessWithoutNullStreams;
-    try {
-      child = spawn(NPM_BIN, ['view', 'huaweicloud-devkit', 'dist-tags', '--json'], {
-        windowsHide: true,
-        cwd,
-        shell: true,
-      });
-    } catch (error) {
-      debugLog(`queryDistTags: ${errorMessage(error) || String(error)}`);
-      resolve(null);
-      return;
-    }
-    const timer = setTimeout(() => {
-      try {
-        child.kill();
-      } catch {
-        // the child may have already exited; the timeout path resolves null regardless
-      }
-      debugLog(`queryDistTags: timed out after ${timeoutMs}ms`);
-      resolve(null);
-    }, timeoutMs);
-    let stdout = '';
-    child.stdout.on('data', (d) => {
-      stdout += String(d);
-    });
-    child.on('error', (error) => {
-      clearTimeout(timer);
-      debugLog(`queryDistTags: ${errorMessage(error) || String(error)}`);
-      resolve(null);
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (code === 0) {
-        resolve(parseDistTagsOutput(stdout));
-      } else {
-        debugLog(`queryDistTags: npm view exited with code ${code}`);
-        resolve(null);
-      }
-    });
-  });
-}
-
-let cachedDistTags: DistTags | null = null;
-let cachedAt = 0;
-let failedAt = 0;
-let inflightQuery: Promise<DistTags | null> | null = null;
-let lastHint: UpdateHint | null = null;
-
-export function invalidateUpdateCache(): void {
-  cachedDistTags = null;
-  cachedAt = 0;
-  failedAt = 0;
-  inflightQuery = null;
-  lastHint = null;
-}
-
-function cacheValid(now = Date.now()): boolean {
-  return Boolean(cachedDistTags) && now - cachedAt <= TTL_MS;
-}
-
-export interface GetCachedUpdateInfoOptions {
-  doQuery?: () => Promise<DistTags | null>;
-  now?: number;
-  sessionId?: string | null;
-}
-
-export async function getCachedUpdateInfo(
-  current: string,
-  { doQuery = queryDistTags, now = Date.now(), sessionId = null }: GetCachedUpdateInfoOptions = {},
-): Promise<UpdateHint> {
-  if (process.env.HUAWEICLOUD_DEVKIT_SKIP_UPDATE === '1') {
-    lastHint = judgeUpdate(current, null, undefined, now);
-    return lastHint;
-  }
-  const skipState = readSkipState(resolveSkipFilePath(sessionId));
-  if (!cacheValid(now)) {
-    if (!cachedDistTags && now - failedAt < FAIL_THROTTLE_MS) {
-      lastHint = judgeUpdate(current, null, skipState, now);
-      return lastHint;
-    }
-    if (!inflightQuery) {
-      inflightQuery = doQuery()
-        .then((distTags) => {
-          if (distTags) {
-            cachedDistTags = distTags;
-            cachedAt = now;
-          } else {
-            failedAt = now;
-          }
-          return distTags;
-        })
-        .finally(() => {
-          inflightQuery = null;
-        });
-    }
-    const distTags = await inflightQuery;
-    lastHint = judgeUpdate(current, distTags, skipState, now);
-    return lastHint;
-  }
-  lastHint = judgeUpdate(current, cachedDistTags, skipState);
-  return lastHint;
-}
-
-export function peekCachedUpdateInfo(): UpdateHint | null {
-  return lastHint && lastHint.updateAvailable && lastHint.targetVersion ? lastHint : null;
-}
-
-export async function getUpdateDistTags(
-  current: string,
-  { sessionId = null, doQuery }: { sessionId?: string | null; doQuery?: () => Promise<DistTags | null> } = {},
-): Promise<{ latest: string | null; next: string | null } | null> {
-  const result = await getCachedUpdateInfo(current, { sessionId, doQuery });
-  if (!result || result.result === 'check_failed') return null;
-  return { latest: result.latestStable ?? null, next: result.latestNext ?? null };
-}
-
-export function applyUpdateHint(result: unknown, name: string, hint: UpdateHintLike | null): unknown {
-  if (!hint || !hint.updateAvailable || !hint.targetVersion) return result;
-  if (name === 'huaweicloud_check_update' || name === 'huaweicloud_upgrade') return result;
-  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
-  return {
-    ...(result as Record<string, unknown>),
-    _updateInfo: { currentVersion: hint.currentVersion, latestVersion: hint.targetVersion },
-  };
-}
 
 function defaultSpawn(
   command: string,
