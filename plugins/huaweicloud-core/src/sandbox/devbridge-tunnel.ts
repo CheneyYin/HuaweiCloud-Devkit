@@ -20,7 +20,8 @@
 
 // The tunnel parameter policy (validators, lifetime constants, the 0.1.x
 // version gate) lives in devbridge-validation.ts; re-exported as the public
-// face (packs/sandbox/tools.ts and the tests import these names here).
+// face (the sandbox pack's handlers-tunnel.ts and the tests import these
+// names here).
 export {
   DEVBRIDGE_HOST_EXPIRY_HOURS,
   DEVBRIDGE_MAX_EXPIRY_HOURS,
@@ -67,6 +68,6 @@ export {
 } from './devbridge-keepalive.ts';
 export type { KeepaliveTunnel, KeepaliveWatchdogResult } from './devbridge-keepalive.ts';
 // The exposeTunnel orchestration lives in devbridge-expose-flow.ts;
-// re-exported as the public face (packs/sandbox/tools.ts and the test
-// harness import it here).
+// re-exported as the public face (the sandbox pack's handlers-tunnel.ts and
+// the test harness import it here).
 export { exposeTunnel } from './devbridge-expose-flow.ts';

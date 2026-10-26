@@ -42,7 +42,8 @@ export { stripTerminalEscapes } from './sandbox-output.ts';
 export { resolveWsExecIndexUrl } from './ws-exec-loader.ts';
 // The hwlink connection layer (workspace-id state, session cache, exec
 // surfaces, close family) lives in hwlink-connection.ts; re-exported as the
-// public face (packs/sandbox/tools.ts and the tests import these names here).
+// public face (the sandbox pack's handler family — src/packs/sandbox/
+// handlers-*.ts, git-transfer.ts — and the tests import these names here).
 export {
   closeAllSessions,
   closeSession,

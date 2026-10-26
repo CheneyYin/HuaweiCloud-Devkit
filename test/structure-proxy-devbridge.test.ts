@@ -115,7 +115,10 @@ test('devbridge host launch survives the exec session (#919/#922): setsid guard,
   // The face pin: the expose contract re-exports from its canonical module
   // (devbridge-expose.ts) since the devbridge-tunnel modularization — the
   // pure re-export seam must not drift away from the family.
-  assert.match(devbridgeTunnel, /export \{[\s\S]*?buildDevbridgeExposeScript,[\s\S]*?\} from '\.\/devbridge-expose\.ts';/);
+  assert.match(
+    devbridgeTunnel,
+    /export \{[\s\S]*?buildDevbridgeExposeScript,[\s\S]*?\} from '\.\/devbridge-expose\.ts';/,
+  );
   // The tunnel parameter policy (validators, lifetime constants, the 0.1.x
   // version gate) lives in devbridge-validation.ts since the devbridge-tunnel
   // modularization; the canonical literals are pinned at their new home.
@@ -160,9 +163,11 @@ test('devbridge host launch survives the exec session (#919/#922): setsid guard,
     /export PATH="\$HOME\/\.huawei\/bin:\$PATH"/,
     'the system-disk-only export must not return',
   );
-  // The connect flow's unquoted PATH form (tools.ts) — the third code leg.
-  const sandboxToolsSource = readSource(join('src', 'packs', 'sandbox', 'tools.ts'));
-  assert.match(sandboxToolsSource, /export PATH=\/workspace\/.local\/bin:\$HOME\/\.huawei\/bin\$\{PATH:\+:\$PATH\}/);
+  // The connect flow's unquoted PATH form (handlers-account.ts since the
+  // sandbox pack's family split, extracted verbatim from tools.ts) — the
+  // third code leg.
+  const sandboxConnectSource = readSource(join('src', 'packs', 'sandbox', 'handlers-account.ts'));
+  assert.match(sandboxConnectSource, /export PATH=\/workspace\/.local\/bin:\$HOME\/\.huawei\/bin\$\{PATH:\+:\$PATH\}/);
 
   // The old 8h default must not re-creep into ANY sandbox sibling's tunnel
   // script (family-wide sweep — stronger than the old single-file check, which
@@ -368,9 +373,10 @@ test('devbridge 0.2.x flow: auth capability probe, version detection, in-place u
     join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'SKILL.md'),
     'utf8',
   );
-  // The credentials tool handler moved to the sandbox pack
-  // (src/packs/sandbox/tools.ts) with the P2 pack program.
-  const sandboxPack = readSource(join('src', 'packs', 'sandbox', 'tools.ts'));
+  // The credentials tool handler moved to the sandbox pack with the P2 pack
+  // program, and into handlers-credentials.ts with the pack's family split
+  // (extracted verbatim from tools.ts).
+  const sandboxCredentials = readSource(join('src', 'packs', 'sandbox', 'handlers-credentials.ts'));
 
   // SKILL.md must never teach the removed 0.1.x login flow (--huaweicloud SSO flag is
   // gone from every 0.2.x build), and the obsolete warning row must stay gone.
@@ -434,14 +440,14 @@ test('devbridge 0.2.x flow: auth capability probe, version detection, in-place u
   // The credentials tool must support injecting the DevBridge API Key:
   // - env-first precedence (keeps the long-lived key out of the conversation)
   // - separate storage from the temporary AK/SK (/tmp/hw_api_key vs /tmp/hw_creds.sh)
-  assert.match(sandboxPack, /api_key/);
-  assert.match(sandboxPack, /process\.env\.HW_API_KEY \|\| args\.api_key/);
-  assert.match(sandboxPack, /\/tmp\/hw_api_key/);
+  assert.match(sandboxCredentials, /api_key/);
+  assert.match(sandboxCredentials, /process\.env\.HW_API_KEY \|\| args\.api_key/);
+  assert.match(sandboxCredentials, /\/tmp\/hw_api_key/);
   assert.match(sandbox, /\/tmp\/hw_api_key/);
 
   // The API Key must NOT be written into the shared AK/SK creds script.
-  const credsWrite = sandboxPack.match(/const credsScript = \[[\s\S]*?\]/);
-  assert.ok(credsWrite, 'credsScript block not found in packs/sandbox/tools.ts');
+  const credsWrite = sandboxCredentials.match(/const credsScript = \[[\s\S]*?\]/);
+  assert.ok(credsWrite, 'credsScript block not found in packs/sandbox/handlers-credentials.ts');
   assert.doesNotMatch(credsWrite[0], /HW_API_KEY/);
 
   // The CodeArts Doer sidecopy must mirror the probe-branch flow and not regress

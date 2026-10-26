@@ -104,7 +104,8 @@ export async function deployCheck(
   workspaceId: string,
   { port, project, outputDir, frameworkType }: DeployCheckOptions,
   username = 'root',
-  // Mirrors SANDBOX_TIMEOUT_MS.deploy_check (packs/sandbox/tools.ts): the
+  // Mirrors SANDBOX_TIMEOUT_MS.deploy_check (packs/sandbox/schemas.ts,
+  // re-exported through the pack's tools.ts face): the
   // bounded per-tunnel probing alone can spend 5 × 5s of curl plus devbridge
   // list round-trips. The remaining curls (localhost nginx/fingerprint, the
   // external QR service) are still unbounded — pre-existing; a hang there can

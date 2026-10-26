@@ -20,11 +20,12 @@ import { formatSecretRef, parseSecretRef } from './secret-vault/refs.ts';
 import { asRecord } from './as-record.ts';
 
 // Credential session helpers shared by the auth and sandbox packs
-// (src/packs/auth/tools.ts, src/packs/sandbox/tools.ts), hoisted from
-// src/tools.ts so the packs import them from lib instead of value-importing
-// tools.ts — which would form a value cycle with tools.ts importing the
-// packs' handler maps. Dependencies reach only into src/auth/, telemetry,
-// and the hdkit api module; no dependency on tools.ts or tool-schemas.ts.
+// (src/packs/auth/tools.ts, src/packs/sandbox/handlers-credentials.ts),
+// hoisted from src/tools.ts so the packs import them from lib instead of
+// value-importing tools.ts — which would form a value cycle with tools.ts
+// importing the packs' handler maps. Dependencies reach only into src/auth/,
+// telemetry, and the hdkit api module; no dependency on tools.ts or
+// tool-schemas.ts.
 
 // Boundary narrowing for credential-shaped values: only string fields survive,
 // so callers keep truthiness checks and string plumbing.

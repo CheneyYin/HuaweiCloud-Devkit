@@ -9,10 +9,22 @@ import type { JscpdBaseline, JscpdConfig, JscpdReport, PackageJson, PackageLock 
 import { readJson, readSource, root } from './structure-helpers.ts';
 
 test('sandbox timeout defaults stay single-sourced (no raw numeric fallbacks)', () => {
-  const src = readSource(join('src', 'packs', 'sandbox', 'tools.ts'));
-  assert.doesNotMatch(src, /args\.timeout_ms \|\| \d/, 'handler fallbacks must read SANDBOX_TIMEOUT_MS');
-  const fallbacks = src.match(/args\.timeout_ms \|\| SANDBOX_TIMEOUT_MS\.\w+/g);
-  assert.equal(fallbacks?.length ?? 0, 9, 'nine tool handlers apply the shared defaults');
+  // Since the sandbox pack's family split the handlers live in
+  // src/packs/sandbox/handlers-*.ts with tools.ts as the re-export face, so
+  // the guard scans every TypeScript module in the pack directory —
+  // strictly stronger than the old single-file read: no sibling can smuggle
+  // a raw numeric fallback (or drop a table-based one) unnoticed.
+  const packDir = join(root, 'plugins', 'huaweicloud-core', 'src', 'packs', 'sandbox');
+  const family = readdirSync(packDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.ts'))
+    .map((entry) => readSource(join('src', 'packs', 'sandbox', entry.name)));
+  assert.ok(family.length >= 3, 'sandbox pack family modules expected');
+  let fallbacks = 0;
+  for (const src of family) {
+    assert.doesNotMatch(src, /args\.timeout_ms \|\| \d/, 'handler fallbacks must read SANDBOX_TIMEOUT_MS');
+    fallbacks += src.match(/args\.timeout_ms \|\| SANDBOX_TIMEOUT_MS\.\w+/g)?.length ?? 0;
+  }
+  assert.equal(fallbacks, 9, 'nine tool handlers apply the shared defaults');
 });
 
 test('agent-registration reports openclaw registration status', () => {
