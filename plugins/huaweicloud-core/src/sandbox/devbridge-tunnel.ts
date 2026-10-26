@@ -4,7 +4,6 @@ import {
   DEVBRIDGE_PORT_NOT_CONFIGURED_MARKER,
   DEVBRIDGE_TUNNEL_DOMAIN,
   DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER,
-  execOneShot,
   stripTerminalEscapes,
 } from './session-manager.ts';
 import { asText } from '../lib/as-text.ts';
@@ -16,6 +15,7 @@ import {
   validateTunnelId,
   validateTunnelPort,
 } from './devbridge-validation.ts';
+import { runOneShot, type OneShotResult } from './devbridge-exec.ts';
 
 // The tunnel parameter policy (validators, lifetime constants, the 0.1.x
 // version gate) lives in devbridge-validation.ts; re-exported as the public
@@ -30,6 +30,9 @@ export {
   validateTunnelPort,
 } from './devbridge-validation.ts';
 export type { DevbridgeVersionVerdict } from './devbridge-validation.ts';
+// The one-shot exec seam lives in devbridge-exec.ts; re-exported as the public
+// face (the test harness imports _setOneShotForTests here).
+export { _setOneShotForTests } from './devbridge-exec.ts';
 
 // The DevBridge expose-tunnel flow, extracted from session-manager so the
 // tunnel helpers stay a cohesive unit with a pure-function test surface.
@@ -74,27 +77,6 @@ export interface ExposeTunnelResult {
   attempts?: Record<string, string>;
   hint?: string;
   loginOutput?: string;
-}
-
-interface OneShotResult {
-  stdout: string;
-  exitCode: number;
-  error?: string;
-}
-
-// Test seam: exposeTunnel is otherwise untestable end-to-end (execOneShot
-// opens a real ws connection). Pure helpers stay seam-free.
-let oneShotForTests:
-  ((workspaceId: string, command: string, username: string, timeoutMs: number) => Promise<OneShotResult>) | null = null;
-
-export function _setOneShotForTests(
-  fn: ((workspaceId: string, command: string, username: string, timeoutMs: number) => Promise<OneShotResult>) | null,
-): void {
-  oneShotForTests = fn;
-}
-
-async function runOneShot(workspaceId: string, command: string, username: string, timeoutMs: number) {
-  return (oneShotForTests ?? execOneShot)(workspaceId, command, username, timeoutMs);
 }
 
 // Build a shell snippet that authenticates devbridge via a verified waterfall:
