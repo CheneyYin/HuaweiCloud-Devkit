@@ -19,9 +19,8 @@
 //   deploy-nginx-verify.ts — the #935 A1 write-verification family
 //   deploy-check.ts        — the deploy-check script, parser, remediation
 // devbridge-tunnel.ts is itself a pure re-export face since the devbridge-tunnel
-// modularization (importing nothing from this path — its family imports the
-// canonical modules directly); the sandbox siblings import each other's
-// canonical modules directly.
+// modularization (importing nothing from this path); every sandbox sibling
+// imports the canonical modules directly.
 
 // The DevBridge s2 gateway wire contract (tunnel domain, migration marker,
 // gateway-level error bodies) lives in devbridge-gateway.ts; re-exported here
@@ -34,9 +33,8 @@ export {
   DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER,
 } from './devbridge-gateway.ts';
 // The single escape-stripping seam for sandbox output parsers (#946) lives in
-// sandbox-output.ts; re-exported as the public face (the upload/deploy parsers
-// and the devbridge-tunnel family's canonical modules import it from this
-// path's re-export target).
+// sandbox-output.ts; re-exported as the public face for consumers outside the
+// sandbox family (the family's modules import sandbox-output.ts directly).
 export { stripTerminalEscapes } from './sandbox-output.ts';
 // The ws-exec barrel loader and the ws-exec structural shapes live in
 // ws-exec-loader.ts; resolveWsExecIndexUrl is re-exported as the public face.

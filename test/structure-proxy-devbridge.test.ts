@@ -111,6 +111,10 @@ test('devbridge host launch survives the exec session (#919/#922): setsid guard,
     'utf8',
   );
   const devbridgeTunnel = readSource(join('src', 'sandbox', 'devbridge-tunnel.ts'));
+  // The face pin: the expose contract re-exports from its canonical module
+  // (devbridge-expose.ts) since the devbridge-tunnel modularization — the
+  // pure re-export seam must not drift away from the family.
+  assert.match(devbridgeTunnel, /export \{[\s\S]*?buildDevbridgeExposeScript,[\s\S]*?\} from '\.\/devbridge-expose\.ts';/);
   // The tunnel parameter policy (validators, lifetime constants, the 0.1.x
   // version gate) lives in devbridge-validation.ts since the devbridge-tunnel
   // modularization; the canonical literals are pinned at their new home.
@@ -191,6 +195,12 @@ test('devbridge host launch survives the exec session (#919/#922): setsid guard,
 
 test('expose_tunnel re-verifies from an independent exec session and classifies gateway tunnel errors (#919)', () => {
   const devbridgeTunnel = readSource(join('src', 'sandbox', 'devbridge-tunnel.ts'));
+  // The face pin: the re-verify family re-exports from its canonical module
+  // (devbridge-verify.ts) since the devbridge-tunnel modularization.
+  assert.match(
+    devbridgeTunnel,
+    /export \{ buildDevbridgeVerifyScript, parseDevbridgeVerifyOutput \} from '\.\/devbridge-verify\.ts';/,
+  );
   // The deploy_check probe script lives in deploy-check.ts since the
   // session-manager modularization.
   const deployCheckSource = readSource(join('src', 'sandbox', 'deploy-check.ts'));
@@ -288,6 +298,12 @@ test('deploy_check judges reachability by non-000 and probes listed tunnels boun
 test('stripTerminalEscapes is the single escape-stripping seam for sandbox output parsers (#946)', () => {
   const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
   const devbridgeTunnel = readSource(join('src', 'sandbox', 'devbridge-tunnel.ts'));
+  // The face pin: the auth parser re-exports from its canonical module
+  // (devbridge-auth.ts) since the devbridge-tunnel modularization.
+  assert.match(
+    devbridgeTunnel,
+    /export \{ buildDevbridgeAuthProbe, parseDevbridgeAuthOutput \} from '\.\/devbridge-auth\.ts';/,
+  );
   // sandbox-output.ts is the canonical home since the session-manager
   // modularization; the whole sandbox sibling family is swept so no sibling
   // (new or old) re-rolls the seam.
