@@ -64,7 +64,11 @@ test('agents/codearts.ts supports the codearts target end to end', () => {
   // missing. The DSH package-root candidate is PLUGIN_ROOT itself because
   // serverSkillDirNames() appends 'skills' (bound by the dsh row's doctor
   // section in agents/dsh-patch.ts).
+  // The roster readers moved to src/payload-roster.ts in the install-payload
+  // split; the pin follows the canonical home (the status listing stays in
+  // the face until its own extraction).
   const payloadModule = readSource(join('src', 'install-payload.ts'));
+  const payloadRosterModule = readSource(join('src', 'payload-roster.ts'));
   const doctorPayloadModule = readSource(join('src', 'doctor-payload.ts'));
   assert.match(payloadModule, /return listSkillDirs\(join\(pluginDir, 'skills'\)\);/);
   assert.match(setup, /expectedSkills: shippedSkillRoster\(\)/);
@@ -79,7 +83,7 @@ test('agents/codearts.ts supports the codearts target end to end', () => {
   // doctor's native-dir check is the receipt-gated one: core names warn only
   // outside a dir a sync row manages, and a manifest without pack info warns
   // instead of crashing the diagnostic run.
-  assert.match(payloadModule, /function tryCoreSkillNames\(\)/);
+  assert.match(payloadRosterModule, /function tryCoreSkillNames\(\)/);
   assert.match(setup, /corePack: tryCoreSkillNames\(\)/);
   assert.match(readSource(join('src', 'doctor-native.ts')), /managedHere && corePack\.has\(entry\.name\)/);
   // The byte-equality comparator lives in the shared zod-free lib (doctor
