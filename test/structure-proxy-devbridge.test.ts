@@ -6,23 +6,23 @@ import test from 'node:test';
 import { pluginRoot, readSource, root } from './structure-helpers.ts';
 
 test('proxy nginx template listens on targetPort, not the stale listenPort (#738)', () => {
-  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
+  const deployNginx = readSource(join('src', 'sandbox', 'deploy-nginx.ts'));
 
   // The proxy template must reference ${targetPort} (the auto-incremented port),
   // not ${listenPort} (the original requested port which may be occupied).
-  const proxyBlock = sessionManager.match(/proxy: `server \{[\s\S]*?\}`/);
+  const proxyBlock = deployNginx.match(/proxy: `server \{[\s\S]*?\}`/);
   assert.ok(proxyBlock, 'proxy nginx template block not found');
   assert.match(proxyBlock[0], /listen \$\{targetPort\}/);
   assert.doesNotMatch(proxyBlock[0], /listen \$\{listenPort\}/);
 });
 
 test('effectiveNodePort for proxy resolves via the pure resolveProxyNodePort helper on targetPort (#738)', () => {
-  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
+  const deployNginx = readSource(join('src', 'sandbox', 'deploy-nginx.ts'));
 
   // effectiveNodePort must track the resolved targetPort so the Node app and
   // nginx stay in sync after auto-increment, and the resolution must be
   // extractable into a pure, unit-testable function.
-  const nodePortBlock = sessionManager.match(
+  const nodePortBlock = deployNginx.match(
     /const effectiveNodePort =[\s\S]*?resolveProxyNodePort\(nodePort, targetPort[^;]*;[\s\S]*?\n\s*: undefined;/,
   );
   assert.ok(nodePortBlock, 'effectiveNodePort block not found');
@@ -30,26 +30,26 @@ test('effectiveNodePort for proxy resolves via the pure resolveProxyNodePort hel
   assert.match(block, /resolveProxyNodePort\(nodePort, targetPort/);
   assert.doesNotMatch(block, /nodePort !== listenPort/);
 
-  const helper = sessionManager.match(/export async function resolveProxyNodePort\([\s\S]*?\n\}/);
+  const helper = deployNginx.match(/export async function resolveProxyNodePort\([\s\S]*?\n\}/);
   assert.ok(helper, 'resolveProxyNodePort helper not found');
   assert.match(helper[0], /nodePort && nodePort !== nginxListenPort \? nodePort : nginxListenPort \+ 1/);
   assert.match(helper[0], /candidate === nginxListenPort \|\| \(await isPortInUse\(candidate\)\)/);
 });
 
 test('port conflict and drift warnings use the unified logic for all nginx types (#738)', () => {
-  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
+  const deployNginx = readSource(join('src', 'sandbox', 'deploy-nginx.ts'));
 
   // The #736 stopgap formatProxyPortWarning must stay retired; proxy gets the
   // same conflict/drift warnings as spa/static.
-  assert.doesNotMatch(sessionManager, /formatProxyPortWarning/);
-  assert.match(sessionManager, /formatPortConflictWarning\(basePort, targetPort\)/);
-  assert.match(sessionManager, /formatPortDriftWarning\(basePort, targetPort\)/);
-  assert.doesNotMatch(sessionManager, /nginxType !== 'proxy'\s*\?\s*formatPortDriftWarning/);
+  assert.doesNotMatch(deployNginx, /formatProxyPortWarning/);
+  assert.match(deployNginx, /formatPortConflictWarning\(basePort, targetPort\)/);
+  assert.match(deployNginx, /formatPortDriftWarning\(basePort, targetPort\)/);
+  assert.doesNotMatch(deployNginx, /nginxType !== 'proxy'\s*\?\s*formatPortDriftWarning/);
 });
 
 test('deploy_nginx warnings are joined with the pipe separator (#738)', () => {
-  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
-  assert.match(sessionManager, /\.join\(' \| '\)/);
+  const deployNginx = readSource(join('src', 'sandbox', 'deploy-nginx.ts'));
+  assert.match(deployNginx, /\.join\(' \| '\)/);
 });
 
 test('devbridge uses the valid `list` command, not the non-existent `ls`', () => {
@@ -57,13 +57,13 @@ test('devbridge uses the valid `list` command, not the non-existent `ls`', () =>
     join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'SKILL.md'),
     'utf8',
   );
-  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
+  const deployNginx = readSource(join('src', 'sandbox', 'deploy-nginx.ts'));
 
   assert.doesNotMatch(sandbox, /devbridge ls\b/);
   assert.match(sandbox, /devbridge list\b/);
 
-  assert.doesNotMatch(sessionManager, /devbridge ls\b/);
-  assert.match(sessionManager, /devbridge list -j/);
+  assert.doesNotMatch(deployNginx, /devbridge ls\b/);
+  assert.match(deployNginx, /devbridge list -j/);
 });
 
 test('huawei-sandbox skill documents devbridge description and host/connect traps', () => {
@@ -317,14 +317,14 @@ test('devbridge 0.2.x flow: auth capability probe, version detection, in-place u
   assert.match(sandbox, /nginx -t` 验证 \+ `nginx -s reload` 热加载/);
 
   // The paired implementation pin: the SKILL's deploy_nginx claim (配置写入
-  // 后自动回验存在性与 nginx -t) is only true because session-manager.ts
+  // 后自动回验存在性与 nginx -t) is only true because deploy-nginx.ts
   // implements the A1 verify block — docs-ahead-of-code (the failure this
   // guard's sibling prose denounces) fails here.
-  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
-  assert.match(sessionManager, /DB_NGINX_CONFIG_MISSING=1/);
-  assert.match(sessionManager, /DB_NGINX_T=PASS/);
-  assert.match(sessionManager, /resolveNginxConfigPath/);
-  assert.match(sessionManager, /fix_and_retry/);
+  const deployNginx = readSource(join('src', 'sandbox', 'deploy-nginx.ts'));
+  assert.match(deployNginx, /DB_NGINX_CONFIG_MISSING=1/);
+  assert.match(deployNginx, /DB_NGINX_T=PASS/);
+  assert.match(deployNginx, /resolveNginxConfigPath/);
+  assert.match(deployNginx, /fix_and_retry/);
 
   // Auth is a verified three-tier waterfall (keyring → AK/SK → api-key file);
   // the preferred path is the expose_tunnel tool, the manual script is the
