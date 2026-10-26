@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
@@ -253,20 +253,29 @@ test('deploy_check judges reachability by non-000 and probes listed tunnels boun
 test('stripTerminalEscapes is the single escape-stripping seam for sandbox output parsers (#946)', () => {
   const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
   const devbridgeTunnel = readSource(join('src', 'sandbox', 'devbridge-tunnel.ts'));
+  // sandbox-output.ts is the canonical home since the session-manager
+  // modularization; the whole sandbox sibling family is swept so no sibling
+  // (new or old) re-rolls the seam.
+  const sandboxOutput = readSource(join('src', 'sandbox', 'sandbox-output.ts'));
+  const sandboxFamily = readdirSync(join(pluginRoot, 'src', 'sandbox'))
+    .filter((name) => name.endsWith('.ts'))
+    .map((name) => [`sandbox/${name}`, readSource(join('src', 'sandbox', name))] as const);
 
-  // One exported definition; the devbridge parsers import it (no second copy).
-  assert.match(sessionManager, /export function stripTerminalEscapes/);
+  // One exported definition; the devbridge parsers import it through the
+  // session-manager.ts re-export face (no second copy).
+  assert.match(sandboxOutput, /export function stripTerminalEscapes/);
+  assert.match(sessionManager, /export \{ stripTerminalEscapes \} from '\.\/sandbox-output\.ts';/);
   assert.match(devbridgeTunnel, /stripTerminalEscapes,\n\} from '\.\/session-manager\.ts'/);
   const csiConstruction = "ESC + '\\\\[[0-9:;<=>?]*[ -/]*[a-zA-Z]'";
-  assert.equal(sessionManager.split(csiConstruction).length - 1, 1, 'CSI regex must be constructed once');
-  assert.equal(devbridgeTunnel.includes(csiConstruction), false);
+  assert.equal(sandboxOutput.split(csiConstruction).length - 1, 1, 'CSI regex must be constructed once');
+  for (const [name, source] of sandboxFamily) {
+    if (name === 'sandbox/sandbox-output.ts') continue;
+    assert.equal(source.includes(csiConstruction), false, `${name}: no CSI construction copy`);
+  }
   // The CSI class covers the private-mode parameter bytes (\x1b[?2026h etc.) —
   // a digits-;-only class leaves them intact and blinds the anchored lookups.
-  assert.match(sessionManager, /0-9:;<=>\?\]\*\[ -\/\]\*\[a-zA-Z\]/);
-  for (const [name, source] of [
-    ['session-manager', sessionManager],
-    ['devbridge-tunnel', devbridgeTunnel],
-  ] as const) {
+  assert.match(sandboxOutput, /0-9:;<=>\?\]\*\[ -\/\]\*\[a-zA-Z\]/);
+  for (const [name, source] of sandboxFamily) {
     // Deny BOTH CSI- and OSC-form literal-regex copies (/\x1b[…/, /\x1b]…).
     assert.doesNotMatch(
       source,
