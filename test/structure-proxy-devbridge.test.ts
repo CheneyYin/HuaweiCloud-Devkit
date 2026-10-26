@@ -96,8 +96,9 @@ test('devbridge tunnel handling is migrated to the s2 gateway domain', () => {
   // A migrated gateway serves a placeholder page with HTTP 200 — the check must inspect the body.
   assert.match(gateway, /服务已迁移/);
 
-  // The constants stay on the session-manager.ts public face — devbridge-tunnel.ts
-  // imports them from that path (the re-export seam must not drift away).
+  // The constants stay on the session-manager.ts public face — the sandbox
+  // consumers import them from that path (the re-export seam must not drift
+  // away); the devbridge-tunnel family imports devbridge-gateway.ts directly.
   assert.match(sessionManager, /DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER,\n\} from '\.\/devbridge-gateway\.ts'/);
 
   // The skill must teach the new URL form and the dead legacy form.
@@ -231,7 +232,8 @@ test('expose_tunnel re-verifies from an independent exec session and classifies 
   // injected sandbox proxy — every curl against *.hwtunnel.com carries it.
   assert.match(deployCheckSource, /curl -s --noproxy '\*' -o \/tmp\/\.dc_tunnel_body/);
   // U16: the tunnel-persistence subsystem — renewal, the watchdog, and the
-  // #998/#999/#1000 hardening all ride devbridge-tunnel.ts.
+  // #998/#999/#1000 hardening ride the devbridge-tunnel family's canonical
+  // modules (pinned below at their homes since the modularization).
   const devbridgeValidation = readSource(join('src', 'sandbox', 'devbridge-validation.ts'));
   // The renew family lives in devbridge-renew.ts since the devbridge-tunnel
   // modularization.

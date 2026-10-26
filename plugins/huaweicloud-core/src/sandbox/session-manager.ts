@@ -24,7 +24,8 @@
 
 // The DevBridge s2 gateway wire contract (tunnel domain, migration marker,
 // gateway-level error bodies) lives in devbridge-gateway.ts; re-exported here
-// as the stable public face (devbridge-tunnel.ts imports it from this path).
+// as the stable public face (deploy-check.ts imports it from this path; the
+// devbridge-tunnel family imports devbridge-gateway.ts directly).
 export {
   DEVBRIDGE_BAD_GATEWAY_MARKER,
   DEVBRIDGE_MIGRATION_MARKER,
