@@ -8,8 +8,12 @@ The following files in this project contain code derived from or
 originated from the hwlink project:
 
   plugins/huaweicloud-core/src/ws-exec/hwlink-exec-client.js
+  plugins/huaweicloud-core/src/ws-exec/hwlink-exec-pending.js
+  plugins/huaweicloud-core/src/ws-exec/hwlink-exec-session.js
   plugins/huaweicloud-core/src/ws-exec/hwlink-fair-queue.js
+  plugins/huaweicloud-core/src/ws-exec/hwlink-interactive-terminal.js
   plugins/huaweicloud-core/src/ws-exec/hwlink-multiplexer.js
+  plugins/huaweicloud-core/src/ws-exec/hwlink-normalize.js
   plugins/huaweicloud-core/src/ws-exec/hwlink-packet.js
   plugins/huaweicloud-core/src/ws-exec/hwlink-terminal-channel.js
   plugins/huaweicloud-core/src/ws-exec/hwlink-tunnel-channel.mjs
