@@ -1,19 +1,20 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+// The detect-framework family face. The frameworks spec table lives in
+// detect-framework-table.ts and the package/project readers in
+// detect-framework-pkg.ts; this module holds the detection orchestration
+// (sub-app scanning, command patching, the branch chain) and remains the
+// import path every consumer depends on — same exported names, same
+// behavior.
+import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { asRecord } from './lib/as-record.ts';
-
-interface FrameworkSpec {
-  type: string;
-  framework: string;
-  installCmd: string | null;
-  buildCmd: string | null;
-  outputDir: string | null;
-  port: number;
-  serveCmd: string | null;
-  checkUrl: string;
-  nginxType: string;
-}
+import { FRAMEWORKS, type FrameworkSpec } from './detect-framework-table.ts';
+import {
+  collectDeps,
+  detectPackageManager,
+  readPkg,
+  readVitepressOutDir,
+  resolveAngularOutput,
+} from './detect-framework-pkg.ts';
 
 export interface SubApp {
   name: string;
@@ -38,182 +39,6 @@ export interface FrameworkDetection {
   nginxType?: string;
   monorepoTool?: string;
   subApps?: SubApp[];
-}
-
-// `satisfies` (not a Record annotation) keeps the literal key set, so the
-// FRAMEWORKS.<name> lookups below stay total under noUncheckedIndexedAccess.
-const FRAMEWORKS = {
-  nextjs: {
-    type: 'ssr',
-    framework: 'Next.js',
-    installCmd: 'npm install',
-    buildCmd: 'npm run build',
-    outputDir: '.next',
-    port: 3000,
-    serveCmd: 'nohup npm start > /tmp/app.log 2>&1 &',
-    checkUrl: 'http://localhost:3000',
-    nginxType: 'proxy',
-  },
-  nuxt: {
-    type: 'ssr',
-    framework: 'Nuxt',
-    installCmd: 'npm install',
-    buildCmd: 'npm run build',
-    outputDir: '.output',
-    port: 3000,
-    serveCmd: 'nohup node .output/server/index.mjs > /tmp/app.log 2>&1 &',
-    checkUrl: 'http://localhost:3000',
-    nginxType: 'proxy',
-  },
-  vitepress: {
-    type: 'ssg',
-    framework: 'VitePress',
-    installCmd: 'npm install',
-    buildCmd: 'npm run docs:build',
-    outputDir: '.vitepress/dist',
-    port: 8080,
-    serveCmd: null,
-    checkUrl: 'http://localhost:8080',
-    nginxType: 'spa',
-  },
-  docusaurus: {
-    type: 'ssg',
-    framework: 'Docusaurus',
-    installCmd: 'npm install',
-    buildCmd: 'npm run build',
-    outputDir: 'build',
-    port: 8080,
-    serveCmd: null,
-    checkUrl: 'http://localhost:8080',
-    nginxType: 'spa',
-  },
-  hugo: {
-    type: 'ssg',
-    framework: 'Hugo',
-    installCmd: null,
-    buildCmd: 'hugo',
-    outputDir: 'public',
-    port: 8080,
-    serveCmd: null,
-    checkUrl: 'http://localhost:8080',
-    nginxType: 'static',
-  },
-  hexo: {
-    type: 'ssg',
-    framework: 'Hexo',
-    installCmd: 'npm install',
-    buildCmd: 'npm run build',
-    outputDir: 'public',
-    port: 8080,
-    serveCmd: null,
-    checkUrl: 'http://localhost:8080',
-    nginxType: 'static',
-  },
-  taro: {
-    type: 'cross-platform',
-    framework: 'Taro',
-    installCmd: 'npm install',
-    buildCmd: 'npm run build:h5',
-    outputDir: 'dist',
-    port: 8080,
-    serveCmd: null,
-    checkUrl: 'http://localhost:8080',
-    nginxType: 'spa',
-  },
-  uniapp: {
-    type: 'cross-platform',
-    framework: 'uni-app',
-    installCmd: 'npm install',
-    buildCmd: 'npm run build:h5',
-    outputDir: 'dist/build/h5',
-    port: 8080,
-    serveCmd: null,
-    checkUrl: 'http://localhost:8080',
-    nginxType: 'spa',
-  },
-  angular: {
-    type: 'spa',
-    framework: 'Angular',
-    installCmd: 'npm install',
-    buildCmd: 'npm run build',
-    outputDir: null,
-    port: 8080,
-    serveCmd: null,
-    checkUrl: 'http://localhost:8080',
-    nginxType: 'spa',
-  },
-  vite: {
-    type: 'spa',
-    framework: 'Vite (React/Vue/Svelte)',
-    installCmd: 'npm install',
-    buildCmd: 'npm run build',
-    outputDir: 'dist',
-    port: 8080,
-    serveCmd: null,
-    checkUrl: 'http://localhost:8080',
-    nginxType: 'spa',
-  },
-  cra: {
-    type: 'spa',
-    framework: 'Create React App',
-    installCmd: 'npm install',
-    buildCmd: 'npm run build',
-    outputDir: 'build',
-    port: 8080,
-    serveCmd: null,
-    checkUrl: 'http://localhost:8080',
-    nginxType: 'spa',
-  },
-  vueCli: {
-    type: 'spa',
-    framework: 'Vue CLI',
-    installCmd: 'npm install',
-    buildCmd: 'npm run build',
-    outputDir: 'dist',
-    port: 8080,
-    serveCmd: null,
-    checkUrl: 'http://localhost:8080',
-    nginxType: 'spa',
-  },
-  static: {
-    type: 'static',
-    framework: 'Static Site',
-    installCmd: null,
-    buildCmd: null,
-    outputDir: '.',
-    port: 8080,
-    serveCmd: null,
-    checkUrl: 'http://localhost:8080',
-    nginxType: 'static',
-  },
-} satisfies Record<string, FrameworkSpec>;
-
-function readPkg(projectPath: string): Record<string, unknown> | null {
-  const pkgPath = join(projectPath, 'package.json');
-  if (!existsSync(pkgPath)) return null;
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(pkgPath, 'utf8'));
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-    return parsed as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
-
-function detectPackageManager(projectPath: string, pkg: Record<string, unknown> | null): string {
-  if (existsSync(join(projectPath, 'pnpm-lock.yaml'))) return 'pnpm';
-  if (existsSync(join(projectPath, 'yarn.lock'))) return 'yarn';
-  if (existsSync(join(projectPath, 'package-lock.json'))) return 'npm';
-  if (existsSync(join(projectPath, 'bun.lockb'))) return 'bun';
-  const declaredValue = pkg?.packageManager;
-  const declared = typeof declaredValue === 'string' ? declaredValue.split('@')[0] : '';
-  if (declared && ['pnpm', 'yarn', 'npm', 'bun'].includes(declared)) return declared;
-  return 'npm';
-}
-
-function collectDeps(pkg: Record<string, unknown> | null): Record<string, unknown> {
-  if (!pkg) return {};
-  return { ...asRecord(pkg.dependencies), ...asRecord(pkg.devDependencies) };
 }
 
 function scanSubApps(projectPath: string): SubApp[] {
@@ -245,31 +70,6 @@ function scanSubApps(projectPath: string): SubApp[] {
   return apps;
 }
 
-function resolveAngularOutput(projectPath: string, pkg: Record<string, unknown> | null): string {
-  try {
-    const angularJson = join(projectPath, 'angular.json');
-    if (existsSync(angularJson)) {
-      const config = asRecord(JSON.parse(readFileSync(angularJson, 'utf8')));
-      const projects = asRecord(config.projects);
-      const defaultProjectValue = config.defaultProject;
-      const defaultProject =
-        typeof defaultProjectValue === 'string' && defaultProjectValue ? defaultProjectValue : Object.keys(projects)[0];
-      const project = asRecord(defaultProject !== undefined ? projects[defaultProject] : undefined);
-      const architect = asRecord(project.architect);
-      const build = asRecord(architect.build);
-      const outputPath = asRecord(build.options).outputPath;
-      if (defaultProject && typeof outputPath === 'string' && outputPath) {
-        return outputPath;
-      }
-    }
-  } catch {
-    // ignore parse errors
-  }
-  const nameValue = pkg?.name;
-  const name = typeof nameValue === 'string' && nameValue ? nameValue : 'app';
-  return `dist/${name}`;
-}
-
 function patchCommands(result: FrameworkDetection, pm: string): FrameworkDetection {
   if (result.installCmd && result.installCmd.startsWith('npm install')) {
     if (pm === 'pnpm') result.installCmd = 'pnpm install';
@@ -288,23 +88,6 @@ function patchCommands(result: FrameworkDetection, pm: string): FrameworkDetecti
 
 function frameworkResult(fw: FrameworkSpec, pm: string, projectPath: string): FrameworkDetection {
   return patchCommands({ ...fw, packageManager: pm, rootDir: projectPath }, pm);
-}
-
-function readVitepressOutDir(projectPath: string): string | null {
-  const configFiles = ['config.mts', 'config.ts', 'config.mjs', 'config.js'];
-  for (const cf of configFiles) {
-    const configPath = join(projectPath, '.vitepress', cf);
-    if (!existsSync(configPath)) continue;
-    try {
-      const content = readFileSync(configPath, 'utf8');
-      const match = content.match(/outDir\s*:\s*['"`]?([^'"`\s,}]+)['"`]?/);
-      // The capture group is +-quantified; it always participates when the regex matches.
-      if (match) return match[1]!;
-    } catch {
-      // unreadable config: fall through to the next config file; null keeps the caller's default
-    }
-  }
-  return null;
 }
 
 export function detectFramework(projectPath: string): FrameworkDetection | null {
