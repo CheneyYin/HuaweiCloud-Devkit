@@ -115,6 +115,9 @@ test('devbridge host launch survives the exec session (#919/#922): setsid guard,
   // version gate) lives in devbridge-validation.ts since the devbridge-tunnel
   // modularization; the canonical literals are pinned at their new home.
   const devbridgeValidation = readSource(join('src', 'sandbox', 'devbridge-validation.ts'));
+  // The expose attempt contract (script, stdout grammar, reachability warning)
+  // lives in devbridge-expose.ts since the same split.
+  const devbridgeExpose = readSource(join('src', 'sandbox', 'devbridge-expose.ts'));
   // The deploy_check remediation lives in deploy-check.ts since the
   // session-manager modularization.
   const deployCheckSource = readSource(join('src', 'sandbox', 'deploy-check.ts'));
@@ -123,11 +126,11 @@ test('devbridge host launch survives the exec session (#919/#922): setsid guard,
   // (some images lack setsid), stdin dropped from the controlling tty, guarded
   // disown (POSIX-sh without the builtin must not abort), and the 72h expiry
   // echoed so exposeTunnel can compute expiresAt.
-  assert.match(devbridgeTunnel, /if command -v setsid > \/dev\/null 2>&1; then setsid nohup devbridge host/);
-  assert.match(devbridgeTunnel, /< \/dev\/null & else nohup devbridge host/);
+  assert.match(devbridgeExpose, /if command -v setsid > \/dev\/null 2>&1; then setsid nohup devbridge host/);
+  assert.match(devbridgeExpose, /< \/dev\/null & else nohup devbridge host/);
   assert.match(devbridgeTunnel, /`disown 2>\/dev\/null \|\| true`/);
   assert.match(devbridgeValidation, /DEVBRIDGE_HOST_EXPIRY_HOURS = 72/);
-  assert.match(devbridgeTunnel, /DB_EXPIRY_HOURS=\$\{expiryHours\}/);
+  assert.match(devbridgeExpose, /DB_EXPIRY_HOURS=\$\{expiryHours\}/);
   // #1000, the agent-facing SKILL surface: the manual fallbacks' curls carry
   // --noproxy with the MANDATORY comment, and the Proxy-trap doctrine
   // paragraph (with the SSH-path cross-reference) teaches the why. Localhost
@@ -141,7 +144,7 @@ test('devbridge host launch survives the exec session (#919/#922): setsid guard,
   // it and every PATH export carries the data-disk prefix.
   assert.match(sandbox, /Sandbox filesystem persistence: what survives a reboot \(#999\)/);
   assert.match(sandbox, /export PATH="\/workspace\/.local\/bin:\$HOME\/\.huawei\/bin:\$PATH"/);
-  assert.match(devbridgeTunnel, /export PATH="\/workspace\/.local\/bin:\$HOME\/\.huawei\/bin:\$PATH"/);
+  assert.match(devbridgeExpose, /export PATH="\/workspace\/.local\/bin:\$HOME\/\.huawei\/bin:\$PATH"/);
   assert.match(sandbox, /stale ~\/\.huawei\/bin\/devbridge removed/);
   // The Layer-3 install target is the substantive core of #999 — WHERE the
   // binary lands. The old system-disk-only export form must not re-creep.
@@ -173,9 +176,9 @@ test('devbridge host launch survives the exec session (#919/#922): setsid guard,
   // Migration/quota verdicts are host-log facts read from dedicated fields —
   // never a whole-stdout scan that the echoed probe body (DB_TUNNEL_BODY)
   // could poison with app content. Count-robust (grep -c prints line counts).
-  assert.match(devbridgeTunnel, /DB_MIGRATION=\$\(grep -c '\$\{DEVBRIDGE_MIGRATION_MARKER\}' \$\{hostLog\}/);
-  assert.match(devbridgeTunnel, /Number\(readDbField\(text, 'DB_MIGRATION'\)\) > 0/);
-  assert.doesNotMatch(devbridgeTunnel, /includes\('10006'\)/);
+  assert.match(devbridgeExpose, /DB_MIGRATION=\$\(grep -c '\$\{DEVBRIDGE_MIGRATION_MARKER\}' \$\{hostLog\}/);
+  assert.match(devbridgeExpose, /Number\(readDbField\(text, 'DB_MIGRATION'\)\) > 0/);
+  assert.doesNotMatch(devbridgeExpose, /includes\('10006'\)/);
 });
 
 test('expose_tunnel re-verifies from an independent exec session and classifies gateway tunnel errors (#919)', () => {
@@ -271,15 +274,26 @@ test('stripTerminalEscapes is the single escape-stripping seam for sandbox outpu
   const sandboxOutput = readSource(join('src', 'sandbox', 'sandbox-output.ts'));
   // The deploy-check parser lives in deploy-check.ts since the same split.
   const deployCheckSource = readSource(join('src', 'sandbox', 'deploy-check.ts'));
+  // The devbridge parsers live in their canonical modules since the
+  // devbridge-tunnel modularization (auth probe parser in devbridge-auth.ts,
+  // the expose/probe parsers in devbridge-expose.ts).
+  const devbridgeAuth = readSource(join('src', 'sandbox', 'devbridge-auth.ts'));
+  const devbridgeExpose = readSource(join('src', 'sandbox', 'devbridge-expose.ts'));
   const sandboxFamily = readdirSync(join(pluginRoot, 'src', 'sandbox'))
     .filter((name) => name.endsWith('.ts'))
     .map((name) => [`sandbox/${name}`, readSource(join('src', 'sandbox', name))] as const);
 
-  // One exported definition; the devbridge parsers import it through the
-  // session-manager.ts re-export face (no second copy).
+  // One exported definition; the devbridge parser modules import the canonical
+  // seam directly since the devbridge-tunnel modularization (auth parser in
+  // devbridge-auth.ts, expose/probe parsers in devbridge-expose.ts — no second
+  // copy, no face round-trip); parsers still inside the devbridge-tunnel.ts
+  // face keep importing through the session-manager.ts re-export face until
+  // they land in their own canonical modules.
   assert.match(sandboxOutput, /export function stripTerminalEscapes/);
   assert.match(sessionManager, /export \{ stripTerminalEscapes \} from '\.\/sandbox-output\.ts';/);
-  assert.match(devbridgeTunnel, /stripTerminalEscapes,\n\} from '\.\/session-manager\.ts'/);
+  assert.match(devbridgeAuth, /import \{ stripTerminalEscapes \} from '\.\/sandbox-output\.ts';/);
+  assert.match(devbridgeExpose, /import \{ stripTerminalEscapes \} from '\.\/sandbox-output\.ts';/);
+  assert.match(devbridgeTunnel, /import \{[^}]*stripTerminalEscapes[^}]*\} from '\.\/session-manager\.ts';/);
   const csiConstruction = "ESC + '\\\\[[0-9:;<=>?]*[ -/]*[a-zA-Z]'";
   assert.equal(sandboxOutput.split(csiConstruction).length - 1, 1, 'CSI regex must be constructed once');
   for (const [name, source] of sandboxFamily) {
@@ -299,14 +313,11 @@ test('stripTerminalEscapes is the single escape-stripping seam for sandbox outpu
   }
 
   // Every sandbox-output parser entry point folds the stripper in.
-  // The devbridge parsers live in their canonical modules since the
-  // devbridge-tunnel modularization (auth probe parser in devbridge-auth.ts).
-  const devbridgeAuth = readSource(join('src', 'sandbox', 'devbridge-auth.ts'));
   assert.match(deployCheckSource, /parseDeployCheckOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/);
-  assert.match(devbridgeTunnel, /parseDevbridgeExposeOutput\(stdout[\s\S]{0,600}?stripTerminalEscapes\(stdout\)/);
+  assert.match(devbridgeExpose, /parseDevbridgeExposeOutput\(stdout[\s\S]{0,600}?stripTerminalEscapes\(stdout\)/);
   assert.match(devbridgeAuth, /parseDevbridgeAuthOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/);
   assert.match(devbridgeTunnel, /parseDevbridgeVerifyOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/);
-  assert.match(devbridgeTunnel, /parseDevbridgeProbeSequence\(stdout[\s\S]{0,700}?stripTerminalEscapes\(stdout\)/);
+  assert.match(devbridgeExpose, /parseDevbridgeProbeSequence\(stdout[\s\S]{0,700}?stripTerminalEscapes\(stdout\)/);
 });
 
 test('devbridge 0.2.x flow: auth capability probe, version detection, in-place upgrade guidance', () => {
