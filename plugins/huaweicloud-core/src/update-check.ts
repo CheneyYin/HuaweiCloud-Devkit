@@ -1,24 +1,24 @@
 // Version-update detection & auto-upgrade for huaweicloud-devkit (session-level).
 // Spec: docs/superpowers/specs/2026-09-07-version-upgrade-design.md (internal, not committed).
 //
-// The semver channel logic lives in ./update-semver.ts and the installed-version
-// reader in ./update-installed.ts (re-exported below); the verdict, registry IO,
-// skip-state, cache, and upgrade families still live here.
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, rmSync } from 'node:fs';
+// The semver channel logic lives in ./update-semver.ts, the installed-version
+// reader in ./update-installed.ts, the skip-state persistence in ./update-skip.ts,
+// and the four-state verdict in ./update-hint.ts (all re-exported below); the
+// registry IO, cache, and upgrade families still live here.
 import {
   spawn,
   spawnSync,
   type ChildProcessWithoutNullStreams,
   type SpawnSyncOptionsWithStringEncoding,
 } from 'node:child_process';
-import { join, dirname, resolve } from 'node:path';
-import { homedir } from 'node:os';
 
 import { fetchWithProxy } from './proxy/proxy-agent.ts';
 import { SUPPORTED_AGENT_TARGETS } from './auth/agent-registration.ts';
 import { asText } from './lib/as-text.ts';
 import { determineTarget, semverCompare, type DistTags } from './update-semver.ts';
-import { readInstalledVersion, selfDir } from './update-installed.ts';
+import { readInstalledVersion } from './update-installed.ts';
+import { readSkipState, resolveSkipFilePath } from './update-skip.ts';
+import { judgeUpdate, type UpdateHint, type UpdateHintLike } from './update-hint.ts';
 
 // The semver channel logic family (parsing, prerelease precedence, target election).
 export {
@@ -33,47 +33,24 @@ export {
 // The installed-version reader (package.json candidates + plugin-manifest fallbacks, #576).
 export { readInstalledVersion } from './update-installed.ts';
 
+// The skip-state (dismiss) persistence family: paths, session suffixing, read/write.
+export {
+  skipFilePath,
+  fallbackSkipFilePath,
+  resolveSkipFilePath,
+  readSkipState,
+  writeSkipState,
+  type SkipState,
+} from './update-skip.ts';
+
+// The four-state verdict (cooldown matrix) and the UpdateHint payload shape.
+export { judgeUpdate, type UpdateResult, type UpdateHint, type UpdateHintLike } from './update-hint.ts';
+
 const IS_WINDOWS = process.platform === 'win32';
 const NPM_BIN = IS_WINDOWS ? 'npm.cmd' : 'npm';
 const NPX_BIN = IS_WINDOWS ? 'npx.cmd' : 'npx';
 const TTL_MS = 60 * 60 * 1000;
 const FAIL_THROTTLE_MS = 5 * 60 * 1000;
-const COOLDOWN_DAYS = 3;
-
-export interface SkipState {
-  dismissedVersion: string;
-  dismissedAt: string;
-  expireAt: string;
-}
-
-export type UpdateResult = 'update_available' | 'up_to_date' | 'check_failed' | 'dismissed';
-
-export interface UpdateHint {
-  currentVersion: string;
-  latestStable: string | null;
-  latestNext: string | null;
-  targetVersion: string | null;
-  updateAvailable: boolean;
-  dismissed: boolean;
-  dismissExpiresAt: string | null;
-  result: UpdateResult;
-  note?: string;
-}
-
-// Structural view of the fields applyUpdateHint reads; partial so callers with
-// minimal hints (tests, protocol layer) still typecheck.
-export interface UpdateHintLike {
-  updateAvailable?: boolean;
-  currentVersion?: string;
-  targetVersion?: string | null;
-}
-
-interface BuildResultExtra {
-  target?: string | null;
-  result?: UpdateResult;
-  dismissExpiresAt?: string | null;
-  note?: string;
-}
 
 interface SpawnResultLike {
   status?: number | null;
@@ -116,130 +93,6 @@ export function parseDistTagsOutput(stdout: unknown): DistTags | null {
   } catch {
     return null;
   }
-}
-
-function buildResult(current: string, distTags: DistTags | null, extra: BuildResultExtra = {}): UpdateHint {
-  const result: UpdateHint = {
-    currentVersion: current,
-    latestStable: distTags?.latest ?? null,
-    latestNext: distTags?.next ?? null,
-    targetVersion: extra.target ?? null,
-    updateAvailable: extra.result === 'update_available',
-    dismissed: extra.result === 'dismissed',
-    dismissExpiresAt: extra.dismissExpiresAt ?? null,
-    result: extra.result ?? 'up_to_date',
-  };
-  if (extra.note) result.note = extra.note;
-  return result;
-}
-
-export function judgeUpdate(
-  current: string,
-  distTags: DistTags | null,
-  skipState: SkipState | null | undefined,
-  now = Date.now(),
-): UpdateHint {
-  if (process.env.HUAWEICLOUD_DEVKIT_SKIP_UPDATE === '1') {
-    return buildResult(current, distTags ?? null);
-  }
-  if (!distTags) {
-    return buildResult(current, null, { result: 'check_failed', note: '检测失败，不影响使用' });
-  }
-  // truthy 但无有效版本（如 failure 折叠后的 { latest:null, next:null }）同样视为检测失败
-  if (!distTags.latest && !distTags.next) {
-    return buildResult(current, null, { result: 'check_failed', note: '检测失败，不影响使用' });
-  }
-  const target = determineTarget(current, distTags);
-  if (!target || semverCompare(target, current) <= 0) {
-    return buildResult(current, distTags, { result: 'up_to_date', target: target ?? null });
-  }
-  const expiresAt = skipState?.expireAt ? new Date(skipState.expireAt).getTime() : 0;
-  const inCooldown =
-    skipState != null && now < expiresAt && semverCompare(target, String(skipState.dismissedVersion)) <= 0;
-  if (inCooldown) {
-    return buildResult(current, distTags, {
-      result: 'dismissed',
-      target,
-      dismissExpiresAt: skipState?.expireAt ?? null,
-    });
-  }
-  return buildResult(current, distTags, { result: 'update_available', target });
-}
-
-export function skipFilePath(): string {
-  return join(resolve(selfDir(), '..'), '.update-skip.json');
-}
-
-export function fallbackSkipFilePath(): string {
-  const base = process.env.HUAWEICLOUD_HOME || homedir();
-  return join(base, '.config', 'huaweicloud', 'devkit-skip.json');
-}
-
-// 会话化 skip 文件：remote 多会话按 sessionId 拆分，stdio/默认保持原文件(向后兼容)。
-function sanitizeSessionId(sessionId: unknown): string {
-  return asText(sessionId || '').replace(/[^0-9a-zA-Z-]/g, '_');
-}
-
-// A1 定稿: 标准 agent 用插件目录副本(有 package.json); codex 等无副本时回退共享文件
-export function resolveSkipFilePath(sessionId: string | null = null): string {
-  let base: string;
-  try {
-    if (existsSync(join(dirname(skipFilePath()), 'package.json'))) {
-      base = skipFilePath();
-    } else {
-      base = fallbackSkipFilePath();
-    }
-  } catch {
-    base = fallbackSkipFilePath();
-  }
-  // stdio / 默认 / 无 session → 原文件（保持向后兼容）
-  if (!sessionId || sessionId === 'default' || sessionId === 'stdin') return base;
-  return `${base}.${sanitizeSessionId(sessionId)}`;
-}
-
-export function readSkipState(file: string): SkipState | null {
-  if (!existsSync(file)) return null;
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'));
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-    const record = parsed as Record<string, unknown>;
-    if (
-      typeof record.dismissedVersion !== 'string' ||
-      typeof record.dismissedAt !== 'string' ||
-      typeof record.expireAt !== 'string'
-    ) {
-      return null;
-    }
-    return {
-      dismissedVersion: record.dismissedVersion,
-      dismissedAt: record.dismissedAt,
-      expireAt: record.expireAt,
-    };
-  } catch {
-    return null;
-  }
-}
-
-export function writeSkipState(
-  file: string,
-  dismissedVersion: unknown,
-  { at = Date.now(), days = COOLDOWN_DAYS }: { at?: number; days?: number } = {},
-): SkipState {
-  const state: SkipState = {
-    dismissedVersion: String(dismissedVersion),
-    dismissedAt: new Date(at).toISOString(),
-    expireAt: new Date(at + days * 24 * 60 * 60 * 1000).toISOString(),
-  };
-  mkdirSync(dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8');
-  try {
-    renameSync(tmp, file);
-  } catch (error) {
-    rmSync(tmp, { force: true });
-    throw error;
-  }
-  return state;
 }
 
 function debugLog(message: string): void {
