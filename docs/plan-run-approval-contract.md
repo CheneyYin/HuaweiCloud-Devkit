@@ -41,12 +41,12 @@ Tokens are persisted to a per-user file (`~/.config/huaweicloud/approvals.json`,
 
 ### Key Functions
 
-| Function                       | Location                             | Purpose                                        |
-| ------------------------------ | ------------------------------------ | ---------------------------------------------- |
-| `createApprovalToken(rawArgs)` | `lib/approval-tokens.ts`             | Stores hash + redacted args, returns token     |
-| `consumeApprovalToken(token)`  | `lib/approval-tokens.ts`             | Validates, claims single-use, tombstones entry |
-| `planHcloudCommand()`          | `src/hcloud-cli.ts`                  | Returns `approvalToken` in result              |
-| `runApprovedCommand()`         | `src/packs/huaweicloud-cli/tools.ts` | Validates token, executes with provided args   |
+| Function                       | Location                                                           | Purpose                                        |
+| ------------------------------ | ------------------------------------------------------------------ | ---------------------------------------------- |
+| `createApprovalToken(rawArgs)` | `lib/approval-tokens.ts`                                           | Stores hash + redacted args, returns token     |
+| `consumeApprovalToken(token)`  | `lib/approval-tokens.ts`                                           | Validates, claims single-use, tombstones entry |
+| `planHcloudCommand()`          | `src/hcloud-plan.ts` (re-exported by the `src/hcloud-cli.ts` face) | Returns `approvalToken` in result              |
+| `runApprovedCommand()`         | `src/packs/huaweicloud-cli/tools.ts`                               | Validates token, executes with provided args   |
 
 ## Why Token Instead of String Comparison
 
