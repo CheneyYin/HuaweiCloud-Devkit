@@ -14,7 +14,7 @@ import {
 import { createHash, randomBytes } from 'node:crypto';
 import { join, dirname, basename } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 import { asRecord } from '../lib/as-record.ts';
 import { createConnection, getCredentials } from '../lib/hdkit/hwlink-api.ts';
@@ -27,6 +27,13 @@ import {
   DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER,
 } from './devbridge-gateway.ts';
 import { stripTerminalEscapes } from './sandbox-output.ts';
+import {
+  firstExisting,
+  loadWsExec,
+  type HwlinkExecResult,
+  type HwlinkMultiplexer,
+  type HwlinkTerminalSession,
+} from './ws-exec-loader.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -50,67 +57,6 @@ function errorLabel(error: unknown): string {
   }
   if (error instanceof Error && error.name) return error.name;
   return 'unknown';
-}
-
-// Result shape returned by ws-exec's exec / executeHwlinkCommand. `error` is
-// never set by ws-exec (failures reject), but the existing fallbacks read it.
-interface HwlinkExecResult {
-  stdout: string;
-  exitCode: number;
-  url?: string;
-  source?: number;
-  username?: string;
-  command?: string;
-  error?: string;
-}
-
-interface HwlinkTerminalSession {
-  state: 'opening' | 'ready' | 'closed';
-  exec(_command: string, _options?: { timeoutMs?: number }): Promise<HwlinkExecResult>;
-  close(): void;
-}
-
-interface HwlinkMultiplexer {
-  readyState: number;
-  onClose?: () => void;
-  onError?: (_error: unknown) => void;
-  close(): void;
-}
-
-interface HwlinkTunnelChannel {
-  localPort: number;
-  ready: Promise<unknown>;
-  attach(_mux: HwlinkMultiplexer): void;
-  close(): void;
-}
-
-// Structural surface of the untyped ws-exec barrel resolved by
-// resolveWsExecIndexUrl() (index.js in dist, index.ts in-repo). Only the members
-// this module calls are modeled; the dynamic import is cast to this shape (same
-// pattern as proxy-agent.ts's UndiciModule cast). The cast is honest because the
-// target is our own bundled module, not parsed/untrusted data.
-interface WsExecModule {
-  connectHwlinkTerminalSession(_options: {
-    url: string;
-    source: unknown;
-    username: string;
-    timeoutMs?: number;
-    WebSocketImpl: unknown;
-  }): Promise<HwlinkTerminalSession>;
-  executeHwlinkCommand(_options: {
-    url: string;
-    source: unknown;
-    username: string;
-    command: string;
-    timeoutMs: number;
-    WebSocketImpl: unknown;
-  }): Promise<HwlinkExecResult>;
-  HwlinkWebSocketMultiplexer: new (
-    _url: string,
-    _source: unknown,
-    _options: { WebSocketImpl: unknown; protocol: string },
-  ) => HwlinkMultiplexer;
-  HwlinkTunnelChannel: new (_options: { localPort: number; remotePort: number }) => HwlinkTunnelChannel;
 }
 
 interface TunnelSession {
@@ -217,40 +163,15 @@ export {
 // sandbox-output.ts; re-exported as the public face (devbridge-tunnel.ts and
 // the upload/deploy parsers import it from this path).
 export { stripTerminalEscapes } from './sandbox-output.ts';
+// The ws-exec barrel loader and the ws-exec structural shapes live in
+// ws-exec-loader.ts; resolveWsExecIndexUrl is re-exported as the public face.
+export { resolveWsExecIndexUrl } from './ws-exec-loader.ts';
 
+// The sandbox file-server asset still resolves from this module's own
+// directory (same three-layout discipline as ws-exec-loader.ts).
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Asset and barrel paths must resolve in three layouts: source (src/sandbox,
-// Node type-stripping), compiled mirror (dist/sandbox/*.js), and the bundled
-// server entry (dist/mcp-server.js inlines this module, so __dirname is dist/
-// itself and subdirectory assets sit one level below it).
-function firstExisting(...candidates: string[]): string {
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
-  }
-  // Both call sites pass literal, non-empty candidate lists; the last entry is the fallback.
-  return candidates[candidates.length - 1]!;
-}
-
-// ws-exec's sources are TypeScript, but runtime entry points read the compiled
-// dist barrel. Prefer the compiled barrel (dist/sandbox -> dist/ws-exec, or the
-// bundled entry -> dist/ws-exec) and fall back to the source barrel for
-// in-repo runs (src/sandbox -> src/ws-exec, stripped by Node outside
-// node_modules).
-export function resolveWsExecIndexUrl(): string {
-  const barrel = firstExisting(
-    join(__dirname, '..', 'ws-exec', 'index.js'),
-    join(__dirname, 'ws-exec', 'index.js'),
-    join(__dirname, '..', 'ws-exec', 'index.ts'),
-  );
-  return pathToFileURL(barrel).href;
-}
-
 export const TUNNEL_URL_PATTERN = /TUNNEL_URL:(https:\/\/[A-Za-z0-9_-]+-\d+\.devbridge-s2\.hwtunnel\.com)/;
-
-async function loadWsExec(): Promise<WsExecModule> {
-  return (await import(resolveWsExecIndexUrl())) as WsExecModule;
-}
 
 let currentWorkspaceId: string | null = process.env.HW_WORKSPACE_ID || null;
 
