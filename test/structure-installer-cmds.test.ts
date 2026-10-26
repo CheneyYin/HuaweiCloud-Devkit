@@ -161,6 +161,7 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
     ['src/payload-files.ts', readSource(join('src', 'payload-files.ts'))] as const,
     ['src/payload-placement.ts', readSource(join('src', 'payload-placement.ts'))] as const,
     ['src/payload-roster.ts', readSource(join('src', 'payload-roster.ts'))] as const,
+    ['src/payload-native-sync.ts', readSource(join('src', 'payload-native-sync.ts'))] as const,
     ['src/packs-policy.ts', packsPolicy] as const,
     ['src/mcp-config-io.ts', readSource(join('src', 'mcp-config-io.ts'))] as const,
     ['src/lib/cli-io.ts', readSource(join('src', 'lib', 'cli-io.ts'))] as const,
@@ -266,8 +267,13 @@ test('setup-cli.ts supports the dsh target end to end', () => {
   // install ships the server payload and registers MCP through cordis.patch.yml
   assert.match(dsh, /copyServerPayload\(pluginDest\)/);
   // No wholesale native copy ever returns: only core-pack names sync natively
-  // (syncNativeCoreSkills), so DSH's dir can never carry service skills.
-  assert.match(readSource(join('src', 'install-payload.ts')), /function syncNativeCoreSkills\(dir: string\)/);
+  // (syncNativeCoreSkills), so DSH's dir can never carry service skills. The
+  // sync moved to src/payload-native-sync.ts in the install-payload split;
+  // the pin follows the canonical home.
+  assert.match(
+    readSource(join('src', 'payload-native-sync.ts')),
+    /function syncNativeCoreSkills\(dir: string\)/,
+  );
   assert.doesNotMatch(
     setup,
     /copyDir\(skillsSrc, (?:dsh|opencode|hermes|workbuddy|atomcode|openclaw|codearts|codeartsWork)SkillsDir\(\)\)/,

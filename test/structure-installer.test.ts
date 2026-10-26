@@ -110,10 +110,10 @@ test('agents/codearts.ts supports the codearts target end to end', () => {
 
 test('nativeSkillDirs derives from PAYLOAD_TARGETS plus the officeace exception', () => {
   const setup = readSource(join('src', 'setup-cli.ts'));
-  const payloadModule = readSource(join('src', 'install-payload.ts'));
   // The table binding stays in setup-cli (PAYLOAD_TARGETS lives there); the
-  // derivation itself lives in the payload module, which takes the rows as
-  // a parameter.
+  // derivation itself lives in the native-sync module (src/payload-native-sync.ts
+  // since the install-payload split), which takes the rows as a parameter.
+  const payloadModule = readSource(join('src', 'payload-native-sync.ts'));
   const listBody = setup.match(/function nativeSkillDirs\(\): string\[\] \{([\s\S]*?)\n\}/)?.[1] ?? '';
   assert.ok(listBody.length > 0, 'nativeSkillDirs must exist');
   assert.match(listBody, /PAYLOAD_TARGETS/, 'the scan list binds to the table');
