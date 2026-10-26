@@ -299,9 +299,12 @@ test('stripTerminalEscapes is the single escape-stripping seam for sandbox outpu
   }
 
   // Every sandbox-output parser entry point folds the stripper in.
+  // The devbridge parsers live in their canonical modules since the
+  // devbridge-tunnel modularization (auth probe parser in devbridge-auth.ts).
+  const devbridgeAuth = readSource(join('src', 'sandbox', 'devbridge-auth.ts'));
   assert.match(deployCheckSource, /parseDeployCheckOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/);
   assert.match(devbridgeTunnel, /parseDevbridgeExposeOutput\(stdout[\s\S]{0,600}?stripTerminalEscapes\(stdout\)/);
-  assert.match(devbridgeTunnel, /parseDevbridgeAuthOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/);
+  assert.match(devbridgeAuth, /parseDevbridgeAuthOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/);
   assert.match(devbridgeTunnel, /parseDevbridgeVerifyOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/);
   assert.match(devbridgeTunnel, /parseDevbridgeProbeSequence\(stdout[\s\S]{0,700}?stripTerminalEscapes\(stdout\)/);
 });
