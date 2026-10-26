@@ -5,7 +5,7 @@ import type { TraceDisclosure, TraceToolCall } from './evaluate.ts';
 import type { HttpRecording } from './http-fake.ts';
 import { out } from './harness.ts';
 
-export interface SelfcheckEvidence {
+interface SelfcheckEvidence {
   responses: Map<number, unknown>;
   hcloudCalls: string[];
   toolCalls: TraceToolCall[];
@@ -14,7 +14,7 @@ export interface SelfcheckEvidence {
   wsCommands: string[];
 }
 
-export function toolPayload(responses: Map<number, unknown>, id: number): Record<string, unknown> | null {
+function toolPayload(responses: Map<number, unknown>, id: number): Record<string, unknown> | null {
   const resp = responses.get(id) as { result?: { content?: { type: string; text?: string }[] } } | undefined;
   const text = resp?.result?.content?.find((c) => c.type === 'text')?.text;
   if (!text) return null;

@@ -19,7 +19,7 @@ import {
 import type { FakeFs } from './fake-shell.ts';
 import type { ConnState } from './hwlink-server.ts';
 
-export interface ParsedHttp {
+interface ParsedHttp {
   method: string;
   path: string;
   headers: Record<string, string>;
