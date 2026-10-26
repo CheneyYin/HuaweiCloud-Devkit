@@ -5,7 +5,8 @@
 // hardening), pack-install.ts (tarball → prefix install), case-fixtures.ts
 // (home/workdir seeding), recordings.ts (log/trace/file collection),
 // report.ts (attempt shapes + summaries + retention), case-run.ts (the
-// per-case attempt loop), selfcheck.ts (the LLM-less chain proof).
+// per-case attempt loop), selfcheck.ts (the LLM-less chain proof, assertion
+// ladder in selfcheck-verify.ts).
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
