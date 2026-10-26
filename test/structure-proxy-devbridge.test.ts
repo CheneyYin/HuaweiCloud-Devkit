@@ -111,7 +111,9 @@ test('devbridge host launch survives the exec session (#919/#922): setsid guard,
     'utf8',
   );
   const devbridgeTunnel = readSource(join('src', 'sandbox', 'devbridge-tunnel.ts'));
-  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
+  // The deploy_check remediation lives in deploy-check.ts since the
+  // session-manager modularization.
+  const deployCheckSource = readSource(join('src', 'sandbox', 'deploy-check.ts'));
 
   // The tool's expose script: setsid-detached nohup with the no-setsid fallback
   // (some images lack setsid), stdin dropped from the controlling tty, guarded
@@ -159,9 +161,9 @@ test('devbridge host launch survives the exec session (#919/#922): setsid guard,
   // The deploy_check remediation string is the third agent-facing surface —
   // it must teach the same guarded launch (a bare `nohup … &` there reaps the
   // host when the remediation's own exec session ends).
-  assert.match(sessionManager, /setsid nohup devbridge host <tunnelId> -p \$\{port\} -e 72/);
+  assert.match(deployCheckSource, /setsid nohup devbridge host <tunnelId> -p \$\{port\} -e 72/);
   assert.match(
-    sessionManager,
+    deployCheckSource,
     /devbridge host <tunnelId> -p \$\{port\} -e 72 > \/tmp\/host\.log 2>&1 < \/dev\/null & fi; disown/,
   );
   // Migration/quota verdicts are host-log facts read from dedicated fields —
@@ -174,7 +176,9 @@ test('devbridge host launch survives the exec session (#919/#922): setsid guard,
 
 test('expose_tunnel re-verifies from an independent exec session and classifies gateway tunnel errors (#919)', () => {
   const devbridgeTunnel = readSource(join('src', 'sandbox', 'devbridge-tunnel.ts'));
-  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
+  // The deploy_check probe script lives in deploy-check.ts since the
+  // session-manager modularization.
+  const deployCheckSource = readSource(join('src', 'sandbox', 'deploy-check.ts'));
   const sandbox = readFileSync(
     join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'SKILL.md'),
     'utf8',
@@ -194,10 +198,10 @@ test('expose_tunnel re-verifies from an independent exec session and classifies 
   assert.match(gateway, /DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER = 'tunnel not found'/);
   assert.match(gateway, /DEVBRIDGE_PORT_NOT_CONFIGURED_MARKER = 'port not configured'/);
   assert.match(gateway, /DEVBRIDGE_BAD_GATEWAY_MARKER = 'bad gateway'/);
-  assert.match(sessionManager, /body=\$\(tr -d '[^']*' < \/tmp\/\.dc_tunnel_body/);
+  assert.match(deployCheckSource, /body=\$\(tr -d '[^']*' < \/tmp\/\.dc_tunnel_body/);
   // #1000 (v2 completion): the deploy_check tunnel probe also bypasses the
   // injected sandbox proxy — every curl against *.hwtunnel.com carries it.
-  assert.match(sessionManager, /curl -s --noproxy '\*' -o \/tmp\/\.dc_tunnel_body/);
+  assert.match(deployCheckSource, /curl -s --noproxy '\*' -o \/tmp\/\.dc_tunnel_body/);
   // U16: the tunnel-persistence subsystem — renewal, the watchdog, and the
   // #998/#999/#1000 hardening all ride devbridge-tunnel.ts.
   assert.match(devbridgeTunnel, /export function validateExpiryHours/);
@@ -229,25 +233,28 @@ test('expose_tunnel re-verifies from an independent exec session and classifies 
   assert.match(sandbox, /## Full-Stack: REST API over PostgreSQL \(PostgREST\)/);
   assert.match(sandbox, /Backend present\?/);
   assert.match(sandbox, /fullstack-postgrest\.md/);
-  assert.match(sessionManager, /\[ "\$code" = "404" \] && \[ "\$body" = "\$\{DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER\}" \]/);
+  assert.match(
+    deployCheckSource,
+    /\[ "\$code" = "404" \] && \[ "\$body" = "\$\{DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER\}" \]/,
+  );
 
   // Retry exhaustion on a gateway-dead URL must fail, not soften to a warning.
   assert.match(devbridgeTunnel, /gateway reports the fresh tunnel URL as dead/);
 });
 
 test('deploy_check judges reachability by non-000 and probes listed tunnels boundedly', () => {
-  const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
+  const deployCheckSource = readSource(join('src', 'sandbox', 'deploy-check.ts'));
 
   // nginx_serving: any non-000 HTTP code counts (404/502 = content issue,
   // not a connectivity issue).
-  assert.match(sessionManager, /\[ -n "\$HTTP_CODE" \] && \[ "\$HTTP_CODE" != "000" \]/);
-  assert.doesNotMatch(sessionManager, /grep -qE "\^\(2\|3\)"/);
+  assert.match(deployCheckSource, /\[ -n "\$HTTP_CODE" \] && \[ "\$HTTP_CODE" != "000" \]/);
+  assert.doesNotMatch(deployCheckSource, /grep -qE "\^\(2\|3\)"/);
 
   // Bounded per-tunnel probing (head -5) with a selected URL — `devbridge list`
   // order is arbitrary, so the first row must not shadow the live tunnel.
-  assert.match(sessionManager, /TUNNEL_IDS=\$\(devbridge list -j[^\n]*head -5\)/);
-  assert.match(sessionManager, /for CAND in \$TUNNEL_IDS; do/);
-  assert.match(sessionManager, /SELECTED_URL="\$CAND_URL"/);
+  assert.match(deployCheckSource, /TUNNEL_IDS=\$\(devbridge list -j[^\n]*head -5\)/);
+  assert.match(deployCheckSource, /for CAND in \$TUNNEL_IDS; do/);
+  assert.match(deployCheckSource, /SELECTED_URL="\$CAND_URL"/);
 });
 
 test('stripTerminalEscapes is the single escape-stripping seam for sandbox output parsers (#946)', () => {
@@ -257,6 +264,8 @@ test('stripTerminalEscapes is the single escape-stripping seam for sandbox outpu
   // modularization; the whole sandbox sibling family is swept so no sibling
   // (new or old) re-rolls the seam.
   const sandboxOutput = readSource(join('src', 'sandbox', 'sandbox-output.ts'));
+  // The deploy-check parser lives in deploy-check.ts since the same split.
+  const deployCheckSource = readSource(join('src', 'sandbox', 'deploy-check.ts'));
   const sandboxFamily = readdirSync(join(pluginRoot, 'src', 'sandbox'))
     .filter((name) => name.endsWith('.ts'))
     .map((name) => [`sandbox/${name}`, readSource(join('src', 'sandbox', name))] as const);
@@ -285,7 +294,7 @@ test('stripTerminalEscapes is the single escape-stripping seam for sandbox outpu
   }
 
   // Every sandbox-output parser entry point folds the stripper in.
-  assert.match(sessionManager, /parseDeployCheckOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/);
+  assert.match(deployCheckSource, /parseDeployCheckOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/);
   assert.match(devbridgeTunnel, /parseDevbridgeExposeOutput\(stdout[\s\S]{0,600}?stripTerminalEscapes\(stdout\)/);
   assert.match(devbridgeTunnel, /parseDevbridgeAuthOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/);
   assert.match(devbridgeTunnel, /parseDevbridgeVerifyOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/);
