@@ -128,7 +128,7 @@ test('devbridge host launch survives the exec session (#919/#922): setsid guard,
   // echoed so exposeTunnel can compute expiresAt.
   assert.match(devbridgeExpose, /if command -v setsid > \/dev\/null 2>&1; then setsid nohup devbridge host/);
   assert.match(devbridgeExpose, /< \/dev\/null & else nohup devbridge host/);
-  assert.match(devbridgeTunnel, /`disown 2>\/dev\/null \|\| true`/);
+  assert.match(devbridgeExpose, /`disown 2>\/dev\/null \|\| true`/);
   assert.match(devbridgeValidation, /DEVBRIDGE_HOST_EXPIRY_HOURS = 72/);
   assert.match(devbridgeExpose, /DB_EXPIRY_HOURS=\$\{expiryHours\}/);
   // #1000, the agent-facing SKILL surface: the manual fallbacks' curls carry
@@ -159,7 +159,15 @@ test('devbridge host launch survives the exec session (#919/#922): setsid guard,
   const sandboxToolsSource = readSource(join('src', 'packs', 'sandbox', 'tools.ts'));
   assert.match(sandboxToolsSource, /export PATH=\/workspace\/.local\/bin:\$HOME\/\.huawei\/bin\$\{PATH:\+:\$PATH\}/);
 
-  assert.doesNotMatch(devbridgeTunnel, /-e 8\b/);
+  // The old 8h default must not re-creep into ANY sandbox sibling's tunnel
+  // script (family-wide sweep — stronger than the old single-file check, which
+  // the devbridge-tunnel modularization would have left vacuous on the face).
+  const tunnelScriptFamily = readdirSync(join(pluginRoot, 'src', 'sandbox'))
+    .filter((name) => name.endsWith('.ts'))
+    .map((name) => [`sandbox/${name}`, readSource(join('src', 'sandbox', name))] as const);
+  for (const [name, source] of tunnelScriptFamily) {
+    assert.doesNotMatch(source, /-e 8\b/, `${name}: no hardcoded 8h tunnel expiry`);
+  }
 
   // The skill teaches the same guarded launch on every host start line.
   assert.match(sandbox, /setsid nohup devbridge host -p <port> -e 72/);
