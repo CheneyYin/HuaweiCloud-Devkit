@@ -1,5 +1,9 @@
 // Version-update detection & auto-upgrade for huaweicloud-devkit (session-level).
 // Spec: docs/superpowers/specs/2026-09-07-version-upgrade-design.md (internal, not committed).
+//
+// The semver channel logic lives in ./update-semver.ts and the installed-version
+// reader in ./update-installed.ts (re-exported below); the verdict, registry IO,
+// skip-state, cache, and upgrade families still live here.
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, rmSync } from 'node:fs';
 import {
   spawn,
@@ -9,11 +13,25 @@ import {
 } from 'node:child_process';
 import { join, dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { fileURLToPath } from 'node:url';
 
 import { fetchWithProxy } from './proxy/proxy-agent.ts';
 import { SUPPORTED_AGENT_TARGETS } from './auth/agent-registration.ts';
 import { asText } from './lib/as-text.ts';
+import { determineTarget, semverCompare, type DistTags } from './update-semver.ts';
+import { readInstalledVersion, selfDir } from './update-installed.ts';
+
+// The semver channel logic family (parsing, prerelease precedence, target election).
+export {
+  semverParse,
+  semverCompare,
+  hasPrerelease,
+  determineTarget,
+  type ParsedSemver,
+  type DistTags,
+} from './update-semver.ts';
+
+// The installed-version reader (package.json candidates + plugin-manifest fallbacks, #576).
+export { readInstalledVersion } from './update-installed.ts';
 
 const IS_WINDOWS = process.platform === 'win32';
 const NPM_BIN = IS_WINDOWS ? 'npm.cmd' : 'npm';
@@ -21,21 +39,6 @@ const NPX_BIN = IS_WINDOWS ? 'npx.cmd' : 'npx';
 const TTL_MS = 60 * 60 * 1000;
 const FAIL_THROTTLE_MS = 5 * 60 * 1000;
 const COOLDOWN_DAYS = 3;
-
-export interface ParsedSemver {
-  major: number;
-  minor: number;
-  patch: number;
-  pre: string[] | null;
-  raw: string;
-}
-
-// dist-tags payload from `npm view` (or the registry). Untyped at the boundary:
-// only string versions survive, missing/malformed tags read as null.
-export interface DistTags {
-  latest?: string | null;
-  next?: string | null;
-}
 
 export interface SkipState {
   dismissedVersion: string;
@@ -105,68 +108,6 @@ function toDistTags(value: unknown): DistTags | null {
   };
 }
 
-export function semverParse(input: unknown): ParsedSemver | null {
-  const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(String(input).trim());
-  if (!m) return null;
-  const pre = m[4] ? m[4].split('.') : null;
-  return { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]), pre, raw: String(input).trim() };
-}
-
-function comparePre(a: readonly (string | undefined)[] | null, b: readonly (string | undefined)[] | null): number {
-  if (a === null && b === null) return 0;
-  if (a === null) return 1; // 无 prerelease（正式版）更大
-  if (b === null) return -1;
-  const length = Math.max(a.length, b.length);
-  for (let i = 0; i < length; i++) {
-    const x = a[i];
-    const y = b[i];
-    if (x === undefined) return -1;
-    if (y === undefined) return 1;
-    const xNum = /^\d+$/.test(x);
-    const yNum = /^\d+$/.test(y);
-    if (xNum && yNum) {
-      const dx = Number(x);
-      const dy = Number(y);
-      if (dx !== dy) return dx < dy ? -1 : 1;
-    } else if (xNum) {
-      return -1; // 数字标识符 < 字母标识符
-    } else if (yNum) {
-      return 1;
-    } else if (x !== y) {
-      return x < y ? -1 : 1;
-    }
-  }
-  return 0;
-}
-
-export function semverCompare(a: unknown, b: unknown): number {
-  const A = semverParse(a);
-  const B = semverParse(b);
-  if (!A || !B) {
-    const sa = String(a);
-    const sb = String(b);
-    return sa === sb ? 0 : sa < sb ? -1 : 1;
-  }
-  if (A.major !== B.major) return A.major < B.major ? -1 : 1;
-  if (A.minor !== B.minor) return A.minor < B.minor ? -1 : 1;
-  if (A.patch !== B.patch) return A.patch < B.patch ? -1 : 1;
-  return comparePre(A.pre, B.pre);
-}
-
-export function hasPrerelease(v: unknown): boolean {
-  const parsed = semverParse(v);
-  return Boolean(parsed && parsed.pre);
-}
-
-export function determineTarget(current: unknown, distTags: DistTags = {}): string | null {
-  const isPre = hasPrerelease(current);
-  const candidates: string[] = [];
-  if (distTags.latest) candidates.push(distTags.latest);
-  if (isPre && distTags.next) candidates.push(distTags.next);
-  if (!candidates.length) return null;
-  return candidates.slice().sort(semverCompare).pop() ?? null;
-}
-
 export function parseDistTagsOutput(stdout: unknown): DistTags | null {
   try {
     const text = asText(stdout || '').trim();
@@ -223,50 +164,6 @@ export function judgeUpdate(
     });
   }
   return buildResult(current, distTags, { result: 'update_available', target });
-}
-
-function selfDir(): string {
-  return dirname(fileURLToPath(import.meta.url));
-}
-
-// Plugin manifests also carry the version and are kept in sync with package.json
-// by `npm run validate`. Codex marketplace installs (`.codex/plugins/cache/...`)
-// contain only the plugin directory — no package.json — so fall back to these
-// manifests when neither candidate package.json exists (#576).
-const VERSION_MANIFEST_RELS = [
-  '.codex-plugin/plugin.json',
-  '.claude-plugin/plugin.json',
-  '.cursor-plugin/plugin.json',
-  '.workbuddy-plugin/plugin.json',
-  '.hermes-plugin/plugin.json',
-  'openclaw.plugin.json',
-];
-
-// JSON boundary: non-object payloads (null, numbers) fold to null — the previous
-// inline property access threw and was caught, same observable result.
-function readJsonVersion(file: string): string | null {
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'));
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-    const version = (parsed as Record<string, unknown>).version;
-    return typeof version === 'string' && version ? version : null;
-  } catch {
-    return null;
-  }
-}
-
-export function readInstalledVersion(): string | null {
-  const pluginRoot = resolve(selfDir(), '..');
-  const packageRoot = resolve(pluginRoot, '..', '..');
-  for (const base of [pluginRoot, packageRoot]) {
-    const version = readJsonVersion(join(base, 'package.json'));
-    if (version) return version;
-  }
-  for (const rel of VERSION_MANIFEST_RELS) {
-    const version = readJsonVersion(join(pluginRoot, rel));
-    if (version) return version;
-  }
-  return null;
 }
 
 export function skipFilePath(): string {
