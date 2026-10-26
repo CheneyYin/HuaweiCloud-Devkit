@@ -92,7 +92,9 @@ const TOOL_SCHEMAS = {
   // spread keeps them in TOOL_SCHEMAS so the satisfies check below still
   // covers every ToolName key.
   ...AUTH_TOOL_SCHEMAS,
-  // The sandbox pack owns its tool schemas (src/packs/sandbox/tools.ts);
+  // The sandbox pack owns its tool schemas (src/packs/sandbox/schemas.ts
+  // since the pack's family split; its tools.ts face re-exports them as
+  // SANDBOX_TOOL_SCHEMAS);
   // the spread keeps them in TOOL_SCHEMAS so the satisfies check below still
   // covers every ToolName key.
   ...SANDBOX_TOOL_SCHEMAS,
