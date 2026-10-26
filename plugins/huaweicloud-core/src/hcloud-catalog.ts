@@ -11,7 +11,7 @@ import { join } from 'node:path';
 
 import { asRecord } from './lib/as-record.ts';
 import { asText } from './lib/as-text.ts';
-import type { HcloudRunResult } from './hcloud-cli.ts';
+import type { HcloudRunResult } from './hcloud-run.ts';
 
 const CATALOG_TTL_MS = 5 * 60 * 1000;
 
