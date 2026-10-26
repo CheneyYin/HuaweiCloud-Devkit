@@ -1,38 +1,20 @@
 // The sandbox file-server + HTTP-tunnel upload transport, extracted from
 // session-manager: embeds and deploys the Python file server on the sandbox,
-// opens a dedicated hwlink tunnel channel, drives the raw-socket POST with its
-// hand-rolled HTTP/1.1 parsing, waits for server health, and owns the
-// best-effort upload log. upload-project.ts imports this transport for the
-// project orchestration; nothing here is part of the session-manager public
-// face.
+// opens a dedicated hwlink tunnel channel, and drives the archive POST and
+// the health wait through the raw-socket client in tunnel-http.ts, with the
+// best-effort diagnostics in upload-diagnostics.ts. upload-project.ts imports
+// this transport for the project orchestration; nothing here is part of the
+// session-manager public face.
 
-import { appendFileSync, existsSync, readFileSync, statSync, unlinkSync } from 'node:fs';
-import { createConnection as netConnect } from 'node:net';
+import { readFileSync, statSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-import { asRecord } from '../lib/as-record.ts';
 import { createTunnelSession, execWithSession } from './hwlink-connection.ts';
 import { firstExisting, loadWsExec, type HwlinkExecResult } from './ws-exec-loader.ts';
-
-// Thrown values cross the JS boundary as `unknown` under strict mode; only a
-// non-empty message string is surfaced (same pattern as update-check.ts).
-export function errorMessage(error: unknown): string | undefined {
-  if (error instanceof Error && error.message) return error.message;
-  if (error && typeof error === 'object' && !Array.isArray(error)) {
-    const message = (error as Record<string, unknown>).message;
-    if (typeof message === 'string' && message) return message;
-  }
-  return undefined;
-}
-
-export interface UploadTunnelResponse {
-  bytes?: number;
-  md5?: string;
-  [key: string]: unknown;
-}
+import { UPLOAD_LOG_PATH, errorMessage, uploadLog } from './upload-diagnostics.ts';
+import { uploadViaTunnel, waitForServerReady, type UploadTunnelResponse } from './tunnel-http.ts';
 
 export interface UploadProjectOptions {
   exclude?: string[];
@@ -53,33 +35,6 @@ const SANDBOX_FILE_SERVER_SCRIPT = readFileSync(
 );
 
 const TUNNEL_READY_TIMEOUT_MS = 30000;
-const SERVER_HEALTH_MAX_RETRIES = 30;
-const SERVER_HEALTH_INTERVAL_MS = 1000;
-export const UPLOAD_LOG_PATH = join(tmpdir(), 'sandbox-upload.log');
-
-export function uploadLog(message: string): void {
-  const ts = new Date().toISOString();
-  const line = `[${ts}] ${message}\n`;
-  console.error(line.trimEnd());
-  try {
-    appendFileSync(UPLOAD_LOG_PATH, line);
-  } catch {
-    // best-effort by design: a failed log-file append must never fail the caller
-  }
-}
-
-export function rotateUploadLog(maxBytes = 100 * 1024): void {
-  try {
-    if (existsSync(UPLOAD_LOG_PATH)) {
-      const stat = statSync(UPLOAD_LOG_PATH);
-      if (stat.size > maxBytes) {
-        unlinkSync(UPLOAD_LOG_PATH);
-      }
-    }
-  } catch {
-    // best-effort: a failed rotation only leaves an oversized log file
-  }
-}
 
 function generateUploadToken(): string {
   return randomBytes(16).toString('hex');
@@ -107,138 +62,6 @@ async function deployFileServer(
     `deployFileServer: start result exitCode=${startResult.exitCode} stdout=${JSON.stringify(startResult.stdout?.slice(0, 200))}`,
   );
   return startResult;
-}
-
-async function uploadViaTunnel(
-  localPort: number,
-  archivePath: string,
-  archiveSize: number,
-  archiveRemotePath: string,
-  uploadToken: string,
-  timeoutMs: number,
-): Promise<UploadTunnelResponse> {
-  const archiveBuffer = readFileSync(archivePath);
-  const headers = [
-    'POST /upload HTTP/1.1',
-    'Host: localhost',
-    'Content-Type: application/octet-stream',
-    `Content-Length: ${archiveSize}`,
-    `X-Target-Path: ${archiveRemotePath}`,
-    `X-Upload-Token: ${uploadToken}`,
-    'Connection: close',
-    '',
-    '',
-  ].join('\r\n');
-  return new Promise<UploadTunnelResponse>((resolve, reject) => {
-    let settled = false;
-    const done = (fn: () => void): void => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        sock.destroy();
-        fn();
-      }
-    };
-    const timer = setTimeout(() => done(() => reject(new Error(`upload timeout after ${timeoutMs}ms`))), timeoutMs);
-    const sock = netConnect({ host: '127.0.0.1', port: localPort }, () => {
-      sock.write(headers);
-      sock.write(archiveBuffer);
-    });
-    let respBuf = Buffer.alloc(0);
-    let contentLength = -1;
-    let headerEnd = -1;
-    // One settlement path for both completions (full body per Content-Length,
-    // or whatever arrived when the socket closed): status check, logging,
-    // and JSON parsing live here so the two triggers cannot drift.
-    const settleResponse = (resp: string, body: string): void => {
-      const statusLine = resp.split('\r\n')[0] || '';
-      const statusCode = parseInt(statusLine.split(' ')[1]!, 10);
-      if (!statusCode || statusCode < 200 || statusCode >= 300) {
-        uploadLog(`uploadViaTunnel: POST failed with HTTP ${statusCode}: ${body.slice(0, 200)}`);
-        reject(new Error(`upload HTTP ${statusCode}: ${body}`));
-        return;
-      }
-      try {
-        resolve(asRecord(JSON.parse(body)));
-      } catch {
-        reject(new Error(`invalid JSON response: ${body.slice(0, 200)}`));
-      }
-    };
-    sock.on('data', (chunk) => {
-      respBuf = Buffer.concat([respBuf, chunk]);
-      if (contentLength < 0) {
-        const resp = respBuf.toString();
-        headerEnd = resp.indexOf('\r\n\r\n');
-        if (headerEnd > 0) {
-          const headerBlock = resp.slice(0, headerEnd);
-          const clMatch = headerBlock.match(/Content-Length:\s*(\d+)/i);
-          if (clMatch) contentLength = parseInt(clMatch[1]!, 10);
-        }
-      }
-      if (contentLength >= 0 && headerEnd > 0) {
-        const bodyReceived = respBuf.length - (headerEnd + 4);
-        if (bodyReceived >= contentLength) {
-          done(() => {
-            const resp = respBuf.toString();
-            settleResponse(resp, resp.slice(headerEnd + 4, headerEnd + 4 + contentLength));
-          });
-        }
-      }
-    });
-    sock.on('close', () => {
-      done(() => {
-        const resp = respBuf.toString();
-        const he = resp.indexOf('\r\n\r\n');
-        settleResponse(resp, he > 0 ? resp.slice(he + 4) : '');
-      });
-    });
-    sock.on('error', (err) => {
-      done(() => {
-        uploadLog(`uploadViaTunnel: socket error: ${err.message}`);
-        reject(err);
-      });
-    });
-  });
-}
-
-async function waitForServerReady(localPort: number): Promise<void> {
-  for (let i = 0; i < SERVER_HEALTH_MAX_RETRIES; i++) {
-    try {
-      uploadLog(`waitForServerReady: attempt ${i + 1}, checking http://localhost:${localPort}/health`);
-      const ok = await new Promise<boolean>((resolve) => {
-        let settled = false;
-        const done = (val: boolean): void => {
-          if (!settled) {
-            settled = true;
-            sock.destroy();
-            resolve(val);
-          }
-        };
-        const sock = netConnect({ host: '127.0.0.1', port: localPort }, () => {
-          sock.write('GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n');
-        });
-        let resp = '';
-        sock.on('data', (c) => {
-          resp += c.toString();
-          if (resp.includes('200 OK')) done(true);
-        });
-        sock.on('close', () => done(resp.includes('200 OK')));
-        sock.on('error', () => done(false));
-        setTimeout(() => done(false), 3000);
-      });
-      if (ok) {
-        uploadLog(`waitForServerReady: server ready on port ${localPort} after ${i} retries`);
-        return;
-      }
-      uploadLog(`waitForServerReady: health check returned non-200 (retry ${i + 1})`);
-    } catch (error) {
-      uploadLog(`waitForServerReady: health check failed: ${errorMessage(error)} (retry ${i + 1})`);
-    }
-    await new Promise((r) => setTimeout(r, SERVER_HEALTH_INTERVAL_MS));
-  }
-  throw new Error(
-    `sandbox file server not ready after ${SERVER_HEALTH_MAX_RETRIES * SERVER_HEALTH_INTERVAL_MS}ms (log: ${UPLOAD_LOG_PATH})`,
-  );
 }
 
 export async function cleanupFileServer(workspaceId: string, username: string): Promise<void> {

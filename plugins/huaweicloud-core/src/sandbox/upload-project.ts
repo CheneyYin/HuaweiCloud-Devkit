@@ -16,16 +16,9 @@ import { tmpdir } from 'node:os';
 
 import { execWithSession } from './hwlink-connection.ts';
 import { UPLOAD_MAX_RETRIES, classifyLocalUploadPath } from './upload-file.ts';
-import {
-  UPLOAD_LOG_PATH,
-  cleanupFileServer,
-  errorMessage,
-  rotateUploadLog,
-  uploadLog,
-  uploadViaHttpTunnel,
-  type UploadProjectOptions,
-  type UploadTunnelResponse,
-} from './upload-transport.ts';
+import { UPLOAD_LOG_PATH, errorMessage, rotateUploadLog, uploadLog } from './upload-diagnostics.ts';
+import { type UploadTunnelResponse } from './tunnel-http.ts';
+import { cleanupFileServer, uploadViaHttpTunnel, type UploadProjectOptions } from './upload-transport.ts';
 
 const execFileAsync = promisify(execFile);
 
