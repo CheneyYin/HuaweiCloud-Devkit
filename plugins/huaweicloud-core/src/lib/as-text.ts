@@ -6,3 +6,11 @@
 export function asText(value: unknown): string {
   return typeof value === 'string' ? value : String(value);
 }
+
+// Boundary narrowing to string | undefined: only real string fields survive,
+// and an empty string stays '' (unlike `asText(v) || undefined`, which would
+// drop it) — so `??` chains keep their exact fall-through semantics on
+// unknown-typed record reads.
+export function asString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}

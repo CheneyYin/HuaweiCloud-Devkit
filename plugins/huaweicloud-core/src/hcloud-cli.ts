@@ -5,13 +5,15 @@ import { join } from 'node:path';
 
 import { classifyHcloudArgs, redactSecrets, assertAllowed, type ClassifyOptions } from './safety-policy.ts';
 import { createApprovalToken } from './lib/approval-tokens.ts';
-import { asText } from './lib/as-text.ts';
+import { asString, asText } from './lib/as-text.ts';
 import type { RiskDecision } from './risk-rule-engine.ts';
 import { getProxySettings } from './proxy/proxy-config.ts';
 import { resolveHcloudCommand } from './hcloud-probe.ts';
 import { parseStsExpiry, resolveCredentialsWithRuntime } from './auth/credentials.ts';
 import { asRecord } from './lib/as-record.ts';
 import { stripKooCliUpdateBanner } from './koocli-version.ts';
+import { extractApiError, redactOutput } from './hcloud-api-error.ts';
+import { obsWriteHint, redactArgsWithObs } from './hcloud-obs-redact.ts';
 
 // The CLI face's consent layer lives in src/lib/approval-tokens.ts; these
 // re-exports keep existing import sites (tests) compiling — the
@@ -20,16 +22,16 @@ export { hashArgs, createApprovalToken, consumeApprovalToken, inspectApprovalTok
 // The #935 A4 banner strip (see koocli-version.ts) re-exported for the
 // executor's existing test import sites.
 export { stripKooCliUpdateBanner } from './koocli-version.ts';
+// The OBS arg redaction and the API-error/output-redaction family, moved to
+// their own modules — same names, same import path, same behavior.
+export { redactArgsWithObs } from './hcloud-obs-redact.ts';
+export { extractApiError, redactOutput, type ApiErrorInfo } from './hcloud-api-error.ts';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_FORCE_KILL_AFTER_MS = 2_000;
 const DEFAULT_MAX_RETRIES = 1;
 const LARGE_OUTPUT_THRESHOLD = 50_000;
 const OUTPUT_DIR = join('/tmp', 'huaweicloud-devkit');
-
-function asString(value: unknown): string | undefined {
-  return typeof value === 'string' ? value : undefined;
-}
 
 // Port fields arrive from the VPC API as JSON numbers or strings; both must stringify.
 function asPortText(value: unknown): string {
@@ -161,36 +163,6 @@ function applyPreflightFindings(classification: RiskDecision, sgFindings: SgFind
   return classification;
 }
 
-const OBS_WRITE_SUBCOMMANDS = new Set([
-  'mb',
-  'cp',
-  'mv',
-  'rm',
-  'chattri',
-  'restore',
-  // KooCLI 7.3.12 write-capable additions (-method based, except
-  // custom-domain which writes via -cname/certificate options), plus the
-  // full-name put/delete public-access-block writes.
-  'bucket-tagging',
-  'object-tagging',
-  'encryption',
-  'custom-domain',
-  'mirror-back-to-source',
-  'put-public-access-block',
-  'delete-public-access-block',
-  'abort',
-  'archive',
-  'create-share',
-  'update',
-]);
-
-function obsWriteHint(args: unknown): string | null {
-  if (!Array.isArray(args) || args.length < 2) return null;
-  if (String(args[0]).toUpperCase() !== 'OBS') return null;
-  if (!OBS_WRITE_SUBCOMMANDS.has(String(args[1]).toLowerCase())) return null;
-  return 'OBS write operations are obsutil-style and always write-class. Before executing, present the full resource manifest (bucket/object list) to the user for ONE batch approval, then run each command through plan → approve (see huawei-iac skill, Provisioning Rules).';
-}
-
 const CATALOG_TTL_MS = 5 * 60 * 1000;
 
 interface ServiceCatalogLoad {
@@ -263,32 +235,6 @@ export function classifyUnsupported(service: unknown, metaDir?: string): Unsuppo
 // credential set that R3 forbids writing to disk, we pass it per-command instead.
 // Zero-persist: nothing touches S1/S2/S3 and every invocation re-reads the current
 // value (stale as soon as the token is).
-// Redact executed args for MCP-visible output. Besides the generic key=value
-// redaction (--cli-access-key=...), obsutil-style standalone credential flags
-// (-i AK / -k SK / -t TOKEN) carry the temporary STS as following array elements,
-// which redactSecrets can't match. We scrub those explicitly.
-export function redactArgsWithObs(rawArgs: unknown): string[] {
-  const arr = Array.isArray(rawArgs) ? rawArgs.map(String) : [];
-  const out = [...arr];
-  for (let i = 0; i < out.length; i += 1) {
-    // The loop condition bounds i; out[i] is defined.
-    const arg = out[i]!;
-    if (arg === '-i' || arg === '-k' || arg === '-t') {
-      if (i + 1 < out.length) out[i + 1] = '<redacted>';
-      i += 1;
-    } else if (/^-i[A-Za-z0-9]/.test(arg)) {
-      out[i] = '-i<redacted>';
-    } else if (/^-k[A-Za-z0-9]/.test(arg)) {
-      out[i] = '-k<redacted>';
-    } else if (/^-t[A-Za-z0-9]/.test(arg)) {
-      out[i] = '-t<redacted>';
-    }
-  }
-  // redactSecrets maps arrays element-wise; the per-string overload keeps the
-  // result honestly typed as string[].
-  return out.map((item) => redactSecrets(item));
-}
-
 export function resolveStsInjectArgs(rawArgs: unknown): string[] {
   const normalized = Array.isArray(rawArgs) ? rawArgs.map(String) : [];
   if (normalized.length === 0) return [];
@@ -827,62 +773,4 @@ function validateRequiredParams(args: string[]): { valid: boolean; missing: stri
   const missing = required.filter((param) => !argsStr.includes(param));
   const hints = missing.map((param) => PARAM_VALUE_HINTS[param]).filter((hint): hint is string => Boolean(hint));
   return { valid: missing.length === 0, missing, hints };
-}
-
-export interface ApiErrorInfo {
-  errorCode: string;
-  errorMessage: string;
-}
-
-export function extractApiError(stdout: unknown): ApiErrorInfo | null {
-  let text = asText(stdout || '');
-  // Strip KooCLI multi-version prefix lines (e.g. "ListVpcs有多个版本,默认使用该API版本v3…")
-  const bracketIdx = text.indexOf('{');
-  if (bracketIdx > 0) text = text.substring(bracketIdx);
-  try {
-    const parsed: unknown = JSON.parse(text);
-    const record = asRecord(parsed);
-    const errorCode = asString(record.error_code) ?? asString(record.errorCode);
-    if (errorCode) {
-      return {
-        errorCode,
-        errorMessage: asString(record.error_msg) ?? asString(record.errorMsg) ?? asString(record.message) ?? '',
-      };
-    }
-    const errorValue = record.error;
-    if (errorValue && typeof errorValue === 'object') {
-      const errorRecord = asRecord(errorValue);
-      return {
-        errorCode: asString(errorRecord.code) ?? asString(errorRecord.error_code) ?? 'UNKNOWN',
-        errorMessage: asString(errorRecord.message) ?? asString(errorRecord.error_msg) ?? '',
-      };
-    }
-  } catch {
-    // non-JSON stdout: fall through to the regex scan for an embedded error_code below
-  }
-  const ecMatch = text.match(/"error_code"\s*:\s*"([^"]+)"/);
-  const emMatch = text.match(/"error_msg"\s*:\s*"([^"]+)"/);
-  if (ecMatch) {
-    return { errorCode: ecMatch[1]!, errorMessage: emMatch ? emMatch[1]! : '' };
-  }
-  return null;
-}
-
-// A4 (#935): the KooCLI 7.2.x version-upgrade banner strip lives in
-// koocli-version.ts (shared with the probe, which must not misparse the
-// banner's target version as the installed one). redactOutput applies it to
-// child-process output BEFORE the JSON bracket-slice; the only upgrade hint
-// DevKit emits is check_cli/doctor's soft, one-shot mismatch hint —
-// kooCliVersion in package.json stays the single source of truth, and
-// check_cli/doctor keep their non-blocking semantics.
-
-export function redactOutput(output: unknown): string {
-  let text = stripKooCliUpdateBanner(asText(output || ''));
-  const bracketIdx = text.indexOf('{');
-  if (bracketIdx > 0) text = text.substring(bracketIdx);
-  try {
-    return JSON.stringify(redactSecrets(JSON.parse(text)), null, 2);
-  } catch {
-    return redactSecrets(text);
-  }
 }
