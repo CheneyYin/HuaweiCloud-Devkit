@@ -1,19 +1,23 @@
 // Stable public face of the sandbox session family. The internals live in the
 // src/sandbox/ siblings; this module is the re-export seam every consumer
 // imports — same exported names, same import path, same behavior:
-//   devbridge-gateway.ts  — the DevBridge s2 gateway wire contract (tunnel
-//                           domain, migration marker, gateway error bodies)
-//   sandbox-output.ts     — stripTerminalEscapes, the single escape-stripping
-//                           seam for sandbox output parsers (#946)
-//   ws-exec-loader.ts     — the ws-exec barrel resolution across the three
-//                           runtime layouts + the ws-exec structural shapes
-//   hwlink-connection.ts  — workspace-id state, the terminal-session cache,
-//                           the exec surfaces, tunnel sessions, close family
-//   upload-file.ts        — the base64 single-file upload family
-//   upload-transport.ts   — the file-server + HTTP-tunnel upload transport
-//   upload-project.ts     — the project upload orchestration (archive, retry)
-//   deploy-nginx.ts       — the nginx deploy family (ports, templates, verify)
-//   deploy-check.ts       — the deploy-check script, parser, remediation
+//   devbridge-gateway.ts   — the DevBridge s2 gateway wire contract (tunnel
+//                            domain, migration marker, gateway error bodies)
+//   sandbox-output.ts      — stripTerminalEscapes, the single escape-stripping
+//                            seam for sandbox output parsers (#946)
+//   ws-exec-loader.ts      — the ws-exec barrel resolution across the three
+//                            runtime layouts + the ws-exec structural shapes
+//   hwlink-connection.ts   — workspace-id state, the terminal-session cache,
+//                            the exec surfaces, tunnel sessions, close family
+//   upload-file.ts         — the base64 single-file upload family
+//   upload-diagnostics.ts  — the upload family's diagnostics (log + rotation,
+//                            errorMessage)
+//   tunnel-http.ts         — the raw-socket HTTP/1.1 client for the tunnel port
+//   upload-transport.ts    — the file-server + HTTP-tunnel upload transport
+//   upload-project.ts      — the project upload orchestration (archive, retry)
+//   deploy-nginx.ts        — the nginx deploy orchestration (ports, templates)
+//   deploy-nginx-verify.ts — the #935 A1 write-verification family
+//   deploy-check.ts        — the deploy-check script, parser, remediation
 // devbridge-tunnel.ts keeps importing the DEVBRIDGE_* constants, execOneShot,
 // and stripTerminalEscapes from this path (pinned by the structure guard);
 // the sandbox siblings import each other's canonical modules directly.
@@ -61,19 +65,22 @@ export {
 // The project upload orchestration lives in upload-project.ts (transport in
 // upload-transport.ts); re-exported as the public face.
 export { uploadProjectWithSession } from './upload-project.ts';
-// The nginx deploy family lives in deploy-nginx.ts; re-exported as the public
-// face (the port helpers and the #935 verify parsers are unit-tested through
-// this path).
+// The nginx deploy orchestration lives in deploy-nginx.ts (the #935 A1
+// write-verification family in deploy-nginx-verify.ts); re-exported as the
+// public face (the port helpers and the #935 verify parsers are unit-tested
+// through this path).
 export {
   deployNginx,
-  evaluateDeployNginxVerify,
   formatPortConflictWarning,
   formatPortDriftWarning,
-  parseDeployNginxVerifyOutput,
-  resolveNginxConfigPath,
   resolveProxyNodePort,
 } from './deploy-nginx.ts';
-export type { DeployNginxVerdict, ParsedDeployNginxVerify } from './deploy-nginx.ts';
+export {
+  evaluateDeployNginxVerify,
+  parseDeployNginxVerifyOutput,
+  resolveNginxConfigPath,
+} from './deploy-nginx-verify.ts';
+export type { DeployNginxVerdict, ParsedDeployNginxVerify } from './deploy-nginx-verify.ts';
 // The deploy-check family (check script, stdout-contract parser, expose
 // remediation) lives in deploy-check.ts; re-exported as the public face.
 export { TUNNEL_URL_PATTERN, buildExposeRemediation, deployCheck, parseDeployCheckOutput } from './deploy-check.ts';

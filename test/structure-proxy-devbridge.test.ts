@@ -326,13 +326,16 @@ test('devbridge 0.2.x flow: auth capability probe, version detection, in-place u
   assert.match(sandbox, /nginx -t` 验证 \+ `nginx -s reload` 热加载/);
 
   // The paired implementation pin: the SKILL's deploy_nginx claim (配置写入
-  // 后自动回验存在性与 nginx -t) is only true because deploy-nginx.ts
-  // implements the A1 verify block — docs-ahead-of-code (the failure this
-  // guard's sibling prose denounces) fails here.
+  // 后自动回验存在性与 nginx -t) is only true because the sandbox family
+  // implements the A1 verify block — deploy-nginx.ts splices the markers into
+  // the deploy script and folds in the verdict from deploy-nginx-verify.ts —
+  // docs-ahead-of-code (the failure this guard's sibling prose denounces)
+  // fails here.
   const deployNginx = readSource(join('src', 'sandbox', 'deploy-nginx.ts'));
+  const deployNginxVerify = readSource(join('src', 'sandbox', 'deploy-nginx-verify.ts'));
   assert.match(deployNginx, /DB_NGINX_CONFIG_MISSING=1/);
   assert.match(deployNginx, /DB_NGINX_T=PASS/);
-  assert.match(deployNginx, /resolveNginxConfigPath/);
+  assert.match(deployNginxVerify, /export function resolveNginxConfigPath/);
   assert.match(deployNginx, /fix_and_retry/);
 
   // Auth is a verified three-tier waterfall (keyring → AK/SK → api-key file);
