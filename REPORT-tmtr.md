@@ -107,7 +107,7 @@ into their respective tmp dirs (paths re-derived per face evaluation).
 | `npx eslint .`                                                           | 0 errors, 73 warnings (exact pre-existing baseline)                              |
 | `npm run build`                                                          | pass (dist + bundle + skills regenerated)                                        |
 | `node --experimental-test-module-mocks --test "test/structure*.test.ts"` | 118 pass (114 baseline + 4 new)                                                  |
-| `npm test`                                                               | 1416 tests: 1414 pass + 2 skip (contract 1410+2, plus the 4 new structure tests) |
+| `npm test` | 1416 tests: 1414 pass + 2 skip (contract 1410+2, plus the 4 new structure tests). One intermediate run showed 2 parallel-load flakes (hook-parity's 115s python battery killed with status null; mcp-server-tools spawn timeout) — both reproduced green standalone per the flake-triage rule and the next full run was green |
 | `npm run lint:dup`                                                       | pass, zero new clones, no baseline regeneration needed                           |
 | `npm run validate`                                                       | pass (KooCLI pairing, pack boundaries, skills sync)                              |
 | `npm run pack:verify`                                                    | pass (612 files, install OK)                                                     |
@@ -145,7 +145,13 @@ Three formal rounds:
   siblings, no pack imports of telemetry, body-equivalence invariants still
   OK on the committed tree, tsc dist tree and esbuild bundle both carry the
   family with intact marker resolution.
-- Round 3 (final, after the docs edits): zero findings.
+- Round 3 (over the docs edits before their commit): caught the AGENTS.md
+  bullet claiming "node builtins + lib/as-text + proxy/proxy-agent only"
+  for the whole family — imprecise for invoke-value.ts, whose edges into
+  tool-definitions/tools are type-only; reworded to scope the claim to the
+  ctx-taking siblings. The post-fix re-check (and the final closure pass:
+  fresh build so dist matches the formatted src, pack:verify, validate,
+  clean git status) found nothing further — zero findings.
 
 ## Deliberately NOT done
 
