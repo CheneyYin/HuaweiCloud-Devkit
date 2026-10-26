@@ -108,8 +108,8 @@ npm test 1416 tests — the brief's header numbers were correct).
 
 ## Interrogate rounds
 
-Three adversarial passes over the full diff, zero findings on the final
-state:
+Three adversarial passes over the code diff plus a terminating docs pass,
+zero findings on the final state:
 
 - Round 1 (Cut A): block-level byte-identity + whole-family multiset audit
   — zero defects. (An intermediate shell-pipeline bug produced a vacuous
@@ -119,9 +119,14 @@ state:
 - Round 2 (Cut B): ordered chain-diff (positional identity of every
   branch), brace accounting for the one extra `}` (the extracted matcher's
   own closing brace), prettier miss on the new test file — fixed in-round.
-- Round 3 (final, full branch diff): face diff is the complete sanctioned
+- Round 3 (full branch diff, after Cut B): face diff is the complete sanctioned
   replacement; all five pins non-vacuous; no dead code, no public-face
   drift, no doctrine violations. Zero findings.
+- Round 4 (docs commit — the terminating pass): AGENTS.md sentence verified
+  against the tree (pack ownership, precedent naming, pin filename) and
+  every report claim re-checked against the measured gate outputs. Zero
+  findings; this round itself is recorded here so the loop's terminal state
+  is the committed one.
 
 ## Deliberately NOT done
 
