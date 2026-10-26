@@ -60,8 +60,9 @@ test('agent rules file ships with the server payload (#758 D4-23)', () => {
   // every install/update call site), with remove-then-copy convergence and a
   // loud abort when the source is missing (the silent-skip is the bug class).
   // After the upstream payload-machinery extraction (2a41b07), the seam lives
-  // in src/install-payload.ts — the guard follows the canonical home.
-  const payload = readSource(join('src', 'install-payload.ts'));
+  // in the payload family — src/payload-placement.ts since the install-payload
+  // split — the guard follows the canonical home.
+  const payload = readSource(join('src', 'payload-placement.ts'));
   assert.match(payload, /function injectAgentRules\(pluginDest: string\): void/);
   assert.match(payload, /injectAgentRules\(pluginDest\);\n {2}if \(!opts\.skipDist\)/);
   assert.match(payload, /const AGENT_RULES_FILE = 'huawei-agent-rules\.mdc';/);

@@ -159,6 +159,7 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
     // in the same commit as the module.
     ['src/payload-utils.ts', readSource(join('src', 'payload-utils.ts'))] as const,
     ['src/payload-files.ts', readSource(join('src', 'payload-files.ts'))] as const,
+    ['src/payload-placement.ts', readSource(join('src', 'payload-placement.ts'))] as const,
     ['src/packs-policy.ts', packsPolicy] as const,
     ['src/mcp-config-io.ts', readSource(join('src', 'mcp-config-io.ts'))] as const,
     ['src/lib/cli-io.ts', readSource(join('src', 'lib', 'cli-io.ts'))] as const,

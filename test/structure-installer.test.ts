@@ -47,8 +47,10 @@ test('agents/codearts.ts supports the codearts target end to end', () => {
   assert.match(setup, /function installMarkerDirForTarget\(target: string\)/);
   // The .installed marker is written at payload placement, inside
   // copyServerPayload — and only when the server itself shipped (skipDist
-  // writes no marker: nothing will run from that dir to consume one).
-  const payloadModuleMarker = readSource(join('src', 'install-payload.ts'));
+  // writes no marker: nothing will run from that dir to consume one). The
+  // placement seam lives in src/payload-placement.ts since the
+  // install-payload split; the pin follows the canonical home.
+  const payloadModuleMarker = readSource(join('src', 'payload-placement.ts'));
   assert.match(
     payloadModuleMarker,
     /if \(!opts\.skipDist\) \{\s*\n\s*writeFileSync\(join\(pluginDest, '\.installed'\)/,
