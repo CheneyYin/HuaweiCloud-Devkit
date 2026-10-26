@@ -83,15 +83,22 @@ test('devbridge tunnel handling is migrated to the s2 gateway domain', () => {
     'utf8',
   );
   const sessionManager = readSource(join('src', 'sandbox', 'session-manager.ts'));
+  // The s2 gateway wire contract moved to devbridge-gateway.ts (the session-manager
+  // modularization); the canonical literals are pinned at their new home.
+  const gateway = readSource(join('src', 'sandbox', 'devbridge-gateway.ts'));
 
   // Code must construct tunnel URLs exclusively from the s2 gateway domain.
   // The guard must also catch regex-literal occurrences where dots are escaped
   // (`cn-north-4-bridge\.myhuaweicloud\.com`) — plain dot matching is blind to those.
-  assert.match(sessionManager, /devbridge-s2\.hwtunnel\.com/);
-  assert.doesNotMatch(sessionManager, /cn-north-4-bridge\\?\.myhuaweicloud\\?\.com/);
+  assert.match(gateway, /devbridge-s2\.hwtunnel\.com/);
+  assert.doesNotMatch(gateway, /cn-north-4-bridge\\?\.myhuaweicloud\\?\.com/);
 
   // A migrated gateway serves a placeholder page with HTTP 200 — the check must inspect the body.
-  assert.match(sessionManager, /服务已迁移/);
+  assert.match(gateway, /服务已迁移/);
+
+  // The constants stay on the session-manager.ts public face — devbridge-tunnel.ts
+  // imports them from that path (the re-export seam must not drift away).
+  assert.match(sessionManager, /DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER,\n\} from '\.\/devbridge-gateway\.ts'/);
 
   // The skill must teach the new URL form and the dead legacy form.
   assert.match(sandbox, /devbridge-s2\.hwtunnel\.com/);
@@ -183,9 +190,10 @@ test('expose_tunnel re-verifies from an independent exec session and classifies 
   // Gateway-level errors: status-gated exact-body markers, shared constants.
   // The probe compares the WHOLE body (tr strips \r/\n — CRLF-tolerant, and an
   // app page that merely mentions a marker never matches).
-  assert.match(sessionManager, /DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER = 'tunnel not found'/);
-  assert.match(sessionManager, /DEVBRIDGE_PORT_NOT_CONFIGURED_MARKER = 'port not configured'/);
-  assert.match(sessionManager, /DEVBRIDGE_BAD_GATEWAY_MARKER = 'bad gateway'/);
+  const gateway = readSource(join('src', 'sandbox', 'devbridge-gateway.ts'));
+  assert.match(gateway, /DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER = 'tunnel not found'/);
+  assert.match(gateway, /DEVBRIDGE_PORT_NOT_CONFIGURED_MARKER = 'port not configured'/);
+  assert.match(gateway, /DEVBRIDGE_BAD_GATEWAY_MARKER = 'bad gateway'/);
   assert.match(sessionManager, /body=\$\(tr -d '[^']*' < \/tmp\/\.dc_tunnel_body/);
   // #1000 (v2 completion): the deploy_check tunnel probe also bypasses the
   // injected sandbox proxy — every curl against *.hwtunnel.com carries it.

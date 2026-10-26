@@ -20,6 +20,12 @@ import { asRecord } from '../lib/as-record.ts';
 import { createConnection, getCredentials } from '../lib/hdkit/hwlink-api.ts';
 import { getWebSocketImpl } from '../proxy/proxy-agent.ts';
 import { trackSandboxConnect, trackSandboxDisconnect } from '../telemetry/telemetry.ts';
+import {
+  DEVBRIDGE_BAD_GATEWAY_MARKER,
+  DEVBRIDGE_PORT_NOT_CONFIGURED_MARKER,
+  DEVBRIDGE_TUNNEL_DOMAIN,
+  DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER,
+} from './devbridge-gateway.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -196,25 +202,16 @@ interface DeployCheckResult {
   remediation: string | undefined;
 }
 
-// Public tunnel URL domain for the DevBridge s2 gateway. The pre-migration Huawei Cloud
-// bridge domain was retired in Sep 2026 and now serves a 「服务已迁移」 placeholder page with
-// HTTP 200 — never construct tunnel URLs from it. Exported for devbridge-tunnel.ts (the
-// DevBridge-owned module keeps the single copy).
-export const DEVBRIDGE_TUNNEL_DOMAIN = 'devbridge-s2.hwtunnel.com';
-// Migration placeholder page marker — a tunnel URL returning this body must be treated as unreachable.
-export const DEVBRIDGE_MIGRATION_MARKER = '服务已迁移';
-// Gateway-level tunnel error bodies. "tunnel not found" was verified live
-// against the s2 gateway (Oct 2026: 404, text/plain, body "tunnel not found\n");
-// the other two are the gateway's documented contract:
-//   404 "tunnel not found"    — no live host session on the gateway (host process dead or
-//                               tunnel deleted); the tunnel RECORD may still exist in `list`
-//   404 "port not configured" — the URL's port is not registered on the tunnel
-//   502 "bad gateway"         — host session alive, but the registered port has no local service
-// A bare status check cannot distinguish these from app-generated 404/502 responses, so the
-// checks below match the exact body AND gate on the HTTP status code.
-export const DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER = 'tunnel not found';
-export const DEVBRIDGE_PORT_NOT_CONFIGURED_MARKER = 'port not configured';
-export const DEVBRIDGE_BAD_GATEWAY_MARKER = 'bad gateway';
+// The DevBridge s2 gateway wire contract (tunnel domain, migration marker,
+// gateway-level error bodies) lives in devbridge-gateway.ts; re-exported here
+// as the stable public face (devbridge-tunnel.ts imports it from this path).
+export {
+  DEVBRIDGE_BAD_GATEWAY_MARKER,
+  DEVBRIDGE_MIGRATION_MARKER,
+  DEVBRIDGE_PORT_NOT_CONFIGURED_MARKER,
+  DEVBRIDGE_TUNNEL_DOMAIN,
+  DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER,
+} from './devbridge-gateway.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
