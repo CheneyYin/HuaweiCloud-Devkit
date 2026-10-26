@@ -190,13 +190,16 @@ test('expose_tunnel re-verifies from an independent exec session and classifies 
     join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'SKILL.md'),
     'utf8',
   );
+  // The fresh-session re-verify family lives in devbridge-verify.ts since the
+  // devbridge-tunnel modularization.
+  const devbridgeVerify = readSource(join('src', 'sandbox', 'devbridge-verify.ts'));
 
   // Fresh-session GET re-verify with the dedicated parser and output fields.
-  assert.match(devbridgeTunnel, /export function buildDevbridgeVerifyScript/);
-  assert.match(devbridgeTunnel, /export function parseDevbridgeVerifyOutput/);
+  assert.match(devbridgeVerify, /export function buildDevbridgeVerifyScript/);
+  assert.match(devbridgeVerify, /export function parseDevbridgeVerifyOutput/);
   assert.match(devbridgeTunnel, /persistent/);
   assert.match(devbridgeTunnel, /请勿分享/);
-  assert.match(devbridgeTunnel, /DB_VERIFY_HTTP_CODE/);
+  assert.match(devbridgeVerify, /DB_VERIFY_HTTP_CODE/);
 
   // Gateway-level errors: status-gated exact-body markers, shared constants.
   // The probe compares the WHOLE body (tr strips \r/\n — CRLF-tolerant, and an
@@ -279,6 +282,7 @@ test('stripTerminalEscapes is the single escape-stripping seam for sandbox outpu
   // the expose/probe parsers in devbridge-expose.ts).
   const devbridgeAuth = readSource(join('src', 'sandbox', 'devbridge-auth.ts'));
   const devbridgeExpose = readSource(join('src', 'sandbox', 'devbridge-expose.ts'));
+  const devbridgeVerify = readSource(join('src', 'sandbox', 'devbridge-verify.ts'));
   const sandboxFamily = readdirSync(join(pluginRoot, 'src', 'sandbox'))
     .filter((name) => name.endsWith('.ts'))
     .map((name) => [`sandbox/${name}`, readSource(join('src', 'sandbox', name))] as const);
@@ -293,6 +297,7 @@ test('stripTerminalEscapes is the single escape-stripping seam for sandbox outpu
   assert.match(sessionManager, /export \{ stripTerminalEscapes \} from '\.\/sandbox-output\.ts';/);
   assert.match(devbridgeAuth, /import \{ stripTerminalEscapes \} from '\.\/sandbox-output\.ts';/);
   assert.match(devbridgeExpose, /import \{ stripTerminalEscapes \} from '\.\/sandbox-output\.ts';/);
+  assert.match(devbridgeVerify, /import \{ stripTerminalEscapes \} from '\.\/sandbox-output\.ts';/);
   assert.match(devbridgeTunnel, /import \{[^}]*stripTerminalEscapes[^}]*\} from '\.\/session-manager\.ts';/);
   const csiConstruction = "ESC + '\\\\[[0-9:;<=>?]*[ -/]*[a-zA-Z]'";
   assert.equal(sandboxOutput.split(csiConstruction).length - 1, 1, 'CSI regex must be constructed once');
@@ -316,7 +321,7 @@ test('stripTerminalEscapes is the single escape-stripping seam for sandbox outpu
   assert.match(deployCheckSource, /parseDeployCheckOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/);
   assert.match(devbridgeExpose, /parseDevbridgeExposeOutput\(stdout[\s\S]{0,600}?stripTerminalEscapes\(stdout\)/);
   assert.match(devbridgeAuth, /parseDevbridgeAuthOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/);
-  assert.match(devbridgeTunnel, /parseDevbridgeVerifyOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/);
+  assert.match(devbridgeVerify, /parseDevbridgeVerifyOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/);
   assert.match(devbridgeExpose, /parseDevbridgeProbeSequence\(stdout[\s\S]{0,700}?stripTerminalEscapes\(stdout\)/);
 });
 
