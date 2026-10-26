@@ -1,16 +1,6 @@
 import { spawnSync, type SpawnSyncOptions, type SpawnSyncReturns } from 'node:child_process';
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { asText } from './lib/as-text.ts';
 import {
@@ -23,96 +13,46 @@ import {
 } from './lib/native-receipt.ts';
 import { parseCoreSkillNames, parseSkillManifest } from './lib/skill-manifest.ts';
 import { listSkillDirs } from './lib/skill-tree.ts';
+import {
+  copyDir,
+  copyFileVerified,
+  mcpServerInstalled,
+  pruneStale,
+  removeIfExists,
+} from './payload-files.ts';
+import { errorMessage, pkgVersion, PLUGIN_ROOT, sleepSync } from './payload-utils.ts';
 
 // The installer's payload machinery: the file operations every per-agent
 // deploy shares, the server payload (dist + safety + skills) placement, and
 // the native core-skill disclosure seam. The table-consuming orchestration
 // (nativeSkillDirs and friends) takes the PAYLOAD_TARGETS rows as a
 // parameter so this module stays a leaf — the dispatch layer owns the table.
+//
+// Stable public face of the payload family (the safety-policy precedent):
+// same exported names, same import path, same behavior. The internals live
+// in the src/payload-* siblings; this module re-exports them.
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-export const PLUGIN_ROOT = resolve(__dirname, '..');
-export const PACKAGE_ROOT = resolve(PLUGIN_ROOT, '..', '..');
+// The layout roots + version + small shared utils (the one-climb root-level
+// derivation, the deploy word, the error/sleep helpers).
+export {
+  PLUGIN_ROOT,
+  PACKAGE_ROOT,
+  pkgVersion,
+  errorMessage,
+  sleepSync,
+  deployWord,
+  type DeployMode,
+} from './payload-utils.ts';
 
-// Every per-agent deploy runs in one of two modes; the word suffix keeps
-// the deploy log lines ('installed' vs ' updated') uniform across agents.
-export type DeployMode = 'install' | 'update';
-export const deployWord = (mode: DeployMode): string => (mode === 'update' ? ' updated' : '');
-
-// The installed package's version — one read for the whole setup-cli graph
-// (the banner, the generated plugin-dir package.json, and doctor's
-// X-HW-Client-Version comparisons). Missing or corrupt package.json keeps
-// the 0.0.0 default.
-export const pkgVersion: string = (() => {
-  try {
-    const pkg = JSON.parse(readFileSync(resolve(PLUGIN_ROOT, '..', '..', 'package.json'), 'utf8')) as {
-      version?: unknown;
-    };
-    return typeof pkg.version === 'string' ? pkg.version : '0.0.0';
-  } catch {
-    return '0.0.0';
-  }
-})();
-
-export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
+// The verified file operations (the retrying size-checked copy, the
+// recursive dir copy, the stale-name prune, the #556 retrying removal).
+export { copyFileVerified, mcpServerInstalled, copyDir, pruneStale, removeIfExists } from './payload-files.ts';
 
 function spawnErrorCode(res: SpawnSyncReturns<unknown>): string | undefined {
   const error = res.error;
   if (!error || !('code' in error)) return undefined;
   const code: unknown = error.code;
   return typeof code === 'string' ? code : undefined;
-}
-
-export function sleepSync(ms: number): void {
-  try {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-  } catch {
-    // main-thread restriction or unavailable Atomics - fall back to a busy wait
-    const end = Date.now() + ms;
-    while (Date.now() < end) {
-      // spin
-    }
-  }
-}
-
-export function copyFileVerified(src: string, dest: string): void {
-  const expected = statSync(src).size;
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    copyFileSync(src, dest);
-    let actual = -1;
-    try {
-      actual = statSync(dest).size;
-    } catch {
-      // destination missing - fall through to retry
-    }
-    if (actual === expected) return;
-    if (attempt < 3) sleepSync(150);
-  }
-  throw new Error(
-    `copyDir verification failed after 3 attempts: ${src} -> ${dest} (expected ${expected} bytes). ` +
-      `The destination file may be locked by another process (e.g. a running agent session using the installed MCP server). ` +
-      `Close it and re-run the install.`,
-  );
-}
-
-export function mcpServerInstalled(baseDir: string): boolean {
-  return existsSync(join(baseDir, 'dist', 'mcp-server.js')) || existsSync(join(baseDir, 'src', 'mcp-server.mjs'));
-}
-
-export function copyDir(src: string, dest: string): void {
-  if (!existsSync(src)) return;
-  mkdirSync(dest, { recursive: true });
-  for (const entry of readdirSync(src, { withFileTypes: true })) {
-    const s = join(src, entry.name);
-    const d = join(dest, entry.name);
-    if (entry.isDirectory()) {
-      copyDir(s, d);
-    } else {
-      copyFileVerified(s, d);
-    }
-  }
 }
 
 // The payload every per-agent plugin dir must carry: the MCP server (dist/),
@@ -209,36 +149,6 @@ export function copyServerPayload(pluginDest: string, opts: { skipDist?: boolean
   if (!opts.skipDist) {
     writeFileSync(join(pluginDest, '.installed'), new Date().toISOString());
   }
-}
-
-// Remove huawei* entries in targetDir that no longer exist in sourceDir (stale files from an older version).
-export function pruneStale(targetDir: string, sourceDir: string): number {
-  if (!existsSync(targetDir) || !existsSync(sourceDir)) return 0;
-  const sourceNames = new Set(readdirSync(sourceDir));
-  let removed = 0;
-  for (const entry of readdirSync(targetDir, { withFileTypes: true })) {
-    if (!entry.name.startsWith('huawei')) continue;
-    if (!sourceNames.has(entry.name)) {
-      if (removeIfExists(join(targetDir, entry.name))) removed++;
-    }
-  }
-  return removed;
-}
-
-export function removeIfExists(p: string): boolean {
-  if (existsSync(p)) {
-    try {
-      // Retry transient EBUSY/EPERM/ENOTEMPTY (locked files on Windows) before
-      // giving up — uninstall should not leave a skill behind just because a
-      // handle was momentarily open (#556).
-      rmSync(p, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-      return true;
-    } catch (error) {
-      console.log(`  \x1b[33m[WARN]\x1b[0m Could not remove ${p}: ${errorMessage(error)}`);
-      return false;
-    }
-  }
-  return false;
 }
 
 // Devkit-owned skill names. The shipped skills/ tree is the ownership

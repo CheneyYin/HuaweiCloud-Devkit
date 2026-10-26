@@ -153,6 +153,12 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
     ['src/lib/dep-resolve.ts', depResolve] as const,
     ['src/targets.ts', targetsModule] as const,
     ['src/install-payload.ts', installPayload] as const,
+    // The payload family internals (the install-payload.ts split): they
+    // compile into the unbundled setup-cli graph through the face, so they
+    // join the zod-free guard alongside it — one entry per sibling, added
+    // in the same commit as the module.
+    ['src/payload-utils.ts', readSource(join('src', 'payload-utils.ts'))] as const,
+    ['src/payload-files.ts', readSource(join('src', 'payload-files.ts'))] as const,
     ['src/packs-policy.ts', packsPolicy] as const,
     ['src/mcp-config-io.ts', readSource(join('src', 'mcp-config-io.ts'))] as const,
     ['src/lib/cli-io.ts', readSource(join('src', 'lib', 'cli-io.ts'))] as const,
