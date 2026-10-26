@@ -1,6 +1,7 @@
 import { DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER } from './devbridge-gateway.ts';
 import { stripTerminalEscapes } from './sandbox-output.ts';
 import { readDbField } from './devbridge-expose.ts';
+import { runOneShot } from './devbridge-exec.ts';
 
 // The fresh-session re-verify family (#919/#922), extracted from
 // devbridge-tunnel: the second-exec GET script, its dedicated parser, and the
@@ -59,4 +60,61 @@ export function parseDevbridgeVerifyOutput(stdout: unknown): DevbridgeVerify {
   const notFoundCount = Number(readDbField(text, 'DB_VERIFY_NOT_FOUND')) || 0;
   const notFound = notFoundCount > 0;
   return { httpCode, notFound };
+}
+
+export interface TunnelPersistenceVerdict {
+  verifyHttpCode: string;
+  verifyNotFound: boolean;
+  persistent: boolean;
+  warning: string | undefined;
+}
+
+// #919: re-verify with a real GET from a SECOND, independent exec session.
+// The in-session health check inside the expose script cannot prove the host
+// survived session teardown (setsid/nohup/disown make that likely, not
+// certain). When the fresh-session GET fails, the URL will die with the
+// deploying session — say so explicitly instead of returning a link the
+// visitor cannot open. (v2 ordering: the recheck runs only on the usable-URL
+// path — a dead URL already failed above it, so no fresh-session call is
+// spent proving it.) The warning texts are the flow's verbatim 请勿分享 lines.
+export async function verifyTunnelPersistence(
+  workspaceId: string,
+  tunnelUrl: string,
+  username: string,
+): Promise<TunnelPersistenceVerdict> {
+  let verifyHttpCode = '';
+  let verifyNotFound = false;
+  try {
+    const verifyResult = await runOneShot(workspaceId, buildDevbridgeVerifyScript(tunnelUrl), username, 30000);
+    // #922 (B1): parse with the dedicated verify parser — the
+    // DB_VERIFY_HTTP_CODE key is not visible to parseDevbridgeExposeOutput.
+    const verify = parseDevbridgeVerifyOutput(verifyResult.stdout);
+    verifyHttpCode = verify.httpCode || '';
+    // #922 (B2): a native false-success form answers HTTP 200 with a
+    // "tunnel not found" body — treat it as non-persistent.
+    verifyNotFound = verify.notFound;
+  } catch {
+    // best-effort: a failed recheck leaves verifyHttpCode '' → persistent false,
+    // and the warning below tells the developer not to share the URL.
+  }
+  // 000/'' = the fresh session could not reach the tunnel (host already dead
+  // or gateway not serving); 200 with a "tunnel not found" body = the
+  // gateway answered but the tunnel is gone; anything else is surfaced as-is.
+  const persistent = verifyHttpCode !== '' && verifyHttpCode !== '000' && !verifyNotFound;
+  let warning: string | undefined;
+  if (!persistent) {
+    if (verifyNotFound) {
+      warning = `复测返回 HTTP ${verifyHttpCode || '???'} 但 body 为 "tunnel not found"（原生假成功形态），访问链接实际未生效，请勿分享 (the recheck answered HTTP ${verifyHttpCode || '???'} with a "tunnel not found" body — the tunnel is NOT serving; do NOT share this URL).`;
+    } else if (verifyHttpCode === '') {
+      // The verify script always emits a code when it runs (curl prints 000 on
+      // transport failure) — an empty code means the recheck exec itself
+      // failed. Say that honestly instead of diagnosing the host as dead.
+      warning =
+        '复测会话执行失败，无法确认访问链接的持久性，请勿分享 (the independent recheck could not run — persistence unverified; treat the URL as non-persistent and do NOT share it).';
+    } else {
+      warning =
+        '访问链接将在会话结束后失效，请勿分享 (the tunnel did NOT survive an independent exec-session recheck — do NOT share this URL; the host process is not persistent).';
+    }
+  }
+  return { verifyHttpCode, verifyNotFound, persistent, warning };
 }

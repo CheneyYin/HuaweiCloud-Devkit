@@ -205,8 +205,8 @@ test('expose_tunnel re-verifies from an independent exec session and classifies 
   // Fresh-session GET re-verify with the dedicated parser and output fields.
   assert.match(devbridgeVerify, /export function buildDevbridgeVerifyScript/);
   assert.match(devbridgeVerify, /export function parseDevbridgeVerifyOutput/);
-  assert.match(devbridgeTunnel, /persistent/);
-  assert.match(devbridgeTunnel, /请勿分享/);
+  assert.match(devbridgeVerify, /persistent/);
+  assert.match(devbridgeVerify, /请勿分享/);
   assert.match(devbridgeVerify, /DB_VERIFY_HTTP_CODE/);
 
   // Gateway-level errors: status-gated exact-body markers, shared constants.
@@ -229,6 +229,9 @@ test('expose_tunnel re-verifies from an independent exec session and classifies 
   // The keepalive watchdog family lives in devbridge-keepalive.ts since the
   // devbridge-tunnel modularization.
   const devbridgeKeepalive = readSource(join('src', 'sandbox', 'devbridge-keepalive.ts'));
+  // The exposeTunnel orchestration lives in devbridge-expose-flow.ts since the
+  // devbridge-tunnel modularization.
+  const devbridgeExposeFlow = readSource(join('src', 'sandbox', 'devbridge-expose-flow.ts'));
   assert.match(devbridgeValidation, /export function validateExpiryHours/);
   assert.match(devbridgeValidation, /export function validateTunnelId/);
   assert.match(devbridgeRenew, /export function buildDevbridgeRenewScript/);
@@ -264,7 +267,7 @@ test('expose_tunnel re-verifies from an independent exec session and classifies 
   );
 
   // Retry exhaustion on a gateway-dead URL must fail, not soften to a warning.
-  assert.match(devbridgeTunnel, /gateway reports the fresh tunnel URL as dead/);
+  assert.match(devbridgeExposeFlow, /gateway reports the fresh tunnel URL as dead/);
 });
 
 test('deploy_check judges reachability by non-000 and probes listed tunnels boundedly', () => {
@@ -303,12 +306,12 @@ test('stripTerminalEscapes is the single escape-stripping seam for sandbox outpu
     .filter((name) => name.endsWith('.ts'))
     .map((name) => [`sandbox/${name}`, readSource(join('src', 'sandbox', name))] as const);
 
-  // One exported definition; the devbridge parser modules import the canonical
-  // seam directly since the devbridge-tunnel modularization (auth parser in
-  // devbridge-auth.ts, expose/probe parsers in devbridge-expose.ts — no second
-  // copy, no face round-trip); parsers still inside the devbridge-tunnel.ts
-  // face keep importing through the session-manager.ts re-export face until
-  // they land in their own canonical modules.
+  // One exported definition; every devbridge parser module imports the
+  // canonical seam directly since the devbridge-tunnel modularization (auth
+  // parser in devbridge-auth.ts, expose/probe parsers in devbridge-expose.ts,
+  // verify in devbridge-verify.ts, renew in devbridge-renew.ts, keepalive in
+  // devbridge-keepalive.ts — no second copy, no face round-trip; the
+  // devbridge-tunnel.ts face is a pure re-export seam and imports nothing).
   assert.match(sandboxOutput, /export function stripTerminalEscapes/);
   assert.match(sessionManager, /export \{ stripTerminalEscapes \} from '\.\/sandbox-output\.ts';/);
   assert.match(devbridgeAuth, /import \{ stripTerminalEscapes \} from '\.\/sandbox-output\.ts';/);
@@ -316,7 +319,6 @@ test('stripTerminalEscapes is the single escape-stripping seam for sandbox outpu
   assert.match(devbridgeVerify, /import \{ stripTerminalEscapes \} from '\.\/sandbox-output\.ts';/);
   assert.match(devbridgeRenew, /import \{ stripTerminalEscapes \} from '\.\/sandbox-output\.ts';/);
   assert.match(devbridgeKeepalive, /import \{ stripTerminalEscapes \} from '\.\/sandbox-output\.ts';/);
-  assert.match(devbridgeTunnel, /import \{[^}]*stripTerminalEscapes[^}]*\} from '\.\/session-manager\.ts';/);
   const csiConstruction = "ESC + '\\\\[[0-9:;<=>?]*[ -/]*[a-zA-Z]'";
   assert.equal(sandboxOutput.split(csiConstruction).length - 1, 1, 'CSI regex must be constructed once');
   for (const [name, source] of sandboxFamily) {

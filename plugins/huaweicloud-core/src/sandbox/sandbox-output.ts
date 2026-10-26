@@ -1,8 +1,8 @@
 // The single escape-stripping seam for sandbox command output (#946), extracted
 // from session-manager so every sandbox-output parser entry point — the
-// deploy-check parser, the upload md5 verify, and the devbridge-tunnel parsers
-// (through the session-manager.ts re-export face) — folds in one copy instead
-// of re-rolling the regexes.
+// deploy-check parser, the upload md5 verify, and the devbridge-tunnel
+// family's parser modules (devbridge-auth/expose/verify/renew/keepalive) —
+// folds in one copy instead of re-rolling the regexes.
 
 // Strip terminal escape sequences from sandbox command output (#946): CSI
 // color/cursor codes and OSC shell-integration markers (shells with integration

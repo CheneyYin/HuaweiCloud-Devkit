@@ -5,8 +5,9 @@ import {
   DEVBRIDGE_TUNNEL_DOMAIN,
   DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER,
 } from './devbridge-gateway.ts';
-import { DEVBRIDGE_HOST_EXPIRY_HOURS } from './devbridge-validation.ts';
+import { DEVBRIDGE_HOST_EXPIRY_HOURS, evaluateDevbridgeVersion } from './devbridge-validation.ts';
 import { stripTerminalEscapes } from './sandbox-output.ts';
+import { runOneShot, type OneShotResult } from './devbridge-exec.ts';
 
 // The expose attempt contract, extracted from devbridge-tunnel: the script that
 // starts the host and probes reachability, the DB_* stdout grammar (readDbField
@@ -214,4 +215,81 @@ export function parseDevbridgeExposeOutput(stdout: unknown): DevbridgeExpose {
   const badGateway = httpCode === '502' && body === DEVBRIDGE_BAD_GATEWAY_MARKER;
   const { probes } = parseDevbridgeProbeSequence(text);
   return { tunnelUrl, httpCode, quotaError, tunnelId, expiryHours, gatewayTunnelError, badGateway, migration, probes };
+}
+
+// The no-usable-URL failure verdict of exposeTunnel (the Q2 ruling path):
+// build the #998 taxonomy return — too_old (with the deferred version
+// read-back) / no_tunnel_url / tunnel_unreachable. The failure shape is the
+// flow's verbatim return (moved here, not reworded); the caller passes the
+// accumulated warnings array and this phase appends its own before joining.
+export async function reportUnusableExpose(args: {
+  workspaceId: string;
+  username: string;
+  port: number;
+  authMode: string;
+  authVersion: string;
+  parsed: DevbridgeExpose;
+  exposeFailed: boolean;
+  warnings: string[];
+  result: OneShotResult;
+}): Promise<ExposeTunnelResult> {
+  const { workspaceId, username, port, authMode, authVersion, parsed, exposeFailed, warnings, result } = args;
+  // #998 read-back: a no-URL failure after retries needs the version in the
+  // return body — the gate above catches 0.1.x upfront, but a binary that
+  // changed mid-flow (or an empty probe version) lands here, and in the
+  // measured incident a single version field would have saved the whole
+  // credentials/network/port misdiagnosis. The command reuses the DB_VERSION
+  // field grammar (echo + anchored parse through stripTerminalEscapes — the
+  // #946 doctrine; a raw stdout read would be OSC-blind on exactly the
+  // shells that lose the probe line in the first place).
+  let noUrlVersion = authVersion;
+  if (parsed.tunnelUrl === '') {
+    try {
+      const versionResult = await runOneShot(
+        workspaceId,
+        `export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"; echo "DB_VERSION=$(devbridge version 2>/dev/null | head -1)"`,
+        username,
+        15000,
+      );
+      const readBack =
+        stripTerminalEscapes(versionResult.stdout)
+          .match(/^DB_VERSION=(.*)$/m)?.[1]
+          ?.trim() ?? '';
+      noUrlVersion = readBack || authVersion;
+    } catch {
+      // best-effort: the auth probe's version stands
+    }
+  }
+  const noUrlCheck = evaluateDevbridgeVersion(noUrlVersion);
+  if (noUrlCheck.blocked) {
+    warnings.push(`devbridge version is ${noUrlVersion} — too old to serve tunnels; upgrade per Step 0 before retrying.`);
+  }
+  // #998 taxonomy: too_old (blocked) / no_tunnel_url (no URL observed —
+  // host did not start, or the exec timed out before the log was read) /
+  // tunnel_unreachable (URL present, probes exhausted). The timeout-fold
+  // case gets its own hedged wording — a timeout lost the observation, it
+  // did not prove the host never started.
+  const timedOut = exposeFailed && parsed.tunnelUrl === '';
+  return {
+    ok: false,
+    port,
+    error: noUrlCheck.blocked
+      ? noUrlCheck.error
+      : timedOut
+        ? 'Failed to expose a working DevBridge tunnel: the expose exec timed out or died before a Tunnel URL could be extracted — host state unknown (see warnings). Retry, or raise timeout_ms.'
+        : parsed.tunnelUrl === ''
+          ? 'Failed to expose a working DevBridge tunnel: the host log contains no Tunnel URL — the host did not start. Check the hostLog below for the real cause.'
+          : 'Failed to expose a working DevBridge tunnel: no reachable public URL after retries.',
+    error_code: noUrlCheck.blocked
+      ? 'devbridge_too_old'
+      : parsed.tunnelUrl === ''
+        ? 'no_tunnel_url'
+        : 'tunnel_unreachable',
+    version: noUrlVersion || undefined,
+    authMode,
+    httpCode: parsed.httpCode,
+    warnings: warnings.length > 0 ? warnings.join(' ') : undefined,
+    remediation: noUrlCheck.blocked ? noUrlCheck.remediation : undefined,
+    hostLog: String(result.stdout ?? '').slice(0, 400),
+  };
 }

@@ -207,3 +207,42 @@ export async function installKeepaliveWatchdog(
     })),
   };
 }
+
+// The AUTO-ENROLL phase of exposeTunnel (see the flow's return-shape comment):
+// read the installed watchdog's tunnel list and merge the new tunnel into it —
+// MERGED, never replacing other tunnels' coverage. keepalive:false opts out.
+// Non-fatal: an enrollment failure is surfaced as a warning (appended to the
+// caller's array), never as a failed expose — the tunnel itself is working.
+// The warning texts are the flow's verbatim lines.
+export async function enrollKeepalive(
+  workspaceId: string,
+  tunnel: { tunnelId: string; url: string },
+  keepalive: boolean | undefined,
+  warnings: string[],
+  username: string,
+): Promise<KeepaliveWatchdogResult | undefined> {
+  if (keepalive !== false && tunnel.url && !tunnel.tunnelId) {
+    warnings.push(
+      'Keepalive enrollment skipped: the tunnel ID could not be derived from the exposed URL — the tunnel works but will NOT be auto-renewed.',
+    );
+  }
+  if (keepalive !== false && tunnel.url && tunnel.tunnelId) {
+    try {
+      const readResult = await runOneShot(workspaceId, buildKeepaliveTunnelsReadScript(), username, 20000);
+      const existing = parseKeepaliveTunnelsOutput(readResult.stdout);
+      const merged = mergeKeepaliveTunnels(existing, [{ tunnelId: tunnel.tunnelId, url: tunnel.url }]);
+      const enrollment = await installKeepaliveWatchdog(workspaceId, { tunnels: merged }, username, 30000);
+      if (!enrollment.ok) {
+        warnings.push(
+          `Keepalive watchdog enrollment failed: ${enrollment.error || 'unknown error'} — the tunnel works but will NOT be auto-renewed. Retry with huaweicloud_sandbox_keepalive_watchdog.`,
+        );
+      }
+      return enrollment;
+    } catch (error) {
+      warnings.push(
+        `Keepalive watchdog enrollment failed (${error instanceof Error ? error.message : 'unknown error'}) — the tunnel works but will NOT be auto-renewed. Retry with huaweicloud_sandbox_keepalive_watchdog.`,
+      );
+    }
+  }
+  return undefined;
+}

@@ -1,13 +1,13 @@
 // The DevBridge s2 gateway's wire contract, extracted from session-manager so
 // the tunnel-domain and gateway-error vocabulary has one canonical home in the
-// sandbox family: deploy-check.ts splices these into its probe script,
-// devbridge-tunnel.ts consumes them through the session-manager.ts re-export
-// face (same exported names, same import path).
+// sandbox family: deploy-check.ts splices these into its probe script, and the
+// devbridge-tunnel family (devbridge-expose.ts / devbridge-verify.ts) consumes
+// them directly (same exported names, same import path).
 
 // Public tunnel URL domain for the DevBridge s2 gateway. The pre-migration Huawei Cloud
 // bridge domain was retired in Sep 2026 and now serves a 「服务已迁移」 placeholder page with
-// HTTP 200 — never construct tunnel URLs from it. Exported for devbridge-tunnel.ts (the
-// DevBridge-owned module keeps the single copy).
+// HTTP 200 — never construct tunnel URLs from it. Exported for the devbridge-tunnel
+// family (the DevBridge-owned modules keep the single copy).
 export const DEVBRIDGE_TUNNEL_DOMAIN = 'devbridge-s2.hwtunnel.com';
 // Migration placeholder page marker — a tunnel URL returning this body must be treated as unreachable.
 export const DEVBRIDGE_MIGRATION_MARKER = '服务已迁移';

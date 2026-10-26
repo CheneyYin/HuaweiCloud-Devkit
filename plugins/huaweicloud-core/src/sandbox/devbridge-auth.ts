@@ -1,4 +1,7 @@
 import { stripTerminalEscapes } from './sandbox-output.ts';
+import { runOneShot } from './devbridge-exec.ts';
+import { evaluateDevbridgeVersion } from './devbridge-validation.ts';
+import type { ExposeTunnelResult } from './devbridge-expose.ts';
 
 // The DevBridge auth waterfall, extracted from devbridge-tunnel so the auth
 // probe script, its stdout parser, and (with the devbridge-tunnel
@@ -143,4 +146,75 @@ export function parseDevbridgeAuthOutput(stdout: unknown): DevbridgeAuth {
   }
   const version = text.match(/^DB_VERSION=(.*)$/m)?.[1]?.trim() ?? '';
   return { authMode, attempts, version };
+}
+
+export type ExposeAuthGate =
+  | { ok: true; authMode: string; version: string }
+  | { ok: false; failure: ExposeTunnelResult };
+
+// The auth+version gate phase of exposeTunnel: run the auth waterfall probe,
+// parse it, and decide whether the expose loop may start at all. The failure
+// shapes are the flow's verbatim returns (moved here, not reworded).
+export async function gateExposeAuth(workspaceId: string, username: string, port: number): Promise<ExposeAuthGate> {
+  const authScript = buildDevbridgeAuthProbe();
+  const authResult = await runOneShot(workspaceId, authScript, username, 30000);
+  const { authMode, attempts, version: authVersion } = parseDevbridgeAuthOutput(authResult.stdout);
+
+  // #998: version gate BEFORE the expose loop. 0.1.x binaries' AK/SK tier still
+  // logs in, so authMode alone would green-light an expose that can never work.
+  // This must precede the authMode check — the structured too_old error names
+  // the real cause where the auth-failure path would point at credentials.
+  const versionCheck = evaluateDevbridgeVersion(authVersion);
+  if (versionCheck.blocked) {
+    return {
+      ok: false,
+      failure: {
+        ok: false,
+        port,
+        error: versionCheck.error,
+        error_code: 'devbridge_too_old',
+        version: authVersion,
+        authMode,
+        attempts,
+        // The combined case (0.1.x AND no usable credential): the version is the
+        // permanent blocker and keeps precedence, but the caller must not lose
+        // the credential half of the diagnosis.
+        remediation:
+          versionCheck.remediation +
+          (authMode === 'NO_CREDENTIAL' || authMode === ''
+            ? ' Note: authMode ' +
+              (authMode || '(none)') +
+              ' indicates a SEPARATE credential issue — after upgrading, re-run huaweicloud_sandbox_credentials.'
+            : ''),
+      },
+    };
+  }
+
+  if (authMode !== 'API_KEY_KEYRING' && authMode !== 'AKSK_SUPPORTED' && authMode !== 'API_KEY_FILE') {
+    // v2 deviation: truncation like hostLog — raw auth output is diagnostics,
+    // and the auth script never echoes key values, but bound it anyway.
+    const loginOutput = (String(authResult.stdout ?? '') + String(authResult.error ?? '')).slice(0, 400);
+    return {
+      ok: false,
+      failure: {
+        ok: false,
+        port,
+        error: 'DevBridge authentication failed: no usable credential in the sandbox.',
+        authMode: authMode || 'UNKNOWN',
+        attempts,
+        hint:
+          'No DevBridge credential is available in this sandbox. Suggested next steps:\n' +
+          '1) Re-run huaweicloud_sandbox_credentials once, then retry huaweicloud_sandbox_expose_tunnel — ' +
+          'this refreshes the temporary AK/SK (most common quick fix when they simply expired) and rewrites /tmp/hw_creds.sh.\n' +
+          '2) If it still fails, this sandbox was created on an older image and cannot auto-acquire an API Key ' +
+          '(the image cannot be upgraded in place). One-time manual fallback: create an API Key at ' +
+          'https://devstation.connect.huaweicloud.com/space/devbridge/apikey, run `export HW_API_KEY=<key>` locally, ' +
+          're-run huaweicloud_sandbox_credentials, then retry.\n' +
+          '3) The "attempts" field shows which tiers were tried and why they failed — include it when escalating to the platform team.',
+        loginOutput,
+      },
+    };
+  }
+
+  return { ok: true, authMode, version: authVersion };
 }
