@@ -64,13 +64,13 @@ test('agents/codearts.ts supports the codearts target end to end', () => {
   // missing. The DSH package-root candidate is PLUGIN_ROOT itself because
   // serverSkillDirNames() appends 'skills' (bound by the dsh row's doctor
   // section in agents/dsh-patch.ts).
-  // The roster readers moved to src/payload-roster.ts in the install-payload
-  // split; the pin follows the canonical home (the status listing stays in
-  // the face until its own extraction).
-  const payloadModule = readSource(join('src', 'install-payload.ts'));
+  // The roster readers moved to src/payload-roster.ts and the status listing
+  // to src/payload-status.ts in the install-payload split; the pins follow
+  // the canonical homes.
+  const payloadStatusModule = readSource(join('src', 'payload-status.ts'));
   const payloadRosterModule = readSource(join('src', 'payload-roster.ts'));
   const doctorPayloadModule = readSource(join('src', 'doctor-payload.ts'));
-  assert.match(payloadModule, /return listSkillDirs\(join\(pluginDir, 'skills'\)\);/);
+  assert.match(payloadStatusModule, /return listSkillDirs\(join\(pluginDir, 'skills'\)\);/);
   assert.match(setup, /expectedSkills: shippedSkillRoster\(\)/);
   assert.match(doctorPayloadModule, /present\.size === expectedSkills\.length/);
   assert.match(doctorPayloadModule, /expectedSkills\.every\(\(name\) => present\.has\(name\)\)/);
