@@ -100,11 +100,12 @@ test('dependency provisioning: new modules stay unbundled; setup-cli delegates',
     .sort((a, b) => a.localeCompare(b));
   assert.ok(vaultModules.length >= 3, `expected the secret-vault module family, found: ${vaultModules.join(', ')}`);
   // And for the auth subsystem (#900 error-table port): src/auth/* is kept
-  // zod-free BY POLICY — six of the seven modules also compile into the
-  // unbundled setup-cli graph (setup-cli.ts imports them directly), and the
-  // seventh (credential-validator) is reachable only from the bundled
-  // mcp-server graph, where zod exists but the subsystem stays uniform with
-  // the rest. Walking the whole tree keeps either graph safe.
+  // zod-free BY POLICY — every module but one compiles into the unbundled
+  // setup-cli graph (setup-cli.ts reaches the family through the
+  // credentials.ts face and the auth command modules), and the one exception
+  // (credential-validator) is reachable only from the bundled mcp-server
+  // graph, where zod exists but the subsystem stays uniform with the rest.
+  // Walking the whole tree keeps either graph safe.
   const authModules = (readdirSync(join(pluginRoot, 'src', 'auth'), { recursive: true }) as string[])
     .filter((name) => name.endsWith('.ts'))
     .sort((a, b) => a.localeCompare(b));
