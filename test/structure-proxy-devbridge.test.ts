@@ -111,6 +111,10 @@ test('devbridge host launch survives the exec session (#919/#922): setsid guard,
     'utf8',
   );
   const devbridgeTunnel = readSource(join('src', 'sandbox', 'devbridge-tunnel.ts'));
+  // The tunnel parameter policy (validators, lifetime constants, the 0.1.x
+  // version gate) lives in devbridge-validation.ts since the devbridge-tunnel
+  // modularization; the canonical literals are pinned at their new home.
+  const devbridgeValidation = readSource(join('src', 'sandbox', 'devbridge-validation.ts'));
   // The deploy_check remediation lives in deploy-check.ts since the
   // session-manager modularization.
   const deployCheckSource = readSource(join('src', 'sandbox', 'deploy-check.ts'));
@@ -122,7 +126,7 @@ test('devbridge host launch survives the exec session (#919/#922): setsid guard,
   assert.match(devbridgeTunnel, /if command -v setsid > \/dev\/null 2>&1; then setsid nohup devbridge host/);
   assert.match(devbridgeTunnel, /< \/dev\/null & else nohup devbridge host/);
   assert.match(devbridgeTunnel, /`disown 2>\/dev\/null \|\| true`/);
-  assert.match(devbridgeTunnel, /DEVBRIDGE_HOST_EXPIRY_HOURS = 72/);
+  assert.match(devbridgeValidation, /DEVBRIDGE_HOST_EXPIRY_HOURS = 72/);
   assert.match(devbridgeTunnel, /DB_EXPIRY_HOURS=\$\{expiryHours\}/);
   // #1000, the agent-facing SKILL surface: the manual fallbacks' curls carry
   // --noproxy with the MANDATORY comment, and the Proxy-trap doctrine
@@ -204,8 +208,9 @@ test('expose_tunnel re-verifies from an independent exec session and classifies 
   assert.match(deployCheckSource, /curl -s --noproxy '\*' -o \/tmp\/\.dc_tunnel_body/);
   // U16: the tunnel-persistence subsystem — renewal, the watchdog, and the
   // #998/#999/#1000 hardening all ride devbridge-tunnel.ts.
-  assert.match(devbridgeTunnel, /export function validateExpiryHours/);
-  assert.match(devbridgeTunnel, /export function validateTunnelId/);
+  const devbridgeValidation = readSource(join('src', 'sandbox', 'devbridge-validation.ts'));
+  assert.match(devbridgeValidation, /export function validateExpiryHours/);
+  assert.match(devbridgeValidation, /export function validateTunnelId/);
   assert.match(devbridgeTunnel, /export function buildDevbridgeRenewScript/);
   assert.match(devbridgeTunnel, /export function buildDevbridgeKeepaliveScript/);
   assert.match(devbridgeTunnel, /export function mergeKeepaliveTunnels/);
