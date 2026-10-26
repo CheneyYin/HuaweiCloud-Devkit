@@ -273,10 +273,7 @@ test('setup-cli.ts supports the dsh target end to end', () => {
   // (syncNativeCoreSkills), so DSH's dir can never carry service skills. The
   // sync moved to src/payload-native-sync.ts in the install-payload split;
   // the pin follows the canonical home.
-  assert.match(
-    readSource(join('src', 'payload-native-sync.ts')),
-    /function syncNativeCoreSkills\(dir: string\)/,
-  );
+  assert.match(readSource(join('src', 'payload-native-sync.ts')), /function syncNativeCoreSkills\(dir: string\)/);
   assert.doesNotMatch(
     setup,
     /copyDir\(skillsSrc, (?:dsh|opencode|hermes|workbuddy|atomcode|openclaw|codearts|codeartsWork)SkillsDir\(\)\)/,
