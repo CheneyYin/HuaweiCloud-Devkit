@@ -1702,19 +1702,31 @@ def evaluate(tool_name, tool_input):
     # Length cap (interrogate round 5): BYTES on both twins (UTF-16 units on
     # TS vs code points here disagreed at the boundary on astral-plane
     # padding — same payload, different verdicts; bytes are also the honest
-    # reading of "256 KiB payload"). "replace" handles LONE SURROGATES the
-    # JSON parser accepts (round 6: a bare .encode("utf-8") raised
-    # UnicodeEncodeError and killed the hook verdict-less — read as allow —
-    # on any payload carrying \ud800; TS's Buffer.byteLength replaces them,
-    # and the replacement's byte count matches).
-    text_bytes = len(text.encode("utf-8", "replace"))
+    # reading of "256 KiB payload"). The surrogate-safe chain (round 7 — a
+    # bare .encode("utf-8") raised UnicodeEncodeError on the lone \ud800 the
+    # JSON parser accepts, killing the hook verdict-less, and round 6's
+    # "replace" counted a lone surrogate as 1 byte where TS's
+    # Buffer.byteLength counts 3 as U+FFFD — an 87k-surrogate payload sat
+    # under this cap and over TS's, an executable write allowing here while
+    # denying there): the utf-16-surrogatepass round-trip pairs valid
+    # surrogate pairs, replaces lone ones with U+FFFD, and the final utf-8
+    # length is byte-identical to Node's.
+    text_bytes = len(
+        text.encode("utf-16", "surrogatepass").decode("utf-16", "replace").encode("utf-8")
+    )
     # Continuation-dropped text (interrogate round 6): bash removes the
-    # \<newline> pair BEFORE tokenization, reassembling $'/$(/backtick across
-    # the break — the raw text of h$\<LF>'\x63'loud … carries only $\, so
-    # every raw-text expansion check and the decode must run on the
-    # reassembled form or a composed mangled write sails through. Dropping
-    # pairs can only ever CREATE markers (a real $' survives the drop
-    # untouched), so the dropped form subsumes the raw one.
+    # \<newline> pair before tokenization OUTSIDE single-quoted and $'…'
+    # spans (inside those the pair is literal — the drop here is
+    # deliberately blunter and only ever over-denies), reassembling
+    # $'/$(/backtick across the break — the raw text of
+    # h$\<LF>'\x63'loud … carries only $\, so every raw-text expansion check
+    # and the decode must run on the reassembled form or a composed mangled
+    # write sails through. Dropping pairs can only ever CREATE markers (a
+    # real $' survives the drop untouched), so the dropped form subsumes the
+    # raw one — with the recorded round-7 caveat that a created marker can
+    # be PHANTOM ($$\<LF>' glues to a $' bash never builds, and a
+    # single-quote interior's closing quote can compose one): fail-closed
+    # false denies, never a miss.
     text_cont = re.sub(r"\\\n", "", text)
     # A routed OR EXPANSION-BEARING over-cap payload denies fail-closed: the
     # round-4 decode skip must not make the over-cap slice the one place a

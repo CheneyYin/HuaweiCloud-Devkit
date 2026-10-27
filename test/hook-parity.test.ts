@@ -147,6 +147,18 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
   ['#' + 'x'.repeat(262200) + "\nh$\\\n'\\x63'loud ECS $\\\n'\\x44'eleteServers --server.id=x", 'deny'],
   ['hcloud ECS DeleteServers --server.id=x \ud800', 'deny'],
   ['echo hello \ud800', 'allow'],
+  // The surrogate BOUNDARY parity row (interrogate round 7): 131,072 lone
+  // surrogates + an expansion tail is ~131 KB under round-6's py count (1
+  // byte each) but ~393 KB under TS's U+FFFD count (3 bytes each) — round
+  // 6's "replace" chain let an executable over-cap write allow on py while
+  // TS denied. The utf-16-surrogatepass round-trip counts byte-identically
+  // to Node now; this row flips if the counts drift apart again.
+  ['\ud800'.repeat(131072) + 'echo $(date)', 'deny'],
+  // The astral row: 200k valid surrogate pairs = 800 KB bytes / 400,000
+  // UTF-16 units / 200,000 code points — over the byte cap on both twins,
+  // over the OLD TS unit cap (400,002 > 262,144) but under the OLD py
+  // point-cap: it discriminates the byte-unit change on py and the round-5
+  // expansion-bearing cap on TS.
   ['𝄞'.repeat(200000) + '\necho $(date)', 'deny'],
   // The $(…)-substitution residual (documented): printf-built bins stay
   // opaque to the decode; the OBS-token marker arm still catches the

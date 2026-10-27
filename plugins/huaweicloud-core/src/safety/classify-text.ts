@@ -19,12 +19,17 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
   // other. Bytes are also the honest reading of "256 KiB payload".
   const textBytes = Buffer.byteLength(text, 'utf8');
   // Continuation-dropped text (interrogate round 6): bash removes the
-  // \<newline> pair BEFORE tokenization, reassembling `$'`/`$(`/backtick
+  // \<newline> pair before tokenization OUTSIDE single-quoted and `$'…'`
+  // spans (inside those the pair is literal — the drop here is deliberately
+  // blunter and only ever over-denies), reassembling `$'`/`$(`/backtick
   // across the break — the raw text of `h$\<LF>'\x63'loud …` carries only
   // `$\`, so every raw-text expansion check and the decode must run on the
   // reassembled form or a composed mangled write sails through. Dropping
   // pairs can only ever CREATE markers (a real `$'` survives the drop
-  // untouched), so the dropped form subsumes the raw one.
+  // untouched), so the dropped form subsumes the raw one — with the recorded
+  // round-7 caveat that a created marker can be PHANTOM (`$$\<LF>'` glues to
+  // a `$'` bash never builds, and a single-quote interior's closing quote
+  // can compose one): fail-closed false denies, never a miss.
   const contDropped = text.replace(/\\\n/g, '');
 
   // Length cap: a routed payload past 256 KiB cannot execute through any

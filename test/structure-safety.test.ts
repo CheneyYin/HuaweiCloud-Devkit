@@ -93,7 +93,10 @@ test('the py hook derives the obfuscation gate write vocabulary from policy.json
   // the break), and the byte count is surrogate-safe ("replace" — a lone
   // \ud800 crashed the hook verdict-less before).
   assert.match(pyHook, /text_cont = re\.sub\(r"\\\\\\n", "", text\)/);
-  assert.match(pyHook, /text\.encode\("utf-8", "replace"\)/);
+  // Round 7: the byte count is the utf-16-surrogatepass round-trip —
+  // paired surrogates survive, lone ones become U+FFFD, byte-identical to
+  // Node's Buffer.byteLength (round 6's "replace" counted 1 vs Node's 3).
+  assert.match(pyHook, /text\.encode\("utf-16", "surrogatepass"\)\.decode\("utf-16", "replace"\)\.encode\("utf-8"\)/);
   assert.match(pyHook, /OBFUSCATION_RE\.search\(text_cont\)/);
   assert.match(pyHook, /# Outside quotes a backslash escapes the NEXT character/);
   const shellText = readSource(join('src', 'safety', 'shell-text.ts'));
@@ -111,7 +114,6 @@ test('the py hook derives the obfuscation gate write vocabulary from policy.json
     classifyText.includes('/\\$[\'"]|\\$\\(|`/.test(contDropped)'),
     'the over-cap deny must cover expansion-bearing payloads (on the continuation-dropped text)',
   );
-  assert.match(pyHook, /text_bytes = len\(text\.encode\("utf-8", "replace"\)\)/);
   assert.match(pyHook, /if text_bytes > 262144 and \(\s*\n\s*OBFUSCATION_RE\.search\(text_cont\)/);
   // The fail-closed arm sits in the gate's vocabulary clause (whitespace-
   // tolerant: indentation reflow must not break the pin — interrogate
