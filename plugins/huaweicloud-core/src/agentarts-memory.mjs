@@ -425,6 +425,33 @@ export async function readAgentartsMemory(params = {}, options = {}) {
   });
 }
 
+// Numeric digest of a search_memories response (A3/A4): semantic search
+// with an omitted min_score returns the WHOLE space ranked — the
+// MemorySearchFilter dataclass defaults min_score to None and its
+// to_dict drops None (pinned venv config.py:122-132), so no cutoff is
+// sent and "result present" says nothing about relevance. The score
+// RANGE is the relevance signal; this aggregates it without touching
+// content (the no-content-scan contract is unchanged — pure numbers).
+function searchScoreSummary(parsed) {
+  if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.results)) return null;
+  const summary = { resultCount: parsed.results.length };
+  let max = -Infinity;
+  let min = Infinity;
+  let seen = 0;
+  for (const entry of parsed.results) {
+    const score = entry && typeof entry === 'object' ? Number(entry.score) : Number.NaN;
+    if (!Number.isFinite(score)) continue;
+    if (score > max) max = score;
+    if (score < min) min = score;
+    seen++;
+  }
+  if (seen > 0) {
+    summary.maxScore = max;
+    summary.minScore = min;
+  }
+  return summary;
+}
+
 // Shared payload shaper for the read and write bridges (identical failure
 // contract, redaction, and truncation semantics).
 function shapeMemoryResult(result, candidate, params, timeoutMs) {
@@ -451,12 +478,35 @@ function shapeMemoryResult(result, candidate, params, timeoutMs) {
   // accumulate a lot of output). When the side file fires, `result`
   // is dropped — the file pointer is the contract; returning an
   // untruncated parsed object next to a truncated stdout would defeat
-  // the whole large-output machinery.
+  // the whole large-output machinery. searchSummary SURVIVES truncation
+  // by design: it is three numbers off the full parsed set — exactly
+  // the judgement aid a too-big-to-inline result list needs.
   const largeOutputFile = saveLargeOutput(safeStdout);
   const payloadStdout = largeOutputFile
     ? `${safeStdout.slice(0, 2000)}\n...(truncated, full output saved to ${largeOutputFile})`
     : safeStdout;
   const parsePolluted = !result.timedOut && result.exitCode === 0 && parsed === null;
+  // search_memories only: the score digest (see searchScoreSummary).
+  const searchSummary =
+    params.operation === 'search_memories' && parsed !== null && parsed !== undefined
+      ? searchScoreSummary(parsed)
+      : null;
+  // Unscoped list advisory (A7): list_sessions/list_memories without an
+  // actor scope span EVERY actor's data in the space — legal (ops/debug
+  // stance) but easy to misread as one actor's view. The note names the
+  // scoping parameter per operation (top-level actor_id for
+  // list_sessions; filters.actor_id for list_memories — the top-level
+  // form is rejected there as not-a-parameter).
+  const unscopedList =
+    (params.operation === 'list_sessions' && !params.actor_id) ||
+    (params.operation === 'list_memories' && !(params.filters && params.filters.actor_id));
+  const unscopedListNotes = unscopedList
+    ? [
+        `Unscoped list: results span EVERY actor in the space. Scope with ${
+          params.operation === 'list_sessions' ? 'actor_id' : 'filters.actor_id'
+        } if a single actor's view was intended.`,
+      ]
+    : null;
   return {
     ok: !failed,
     service: 'AgentArts',
@@ -465,6 +515,8 @@ function shapeMemoryResult(result, candidate, params, timeoutMs) {
     exitCode: result.exitCode,
     failureDetected: failed,
     ...(largeOutputFile || failed ? {} : { result: parsed }),
+    ...(searchSummary ? { searchSummary } : {}),
+    ...(unscopedListNotes ? { notes: unscopedListNotes } : {}),
     stdout: payloadStdout,
     stderr: redactSecrets(result.stderr || ''),
     ...(result.timedOut
@@ -890,7 +942,7 @@ export const AGENTARTS_MEMORY_TOOL_DEFINITIONS = [
   {
     name: 'huaweicloud_agentarts_memory_read',
     description:
-      "Read the AgentArts memory DATA plane (SDK MemoryClient — the 0.1.7 CLI has NO data-plane subcommands): sessions, messages, and memories of an existing memory space. The one-time data-plane api_key is read from the wrapper-captured 0600 key file (spaces created through the memory create tool); it never enters argv, tool arguments, or output. actor_id is REQUIRED for search_memories — server-side isolation is actor-level only, and an unscoped search silently spans every actor in the space; list_memories without filters.actor_id lists ALL actors' memories (an ops/debug stance). list_messages requires session_id (the SDK's space-wide form builds a broken /sessions/None path in 0.1.7). search_memories results LAG add_messages — extraction is asynchronous, so an empty result immediately after a write is EXPECTED; verify message ingestion with list_messages (immediate). Pagination is 0-based; sessions limit 1-20, messages/memories limit 1-100. Region defaults to cn-southwest-2 (the only e2e-measured region). Read-only: no approval needed.",
+      "Read the AgentArts memory DATA plane (SDK MemoryClient — the 0.1.7 CLI has NO data-plane subcommands): sessions, messages, and memories of an existing memory space. The one-time data-plane api_key is read from the wrapper-captured 0600 key file (spaces created through the memory create tool); it never enters argv, tool arguments, or output. actor_id is REQUIRED for search_memories — server-side isolation is actor-level only, and an unscoped search silently spans every actor in the space; list_memories without filters.actor_id lists ALL actors' memories (an ops/debug stance). list_messages requires session_id (the SDK's space-wide form builds a broken /sessions/None path in 0.1.7). search_memories results LAG add_messages — extraction is asynchronous, so an empty result immediately after a write is EXPECTED; verify message ingestion with list_messages (immediate). search_memories with an omitted filters.min_score applies NO score cutoff — the SDK filter defaults min_score to None and drops it from the request, so the WHOLE space comes back ranked by similarity; judge relevance by the returned searchSummary score range (measured scale is tiny, top hits ~0.01-0.06), not by result presence. Pagination is 0-based; sessions limit 1-20, messages/memories limit 1-100. Region defaults to cn-southwest-2 (the only e2e-measured region). Read-only: no approval needed.",
     inputSchema: {
       type: 'object',
       required: ['operation', 'space_id'],
@@ -917,14 +969,15 @@ export const AGENTARTS_MEMORY_TOOL_DEFINITIONS = [
         k: { type: 'integer', minimum: 1, description: 'get_last_k_messages: how many trailing messages.' },
         limit: {
           type: 'integer',
-          description: 'Page size: sessions 1-20 (default 20), messages/memories 1-100 (default 10).',
+          description:
+            'Page size: sessions 1-20 (default 20), messages/memories 1-100 (default 10). NOT a parameter of search_memories — its result size is filters.top_k (default 10, server-side).',
         },
         offset: { type: 'integer', minimum: 0, description: '0-based pagination offset.' },
         region: { type: 'string', description: 'Defaults to cn-southwest-2.' },
         filters: {
           type: 'object',
           description:
-            'search_memories: MemorySearchFilter fields (query REQUIRED, plus strategy_type/strategy_id/assistant_id/session_id/memory_type/start_time/end_time/top_k/min_score — actor_id goes in the top-level param). list_memories: MemoryListFilter fields (strategy_type/strategy_id/actor_id/assistant_id/session_id/start_time/end_time — sort_by/sort_order exist on the SDK dataclass but 0.1.7 never sends them; rejected here). Unknown keys are rejected.',
+            'search_memories: MemorySearchFilter fields (query REQUIRED, plus strategy_type/strategy_id/assistant_id/session_id/memory_type/start_time/end_time/top_k/min_score — actor_id goes in the top-level param; omitted min_score = NO score cutoff, the whole space returns ranked). list_memories: MemoryListFilter fields (strategy_type/strategy_id/actor_id/assistant_id/session_id/start_time/end_time — sort_by/sort_order exist on the SDK dataclass but 0.1.7 never sends them; rejected here). Unknown keys are rejected.',
         },
       },
     },

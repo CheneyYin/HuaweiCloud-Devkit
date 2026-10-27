@@ -22,18 +22,19 @@
 
 ## Tier 3 — 加固
 
-| #   | 诉求                                                                                                                           | 证据                                                    |
-| --- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------- |
-| 9   | create/list 读模型一致（create 回 `memory_extract_enabled: true`，list 读回 `false` + null）                                   | 【实测】陷阱 25                                         |
-| 10  | TTL 默认 168h 进 help（消息 7 天过期，记忆独立长存）                                                                           | 【源码】config.py:190                                   |
-| 11  | 插件 /recall /remember 指向不存在的 HTTP server（`AGENTARTS_MEMORY_SERVER_URL` 全仓零处设置; 0.1.7 无任何 HTTP memory server） | 【实测】recall.md:15 curl 指令开箱即坏                  |
-| 12  | 插件 MCP server 不吞异常（`{"error": ..., "total": 0}` 形似空成功）+ 真实 actor 身份（硬编码 "opencode-user" 等假名）          | 【源码】server.py:127-233                               |
-| 13  | `install openclaw` 移除或实现（exit-0 no-op）; `install --yes` 凭证缺失时拒装而非装出坏配置                                    | 【源码/实测】installer/cli.py:95-97; utils.py:1107-1112 |
-| 14  | 官方插件支持 workbuddy/atomcode/dsh 宿主（当前仅 5 平台）                                                                      | 【源码】installer/cli.py:37                             |
+| #   | 诉求                                                                                                                                                                                                                                                 | 证据                                                                          |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| 9   | create/list 读模型一致（create/get 回 `memory_extract_enabled: true`，list 读回 `false` + null）                                                                                                                                                     | 【实测】陷阱 25 + 28（2026-10-27: get 侧与 create 一致——list 序列化是错误侧） |
+| 10  | TTL 默认 168h 进 help（消息 7 天过期，记忆独立长存）                                                                                                                                                                                                 | 【源码】config.py:190                                                         |
+| 10b | min_score 生效默认值显式化 + 分数量级文档化（文档 0.5 属 `MemorySearchRequest`，`MemorySearchFilter` 路径默认 None 且序列化丢弃——实测不设阈值返回 score 0.00001 条目，整空间按分排序；分数量级 ~0.01-0.06，与 hook 0.3 / 插件 MCP 0.7 常量完全脱节） | 【实测+源码】陷阱 29（config.py:122-132 vs 506-507）                          |
+| 11  | 插件 /recall /remember 指向不存在的 HTTP server（`AGENTARTS_MEMORY_SERVER_URL` 全仓零处设置; 0.1.7 无任何 HTTP memory server）                                                                                                                       | 【实测】recall.md:15 curl 指令开箱即坏                                        |
+| 12  | 插件 MCP server 不吞异常（`{"error": ..., "total": 0}` 形似空成功）+ 真实 actor 身份（硬编码 "opencode-user" 等假名）                                                                                                                                | 【源码】server.py:127-233                                                     |
+| 13  | `install openclaw` 移除或实现（exit-0 no-op）; `install --yes` 凭证缺失时拒装而非装出坏配置                                                                                                                                                          | 【源码/实测】installer/cli.py:95-97; utils.py:1107-1112                       |
+| 14  | 官方插件支持 workbuddy/atomcode/dsh 宿主（当前仅 5 平台）                                                                                                                                                                                            | 【源码】installer/cli.py:37                                                   |
 
 ## S0 待真机裁决（bridge 落地后新增）
 
 - `memory get -o json` 首查是否回传 api_key（`_space_info_to_dict` 无条件含该键，服务端行为未知）——若回传，wrapper 的 readonly get 成为 key 找回路径。
-- bridge 工具族真机 e2e（12 方法信封/分页/序列化实测）。
-- 检索阈值三分叉（0.3 hook / 0.7 插件 MCP / 0.5 SDK 默认）的召回行为差异。
+- bridge 工具族真机 e2e（12 方法信封/分页/序列化实测）。【部分裁决 2026-10-27: 8 读 + 4 写全族已在真实 space 上使用（U2-U5 会话），信封/分页/检索行为实测——剩余: 显式 min_score 传 0.5 时的过滤行为是否符合文档】
+- 检索阈值三分叉（0.3 hook / 0.7 插件 MCP / 0.5 SDK 默认）的召回行为差异。【部分裁决 2026-10-27: 桥路径（MemorySearchFilter）默认**无过滤**——min_score None 被序列化丢弃（陷阱 29），三分叉第四叉; 0.3/0.7 常量在实测分数量级（~0.01-0.06）上会滤空一切, 不可移植】
 - `add_messages` 抽取管道延迟量级（多快可检索）。

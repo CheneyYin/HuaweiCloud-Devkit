@@ -322,6 +322,132 @@ test('large memory results truncate to a pointer like the CLI wrapper', async ()
   });
 });
 
+test('search_memories success carries a numeric score digest (searchSummary)', async () => {
+  await withIsolation(async (home) => {
+    writeKeyFile(home, 'sp1', KEY);
+    // MemorySearchResponse shape (pinned venv config.py:874-899):
+    // {results: [{record, score}], total, query}.
+    const out = await readAgentartsMemory(
+      { operation: 'search_memories', space_id: 'sp1', actor_id: 'u1', filters: { query: 'deploy' } },
+      {
+        runCandidate: async () => ({
+          exitCode: 0,
+          stdout: JSON.stringify({
+            results: [
+              { record: { id: 'm1' }, score: 0.0001 },
+              { record: { id: 'm2' }, score: 0.042 },
+              { record: { id: 'm3' }, score: 0.06 },
+            ],
+            total: 3,
+            query: 'deploy',
+          }),
+          stderr: '',
+        }),
+      },
+    );
+    assert.equal(out.ok, true);
+    // The digest is pure numbers: relevance signal without a content scan.
+    assert.deepEqual(out.searchSummary, { resultCount: 3, maxScore: 0.06, minScore: 0.0001 });
+    // Non-search reads never grow a searchSummary.
+    const plain = await readAgentartsMemory(
+      { operation: 'list_sessions', space_id: 'sp1' },
+      {
+        runCandidate: async () => ({ exitCode: 0, stdout: '{"items": []}', stderr: '' }),
+      },
+    );
+    assert.equal(plain.ok, true);
+    assert.equal('searchSummary' in plain, false);
+    // Scoreless search results: count-only digest, no NaN leakage.
+    const scoreless = await readAgentartsMemory(
+      { operation: 'search_memories', space_id: 'sp1', actor_id: 'u1', filters: { query: 'deploy' } },
+      {
+        runCandidate: async () => ({
+          exitCode: 0,
+          stdout: JSON.stringify({ results: [{ record: { id: 'm1' } }], total: 1, query: 'deploy' }),
+          stderr: '',
+        }),
+      },
+    );
+    assert.deepEqual(scoreless.searchSummary, { resultCount: 1 });
+    // Failed searches grow no digest.
+    const failedSearch = await readAgentartsMemory(
+      { operation: 'search_memories', space_id: 'sp1', actor_id: 'u1', filters: { query: 'deploy' } },
+      {
+        runCandidate: async () => ({ exitCode: 1, stdout: '', stderr: 'ValueError: boom' }),
+      },
+    );
+    assert.equal(failedSearch.ok, false);
+    assert.equal('searchSummary' in failedSearch, false);
+  });
+});
+
+test('searchSummary survives large-output truncation (result drops, digest stays)', async () => {
+  await withIsolation(async (home) => {
+    writeKeyFile(home, 'sp1', KEY);
+    // >50,000 chars of parseable search JSON: the side file fires, the
+    // parsed result is dropped (the file pointer is the contract) — the
+    // three-number digest is exactly what a too-big result list needs.
+    const padding = 'x'.repeat(60_000);
+    const out = await readAgentartsMemory(
+      { operation: 'search_memories', space_id: 'sp1', actor_id: 'u1', filters: { query: 'deploy' } },
+      {
+        runCandidate: async () => ({
+          exitCode: 0,
+          stdout: JSON.stringify({
+            results: [
+              { record: { id: 'm1', blob: padding }, score: 0.01 },
+              { record: { id: 'm2', blob: padding }, score: 0.05 },
+            ],
+            total: 2,
+            query: 'deploy',
+          }),
+          stderr: '',
+        }),
+      },
+    );
+    assert.equal(out.ok, true);
+    assert.match(out.stdout, /truncated, full output saved to/);
+    assert.equal('result' in out, false);
+    assert.deepEqual(out.searchSummary, { resultCount: 2, maxScore: 0.05, minScore: 0.01 });
+  });
+});
+
+test('unscoped list_sessions/list_memories results carry an all-actors note', async () => {
+  await withIsolation(async (home) => {
+    writeKeyFile(home, 'sp1', KEY);
+    const run = (operation, extra) =>
+      readAgentartsMemory(
+        { operation, space_id: 'sp1', ...extra },
+        {
+          runCandidate: async () => ({ exitCode: 0, stdout: '{"items": []}', stderr: '' }),
+        },
+      );
+    // list_sessions without actor_id: every actor's sessions.
+    const unscopedSessions = await run('list_sessions');
+    assert.equal(unscopedSessions.ok, true);
+    assert.ok(unscopedSessions.notes.length >= 1);
+    assert.match(unscopedSessions.notes[0], /results span EVERY actor in the space/);
+    assert.match(unscopedSessions.notes[0], /Scope with actor_id/);
+    // Scoped: no note.
+    const scopedSessions = await run('list_sessions', { actor_id: 'u1' });
+    assert.equal(scopedSessions.ok, true);
+    assert.equal('notes' in scopedSessions, false);
+    // list_memories without filters.actor_id: every actor's memories;
+    // the note names the filters form (the top-level actor_id is NOT a
+    // list_memories parameter — rejected at the boundary).
+    const unscopedMemories = await run('list_memories');
+    assert.equal(unscopedMemories.ok, true);
+    assert.match(unscopedMemories.notes[0], /Scope with filters\.actor_id/);
+    const scopedMemories = await run('list_memories', { filters: { actor_id: 'u1' } });
+    assert.equal(scopedMemories.ok, true);
+    assert.equal('notes' in scopedMemories, false);
+    // Non-list reads never grow the note.
+    const single = await run('get_memory', { memory_id: 'm1' });
+    assert.equal(single.ok, true);
+    assert.equal('notes' in single, false);
+  });
+});
+
 test('memory read tool surface: definition and dispatch', async () => {
   await withIsolation(async () => {
     const definition = AGENTARTS_MEMORY_TOOL_DEFINITIONS[0];
@@ -332,6 +458,15 @@ test('memory read tool surface: definition and dispatch', async () => {
     assert.equal(definition.inputSchema.required.join(','), 'operation,space_id');
     // Definitions carry no handlers (dispatch lives in the call function).
     assert.equal('handler' in definition, false);
+    // The limit/top_k contract is discoverable without a failed call
+    // (friction A2): limit's description excludes search_memories…
+    assert.match(definition.inputSchema.properties.limit.description, /NOT a parameter of search_memories/);
+    assert.match(definition.inputSchema.properties.limit.description, /filters\.top_k/);
+    // …the search semantics (no default cutoff, whole space ranked, score
+    // range as the relevance signal) live in the description and filters.
+    assert.match(definition.description, /NO score cutoff/);
+    assert.match(definition.description, /searchSummary score range/);
+    assert.match(definition.inputSchema.properties.filters.description, /omitted min_score = NO score cutoff/);
 
     // Dispatch routing (no spawn: invalid params stop at the boundary).
     const rejected = await callAgentartsMemoryTool('huaweicloud_agentarts_memory_read', {

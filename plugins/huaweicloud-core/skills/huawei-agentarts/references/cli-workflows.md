@@ -111,7 +111,7 @@ evidence) — treat pre-deploy as required.
 ```
 huaweicloud_agentarts_run_readonly_command
   ["memory","list","--region","cn-southwest-2","--output","json"]
-  ["memory","get","<space-id>","--region","cn-southwest-2"]
+  ["memory","get","<space-id>","--region","cn-southwest-2","--output","json"]
   ["memory","status","<space-id>","--region","cn-southwest-2"]  (space_id is a
    POSITIONAL argument — a --space-id flag is rejected by the CLI)
   ["gateway","list"]
@@ -126,6 +126,16 @@ huaweicloud_agentarts_list_agents (SDK API — 0.1.7 has NO list CLI command)
 Use `--output json` for machine parsing (default is a rich table). The
 list-agents tool returns `agents[]` already parsed; omit `limit`/`offset`
 unless sweeping — the SDK defaults are the single source of truth.
+
+Reading a space's CONFIG (ttl, strategies, access, vpc/public flags,
+memory_extract_enabled): `memory get -o json` is the source of truth —
+`memory list` reads the same fields back WRONG (read-model drift:
+list shows `memory_extract_enabled: false` and null strategies for a
+space that get and create both show as `true` with the four built-ins;
+create/list drift is trap 25, the get side was measured 2026-10-27).
+The get body is ~52KB (every strategy's extraction prompt) — the
+runner truncates it to the 0600 side file; grep the saved file for the
+fields you need instead of re-reading.
 
 ## Gateway Provisioning
 
@@ -186,7 +196,11 @@ the SDK bridge tools; the one-time data-plane api_key is read from the
 wrapper-captured 0600 key file and injected env-only (never argv, never
 the transcript — see credentials.md).
 
-The write loop (create → record → recall):
+The write loop (create → record → recall). Read before writing when the
+intent is ambiguous (a two-word user input is not a write instruction):
+search_memories with the same actor_id / list_messages on the target
+session first — every write costs a plan → present → approve → write
+round-trip, and an unnecessary one also risks duplicate memories.
 
 1. Create the space through the CLI pair (`memory create` captures the
    key file).
@@ -205,7 +219,21 @@ The write loop (create → record → recall):
    do not re-write (duplicate) or churn `is_force_extract`; wait, or
    verify ingestion via list_messages.
 5. Recall with `memory_read search_memories` using the SAME `actor_id`
-   (required — server isolation is actor-level only).
+   (required — server isolation is actor-level only). Size the result
+   with `filters.top_k` (NOT `limit` — search takes no limit; the
+   boundary rejects it), and judge the outcome by `searchSummary`
+   (below), never by result presence.
+
+actor_id per operation (the same name, three different contracts):
+
+| Operation       | actor_id                                                  |
+| --------------- | --------------------------------------------------------- |
+| search_memories | REQUIRED, top-level (unscoped = every actor's memories)   |
+| create_session  | REQUIRED, top-level (the actor is the isolation unit)     |
+| list_sessions   | optional, top-level — omit = all actors (result notes it) |
+| list_memories   | optional, `filters.actor_id` — omit = all actors (ditto)  |
+| add_messages    | optional per message (string)                             |
+| everything else | n/a                                                       |
 
 Failure/retry semantics: a mismatched write rejects without consuming
 the token; a SUCCESSFUL write consumes it, and replay returns
@@ -225,11 +253,24 @@ Two retention/recall traps worth knowing before you lean on the data:
   higher `--ttl`; extracted MEMORIES persist independently. Use the
   bridge for durable facts (they become memories via extraction), not as
   a permanent conversation archive.
-- **Search thresholds diverge across the official surfaces**: the hook
-  path uses 0.3, the plugin's MCP path 0.7, the SDK/server default 0.5
-  (min_score). The bridge passes min_score through untouched — omit it
-  for the server default, lower it (e.g. 0.3) when a recall seems to be
-  missing material.
+- **Search semantics: no default cutoff, whole-space returns, tiny
+  absolute scores.** The documented server default of 0.5 belongs to
+  `MemorySearchRequest` — a different request class the bridge never
+  builds. The bridge's `MemorySearchFilter` defaults `min_score` to
+  None and its serializer DROPS None (pinned venv config.py:122-132),
+  so an omitted `min_score` sends nothing and the server returns the
+  whole space ranked by similarity. Measured (one 7-memory space,
+  2026-10-27): a no-match query returned all 7 entries with a best
+  score of ≈0.06, while a different genuinely-matching query topped
+  out at ≈0.04 — the no-match query scored HIGHER than the real match,
+  so "no results" is never the no-match signal and absolute scores are
+  not comparable across queries. Judge relevance by the result's
+  `searchSummary` `{resultCount, maxScore, minScore}`: the measured
+  band is ~0.01-0.06, and a big relative gap inside one response is
+  the hit signal. Set `filters.min_score` only after seeing the band —
+  the hook path's 0.3 and the plugin MCP path's 0.7 constants would
+  filter out EVERYTHING on this scale; transplant no threshold from
+  another surface.
 
 Which path to use (the dual-path decision): the WRAPPER bridge
 (memory_read/plan/write) is governed — approval tokens, redaction, the

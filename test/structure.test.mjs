@@ -1357,6 +1357,36 @@ test('huawei-agentarts skill ships with routing floor and core registry wiring',
     assert.ok(body.includes(strategy), `MEMORY_STRATEGY_MEASURED value ${strategy} is missing from SKILL.md`);
   }
 
+  // U5 (friction fix 7, measured 2026-10-27): the memory config
+  // read-model drift and the search-semantics traps are pinned in BOTH
+  // doc surfaces — the hand-written layer must not drift from what the
+  // bridge enforces/returns.
+  // list contradicts get/create on config fields: get is the source of
+  // truth, list is inventory-only.
+  assert.match(body, /memory list.*contradict.*memory get/s);
+  assert.match(body, /never with list/);
+  assert.match(workflows, /memory get -o json` is the source of truth/);
+  assert.match(workflows, /read-model drift/);
+  assert.match(workflows, /memory_extract_enabled: false/);
+  // The get example must carry --output json (a rich table is the default).
+  assert.match(workflows, /\["memory","get","<space-id>","--region","cn-southwest-2","--output","json"\]/);
+  // Search: no default min_score on the filter path (the documented 0.5
+  // belongs to MemorySearchRequest, a class the bridge never builds),
+  // whole-space returns, searchSummary as the relevance signal, and the
+  // obsolete "omit it for the server default" teaching is gone.
+  assert.match(body, /WHOLE space ranked/);
+  assert.match(body, /NO default min_score/);
+  assert.match(body, /searchSummary score range/);
+  assert.match(workflows, /MemorySearchRequest/);
+  assert.match(workflows, /serializer DROPS None/);
+  assert.match(workflows, /searchSummary/);
+  assert.match(workflows, /transplant no threshold from/);
+  assert.doesNotMatch(workflows, /for the server default/);
+  // actor_id per-operation contracts + the read-first write-loop rule.
+  assert.match(workflows, /REQUIRED, top-level \(unscoped = every actor's memories\)/);
+  assert.match(workflows, /optional, `filters\.actor_id` — omit = all actors/);
+  assert.match(workflows, /Read before writing when the\s+intent is ambiguous/);
+
   // Core skill routes agent workloads and declares the gate exemption (D15).
   const core = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-core', 'SKILL.md'), 'utf8');
   assert.match(core, /huawei-agentarts/);
@@ -1614,8 +1644,13 @@ test('memory data-plane retention traps and dual-path decision are taught (U4)',
   // add_messages as an archive.
   assert.match(workflows, /Message TTL is 7 days by default/);
   assert.match(workflows, /message_ttl_hours: 168/);
-  // The threshold three-way divergence (hook 0.3 / plugin 0.7 / SDK 0.5).
-  assert.match(workflows, /hook\s+path uses 0\.3, the plugin's MCP path 0\.7, the SDK\/server default 0\.5/);
+  // U5 corrected the threshold teaching: the three-way divergence line
+  // (hook 0.3 / plugin 0.7 / "SDK/server default 0.5") was WRONG — the
+  // 0.5 belongs to MemorySearchRequest, a class the bridge never builds;
+  // the filter path has NO default cutoff. The old line must not return.
+  assert.match(workflows, /no default cutoff, whole-space returns, tiny/);
+  assert.match(workflows, /a different request class the bridge never\s+builds/);
+  assert.doesNotMatch(workflows, /hook\s+path uses 0\.3, the plugin's MCP path 0\.7, the SDK\/server default 0\.5/);
   // The dual-path decision (governed bridge vs host-trust plugin install).
   assert.match(workflows, /dual-path decision/);
   assert.match(workflows, /host-trust/);
