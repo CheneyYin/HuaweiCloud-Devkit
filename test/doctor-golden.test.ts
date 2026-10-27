@@ -30,7 +30,10 @@ assert.ok(
 );
 
 function expectGolden(name: string, actual: string): void {
-  const expected = readFileSync(join(goldenFixturesDir, name), 'utf8');
+  // The doctor binary writes LF; the goldens are committed LF. A stray CRLF
+  // read of the fixture (a checkout without the eol=lf attribute in effect)
+  // must read as a fixture problem, not a doctor output change.
+  const expected = readFileSync(join(goldenFixturesDir, name), 'utf8').replace(/\r\n/g, '\n');
   if (actual === expected) return;
   const actualLines = actual.split('\n');
   const expectedLines = expected.split('\n');

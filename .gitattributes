@@ -1,0 +1,6 @@
+# Byte-exact test goldens and structure guards pin source text with \n-anchored
+# regexes, so a CRLF checkout (Windows runners default to core.autocrlf=true)
+# fails seven tests on line endings alone. Force LF for every text file on
+# checkout; binary detection stays automatic. Measured 2026-10-27 on PR #1037's
+# windows-latest legs: the golden files diverged at line 1 ("golden: \r").
+* text=auto eol=lf
