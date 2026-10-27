@@ -19,14 +19,23 @@ async function handleVoucherStatus(args: ToolArgs = {}, _opts: CallToolOptions =
 // P0 sync flush (E4c, the #1014 wave): a claim is one-shot and the session
 // often ends right after it, so the claim telemetry must not ride the
 // 60s timer — await the flush AFTER the claim result arrives and BEFORE
-// returning, so the tool:huaweicloud_voucher_claim event is sent (or
-// terminally dispositioned) by the time the caller sees success. The
-// flush promise never rejects (E4a: failures requeue for the timer / the
-// exit spool), so a telemetry outage degrades to a delayed requeue, never
-// a failed claim result; the await is bounded by one fetch timeout (plus
-// an in-flight round's tail when colliding with the periodic flush).
-// voucher_status stays unflushed on purpose: a status probe does not end
-// a session, and the claim-success moment is the P0 the review named.
+// returning, so the tool:huaweicloud_voucher_claim event gets a real send
+// attempt by the time the caller sees success. Scope, honestly: the await
+// is one flush round plus any in-flight chain — when a dead telemetry
+// endpoint has accumulated ≥ BATCH_SIZE (100) queued events, the claim
+// event can ride the un-flushed tail, which the exit spool (E4b) and the
+// periodic timer then own; the guarantee is "not lost when the session
+// ends", layered, not "synchronously delivered at any queue depth". The
+// flush promise never rejects (E4a: failures requeue or drop), so a
+// telemetry outage degrades to a delayed requeue, never a failed claim
+// result. Latency coupling: on an unreachable endpoint the await adds up
+// to one fetch timeout (chained onto an in-flight round: a few more) to
+// the tool response — on the stdio face that is the documented trade, and
+// it equally applies to the remote surface (whose voucher calls dispatch
+// through this same handler with live telemetry state — the remote
+// initializes it per request via runInitializeSideEffects). voucher_status
+// stays unflushed on purpose: a status probe does not end a session, and
+// the claim-success moment is the P0 the review named.
 async function handleVoucherClaim(args: ToolArgs = {}, _opts: CallToolOptions = {}) {
   const result = await hdkitVoucherClaim(args.domain_id);
   await flushTelemetryEvents();

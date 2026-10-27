@@ -22,7 +22,7 @@ function withNoAgentEnv(fn: () => void) {
 
 type TelemetryModule = typeof import('../plugins/huaweicloud-core/src/telemetry/telemetry.ts');
 
-// 隔离 telemetry.mjs 的模块级目录常量（GLOBAL_TELEMETRY_DIR 在 import 时固定）：
+// 隔离 telemetry face 的模块级目录常量（GLOBAL_TELEMETRY_DIR 在 import 时固定）：
 // 临时 HUAWEICLOUD_DEVKIT_HOME + 带 query 的 import 强制新模块实例，用完恢复并清理。
 // fn also receives the home so tests can locate the global-dir artifacts
 // (installation-id, the exit spool) the isolated instance writes there.
@@ -136,6 +136,19 @@ async function withEnv(vars: Record<string, string | undefined>, fn: () => Promi
       else process.env[key] = value;
     }
   }
+}
+
+// DAU warm-up: the agent-dir stamps (install-stamp / dau-stamp /
+// first-use-stamp) live in the SHARED plugin telemetry dir, so whether
+// the boot enqueues already consumed the day's dau:active_today depends
+// on machine state (first run of the UTC day vs any later run — the
+// stamp is only touched by a SUCCESSFUL flush). Tests that deepEqual
+// exact scenario shapes drain one warm-up enqueue first, so checkDauPing
+// has fired and the stamp is touched before their scenario begins —
+// machine-state-independent either way.
+async function drainDauPing(telemetry: TelemetryModule): Promise<void> {
+  telemetry.trackToolInvoke('dau_warmup');
+  await telemetry.flushTelemetryEvents();
 }
 
 test('detectAgentHarness returns known when no env set', () => {
@@ -361,6 +374,7 @@ test('flushTelemetryEvents sends queued events with their literal keys', async (
       await withEnv({ HUAWEICLOUD_DEVKIT_TELEMETRY_ENDPOINT: TELEMETRY_URL }, async () => {
         telemetry.initTelemetry({ harness: 'test', version: '1.0.0' });
         await telemetry.flushTelemetryEvents();
+        await drainDauPing(telemetry);
         telemetry.trackToolInvoke('flush_send_probe');
         telemetry.trackSkillRetrieve('flush-skill-probe');
         await telemetry.flushTelemetryEvents();
@@ -401,6 +415,7 @@ test('a flush arriving mid-round chains onto it and flushes late-enqueued events
       await withEnv({ HUAWEICLOUD_DEVKIT_TELEMETRY_ENDPOINT: TELEMETRY_URL }, async () => {
         telemetry.initTelemetry({ harness: 'test', version: '1.0.0' });
         await telemetry.flushTelemetryEvents();
+        await drainDauPing(telemetry);
 
         telemetry.trackToolInvoke('inflight_first');
         holdNext = true;
@@ -498,6 +513,7 @@ test('spoolTelemetryEvents writes full-event JSONL and hands the queue over', as
       await withEnv({ HUAWEICLOUD_DEVKIT_TELEMETRY_ENDPOINT: TELEMETRY_URL }, async () => {
         telemetry.initTelemetry({ harness: 'test', version: '1.0.0' });
         await telemetry.flushTelemetryEvents();
+        await drainDauPing(telemetry);
         const spool = exitSpoolPath(home);
 
         telemetry.trackToolInvoke('exit_spool_probe');
@@ -677,6 +693,7 @@ test('the stdio transport exit paths spool the queue before exiting', async () =
       const telemetry = (await import('../plugins/huaweicloud-core/src/telemetry/telemetry.ts')) as TelemetryModule;
       telemetry.initTelemetry({ harness: 'transport-test', version: '1.0.0' });
       await telemetry.flushTelemetryEvents();
+      await drainDauPing(telemetry);
       const { DevkitStdioTransport } = await import('../plugins/huaweicloud-core/src/mcp-stdio-transport.ts');
       const fakeStdin = new PassThrough();
       const fakeStdout = new PassThrough();
@@ -726,14 +743,110 @@ test('the stdio transport exit paths spool the queue before exiting', async () =
           .map((line) => (JSON.parse(line) as Record<string, unknown>).key),
         ['tool:exit_via_stdout_close'],
       );
-      fakeStdin.destroy();
-      fakeStdout.destroy();
+      // NO destroy() on the fake streams: destroy() emits a SECOND 'close'
+      // asynchronously — by then the finally has restored the real
+      // process.exit, so the transport's handler would execute the
+      // production hard exit inside the test process (measured: it
+      // collapses the whole file into one racy opaque gate unit). A
+      // PassThrough pair is in-memory — no handles to release.
     });
   } finally {
     process.exit = originalExit;
     restore();
     fs.rmSync(spool, { force: true });
   }
+});
+
+test('exit-spool ingest respects the queue cap, keeping the newest events', async () => {
+  await withIsolatedTelemetry(async (telemetry, home) => {
+    const calls: CapturedCall[] = [];
+    const restore = stubFetch(async (url, init) => {
+      calls.push({ url, body: typeof init.body === 'string' ? init.body : undefined });
+      return okTelemetryResponse();
+    });
+    try {
+      await withEnv({ HUAWEICLOUD_DEVKIT_TELEMETRY_ENDPOINT: TELEMETRY_URL }, async () => {
+        const fullEvent = (key: string): Record<string, unknown> => ({
+          key,
+          value: '1',
+          installId: 'cap-install-id',
+          userHash: null,
+          version: '0.0.0',
+          harness: 'cap-boot',
+          agentVersion: '1.0.0',
+          os: 'A',
+          osVersion: '1',
+        });
+        const spool = exitSpoolPath(home);
+        fs.mkdirSync(path.dirname(spool), { recursive: true });
+        // 600 built events — more than the pipeline's 500-event queue cap
+        const lines = Array.from({ length: 600 }, (_, i) =>
+          JSON.stringify(fullEvent(`tool:cap_probe_${String(i + 1).padStart(4, '0')}`)),
+        );
+        fs.writeFileSync(spool, `${lines.join('\n')}\n`, 'utf8');
+
+        telemetry.initTelemetry({ harness: 'test', version: '1.0.0' });
+        telemetry.ingestHookEvents();
+        telemetry.ingestHookEvents();
+        // drain whatever the queue holds (boot events + the clamped
+        // recovery), one round per await, until a round sends nothing
+        let prevPosts = -1;
+        for (let i = 0; i < 20 && telemetryPostBodies(calls).length !== prevPosts; i++) {
+          prevPosts = telemetryPostBodies(calls).length;
+          await telemetry.flushTelemetryEvents();
+        }
+        const capProbes = telemetryPostBodies(calls)
+          .flat()
+          .map((event) => String(event.key))
+          .filter((key) => key.startsWith('tool:cap_probe_'));
+        assert.equal(capProbes.length, 500, 'the ingested queue must clamp to the cap');
+        assert.ok(!capProbes.includes('tool:cap_probe_0001'), 'the oldest overflow is dropped');
+        assert.ok(capProbes.includes('tool:cap_probe_0600'), 'the newest events are kept');
+      });
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('a persistently failing endpoint drops events after the retry budget', async () => {
+  await withIsolatedTelemetry(async (telemetry) => {
+    const calls: CapturedCall[] = [];
+    let failTelemetry = true;
+    const restore = stubFetch(async (url, init) => {
+      calls.push({ url, body: typeof init.body === 'string' ? init.body : undefined });
+      if (url === TELEMETRY_URL && failTelemetry) {
+        return new Response(JSON.stringify({}), { status: 503, headers: { 'Content-Type': 'application/json' } });
+      }
+      return okTelemetryResponse();
+    });
+    try {
+      await withEnv({ HUAWEICLOUD_DEVKIT_TELEMETRY_ENDPOINT: TELEMETRY_URL }, async () => {
+        telemetry.initTelemetry({ harness: 'test', version: '1.0.0' });
+        telemetry.trackToolInvoke('drop_probe');
+        // four failing rounds exhaust the three-retry budget for every
+        // event that rode them (chained setImmediate rounds only add
+        // failures); every await resolves — the never-reject contract
+        for (let i = 0; i < 4; i++) {
+          await assert.doesNotReject(telemetry.flushTelemetryEvents());
+        }
+        failTelemetry = false;
+        const failedRounds = telemetryPostBodies(calls).length;
+        await telemetry.flushTelemetryEvents();
+        await telemetry.flushTelemetryEvents();
+        // the failed rounds' POST bodies naturally contain the probe (it
+        // was being retried); only what is sent AFTER the budget is
+        // exhausted proves the drop
+        const keys = telemetryPostBodies(calls)
+          .slice(failedRounds)
+          .flat()
+          .map((event) => event.key);
+        assert.ok(!keys.includes('tool:drop_probe'), 'the probe must be dropped after exhausting the retry budget');
+      });
+    } finally {
+      restore();
+    }
+  });
 });
 
 // ---- voucher P0 sync flush (E4c) ----

@@ -65,11 +65,13 @@ export function enqueueTrackedEvent(ctx: TelemetryContext, raw: TelemetryEventIn
 // resolves. The recursion terminates: each follow-up only happens on an
 // in-flight arrival, and a round permanently removes its batch (sent or
 // client-error dropped) or requeues it with _retries+1 until MAX_RETRIES
-// drops it, so the queue strictly drains under a chain. Worst-case wait
-// for an awaiter is two fetch timeouts (the in-flight round + one
-// follow-up). A queue longer than the follow-up's batch leaves the tail to
-// the next trigger — the exit spool (hook-ingest.ts) owns that tail, not
-// this promise.
+// drops it, so the queue strictly drains under a chain. Wait bound: each
+// in-flight collision adds one follow-up round — K awaiters arriving
+// mid-flight serialize into at most K+1 rounds, and under persistent
+// timeout-failure the retry budget caps any chain at MAX_RETRIES+1 rounds
+// (≤ 4 fetch timeouts). A queue longer than the follow-up's batch leaves
+// the tail to the next trigger — the exit spool (hook-ingest.ts) owns that
+// tail, not this promise.
 //
 // The returned promise never rejects: failures (fetch errors, 5xx) are
 // dispositioned internally (requeue for the next trigger, or drop after
@@ -177,6 +179,16 @@ function requeueEvents(ctx: TelemetryContext, batch: TelemetryEvent[]): void {
 // still complete on its own. A failed round requeues into the now-empty
 // queue and is lost at drain — both are accepted, bounded, documented
 // residuals (see docs/CHANGELOG.md).
+//
+// Recovery timing is NEXT ACTIVE BOOT, not literally next boot: a boot
+// that enqueues nothing (all stamps present, counter zero — the steady
+// state) only CLAIMS the spool via the rename; the first tool-call
+// enqueue's ingest or the 60s timer tick reads it. An idle session that
+// exits before either defers recovery to the following boot — no loss,
+// convergent, but one extra idle lifetime of latency. Crash windows
+// (between append and rename, rename and read, read and unlink) all
+// converge to at-least-once delivery; a crash BEFORE any close handler
+// runs (SIGKILL-class) loses the in-memory tail — no handler runs at all.
 export function spoolEventsForExit(ctx: TelemetryContext): void {
   const queue = ctx.state.eventQueue;
   if (queue.length === 0) return;

@@ -177,6 +177,11 @@ export function flushTelemetryEvents(): Promise<void> {
   return flushEvents(ctx);
 }
 
+// Historical public name (kept for import stability); the seam now covers
+// BOTH spool files — the hook spool (input events rebuilt with this
+// session's identity) AND the exit spool (full events kept verbatim). See
+// ingestSpools in hook-ingest.ts for the shared rename-now/read-next
+// pattern and the at-least-once bound.
 export function ingestHookEvents(): void {
   ingestSpools(ctx);
 }
