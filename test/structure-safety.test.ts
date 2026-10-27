@@ -102,12 +102,21 @@ test('the py hook derives the obfuscation gate write vocabulary from policy.json
     pyHook,
     /text_bytes = len\(\s*text\.encode\("utf-16", "surrogatepass"\)\.decode\("utf-16", "replace"\)\.encode\("utf-8"\)\s*\)/,
   );
-  // Round 8: whitespace-only commands deny (the TS risk-rule engine's
-  // contract, mirrored), and the over-cap latency guard skips the segment
+  // Round 8-9: whitespace-only commands deny on the EXACT JS trim() set
+  // (round 8's bare str.strip() also stripped \x85 and \x1c-\x1f — a
+  // one-directional drift), the over-cap latency guard skips the segment
   // walk for broad-unrouted payloads (the BROAD tail mirrors TS's
-  // broadRouted).
-  assert.match(pyHook, /if not text\.replace\("\\ufeff", ""\)\.strip\(\):/);
-  assert.match(pyHook, /HCLOUD_ROUTE_BROAD_RE = re\.compile/);
+  // broadRouted, `<` included in round 9), and the glued-bin fallback
+  // tokenizer + input-redirect peel close the round-9 criticals.
+  assert.match(pyHook, /if not text\.strip\(/);
+  assert.ok(
+    pyHook.includes(
+      String.raw`HCLOUD_ROUTE_BROAD_RE = re.compile(r"(^|[^a-z0-9.-])hcloud(\.exe)?([\s)\]}'\";&|<>]|$)", re.I)`,
+    ),
+    'the BROAD routing tail must carry the full class incl. <',
+  );
+  assert.match(pyHook, /def split_tokens_glued\(text\):/);
+  assert.match(pyHook, /t = re\.sub\(r"<\{1,2\}\[\^<>&;\\|\\s\]\*\$", "", t\)/);
   assert.match(pyHook, /OBFUSCATION_RE\.search\(text_cont\)/);
   assert.match(pyHook, /# Outside quotes a backslash escapes the NEXT character/);
   const shellText = readSource(join('src', 'safety', 'shell-text.ts'));
@@ -171,7 +180,7 @@ test('the py hook degrades coherently: derived vocabularies, isolated fields, fa
   // over BOTH shadow candidates, and treats an empty prefix list as a hit
   // (the is-None arm's mirror).
   const classifyText = readSource(join('src', 'safety', 'classify-text.ts'));
-  assert.match(classifyText, /import \{ OBSUTIL_WRITES \} from '\.\/tokens\.ts';/);
+  assert.match(classifyText, /OBSUTIL_WRITES,\n?\s*isHcloudToken,|import \{\n?\s*COMMAND_POSITION_PREFIXES,/);
   assert.match(classifyText, /writeOperationPrefixes\.length === 0/);
   assert.ok(
     classifyText.includes('shadowCandidates.some((candidate) => /\\bOBS\\b/i.test(candidate)) &&'),

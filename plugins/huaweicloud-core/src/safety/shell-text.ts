@@ -210,6 +210,74 @@ export function splitSimpleCommand(command: unknown): string[] {
   );
 }
 
+// Bash-word-faithful tokenizer for the write gate's glued-bin fallback
+// (interrogate round 9): adjacent quoted spans and word characters form ONE
+// token — `"hcl"oud ECS Delete` is the single word hcloud to bash, with
+// ECS/Delete as real argv — unlike splitSimpleCommand, which keeps the
+// span/fragment distinction other consumers rely on (the windows-payload
+// piece-split's quote-carrying refusal, the feeder expanders).
+// Single-quoted spans keep their literal backslashes; double-quoted spans
+// resolve \" and \\ pairs; unterminated spans run to the end; \\<newline>
+// continuations drop first (bash's own first pass). Mirrored by
+// split_tokens_glued in hooks/huaweicloud-safety.py — the tokenizer twin
+// corpus pins the shared outputs.
+export function splitSimpleCommandGlued(command: unknown): string[] {
+  const text = String(command).replace(/\\\n/g, '');
+  const tokens: string[] = [];
+  let cur = '';
+  let i = 0;
+  const flush = (): void => {
+    if (cur) {
+      tokens.push(cur);
+      cur = '';
+    }
+  };
+  while (i < text.length) {
+    const ch = text[i]!;
+    if (ch === "'") {
+      const end = text.indexOf("'", i + 1);
+      if (end < 0) {
+        cur += text.slice(i + 1);
+        i = text.length;
+        continue;
+      }
+      cur += text.slice(i + 1, end);
+      i = end + 1;
+      continue;
+    }
+    if (ch === '"') {
+      i++;
+      let closed = false;
+      while (i < text.length) {
+        const c = text[i]!;
+        if (c === '\\' && i + 1 < text.length && (text[i + 1] === '"' || text[i + 1] === '\\')) {
+          cur += c + text[i + 1]!;
+          i += 2;
+          continue;
+        }
+        if (c === '"') {
+          closed = true;
+          i++;
+          break;
+        }
+        cur += c;
+        i++;
+      }
+      if (!closed && i >= text.length) break;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      flush();
+      i++;
+      continue;
+    }
+    cur += ch;
+    i++;
+  }
+  flush();
+  return tokens;
+}
+
 // Quote/backslash-stripped shadow of a command text for PRESENCE gates: an
 // agent can quote any token (`secret 'get'`, `bash -c "hcloud ..."`, g\et)
 // so the raw-text regexes miss it while the shell still executes the

@@ -210,9 +210,15 @@ export function matchesBinName(token: string, names: readonly string[]): boolean
 }
 
 // Peel a trailing glued redirection (with its operand) off a token:
-// `hcloud>out`, `OBS>&2` — bash still runs the bin with the service.
+// `hcloud>out`, `OBS>&2`, and the INPUT forms `hcloud<f`, `hcloud<<EOF`
+// (interrogate round 9 — bash runs `bin<file args…` as the bin with the
+// full argv; the operand is stdin, never argv) — bash still runs the bin
+// with the service.
 export function peelGluedRedirect(token: string): string {
-  return token.replace(/>{1,2}[^>;&|]*$/, '').replace(/>&\d+$/, '');
+  return token
+    .replace(/>{1,2}[^>;&|\s]*$/, '')
+    .replace(/<{1,2}[^<>;&|\s]*$/, '')
+    .replace(/>&\d+$/, '');
 }
 
 // One spelling of the hcloud bin-token predicate. The token is normalized

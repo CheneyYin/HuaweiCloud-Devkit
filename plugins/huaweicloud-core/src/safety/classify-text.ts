@@ -5,13 +5,28 @@ import { credentialFileCandidates } from './credential-path.ts';
 import { DEFAULT_POLICY } from './default-policy.ts';
 import { matchesAny, type ClassifyOptions } from './policy.ts';
 import { applyRawCommandRiskRules } from './risk-merge.ts';
-import { decodeAnsiCSpans, splitSimpleCommand, stripShellQuotes } from './shell-text.ts';
-import { OBSUTIL_WRITES } from './tokens.ts';
+import { decodeAnsiCSpans, splitSimpleCommand, splitSimpleCommandGlued, stripShellQuotes } from './shell-text.ts';
+import { COMMAND_POSITION_PREFIXES, OBSUTIL_WRITES, isHcloudToken, skipPrefixArguments } from './tokens.ts';
 import { SECRET_SHADOW_RE, SECRET_TEXT_RE } from './vocabulary.ts';
 
 export function classifyTextCommand(command: unknown, options: ClassifyOptions = {}): RiskDecision {
   const policy = options.policy || DEFAULT_POLICY;
   const text = asText(command || '');
+  // Whitespace-only commands deny FIRST (interrogate round 9): the risk-rule
+  // engine's empty-command gate sat AFTER the dump-family regexes, and a
+  // newline flood (32k+ newlines) sent ARGLESS_DUMP_RE/BARE_SET_RE into
+  // superlinear backtracking (7s at 32k, 25s+ at 128k — past the 5s hook
+  // timeout, which reads as allow) before the deny could land. trim() is a
+  // single linear pass; the placement mirrors the py twin's gate-first
+  // posture.
+  if (text.trim().length === 0) {
+    return {
+      decision: 'deny',
+      risk: 'invalid',
+      reason:
+        'command must be a non-empty string. Remediation: Provide a valid, non-empty input before re-running the check.',
+    };
+  }
   const shadowText = stripShellQuotes(text);
   // The cap counts BYTES on both twins (interrogate round 5): UTF-16 units
   // (TS) vs code points (py) disagreed at the boundary on astral-plane
@@ -42,8 +57,8 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
   // the one place a mangled write sails through.
   if (textBytes > 262_144) {
     if (
-      /(^|[^a-z0-9.-])hcloud(\.exe)?[\s)\]}'"]/i.test(shadowText) ||
-      /(^|[^a-z0-9.-])hcloud(\.exe)?[\s)\]}'"]/i.test(text) ||
+      /(^|[^a-z0-9.-])hcloud(\.exe)?[\s)\]}'"<]/i.test(shadowText) ||
+      /(^|[^a-z0-9.-])hcloud(\.exe)?[\s)\]}'"<]/i.test(text) ||
       /\$['"]|\$\(|`/.test(contDropped)
     ) {
       return {
@@ -296,17 +311,58 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
   // fail-closed stays gated on the NARROW tail so the pinned bare
   // `hcloud` / `sudo hcloud` allows survive.
   const narrowRouted =
-    /(^|[^a-z0-9.-])hcloud(\.exe)?[\s)\]}'"]/i.test(shadowText) ||
-    /(^|[^a-z0-9.-])hcloud(\.exe)?[\s)\]}'"]/i.test(text);
+    /(^|[^a-z0-9.-])hcloud(\.exe)?[\s)\]}'"<]/i.test(shadowText) ||
+    /(^|[^a-z0-9.-])hcloud(\.exe)?[\s)\]}'"<]/i.test(text);
+  // The broad tail includes `<` (interrogate round 9): a glued input
+  // redirect (`hcloud<f args…`) routes — bash runs the bin with the full
+  // argv, the operand is stdin.
   const broadRouted =
-    /(^|[^a-z0-9.-])hcloud(\.exe)?([\s)\]}'";&|>]|$)/i.test(shadowText) ||
-    /(^|[^a-z0-9.-])hcloud(\.exe)?([\s)\]}'";&|>]|$)/i.test(text);
+    /(^|[^a-z0-9.-])hcloud(\.exe)?([\s)\]}'";&|<>]|$)/i.test(shadowText) ||
+    /(^|[^a-z0-9.-])hcloud(\.exe)?([\s)\]}'";&|<>]|$)/i.test(text);
   if (broadRouted) {
-    return classifyHcloudArgs(splitSimpleCommand(text), {
+    const standard = classifyHcloudArgs(splitSimpleCommand(text), {
       ...options,
       rawCommand: text,
       _narrowRouted: narrowRouted,
     });
+    if (standard.decision === 'deny') return standard;
+    // Glued-bin fallback (interrogate round 9): bash glues adjacent quoted
+    // spans and word characters into ONE word — `"hcl"oud ECS Delete` runs
+    // hcloud with full argv — while splitSimpleCommand keeps the
+    // span/fragment distinction (other consumers rely on it), so a
+    // quote-INITIAL mangled bin never yields an hcloud-leading argv. The
+    // shadow routes it, so this pass only runs for routed payloads, and
+    // ONLY when the glued stream is hcloud-LEADING (command position after
+    // prefix stripping — the py twin's leading-segment contract): a quoted
+    // argument mention (`docker stop 'hcloud'`, `pip install "hcloud"`)
+    // must keep its orphan-allow.
+    const gluedTokens = splitSimpleCommandGlued(text);
+    // Command position after prefix stripping (the py leading-segment
+    // shape): walk the command-position prefixes and their value flags,
+    // then the head must BE the hcloud bin.
+    let probe = gluedTokens;
+    while (probe.length > 0) {
+      const head = String(probe[0]);
+      const base = head.includes('/') ? head.slice(head.lastIndexOf('/') + 1) : head;
+      if (COMMAND_POSITION_PREFIXES.has(base)) {
+        probe = skipPrefixArguments(base, probe.slice(1));
+        continue;
+      }
+      break;
+    }
+    if (probe.length > 0 && isHcloudToken(String(probe[0]))) {
+      const glued = classifyHcloudArgs(gluedTokens, {
+        ...options,
+        rawCommand: text,
+        _narrowRouted: narrowRouted,
+        // The glued tokens ARE the pre-classified argv — the raw-text
+        // segment pass would take the orphan path (no literal hcloud
+        // segment in the raw text) and never reach commandOperation.
+        _segmentDepth: 1,
+      });
+      if (glued.decision === 'deny') return glued;
+    }
+    return standard;
   }
 
   return applyRawCommandRiskRules(

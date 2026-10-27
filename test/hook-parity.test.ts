@@ -3,7 +3,11 @@ import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
 import { classifyTextCommand } from '../plugins/huaweicloud-core/src/safety-policy.ts';
-import { decodeAnsiCSpans, splitSimpleCommand } from '../plugins/huaweicloud-core/src/safety/shell-text.ts';
+import {
+  decodeAnsiCSpans,
+  splitSimpleCommand,
+  splitSimpleCommandGlued,
+} from '../plugins/huaweicloud-core/src/safety/shell-text.ts';
 
 // The TS classifier and the python hook are two hand-maintained
 // implementations of one safety policy. This battery runs the SAME command
@@ -164,6 +168,24 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
   [' ', 'deny'],
   ['\n', 'deny'],
   ['﻿', 'deny'],
+  // port-v2defects (interrogate round 9): the glued-bin family — bash glues
+  // adjacent quoted spans and word characters into ONE word, so
+  // "hcl"oud ECS Delete runs hcloud with full argv while the span/fragment
+  // tokenizers never yield an hcloud-leading stream. The write gate's glued
+  // fallback (split_tokens_glued / splitSimpleCommandGlued, routed-only)
+  // classifies the reassembled argv; the trailing-glued INPUT redirect
+  // family (hcloud<f2 args…, xargs hcloud<f, xargs hcloud<<EOF) peels in
+  // the head predicates and routes through the narrow tail's new '<'.
+  ['"hcl"oud ECS DeleteServers --server.id=x', 'deny'],
+  ["'hcl''oud' ECS DeleteServers --server.id=x", 'deny'],
+  ['hcl"oud" ECS DeleteServers --server.id=x', 'deny'],
+  ['"hcl""oud" ECS DeleteServers --server.id=x', 'deny'],
+  ['"hcl"oud OBS rm obs://b -f', 'deny'],
+  ['"hcl"oud ECS ListServers', 'allow'],
+  ['hcloud<f2 ECS DeleteServers --server.id=x', 'deny'],
+  ['hcloud<f2 ECS ListServers', 'allow'],
+  ["printf 'ECS DeleteServers --server.id=x' >f; xargs hcloud<f", 'deny'],
+  ['xargs hcloud<<EOF\nECS DeleteServers --server.id=x\nEOF', 'deny'],
   // The astral row: 200k valid surrogate pairs = 800 KB bytes / 400,000
   // UTF-16 units / 200,000 code points — over the byte cap on both twins,
   // over the OLD TS unit cap (400,002 > 262,144) but under the OLD py
@@ -773,14 +795,14 @@ test('the ANSI-C decoders agree byte-for-byte on the adversarial corpus (interro
   ];
   const ts = corpus.map((probe) => decodeAnsiCSpans(probe));
   const py = spawnSync('python3', ['-c', PY_DECODE_DRIVER], {
-    input: JSON.stringify({ decode: corpus, tokens: TOKEN_CORPUS }),
+    input: JSON.stringify({ decode: corpus, tokens: TOKEN_CORPUS, glued: GLUED_TOKEN_CORPUS }),
     encoding: 'utf8',
     timeout: 30000,
   });
   const unavailable = (py.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT';
   if (unavailable) return; // python3 not on PATH: TS-only environment
   assert.equal(py.status, 0, `decode driver crashed: ${py.stderr.slice(0, 300)}`);
-  const pyOut = JSON.parse(py.stdout) as { decode: string[]; tokens: string[][] };
+  const pyOut = JSON.parse(py.stdout) as { decode: string[]; tokens: string[][]; glued: string[][] };
   assert.equal(pyOut.decode.length, corpus.length, 'the driver must answer one decode per probe');
   for (let i = 0; i < corpus.length; i++) {
     assert.deepEqual(
@@ -801,6 +823,17 @@ test('the ANSI-C decoders agree byte-for-byte on the adversarial corpus (interro
       `tokenizer drift on ${JSON.stringify(TOKEN_CORPUS[i])}: ts=${JSON.stringify(tsTokens[i])} py=${JSON.stringify(pyOut.tokens[i])}`,
     );
   }
+  // The GLUED tokenizer twin corpus (interrogate round 9): the write gate's
+  // glued-bin fallback tokenizer must agree on both layers.
+  const tsGlued = GLUED_TOKEN_CORPUS.map((probe) => splitSimpleCommandGlued(probe));
+  assert.equal(pyOut.glued.length, GLUED_TOKEN_CORPUS.length, 'the driver must answer one glued list per probe');
+  for (let i = 0; i < GLUED_TOKEN_CORPUS.length; i++) {
+    assert.deepEqual(
+      tsGlued[i],
+      pyOut.glued[i],
+      `glued tokenizer drift on ${JSON.stringify(GLUED_TOKEN_CORPUS[i])}: ts=${JSON.stringify(tsGlued[i])} py=${JSON.stringify(pyOut.glued[i])}`,
+    );
+  }
 });
 
 // One python3 process decodes the whole corpus via importlib (the Hermes
@@ -817,11 +850,14 @@ const PY_DECODE_DRIVER = [
   'payload = json.load(sys.stdin)',
   'decodes = [m.decode_ansi_c_spans(p) for p in payload["decode"]]',
   'tokens = [m.split_tokens(p) for p in payload["tokens"]]',
-  'print(json.dumps({"decode": decodes, "tokens": tokens}))',
+  'glued = [m.split_tokens_glued(p) for p in payload["glued"]]',
+  'print(json.dumps({"decode": decodes, "tokens": tokens, "glued": glued}))',
 ].join('\n');
 
 // The tokenizer twin corpus: the line-continuation shapes (plus controls)
-// must tokenize identically on both layers.
+// must tokenize identically on both layers — now including the GLUED
+// tokenizer pair (interrogate round 9: split_tokens_glued vs
+// splitSimpleCommandGlued, the write gate's glued-bin fallback).
 const TOKEN_CORPUS: string[] = [
   'h\\\ncloud ECS DeleteServers --server.id=x',
   'hcloud ECS De\\\nleteServers --server.id=x',
@@ -830,4 +866,17 @@ const TOKEN_CORPUS: string[] = [
   'echo a\\\nb c',
   'hcloud ECS ListServers',
   "echo 'a\\\nb' c",
+];
+
+const GLUED_TOKEN_CORPUS: string[] = [
+  '"hcl"oud ECS DeleteServers --server.id=x',
+  "'hcl''oud' ECS x",
+  'hcl"oud" ECS x',
+  '"hcl""oud" ECS x',
+  'bash -c "hcloud ECS ListServers"',
+  "bash -c 'hcloud ECS ListServers'",
+  "--description='a;hcloud;DeleteServers'",
+  'a"b\\"c" d',
+  "unterminated 'span",
+  'unterminated "span',
 ];

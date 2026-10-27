@@ -583,8 +583,12 @@ def _strip_edge_quotes(token):
 
 def _peel_glued_redirect(token):
     """Peel a trailing glued redirection (with its operand) off a token:
-    `hcloud>out`, `OBS>&2` — bash still runs the bin with the service."""
-    t = re.sub(r">{1,2}[^>;&|]*$", "", str(token))
+    `hcloud>out`, `OBS>&2`, and the INPUT forms `hcloud<f`, `hcloud<<EOF`
+    (interrogate round 9 — bash runs `bin<file args…` as the bin with the
+    full argv; the operand is stdin, never argv) — bash still runs the bin
+    with the service."""
+    t = re.sub(r">{1,2}[^>;&|\s]*$", "", str(token))
+    t = re.sub(r"<{1,2}[^<>;&|\s]*$", "", t)
     return re.sub(r">&\d+$", "", t)
 
 
@@ -906,6 +910,65 @@ def split_tokens(text):
                 j += 1
             tokens.append(re.sub(r"^['\"]|['\"]$", "", text[i:j]))
             i = j
+    return tokens
+
+
+def split_tokens_glued(text):
+    """Bash-word-faithful tokenizer for the write gate's glued-bin fallback
+    (interrogate round 9): adjacent quoted spans and word characters form
+    ONE token — ``"hcl"oud ECS Delete`` is the single word ``hcloud`` to
+    bash, with ``ECS``/``Delete`` as real argv — unlike split_tokens, which
+    keeps the span/fragment distinction other consumers rely on (the
+    windows-payload piece-split's quote-carrying refusal, the feeder
+    expanders). Single-quoted spans keep their literal backslashes; double-
+    quoted spans resolve \\" and \\\\ pairs; unterminated spans run to the
+    end; \\<newline> continuations drop first (bash's own first pass).
+    Mirrored by splitSimpleCommandGlued in src/safety/shell-text.ts — the
+    tokenizer twin corpus pins the shared outputs."""
+    text = re.sub(r"\\\n", "", text)
+    tokens = []
+    cur = []
+
+    def _flush():
+        if cur:
+            tokens.append("".join(cur))
+            del cur[:]
+
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "'":
+            end = text.find(ch, i + 1)
+            if end < 0:
+                cur.append(text[i + 1:])
+                i = n
+                continue
+            cur.append(text[i + 1:end])
+            i = end + 1
+            continue
+        if ch == '"':
+            j = i + 1
+            closed = False
+            while j < n:
+                if text[j] == "\\" and j + 1 < n and text[j + 1] in ('"', "\\"):
+                    cur.append(text[j])
+                    cur.append(text[j + 1])
+                    j += 2
+                    continue
+                if text[j] == '"':
+                    closed = True
+                    break
+                cur.append(text[j])
+                j += 1
+            i = n if j >= n and not closed else j + 1
+            continue
+        if ch.isspace():
+            _flush()
+            i += 1
+            continue
+        cur.append(ch)
+        i += 1
+    _flush()
     return tokens
 
 
@@ -1314,11 +1377,11 @@ def split_shell_segments(text, seps_out=None):
 # backslashes, which glues the bin into the preceding word
 # (`cmd /c"hcloud …`, `C:\hcloud.exe …`) while the raw text still
 # carries the boundary character itself.
-HCLOUD_ROUTE_RE = re.compile(r"(^|[^a-z0-9.-])hcloud(\.exe)?[\s)\]}'\"]", re.I)
+HCLOUD_ROUTE_RE = re.compile(r"(^|[^a-z0-9.-])hcloud(\.exe)?[\s)\]}'\"<]", re.I)
 # The BROAD routing tail (the TS broadRouted twin, interrogate round 8): also
 # `;`, `&`, `|`, `>`, and end-of-string, so `xargs hcloud` at EOF and
 # glued-separator bins route for the over-cap latency guard below.
-HCLOUD_ROUTE_BROAD_RE = re.compile(r"(^|[^a-z0-9.-])hcloud(\.exe)?([\s)\]}'\";&|>]|$)", re.I)
+HCLOUD_ROUTE_BROAD_RE = re.compile(r"(^|[^a-z0-9.-])hcloud(\.exe)?([\s)\]}'\";&|<>]|$)", re.I)
 
 WRITE_BLOCK_REASON = (
     "unapproved Huawei Cloud write operations must be planned first and explicitly approved by the user."
@@ -1421,10 +1484,12 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
         # reads as allow) while the TS twin gates entry on routing and never
         # segments. Every hcloud-head spelling the tokenizers admit also
         # appears contiguously in the raw or stripped text (the shadow drops
-        # exactly the characters the tokenizers strip), so a payload that is
-        # over-cap AND broad-unrouted has nothing this walk can classify —
-        # the expansion-bearing and routed over-cap shapes already denied at
-        # evaluate()'s head cap.
+        # exactly the characters the tokenizers strip — recorded round-9
+        # exceptions: the head predicates' paren-stripped and BOM-glued
+        # normalized spellings, both non-executable in bash), so a payload
+        # that is over-cap AND broad-unrouted has nothing this walk can
+        # classify — the expansion-bearing and routed over-cap shapes
+        # already denied at evaluate()'s head cap.
         if len(text) > 262144 and not (
             HCLOUD_ROUTE_BROAD_RE.search(strip_shell_quotes(text)) is not None
             or HCLOUD_ROUTE_BROAD_RE.search(text) is not None
@@ -1435,10 +1500,9 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
         # nests at that size costs minutes — a hook DoS. Fail-closed.
         if routed and len(text) > 262144:
             return "command payload too large to classify safely; denied fail-closed"
-        routed = (
-            HCLOUD_ROUTE_RE.search(strip_shell_quotes(text)) is not None
-            or HCLOUD_ROUTE_RE.search(text) is not None
-        )
+        # (the routed value computed above is authoritative — the historical
+        # second recompute here was dead code, removed in interrogate
+        # round 9)
     segment_seps = []
     segments = split_shell_segments(text, segment_seps)
     saw_leading = False
@@ -1671,6 +1735,28 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
             reason = _classify_leading(stripped, argv, routed)
             if reason:
                 return reason
+    # Glued-bin fallback (interrogate round 9): bash glues adjacent quoted
+    # spans and word characters into ONE word — `"hcl"oud ECS Delete` runs
+    # hcloud with full argv — while split_tokens keeps the span/fragment
+    # distinction (other consumers rely on it, e.g. the windows-payload
+    # piece-split's quote-carrying refusal), so a quote-INITIAL mangled bin
+    # never yields an hcloud-leading token stream. The shadow does route it
+    # (strip_shell_quotes glues), so this pass runs only when routed and the
+    # standard passes found nothing — benign unrouted commands skip it.
+    if not saw_leading and routed:
+        for segment in split_shell_segments(text):
+            stripped = hcloud_leading_segment(split_tokens_glued(segment))
+            if stripped is not None:
+                argv = [t for t in stripped[1:] if not t.startswith("-")]
+                reason = _classify_leading(stripped, argv, routed)
+                if reason:
+                    return reason
+        stripped = hcloud_leading_segment(split_tokens_glued(text))
+        if stripped is not None:
+            argv = [t for t in stripped[1:] if not t.startswith("-")]
+            reason = _classify_leading(stripped, argv, routed)
+            if reason:
+                return reason
     return None
 
 
@@ -1717,13 +1803,15 @@ def evaluate(tool_name, tool_input):
     callers decide the exact output shape.
     """
     text = command_text(tool_input)
-    # Whitespace-only commands deny (interrogate round 8): the TS twin's
-    # risk-rule engine rejects them ("command must be a non-empty string" —
-    # JS trim() also strips \ufeff), and the py layer allowed them — a
-    # verdict drift in the battery's own contract class. \ufeff is not
-    # Unicode whitespace to str.strip(), so it is dropped explicitly.
-    if not text.replace("\ufeff", "").strip():
-        return "command must be a non-empty string"
+    # Whitespace-only commands deny (interrogate rounds 8-9): the TS twin's
+    # risk-rule engine rejects them ("command must be a non-empty string").
+    # The strip set is the EXACT JS trim() character set — round 8's bare
+    # str.strip() also stripped \x85 (NEL) and \x1c-\x1f, which JS trim does
+    # NOT, denying py-side what TS allowed (a one-directional drift); py's
+    # strip() misses \ufeff, which JS trim DOES strip, so it rides the set
+    # explicitly.
+    if not text.strip(" \t\n\v\f\r                 　﻿"):
+        return "command must be a non-empty string. Remediation: Provide a valid, non-empty input before re-running the check."
     unquoted = strip_shell_quotes(text)
     # Length cap (interrogate round 5): BYTES on both twins (UTF-16 units on
     # TS vs code points here disagreed at the boundary on astral-plane
