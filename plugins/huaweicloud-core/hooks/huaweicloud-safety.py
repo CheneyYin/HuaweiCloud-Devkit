@@ -60,13 +60,15 @@ OBSUTIL_WRITES = {
 # at the gate — see the load_policy comment). Module-compiled, not
 # policy-derived: OBSUTIL_WRITES has its own pinned dual-home doctrine
 # (the KooCLI 7.3.12 lockstep sweep), so it is not foldable into
-# policy.json's prefix list. The cloud marker that gates it: any *cloud
-# spelling (the mangled bin leaves `x68cloud` — a substring match, no \b, or
-# the digits glue would defeat it) or the word-bounded OBS service token
-# (also matches `obs://` — the colon is a boundary). `observations`/`jobs`
-# stay non-markers.
+# policy.json's prefix list. The marker that gates it is the word-bounded
+# OBS service token (also matches `obs://` — the colon is a boundary);
+# `observations`/`jobs` stay non-markers. A bare `cloud` SUBSTRING was the
+# round-2 marker and denied routine huaweicloud-bearing PATHS
+# (cp $(mktemp -d)/x plugins/huaweicloud-core/dist/foo) — the decoded-bin
+# clause (decode_ansi_c_spans, interrogate round 3) now carries the
+# mangled-bin class that substring existed for.
 OBS_VOCAB_RE = re.compile(r"(^|[^a-z])(?:" + "|".join(sorted(OBSUTIL_WRITES)) + ")", re.I)
-CLOUD_MARKER_RE = re.compile(r"cloud|\bOBS\b", re.I)
+OBS_MARKER_RE = re.compile(r"\bOBS\b", re.I)
 
 
 def load_policy():
@@ -195,6 +197,91 @@ def strip_shell_quotes(text):
     residual — a text gate cannot see through expansion. None of the
     canonical command tokens contain the stripped characters."""
     return re.sub(r"['\"\\\\$`]", "", text)
+
+
+ANSI_C_DECODE_RE = re.compile(r"\\(?:x([0-9a-fA-F]{1,2})|([0-7]{1,3})|u([0-9a-fA-F]{1,4})|U([0-9a-fA-F]{1,8}))")
+
+
+def decode_ansi_c_spans(text):
+    """Reconstruct the argv letters ANSI-C quoting builds: inside $'…' spans
+    (opened only OUTSIDE quotes — a $ already inside a plain quoted span is
+    a literal), decode \\xHH, \\NNN (octal), \\uHHHH, and \\UHHHHHHHH
+    escapes to their characters; everything else passes through verbatim
+    (interrogate round 3: the obfuscation gate's candidates now see
+    ``h$'\\x63'loud`` as the ``hcloud`` the shell actually executes, so
+    mangling past a marker — the round-2 cloud-marker gate's bypass — no
+    longer hides the bin, the service token, or the operation word).
+    \\' inside the span does not close it; \\\\ and unrecognized escapes
+    stay literal (conservative); an unterminated span returns the ORIGINAL
+    text (no decode — today's shadow); $"…" spans pass through (locale
+    quoting, no escape processing for identifiers); command substitution
+    $(…) stays opaque (the documented residual — the printf-built bin
+    class). Mirrored by decodeAnsiCSpans in src/safety/shell-text.ts —
+    hook-parity pins the shared verdicts."""
+    if "$'" not in text:
+        return text
+    out = []
+    i, n = 0, len(text)
+    quote = None
+    while i < n:
+        ch = text[i]
+        if quote is not None:
+            out.append(ch)
+            if ch == "\\" and quote == '"' and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "$" and i + 1 < n and text[i + 1] == "'":
+            j = i + 2
+            span = []
+            closed = False
+            while j < n:
+                c = text[j]
+                if c == "'":
+                    closed = True
+                    j += 1
+                    break
+                if c == "\\" and j + 1 < n:
+                    nxt = text[j + 1]
+                    if nxt == "'":
+                        span.append("'")
+                        j += 2
+                        continue
+                    m = ANSI_C_DECODE_RE.match(text, j)
+                    if m:
+                        digits = m.group(1) or m.group(2) or m.group(3) or m.group(4)
+                        radix = 16 if (m.group(2) is None) else 8
+                        try:
+                            value = int(digits, radix)
+                            if 0 <= value <= 0x10FFFF:
+                                span.append(chr(value))
+                                j = m.end()
+                                continue
+                        except ValueError:
+                            pass
+                    span.append(c)
+                    span.append(nxt)
+                    j += 2
+                    continue
+                span.append(c)
+                j += 1
+            if not closed:
+                return text
+            out.append("".join(span))
+            i = j
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def deny(reason, hermes=False):
@@ -1249,30 +1336,29 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
         # vocabulary must not reopen PLAIN writes while their mangled
         # forms still deny through the obfuscation gate — an incoherent
         # posture where only the honest spelling sails through.
-        # Invocation-scoped (interrogate round 2): the scope primitives
-        # (split_shell_segments / hcloud_leading_segment) are policy-free,
-        # so prose that merely MENTIONS hcloud stays allowed — one corrupt
-        # policy.json must not block every Bash command that names the CLI.
-        # hcloud-leading invocations all deny, reads and --help included:
-        # with no vocabulary there is nothing to prove safety with (the
-        # recorded trade). Unrouted text keeps no jurisdiction here.
-        if routed is None:
-            routed = (
-                HCLOUD_ROUTE_RE.search(strip_shell_quotes(text)) is not None
-                or HCLOUD_ROUTE_RE.search(text) is not None
+        # Invocation-scoped (interrogate rounds 2-3): the leading-segment
+        # walk runs UNCONDITIONALLY — the narrow routing tail
+        # ([\s)\]}'\"]) missed `xargs hcloud;|>&&&` tails (round 3), and
+        # the walk itself is the scope (prose never yields a leading
+        # segment). Prose that merely MENTIONS hcloud stays allowed; a
+        # corrupt policy.json must not block every Bash command that names
+        # the CLI. hcloud-leading invocations all deny, reads and --help
+        # included: with no vocabulary there is nothing to prove safety
+        # with (the recorded trade). The length cap mirrors the healthy
+        # gate's (no routing to scope it — every oversized payload denies).
+        if len(text) > 262144:
+            return "command payload too large to classify safely; denied fail-closed"
+        leading = [
+            segment
+            for segment in split_shell_segments(text)
+            if hcloud_leading_segment(split_tokens(segment)) is not None
+        ] or ([text] if hcloud_leading_segment(split_tokens(text)) is not None else [])
+        if leading:
+            return (
+                "the safety policy could not be loaded or carries no write vocabulary; "
+                "hcloud commands are denied fail-closed. Fix or reinstall the plugin's "
+                "safety/policy.json."
             )
-        if routed:
-            leading = [
-                segment
-                for segment in split_shell_segments(text)
-                if hcloud_leading_segment(split_tokens(segment)) is not None
-            ] or ([text] if hcloud_leading_segment(split_tokens(text)) is not None else [])
-            if leading:
-                return (
-                    "the safety policy could not be loaded or carries no write vocabulary; "
-                    "hcloud commands are denied fail-closed. Fix or reinstall the plugin's "
-                    "safety/policy.json."
-                )
         return None
     if routed is None:
         routed = (
@@ -1567,6 +1653,13 @@ def evaluate(tool_name, tool_input):
     """
     text = command_text(tool_input)
     unquoted = strip_shell_quotes(text)
+    # The ANSI-C-decoded shadow (interrogate round 3): the argv letters $'…'
+    # spans build, reconstructed — h$'\x63'loud is the hcloud the shell
+    # executes. Presence gates below that bear on cloud-command or
+    # secret-reveal detection search BOTH shadows; with no $' span the
+    # decoded candidate is the original text (zero cost).
+    decoded_unquoted = strip_shell_quotes(decode_ansi_c_spans(text))
+    candidates = (unquoted, decoded_unquoted)
     normalized = re.sub(r"/{2,}", "/", text)
     normalized = re.sub(r"/\./", "/", normalized)
     normalized_unquoted = re.sub(r"/{2,}", "/", unquoted)
@@ -1579,12 +1672,15 @@ def evaluate(tool_name, tool_input):
         for candidate in (text, unquoted, normalized, normalized_unquoted)
     ):
         return "reading Huawei Cloud credential/profile files can expose AK/SK or tokens. Use redacted toolkit tools."
-    if SECRET_CLI_RE and SECRET_CLI_RE.search(unquoted):
+    if SECRET_CLI_RE and any(SECRET_CLI_RE.search(candidate) for candidate in candidates):
         return "printing vault secrets into the agent context is blocked. Use secret exec so the value reaches only the child process environment."
     # Order-independent reveal pair: xargs reorders the argv while every word
     # stays literal — a devkit bin plus a `secret get` pair anywhere is a
-    # reveal regardless of order.
-    if DEVKIT_BIN_RE.search(unquoted) and REVEAL_PAIR_RE.search(unquoted):
+    # reveal regardless of order (both shadow candidates — the decoded one
+    # catches ANSI-C-mangled spellings).
+    if any(DEVKIT_BIN_RE.search(candidate) for candidate in candidates) and any(
+        REVEAL_PAIR_RE.search(candidate) for candidate in candidates
+    ):
         return "printing vault secrets into the agent context is blocked. Use secret exec so the value reaches only the child process environment."
     # Obfuscated cloud-command invocation: ANSI-C escapes and command
     # substitution build argv the shadow cannot reconstruct. Canonical
@@ -1594,25 +1690,31 @@ def evaluate(tool_name, tool_input):
     # carries 'deleteservers'): expansion + a write-op word denies fail-closed.
     # Mirrors the TS gate's writeVocabHit clause (the #927 audit bypass fix);
     # the vocabulary is the policy.json writeOperationPrefixes list derived
-    # by load_policy from the same read as WRITE_OPERATION_RE — one list, both
-    # gates — plus the marker-gated OBS_VOCAB_RE arm (interrogate round 2):
-    # the OBS subcommand words fire only when the shadow also carries a cloud
-    # marker (any *cloud spelling — the mangled bin leaves `x68cloud` — or
-    # the OBS service token), so routine expansion-bearing shell idioms
-    # (`docker rm $(docker ps -aq)`, `mkdir -p $(pwd)/build`) stay legitimate
-    # while `$'\x68'cloud OBS rm …` denies. The `is None` arm is the
-    # vocabulary's failure mode, chosen FAIL-CLOSED: when the derivation is
-    # unavailable (policy.json missing or corrupt JSON, or the list empty or
-    # non-list — load_policy normalizes non-lists to empty) the clause
-    # treats the vocabulary as hit, so an expansion-bearing command denies
-    # instead of the unavailable word list re-opening the mangled-write hole
-    # the gate exists to close.
+    # by load_policy from the same read as WRITE_OPERATION_RE — one list,
+    # both gates — plus the marker-gated OBS_VOCAB_RE arm: the OBS subcommand
+    # words fire only when a shadow also carries the OBS service token, so
+    # routine expansion-bearing shell idioms (`docker rm $(docker ps -aq)`,
+    # `mkdir -p $(pwd)/build`) stay legitimate. Interrogate round 3 adds the
+    # DECODED candidate: mangling past the marker (h$'\x63'loud $'\x4f'BS rm —
+    # no 'cloud', no 'OBS' in the stripped shadow) can no longer hide the
+    # bin, the service token, or the operation word, and mangled READS deny
+    # too (deny rather than parse — the same verdict an op-mangled read with
+    # a literal bin already gets). The `is None` arm is the vocabulary's
+    # failure mode, chosen FAIL-CLOSED: when the derivation is unavailable
+    # (policy.json missing or corrupt JSON, or the list empty or non-list —
+    # load_policy normalizes non-lists to empty) the clause treats the
+    # vocabulary as hit, so an expansion-bearing command denies instead of
+    # the unavailable word list re-opening the mangled-write hole the gate
+    # exists to close.
     if (
-        CLOUD_BIN_RE.search(unquoted)
-        or re.search(r"secret://", unquoted)
+        any(CLOUD_BIN_RE.search(candidate) for candidate in candidates)
+        or any(re.search(r"secret://", candidate) for candidate in candidates)
         or WRITE_VOCAB_RE is None
-        or WRITE_VOCAB_RE.search(unquoted)
-        or (CLOUD_MARKER_RE.search(unquoted) and OBS_VOCAB_RE.search(unquoted))
+        or any(WRITE_VOCAB_RE.search(candidate) for candidate in candidates)
+        or (
+            any(OBS_MARKER_RE.search(candidate) for candidate in candidates)
+            and any(OBS_VOCAB_RE.search(candidate) for candidate in candidates)
+        )
     ) and OBFUSCATION_RE.search(text):
         return "an obfuscated cloud CLI invocation (shell expansion inside the command) is blocked. Write the command in plain form."
     if (

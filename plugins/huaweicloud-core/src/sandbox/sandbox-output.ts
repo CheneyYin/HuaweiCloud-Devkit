@@ -28,11 +28,16 @@ export function stripTerminalEscapes(text: unknown): string {
   // of that field, still preferable to the unstripped escape blinding the line.
   const csiRe = new RegExp(ESC + '\\[[0-9:;<=>?]*[ -/]*[a-zA-Z]', 'g');
   // OSC analog of the CSI edge below: a mangled/unterminated OSC whose
-  // payload swallows a whole marker line strips the marker entirely. Every
-  // DB_* marker family that consumes this seam is PRESENCE-REQUIRED (the
-  // deploy-nginx OK/MISSING inversion, interrogate round 2), so a swallow
-  // reads as the marker's ABSENCE — the failure direction — never as a
-  // false success; the affected field's diagnosis degrades, fail-closed.
+  // payload swallows a whole marker line strips the marker entirely. The
+  // NGINX-VERIFY family is presence-required end to end (the OK/MISSING
+  // inversion, interrogate round 2), so a swallow reads as the failure
+  // direction there. Recorded residual (interrogate round 3): the
+  // devbridge-expose family still carries absence-equals-success fields
+  // (DB_MIGRATION, DB_TUNNEL_BODY, DB_QUOTA_ERROR) — a selective swallow
+  // of those reads as SUCCESS (a migrated gateway placeholder can compose
+  // ok:true with a dead URL); inverting them is the same
+  // one-line-per-marker shape as the nginx family, deliberately not done
+  // in this task.
   const oscRe = new RegExp(ESC + '\\][^' + ESC + '\x07]*(?:\x07|' + ESC + '\\\\)', 'g');
   return raw
     .replace(csiRe, '')

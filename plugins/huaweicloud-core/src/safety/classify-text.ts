@@ -5,7 +5,7 @@ import { credentialFileCandidates } from './credential-path.ts';
 import { DEFAULT_POLICY } from './default-policy.ts';
 import { matchesAny, type ClassifyOptions } from './policy.ts';
 import { applyRawCommandRiskRules } from './risk-merge.ts';
-import { splitSimpleCommand, stripShellQuotes } from './shell-text.ts';
+import { decodeAnsiCSpans, splitSimpleCommand, stripShellQuotes } from './shell-text.ts';
 import { OBSUTIL_WRITES } from './tokens.ts';
 import { SECRET_SHADOW_RE, SECRET_TEXT_RE } from './vocabulary.ts';
 
@@ -13,6 +13,13 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
   const policy = options.policy || DEFAULT_POLICY;
   const text = asText(command || '');
   const shadowText = stripShellQuotes(text);
+  // The ANSI-C-decoded shadow (interrogate round 3): the argv letters `$'…'`
+  // spans build, reconstructed — `h$'\x63'loud` is the `hcloud` the shell
+  // executes. Presence gates below that bear on cloud-command or
+  // secret-reveal detection search BOTH shadows; with no `$'` span the
+  // decoded candidate is the original text (zero cost).
+  const decodedShadowText = stripShellQuotes(decodeAnsiCSpans(text));
+  const shadowCandidates = [shadowText, decodedShadowText];
 
   // Length cap: a routed payload past 256 KiB cannot execute through any
   // wrapper chain (MAX_ARG_STRLEN), and classifying pathological nests
@@ -47,9 +54,10 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
   // The vault CLI's own reveal surface: `secret get` prints a stored secret
   // to stdout, which is the agent context when run through the Bash tool.
   // `secret exec` (values reach only the child env) stays allowed. Matched
-  // against the quote-stripped shadow so quoted subcommand spellings
+  // against the quote-stripped shadow (both candidates — the decoded one
+  // catches ANSI-C-mangled subcommand spellings) so quoted forms
   // (`secret 'get'`) do not slip past.
-  if (matchesAny(shadowText, policy.blockedSecretCliPatterns)) {
+  if (shadowCandidates.some((candidate) => matchesAny(candidate, policy.blockedSecretCliPatterns))) {
     return {
       decision: 'deny',
       risk: 'secret',
@@ -59,13 +67,16 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
   }
 
   // Order-independent reveal pair: `echo secret get <ref> --stdout | xargs
-  // npx huaweicloud-devkit` reorders the argv through xargs while every
-  // word is literal in the text — the patterns above assume bin-before-
+  // npx huaweicloud-devkit` reorders the argv through xargs while every word
+  // is literal in the text — the patterns above assume bin-before-
   // subcommand order. Any payload carrying BOTH a devkit bin and a
-  // `secret get` pair is a reveal regardless of order.
+  // `secret get` pair is a reveal regardless of order (both shadow
+  // candidates — the decoded one catches ANSI-C-mangled spellings).
   if (
-    /(^|[^a-z0-9.-])(?:huaweicloud-devkit|setup-cli\.(?:js|mjs|ts|cjs)|setup\.cjs)/i.test(shadowText) &&
-    /(?:^|\s)secret\s+get\b/i.test(shadowText)
+    shadowCandidates.some((candidate) =>
+      /(^|[^a-z0-9.-])(?:huaweicloud-devkit|setup-cli\.(?:js|mjs|ts|cjs)|setup\.cjs)/i.test(candidate),
+    ) &&
+    shadowCandidates.some((candidate) => /(?:^|\s)secret\s+get\b/i.test(candidate))
   ) {
     return {
       decision: 'deny',
@@ -92,37 +103,44 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
   // audit: v2 and main both allowed this class before — the sibling
   // operation-token form `$'\x43'reateServers` was already denied).
   //
-  // The vocabulary itself: the policy writeOperationPrefixes (this clause's
-  // pre-existing DEFAULT_POLICY read, not options.policy), plus — interrogate
-  // round 2 — the OBS subcommand words in a MARKER-GATED arm: routing dies
-  // with the keyword under ANSI-C mangling, so non-prefix obsutil subcommand
-  // writes (rm/cp/mv/sync/chattri…) mangle exactly like the prefix
-  // operations, but those short words are routine shell vocabulary, so that
-  // arm fires only when the shadow also carries a cloud marker (any *cloud
-  // spelling — the mangled bin leaves `x68cloud` — or the word-bounded OBS
-  // service token, which also matches `obs://`), keeping
-  // `docker rm $(docker ps -aq)` and `mkdir -p $(pwd)/build` legitimate.
-  // The py twin gates the same way (CLOUD_MARKER_RE + OBS_VOCAB_RE).
+  // Interrogate round 3 adds the DECODED candidate (decodeAnsiCSpans): the
+  // gate now also sees the argv letters the escapes actually build —
+  // mangling past the marker (h$'\x63'loud $'\x4f'BS rm: no 'cloud', no
+  // 'OBS' in the stripped shadow) can no longer hide the bin, the service
+  // token, or the operation word, and mangled READS deny too (deny rather
+  // than parse — the same verdict an op-mangled read with a literal bin
+  // already gets; the #727 doctrine). The vocabulary itself: the policy
+  // writeOperationPrefixes (this clause's pre-existing DEFAULT_POLICY read,
+  // not options.policy), plus the OBS subcommand words in a MARKER-GATED
+  // arm — the OBS TOKEN is the marker (word-bounded, also matches `obs://`);
+  // a bare `cloud` substring was the round-2 marker and denied routine
+  // huaweicloud-bearing PATHS, so it is gone — the decoded bin clause
+  // carries the mangled-bin class instead. The py twin gates the same way.
   // An EMPTY prefix list cannot occur from the shipped policy (structure
   // guard floors it at >= 10) and loadPolicy now throws on a present-but-
   // empty list; the length arm mirrors the py WRITE_VOCAB_RE is-None arm
   // for any caller hand-feeding such a policy anyway. Residual, recorded:
   // the TS write gate itself (hasWritePrefix over []) stays fail-open on
   // that same abnormal shape when passed via options.policy — pre-existing
-  // on main and v2, out of this fix's surface.
+  // on main and v2, out of this fix's surface; command substitution
+  // (`$(printf '\x68…')`) stays opaque to the decode — the OBS-token arm
+  // still catches the service-token-literal form.
+  const cloudCommandBearing = shadowCandidates.some(
+    (candidate) =>
+      /(^|[^a-z0-9.-])(?:huaweicloud-devkit|setup-cli\.(?:js|mjs|ts|cjs)|setup\.cjs)|(^|[^a-z0-9.-])hcloud(\.exe)?\s/i.test(
+        candidate,
+      ) || /secret:\/\//i.test(candidate),
+  );
   const writeVocabHit =
     DEFAULT_POLICY.writeOperationPrefixes.length === 0 ||
-    [...DEFAULT_POLICY.writeOperationPrefixes].some((word) => new RegExp(`(^|[^a-z])${word}`, 'i').test(shadowText)) ||
-    (/(?:cloud|\bOBS\b)/i.test(shadowText) &&
-      [...OBSUTIL_WRITES].some((word) => new RegExp(`(^|[^a-z])${word}`, 'i').test(shadowText)));
-  if (
-    (/(^|[^a-z0-9.-])(?:huaweicloud-devkit|setup-cli\.(?:js|mjs|ts|cjs)|setup\.cjs)|(^|[^a-z0-9.-])hcloud(\.exe)?\s/i.test(
-      shadowText,
+    shadowCandidates.some((candidate) =>
+      DEFAULT_POLICY.writeOperationPrefixes.some((word) => new RegExp(`(^|[^a-z])${word}`, 'i').test(candidate)),
     ) ||
-      /secret:\/\//i.test(shadowText) ||
-      writeVocabHit) &&
-    /\$['"]|\$\(|`/.test(text)
-  ) {
+    (shadowCandidates.some((candidate) => /\bOBS\b/i.test(candidate)) &&
+      shadowCandidates.some((candidate) =>
+        [...OBSUTIL_WRITES].some((word) => new RegExp(`(^|[^a-z])${word}`, 'i').test(candidate)),
+      ));
+  if ((cloudCommandBearing || writeVocabHit) && /\$['"]|\$\(|`/.test(text)) {
     return {
       decision: 'deny',
       risk: 'secret',

@@ -78,17 +78,42 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
   ["$'\\x68'cloud OBS cp obs://src obs://dst", 'deny'],
   ["$'\\x68'cloud OBS sync obs://b obs://c", 'deny'],
   ["$'\\x68'cloud OBS chattri obs://b -acl=public-read", 'deny'],
-  ["$'\\x68'cloud OBS ls obs://bucket", 'allow'],
-  ["$'\\x68'cloud OBS stat obs://b/o", 'allow'],
-  // port-v2defects (interrogate round 2): the OBS arm is MARKER-GATED on
-  // both layers (a cloud spelling or the OBS token must ride the shadow) —
-  // the short subcommand words are routine shell vocabulary, and the
-  // unscoped round-1 union denied these legitimate expansion-bearing
-  // idioms. The mangled forms above still deny (x68cloud is the marker).
+  // port-v2defects (interrogate round 3): with the ANSI-C decode feeding
+  // the gate's candidates, EVERY $'-mangled cloud command denies rather
+  // than parses (the #727 doctrine — an op-mangled read with a literal bin
+  // already denied); these read controls flipped from allow, and now pin
+  // the uniform mangled-read verdict.
+  ["$'\\x68'cloud OBS ls obs://bucket", 'deny'],
+  ["$'\\x68'cloud OBS stat obs://b/o", 'deny'],
+  // port-v2defects (interrogate round 3): the decode closes the
+  // mangle-past-the-marker bypass — h$'\x63'loud reconstructs to the hcloud
+  // the shell executes, so the decoded candidate feeds the bin/secret/vocab
+  // clauses no matter WHICH letters were escaped (bin, service token,
+  // operation word — hex, octal, or unicode), and bin+op both-mangled no
+  // longer sidesteps the vocabulary family.
+  ["h$'\\x63'loud $'\\x4f'BS rm mybucket", 'deny'],
+  ["h$'\\143'loud $'\\117'BS cp obs://src obs://dst", 'deny'],
+  ["h$'\\u0063'loud $'\\u004f'BS sync obs://b obs://c", 'deny'],
+  ["$'\\x68'$'\\x63'loud ECS $'\\x44'eleteServers --server.id=x", 'deny'],
+  ["h$'\\x63'loud ECS ListServers", 'deny'],
+  ["h$'\\x63'loud configure show", 'deny'],
+  // The $(…)-substitution residual (documented): printf-built bins stay
+  // opaque to the decode; the OBS-token marker arm still catches the
+  // service-token-literal form.
+  ["$(printf '\\x68\\x63loud') OBS rm mybucket", 'deny'],
+  // port-v2defects (interrogate rounds 2-3): the OBS arm is gated on the
+  // OBS TOKEN (a bare `cloud` substring was the round-2 marker and denied
+  // routine huaweicloud-bearing PATHS — the decoded-bin clause now carries
+  // the mangled-bin class). The short subcommand words are routine shell
+  // vocabulary: these legitimate expansion-bearing idioms stay allowed.
   ['docker rm $(docker ps -aq)', 'allow'],
   ['mkdir -p $(pwd)/build', 'allow'],
   ['bash -c "cp $(mktemp -d)/x y"', 'allow'],
   ['git commit -m "sync $(git rev-parse --short HEAD)"', 'allow'],
+  ['cp $(mktemp -d)/x plugins/huaweicloud-core/dist/foo', 'allow'],
+  ['cp -r $(pwd)/src plugins/huaweicloud-core/ && mv $(pwd)/old plugins/huaweicloud-core/old', 'allow'],
+  ['mkdir -p $(pwd)/build/observations', 'allow'],
+  ['gcloud storage rm gs://bucket/$(date).bak', 'allow'],
   // port-v2defects (interrogate round 1): the write gate's read exemption is
   // anchored at the operation token's START on both layers (TS hasReadPrefix
   // ^prefix parity — py re.match). A write-prefixed operation with an

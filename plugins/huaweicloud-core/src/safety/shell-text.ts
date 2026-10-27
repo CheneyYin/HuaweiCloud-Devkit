@@ -198,3 +198,94 @@ export function stripShellQuotes(text: string): string {
   // expansion.
   return text.replace(/['"\\$`]/g, '');
 }
+
+// mirrors the py twin's ANSI_C_DECODE_RE; sticky (lastIndex-anchored) so the
+// per-escape probe allocates nothing on megabyte payloads. The x/u/U
+// prefixes sit OUTSIDE the capture groups — the captured digits must parse.
+const ANSI_C_ESCAPE_RE = /\\(?:x([0-9a-fA-F]{1,2})|([0-7]{1,3})|u([0-9a-fA-F]{1,4})|U([0-9a-fA-F]{1,8}))/y;
+
+// Reconstruct the argv letters ANSI-C quoting builds: inside `$'…'` spans
+// (opened only OUTSIDE quotes — a `$` already inside a plain quoted span is
+// a literal), decode \xHH, \NNN (octal), \uHHHH, and \UHHHHHHHH escapes to
+// their characters; everything else passes through verbatim (interrogate
+// round 3: the obfuscation gate's candidates now see `h$'\x63'loud` as the
+// `hcloud` the shell actually executes, so mangling past a marker — the
+// round-2 cloud-marker gate's bypass — no longer hides the bin, the service
+// token, or the operation word). `\'` inside the span does not close it;
+// `\\` and unrecognized escapes stay literal (conservative); an unterminated
+// span returns the ORIGINAL text (no decode — today's shadow); `$"…"` spans
+// are passed through (locale quoting, no escape processing for identifiers);
+// command substitution `$(…)` stays opaque (the documented residual — the
+// printf-built bin class). Mirrored by decode_ansi_c_spans in
+// hooks/huaweicloud-safety.py — hook-parity pins the shared verdicts.
+export function decodeAnsiCSpans(text: string): string {
+  if (!text.includes("$'")) return text;
+  const out: string[] = [];
+  let i = 0;
+  let quote: '"' | "'" | null = null;
+  while (i < text.length) {
+    const ch = text[i]!;
+    if (quote !== null) {
+      out.push(ch);
+      if (ch === '\\' && quote === '"' && i + 1 < text.length) {
+        out.push(text[i + 1]!);
+        i += 2;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      i++;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      out.push(ch);
+      i++;
+      continue;
+    }
+    if (ch === '$' && text[i + 1] === "'") {
+      const span: string[] = [];
+      let j = i + 2;
+      let closed = false;
+      while (j < text.length) {
+        const c = text[j]!;
+        if (c === "'") {
+          closed = true;
+          j++;
+          break;
+        }
+        if (c === '\\' && j + 1 < text.length) {
+          const next = text[j + 1]!;
+          if (next === "'") {
+            span.push("'");
+            j += 2;
+            continue;
+          }
+          ANSI_C_ESCAPE_RE.lastIndex = j;
+          const m = ANSI_C_ESCAPE_RE.exec(text);
+          if (m) {
+            const digits = m[1] ?? m[2] ?? m[3] ?? m[4] ?? '';
+            const radix = m[1] || m[3] || m[4] ? 16 : 8;
+            const value = Number.parseInt(digits, radix);
+            if (Number.isFinite(value) && value <= 0x10ffff) {
+              span.push(String.fromCodePoint(value));
+              j += m[0].length;
+              continue;
+            }
+          }
+          span.push(c, next);
+          j += 2;
+          continue;
+        }
+        span.push(c);
+        j++;
+      }
+      if (!closed) return text;
+      out.push(span.join(''));
+      i = j;
+      continue;
+    }
+    out.push(ch);
+    i++;
+  }
+  return out.join('');
+}

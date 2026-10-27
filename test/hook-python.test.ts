@@ -305,6 +305,12 @@ test('python hook fails closed when the policy vocabulary is unavailable (degrad
       'nested script: the leading-segment walk is policy-free',
     ],
     ['echo Delete | xargs hcloud ECS', 'deny', 'xargs feeder: the leading-segment walk'],
+    // Round 3: the walk runs UNCONDITIONALLY — the narrow routing tail
+    // ([\s)\]}'\"]) missed these executable `xargs hcloud` tails.
+    ['echo ECS DeleteServers | xargs hcloud;', 'deny', 'semicolon tail: the unconditional walk'],
+    ['echo ECS DeleteServers | xargs hcloud|cat', 'deny', 'pipe tail: the unconditional walk'],
+    ['echo ECS DeleteServers | xargs hcloud>out', 'deny', 'redirect tail: the unconditional walk'],
+    ['echo ECS DeleteServers | xargs hcloud&&true', 'deny', '&& tail: the unconditional walk'],
     ['hcloud --help', 'deny', 'degraded mode denies all hcloud-leading invocations (the recorded trade)'],
     [
       'echo "see the hcloud docs"',

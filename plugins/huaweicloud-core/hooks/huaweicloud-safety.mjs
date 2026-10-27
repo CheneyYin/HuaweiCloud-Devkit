@@ -16,6 +16,13 @@ const DENY_PREFIX = 'Huawei Cloud safety hook blocked this action: ';
 const POLICY_LOAD_FAILED_REASON =
   'the safety policy failed to load; commands are denied fail-closed. Reinstall the huaweicloud-devkit plugin.';
 
+// Distinct from the load failure (interrogate round 3): the policy parsed
+// fine and the crash happened INSIDE classification (a truncated
+// cloud-risk-rules.json) — the reason names the actual break so the
+// reinstall actually fixes it.
+const CLASSIFY_FAILED_REASON =
+  'the safety classifier failed to run (corrupt safety rules?); commands are denied fail-closed. Reinstall the huaweicloud-devkit plugin.';
+
 function commandText(toolInput) {
   if (typeof toolInput === 'string') return toolInput;
   if (toolInput && typeof toolInput === 'object') {
@@ -99,7 +106,7 @@ function main() {
   try {
     result = classifyTextCommand(text);
   } catch {
-    deny(POLICY_LOAD_FAILED_REASON);
+    deny(CLASSIFY_FAILED_REASON);
     return;
   }
   if (result.decision === 'deny') deny(result.reason);

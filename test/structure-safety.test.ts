@@ -68,20 +68,31 @@ test('the py hook derives the obfuscation gate write vocabulary from policy.json
   }
   // The OBS subcommand half is a separate module-compiled regex (its own
   // dual-home doctrine, not foldable into policy.json), gated at the gate by
-  // CLOUD_MARKER_RE so routine expansion-bearing shell idioms stay
-  // legitimate while the mangled OBS writes deny.
+  // the word-bounded OBS TOKEN — a bare `cloud` substring was the round-2
+  // marker and denied routine huaweicloud-bearing PATHS; the decoded-bin
+  // clause carries the mangled-bin class now.
   const obsAssignments = pyHook.match(/OBS_VOCAB_RE = re\.compile\([^\n]*\)/g) ?? [];
   assert.ok(obsAssignments.length >= 1, 'the OBS vocabulary must be module-compiled');
   for (const assignment of obsAssignments) {
     assert.match(assignment, /OBSUTIL_WRITES/, `the OBS vocabulary derives from OBSUTIL_WRITES: ${assignment}`);
   }
-  assert.match(pyHook, /CLOUD_MARKER_RE = re\.compile\(r"cloud\|\\bOBS\\b", re\.I\)/);
+  assert.match(pyHook, /OBS_MARKER_RE = re\.compile\(r"\\bOBS\\b", re\.I\)/);
+  // The ANSI-C decode (interrogate round 3): both layers reconstruct the
+  // argv letters $'…' spans build, and the gate's clauses search BOTH
+  // shadow candidates — mangle-past-the-marker no longer hides the bin.
+  assert.match(pyHook, /def decode_ansi_c_spans\(text\):/);
+  assert.match(pyHook, /decoded_unquoted = strip_shell_quotes\(decode_ansi_c_spans\(text\)\)/);
+  const shellText = readSource(join('src', 'safety', 'shell-text.ts'));
+  assert.match(shellText, /export function decodeAnsiCSpans\(text: string\): string \{/);
+  const classifyText = readSource(join('src', 'safety', 'classify-text.ts'));
+  assert.match(classifyText, /decodeAnsiCSpans/);
+  assert.match(classifyText, /const decodedShadowText = stripShellQuotes\(decodeAnsiCSpans\(text\)\)/);
   // The fail-closed arm sits in the gate's vocabulary clause (whitespace-
   // tolerant: indentation reflow must not break the pin — interrogate
   // round 2).
   assert.match(
     pyHook,
-    /or WRITE_VOCAB_RE is None\s+or WRITE_VOCAB_RE\.search\(unquoted\)\s+or \(CLOUD_MARKER_RE\.search\(unquoted\) and OBS_VOCAB_RE\.search\(unquoted\)\)/,
+    /or WRITE_VOCAB_RE is None\s+or any\(WRITE_VOCAB_RE\.search\(candidate\) for candidate in candidates\)/,
   );
 });
 
@@ -117,14 +128,15 @@ test('the py hook degrades coherently: derived vocabularies, isolated fields, fa
   assert.match(pyHook, /if not isinstance\(write_prefixes, list\):/);
   assert.match(pyHook, /if not isinstance\(read_prefixes, list\):/);
 
-  // The TS twin: writeVocabHit's OBS arm is marker-gated the same way and
-  // treats an empty prefix list as a hit (the is-None arm's mirror).
+  // The TS twin: writeVocabHit's OBS arm is marker-gated on the OBS token
+  // over BOTH shadow candidates, and treats an empty prefix list as a hit
+  // (the is-None arm's mirror).
   const classifyText = readSource(join('src', 'safety', 'classify-text.ts'));
   assert.match(classifyText, /import \{ OBSUTIL_WRITES \} from '\.\/tokens\.ts';/);
   assert.match(classifyText, /writeOperationPrefixes\.length === 0/);
   assert.ok(
-    classifyText.includes('(/(?:cloud|\\bOBS\\b)/i.test(shadowText) &&'),
-    'the OBS vocabulary arm must be cloud-marker-gated',
+    classifyText.includes('shadowCandidates.some((candidate) => /\\bOBS\\b/i.test(candidate)) &&'),
+    'the OBS vocabulary arm must be OBS-token-gated over both shadow candidates',
   );
   assert.match(classifyText, /\[\.\.\.OBSUTIL_WRITES\]\.some/);
 
@@ -138,10 +150,11 @@ test('the py hook degrades coherently: derived vocabularies, isolated fields, fa
   const nodeHook = readFileSync(join(pluginRoot, 'hooks', 'huaweicloud-safety.mjs'), 'utf8');
   assert.match(nodeHook, /} catch \{\s*\n\s*writeSync\(/);
   assert.match(nodeHook, /POLICY_LOAD_FAILED_REASON/);
-  // Classify-time failure (a corrupt rules file) denies the same way.
+  // Classify-time failure (a corrupt rules file) denies the same way, with
+  // its own cause-named reason (round 3: the policy parsed fine).
   assert.match(
     nodeHook,
-    /result = classifyTextCommand\(text\);\s*\n\s*\} catch \{\s*\n\s*deny\(POLICY_LOAD_FAILED_REASON\);/,
+    /result = classifyTextCommand\(text\);\s*\n\s*\} catch \{\s*\n\s*deny\(CLASSIFY_FAILED_REASON\);/,
   );
 });
 

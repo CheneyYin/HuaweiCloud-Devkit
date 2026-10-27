@@ -109,7 +109,9 @@ test('node hook denies fail-closed when classification itself throws (corrupt ru
       assert.equal(result.status, 0, `${command}: must exit 0, not crash: ${result.stderr.slice(0, 200)}`);
       const output = JSON.parse(result.stdout);
       assert.equal(output.hookSpecificOutput.permissionDecision, 'deny', `${command} must deny fail-closed`);
-      assert.match(output.hookSpecificOutput.permissionDecisionReason, /safety policy failed to load/);
+      // The classify-time reason names the actual break (round 3: the
+      // policy parsed fine — the rules file died mid-classification).
+      assert.match(output.hookSpecificOutput.permissionDecisionReason, /safety classifier failed to run/);
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
