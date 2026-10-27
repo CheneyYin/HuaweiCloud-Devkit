@@ -149,11 +149,21 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
   ['echo hello \ud800', 'allow'],
   // The surrogate BOUNDARY parity row (interrogate round 7): 131,072 lone
   // surrogates + an expansion tail is ~131 KB under round-6's py count (1
-  // byte each) but ~393 KB under TS's U+FFFD count (3 bytes each) — round
-  // 6's "replace" chain let an executable over-cap write allow on py while
-  // TS denied. The utf-16-surrogatepass round-trip counts byte-identically
-  // to Node now; this row flips if the counts drift apart again.
+  // byte each) but ~393 KB under TS's U+FFFD count (3 bytes each). This
+  // row's payload is the count-parity SHAPE (an expansion-bearing echo) —
+  // the write bypass itself was the reviewer's separate printf-mangled
+  // payload, denied by the cap's expansion arm; this row flips if the
+  // counts drift apart again (round 8 wording fix: it never reproduced the
+  // bypass).
   ['\ud800'.repeat(131072) + 'echo $(date)', 'deny'],
+  // Whitespace-only commands (interrogate round 8): the TS twin's risk-rule
+  // engine denies them ("command must be a non-empty string" — JS trim also
+  // strips \ufeff); the py layer allowed them, a verdict drift in the
+  // battery's own contract class. Mirrored.
+  ['', 'deny'],
+  [' ', 'deny'],
+  ['\n', 'deny'],
+  ['﻿', 'deny'],
   // The astral row: 200k valid surrogate pairs = 800 KB bytes / 400,000
   // UTF-16 units / 200,000 code points — over the byte cap on both twins,
   // over the OLD TS unit cap (400,002 > 262,144) but under the OLD py

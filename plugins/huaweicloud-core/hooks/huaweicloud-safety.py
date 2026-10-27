@@ -1315,6 +1315,10 @@ def split_shell_segments(text, seps_out=None):
 # (`cmd /c"hcloud …`, `C:\hcloud.exe …`) while the raw text still
 # carries the boundary character itself.
 HCLOUD_ROUTE_RE = re.compile(r"(^|[^a-z0-9.-])hcloud(\.exe)?[\s)\]}'\"]", re.I)
+# The BROAD routing tail (the TS broadRouted twin, interrogate round 8): also
+# `;`, `&`, `|`, `>`, and end-of-string, so `xargs hcloud` at EOF and
+# glued-separator bins route for the over-cap latency guard below.
+HCLOUD_ROUTE_BROAD_RE = re.compile(r"(^|[^a-z0-9.-])hcloud(\.exe)?([\s)\]}'\";&|>]|$)", re.I)
 
 WRITE_BLOCK_REASON = (
     "unapproved Huawei Cloud write operations must be planned first and explicitly approved by the user."
@@ -1411,6 +1415,21 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
             HCLOUD_ROUTE_RE.search(strip_shell_quotes(text)) is not None
             or HCLOUD_ROUTE_RE.search(text) is not None
         )
+        # Over-cap latency guard (interrogate round 8): a benign-looking
+        # oversized payload paid the full segment/token walk here (measured
+        # 32s+ on 10 MB — a harness timeout swallows the verdict, which
+        # reads as allow) while the TS twin gates entry on routing and never
+        # segments. Every hcloud-head spelling the tokenizers admit also
+        # appears contiguously in the raw or stripped text (the shadow drops
+        # exactly the characters the tokenizers strip), so a payload that is
+        # over-cap AND broad-unrouted has nothing this walk can classify —
+        # the expansion-bearing and routed over-cap shapes already denied at
+        # evaluate()'s head cap.
+        if len(text) > 262144 and not (
+            HCLOUD_ROUTE_BROAD_RE.search(strip_shell_quotes(text)) is not None
+            or HCLOUD_ROUTE_BROAD_RE.search(text) is not None
+        ):
+            return None
         # Length cap (TS parity): a routed payload past 256 KiB cannot
         # execute through any wrapper chain, and classifying pathological
         # nests at that size costs minutes — a hook DoS. Fail-closed.
@@ -1698,6 +1717,13 @@ def evaluate(tool_name, tool_input):
     callers decide the exact output shape.
     """
     text = command_text(tool_input)
+    # Whitespace-only commands deny (interrogate round 8): the TS twin's
+    # risk-rule engine rejects them ("command must be a non-empty string" —
+    # JS trim() also strips \ufeff), and the py layer allowed them — a
+    # verdict drift in the battery's own contract class. \ufeff is not
+    # Unicode whitespace to str.strip(), so it is dropped explicitly.
+    if not text.replace("\ufeff", "").strip():
+        return "command must be a non-empty string"
     unquoted = strip_shell_quotes(text)
     # Length cap (interrogate round 5): BYTES on both twins (UTF-16 units on
     # TS vs code points here disagreed at the boundary on astral-plane

@@ -96,7 +96,18 @@ test('the py hook derives the obfuscation gate write vocabulary from policy.json
   // Round 7: the byte count is the utf-16-surrogatepass round-trip —
   // paired surrogates survive, lone ones become U+FFFD, byte-identical to
   // Node's Buffer.byteLength (round 6's "replace" counted 1 vs Node's 3).
-  assert.match(pyHook, /text\.encode\("utf-16", "surrogatepass"\)\.decode\("utf-16", "replace"\)\.encode\("utf-8"\)/);
+  // Round 8: the pin ties text_bytes itself to the chain (the codec-only
+  // assert let a rename drift past).
+  assert.match(
+    pyHook,
+    /text_bytes = len\(\s*text\.encode\("utf-16", "surrogatepass"\)\.decode\("utf-16", "replace"\)\.encode\("utf-8"\)\s*\)/,
+  );
+  // Round 8: whitespace-only commands deny (the TS risk-rule engine's
+  // contract, mirrored), and the over-cap latency guard skips the segment
+  // walk for broad-unrouted payloads (the BROAD tail mirrors TS's
+  // broadRouted).
+  assert.match(pyHook, /if not text\.replace\("\\ufeff", ""\)\.strip\(\):/);
+  assert.match(pyHook, /HCLOUD_ROUTE_BROAD_RE = re\.compile/);
   assert.match(pyHook, /OBFUSCATION_RE\.search\(text_cont\)/);
   assert.match(pyHook, /# Outside quotes a backslash escapes the NEXT character/);
   const shellText = readSource(join('src', 'safety', 'shell-text.ts'));
