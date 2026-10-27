@@ -39,7 +39,13 @@ export function writeHermesMcpConfig(devkitPacks: string | null): boolean {
   if (hcloudBin) {
     blockLines.push(`      HCLOUD_BIN: "${hcloudBin.replace(/\\/g, '/')}"`);
   }
-  const hermesPacksLine = devkitPacks !== null ? `      DEVKIT_PACKS: "${devkitPacks.replace(/"/g, '\\"')}"` : null;
+  // YAML double-quoted scalars: backslash starts an escape sequence, so a
+  // raw backslash in DEVKIT_PACKS would corrupt (or inject into) the parsed
+  // value — escape backslashes first, then quotes (CodeQL
+  // js/incomplete-sanitization; backslash-before-quote order matters: the
+  // quote escape's own backslash must not be doubled).
+  const yamlQuoted = (value: string): string => value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const hermesPacksLine = devkitPacks !== null ? `      DEVKIT_PACKS: "${yamlQuoted(devkitPacks)}"` : null;
   if (hermesPacksLine !== null) blockLines.push(hermesPacksLine);
 
   let existing = '';
@@ -76,7 +82,7 @@ export function writeHermesMcpConfig(devkitPacks: string | null): boolean {
   // Restore user args saved by a previous uninstall (issue #615).
   const hermesDelta = takeAgentDelta('hermes');
   if (hermesDelta && Array.isArray(hermesDelta.argsExtra) && hermesDelta.argsExtra.length > 0) {
-    const extras = hermesDelta.argsExtra.map((a) => `"${String(a)}"`).join(', ');
+    const extras = hermesDelta.argsExtra.map((a) => `"${yamlQuoted(String(a))}"`).join(', ');
     blockLines[3] = `    args: ["${mcpPath}", ${extras}]`;
   }
   const newBlock = blockLines.join('\n');

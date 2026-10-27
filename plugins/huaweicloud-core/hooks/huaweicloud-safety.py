@@ -287,8 +287,14 @@ OBSUTIL_WRITES = {
 # separator) so `make env` / `rg env` stay legitimate: env/printenv/export/
 # declare/typeset take flags; bare `set` dumps but `set -e` sets an option.
 # A following pipe or redirect means the dump leaves the process either way.
+# The flags alternation is deliberately unambiguous: the long-flag branch
+# carries (?!u\s) so a bare `-u` can ONLY parse through the `-u <value>`
+# branch — the two-branch overlap on `-u ...` chains was exponential
+# backtracking on failing tails (CodeQL; measured on the TS twin: 26
+# repetitions of ' -u -- ' took 14.3s, 28 took >120s pre-fix, 5000 take 1ms
+# post-fix). Must stay structurally identical to classify-text.ts.
 ARGLESS_DUMP_RE = re.compile(
-    r"(?:^|[;&|\n\r)]|\|\||&&)\s*(?:env|printenv|export|declare|typeset)(?![A-Za-z0-9_-])(?:\s+(?:--?[A-Za-z0-9-]+(?:=[^ ]*)?|-u\s+\S+))*(\s*[|>].*)?\s*$",
+    r"(?:^|[;&|\n\r)]|\|\||&&)\s*(?:env|printenv|export|declare|typeset)(?![A-Za-z0-9_-])(?:\s+(?:-u\s+\S+|--?(?!u\s)[A-Za-z0-9-]+(?:=[^ ]*)?))*(\s*[|>].*)?\s*$",
     re.I,
 )
 BARE_SET_RE = re.compile(r"(?:^|[;&|\n\r)]|\|\||&&)\s*set\s*$", re.I)

@@ -136,9 +136,16 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
   // env/printenv/export/declare/typeset take flags; bare `set` dumps, but
   // `set -e`/`set -o pipefail` set shell options and dump nothing, so only
   // the flagless form denies. A following pipe or redirect means the dump
-  // leaves the process either way.
+  // leaves the process either way. The flags alternation is deliberately
+  // unambiguous: the long-flag branch carries (?!u\s) so a bare `-u` can
+  // ONLY parse through the `-u <value>` branch — the two-branch overlap on
+  // `-u ...` chains was exponential backtracking on failing tails
+  // (CodeQL js/inefficient-regular-expression; measured: 26 repetitions of
+  // ' -u -- ' took 14.3s, 28 took >120s pre-fix, 5000 take 1ms post-fix).
+  // The python twin (hooks/huaweicloud-safety.py ARGLESS_DUMP_RE) must stay
+  // structurally identical — hook-parity.test.ts pins the shared verdicts.
   if (
-    /(?:^|[;&|\n\r)]|\|\||&&)\s*(?:env|printenv|export|declare|typeset)(?![A-Za-z0-9_-])(?:\s+(?:--?[A-Za-z0-9-]+(?:=[^ ]*)?|-u\s+\S+))*(\s*[|>].*)?\s*$/i.test(
+    /(?:^|[;&|\n\r)]|\|\||&&)\s*(?:env|printenv|export|declare|typeset)(?![A-Za-z0-9_-])(?:\s+(?:-u\s+\S+|--?(?!u\s)[A-Za-z0-9-]+(?:=[^ ]*)?))*(\s*[|>].*)?\s*$/i.test(
       shadowText,
     ) ||
     /(?:^|[;&|\n\r)]|\|\||&&)\s*set\s*$/i.test(shadowText) ||

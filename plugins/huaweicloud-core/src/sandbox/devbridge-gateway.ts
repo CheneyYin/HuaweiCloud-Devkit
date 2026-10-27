@@ -23,3 +23,14 @@ export const DEVBRIDGE_MIGRATION_MARKER = '服务已迁移';
 export const DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER = 'tunnel not found';
 export const DEVBRIDGE_PORT_NOT_CONFIGURED_MARKER = 'port not configured';
 export const DEVBRIDGE_BAD_GATEWAY_MARKER = 'bad gateway';
+
+// Complete regex-metacharacter escape for the domain when it is interpolated
+// into a pattern — the dot-only escape the family used before was incomplete
+// (CodeQL js/incomplete-sanitization: a backslash in the input would eat the
+// next character's escape). Both regex consumers — the expose script's
+// port-anchored grep -oE matcher and the tunnelId parser's RegExp — go
+// through this one seam; the escaped form is valid for ERE and JS RegExp
+// alike (over-escaping is inert in both).
+export function escapeTunnelDomainForRegExp(domain: string): string {
+  return domain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}

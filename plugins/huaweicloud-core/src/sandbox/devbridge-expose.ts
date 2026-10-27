@@ -4,6 +4,7 @@ import {
   DEVBRIDGE_PORT_NOT_CONFIGURED_MARKER,
   DEVBRIDGE_TUNNEL_DOMAIN,
   DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER,
+  escapeTunnelDomainForRegExp,
 } from './devbridge-gateway.ts';
 import { DEVBRIDGE_HOST_EXPIRY_HOURS, evaluateDevbridgeVersion } from './devbridge-validation.ts';
 import { stripTerminalEscapes } from './sandbox-output.ts';
@@ -60,7 +61,7 @@ export function buildDevbridgeExposeScript(port: number, expiryHours: number = D
   // Port-anchored URL extraction: a multi-port host prints one "Tunnel URL:" line per
   // port, so a port-blind `sed | tail -1` can pick another port's URL. The pattern is
   // derived from the shared domain constant, never hardcoded.
-  const domainLiteral = DEVBRIDGE_TUNNEL_DOMAIN.replace(/\./g, '\\.');
+  const domainLiteral = escapeTunnelDomainForRegExp(DEVBRIDGE_TUNNEL_DOMAIN);
   return [
     // #999: the export rides the same first line as the pkill so the fake's
     // first-line recognizer (and any reader) sees one stable anchor — the
@@ -205,7 +206,7 @@ export function parseDevbridgeExposeOutput(stdout: unknown): DevbridgeExpose {
   // retrying host can log the marker on several lines.
   const quotaError = Number(readDbField(text, 'DB_QUOTA_ERROR')) > 0;
   const migration = Number(readDbField(text, 'DB_MIGRATION')) > 0;
-  const domainPattern = DEVBRIDGE_TUNNEL_DOMAIN.replace(/\./g, '\\.');
+  const domainPattern = escapeTunnelDomainForRegExp(DEVBRIDGE_TUNNEL_DOMAIN);
   const tunnelId =
     (tunnelUrl.match(new RegExp(`^https:\\/\\/([A-Za-z0-9_-]+)-\\d+\\.${domainPattern}`)) ?? [])[1] ?? '';
   const expiryHours = Number(readDbField(text, 'DB_EXPIRY_HOURS')) || undefined;

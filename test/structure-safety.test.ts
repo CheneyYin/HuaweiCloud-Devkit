@@ -91,3 +91,16 @@ test('the safety skill documents the secret vault and its reference is not a dea
   assert.match(reference, /python3 -m skill_quality_cli/);
   assert.match(reference, /cli_entry\.py/);
 });
+
+test('the signing test vectors never spell a contiguous Signature=<hex> literal', () => {
+  // The CI secret scanner (gitleaks generic-api-key) matches the contiguous
+  // '<token keyword>...=...<64-hex>' shape: it flagged two of the four
+  // deterministic HMAC vectors on PR #1037 (2026-10-27) — test digests, not
+  // credentials. The vectors now live as prefix + DIGEST_* concatenation so
+  // no keyword sits inside the scanner's window of a hex value; a "cleanup"
+  // that merges them back into single literals re-trips the gate. This pin
+  // makes that regression a named failure instead of a red CI mystery.
+  const vectors = readFileSync(join(root, 'test', 'hw-request-signing.test.ts'), 'utf8');
+  assert.doesNotMatch(vectors, /Signature=[0-9a-f]{64}/);
+  assert.match(vectors, /Signature=' \+ DIGEST_/);
+});

@@ -562,3 +562,30 @@ test('TS classifier and python hook agree on the shared adversarial battery', ()
   }
   assert.deepEqual(mismatches, [], 'layer drift detected');
 });
+
+test('the env-dump flag chain stays linear on the -u/-- adversarial shape (ReDoS probe)', () => {
+  // CodeQL js/inefficient-regular-expression flagged the flags alternation
+  // of ARGLESS_DUMP_RE: the old two-branch form let a bare `-u` parse
+  // through BOTH branches, so a failing tail (`plainword` — the shape that
+  // forces full decomposition) went exponential — measured red-first on the
+  // pre-fix regex: 14.3s at 26 repetitions of ' -u -- ', >120s at 28. The
+  // (?!u\s) lookahead on the long-flag branch makes each token's parse
+  // unique; 5000 repetitions must classify in bounded time on BOTH layers
+  // (the python twin shares the structure; its spawnSync timeout of 30s is
+  // the python-side bound — an exponential regression kills the process
+  // there and fails the status assertion below).
+  const payload = `env${' -u -- '.repeat(5000)}plainword`;
+  const tsStart = Date.now();
+  assert.equal(classifyTextCommand(payload).decision, 'allow');
+  assert.ok(Date.now() - tsStart < 1000, 'TS classifier spent exponential time on the -u/-- chain');
+
+  const py = spawnSync('python3', [hookPath], {
+    input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: payload } }),
+    encoding: 'utf8',
+    timeout: 30000,
+  });
+  const unavailable = (py.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT';
+  if (unavailable) return; // python3 not on PATH: TS-only environment
+  assert.equal(py.status, 0, `python hook crashed on the -u/-- chain: ${py.stderr.slice(0, 200)}`);
+  assert.equal(py.stdout.trim().length > 0 ? 'deny' : 'allow', 'allow');
+});
