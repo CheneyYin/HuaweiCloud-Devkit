@@ -278,6 +278,30 @@ test('expose_tunnel re-verifies from an independent exec session and classifies 
   assert.match(sandbox, /## Full-Stack: REST API over PostgreSQL \(PostgREST\)/);
   assert.match(sandbox, /Backend present\?/);
   assert.match(sandbox, /fullstack-postgrest\.md/);
+
+  // The dev #1016/#1017/#1019/#1020 knowledge wave ported into the reference:
+  // the PG data-disk move (the 系统盘 rollback trap), the Aliyun RPM mirror,
+  // the third-party-proxy + official-sha256 doctrine, and the corrected
+  // write-grant beat (401 → targeted GRANT → 201).
+  const postgrest = readSource(
+    join('src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'references', 'fullstack-postgrest.md'),
+  );
+  // PGDATA lives on the data disk — /var/lib/pgsql rolls back on reboot (#1019).
+  assert.match(postgrest, /\/workspace\/pgsql\/16\/data/);
+  assert.match(postgrest, /initdb -D \/workspace\/pgsql\/16\/data/);
+  assert.doesNotMatch(postgrest, /\/var\/lib\/pgsql\/16\/data/);
+  assert.match(postgrest, /系统盘 \(system disk\)/);
+  // RPMs come from the Aliyun mirror, not the ~8KB/s official sources.
+  assert.match(postgrest, /mirrors\.aliyun\.com\/postgresql\/repos\/yum\/16\/redhat\/rhel-8-aarch64/);
+  assert.match(postgrest, /mirrors\.aliyun\.com\/almalinux\/8\/BaseOS/);
+  // Third-party proxy bytes are verified against the official GitHub digest.
+  assert.match(postgrest, /postgrest-v16\.5-linux-static-aarch64\.tar\.xz/);
+  assert.match(postgrest, /\| sha256sum -c -/);
+  assert.match(postgrest, /test -n "\$PGRST_SHA256"/);
+  // POST 401 → targeted GRANT → 201 (the ported third beat — anchored on the
+  // Step-4 sentence itself, not the same-shaped restart-trap sentence).
+  assert.match(postgrest, /After that targeted grant the same `POST \/api\/todos` returns \*\*201\*\*/);
+
   assert.match(
     deployCheckSource,
     /\[ "\$code" = "404" \] && \[ "\$body" = "\$\{DEVBRIDGE_TUNNEL_NOT_FOUND_MARKER\}" \]/,
