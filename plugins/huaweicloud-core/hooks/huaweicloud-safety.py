@@ -35,11 +35,12 @@ CONFIG_FILE_RE = None
 SECRET_READ_RE = None
 SECRET_CLI_RE = None
 WRITE_OPERATION_RE = None
+WRITE_VOCAB_RE = None
 BLOCKED_CONFIGURE_SUBCOMMANDS = set()
 
 
 def load_policy():
-    global CONFIG_FILE_RE, SECRET_READ_RE, SECRET_CLI_RE, WRITE_OPERATION_RE
+    global CONFIG_FILE_RE, SECRET_READ_RE, SECRET_CLI_RE, WRITE_OPERATION_RE, WRITE_VOCAB_RE
     try:
         with POLICY_PATH.open("r", encoding="utf-8") as file_obj:
             policy = json.load(file_obj)
@@ -80,6 +81,18 @@ def load_policy():
             # (^|[A-Za-z0-9]) never matched a space-preceded plain
             # operation AND matched prose after `echo`.
             WRITE_OPERATION_RE = re.compile(r"(^|[A-Za-z0-9])(" + "|".join(write_prefixes) + r")\w*", re.I)
+            # Write-operation vocabulary for the obfuscation gate's
+            # fail-closed clause — DERIVED from the same policy list as
+            # WRITE_OPERATION_RE, never a second hand-maintained
+            # alternation: the hardcoded 20-word copy this replaced had
+            # drifted from the 37 policy.json prefixes, and the 17 missing
+            # words (invoke/execute/trigger/deploy among them) let mangled
+            # writes through the py-hook faces (Hermes importlib, WorkBuddy
+            # deploy) while the TS layer denied (writeVocabHit over
+            # DEFAULT_POLICY.writeOperationPrefixes in classify-text.ts).
+            # The vocabulary's own failure mode lives at the gate: an
+            # unavailable derivation fails the clause CLOSED.
+            WRITE_VOCAB_RE = re.compile(r"(^|[^a-z])(?:" + "|".join(write_prefixes) + ")", re.I)
     except Exception:
         pass
 
@@ -300,12 +313,6 @@ ARGLESS_DUMP_RE = re.compile(
 BARE_SET_RE = re.compile(r"(?:^|[;&|\n\r)]|\|\||&&)\s*set\s*$", re.I)
 DUMP_PIPE_RE = re.compile(r"(?:^|[;&|\n\r)]|\|\||&&)\s*(?:env|printenv|set)(?![A-Za-z0-9_-])\s*(?:\||>)", re.I)
 OBFUSCATION_RE = re.compile(r"\$['\"]|\$\(|`")
-# Write-operation vocabulary for the obfuscation gate's fail-closed clause —
-# the policy.json writeOperationPrefixes mirrored as one alternation.
-WRITE_VOCAB_RE = re.compile(
-    r"(^|[^a-z])(?:create|batchcreate|delete|batchdelete|update|modify|resize|reboot|stop|start|restart|apply|authorize|revoke|add|remove|associate|disassociate|attach|detach)",
-    re.I,
-)
 CLOUD_BIN_RE = re.compile(
     r"(^|[^a-z0-9.-])(?:huaweicloud-devkit|setup-cli\.(?:js|mjs|ts|cjs)|setup\.cjs)|(^|[^a-z0-9.-])hcloud(\.exe)?\s",
     re.I,
@@ -1485,10 +1492,18 @@ def evaluate(tool_name, tool_input):
     # closes ANSI-C KEYWORD mangling ($'\x68'cloud — the h exists only inside
     # the escape, so no layer sees 'hcloud', but the unquoted text still
     # carries 'deleteservers'): expansion + a write-op word denies fail-closed.
-    # Mirrors the TS gate's writeVocabHit clause (the #927 audit bypass fix).
+    # Mirrors the TS gate's writeVocabHit clause (the #927 audit bypass fix);
+    # the vocabulary is the policy.json writeOperationPrefixes list derived
+    # by load_policy (same source as WRITE_OPERATION_RE — one list, both
+    # gates). The `is None` arm is the vocabulary's failure mode, chosen
+    # FAIL-CLOSED: when the derivation is unavailable (policy.json missing,
+    # corrupt, or the list empty) the clause treats the vocabulary as hit,
+    # so an expansion-bearing command denies instead of the unavailable
+    # word list re-opening the mangled-write hole the gate exists to close.
     if (
         CLOUD_BIN_RE.search(unquoted)
         or re.search(r"secret://", unquoted)
+        or WRITE_VOCAB_RE is None
         or WRITE_VOCAB_RE.search(unquoted)
     ) and OBFUSCATION_RE.search(text):
         return "an obfuscated cloud CLI invocation (shell expansion inside the command) is blocked. Write the command in plain form."

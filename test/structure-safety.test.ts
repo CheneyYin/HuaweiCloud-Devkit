@@ -43,6 +43,33 @@ test('cloud risk rules are present and public-safe', () => {
   }
 });
 
+test('the py hook derives the obfuscation gate write vocabulary from policy.json, never a second hand-maintained list', () => {
+  // port-v2defects (interrogate round): WRITE_VOCAB_RE was a hardcoded
+  // 20-word alternation whose comment claimed to mirror policy.json's 37
+  // writeOperationPrefixes — the 17 missing words (invoke/execute/trigger/
+  // deploy among them) let mangled InvokeFunction/Execute/Trigger/Deploy
+  // writes through the py-hook faces (Hermes importlib, WorkBuddy deploy)
+  // while the TS layer denied via writeVocabHit. The vocabulary is now
+  // DERIVED by load_policy from the same list WRITE_OPERATION_RE reads, and
+  // an unavailable derivation (unreadable policy, empty list) fails the
+  // gate's clause CLOSED — the `is None` arm fires — instead of silently
+  // reopening the mangled-write hole.
+  const pyHook = readSource(join('hooks', 'huaweicloud-safety.py'));
+  assert.match(pyHook, /WRITE_VOCAB_RE = None/);
+  assert.ok(
+    pyHook.includes('WRITE_VOCAB_RE = re.compile(r"(^|[^a-z])(?:" + "|".join(write_prefixes) + ")", re.I)'),
+    'the vocabulary must be derived from the policy write_prefixes list inside load_policy',
+  );
+  // The fail-closed arm sits in the gate's vocabulary clause.
+  assert.ok(
+    pyHook.includes('or WRITE_VOCAB_RE is None\n        or WRITE_VOCAB_RE.search(unquoted)'),
+    'an unavailable derivation must fail the clause CLOSED (the is None arm)',
+  );
+  // The drift shape itself must not return: a literal write-word alternation
+  // assigned to WRITE_VOCAB_RE is the bug this closes.
+  assert.doesNotMatch(pyHook, /WRITE_VOCAB_RE = re\.compile\(\s*r?"\(\^\|\[\^a-z\]\)\(\?:create\|batchcreate\|/);
+});
+
 test('hooks.json uses Node hook and keeps Python hook for Hermes compatibility', () => {
   const hooksDir = join(pluginRoot, 'hooks');
   const hooksJsonPath = join(hooksDir, 'hooks.json');

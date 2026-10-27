@@ -56,6 +56,19 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
   // both layers deny via the write-vocabulary clause of the obfuscation gate.
   ["$'\\x68'cloud ECS DeleteServers --server.name=x", 'deny'],
   ["hcl$'\\x6f'ud ECS DeleteServers --server.name=x", 'deny'],
+  // port-v2defects (interrogate round): the py hook's WRITE_VOCAB_RE was a
+  // hardcoded 20-word copy of policy.json's 37 writeOperationPrefixes — the
+  // 17 missing words (invoke/execute/trigger/deploy among them, the
+  // doctrine-named write families) let these mangled writes through the
+  // py-hook faces (Hermes importlib, WorkBuddy deploy) while the TS layer
+  // denied. The py vocabulary now derives from the same policy list; these
+  // pins mirror the DeleteServers pin above for each family. Operation
+  // spellings pin the classifier's write-prefix clause — FunctionGraph
+  // InvokeFunction is the corpus-real anchor, the others are shaped.
+  ["$'\\x68'cloud FunctionGraph InvokeFunction --func_urn=x", 'deny'],
+  ["$'\\x68'cloud CodeArtsDeploy ExecuteDeployTask --task_id=x", 'deny'],
+  ["$'\\x68'cloud CES TriggerAlarmPolicy --alarm_id=x", 'deny'],
+  ["$'\\x68'cloud CodeArtsDeploy DeployApplication --app_id=x", 'deny'],
   // cors/website: real write-capable subcommands on the pinned 7.3.12 (live
   // -method=get reaches OBS and returns NoSuchBucket) — upstream #1001's
   // removal was measured on 7.2.x. Both layers keep the deny.
