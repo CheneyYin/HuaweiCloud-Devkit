@@ -12,10 +12,13 @@ const MAX_VALUE_LENGTH = 255;
 
 // The event-queue cap, shared by the two writers that must agree on it:
 // the enqueue clamp (event-pipeline.ts) and the ingest clamp
-// (hook-ingest.ts). A shared home rather than a mirrored pair —
-// event-pipeline and hook-ingest value-import each other, so a mirror
-// could drift silently (and no behavior test can pin equality without
-// enqueueing past the cap). Same constant class as MAX_VALUE_LENGTH.
+// (hook-ingest.ts). A shared home rather than a mirrored pair — a mirror
+// could drift silently, and no behavior test can pin equality without
+// enqueueing past the cap. Placed here because both clamp sites already
+// value-import this module (event-pipeline's edge into hook-ingest is
+// one-way, so hook-ingest could host it too — this home keeps the cap
+// beside the other event-shaping constants). Same constant class as
+// MAX_VALUE_LENGTH.
 export const MAX_EVENT_QUEUE = 500;
 
 const osTypeStr = osType();

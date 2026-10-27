@@ -69,13 +69,17 @@ export function enqueueTrackedEvent(ctx: TelemetryContext, raw: TelemetryEventIn
 // resolves. The recursion terminates: each follow-up only happens on an
 // in-flight arrival, and a round permanently removes its batch (sent or
 // client-error dropped) or requeues it with _retries+1 until MAX_RETRIES
-// drops it, so the queue strictly drains under a chain. Wait bound: each
-// in-flight collision adds one follow-up round — K awaiters arriving
-// mid-flight serialize into at most K+1 rounds, and under persistent
-// timeout-failure the retry budget caps any chain at MAX_RETRIES+1 rounds
-// (≤ 4 fetch timeouts). A queue longer than the follow-up's batch leaves
-// the tail to the next trigger — the exit spool (hook-ingest.ts) owns that
-// tail, not this promise.
+// drops it, so the queue strictly drains under a chain. Wait bound, stated
+// honestly: the chain's DEPTH scales with arrivals — each in-flight
+// collision adds one follow-up round, so K awaiters arriving mid-flight
+// serialize into up to K+1 rounds, and under sustained traffic against a
+// dead endpoint an awaiter's wait scales with the arrival rate, not with
+// the retry budget. What the budget bounds is each BATCH's delivery
+// lifetime (a requeued batch is dropped after MAX_RETRIES failing rounds,
+// ≤ 4 fetch timeouts old) — which guarantees termination, not a latency
+// ceiling. A queue longer than the follow-up's batch leaves the tail to
+// the next trigger — the exit spool (hook-ingest.ts) owns that tail, not
+// this promise.
 //
 // The returned promise never rejects: failures (fetch errors, 5xx) are
 // dispositioned internally (requeue for the next trigger, or drop after

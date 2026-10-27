@@ -29,10 +29,12 @@ async function handleVoucherStatus(args: ToolArgs = {}, _opts: CallToolOptions =
 // flush promise never rejects (E4a: failures requeue or drop), so a
 // telemetry outage degrades to a delayed requeue, never a failed claim
 // result. Latency coupling: with a healthy endpoint the await adds one
-// fetch; with an unreachable one it can chain up to the flush contract's
-// bound (MAX_RETRIES+1 rounds ≈ 4 fetch timeouts) — on the stdio face
-// that is the documented trade, and it equally applies to the remote
-// surface, whose voucher calls dispatch through this same handler against
+// fetch; with an unreachable one the wait scales with concurrent flush
+// arrivals (each in-flight collision adds a follow-up round — on a busy
+// multi-session remote this can exceed the per-batch retry budget's
+// horizon; the budget bounds each batch's delivery lifetime, not the
+// chain's latency) — on the stdio face that is the documented trade, and
+// it equally applies to the remote surface, whose voucher calls dispatch through this same handler against
 // process-wide telemetry state (initialized on each initialize handshake;
 // a tools/call-first request on a fresh remote process has no telemetry
 // state and the await is a no-op). voucher_status stays unflushed on
