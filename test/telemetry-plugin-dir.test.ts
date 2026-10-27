@@ -36,9 +36,27 @@ test('resolvePluginDir: raw source checkout shape (src/telemetry, no dist)', () 
   const root = fixtureDir('devkit-telemetry-src-');
   mkdirSync(join(root, 'src', 'telemetry'), { recursive: true });
   writeFileSync(join(root, 'src', 'telemetry', 'telemetry.ts'), '');
-  // A raw checkout has no dist/; safety/ at the plugin root is the marker.
+  // A raw checkout has no dist/; safety/ plus package.json at the plugin
+  // root is the marker.
   mkdirSync(join(root, 'safety'));
   writeFileSync(join(root, 'safety', 'policy.json'), '{}');
+  writeFileSync(join(root, 'package.json'), '{}');
+  assert.equal(resolvePluginDir(join(root, 'src', 'telemetry')), root);
+});
+
+test('resolvePluginDir: a safety/ dir inside src/ never wins the first climb', () => {
+  // The safety family split created src/safety/, and a bare safety/ marker
+  // made src/ resolve as the plugin dir from src/telemetry — the identity
+  // stamps then wrote into the committed source tree on every source-tree
+  // test run (four stray zero-byte files in src/telemetry, measured
+  // 2026-10-27). src/ carries safety/ but never the plugin's package.json.
+  const root = fixtureDir('devkit-telemetry-src-safety-');
+  mkdirSync(join(root, 'src', 'telemetry'), { recursive: true });
+  mkdirSync(join(root, 'src', 'safety'));
+  writeFileSync(join(root, 'src', 'safety', 'classify-text.ts'), '');
+  mkdirSync(join(root, 'safety'));
+  writeFileSync(join(root, 'safety', 'policy.json'), '{}');
+  writeFileSync(join(root, 'package.json'), '{}');
   assert.equal(resolvePluginDir(join(root, 'src', 'telemetry')), root);
 });
 

@@ -66,8 +66,17 @@ const __dirname = dirname(__filename);
 // layout keeps dist/ and/or safety/ directly under the plugin dir (dist in
 // built layouts, safety in a raw source checkout).
 export function resolvePluginDir(startDir: string): string {
+  // The raw-checkout marker is safety/ PLUS package.json: the safety family
+  // split put a safety/ directory inside src/ too, and a bare safety/ probe
+  // made src/ win the first climb from src/telemetry — the identity stamps
+  // (install-stamp, dau-stamp, ...) then wrote into the committed source
+  // tree on every source-tree test run (measured 2026-10-27: four stray
+  // zero-byte stamp files in src/telemetry). src/ never carries the
+  // plugin's package.json; every true plugin root (checkout, tsc tree,
+  // bundle, npm/codex cache) does.
   for (const candidate of [join(startDir, '..'), join(startDir, '..', '..')]) {
-    if (existsSync(join(candidate, 'dist')) || existsSync(join(candidate, 'safety'))) return candidate;
+    if (existsSync(join(candidate, 'dist'))) return candidate;
+    if (existsSync(join(candidate, 'safety')) && existsSync(join(candidate, 'package.json'))) return candidate;
   }
   return join(startDir, '..', '..');
 }
