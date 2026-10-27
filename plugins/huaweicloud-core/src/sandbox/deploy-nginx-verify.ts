@@ -35,13 +35,22 @@ export interface ParsedDeployNginxVerify {
 // The markers are ANCHORED (^…$), so OSC-integration shells that wrap every
 // line in \x1b]133;C\x07 blind the parse — every successful deploy would read
 // as "nginx -t did not pass" (port-v2defects; the #946 single-seam doctrine:
-// stripTerminalEscapes folds in here like every sandbox-output parser).
+// stripTerminalEscapes folds in here like every sandbox-output parser). Each
+// line is also TRIMMED before the anchored lookups (the deploy-check sibling
+// doctrine, interrogate round 1): residual leading/trailing whitespace — a
+// shell variant appending a space after the OSC terminator, an indented echo —
+// escapes the escape-stripper and would read the same false failure.
+// configMissing deliberately stays an UNANCHORED substring on the whole
+// stripped text (its historical tolerance — a marker glued into a longer line
+// still reads).
 export function parseDeployNginxVerifyOutput(stdout: string | undefined): ParsedDeployNginxVerify {
   const text = stripTerminalEscapes(stdout);
+  const lines = text.split('\n').map((line) => line.trim());
   const configMissing = /DB_NGINX_CONFIG_MISSING=1/.test(text);
-  const nginxTest = text.match(/^DB_NGINX_T=(\w+)$/m)?.[1] ?? '';
-  const nginxTestOutput = (text.match(/^DB_NGINX_T_OUTPUT: .*$/gm) ?? [])
-    .map((line) => line.replace(/^DB_NGINX_T_OUTPUT: /, ''))
+  const nginxTest = lines.find((line) => /^DB_NGINX_T=\w+$/.test(line))?.slice('DB_NGINX_T='.length) ?? '';
+  const nginxTestOutput = lines
+    .filter((line) => line.startsWith('DB_NGINX_T_OUTPUT: '))
+    .map((line) => line.slice('DB_NGINX_T_OUTPUT: '.length))
     .join('\n');
   return { configMissing, nginxTest, nginxTestOutput };
 }

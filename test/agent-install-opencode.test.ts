@@ -162,10 +162,25 @@ test('workbuddy telemetry dirs follow HUAWEICLOUD_DEVKIT_HOME (port-v2defects)',
     );
     const uninstall = run('workbuddy', home, cwd, 'uninstall', { HUAWEICLOUD_DEVKIT_HOME: override });
     assert.equal(uninstall.status, 0, uninstall.stderr);
-    assert.match(uninstall.stdout, /Removed telemetry cache/);
+    // The stdout line is location-bearing (interrogate round 1): the removed
+    // path printed must be the OVERRIDE twin, not the bare-HOME one.
+    assert.match(
+      uninstall.stdout,
+      /Removed telemetry cache: .*ai-devkit-home-[^\s]*[.]huaweicloud-devkit[\\/]telemetry/,
+    );
     assert.ok(
       !existsSync(join(override, '.huaweicloud-devkit', 'telemetry')),
       'uninstall must remove the override dir the install created',
+    );
+    // Pre-existing uninstall shape, pinned explicitly (interrogate round 1):
+    // the rmSync targets the telemetry CHILD — the now-empty
+    // .huaweicloud-devkit parent survives under the override exactly as the
+    // bare-home parent did pre-fix. Recorded, not changed: removing the
+    // parent would need an emptiness guard and buys nothing (the dir is
+    // devkit-namespaced and self-heals on the next install/server write).
+    assert.ok(
+      existsSync(join(override, '.huaweicloud-devkit')),
+      'the empty parent dir remains (pre-existing shape, pinned deliberately)',
     );
     assert.ok(
       !existsSync(join(home, '.huaweicloud-devkit')),

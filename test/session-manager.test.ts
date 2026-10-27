@@ -263,6 +263,23 @@ test('parseDeployNginxVerifyOutput survives OSC/CSI-wrapped output (#946 shell s
   const pass = parseDeployNginxVerifyOutput(['deploy output', `${osc}DB_NGINX_T=PASS`].join('\r\n'));
   assert.equal(pass.configMissing, false);
   assert.equal(pass.nginxTest, 'PASS', 'OSC-wrapped PASS marker must be stripped and read');
+  // ST-terminated OSC (tmux passthrough emits \x1b\\ instead of BEL) — the
+  // OSC regex's second alternative, pinned so a BEL-only "simplification"
+  // cannot pass the suite (interrogate round 1).
+  assert.equal(
+    parseDeployNginxVerifyOutput('\x1b]133;C\x1b\\DB_NGINX_T=PASS').nginxTest,
+    'PASS',
+    'ST-terminated OSC must be stripped and read',
+  );
+  // Residual whitespace around a marker line (a shell variant appending a
+  // space after the terminator, an indented echo) — the per-line trim
+  // (deploy-check sibling doctrine) must keep the anchored lookups reading
+  // (interrogate round 1; the pre-trim parser read nginxTest "" here).
+  assert.equal(
+    parseDeployNginxVerifyOutput('DB_NGINX_T=PASS \r\n  DB_NGINX_CONFIG_MISSING=1\n').nginxTest,
+    'PASS',
+    'a trailing space after the value must not blind the T= anchor',
+  );
   const fail = parseDeployNginxVerifyOutput(
     [`${osc}DB_NGINX_T=FAIL`, `${osc}DB_NGINX_T_OUTPUT: nginx: [emerg] unknown directive "foo"`].join('\r\n'),
   );

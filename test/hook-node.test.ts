@@ -53,6 +53,35 @@ test('node hook still blocks when the plugin copy has no built dist', () => {
   }
 });
 
+test('node hook denies fail-closed when the policy cannot be loaded (interrogate round 1)', () => {
+  // A payload too broken to load its own policy (safety/ missing —
+  // DEFAULT_POLICY throws at module load) must deny with the cause named
+  // instead of dying with no verdict, which a PreToolUse harness reads as
+  // "allow". The py twin's fail-closed posture.
+  const dir = mkdtempSync(join(tmpdir(), 'hwc-hook-nopolicy-'));
+  try {
+    const pluginRoot = join(process.cwd(), 'plugins', 'huaweicloud-core');
+    cpSync(join(pluginRoot, 'hooks'), join(dir, 'hooks'), { recursive: true });
+    cpSync(join(pluginRoot, 'src'), join(dir, 'src'), { recursive: true });
+    assert.ok(!existsSync(join(dir, 'dist')), 'fixture must not contain dist');
+    assert.ok(!existsSync(join(dir, 'safety')), 'fixture must not contain safety/');
+
+    const result = spawnSync(process.execPath, [join(dir, 'hooks', 'huaweicloud-safety.mjs')], {
+      input: JSON.stringify({
+        tool_name: 'Bash',
+        tool_input: { command: 'hcloud ECS ListServers' },
+      }),
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, `the broken-payload hook must exit 0, not crash: ${result.stderr.slice(0, 200)}`);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(output.hookSpecificOutput.permissionDecisionReason, /safety policy failed to load/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('node hook blocks public admin port through shared rules', () => {
   const result = runHook({
     tool_name: 'mcp__huaweicloud__create_security_group_rule',

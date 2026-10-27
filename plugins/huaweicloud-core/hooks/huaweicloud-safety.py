@@ -36,14 +36,81 @@ SECRET_READ_RE = None
 SECRET_CLI_RE = None
 WRITE_OPERATION_RE = None
 WRITE_VOCAB_RE = None
+READ_OPERATION_RE = None
 BLOCKED_CONFIGURE_SUBCOMMANDS = set()
+
+# OBS util write-capable subcommands — the write-gate's OBS face and (via the
+# load_policy union) the obfuscation gate's vocabulary. Kept as one set per
+# layer with the TS twin (src/safety/tokens.ts OBSUTIL_WRITES), pinned by the
+# hook-parity battery.
+OBSUTIL_WRITES = {
+    "mb", "cp", "mv", "rm", "delete", "mkdir", "sync", "restore", "chattri",
+    "bucketpolicy", "lifecycle", "cors", "website", "sign", "share-add", "share-update", "share-rm",
+    # KooCLI 7.3.12 write-capable subcommands (-method based, except
+    # custom-domain which writes via -cname/certificate options),
+    # plus the full-name put/delete public-access-block writes.
+    "bucket-tagging", "object-tagging", "encryption", "custom-domain", "mirror-back-to-source",
+    "put-public-access-block", "delete-public-access-block",
+    # Pre-existing on 7.2.x too but never dispositioned (7.3.12-pin sweep),
+    # plus create-share (issues capability tokens — sign's class) and update
+    # (obsutil self-update — mutates the installed binary).
+    "abort", "archive", "create-share", "update",
+}
 
 
 def load_policy():
-    global CONFIG_FILE_RE, SECRET_READ_RE, SECRET_CLI_RE, WRITE_OPERATION_RE, WRITE_VOCAB_RE
+    global CONFIG_FILE_RE, SECRET_READ_RE, SECRET_CLI_RE, WRITE_OPERATION_RE, WRITE_VOCAB_RE, READ_OPERATION_RE
     try:
         with POLICY_PATH.open("r", encoding="utf-8") as file_obj:
             policy = json.load(file_obj)
+        # Write/read vocabularies FIRST, per-field isolated (interrogate
+        # round 1): an invalid regex in a LATER field's list
+        # (credentialFilePatterns, blockedSecretOperations, ...) must not
+        # abort the load before the vocabularies compile — their
+        # unavailability fails their gates CLOSED (hcloud_write_blocked /
+        # the obfuscation clause), so unrelated corruption must not trigger
+        # that arm while the lists are intact. Non-list values normalize to
+        # [] so every degraded shape funnels into the fail-closed arms
+        # instead of "|".join-ing a string into a garbage char-alternation.
+        write_prefixes = policy.get("writeOperationPrefixes", [])
+        if not isinstance(write_prefixes, list):
+            write_prefixes = []
+        if write_prefixes:
+            # Applied to the OPERATION TOKEN (positional, like the TS
+            # hasWritePrefix): ^ matches token start, [A-Za-z0-9] admits
+            # compound names (NovaCreate…). The older whole-text form with
+            # (^|[A-Za-z0-9]) never matched a space-preceded plain
+            # operation AND matched prose after `echo`.
+            WRITE_OPERATION_RE = re.compile(r"(^|[A-Za-z0-9])(" + "|".join(write_prefixes) + r")\w*", re.I)
+            # Write-operation vocabulary for the obfuscation gate's
+            # fail-closed clause — DERIVED from the same policy list as
+            # WRITE_OPERATION_RE, never a second hand-maintained
+            # alternation: the hardcoded 20-word copy this replaced had
+            # drifted from the 37 policy.json prefixes, and the 17 missing
+            # words (invoke/execute/trigger/deploy among them) let mangled
+            # writes through the py-hook faces (Hermes importlib, WorkBuddy
+            # deploy) while the TS layer denied (writeVocabHit over
+            # DEFAULT_POLICY.writeOperationPrefixes in classify-text.ts).
+            # UNIONED with OBSUTIL_WRITES (interrogate round 1): routing
+            # dies with the keyword under ANSI-C mangling, so this vocab is
+            # the only layer that can fire — non-prefix obsutil subcommand
+            # writes (rm/cp/mv/sync/chattri…) must be in it. The
+            # vocabulary's own failure mode lives at the gate: an
+            # unavailable derivation fails the clause CLOSED.
+            WRITE_VOCAB_RE = re.compile(r"(^|[^a-z])(?:" + "|".join(sorted(set(write_prefixes) | OBSUTIL_WRITES)) + ")", re.I)
+        read_prefixes = policy.get("readOperationPrefixes", [])
+        if not isinstance(read_prefixes, list):
+            read_prefixes = []
+        if read_prefixes:
+            # The read vocabulary, likewise derived (interrogate round 1 —
+            # the hardcoded mirror was the last hand-maintained policy
+            # copy). Kept in the historical \b-anywhere shape for BOTH
+            # consumers: record_cli_event matches it against the
+            # "Service Operation" cmd string (the read word is the SECOND
+            # word), and the write gate's read exemption anchors it at the
+            # operation token's start via re.match (TS hasReadPrefix's
+            # ^prefix parity — \b at position 0 is equivalent).
+            READ_OPERATION_RE = re.compile(r"\b(" + "|".join(read_prefixes) + r")\w*", re.I)
         cred_patterns = policy.get("credentialFilePatterns", [])
         if cred_patterns:
             CONFIG_FILE_RE = re.compile("|".join(cred_patterns), re.I)
@@ -73,26 +140,6 @@ def load_policy():
         blocked_secret_cli = policy.get("blockedSecretCliPatterns", [])
         if blocked_secret_cli:
             SECRET_CLI_RE = re.compile("|".join(blocked_secret_cli), re.I)
-        write_prefixes = policy.get("writeOperationPrefixes", [])
-        if write_prefixes:
-            # Applied to the OPERATION TOKEN (positional, like the TS
-            # hasWritePrefix): ^ matches token start, [A-Za-z0-9] admits
-            # compound names (NovaCreate…). The older whole-text form with
-            # (^|[A-Za-z0-9]) never matched a space-preceded plain
-            # operation AND matched prose after `echo`.
-            WRITE_OPERATION_RE = re.compile(r"(^|[A-Za-z0-9])(" + "|".join(write_prefixes) + r")\w*", re.I)
-            # Write-operation vocabulary for the obfuscation gate's
-            # fail-closed clause — DERIVED from the same policy list as
-            # WRITE_OPERATION_RE, never a second hand-maintained
-            # alternation: the hardcoded 20-word copy this replaced had
-            # drifted from the 37 policy.json prefixes, and the 17 missing
-            # words (invoke/execute/trigger/deploy among them) let mangled
-            # writes through the py-hook faces (Hermes importlib, WorkBuddy
-            # deploy) while the TS layer denied (writeVocabHit over
-            # DEFAULT_POLICY.writeOperationPrefixes in classify-text.ts).
-            # The vocabulary's own failure mode lives at the gate: an
-            # unavailable derivation fails the clause CLOSED.
-            WRITE_VOCAB_RE = re.compile(r"(^|[^a-z])(?:" + "|".join(write_prefixes) + ")", re.I)
     except Exception:
         pass
 
@@ -104,7 +151,10 @@ ENV_DUMP_RE = re.compile(
     re.I,
 )
 HCLOUD_RE = re.compile(r"(^|\s)hcloud(\.exe)?\s+", re.I)
-READ_OPERATION_RE = re.compile(r"\b(List|Show|Get|Describe|NovaList|NovaShow)\w*", re.I)
+# READ_OPERATION_RE is policy-derived (load_policy, from
+# readOperationPrefixes) — see the derivation comment there for the two
+# consumer shapes (record_cli_event's \b-anywhere, the write gate's
+# re.match anchoring).
 # Mirrors the TS layer's #650 D4-2 gate: unescaped $HW_/$HUAWEICLOUD_/
 # $HWC_/$OS_ credential expansions are a potential dump regardless of the
 # command. The negative lookbehind exempts backslash-escaped or single-quoted
@@ -172,7 +222,7 @@ def record_cli_event(text):
     cmd = " ".join(cmd.split()[:2])
     if not cmd:
         return
-    is_read = bool(READ_OPERATION_RE.search(cmd))
+    is_read = bool(READ_OPERATION_RE.search(cmd)) if READ_OPERATION_RE else False
     is_write = bool(WRITE_OPERATION_RE.search(cmd)) if WRITE_OPERATION_RE else False
     event_key = "cli:read" if is_read else ("cli:write" if is_write else "cli:invoke")
     event = {"key": event_key, "value": f"hcloud {cmd}", "capability": "cli"}
@@ -282,19 +332,6 @@ DEVKIT_BIN_NAMES = {
     "huaweicloud-devkit", "huaweicloud-devkit.js", "huaweicloud-devkit.cjs",
     "huaweicloud-devkit.mjs", "huaweicloud-devkit.ts", "huaweicloud-devkit.exe",
     "setup-cli.js", "setup-cli.mjs", "setup-cli.ts", "setup.cjs",
-}
-OBSUTIL_WRITES = {
-    "mb", "cp", "mv", "rm", "delete", "mkdir", "sync", "restore", "chattri",
-    "bucketpolicy", "lifecycle", "cors", "website", "sign", "share-add", "share-update", "share-rm",
-    # KooCLI 7.3.12 write-capable subcommands (-method based, except
-    # custom-domain which writes via -cname/certificate options),
-    # plus the full-name put/delete public-access-block writes.
-    "bucket-tagging", "object-tagging", "encryption", "custom-domain", "mirror-back-to-source",
-    "put-public-access-block", "delete-public-access-block",
-    # Pre-existing on 7.2.x too but never dispositioned (7.3.12-pin sweep),
-    # plus create-share (issues capability tokens — sign's class) and update
-    # (obsutil self-update — mutates the installed binary).
-    "abort", "archive", "create-share", "update",
 }
 # Argument-less full-dump forms — at COMMAND POSITION (start or after a
 # separator) so `make env` / `rg env` stay legitimate: env/printenv/export/
@@ -1147,7 +1184,17 @@ def _stripped_write_deny(stripped, argv):
         return True
     if service.lower() == "obs" and operation.lower() in OBSUTIL_WRITES:
         return True
-    return bool(WRITE_OPERATION_RE.search(operation) and not READ_OPERATION_RE.search(operation))
+    # The read exemption anchors at the operation token's START via
+    # re.match (interrogate round 1 — TS hasReadPrefix's ^prefix parity;
+    # \b at position 0 is equivalent): a write-prefixed operation with an
+    # embedded read word (`Update-Show-x`) is the write it is on both
+    # layers. An unavailable read vocabulary cannot prove a read — the
+    # exemption does not apply (fail-closed, the empty-read-list parity:
+    # TS hasReadPrefix over [] is always false).
+    return bool(
+        WRITE_OPERATION_RE.search(operation)
+        and (READ_OPERATION_RE is None or not READ_OPERATION_RE.match(operation))
+    )
 
 
 def _classify_leading(stripped, argv, routed):
@@ -1173,6 +1220,22 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
     subcommands classify through the same write list; `hcloud configure
     show/get/list/…` is a credential read (policy vocabulary, TS parity)."""
     if not WRITE_OPERATION_RE:
+        # Fail-closed (interrogate round 1): an unavailable write
+        # vocabulary must not reopen PLAIN writes while their mangled
+        # forms still deny through the obfuscation gate — an incoherent
+        # posture where only the honest spelling sails through. A routed
+        # hcloud payload denies with the cause named; unrouted text keeps
+        # no jurisdiction here and stays allowed.
+        if routed is None:
+            routed = (
+                HCLOUD_ROUTE_RE.search(strip_shell_quotes(text)) is not None
+                or HCLOUD_ROUTE_RE.search(text) is not None
+            )
+        if routed:
+            return (
+                "the safety policy could not be loaded; hcloud commands are "
+                "denied fail-closed. Fix or reinstall the plugin's safety/policy.json."
+            )
         return None
     if routed is None:
         routed = (
@@ -1493,13 +1556,16 @@ def evaluate(tool_name, tool_input):
     # the escape, so no layer sees 'hcloud', but the unquoted text still
     # carries 'deleteservers'): expansion + a write-op word denies fail-closed.
     # Mirrors the TS gate's writeVocabHit clause (the #927 audit bypass fix);
-    # the vocabulary is the policy.json writeOperationPrefixes list derived
-    # by load_policy (same source as WRITE_OPERATION_RE — one list, both
-    # gates). The `is None` arm is the vocabulary's failure mode, chosen
-    # FAIL-CLOSED: when the derivation is unavailable (policy.json missing,
-    # corrupt, or the list empty) the clause treats the vocabulary as hit,
-    # so an expansion-bearing command denies instead of the unavailable
-    # word list re-opening the mangled-write hole the gate exists to close.
+    # the vocabulary is the policy.json writeOperationPrefixes list UNIONED
+    # with OBSUTIL_WRITES (both non-prefix subcommand writes and prefix
+    # operations mangle the same way), derived by load_policy from the same
+    # read as WRITE_OPERATION_RE — one list, both gates. The `is None` arm is
+    # the vocabulary's failure mode, chosen FAIL-CLOSED: when the derivation
+    # is unavailable (policy.json missing or corrupt JSON, or the list empty
+    # or non-list — load_policy normalizes non-lists to empty) the clause
+    # treats the vocabulary as hit, so an expansion-bearing command denies
+    # instead of the unavailable word list re-opening the mangled-write hole
+    # the gate exists to close.
     if (
         CLOUD_BIN_RE.search(unquoted)
         or re.search(r"secret://", unquoted)

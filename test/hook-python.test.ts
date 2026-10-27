@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
+
+import { fixtureDir } from './fixture-dir.ts';
 
 const hookPath = join(process.cwd(), 'plugins', 'huaweicloud-core', 'hooks', 'huaweicloud-safety.py');
 const pythonBin = process.platform === 'win32' ? 'python' : 'python3';
@@ -265,4 +267,92 @@ test('python hook: positional write gate, newline payloads, and OBS writes', () 
     'hcloud OBS ls obs://bucket',
   ];
   for (const command of allowCases) expectHookDecision(command, 'allow');
+});
+
+// port-v2defects (interrogate round 1): the DEGRADED-mode doctrine, pinned
+// behaviorally. The hook is copied into a fixture dir WITHOUT its safety/
+// sibling (and, in the second variant, with a policy whose LATER field
+// carries an invalid regex) so the policy-load failure modes fire for real:
+// an unavailable write vocabulary must fail its gates CLOSED (the
+// obfuscation clause's is-None arm; hcloud_write_blocked's routed deny) —
+// never reopen plain writes while the mangled forms deny — and per-field
+// isolation must keep unrelated corruption (a bad credentialFilePatterns
+// regex) from triggering the fail-closed arms while the vocabularies are
+// intact.
+test('python hook fails closed when the policy vocabulary is unavailable (degraded-mode doctrine)', () => {
+  // The copies mirror the deployed layout (hooks/ under the plugin dir,
+  // safety/ its sibling) so the hook's parents[1] resolves inside the
+  // fixture, not the surrounding tmpdir.
+  const dir = fixtureDir('hook-degraded-');
+  mkdirSync(join(dir, 'hooks'), { recursive: true });
+  const hookCopy = join(dir, 'hooks', 'huaweicloud-safety.py');
+  copyFileSync(hookPath, hookCopy);
+  const runDegraded = (command: string) =>
+    spawnSync(pythonBin, [hookCopy], {
+      input: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }),
+      encoding: 'utf8',
+    });
+  if (pythonUnavailable(runDegraded('echo hello'))) return;
+
+  // No safety/ sibling: every policy-derived regex stays None.
+  const cases: Array<[command: string, verdict: 'deny' | 'allow', why: string]> = [
+    ["$'\\x68'cloud FunctionGraph InvokeFunction --func_urn=x", 'deny', 'mangled write: the is-None vocab arm'],
+    ['hcloud ECS DeleteServers --server.id=x', 'deny', 'plain write: the routed fail-closed write gate'],
+    ['hcloud ECS ListServers', 'deny', 'plain read: fail-closed with the cause named (no vocabulary to prove safety)'],
+    ['echo $(date)', 'deny', 'non-cloud obfuscation: the blast radius, chosen fail-closed'],
+    ['echo hello', 'allow', 'plain non-hcloud text keeps no jurisdiction'],
+    ['ls -la', 'allow', 'same'],
+  ];
+  for (const [command, expected, why] of cases) {
+    const result = runDegraded(command);
+    assert.equal(result.status, 0, `${command}: the degraded hook must not crash: ${result.stderr.slice(0, 200)}`);
+    assert.equal(result.stderr, '', `${command}: no stderr in degraded mode`);
+    if (expected === 'allow') {
+      assert.equal(result.stdout.trim(), '', `${command} must allow (${why})`);
+    } else {
+      const output = JSON.parse(result.stdout);
+      assert.equal(output.hookSpecificOutput.permissionDecision, 'deny', `${command} must deny (${why})`);
+    }
+  }
+  // The routed deny names the cause (actionable, not a bare refusal).
+  const writeResult = JSON.parse(runDegraded('hcloud ECS DeleteServers --server.id=x').stdout);
+  assert.match(writeResult.hookSpecificOutput.permissionDecisionReason, /policy could not be loaded/);
+
+  // Per-field isolation: an invalid regex in a LATER policy field
+  // (credentialFilePatterns) must not abort the load before the
+  // write/read vocabularies compile — the fail-closed arms stay untriggered
+  // while the vocabularies are intact.
+  const isolated = fixtureDir('hook-isolated-');
+  mkdirSync(join(isolated, 'hooks'), { recursive: true });
+  mkdirSync(join(isolated, 'safety'), { recursive: true });
+  const policy = JSON.parse(
+    readFileSync(join(process.cwd(), 'plugins', 'huaweicloud-core', 'safety', 'policy.json'), 'utf8'),
+  );
+  policy.credentialFilePatterns = ['('];
+  writeFileSync(join(isolated, 'safety', 'policy.json'), JSON.stringify(policy));
+  const isolatedHook = join(isolated, 'hooks', 'huaweicloud-safety.py');
+  copyFileSync(hookPath, isolatedHook);
+  const runIsolated = (command: string) =>
+    spawnSync(pythonBin, [isolatedHook], {
+      input: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }),
+      encoding: 'utf8',
+    });
+  if (pythonUnavailable(runIsolated('echo hello'))) return;
+  const isolatedCases: Array<[command: string, verdict: 'deny' | 'allow', why: string]> = [
+    ['echo $(date)', 'allow', 'unrelated corruption must not trigger the vocab fail-closed arm'],
+    ['hcloud ECS DeleteServers --server.id=x', 'deny', 'the intact write vocabulary still denies writes'],
+    ['hcloud ECS ListServers', 'allow', 'the intact read vocabulary still allows reads'],
+    ['hcloud ECS Update-Show-x', 'deny', 'the read exemption stays start-anchored'],
+  ];
+  for (const [command, expected, why] of isolatedCases) {
+    const result = runIsolated(command);
+    assert.equal(result.status, 0, `${command}: ${result.stderr.slice(0, 200)}`);
+    if (expected === 'allow') {
+      assert.equal(result.stdout.trim(), '', `${command} must allow (${why})`);
+    } else {
+      const output = JSON.parse(result.stdout);
+      assert.equal(output.hookSpecificOutput.permissionDecision, 'deny', `${command} must deny (${why})`);
+    }
+  }
+  assert.ok(existsSync(hookCopy), 'fixture registry owns the copies (cleaned at exit)');
 });

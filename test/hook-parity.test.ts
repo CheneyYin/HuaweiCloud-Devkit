@@ -69,6 +69,24 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
   ["$'\\x68'cloud CodeArtsDeploy ExecuteDeployTask --task_id=x", 'deny'],
   ["$'\\x68'cloud CES TriggerAlarmPolicy --alarm_id=x", 'deny'],
   ["$'\\x68'cloud CodeArtsDeploy DeployApplication --app_id=x", 'deny'],
+  // port-v2defects (interrogate round 1): the mangled OBS subcommand face —
+  // routing dies with the keyword, so the obfuscation gate's write
+  // vocabulary is the only layer that can fire, and its union with
+  // OBSUTIL_WRITES (both layers) closes the non-prefix subcommand writes
+  // (rm/cp/sync/chattri…). Read subcommands stay allowed.
+  ["$'\\x68'cloud OBS rm obs://b -f", 'deny'],
+  ["$'\\x68'cloud OBS cp obs://src obs://dst", 'deny'],
+  ["$'\\x68'cloud OBS sync obs://b obs://c", 'deny'],
+  ["$'\\x68'cloud OBS chattri obs://b -acl=public-read", 'deny'],
+  ["$'\\x68'cloud OBS ls obs://bucket", 'allow'],
+  ["$'\\x68'cloud OBS stat obs://b/o", 'allow'],
+  // port-v2defects (interrogate round 1): the write gate's read exemption is
+  // anchored at the operation token's START on both layers (TS hasReadPrefix
+  // ^prefix parity — py re.match). A write-prefixed operation with an
+  // embedded read word classifies as the write it is; a read-prefixed one
+  // with an embedded write word stays the read it is.
+  ['hcloud ECS Update-Show-x', 'deny'],
+  ['hcloud ECS ShowUpdate-x', 'allow'],
   // cors/website: real write-capable subcommands on the pinned 7.3.12 (live
   // -method=get reaches OBS and returns NoSuchBucket) — upstream #1001's
   // removal was measured on 7.2.x. Both layers keep the deny.

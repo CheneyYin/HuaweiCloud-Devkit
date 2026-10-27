@@ -27,6 +27,10 @@ export function stripTerminalEscapes(text: unknown): string {
   // intermediate class consume one leading data char — fail-closed corruption
   // of that field, still preferable to the unstripped escape blinding the line.
   const csiRe = new RegExp(ESC + '\\[[0-9:;<=>?]*[ -/]*[a-zA-Z]', 'g');
+  // OSC analog of the CSI edge below: a mangled/unterminated OSC whose
+  // payload swallows a whole marker line strips the marker entirely —
+  // fail-closed corruption of that line (the anchored parsers read the
+  // marker as absent), the same tradeoff the CSI edge accepts.
   const oscRe = new RegExp(ESC + '\\][^' + ESC + '\x07]*(?:\x07|' + ESC + '\\\\)', 'g');
   return raw
     .replace(csiRe, '')

@@ -6,6 +6,7 @@ import { DEFAULT_POLICY } from './default-policy.ts';
 import { matchesAny, type ClassifyOptions } from './policy.ts';
 import { applyRawCommandRiskRules } from './risk-merge.ts';
 import { splitSimpleCommand, stripShellQuotes } from './shell-text.ts';
+import { OBSUTIL_WRITES } from './tokens.ts';
 import { SECRET_SHADOW_RE, SECRET_TEXT_RE } from './vocabulary.ts';
 
 export function classifyTextCommand(command: unknown, options: ClassifyOptions = {}): RiskDecision {
@@ -90,9 +91,23 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
   // hit denies even when the cloud-CLI marker itself was destroyed (#927
   // audit: v2 and main both allowed this class before — the sibling
   // operation-token form `$'\x43'reateServers` was already denied).
-  const writeVocabHit = DEFAULT_POLICY.writeOperationPrefixes.some((prefix) =>
-    new RegExp(`(^|[^a-z])${prefix}`, 'i').test(shadowText),
-  );
+  //
+  // The vocabulary itself: the policy writeOperationPrefixes UNIONED with
+  // OBSUTIL_WRITES (the py twin's load_policy union, interrogate round 1) —
+  // routing dies with the keyword under ANSI-C mangling, so this vocab is
+  // the only layer that can fire, and non-prefix obsutil subcommand writes
+  // (rm/cp/mv/sync/chattri…) mangle exactly like the prefix operations. An
+  // EMPTY prefix list is an abnormal, hand-mangled policy (the shipped one
+  // is structure-floored at >= 10): treated as a hit so the clause fails
+  // CLOSED, mirroring the py WRITE_VOCAB_RE is-None arm. Residual,
+  // recorded: the TS write gate itself (hasWritePrefix over []) stays
+  // fail-open on that same abnormal shape — pre-existing on main and v2,
+  // out of this fix's surface.
+  const writeVocabHit =
+    DEFAULT_POLICY.writeOperationPrefixes.length === 0 ||
+    [...DEFAULT_POLICY.writeOperationPrefixes, ...OBSUTIL_WRITES].some((word) =>
+      new RegExp(`(^|[^a-z])${word}`, 'i').test(shadowText),
+    );
   if (
     (/(^|[^a-z0-9.-])(?:huaweicloud-devkit|setup-cli\.(?:js|mjs|ts|cjs)|setup\.cjs)|(^|[^a-z0-9.-])hcloud(\.exe)?\s/i.test(
       shadowText,
