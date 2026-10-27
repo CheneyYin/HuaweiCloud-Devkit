@@ -1702,14 +1702,27 @@ def evaluate(tool_name, tool_input):
     # Length cap (interrogate round 5): BYTES on both twins (UTF-16 units on
     # TS vs code points here disagreed at the boundary on astral-plane
     # padding — same payload, different verdicts; bytes are also the honest
-    # reading of "256 KiB payload"). A routed OR EXPANSION-BEARING over-cap
-    # payload denies fail-closed: the round-4 decode skip must not make the
-    # over-cap slice the one place a mangled write sails through (the
-    # obfuscation marker is a constant-time raw-text check; no legitimate
-    # oversized expansion-bearing Bash payload exists).
-    text_bytes = len(text.encode("utf-8"))
+    # reading of "256 KiB payload"). "replace" handles LONE SURROGATES the
+    # JSON parser accepts (round 6: a bare .encode("utf-8") raised
+    # UnicodeEncodeError and killed the hook verdict-less — read as allow —
+    # on any payload carrying \ud800; TS's Buffer.byteLength replaces them,
+    # and the replacement's byte count matches).
+    text_bytes = len(text.encode("utf-8", "replace"))
+    # Continuation-dropped text (interrogate round 6): bash removes the
+    # \<newline> pair BEFORE tokenization, reassembling $'/$(/backtick across
+    # the break — the raw text of h$\<LF>'\x63'loud … carries only $\, so
+    # every raw-text expansion check and the decode must run on the
+    # reassembled form or a composed mangled write sails through. Dropping
+    # pairs can only ever CREATE markers (a real $' survives the drop
+    # untouched), so the dropped form subsumes the raw one.
+    text_cont = re.sub(r"\\\n", "", text)
+    # A routed OR EXPANSION-BEARING over-cap payload denies fail-closed: the
+    # round-4 decode skip must not make the over-cap slice the one place a
+    # mangled write sails through (the marker check on the dropped text is a
+    # single linear scan; no legitimate oversized expansion-bearing Bash
+    # payload exists).
     if text_bytes > 262144 and (
-        OBFUSCATION_RE.search(text)
+        OBFUSCATION_RE.search(text_cont)
         or HCLOUD_ROUTE_RE.search(unquoted)
         or HCLOUD_ROUTE_RE.search(text)
     ):
@@ -1718,12 +1731,16 @@ def evaluate(tool_name, tool_input):
     # spans build, reconstructed — h$'\x63'loud is the hcloud the shell
     # executes. Presence gates below that bear on cloud-command or
     # secret-reveal detection search BOTH shadows; with no $' span the
-    # decoded candidate is the original text. Skipped for over-cap payloads
-    # (interrogate round 4: an unrouted 10 MB escape flood must not pay the
-    # decode's linear pass — and round 5's expansion-bearing cap deny above
-    # closes the skip's mangled-write window at the same size).
+    # decoded candidate is the original text. Decoded from the
+    # CONTINUATION-DROPPED text (round 6: the pair removal is part of bash's
+    # own first pass, and the decode's outside-quote backslash branch would
+    # otherwise consume the \ of a composed $\<LF>' without opening the
+    # span). Skipped for over-cap payloads (round 4: an unrouted 10 MB
+    # escape flood must not pay the decode's linear pass — and the
+    # expansion-bearing cap deny above closes the skip's mangled-write
+    # window at the same size).
     decoded_unquoted = (
-        unquoted if text_bytes > 262144 else strip_shell_quotes(decode_ansi_c_spans(text))
+        unquoted if text_bytes > 262144 else strip_shell_quotes(decode_ansi_c_spans(text_cont))
     )
     candidates = (unquoted, decoded_unquoted)
     normalized = re.sub(r"/{2,}", "/", text)
@@ -1781,7 +1798,10 @@ def evaluate(tool_name, tool_input):
             any(OBS_MARKER_RE.search(candidate) for candidate in candidates)
             and any(OBS_VOCAB_RE.search(candidate) for candidate in candidates)
         )
-    ) and OBFUSCATION_RE.search(text):
+    # The right conjunct runs on the CONTINUATION-DROPPED text (round 6): a
+    # composed $\<LF>' carries the marker only after the pair drop, and the
+    # drop never destroys a real one.
+    ) and OBFUSCATION_RE.search(text_cont):
         return "an obfuscated cloud CLI invocation (shell expansion inside the command) is blocked. Write the command in plain form."
     if (
         ENV_DUMP_RE.search(unquoted)

@@ -18,20 +18,28 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
   // padding — the same payload denied on one layer and allowed on the
   // other. Bytes are also the honest reading of "256 KiB payload".
   const textBytes = Buffer.byteLength(text, 'utf8');
+  // Continuation-dropped text (interrogate round 6): bash removes the
+  // \<newline> pair BEFORE tokenization, reassembling `$'`/`$(`/backtick
+  // across the break — the raw text of `h$\<LF>'\x63'loud …` carries only
+  // `$\`, so every raw-text expansion check and the decode must run on the
+  // reassembled form or a composed mangled write sails through. Dropping
+  // pairs can only ever CREATE markers (a real `$'` survives the drop
+  // untouched), so the dropped form subsumes the raw one.
+  const contDropped = text.replace(/\\\n/g, '');
 
   // Length cap: a routed payload past 256 KiB cannot execute through any
   // wrapper chain (MAX_ARG_STRLEN), and classifying pathological nests
   // at that size costs minutes — a hook DoS. Denied fail-closed instead.
-  // An EXPANSION-BEARING over-cap payload denies too (interrogate round
-  // 5): the round-4 decode skip must not make the over-cap slice the one
-  // place a mangled write sails through — the obfuscation marker is a
-  // constant-time raw-text check, and no legitimate oversized
-  // expansion-bearing Bash payload exists.
+  // An EXPANSION-BEARING over-cap payload denies too (interrogate rounds
+  // 5-6): the marker check runs on the continuation-dropped text (a single
+  // linear scan) — no legitimate oversized expansion-bearing Bash payload
+  // exists, and the round-4 decode skip must not make the over-cap slice
+  // the one place a mangled write sails through.
   if (textBytes > 262_144) {
     if (
       /(^|[^a-z0-9.-])hcloud(\.exe)?[\s)\]}'"]/i.test(shadowText) ||
       /(^|[^a-z0-9.-])hcloud(\.exe)?[\s)\]}'"]/i.test(text) ||
-      /\$['"]|\$\(|`/.test(text)
+      /\$['"]|\$\(|`/.test(contDropped)
     ) {
       return {
         decision: 'deny',
@@ -44,12 +52,15 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
   // spans build, reconstructed — `h$'\x63'loud` is the `hcloud` the shell
   // executes. Presence gates below that bear on cloud-command or
   // secret-reveal detection search BOTH shadows; with no `$'` span the
-  // decoded candidate is the original text. Computed AFTER the length cap
-  // and skipped for over-cap payloads (interrogate round 4: an unrouted
-  // 10 MB escape flood must not pay the decode's linear pass — measured
-  // ~0.75 ms/KB — and round 5's expansion-bearing cap deny above closes
-  // the skip's mangled-write window at the same size).
-  const decodedShadowText = textBytes > 262_144 ? shadowText : stripShellQuotes(decodeAnsiCSpans(text));
+  // decoded candidate is the original text. Decoded from the
+  // CONTINUATION-DROPPED text (round 6: the pair removal is part of bash's
+  // own first pass, and the decode's outside-quote backslash branch would
+  // otherwise consume the `\` of a composed `$\<LF>'` without opening the
+  // span). Computed AFTER the length cap and skipped for over-cap payloads
+  // (round 4: an unrouted 10 MB escape flood must not pay the decode's
+  // linear pass — and the expansion-bearing cap deny above closes the
+  // skip's mangled-write window at the same size).
+  const decodedShadowText = textBytes > 262_144 ? shadowText : stripShellQuotes(decodeAnsiCSpans(contDropped));
   const shadowCandidates = [shadowText, decodedShadowText];
 
   // Raw, shadow, and path-normalized forms (shared with the MCP file gate):
@@ -155,7 +166,10 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
       shadowCandidates.some((candidate) =>
         [...OBSUTIL_WRITES].some((word) => new RegExp(`(^|[^a-z])${word}`, 'i').test(candidate)),
       ));
-  if ((cloudCommandBearing || writeVocabHit) && /\$['"]|\$\(|`/.test(text)) {
+  // The right conjunct runs on the CONTINUATION-DROPPED text (round 6): a
+  // composed `$\<LF>'` carries the marker only after the pair drop, and the
+  // drop never destroys a real one.
+  if ((cloudCommandBearing || writeVocabHit) && /\$['"]|\$\(|`/.test(contDropped)) {
     return {
       decision: 'deny',
       risk: 'secret',

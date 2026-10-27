@@ -132,6 +132,22 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
   // stays allowed.
   ['#' + 'x'.repeat(262200) + "\nh$'\\x63'loud ECS $'\\x44'eleteServers --server.id=x", 'deny'],
   ['#' + 'x'.repeat(262200) + '\necho hello', 'allow'],
+  // port-v2defects (interrogate round 6): the composition channel — bash
+  // removes \\<LF> BEFORE tokenization, reassembling $'/$( across the break,
+  // so h$\\<LF>'\\x63'loud executes as a mangled write while the raw text
+  // carries only $. The expansion check and the decode now run on the
+  // continuation-dropped text (both twins): over-cap composed shapes deny
+  // at the cap, tiny ones through the obfuscation gate. Also the surrogate
+  // row (a lone \ud800 crashed the py hook verdict-less — read as allow —
+  // before the "replace" byte count) and the astral-boundary row (the cap
+  // counts BYTES: astral padding between the old unit-caps must deny with
+  // an expansion-bearing tail, on both layers).
+  ["hcloud ECS $\\\n'\\x44'eleteServers --server.id=x", 'deny'],
+  ["h$\\\n'\\x63'loud ECS DeleteServers --server.id=x", 'deny'],
+  ['#' + 'x'.repeat(262200) + "\nh$\\\n'\\x63'loud ECS $\\\n'\\x44'eleteServers --server.id=x", 'deny'],
+  ['hcloud ECS DeleteServers --server.id=x \ud800', 'deny'],
+  ['echo hello \ud800', 'allow'],
+  ['𝄞'.repeat(200000) + '\necho $(date)', 'deny'],
   // The $(…)-substitution residual (documented): printf-built bins stay
   // opaque to the decode; the OBS-token marker arm still catches the
   // service-token-literal form.
