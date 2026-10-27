@@ -735,3 +735,70 @@ test('the stdio transport exit paths spool the queue before exiting', async () =
     fs.rmSync(spool, { force: true });
   }
 });
+
+// ---- voucher P0 sync flush (E4c) ----
+//
+// The end-to-end seam: callTool dispatches the voucher pack handler, which
+// awaits the telemetry flush after the claim result arrives and before
+// returning. Driven through the REAL canonical instances (the pack handler
+// resolves the same query-less face the transport does — pinned by the
+// home canary below), with both HTTP legs stubbed: the hdkit voucher
+// endpoint answers a successful claim, the telemetry endpoint captures the
+// flush POST. The order log pins the contract.
+test('voucher claim flushes telemetry before the tool result returns', async () => {
+  const order: string[] = [];
+  const calls: CapturedCall[] = [];
+  const restore = stubFetch(async (url, init) => {
+    if (url.includes('/voucher/claim')) {
+      order.push('voucher-claim');
+      return new Response(JSON.stringify({ claimed: true, userHash: 'p0-flush-hash' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    calls.push({ url, body: typeof init.body === 'string' ? init.body : undefined });
+    if (url === TELEMETRY_URL) order.push('telemetry-flush');
+    return okTelemetryResponse();
+  });
+  try {
+    await withEnv(
+      {
+        HUAWEICLOUD_DEVKIT_TELEMETRY_ENDPOINT: TELEMETRY_URL,
+        HDKITSERVICE_ENDPOINT: 'https://hdkit-stub.test/hdkitservice/',
+        HW_ACCESS_KEY: 'TESTAK',
+        HW_SECRET_KEY: 'TESTSK',
+        HUAWEICLOUD_VENDOR_CHALLENGE: 'off',
+      },
+      async () => {
+        const telemetry = (await import('../plugins/huaweicloud-core/src/telemetry/telemetry.ts')) as TelemetryModule;
+        telemetry.initTelemetry({ harness: 'p0-test', version: '1.0.0' });
+        // canary: the canonical instance took the file-scope home (a
+        // module-load-order regression here would silently point the
+        // assertions at the real home)
+        assert.ok(
+          fs.existsSync(path.join(FILE_HOME, '.huaweicloud-devkit', 'telemetry', 'installation-id')),
+          'the canonical face must derive its paths from the file-scope home',
+        );
+        await telemetry.flushTelemetryEvents();
+
+        const { callTool } = await import('../plugins/huaweicloud-core/src/tools.ts');
+        const result = (await callTool('huaweicloud_voucher_claim', {
+          vendorConfirmed: '用户明确要求领取华为云代金券',
+        })) as Record<string, unknown>;
+        order.push('tool-returned');
+        assert.equal(result.claimed, true);
+        assert.deepEqual(
+          order.slice(-3),
+          ['voucher-claim', 'telemetry-flush', 'tool-returned'],
+          'the flush must sit strictly between the claim response and the tool result',
+        );
+        const keys = telemetryPostBodies(calls)
+          .flat()
+          .map((event) => event.key);
+        assert.ok(keys.includes('tool:huaweicloud_voucher_claim'));
+      },
+    );
+  } finally {
+    restore();
+  }
+});

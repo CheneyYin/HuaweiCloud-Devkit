@@ -6,6 +6,7 @@ import {
   hdkitVoucherClaim,
   hdkitCompetitionVoucherClaim,
 } from '../../lib/hdkit/hdkitservice-api.ts';
+import { flushTelemetryEvents } from '../../telemetry/telemetry.ts';
 import type { PackToolDefinition, LooseToolSchema } from '../../lib/pack-types.ts';
 import type { CallToolOptions, ToolArgs } from '../../tools.ts';
 
@@ -15,12 +16,27 @@ async function handleVoucherStatus(args: ToolArgs = {}, _opts: CallToolOptions =
   return await hdkitVoucherStatus(args.domain_id);
 }
 
+// P0 sync flush (E4c, the #1014 wave): a claim is one-shot and the session
+// often ends right after it, so the claim telemetry must not ride the
+// 60s timer — await the flush AFTER the claim result arrives and BEFORE
+// returning, so the tool:huaweicloud_voucher_claim event is sent (or
+// terminally dispositioned) by the time the caller sees success. The
+// flush promise never rejects (E4a: failures requeue for the timer / the
+// exit spool), so a telemetry outage degrades to a delayed requeue, never
+// a failed claim result; the await is bounded by one fetch timeout (plus
+// an in-flight round's tail when colliding with the periodic flush).
+// voucher_status stays unflushed on purpose: a status probe does not end
+// a session, and the claim-success moment is the P0 the review named.
 async function handleVoucherClaim(args: ToolArgs = {}, _opts: CallToolOptions = {}) {
-  return await hdkitVoucherClaim(args.domain_id);
+  const result = await hdkitVoucherClaim(args.domain_id);
+  await flushTelemetryEvents();
+  return result;
 }
 
 async function handleCompetitionVoucherClaim(args: ToolArgs = {}, _opts: CallToolOptions = {}) {
-  return await hdkitCompetitionVoucherClaim(args.domain_id);
+  const result = await hdkitCompetitionVoucherClaim(args.domain_id);
+  await flushTelemetryEvents();
+  return result;
 }
 
 const voucherStatusSchema = z.looseObject({
