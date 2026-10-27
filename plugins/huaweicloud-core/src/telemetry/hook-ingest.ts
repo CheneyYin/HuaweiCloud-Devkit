@@ -21,16 +21,7 @@
 import { existsSync, readFileSync, renameSync, unlinkSync } from 'node:fs';
 
 import type { TelemetryContext, TelemetryEvent } from './telemetry-types.ts';
-import { buildEvent, toTelemetryEvent, toTelemetryEventInput } from './telemetry-values.ts';
-
-// Mirrors event-pipeline's MAX_QUEUE_SIZE — the enqueue path clamps the
-// queue there; the ingest path clamps here so the ≤500 invariant holds on
-// every writer. A sibling import would create a value-level cycle
-// (event-pipeline imports this module), so the value is mirrored and
-// pinned equal by the cap behavior test (test/telemetry.test.ts: a
-// 600-line spool ingests exactly 500, newest kept — the same keep-newest
-// policy the enqueue clamp applies).
-const MAX_INGEST_QUEUE = 500;
+import { buildEvent, MAX_EVENT_QUEUE, toTelemetryEvent, toTelemetryEventInput } from './telemetry-values.ts';
 
 export function ingestSpools(ctx: TelemetryContext): void {
   ingestJsonlSpool(ctx, ctx.paths.hookEventsPath, (parsed) => {
@@ -58,13 +49,18 @@ function ingestJsonlSpool(
           // a malformed line is skipped; the rest of the leftover batch still ingests
         }
       }
-      // Clamp to the queue cap with the same keep-newest policy as the
-      // enqueue path: without this, a large recovery (multi-session exit
-      // spool accumulation) loads unbounded events, and the NEXT enqueue's
-      // clamp would trim oldest-first — silently dropping exactly the
-      // recovered events this seam exists to deliver.
-      if (ctx.state.eventQueue.length > MAX_INGEST_QUEUE) {
-        ctx.state.eventQueue = ctx.state.eventQueue.slice(-MAX_INGEST_QUEUE);
+      // Clamp to the shared event-queue cap (keep-newest — the same policy
+      // the enqueue path applies), so the ≤cap invariant holds on every
+      // writer. Without this, a large recovery (multi-session exit-spool
+      // accumulation) loads unbounded events into memory; with it, a
+      // recovery larger than the cap drops its OLDEST overflow at read
+      // time — truncating what a no-clamp recovery could have fully
+      // delivered across later rounds. The memory invariant is the point.
+      // Cross-spool note: the hook spool is ingested first, so when both
+      // spools are saturated the exit spool (pushed later = newer) wins
+      // the tail by push order.
+      if (ctx.state.eventQueue.length > MAX_EVENT_QUEUE) {
+        ctx.state.eventQueue = ctx.state.eventQueue.slice(-MAX_EVENT_QUEUE);
       }
     } catch {
       // an unreadable leftover batch is unrecoverable; fall through to cleanup

@@ -10,6 +10,14 @@ import type { TelemetryContext, TelemetryEvent, TelemetryEventInput } from './te
 
 const MAX_VALUE_LENGTH = 255;
 
+// The event-queue cap, shared by the two writers that must agree on it:
+// the enqueue clamp (event-pipeline.ts) and the ingest clamp
+// (hook-ingest.ts). A shared home rather than a mirrored pair —
+// event-pipeline and hook-ingest value-import each other, so a mirror
+// could drift silently (and no behavior test can pin equality without
+// enqueueing past the cap). Same constant class as MAX_VALUE_LENGTH.
+export const MAX_EVENT_QUEUE = 500;
+
 const osTypeStr = osType();
 const osVersionStr = osRelease();
 

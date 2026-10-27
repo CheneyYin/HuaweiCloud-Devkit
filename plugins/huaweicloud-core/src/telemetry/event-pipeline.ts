@@ -12,9 +12,8 @@ import { checkDauPing } from './identity-stamps.ts';
 import { ingestSpools } from './hook-ingest.ts';
 import { ensureDir, touchFile } from './telemetry-fs.ts';
 import type { TelemetryContext, TelemetryEvent, TelemetryEventInput } from './telemetry-types.ts';
-import { buildEvent } from './telemetry-values.ts';
+import { buildEvent, MAX_EVENT_QUEUE } from './telemetry-values.ts';
 
-const MAX_QUEUE_SIZE = 500;
 const BATCH_SIZE = 100;
 const FETCH_TIMEOUT_MS = 5000;
 const MAX_RETRIES = 3;
@@ -41,8 +40,8 @@ export function enqueueTrackedEvent(ctx: TelemetryContext, raw: TelemetryEventIn
   const event = buildEvent(ctx, raw);
   ctx.state.eventQueue.push(event);
 
-  if (ctx.state.eventQueue.length > MAX_QUEUE_SIZE) {
-    ctx.state.eventQueue = ctx.state.eventQueue.slice(ctx.state.eventQueue.length - MAX_QUEUE_SIZE);
+  if (ctx.state.eventQueue.length > MAX_EVENT_QUEUE) {
+    ctx.state.eventQueue = ctx.state.eventQueue.slice(ctx.state.eventQueue.length - MAX_EVENT_QUEUE);
   }
 
   if (ctx.state.eventQueue.length >= BATCH_SIZE)
@@ -52,10 +51,15 @@ export function enqueueTrackedEvent(ctx: TelemetryContext, raw: TelemetryEventIn
 }
 
 // The awaitable flush. ONE round per call (a round = one BATCH_SIZE splice
-// over the wire, exactly the pre-awaitable behavior per trigger), so the
-// periodic timer and enqueue triggers keep their pacing — a round failing
-// with a retryable error still waits for the next trigger, never
-// back-to-back self-retries.
+// over the wire, exactly the pre-awaitable behavior per trigger), so a
+// trigger arriving while the pipeline is IDLE keeps its pacing — a round
+// failing with a retryable error still waits for the next trigger. One
+// deliberate pacing change from the pre-awaitable void: a trigger arriving
+// while a round is IN FLIGHT previously no-op'd; it now chains into a
+// follow-up round, so under sustained ≥BATCH_SIZE enqueue pressure against
+// a dead endpoint, retry rounds run denser than the old
+// one-round-per-trigger spacing (still bounded — the retry budget drops
+// the events after MAX_RETRIES either way).
 //
 // Await semantics for a caller arriving while a round is in flight (the
 // documented contract, pinned by test/telemetry.test.ts): the caller

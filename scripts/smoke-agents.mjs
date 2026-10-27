@@ -55,6 +55,12 @@ function cleanEnv(extra = {}) {
   ]) {
     delete env[key];
   }
+  // Telemetry OFF for the MCP roundtrips: they boot with the developer's
+  // real HOME, and the #1014 exit spool would otherwise persist their
+  // unflushed tails into the real ~/.huaweicloud-devkit/telemetry/
+  // (a benign but real test→production channel — the next real session
+  // would ingest and POST the smoke's events).
+  env.HUAWEICLOUD_DEVKIT_TELEMETRY = 'off';
   return { ...env, ...extra };
 }
 

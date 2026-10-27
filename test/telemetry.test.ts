@@ -719,10 +719,12 @@ test('the stdio transport exit paths spool the queue before exiting', async () =
       // Model the next boot's consumption of the spool (the ingest claim —
       // an enqueue-side ingestSpools renames the live file to .processing
       // and a later pass reads + unlinks it), flushing what it recovered,
-      // so phase 2 starts from a clean slate. Physically, no enqueue can
-      // occur between a process's two close-path spools (the transport is
-      // closed — no tool call can start an enqueue), so each phase models
-      // one process lifetime.
+      // so phase 2 starts from a clean slate. The two phases each model
+      // one process lifetime for determinism; in the one real both-paths
+      // scenario (Hermes on Windows: stdin close arms the keepalive, no
+      // exit; stdout closes later), in-flight calls CAN enqueue between
+      // the spools — spoolEventsForExit's append+clear converges exactly
+      // that (the second spool appends only the delta).
       telemetry.ingestHookEvents();
       telemetry.ingestHookEvents();
       await telemetry.flushTelemetryEvents();

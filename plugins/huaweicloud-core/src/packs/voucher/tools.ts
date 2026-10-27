@@ -28,14 +28,16 @@ async function handleVoucherStatus(args: ToolArgs = {}, _opts: CallToolOptions =
 // ends", layered, not "synchronously delivered at any queue depth". The
 // flush promise never rejects (E4a: failures requeue or drop), so a
 // telemetry outage degrades to a delayed requeue, never a failed claim
-// result. Latency coupling: on an unreachable endpoint the await adds up
-// to one fetch timeout (chained onto an in-flight round: a few more) to
-// the tool response — on the stdio face that is the documented trade, and
-// it equally applies to the remote surface (whose voucher calls dispatch
-// through this same handler with live telemetry state — the remote
-// initializes it per request via runInitializeSideEffects). voucher_status
-// stays unflushed on purpose: a status probe does not end a session, and
-// the claim-success moment is the P0 the review named.
+// result. Latency coupling: with a healthy endpoint the await adds one
+// fetch; with an unreachable one it can chain up to the flush contract's
+// bound (MAX_RETRIES+1 rounds ≈ 4 fetch timeouts) — on the stdio face
+// that is the documented trade, and it equally applies to the remote
+// surface, whose voucher calls dispatch through this same handler against
+// process-wide telemetry state (initialized on each initialize handshake;
+// a tools/call-first request on a fresh remote process has no telemetry
+// state and the await is a no-op). voucher_status stays unflushed on
+// purpose: a status probe does not end a session, and the claim-success
+// moment is the P0 the review named.
 async function handleVoucherClaim(args: ToolArgs = {}, _opts: CallToolOptions = {}) {
   const result = await hdkitVoucherClaim(args.domain_id);
   await flushTelemetryEvents();
