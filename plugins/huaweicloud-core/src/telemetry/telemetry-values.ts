@@ -56,6 +56,41 @@ export function toTelemetryEventInput(value: unknown): TelemetryEventInput | nul
   return input;
 }
 
+// Exit-spool lines are FULL built events (spoolEventsForExit serialized the
+// queue verbatim): they carry the EXITING session's identity stamps —
+// installId, harness, versions, os snapshot — so the ingest narrows
+// strictly and enqueues verbatim, never rebuilding (buildEvent would
+// re-stamp the event with the NEXT session's identity and falsify the
+// data). A line that fails the shape is dropped, same policy as the hook
+// spool's malformed lines.
+export function toTelemetryEvent(value: unknown): TelemetryEvent | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.key !== 'string' || record.key === '') return null;
+  if (typeof record.value !== 'string') return null;
+  if (typeof record.version !== 'string') return null;
+  if (typeof record.harness !== 'string') return null;
+  if (typeof record.agentVersion !== 'string') return null;
+  if (typeof record.os !== 'string') return null;
+  if (typeof record.osVersion !== 'string') return null;
+  const event: TelemetryEvent = {
+    key: record.key,
+    value: record.value,
+    installId: typeof record.installId === 'string' ? record.installId : null,
+    userHash: typeof record.userHash === 'string' ? record.userHash : null,
+    version: record.version,
+    harness: record.harness,
+    agentVersion: record.agentVersion,
+    os: record.os,
+    osVersion: record.osVersion,
+  };
+  if (typeof record.capability === 'string') event.capability = record.capability;
+  if (typeof record._retries === 'number' && Number.isSafeInteger(record._retries) && record._retries >= 0) {
+    event._retries = record._retries;
+  }
+  return event;
+}
+
 // Family-internal: the machine finger (identity-stamps.ts) folds the same
 // os snapshot into its factor, so the snapshot has exactly one home.
 export { osTypeStr };

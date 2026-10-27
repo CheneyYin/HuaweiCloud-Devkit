@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
+import { PassThrough } from 'node:stream';
 
 import { AGENTS } from '../plugins/huaweicloud-core/src/telemetry/agent-registry.ts';
 import { detectAgentHarness } from '../plugins/huaweicloud-core/src/telemetry/agent-detect.ts';
@@ -23,7 +24,9 @@ type TelemetryModule = typeof import('../plugins/huaweicloud-core/src/telemetry/
 
 // 隔离 telemetry.mjs 的模块级目录常量（GLOBAL_TELEMETRY_DIR 在 import 时固定）：
 // 临时 HUAWEICLOUD_DEVKIT_HOME + 带 query 的 import 强制新模块实例，用完恢复并清理。
-async function withIsolatedTelemetry(fn: (telemetry: TelemetryModule) => unknown) {
+// fn also receives the home so tests can locate the global-dir artifacts
+// (installation-id, the exit spool) the isolated instance writes there.
+async function withIsolatedTelemetry(fn: (telemetry: TelemetryModule, home: string) => unknown) {
   const fs = await import('node:fs');
   const os = await import('node:os');
   const path = await import('node:path');
@@ -32,12 +35,18 @@ async function withIsolatedTelemetry(fn: (telemetry: TelemetryModule) => unknown
   process.env.HUAWEICLOUD_DEVKIT_HOME = tmp;
   try {
     const telemetry = await import(`../plugins/huaweicloud-core/src/telemetry/telemetry.ts?iso=${Date.now()}`);
-    return await fn(telemetry);
+    return await fn(telemetry, tmp);
   } finally {
     if (prevHome === undefined) delete process.env.HUAWEICLOUD_DEVKIT_HOME;
     else process.env.HUAWEICLOUD_DEVKIT_HOME = prevHome;
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+// The exit-spool file location for a given home (the face's
+// GLOBAL_TELEMETRY_DIR derivation, mirrored for assertions).
+function exitSpoolPath(home: string): string {
+  return path.join(home, '.huaweicloud-devkit', 'telemetry', 'exit-events.jsonl');
 }
 
 // ---- flush-behavior test infrastructure ----
@@ -458,4 +467,271 @@ test('flushTelemetryEvents resolves on server failure and requeues for the next 
       restore();
     }
   });
+});
+
+// ---- exit-time synchronous disk spool (E4b) ----
+
+test('spoolTelemetryEvents is a no-op when the queue is empty', async () => {
+  await withIsolatedTelemetry(async (telemetry, home) => {
+    const restore = stubFetch(async () => okTelemetryResponse());
+    try {
+      await withEnv({ HUAWEICLOUD_DEVKIT_TELEMETRY_ENDPOINT: TELEMETRY_URL }, async () => {
+        telemetry.initTelemetry({ harness: 'test', version: '1.0.0' });
+        await telemetry.flushTelemetryEvents();
+        telemetry.spoolTelemetryEvents();
+        assert.ok(!fs.existsSync(exitSpoolPath(home)), 'an empty queue must not create a spool file');
+      });
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('spoolTelemetryEvents writes full-event JSONL and hands the queue over', async () => {
+  await withIsolatedTelemetry(async (telemetry, home) => {
+    const calls: CapturedCall[] = [];
+    const restore = stubFetch(async (url, init) => {
+      calls.push({ url, body: typeof init.body === 'string' ? init.body : undefined });
+      return okTelemetryResponse();
+    });
+    try {
+      await withEnv({ HUAWEICLOUD_DEVKIT_TELEMETRY_ENDPOINT: TELEMETRY_URL }, async () => {
+        telemetry.initTelemetry({ harness: 'test', version: '1.0.0' });
+        await telemetry.flushTelemetryEvents();
+        const spool = exitSpoolPath(home);
+
+        telemetry.trackToolInvoke('exit_spool_probe');
+        telemetry.spoolTelemetryEvents();
+        assert.ok(fs.existsSync(spool));
+        const lines = fs.readFileSync(spool, 'utf8').trim().split('\n').filter(Boolean);
+        assert.equal(lines.length, 1);
+        const event = JSON.parse(lines[0]!) as Record<string, unknown>;
+        assert.equal(event.key, 'tool:exit_spool_probe');
+        // full-event shape (the exiting session's identity rides along),
+        // not the hook-spool input shape
+        assert.equal(event.harness, 'test');
+        assert.equal(typeof event.installId, 'string');
+
+        // the in-memory queue handed over: a second spool appends nothing
+        // (double-write convergence), and a flush after the handover has
+        // nothing to send
+        const postsBefore = telemetryPostBodies(calls).length;
+        telemetry.spoolTelemetryEvents();
+        assert.equal(fs.readFileSync(spool, 'utf8').trim().split('\n').filter(Boolean).length, 1);
+        await telemetry.flushTelemetryEvents();
+        assert.equal(telemetryPostBodies(calls).length, postsBefore);
+      });
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('the exit spool round-trips: the next boot ingests and flushes the recovered events', async () => {
+  // Twin query-string face instances under ONE home stand in for two
+  // process lifetimes: boot 1 loses its flush (failing endpoint), exit-
+  // spools, "dies"; boot 2 boots against the same home, ingests the spool
+  // through the boot seam, and flushes the recovered events.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hwdk-telemetry-boot-'));
+  const prevHome = process.env.HUAWEICLOUD_DEVKIT_HOME;
+  process.env.HUAWEICLOUD_DEVKIT_HOME = home;
+  const calls: CapturedCall[] = [];
+  let endpointHealthy = false;
+  const restore = stubFetch(async (url, init) => {
+    calls.push({ url, body: typeof init.body === 'string' ? init.body : undefined });
+    if (url === TELEMETRY_URL && !endpointHealthy) {
+      return new Response(JSON.stringify({}), { status: 503, headers: { 'Content-Type': 'application/json' } });
+    }
+    return okTelemetryResponse();
+  });
+  try {
+    await withEnv({ HUAWEICLOUD_DEVKIT_TELEMETRY_ENDPOINT: TELEMETRY_URL }, async () => {
+      // ---- boot 1: events stay queued (503 requeue), then the exit handover ----
+      const boot1 = (await import(
+        `../plugins/huaweicloud-core/src/telemetry/telemetry.ts?iso=boot1-${Date.now()}`
+      )) as TelemetryModule;
+      boot1.initTelemetry({ harness: 'boot1', version: '1.0.0' });
+      boot1.trackToolInvoke('recovered_by_next_boot');
+      await boot1.flushTelemetryEvents();
+      boot1.spoolTelemetryEvents();
+      const spool = exitSpoolPath(home);
+      assert.ok(fs.existsSync(spool), 'the exit handover must write the spool');
+      assert.ok(fs.readFileSync(spool, 'utf8').includes('"key":"tool:recovered_by_next_boot"'));
+
+      // ---- boot 2 (same home): the spool rides the boot ingest seam ----
+      endpointHealthy = true;
+      const boot2 = (await import(
+        `../plugins/huaweicloud-core/src/telemetry/telemetry.ts?iso=boot2-${Date.now()}`
+      )) as TelemetryModule;
+      boot2.initTelemetry({ harness: 'boot2', version: '1.0.0' });
+      // The ingest depth during initTelemetry depends on shared stamp
+      // state (how many boot events enqueue); drive the public ingest seam
+      // explicitly so the test is deterministic on every machine.
+      boot2.ingestHookEvents();
+      await boot2.flushTelemetryEvents();
+
+      const keys = telemetryPostBodies(calls)
+        .flat()
+        .map((event) => event.key);
+      assert.ok(keys.includes('tool:recovered_by_next_boot'), 'the recovered event must reach the endpoint');
+      // the recovered event keeps the EXITING session's identity
+      const recovered = telemetryPostBodies(calls)
+        .flat()
+        .find((event) => event.key === 'tool:recovered_by_next_boot')!;
+      assert.equal(recovered.harness, 'boot1');
+      // the spool is fully consumed (live renamed, .processing read + unlinked)
+      assert.ok(!fs.existsSync(spool));
+      assert.ok(!fs.existsSync(`${spool}.processing`));
+    });
+  } finally {
+    restore();
+    if (prevHome === undefined) delete process.env.HUAWEICLOUD_DEVKIT_HOME;
+    else process.env.HUAWEICLOUD_DEVKIT_HOME = prevHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('exit-spool ingest drops malformed lines and recovers a crashed .processing leftover', async () => {
+  await withIsolatedTelemetry(async (telemetry, home) => {
+    const calls: CapturedCall[] = [];
+    const restore = stubFetch(async (url, init) => {
+      calls.push({ url, body: typeof init.body === 'string' ? init.body : undefined });
+      return okTelemetryResponse();
+    });
+    try {
+      await withEnv({ HUAWEICLOUD_DEVKIT_TELEMETRY_ENDPOINT: TELEMETRY_URL }, async () => {
+        const fullEvent = (key: string): Record<string, unknown> => ({
+          key,
+          value: '1',
+          installId: 'recover-install-id',
+          userHash: null,
+          version: '0.0.0',
+          harness: 'crashed-boot',
+          agentVersion: '1.0.0',
+          os: 'A',
+          osVersion: '1',
+        });
+        const spool = exitSpoolPath(home);
+        fs.mkdirSync(path.dirname(spool), { recursive: true });
+        // a crashed PREVIOUS ingest left a .processing leftover; the live
+        // file carries one good line, one non-JSON line, and one
+        // well-formed-but-wrong-shape line
+        fs.writeFileSync(`${spool}.processing`, `${JSON.stringify(fullEvent('tool:leftover_probe'))}\n`, 'utf8');
+        fs.writeFileSync(
+          spool,
+          `not-json-at-all\n${JSON.stringify({ key: 'shapeless_probe', value: '1' })}\n${JSON.stringify(
+            fullEvent('tool:live_probe'),
+          )}\n`,
+          'utf8',
+        );
+
+        telemetry.initTelemetry({ harness: 'test', version: '1.0.0' });
+        // two ingest passes converge any depth: leftover read + live
+        // rename in the first, renamed read + unlink in the second
+        telemetry.ingestHookEvents();
+        telemetry.ingestHookEvents();
+        await telemetry.flushTelemetryEvents();
+
+        const keys = new Set(
+          telemetryPostBodies(calls)
+            .flat()
+            .map((event) => event.key),
+        );
+        assert.ok(keys.has('tool:leftover_probe'), 'the crashed leftover must be recovered');
+        assert.ok(keys.has('tool:live_probe'), 'the live spool line must be recovered');
+        assert.ok(!keys.has('shapeless_probe'), 'a wrong-shape line must be dropped');
+        assert.ok(!fs.existsSync(spool));
+        assert.ok(!fs.existsSync(`${spool}.processing`));
+      });
+    } finally {
+      restore();
+    }
+  });
+});
+
+// The real exit paths, driven through the transport's own stream wiring:
+// a PassThrough pair rides the injectable `streams` seam (the
+// initializeSideEffects precedent — binding the REAL process streams under
+// a test harness corrupts the harness's own stream state), emitted
+// 'close' events fire the transport's handlers, and a patched process.exit
+// records the hard exit instead of taking it. The spool's side effects
+// (file written, queue handed over) are asserted directly, and the patch
+// ALSO captures whether the spool file existed at the moment exit was
+// called, which pins the spool-BEFORE-exit ordering.
+test('the stdio transport exit paths spool the queue before exiting', async () => {
+  const calls: CapturedCall[] = [];
+  const restore = stubFetch(async (url, init) => {
+    calls.push({ url, body: typeof init.body === 'string' ? init.body : undefined });
+    return okTelemetryResponse();
+  });
+  const spool = exitSpoolPath(FILE_HOME);
+  const exitCalls: { code: number; spoolExists: boolean }[] = [];
+  const originalExit = process.exit;
+  process.exit = ((code?: number) => {
+    exitCalls.push({ code: code ?? 0, spoolExists: fs.existsSync(spool) });
+  }) as typeof process.exit;
+  try {
+    await withEnv({ HUAWEICLOUD_DEVKIT_TELEMETRY_ENDPOINT: TELEMETRY_URL }, async () => {
+      // The CANONICAL face instance (the one the transport's import
+      // resolves) — its module-scope paths derive from the file-scope home.
+      const telemetry = (await import('../plugins/huaweicloud-core/src/telemetry/telemetry.ts')) as TelemetryModule;
+      telemetry.initTelemetry({ harness: 'transport-test', version: '1.0.0' });
+      await telemetry.flushTelemetryEvents();
+      const { DevkitStdioTransport } = await import('../plugins/huaweicloud-core/src/mcp-stdio-transport.ts');
+      const fakeStdin = new PassThrough();
+      const fakeStdout = new PassThrough();
+      const transport = new DevkitStdioTransport({ streams: { stdin: fakeStdin, stdout: fakeStdout } });
+      await transport.start();
+
+      // ---- phase 1: the normal shutdown order (stdin close → hard exit) ----
+      telemetry.trackToolInvoke('exit_via_stdin_close');
+      fakeStdin.emit('close');
+      assert.equal(exitCalls.length, 1);
+      assert.equal(exitCalls[0]!.code, 0);
+      assert.equal(exitCalls[0]!.spoolExists, true, 'the spool must exist BEFORE process.exit takes effect');
+      assert.deepEqual(
+        fs
+          .readFileSync(spool, 'utf8')
+          .trim()
+          .split('\n')
+          .filter(Boolean)
+          .map((line) => (JSON.parse(line) as Record<string, unknown>).key),
+        ['tool:exit_via_stdin_close'],
+      );
+
+      // Model the next boot's consumption of the spool (the ingest claim —
+      // an enqueue-side ingestSpools renames the live file to .processing
+      // and a later pass reads + unlinks it), flushing what it recovered,
+      // so phase 2 starts from a clean slate. Physically, no enqueue can
+      // occur between a process's two close-path spools (the transport is
+      // closed — no tool call can start an enqueue), so each phase models
+      // one process lifetime.
+      telemetry.ingestHookEvents();
+      telemetry.ingestHookEvents();
+      await telemetry.flushTelemetryEvents();
+      fs.rmSync(spool, { force: true });
+      fs.rmSync(`${spool}.processing`, { force: true });
+
+      // ---- phase 2: the rarer order (stdout close → natural drain) ----
+      telemetry.trackToolInvoke('exit_via_stdout_close');
+      fakeStdout.emit('close');
+      assert.equal(exitCalls.length, 1, 'the stdout-close path must not hard-exit');
+      assert.ok(fs.existsSync(spool), 'the stdout-close path must spool the queue');
+      assert.deepEqual(
+        fs
+          .readFileSync(spool, 'utf8')
+          .trim()
+          .split('\n')
+          .filter(Boolean)
+          .map((line) => (JSON.parse(line) as Record<string, unknown>).key),
+        ['tool:exit_via_stdout_close'],
+      );
+      fakeStdin.destroy();
+      fakeStdout.destroy();
+    });
+  } finally {
+    process.exit = originalExit;
+    restore();
+    fs.rmSync(spool, { force: true });
+  }
 });

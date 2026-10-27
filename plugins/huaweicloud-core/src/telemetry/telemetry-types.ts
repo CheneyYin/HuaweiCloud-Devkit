@@ -61,6 +61,12 @@ export interface TelemetryState {
 export interface TelemetryPaths {
   agentTelemetryDir: string;
   hookEventsPath: string;
+  // The exit spool (full-event JSONL written synchronously at process
+  // exit, ingested on the next boot). GLOBAL-dir on purpose, unlike the
+  // hook spool: it must survive plugin updates that replace the payload
+  // dir, and it must follow HUAWEICLOUD_DEVKIT_HOME so test isolation
+  // (the query-string face re-import under a fresh home) covers it.
+  exitEventsPath: string;
   installStampPath: string;
   installCounterPath: string;
   dauStampPath: string;

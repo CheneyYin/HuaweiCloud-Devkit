@@ -1,12 +1,16 @@
 // The event pipeline: enqueue (with hook-spool ingestion and the DAU ping),
 // the queue caps, the batch flush over fetchWithProxy with timeout and
 // bounded retry, the opt-out gate (HUAWEICLOUD_DEVKIT_TELEMETRY=off) and
-// the endpoint override, and the stamp touches a successful flush
-// performs. State arrives via the face-owned context.
+// the endpoint override, the stamp touches a successful flush performs,
+// and the exit-time synchronous disk spool. State arrives via the
+// face-owned context.
+import { appendFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+
 import { fetchWithProxy } from '../proxy/proxy-agent.ts';
 import { checkDauPing } from './identity-stamps.ts';
-import { ingestHookSpool } from './hook-ingest.ts';
-import { touchFile } from './telemetry-fs.ts';
+import { ingestSpools } from './hook-ingest.ts';
+import { ensureDir, touchFile } from './telemetry-fs.ts';
 import type { TelemetryContext, TelemetryEvent, TelemetryEventInput } from './telemetry-types.ts';
 import { buildEvent } from './telemetry-values.ts';
 
@@ -30,7 +34,7 @@ export function enqueueTrackedEvent(ctx: TelemetryContext, raw: TelemetryEventIn
   if (!isTelemetryEnabled()) return;
   if (!ctx.state.installId) return;
 
-  ingestHookSpool(ctx);
+  ingestSpools(ctx);
 
   checkDauPing(ctx);
 
@@ -145,4 +149,44 @@ function requeueEvents(ctx: TelemetryContext, batch: TelemetryEvent[]): void {
     kept.push(event);
   }
   if (kept.length > 0) ctx.state.eventQueue = [...kept, ...ctx.state.eventQueue];
+}
+
+// The exit-time synchronous disk spool (E4b). The stdio transport's close
+// paths call this immediately before exit: process.exit runs no further
+// event-loop turns, so an async flush cannot live there (beforeExit never
+// fires on explicit exit, and awaiting a 5s fetch inside onStdinClose
+// risks the host's CLOSE_TIMEOUT). The queue is written as full-event
+// JSONL to exit-events.jsonl (global telemetry dir — it must survive
+// plugin updates that replace the payload dir, and it follows
+// HUAWEICLOUD_DEVKIT_HOME for isolation), then CLEARED: the spool copy is
+// the handover, so a path that outlives the spool (the stdout-close
+// natural drain, where a straggler timer flush may still fire) finds an
+// empty queue and cannot double-send the spooled lines. Append mode keeps
+// concurrent sessions — separate processes sharing the home — from
+// clobbering each other's tails; the boot-time ingest (ingestSpools)
+// claims the file with the same rename-now/read-next pattern as the hook
+// spool, so a crash between write and ingest is recovered exactly once.
+//
+// Idempotence when both close paths fire in one process (stdout close,
+// then the hard stdin exit): the first call clears the queue, so the
+// second appends only events enqueued in between — each line is written
+// exactly once. An in-flight flush round at spool time is NOT captured
+// (its batch already left the queue, mid-send): on the hard-exit path it
+// is abandoned (≤ BATCH_SIZE events inside one 5s fetch window — the
+// pre-E4b behavior, no regression); on the natural-drain path it may
+// still complete on its own. A failed round requeues into the now-empty
+// queue and is lost at drain — both are accepted, bounded, documented
+// residuals (see docs/CHANGELOG.md).
+export function spoolEventsForExit(ctx: TelemetryContext): void {
+  const queue = ctx.state.eventQueue;
+  if (queue.length === 0) return;
+  try {
+    ensureDir(dirname(ctx.paths.exitEventsPath));
+    appendFileSync(ctx.paths.exitEventsPath, `${queue.map((event) => JSON.stringify(event)).join('\n')}\n`, 'utf8');
+    ctx.debugLog(`EXIT SPOOL wrote ${queue.length} events to ${ctx.paths.exitEventsPath}`);
+    ctx.state.eventQueue = [];
+  } catch (error: unknown) {
+    // best-effort: a failed spool loses the tail; it must never block the exit
+    ctx.debugLog(`EXIT SPOOL FAIL err=${error instanceof Error ? error.message : String(error)}`);
+  }
 }

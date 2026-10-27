@@ -95,6 +95,7 @@ test('telemetry face keeps the public surface under the same import path', () =>
     'enqueueEvent',
     'flushTelemetryEvents',
     'ingestHookEvents',
+    'spoolTelemetryEvents',
     'trackInstall',
     'trackToolInvoke',
     'trackSkillRetrieve',
@@ -126,4 +127,24 @@ test('agent-registry keeps the detection data face; version detectors moved out'
   // The detectors themselves no longer live in the registry.
   assert.doesNotMatch(registry, /function detectCodeArtsVersion/);
   assert.doesNotMatch(registry, /VERSION_DETECTORS/);
+});
+
+// The exit-spool handover must precede BOTH transport exit paths — no
+// event-loop turn runs between the spool and the hard exit, and that turn
+// is exactly where an async flush would otherwise have had to live. The
+// behavior tests (telemetry.test.ts) drive the real paths via emitted
+// stream events and a patched process.exit; this pin keeps the call ORDER
+// from being silently swapped or dropped during refactors.
+test('stdio transport hands the queue to the exit spool before both exit paths', () => {
+  const transport = readSource('src/mcp-stdio-transport.ts');
+  assert.match(
+    transport,
+    /spoolTelemetryEvents\(\);\s*\n\s*process\.exit\(0\);/,
+    'the stdin-close hard-exit path must spool before process.exit(0)',
+  );
+  assert.match(
+    transport,
+    /spoolTelemetryEvents\(\);\s*\n\s*process\.exitCode = 0;/,
+    'the stdout-close natural-drain path must spool before the close',
+  );
 });
