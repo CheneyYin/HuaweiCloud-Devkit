@@ -262,7 +262,9 @@ export async function reportUnusableExpose(args: {
   }
   const noUrlCheck = evaluateDevbridgeVersion(noUrlVersion);
   if (noUrlCheck.blocked) {
-    warnings.push(`devbridge version is ${noUrlVersion} — too old to serve tunnels; upgrade per Step 0 before retrying.`);
+    warnings.push(
+      `devbridge version is ${noUrlVersion} — too old to serve tunnels; upgrade per Step 0 before retrying.`,
+    );
   }
   // #998 taxonomy: too_old (blocked) / no_tunnel_url (no URL observed —
   // host did not start, or the exec timed out before the log was read) /

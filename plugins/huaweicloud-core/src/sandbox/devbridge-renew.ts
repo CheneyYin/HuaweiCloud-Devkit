@@ -1,8 +1,4 @@
-import {
-  DEVBRIDGE_RENEW_HOURS,
-  validateExpiryHours,
-  validateTunnelId,
-} from './devbridge-validation.ts';
+import { DEVBRIDGE_RENEW_HOURS, validateExpiryHours, validateTunnelId } from './devbridge-validation.ts';
 import { runOneShot } from './devbridge-exec.ts';
 import { stripTerminalEscapes } from './sandbox-output.ts';
 import { readDbField } from './devbridge-expose.ts';

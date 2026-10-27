@@ -12,16 +12,16 @@ seven src/-ROOT-level family modules, every one below the cx < 50 bar.
 
 ## Per-file final cx (`npx jscpd <file> --complexity --reporters ai`)
 
-| File | Lines | cx | Bar |
-| --- | --- | --- | --- |
-| `src/update-check.ts` (face) | 51 | 1 | ✓ |
-| `src/update-installed.ts` | 53 | 13 | ✓ |
-| `src/update-hint.ts` | 82 | 21 | ✓ |
-| `src/update-skip.ts` | 94 | 22 | ✓ |
-| `src/update-upgrade.ts` | 123 | 24 | ✓ |
-| `src/update-cache.ts` | 95 | 32 | ✓ |
-| `src/update-semver.ts` | 80 | 38 | ✓ |
-| `src/update-registry.ts` | 146 | 41 | ✓ |
+| File                         | Lines | cx  | Bar |
+| ---------------------------- | ----- | --- | --- |
+| `src/update-check.ts` (face) | 51    | 1   | ✓   |
+| `src/update-installed.ts`    | 53    | 13  | ✓   |
+| `src/update-hint.ts`         | 82    | 21  | ✓   |
+| `src/update-skip.ts`         | 94    | 22  | ✓   |
+| `src/update-upgrade.ts`      | 123   | 24  | ✓   |
+| `src/update-cache.ts`        | 95    | 32  | ✓   |
+| `src/update-semver.ts`       | 80    | 38  | ✓   |
+| `src/update-registry.ts`     | 146   | 41  | ✓   |
 
 ## Module map
 
@@ -94,14 +94,14 @@ transformations, both non-observable:
 
 ## Gate results (run in full before every commit; 4 code commits)
 
-| Gate | Result |
-| --- | --- |
-| `npm run typecheck` | 0 errors (both projects), every unit |
-| `npx eslint .` | 0 errors, 73 warnings — exactly the pre-existing allowance, zero new |
-| `npm run build` | green every unit (import graph changed each time); dist + skills regenerated |
-| `node --test "test/structure*.test.ts"` | 114 pass, 0 fail, every unit |
-| `npm test` | 1412 tests, 1410 pass + 2 skip — the contract, every unit |
-| `npm run lint:dup` | exit 0, zero new clones, `.jscpd-baseline.json` untouched (nothing to absorb: no moved-not-deleted duplication) |
+| Gate                                    | Result                                                                                                          |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `npm run typecheck`                     | 0 errors (both projects), every unit                                                                            |
+| `npx eslint .`                          | 0 errors, 73 warnings — exactly the pre-existing allowance, zero new                                            |
+| `npm run build`                         | green every unit (import graph changed each time); dist + skills regenerated                                    |
+| `node --test "test/structure*.test.ts"` | 114 pass, 0 fail, every unit                                                                                    |
+| `npm test`                              | 1412 tests, 1410 pass + 2 skip — the contract, every unit                                                       |
+| `npm run lint:dup`                      | exit 0, zero new clones, `.jscpd-baseline.json` untouched (nothing to absorb: no moved-not-deleted duplication) |
 
 Telemetry stamp residue in `src/telemetry/` removed after every full
 `npm test` run, per the common rules.

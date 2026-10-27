@@ -10,18 +10,18 @@ session-manager precedents: devbridge-tunnel.ts is now the pure re-export seam
 
 ## Final per-file cx (measured with `npx jscpd <file> --complexity --reporters ai`)
 
-| File                      | Lines | cx | Role                                                                    |
-| ------------------------- | ----- | -- | ----------------------------------------------------------------------- |
-| `devbridge-tunnel.ts`     | 72    | 1  | pure re-export face (was 1164 / cx 186; 0 imports)                      |
-| `devbridge-exec.ts`       | 28    | 5  | the one-shot exec seam (OneShotResult, test override, runOneShot)       |
-| `devbridge-validation.ts` | 100   | 15 | port/expiry/id validators + lifetime constants + the 0.1.x version gate |
-| `devbridge-auth.ts`       | 220   | 21 | auth waterfall probe + parser + the expose auth/version gate            |
-| `devbridge-expose.ts`     | 295   | 38 | expose attempt contract: script, DB_* grammar (readDbField), parsers,   |
-|                           |       |    | reachability warning, ExposeTunnelResult, the no-URL failure verdict    |
-| `devbridge-verify.ts`     | 120   | 15 | fresh-session re-verify family (#919/#922) + persistence verdict        |
-| `devbridge-renew.ts`      | 90    | 12 | renew script + parser + renewTunnel flow                                |
-| `devbridge-keepalive.ts`  | 248   | 44 | keepalive watchdog family (scripts, parser, merge, install, enrollment) |
-| `devbridge-expose-flow.ts`| 260   | 44 | the exposeTunnel orchestration (retry loop + dead-url/keepalive fields) |
+| File                       | Lines | cx  | Role                                                                    |
+| -------------------------- | ----- | --- | ----------------------------------------------------------------------- |
+| `devbridge-tunnel.ts`      | 72    | 1   | pure re-export face (was 1164 / cx 186; 0 imports)                      |
+| `devbridge-exec.ts`        | 28    | 5   | the one-shot exec seam (OneShotResult, test override, runOneShot)       |
+| `devbridge-validation.ts`  | 100   | 15  | port/expiry/id validators + lifetime constants + the 0.1.x version gate |
+| `devbridge-auth.ts`        | 220   | 21  | auth waterfall probe + parser + the expose auth/version gate            |
+| `devbridge-expose.ts`      | 295   | 38  | expose attempt contract: script, DB_* grammar (readDbField), parsers,   |
+|                            |       |     | reachability warning, ExposeTunnelResult, the no-URL failure verdict    |
+| `devbridge-verify.ts`      | 120   | 15  | fresh-session re-verify family (#919/#922) + persistence verdict        |
+| `devbridge-renew.ts`       | 90    | 12  | renew script + parser + renewTunnel flow                                |
+| `devbridge-keepalive.ts`   | 248   | 44  | keepalive watchdog family (scripts, parser, merge, install, enrollment) |
+| `devbridge-expose-flow.ts` | 260   | 44  | the exposeTunnel orchestration (retry loop + dead-url/keepalive fields) |
 
 The touched guard file also measures below the bar:
 `test/structure-proxy-devbridge.test.ts` cx 21 (was 18 at base; the +3 is the
@@ -73,7 +73,7 @@ decomposed into phase helpers that live with their concerns (the brief's
 - `verifyTunnelPersistence` → devbridge-verify.ts: the fresh-session GET,
   dedicated parser, persistent verdict, and the three 请勿分享 warnings
   (verbatim texts; returns `{verifyHttpCode, verifyNotFound, persistent,
-  warning}`).
+warning}`).
 - `enrollKeepalive` → devbridge-keepalive.ts: the AUTO-ENROLL read → merge →
   install with its warnings (verbatim texts).
 - `deadUrlExposeFailure` + `keepaliveResultField` → devbridge-expose-flow.ts
@@ -158,7 +158,7 @@ s2-gateway 404 text/plain wire test ran untouched and green.
 - `npm run lint:dup` — exit 0; `.jscpd-baseline.json` untouched (no new
   clones; no regeneration was needed).
 - Telemetry stamp residue removed after every full `npm test` run; `git
-  status` clean.
+status` clean.
 
 ## Commits (one per verified unit)
 

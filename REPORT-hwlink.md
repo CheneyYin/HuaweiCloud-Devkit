@@ -15,13 +15,13 @@ tree, and the module content was reviewed against the diff.
 
 ## Per-file final cx (`npx jscpd <file> --complexity --reporters ai`)
 
-| File                               | Lines | cx | Role                                                                    |
-| ---------------------------------- | ----- | -- | ----------------------------------------------------------------------- |
-| `hwlink-exec-client.ts` (the face) | —     | 1  | pure re-export of the exact six-name public set                          |
-| `hwlink-normalize.ts`              | 60    | 21 | input shaping (normalizeCommand/Timeout/Source/Url, isFiniteNumber)      |
-| `hwlink-interactive-terminal.ts`   | 158   | 36 | the one-shot terminal factory (createHwlinkTerminal)                    |
-| `hwlink-exec-pending.ts`           | 113   | 11 | PendingExec request/response correlation over the narrowed host shape    |
-| `hwlink-exec-session.ts`           | 334   | 39 | the session class + entry points (connect/execute wrappers)              |
+| File                               | Lines | cx  | Role                                                                  |
+| ---------------------------------- | ----- | --- | --------------------------------------------------------------------- |
+| `hwlink-exec-client.ts` (the face) | —     | 1   | pure re-export of the exact six-name public set                       |
+| `hwlink-normalize.ts`              | 60    | 21  | input shaping (normalizeCommand/Timeout/Source/Url, isFiniteNumber)   |
+| `hwlink-interactive-terminal.ts`   | 158   | 36  | the one-shot terminal factory (createHwlinkTerminal)                  |
+| `hwlink-exec-pending.ts`           | 113   | 11  | PendingExec request/response correlation over the narrowed host shape |
+| `hwlink-exec-session.ts`           | 334   | 39  | the session class + entry points (connect/execute wrappers)           |
 
 Every touched file below cx 50. The pre-existing siblings
 (hwlink-packet 26, hwlink-fair-queue 25, hwlink-terminal-channel 33,

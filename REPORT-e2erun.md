@@ -9,34 +9,34 @@ same output contract.
 
 ## Per-file final cx (all 33 files under test/e2e/)
 
-| File                                  | cx before | cx after | Verdict   |
-| ------------------------------------- | --------- | -------- | --------- |
-| runner.ts                             | 227       | 42       | below bar |
-| evaluate.ts                           | 131       | 15       | below bar |
-| ws-fake/hwlink-server.ts              | 64        | 31       | below bar |
-| selfcheck-verify.ts (new)             | —         | 47       | below bar |
-| drivers/gateway-proxy.ts              | 46        | 46       | below bar (untouched) |
-| evaluate-kinds.ts (new)               | —         | 46       | below bar |
-| evaluate-matchers.ts (new)            | —         | 42       | below bar |
-| drivers/shared.ts                     | 42        | 42       | below bar (untouched) |
-| ws-fake/fake-shell.ts                 | 41        | 41       | below bar (untouched) |
-| drivers/codex.ts                      | 37        | 37       | below bar (untouched) |
-| recordings.ts (new)                   | —         | 28       | below bar |
-| report.ts (new)                       | —         | 26       | below bar |
-| case-run.ts (new)                     | —         | 25       | below bar |
-| evaluate-sequence.ts (new)            | —         | 24       | below bar |
-| http-fake.ts                          | 20        | 20       | below bar (untouched) |
-| harness.ts (new)                      | —         | 19       | below bar |
-| selfcheck.ts (new)                    | —         | 19       | below bar |
-| env-policy.ts                         | 15        | 15       | below bar (untouched) |
-| ws-fake/terminal-protocol.ts (new)    | —         | 14       | below bar |
-| evaluate-evidence.ts (new)            | —         | 3        | below bar |
-| ws-fake/tunnel-relay.ts (new)         | —         | 25       | below bar |
-| pack-install.ts (new)                 | —         | 6        | below bar |
-| seams.ts (new)                        | —         | 6        | below bar |
-| case-fixtures.ts (new)                | —         | 7        | below bar |
-| drivers/opencode.ts                   | 20        | 20       | below bar (untouched) |
-| cases/\*, drivers/types.ts, types.ts  | 1–3       | 1–3      | below bar (untouched) |
+| File                                 | cx before | cx after | Verdict               |
+| ------------------------------------ | --------- | -------- | --------------------- |
+| runner.ts                            | 227       | 42       | below bar             |
+| evaluate.ts                          | 131       | 15       | below bar             |
+| ws-fake/hwlink-server.ts             | 64        | 31       | below bar             |
+| selfcheck-verify.ts (new)            | —         | 47       | below bar             |
+| drivers/gateway-proxy.ts             | 46        | 46       | below bar (untouched) |
+| evaluate-kinds.ts (new)              | —         | 46       | below bar             |
+| evaluate-matchers.ts (new)           | —         | 42       | below bar             |
+| drivers/shared.ts                    | 42        | 42       | below bar (untouched) |
+| ws-fake/fake-shell.ts                | 41        | 41       | below bar (untouched) |
+| drivers/codex.ts                     | 37        | 37       | below bar (untouched) |
+| recordings.ts (new)                  | —         | 28       | below bar             |
+| report.ts (new)                      | —         | 26       | below bar             |
+| case-run.ts (new)                    | —         | 25       | below bar             |
+| evaluate-sequence.ts (new)           | —         | 24       | below bar             |
+| http-fake.ts                         | 20        | 20       | below bar (untouched) |
+| harness.ts (new)                     | —         | 19       | below bar             |
+| selfcheck.ts (new)                   | —         | 19       | below bar             |
+| env-policy.ts                        | 15        | 15       | below bar (untouched) |
+| ws-fake/terminal-protocol.ts (new)   | —         | 14       | below bar             |
+| evaluate-evidence.ts (new)           | —         | 3        | below bar             |
+| ws-fake/tunnel-relay.ts (new)        | —         | 25       | below bar             |
+| pack-install.ts (new)                | —         | 6        | below bar             |
+| seams.ts (new)                       | —         | 6        | below bar             |
+| case-fixtures.ts (new)               | —         | 7        | below bar             |
+| drivers/opencode.ts                  | 20        | 20       | below bar (untouched) |
+| cases/\*, drivers/types.ts, types.ts | 1–3       | 1–3      | below bar (untouched) |
 
 The task brief's note that `cases/core.ts` measured ~74/96 earlier did not
 reproduce: every file in `cases/` measures cx 1–3 today (data-heavy case

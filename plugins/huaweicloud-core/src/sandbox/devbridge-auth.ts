@@ -149,8 +149,7 @@ export function parseDevbridgeAuthOutput(stdout: unknown): DevbridgeAuth {
 }
 
 export type ExposeAuthGate =
-  | { ok: true; authMode: string; version: string }
-  | { ok: false; failure: ExposeTunnelResult };
+  { ok: true; authMode: string; version: string } | { ok: false; failure: ExposeTunnelResult };
 
 // The auth+version gate phase of exposeTunnel: run the auth waterfall probe,
 // parse it, and decide whether the expose loop may start at all. The failure
