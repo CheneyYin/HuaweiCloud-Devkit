@@ -180,7 +180,19 @@ test('the py hook degrades coherently: derived vocabularies, isolated fields, fa
   // over BOTH shadow candidates, and treats an empty prefix list as a hit
   // (the is-None arm's mirror).
   const classifyText = readSource(join('src', 'safety', 'classify-text.ts'));
-  assert.match(classifyText, /OBSUTIL_WRITES,\n?\s*isHcloudToken,|import \{\n?\s*COMMAND_POSITION_PREFIXES,/);
+  // Round 10: the TS glued gate reuses the FULL unwrap grammar
+  // (unwrapWithWindowsFlag) per segment, skips plain-leading segments (the
+  // standard machinery owns them — xargs-feeder context), and flattens
+  // shell -c / eval scripts through the glued tokenizer.
+  assert.match(
+    classifyText,
+    /import \{ OBSUTIL_WRITES, COMMAND_POSITION_PREFIXES, SHELL_FIRST_TOKENS, isHcloudToken \} from '\.\/tokens\.ts';/,
+  );
+  assert.match(classifyText, /import \{ unwrapWithWindowsFlag \} from '\.\/unwrap\.ts';/);
+  assert.match(classifyText, /function flattenGluedScripts\(tokens: string\[\], depth = 0\): string\[\] \{/);
+  assert.match(classifyText, /const plainStream = unwrapWithWindowsFlag\(splitSimpleCommand\(segment\)\)\.stream;/);
+  // The py twin: the per-segment glued fallback inside the walk.
+  assert.match(pyHook, /glued_stripped = hcloud_leading_segment\(split_tokens_glued\(segment\)\)/);
   assert.match(classifyText, /writeOperationPrefixes\.length === 0/);
   assert.ok(
     classifyText.includes('shadowCandidates.some((candidate) => /\\bOBS\\b/i.test(candidate)) &&'),

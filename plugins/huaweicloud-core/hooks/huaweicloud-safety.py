@@ -209,6 +209,11 @@ def strip_shell_quotes(text):
 
 ANSI_C_DECODE_RE = re.compile(r"\\(?:x([0-9a-fA-F]{1,2})|([0-7]{1,3})|u([0-9a-fA-F]{1,4})|U([0-9a-fA-F]{1,8}))")
 
+# The JS /\s/ character class (interrogate round 10): the glued tokenizer's
+# word separators — str.isspace() is a superset (\x85, \x1c-\x1f) that bash
+# does not treat as IFS and JS does not match.
+JS_WHITESPACE_RE = re.compile(r"[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]")
+
 
 def decode_ansi_c_spans(text):
     """Reconstruct the argv letters ANSI-C quoting builds: inside $'…' spans
@@ -923,8 +928,13 @@ def split_tokens_glued(text):
     expanders). Single-quoted spans keep their literal backslashes; double-
     quoted spans resolve \\" and \\\\ pairs; unterminated spans run to the
     end; \\<newline> continuations drop first (bash's own first pass).
-    Mirrored by splitSimpleCommandGlued in src/safety/shell-text.ts — the
-    tokenizer twin corpus pins the shared outputs."""
+    Word separators are the EXACT JS /\\s/ set (interrogate round 10):
+    str.isspace() also splits on \\x85 and \\x1c-\\x1f, which JS does not
+    and bash does not treat as IFS — the round-9 tokenizer re-chose the
+    language-native class after the strip-set lesson and drifted the twins
+    on those (fail-closed over-deny, non-executable shapes). Mirrored by
+    splitSimpleCommandGlued in src/safety/shell-text.ts — the tokenizer
+    twin corpus pins the shared outputs."""
     text = re.sub(r"\\\n", "", text)
     tokens = []
     cur = []
@@ -962,7 +972,7 @@ def split_tokens_glued(text):
                 j += 1
             i = n if j >= n and not closed else j + 1
             continue
-        if ch.isspace():
+        if JS_WHITESPACE_RE.match(ch):
             _flush()
             i += 1
             continue
@@ -1556,6 +1566,23 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
                         return reason
         stripped = hcloud_leading_segment(tokens)
         if stripped is None:
+            # Glued-bin fallback, PER SEGMENT (interrogate round 10): bash
+            # glues adjacent quoted spans and word characters into ONE word
+            # — `"hcl"oud ECS Delete` runs hcloud with full argv — while
+            # split_tokens keeps the span/fragment distinction, so a
+            # quote-INITIAL mangled bin never yields a leading token stream.
+            # Tried HERE (not after the loop) so a leading READ in another
+            # segment can never mask a later glued write (round 10's C3) and
+            # the standard xargs machinery keeps handling the segments it
+            # already classifies (the whole-text re-run denied a pinned
+            # xargs allow through the empty-args arm).
+            if routed:
+                glued_stripped = hcloud_leading_segment(split_tokens_glued(segment))
+                if glued_stripped is not None:
+                    glued_argv = [t for t in glued_stripped[1:] if not t.startswith("-")]
+                    reason = _classify_leading(glued_stripped, glued_argv, routed)
+                    if reason:
+                        return reason
             continue
         saw_leading = True
         windows_payload = _LEADING_WINDOWS_PAYLOAD[0]
@@ -1735,22 +1762,12 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
             reason = _classify_leading(stripped, argv, routed)
             if reason:
                 return reason
-    # Glued-bin fallback (interrogate round 9): bash glues adjacent quoted
-    # spans and word characters into ONE word — `"hcl"oud ECS Delete` runs
-    # hcloud with full argv — while split_tokens keeps the span/fragment
-    # distinction (other consumers rely on it, e.g. the windows-payload
-    # piece-split's quote-carrying refusal), so a quote-INITIAL mangled bin
-    # never yields an hcloud-leading token stream. The shadow does route it
-    # (strip_shell_quotes glues), so this pass runs only when routed and the
-    # standard passes found nothing — benign unrouted commands skip it.
+    # Glued-bin fallback, WHOLE TEXT (interrogate rounds 9-10): the last
+    # resort for wrapper-qualified shapes where no segment was leading —
+    # the per-segment fallback above handles everything else. Gated on `not
+    # saw_leading` (the standard machinery classified those segments with
+    # full context); routed-only (benign unrouted commands skip it).
     if not saw_leading and routed:
-        for segment in split_shell_segments(text):
-            stripped = hcloud_leading_segment(split_tokens_glued(segment))
-            if stripped is not None:
-                argv = [t for t in stripped[1:] if not t.startswith("-")]
-                reason = _classify_leading(stripped, argv, routed)
-                if reason:
-                    return reason
         stripped = hcloud_leading_segment(split_tokens_glued(text))
         if stripped is not None:
             argv = [t for t in stripped[1:] if not t.startswith("-")]

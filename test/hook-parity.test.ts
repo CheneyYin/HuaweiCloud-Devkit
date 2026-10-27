@@ -186,6 +186,27 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
   ['hcloud<f2 ECS ListServers', 'allow'],
   ["printf 'ECS DeleteServers --server.id=x' >f; xargs hcloud<f", 'deny'],
   ['xargs hcloud<<EOF\nECS DeleteServers --server.id=x\nEOF', 'deny'],
+  // port-v2defects (interrogate round 10): the glued gate's full-grammar
+  // completion — the round-9 hand-rolled prefix walk missed shells/eval/
+  // env assignments/redirections/wrappers and multi-segment payloads, and
+  // a leading READ masked a later glued write (`not saw_leading`). All
+  // real-bash-executable proofs from the round; the nested scripts flatten
+  // through the glued tokenizer (py's recursion doctrine).
+  ['bash -c \'"hcl"oud ECS Delete\'', 'deny'],
+  ['bash -c "\\"hcl\\"oud ECS Delete"', 'deny'],
+  ['sh -c "\'hcl\'oud ECS Delete"', 'deny'],
+  ['eval \'"hcl"oud ECS Delete\'', 'deny'],
+  ['eval "hcl"oud ECS Delete', 'deny'],
+  ['HW_REGION=x "hcl"oud ECS Delete', 'deny'],
+  ['env HW_REGION=x "hcl"oud ECS Delete', 'deny'],
+  ['2>/dev/null "hcl"oud ECS Delete', 'deny'],
+  ['<in "hcl"oud ECS Delete', 'deny'],
+  ['skill-quality-cli run -- "hcl"oud ECS Delete', 'deny'],
+  ['huaweicloud-devkit secret exec --env N=secret://s/n -- "hcl"oud ECS Delete', 'deny'],
+  ['echo x; "hcl"oud ECS Delete', 'deny'],
+  ['true && "hcl"oud ECS Delete', 'deny'],
+  ['hcloud ECS ListServers; "hcl"oud ECS Delete', 'deny'],
+  ['hcloud --help; "hcl"oud OBS rm mybucket', 'deny'],
   // The astral row: 200k valid surrogate pairs = 800 KB bytes / 400,000
   // UTF-16 units / 200,000 code points — over the byte cap on both twins,
   // over the OLD TS unit cap (400,002 > 262,144) but under the OLD py
@@ -879,4 +900,12 @@ const GLUED_TOKEN_CORPUS: string[] = [
   'a"b\\"c" d',
   "unterminated 'span",
   'unterminated "span',
+  // Round 10: the separator-set alignment probes — py isspace() vs JS /\s/
+  // drifted on \x85/\x1c-\x1f (fail-closed over-deny, non-executable
+  // shapes); the py glued tokenizer now uses the explicit JS set.
+  '"hcl"oudECS Delete',
+  '"hcl"oudECS Delete',
+  '"hcl"oudECS Delete',
+  '"hcl"oud ECS Delete',
+  '"hcl"oud　ECS Delete',
 ];
