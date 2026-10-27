@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
 import { classifyTextCommand } from '../plugins/huaweicloud-core/src/safety-policy.ts';
-import { decodeAnsiCSpans } from '../plugins/huaweicloud-core/src/safety/shell-text.ts';
+import { decodeAnsiCSpans, splitSimpleCommand } from '../plugins/huaweicloud-core/src/safety/shell-text.ts';
 
 // The TS classifier and the python hook are two hand-maintained
 // implementations of one safety policy. This battery runs the SAME command
@@ -123,6 +123,15 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
   ["printf $'%s\\n' hello", 'allow'],
   ["echo $(date +$'%Y-%m-%d')", 'allow'],
   ["awk $'\\t' '{print $1}'", 'allow'],
+  // port-v2defects (interrogate round 5): the over-cap slice — the round-4
+  // decode skip made >256 KiB the one place a fully-mangled write sailed
+  // through on every layer (executable proof supplied by the reviewer: bash
+  // ran it). The cap now denies expansion-bearing over-cap payloads
+  // fail-closed (bytes on both twins — the UTF-16/code-point boundary
+  // drift died with the unit alignment), and a benign over-cap payload
+  // stays allowed.
+  ['#' + 'x'.repeat(262200) + "\nh$'\\x63'loud ECS $'\\x44'eleteServers --server.id=x", 'deny'],
+  ['#' + 'x'.repeat(262200) + '\necho hello', 'allow'],
   // The $(…)-substitution residual (documented): printf-built bins stay
   // opaque to the decode; the OBS-token marker arm still catches the
   // service-token-literal form.
@@ -726,32 +735,61 @@ test('the ANSI-C decoders agree byte-for-byte on the adversarial corpus (interro
   ];
   const ts = corpus.map((probe) => decodeAnsiCSpans(probe));
   const py = spawnSync('python3', ['-c', PY_DECODE_DRIVER], {
-    input: JSON.stringify(corpus),
+    input: JSON.stringify({ decode: corpus, tokens: TOKEN_CORPUS }),
     encoding: 'utf8',
     timeout: 30000,
   });
   const unavailable = (py.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT';
   if (unavailable) return; // python3 not on PATH: TS-only environment
   assert.equal(py.status, 0, `decode driver crashed: ${py.stderr.slice(0, 300)}`);
-  const pyOut = JSON.parse(py.stdout) as string[];
-  assert.equal(pyOut.length, corpus.length, 'the driver must answer one line per probe');
+  const pyOut = JSON.parse(py.stdout) as { decode: string[]; tokens: string[][] };
+  assert.equal(pyOut.decode.length, corpus.length, 'the driver must answer one decode per probe');
   for (let i = 0; i < corpus.length; i++) {
     assert.deepEqual(
       ts[i],
-      pyOut[i],
-      `decode drift on ${JSON.stringify(corpus[i])}: ts=${JSON.stringify(ts[i])} py=${JSON.stringify(pyOut[i])}`,
+      pyOut.decode[i],
+      `decode drift on ${JSON.stringify(corpus[i])}: ts=${JSON.stringify(ts[i])} py=${JSON.stringify(pyOut.decode[i])}`,
+    );
+  }
+  // The tokenizer twin corpus (interrogate round 5): splitSimpleCommand and
+  // split_tokens must agree on the continuation shapes — the preprocess leg
+  // had no pin of its own.
+  const tsTokens = TOKEN_CORPUS.map((probe) => splitSimpleCommand(probe));
+  assert.equal(pyOut.tokens.length, TOKEN_CORPUS.length, 'the driver must answer one token list per probe');
+  for (let i = 0; i < TOKEN_CORPUS.length; i++) {
+    assert.deepEqual(
+      tsTokens[i],
+      pyOut.tokens[i],
+      `tokenizer drift on ${JSON.stringify(TOKEN_CORPUS[i])}: ts=${JSON.stringify(tsTokens[i])} py=${JSON.stringify(pyOut.tokens[i])}`,
     );
   }
 });
 
 // One python3 process decodes the whole corpus via importlib (the Hermes
 // load path) and answers JSON — kept as a string so the driver ships with
-// the test.
+// the test. The driver also TOKENIZES a second corpus (interrogate round
+// 5): the continuation-drop preprocess in split_tokens/splitSimpleCommand
+// was defense-in-depth with no pin of its own — a refactor dropping it
+// passed every verdict row (the splitter/shadow drops carry the verdicts).
 const PY_DECODE_DRIVER = [
   'import importlib.util, json, sys',
   'spec = importlib.util.spec_from_file_location("h", "plugins/huaweicloud-core/hooks/huaweicloud-safety.py")',
   'm = importlib.util.module_from_spec(spec)',
   'spec.loader.exec_module(m)',
-  'corpus = json.load(sys.stdin)',
-  'print(json.dumps([m.decode_ansi_c_spans(p) for p in corpus]))',
+  'payload = json.load(sys.stdin)',
+  'decodes = [m.decode_ansi_c_spans(p) for p in payload["decode"]]',
+  'tokens = [m.split_tokens(p) for p in payload["tokens"]]',
+  'print(json.dumps({"decode": decodes, "tokens": tokens}))',
 ].join('\n');
+
+// The tokenizer twin corpus: the line-continuation shapes (plus controls)
+// must tokenize identically on both layers.
+const TOKEN_CORPUS: string[] = [
+  'h\\\ncloud ECS DeleteServers --server.id=x',
+  'hcloud ECS De\\\nleteServers --server.id=x',
+  'hcloud ECS "De\\\nleteServers" --server.id=x',
+  "bash -c 'h\\\ncloud ECS DeleteServers --server.id=x'",
+  'echo a\\\nb c',
+  'hcloud ECS ListServers',
+  "echo 'a\\\nb' c",
+];

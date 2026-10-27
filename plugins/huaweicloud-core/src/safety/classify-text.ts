@@ -13,14 +13,25 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
   const policy = options.policy || DEFAULT_POLICY;
   const text = asText(command || '');
   const shadowText = stripShellQuotes(text);
+  // The cap counts BYTES on both twins (interrogate round 5): UTF-16 units
+  // (TS) vs code points (py) disagreed at the boundary on astral-plane
+  // padding — the same payload denied on one layer and allowed on the
+  // other. Bytes are also the honest reading of "256 KiB payload".
+  const textBytes = Buffer.byteLength(text, 'utf8');
 
   // Length cap: a routed payload past 256 KiB cannot execute through any
   // wrapper chain (MAX_ARG_STRLEN), and classifying pathological nests
   // at that size costs minutes — a hook DoS. Denied fail-closed instead.
-  if (text.length > 262_144) {
+  // An EXPANSION-BEARING over-cap payload denies too (interrogate round
+  // 5): the round-4 decode skip must not make the over-cap slice the one
+  // place a mangled write sails through — the obfuscation marker is a
+  // constant-time raw-text check, and no legitimate oversized
+  // expansion-bearing Bash payload exists.
+  if (textBytes > 262_144) {
     if (
       /(^|[^a-z0-9.-])hcloud(\.exe)?[\s)\]}'"]/i.test(shadowText) ||
-      /(^|[^a-z0-9.-])hcloud(\.exe)?[\s)\]}'"]/i.test(text)
+      /(^|[^a-z0-9.-])hcloud(\.exe)?[\s)\]}'"]/i.test(text) ||
+      /\$['"]|\$\(|`/.test(text)
     ) {
       return {
         decision: 'deny',
@@ -36,8 +47,9 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
   // decoded candidate is the original text. Computed AFTER the length cap
   // and skipped for over-cap payloads (interrogate round 4: an unrouted
   // 10 MB escape flood must not pay the decode's linear pass — measured
-  // ~0.75 ms/KB — before the gates' other candidates handle it).
-  const decodedShadowText = text.length > 262_144 ? shadowText : stripShellQuotes(decodeAnsiCSpans(text));
+  // ~0.75 ms/KB — and round 5's expansion-bearing cap deny above closes
+  // the skip's mangled-write window at the same size).
+  const decodedShadowText = textBytes > 262_144 ? shadowText : stripShellQuotes(decodeAnsiCSpans(text));
   const shadowCandidates = [shadowText, decodedShadowText];
 
   // Raw, shadow, and path-normalized forms (shared with the MCP file gate):

@@ -86,7 +86,7 @@ test('the py hook derives the obfuscation gate write vocabulary from policy.json
   assert.match(pyHook, /def decode_ansi_c_spans\(text\):/);
   assert.match(
     pyHook,
-    /decoded_unquoted = \(\s*unquoted if len\(text\) > 262144 else strip_shell_quotes\(decode_ansi_c_spans\(text\)\)\s*\)/,
+    /decoded_unquoted = \(\s*unquoted if text_bytes > 262144 else strip_shell_quotes\(decode_ansi_c_spans\(text\)\)\s*\)/,
   );
   assert.match(pyHook, /# Outside quotes a backslash escapes the NEXT character/);
   const shellText = readSource(join('src', 'safety', 'shell-text.ts'));
@@ -94,7 +94,17 @@ test('the py hook derives the obfuscation gate write vocabulary from policy.json
   assert.match(shellText, /Outside quotes a backslash escapes the NEXT character/);
   const classifyText = readSource(join('src', 'safety', 'classify-text.ts'));
   assert.match(classifyText, /decodeAnsiCSpans/);
-  assert.match(classifyText, /text\.length > 262_144 \? shadowText : stripShellQuotes\(decodeAnsiCSpans\(text\)\)/);
+  assert.match(classifyText, /textBytes > 262_144 \? shadowText : stripShellQuotes\(decodeAnsiCSpans\(text\)\)/);
+  // The cap counts BYTES on both twins and denies expansion-bearing
+  // over-cap payloads (round 5: the decode skip must not make the over-cap
+  // slice the one place a mangled write sails through).
+  assert.match(classifyText, /Buffer\.byteLength\(text, 'utf8'\)/);
+  assert.ok(
+    classifyText.includes('/\\$[\'"]|\\$\\(|`/.test(text)'),
+    'the over-cap deny must cover expansion-bearing payloads',
+  );
+  assert.match(pyHook, /text_bytes = len\(text\.encode\("utf-8"\)\)/);
+  assert.match(pyHook, /if text_bytes > 262144 and \(\s*\n\s*OBFUSCATION_RE\.search\(text\)/);
   // The fail-closed arm sits in the gate's vocabulary clause (whitespace-
   // tolerant: indentation reflow must not break the pin — interrogate
   // round 2).

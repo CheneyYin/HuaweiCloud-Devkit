@@ -1699,15 +1699,31 @@ def evaluate(tool_name, tool_input):
     """
     text = command_text(tool_input)
     unquoted = strip_shell_quotes(text)
+    # Length cap (interrogate round 5): BYTES on both twins (UTF-16 units on
+    # TS vs code points here disagreed at the boundary on astral-plane
+    # padding — same payload, different verdicts; bytes are also the honest
+    # reading of "256 KiB payload"). A routed OR EXPANSION-BEARING over-cap
+    # payload denies fail-closed: the round-4 decode skip must not make the
+    # over-cap slice the one place a mangled write sails through (the
+    # obfuscation marker is a constant-time raw-text check; no legitimate
+    # oversized expansion-bearing Bash payload exists).
+    text_bytes = len(text.encode("utf-8"))
+    if text_bytes > 262144 and (
+        OBFUSCATION_RE.search(text)
+        or HCLOUD_ROUTE_RE.search(unquoted)
+        or HCLOUD_ROUTE_RE.search(text)
+    ):
+        return "command payload too large to classify safely; denied fail-closed"
     # The ANSI-C-decoded shadow (interrogate round 3): the argv letters $'…'
     # spans build, reconstructed — h$'\x63'loud is the hcloud the shell
     # executes. Presence gates below that bear on cloud-command or
     # secret-reveal detection search BOTH shadows; with no $' span the
     # decoded candidate is the original text. Skipped for over-cap payloads
     # (interrogate round 4: an unrouted 10 MB escape flood must not pay the
-    # decode's linear pass before the gates' other candidates handle it).
+    # decode's linear pass — and round 5's expansion-bearing cap deny above
+    # closes the skip's mangled-write window at the same size).
     decoded_unquoted = (
-        unquoted if len(text) > 262144 else strip_shell_quotes(decode_ansi_c_spans(text))
+        unquoted if text_bytes > 262144 else strip_shell_quotes(decode_ansi_c_spans(text))
     )
     candidates = (unquoted, decoded_unquoted)
     normalized = re.sub(r"/{2,}", "/", text)
