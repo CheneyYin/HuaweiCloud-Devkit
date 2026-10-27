@@ -189,7 +189,7 @@ function mergeConfigToml(home: string, serverJs: string): void {
     '',
   ].join('\n');
   // The MCP child env is stripped to login vars, so the command must be an
-  // absolute binary — the same node that runs the suite (>= 22.18 floor).
+  // absolute binary — the same node that runs the suite (>= 22.19 floor).
   const nodeBin = process.execPath;
   const tail = [
     '',
