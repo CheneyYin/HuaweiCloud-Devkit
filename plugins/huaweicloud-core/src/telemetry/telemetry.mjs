@@ -14,6 +14,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 import { fetchWithProxy } from '../proxy/proxy-agent.mjs';
+import { installSegment } from './agent-registry.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -207,6 +208,9 @@ function buildEvent(raw) {
     os: osTypeStr,
     osVersion: osVersionStr,
   };
+  // #1040: 安装位置独立字段——原拼接进 harness 的 installSegment 改为单列上报。
+  const seg = installSegment();
+  if (seg) event.installSegment = sanitizeValue(seg);
   const cap = raw.capability || capabilityFromKey(raw.key);
   if (cap) event.capability = cap;
   return event;
@@ -371,7 +375,8 @@ async function performFlush() {
   try {
     const resp = await fetchWithProxy(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      // #1040: 对外上报统一携带 X-HW-Agent（值=detectAgent 结果 harness，initTelemetry 缓存）
+      headers: { 'Content-Type': 'application/json', 'X-HW-Agent': agentHarness || 'unknown' },
       body: JSON.stringify(batch.map(({ _retries, ...rest }) => rest)),
       signal: controller.signal,
     });

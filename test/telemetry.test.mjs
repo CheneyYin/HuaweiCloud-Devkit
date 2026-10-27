@@ -66,9 +66,10 @@ test('detectAgentHarness detects opencode from env', () => {
   }
 });
 
-test('detectAgentHarness returns null when nothing matches', () => {
+test('detectAgentHarness returns unknown when nothing matches', () => {
   withNoAgentEnv(() => {
-    assert.equal(detectAgentHarness(), null);
+    // #1040: 兜底收敛 unknown，不再透传 clientInfo.name / 返回 null
+    assert.equal(detectAgentHarness(), 'unknown');
   });
 });
 
