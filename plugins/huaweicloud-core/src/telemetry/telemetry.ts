@@ -7,11 +7,12 @@
 // (the shared state/paths/context vocabulary), telemetry-fs.ts (stamp-file
 // IO), telemetry-values.ts (event shaping + the os snapshot),
 // identity-stamps.ts (machine finger, installation id, user hash, install
-// counter, DAU/first-use stamps), hook-ingest.ts (the hook spool seam),
-// event-pipeline.ts (queue, flush, retry, the opt-out gate) — plus the
-// pre-existing agent-detect.ts / invoke-value.ts and the detection data
-// face agent-registry.ts (AGENTS + matcher; the version detectors live in
-// agent-versions.ts / agent-versions-desktop.ts).
+// counter, DAU/first-use stamps), hook-ingest.ts (the spool-file ingest
+// seams: the hook spool AND the exit spool), event-pipeline.ts (queue,
+// awaitable flush, retry, the opt-out gate, the exit-time disk spool) —
+// plus the pre-existing agent-detect.ts / invoke-value.ts and the
+// detection data face agent-registry.ts (AGENTS + matcher; the version
+// detectors live in agent-versions.ts / agent-versions-desktop.ts).
 //
 // This module deliberately KEEPS the family's load-bearing module-scope
 // state: resolvePluginDir and every derived path constant, the
@@ -28,7 +29,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { asText } from '../lib/as-text.ts';
-import { enqueueTrackedEvent, flushEvents, isTelemetryEnabled } from './event-pipeline.ts';
+import { enqueueTrackedEvent, flushEvents, isTelemetryEnabled, spoolEventsForExit } from './event-pipeline.ts';
 import {
   checkDauPing,
   clearUserHashFile,
@@ -39,7 +40,7 @@ import {
   recoverInstallId,
   shouldSendFirstUsePing,
 } from './identity-stamps.ts';
-import { ingestHookSpool } from './hook-ingest.ts';
+import { ingestSpools } from './hook-ingest.ts';
 import { ensureDir, stampExists } from './telemetry-fs.ts';
 import type { TelemetryContext, TelemetryEventInput, TelemetryPaths, TelemetryState } from './telemetry-types.ts';
 
@@ -91,10 +92,14 @@ const GLOBAL_TELEMETRY_DIR = join(
 // The family's paths in one record, derived in this module only. The
 // agent-dir paths sit inside the plugin dir (they must resolve to the same
 // locations in the source, tsc, and bundle shapes — see resolvePluginDir);
-// the global identity paths sit under the home override.
+// the global identity paths sit under the home override. The exit spool
+// rides the global dir (not the agent dir) on purpose: it must survive
+// plugin updates that replace the payload dir, and it must follow
+// HUAWEICLOUD_DEVKIT_HOME so the test isolation covers it.
 const paths: TelemetryPaths = {
   agentTelemetryDir: AGENT_TELEMETRY_DIR,
   hookEventsPath: join(AGENT_TELEMETRY_DIR, 'hook-events.jsonl'),
+  exitEventsPath: join(GLOBAL_TELEMETRY_DIR, 'exit-events.jsonl'),
   installStampPath: join(AGENT_TELEMETRY_DIR, 'install-stamp'),
   installCounterPath: join(AGENT_TELEMETRY_DIR, 'install-counter'),
   dauStampPath: join(AGENT_TELEMETRY_DIR, 'dau-stamp'),
@@ -130,6 +135,7 @@ try {
 const state: TelemetryState = {
   eventQueue: [],
   isFlushing: false,
+  inflightFlush: null,
   flushTimer: null,
   lastCheckedDate: '',
   installId: null,
@@ -161,8 +167,35 @@ export function enqueueEvent(raw: TelemetryEventInput): void {
   enqueueTrackedEvent(ctx, raw);
 }
 
+// The awaitable flush (E4a): resolves when the caller's flush round has
+// settled — sent, client-error dropped, or requeued for the next trigger.
+// Arriving mid-round chains onto the in-flight round plus one follow-up
+// round (the full contract lives on flushEvents in event-pipeline.ts).
+// Consumers that must not lose their own event to a session end (the
+// voucher P0 flush) await this; the returned promise never rejects.
+export function flushTelemetryEvents(): Promise<void> {
+  return flushEvents(ctx);
+}
+
+// Historical public name (kept for import stability); the seam now covers
+// BOTH spool files — the hook spool (input events rebuilt with this
+// session's identity) AND the exit spool (full events kept verbatim). See
+// ingestSpools in hook-ingest.ts for the shared rename-now/read-next
+// pattern and the at-least-once bound.
 export function ingestHookEvents(): void {
-  ingestHookSpool(ctx);
+  ingestSpools(ctx);
+}
+
+// The exit-time synchronous spool (E4b): the stdio transport's close paths
+// call this immediately before exit. Writes the unflushed queue to the
+// exit spool file (full-event JSONL) and clears the queue — the next boot
+// ingests it through the same seam as the hook spool. Synchronous by
+// necessity (process.exit hosts no async); a no-op when the queue is
+// empty, which is also the telemetry-off case (the enqueue gate keeps
+// that queue empty). The full residual analysis (in-flight round at exit,
+// crash windows, idempotence) lives on spoolEventsForExit.
+export function spoolTelemetryEvents(): void {
+  spoolEventsForExit(ctx);
 }
 
 export function trackInstall(): void {
@@ -232,10 +265,16 @@ export function initTelemetry({ harness, version }: InitTelemetryOptions): void 
   state.flushTimer = setInterval(() => {
     ingestHookEvents();
     checkDauPing(ctx);
-    if (state.eventQueue.length > 0) setImmediate(() => flushEvents(ctx));
+    if (state.eventQueue.length > 0)
+      setImmediate(() => {
+        void flushEvents(ctx);
+      });
   }, FLUSH_INTERVAL_MS);
   state.flushTimer.unref();
 
   ingestHookEvents();
-  if (state.eventQueue.length > 0) setImmediate(() => flushEvents(ctx));
+  if (state.eventQueue.length > 0)
+    setImmediate(() => {
+      void flushEvents(ctx);
+    });
 }
