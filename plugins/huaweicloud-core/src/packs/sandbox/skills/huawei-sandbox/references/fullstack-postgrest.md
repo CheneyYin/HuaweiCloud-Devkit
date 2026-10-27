@@ -261,14 +261,14 @@ here. The checklist below assumes PG data was initialized on
 
 ### Lost on reboot (系统盘 — must rebuild)
 
-| Component          | Location               | Recovery action                                                                  |
-| ------------------ | ---------------------- | -------------------------------------------------------------------------------- |
-| PostgreSQL 16 RPMs | `/usr/pgsql-16/`       | Re-run the Step 1 `rpm -ivh --nodeps` block                                      |
-| Soname shims       | `/usr/lib64/lib*.so.*` | Re-run the Step 1 symlink + `ldconfig` block                                     |
-| `postgres` user    | `/etc/passwd` entry    | `useradd -r -m postgres` then `chown postgres:postgres /workspace/pgsql/16/data` |
-| PostgREST binary   | `/opt/postgrest/`      | Re-download + sha256-verify + extract (Step 2), then relaunch (Step 2)           |
-| pgrst.conf         | `/opt/postgrest/`      | Re-upload via `huaweicloud_sandbox_upload_file`                                  |
-| nginx config       | `/etc/nginx/conf.d/`   | Re-create via `huaweicloud_sandbox_deploy_nginx`                                 |
+| Component          | Location               | Recovery action                                                                                 |
+| ------------------ | ---------------------- | ----------------------------------------------------------------------------------------------- |
+| PostgreSQL 16 RPMs | `/usr/pgsql-16/`       | Re-run the Step 1 `rpm -ivh --nodeps` block                                                     |
+| Soname shims       | `/usr/lib64/lib*.so.*` | Re-run the Step 1 symlink + `ldconfig` block                                                    |
+| `postgres` user    | `/etc/passwd` entry    | `useradd -r -m postgres` then `chown postgres:postgres /workspace/pgsql/16/data`                |
+| PostgREST binary   | `/opt/postgrest/`      | Re-download + sha256-verify + extract (Step 2), then relaunch (Step 2)                          |
+| pgrst.conf         | `/opt/postgrest/`      | Re-upload via `huaweicloud_sandbox_upload_file`                                                 |
+| nginx config       | `/etc/nginx/conf.d/`   | Re-apply Step 3's single-origin block (`deploy_nginx` templates carry no `/api/` reverse proxy) |
 
 ### Survives reboot (/workspace — no rebuild needed)
 
@@ -283,9 +283,10 @@ Only the PostgreSQL-side install (the server RPMs, the soname shims, and the
 `postgres` user) must be rebuilt; then `pg_ctl -D /workspace/pgsql/16/data
 start` resumes the surviving cluster immediately. The application layer is lost
 with the system disk too: re-download + sha256-verify the PostgREST binary and
-re-upload `pgrst.conf` (Step 2), re-create the nginx config via
-`huaweicloud_sandbox_deploy_nginx` (or Step 3's manual equivalent), then
-relaunch PostgREST and reload nginx.
+re-upload `pgrst.conf` (Step 2), re-apply the Step 3 single-origin nginx
+config (never `huaweicloud_sandbox_deploy_nginx` — its SPA/proxy/static
+templates carry no `/api/` reverse proxy, so the restored site would be
+SPA-only), then relaunch PostgREST and reload nginx.
 
 ### Write-permission GRANT rollback trap (POST 401 → GRANT → 201)
 
