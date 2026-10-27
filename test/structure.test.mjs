@@ -1378,7 +1378,7 @@ test('huawei-agentarts skill ships with routing floor and core registry wiring',
   assert.match(body, /NO default min_score/);
   assert.match(body, /searchSummary score range/);
   assert.match(workflows, /MemorySearchRequest/);
-  assert.match(workflows, /serializer DROPS None/);
+  assert.match(workflows, /serializer\s+DROPS None/);
   assert.match(workflows, /searchSummary/);
   assert.match(workflows, /transplant no threshold from/);
   assert.doesNotMatch(workflows, /for the server default/);
@@ -1386,6 +1386,28 @@ test('huawei-agentarts skill ships with routing floor and core registry wiring',
   assert.match(workflows, /REQUIRED, top-level \(unscoped = every actor's memories\)/);
   assert.match(workflows, /optional, `filters\.actor_id` — omit = all actors/);
   assert.match(workflows, /Read before writing when the\s+intent is ambiguous/);
+
+  // U6 (friction fix 8, measured 2026-10-27): explicit min_score is
+  // server-ineffective (0.01 still returned everything incl. 0.000016) —
+  // the bridge now filters client-side and every doc surface says so.
+  assert.match(body, /ineffective even when SET/);
+  assert.match(body, /client-side/);
+  assert.match(workflows, /applies a set `min_score` CLIENT-side/);
+  assert.match(workflows, /server ignores the threshold itself/);
+  assert.match(workflows, /0\.000016-0\.14/);
+  assert.doesNotMatch(workflows, /only after seeing the band/);
+  // actor_id position trap: add_messages is per-message, top-level rejected.
+  assert.match(body, /INSIDE each message/);
+  assert.match(workflows, /per-message ONLY/);
+  // CLI table truncates ids; every memory read example carries -o json.
+  assert.match(body, /TRUNCATES ids/);
+  assert.match(workflows, /TRUNCATES ids mid-string/);
+  assert.match(workflows, /\["memory","status","<space-id>","--region","cn-southwest-2","--output","json"\]/);
+  // Extraction semantics: fan-out, append-merge, subject inference.
+  assert.match(body, /one message extracts into N memories/);
+  assert.match(workflows, /fan-out, not 1:1/);
+  assert.match(workflows, /append-merge/);
+  assert.match(workflows, /never named Alice/);
 
   // Core skill routes agent workloads and declares the gate exemption (D15).
   const core = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-core', 'SKILL.md'), 'utf8');
@@ -1648,8 +1670,13 @@ test('memory data-plane retention traps and dual-path decision are taught (U4)',
   // (hook 0.3 / plugin 0.7 / "SDK/server default 0.5") was WRONG — the
   // 0.5 belongs to MemorySearchRequest, a class the bridge never builds;
   // the filter path has NO default cutoff. The old line must not return.
-  assert.match(workflows, /no default cutoff, whole-space returns, tiny/);
-  assert.match(workflows, /a different request class the bridge never\s+builds/);
+  // (U6 sharpened further: even an explicit min_score is ignored
+  // server-side — pinned in the U6 block below.)
+  assert.match(
+    workflows,
+    /no default cutoff, whole-space returns, and the\s+server-side threshold filter does not work at all/,
+  );
+  assert.match(workflows, /a different\s+request class the bridge never\s+builds/);
   assert.doesNotMatch(workflows, /hook\s+path uses 0\.3, the plugin's MCP path 0\.7, the SDK\/server default 0\.5/);
   // The dual-path decision (governed bridge vs host-trust plugin install).
   assert.match(workflows, /dual-path decision/);

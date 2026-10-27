@@ -112,7 +112,7 @@ evidence) — treat pre-deploy as required.
 huaweicloud_agentarts_run_readonly_command
   ["memory","list","--region","cn-southwest-2","--output","json"]
   ["memory","get","<space-id>","--region","cn-southwest-2","--output","json"]
-  ["memory","status","<space-id>","--region","cn-southwest-2"]  (space_id is a
+  ["memory","status","<space-id>","--region","cn-southwest-2","--output","json"]  (space_id is a
    POSITIONAL argument — a --space-id flag is rejected by the CLI)
   ["gateway","list"]
   ["gateway","get-target","<gateway-id>","<target-id>"]
@@ -123,9 +123,13 @@ huaweicloud_agentarts_list_agents (SDK API — 0.1.7 has NO list CLI command)
   { "limit": 100 }                    → explicit page size when sweeping
 ```
 
-Use `--output json` for machine parsing (default is a rich table). The
-list-agents tool returns `agents[]` already parsed; omit `limit`/`offset`
-unless sweeping — the SDK defaults are the single source of truth.
+Use `--output json` on EVERY memory read (default is a rich table that
+TRUNCATES ids mid-string — `60a51c61-c5d8-491…` — a copied id is
+broken). The list-agents tool returns `agents[]` already parsed; omit
+`limit`/`offset` unless sweeping — the SDK defaults are the single
+source of truth. Through the BRIDGE, list_memories also defaults to
+limit 10 — pass limit 100 (the max) and paginate offset to sweep a
+space.
 
 Reading a space's CONFIG (ttl, strategies, access, vpc/public flags,
 memory_extract_enabled): `memory get -o json` is the source of truth —
@@ -226,14 +230,14 @@ round-trip, and an unnecessary one also risks duplicate memories.
 
 actor_id per operation (the same name, three different contracts):
 
-| Operation       | actor_id                                                  |
-| --------------- | --------------------------------------------------------- |
-| search_memories | REQUIRED, top-level (unscoped = every actor's memories)   |
-| create_session  | REQUIRED, top-level (the actor is the isolation unit)     |
-| list_sessions   | optional, top-level — omit = all actors (result notes it) |
-| list_memories   | optional, `filters.actor_id` — omit = all actors (ditto)  |
-| add_messages    | optional per message (string)                             |
-| everything else | n/a                                                       |
+| Operation       | actor_id                                                                                                        |
+| --------------- | --------------------------------------------------------------------------------------------------------------- |
+| search_memories | REQUIRED, top-level (unscoped = every actor's memories)                                                         |
+| create_session  | REQUIRED, top-level (the actor is the isolation unit)                                                           |
+| list_sessions   | optional, top-level — omit = all actors (result notes it)                                                       |
+| list_memories   | optional, `filters.actor_id` — omit = all actors (ditto)                                                        |
+| add_messages    | per-message ONLY — top-level actor_id is rejected (not an add_messages parameter; measured: first-plan failure) |
+| everything else | n/a                                                                                                             |
 
 Failure/retry semantics: a mismatched write rejects without consuming
 the token; a SUCCESSFUL write consumes it, and replay returns
@@ -245,7 +249,7 @@ soft delete — unreachable through this toolkit immediately, retained
 server-side for async cleanup (90-365 days per the SDK), no in-toolkit
 recovery.
 
-Two retention/recall traps worth knowing before you lean on the data:
+Three retention/recall traps worth knowing before you lean on the data:
 
 - **Message TTL is 7 days by default** (`message_ttl_hours: 168`, range
   1-8760, SDK source). Raw conversation messages a space stores through
@@ -253,24 +257,42 @@ Two retention/recall traps worth knowing before you lean on the data:
   higher `--ttl`; extracted MEMORIES persist independently. Use the
   bridge for durable facts (they become memories via extraction), not as
   a permanent conversation archive.
-- **Search semantics: no default cutoff, whole-space returns, tiny
-  absolute scores.** The documented server default of 0.5 belongs to
-  `MemorySearchRequest` — a different request class the bridge never
-  builds. The bridge's `MemorySearchFilter` defaults `min_score` to
-  None and its serializer DROPS None (pinned venv config.py:122-132),
-  so an omitted `min_score` sends nothing and the server returns the
-  whole space ranked by similarity. Measured (one 7-memory space,
-  2026-10-27): a no-match query returned all 7 entries with a best
-  score of ≈0.06, while a different genuinely-matching query topped
-  out at ≈0.04 — the no-match query scored HIGHER than the real match,
-  so "no results" is never the no-match signal and absolute scores are
-  not comparable across queries. Judge relevance by the result's
-  `searchSummary` `{resultCount, maxScore, minScore}`: the measured
-  band is ~0.01-0.06, and a big relative gap inside one response is
-  the hit signal. Set `filters.min_score` only after seeing the band —
-  the hook path's 0.3 and the plugin MCP path's 0.7 constants would
-  filter out EVERYTHING on this scale; transplant no threshold from
-  another surface.
+- **Search semantics: no default cutoff, whole-space returns, and the
+  server-side threshold filter does not work at all.** The documented
+  server default of 0.5 belongs to `MemorySearchRequest` — a different
+  request class the bridge never builds. The bridge's
+  `MemorySearchFilter` defaults `min_score` to None and its serializer
+  DROPS None (pinned venv config.py:122-132), so an omitted `min_score`
+  sends nothing and the server returns the whole space ranked by
+  similarity. Measured (2026-10-27, one 7-memory space): even an
+  EXPLICIT `min_score: 0.01` still returned all 7 entries including one
+  at 0.000016 — the server ignores the threshold itself. The bridge
+  therefore applies a set `min_score` CLIENT-side: sub-threshold entries
+  are removed from `result`, a note counts the cut, and `searchSummary`
+  `{resultCount, maxScore, minScore}` describes the RAW server response.
+  Score calibration from the same session: a no-match query's best score
+  (≈0.06) exceeded a genuinely-matching query's (≈0.04); the full
+  measured band is 0.000016-0.14 — "no results" is never the no-match
+  signal, absolute scores are not comparable across queries, and a big
+  relative gap inside one response is the hit signal. Calibrate any
+  threshold on the observed band and transplant no threshold from
+  another surface: the hook path's 0.3 and the plugin MCP path's 0.7
+  constants would filter out EVERYTHING on this scale.
+- **Extraction is fan-out, not 1:1 — and the extractor editorializes.**
+  One `add_messages` message can extract into several memories at once
+  (measured: one message → four — semantic, user_preference, summary,
+  episodic running concurrently). `summary` writes a NEW record that
+  merges prior information while the OLD records remain (append-merge,
+  not in-place update). The extractor also infers the subject from
+  session history (measured: a message that never named Alice was stored
+  as "Alice 觉得…") and stores its own paraphrase, not your verbatim
+  text. Consequences: record count is unpredictable from message count;
+  "delete that memory" requires enumerating first (list_memories /
+  search_memories); `delete_memory` is single-record and irreversible —
+  N records = N approval round-trips, no batch, no undo; and there is NO
+  message-level delete in 0.1.7 (only `delete_session` soft delete).
+  Control what gets inferred by controlling the session context you
+  write into.
 
 Which path to use (the dual-path decision): the WRAPPER bridge
 (memory_read/plan/write) is governed — approval tokens, redaction, the

@@ -10,6 +10,7 @@ import {
   runAgentartsMemoryWrite,
   callAgentartsMemoryTool,
   AGENTARTS_MEMORY_TOOL_DEFINITIONS,
+  AGENTARTS_MEMORY_WRITE_TOOL_DEFINITIONS,
   MEMORY_READ_OPERATIONS,
 } from '../plugins/huaweicloud-core/src/agentarts-memory.mjs';
 import { planAgentartsCommand } from '../plugins/huaweicloud-core/src/agentarts-cli.mjs';
@@ -412,6 +413,89 @@ test('searchSummary survives large-output truncation (result drops, digest stays
   });
 });
 
+test('a set filters.min_score is enforced CLIENT-side (server-side filter measured ineffective)', async () => {
+  await withIsolation(async (home) => {
+    writeKeyFile(home, 'sp1', KEY);
+    const search = (filters, runCandidate) =>
+      readAgentartsMemory({ operation: 'search_memories', space_id: 'sp1', actor_id: 'u1', filters }, { runCandidate });
+    const fullResponse = {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        results: [
+          { record: { id: 'm1' }, score: 0.000016 },
+          { record: { id: 'm2' }, score: 0.042 },
+          { record: { id: 'm3' }, score: 0.14 },
+        ],
+        total: 3,
+        query: 'deploy',
+      }),
+      stderr: '',
+    };
+    // min_score=0.01 (the measured trap-31 shape: the server returned
+    // sub-threshold entries anyway). The bridge cuts them from `result`
+    // and reports the cut — searchSummary still describes the RAW set.
+    const cut = await search({ query: 'deploy', top_k: 10, min_score: 0.01 }, async () => fullResponse);
+    assert.equal(cut.ok, true);
+    assert.deepEqual(
+      cut.result.results.map((r) => r.record.id),
+      ['m2', 'm3'],
+    );
+    assert.deepEqual(cut.searchSummary, { resultCount: 3, maxScore: 0.14, minScore: 0.000016 });
+    assert.ok(cut.notes.length >= 1);
+    assert.match(cut.notes[0], /removed 1 of 3 server-returned entries CLIENT-side/);
+    assert.match(cut.notes[0], /server-side filter is ineffective even when set/);
+    assert.match(cut.notes[0], /searchSummary describes the RAW response/);
+    // Everything above threshold: no note, result untouched.
+    const noCut = await search({ query: 'deploy', min_score: 0.00001 }, async () => fullResponse);
+    assert.equal(noCut.ok, true);
+    assert.equal(noCut.result.results.length, 3);
+    assert.equal('notes' in noCut, false);
+    // Entries without a finite score are KEPT (not-below-threshold is
+    // not a judgement the bridge can make for the server).
+    const scoreless = await search({ query: 'deploy', min_score: 0.01 }, async () => ({
+      exitCode: 0,
+      stdout: JSON.stringify({
+        results: [
+          { record: { id: 'no-score' } },
+          { record: { id: 'm2' }, score: 0.042 },
+          { record: { id: 'm1' }, score: 0.000016 },
+        ],
+        total: 3,
+        query: 'deploy',
+      }),
+      stderr: '',
+    }));
+    assert.equal(scoreless.ok, true);
+    assert.deepEqual(
+      scoreless.result.results.map((r) => r.record.id),
+      ['no-score', 'm2'],
+    );
+    // min_score: null (dropped from the request) never triggers the
+    // client-side filter.
+    const nullMin = await search({ query: 'deploy', min_score: null }, async () => fullResponse);
+    assert.equal(nullMin.ok, true);
+    assert.equal(nullMin.result.results.length, 3);
+    assert.equal('notes' in nullMin, false);
+    // A numeric STRING threshold coerces (validation does not type-check
+    // filter values; the request would carry the string server-side).
+    const stringMin = await search({ query: 'deploy', min_score: '0.01' }, async () => fullResponse);
+    assert.equal(stringMin.ok, true);
+    assert.deepEqual(
+      stringMin.result.results.map((r) => r.record.id),
+      ['m2', 'm3'],
+    );
+    // min_score set but the response is unparseable (failure): no filter
+    // path, no note — failure contract owns the payload.
+    const failedSearch = await search({ query: 'deploy', min_score: 0.01 }, async () => ({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'ValueError: boom',
+    }));
+    assert.equal(failedSearch.ok, false);
+    assert.equal('notes' in failedSearch, false);
+  });
+});
+
 test('unscoped list_sessions/list_memories results carry an all-actors note', async () => {
   await withIsolation(async (home) => {
     writeKeyFile(home, 'sp1', KEY);
@@ -467,6 +551,21 @@ test('memory read tool surface: definition and dispatch', async () => {
     assert.match(definition.description, /NO score cutoff/);
     assert.match(definition.description, /searchSummary score range/);
     assert.match(definition.inputSchema.properties.filters.description, /omitted min_score = NO score cutoff/);
+    // U6: a SET min_score is documented as client-side enforced (the
+    // server-side filter is measured-ineffective — trap 31).
+    assert.match(definition.description, /enforced CLIENT-side by this bridge/);
+    assert.match(definition.description, /server-side filter is measured-ineffective/);
+    assert.match(definition.inputSchema.properties.filters.description, /the bridge filters CLIENT-side/);
+    // U6: actor_id position contracts are discoverable in the WRITE tool
+    // definitions (add_messages takes it per-message, top-level rejected).
+    const planDef = AGENTARTS_MEMORY_WRITE_TOOL_DEFINITIONS.find((d) => d.name === 'huaweicloud_agentarts_memory_plan');
+    const writeDef = AGENTARTS_MEMORY_WRITE_TOOL_DEFINITIONS.find(
+      (d) => d.name === 'huaweicloud_agentarts_memory_write',
+    );
+    for (const def of [planDef, writeDef]) {
+      assert.match(def.inputSchema.properties.actor_id.description, /inside each message/);
+      assert.match(def.inputSchema.properties.actor_id.description, /not an add_messages parameter/);
+    }
 
     // Dispatch routing (no spawn: invalid params stop at the boundary).
     const rejected = await callAgentartsMemoryTool('huaweicloud_agentarts_memory_read', {

@@ -486,27 +486,64 @@ function shapeMemoryResult(result, candidate, params, timeoutMs) {
     ? `${safeStdout.slice(0, 2000)}\n...(truncated, full output saved to ${largeOutputFile})`
     : safeStdout;
   const parsePolluted = !result.timedOut && result.exitCode === 0 && parsed === null;
-  // search_memories only: the score digest (see searchScoreSummary).
+  // search_memories only: the score digest over the RAW server response
+  // (see searchScoreSummary) — computed BEFORE the client-side filter so
+  // it always describes what the server actually did.
   const searchSummary =
     params.operation === 'search_memories' && parsed !== null && parsed !== undefined
       ? searchScoreSummary(parsed)
       : null;
+  // Advisory notes (mutually exclusive by operation, one array): the
+  // unscoped-list advisory (A7) and the client-side-filter report (U6).
+  const notes = [];
   // Unscoped list advisory (A7): list_sessions/list_memories without an
   // actor scope span EVERY actor's data in the space — legal (ops/debug
   // stance) but easy to misread as one actor's view. The note names the
   // scoping parameter per operation (top-level actor_id for
   // list_sessions; filters.actor_id for list_memories — the top-level
   // form is rejected there as not-a-parameter).
-  const unscopedList =
+  if (
     (params.operation === 'list_sessions' && !params.actor_id) ||
-    (params.operation === 'list_memories' && !(params.filters && params.filters.actor_id));
-  const unscopedListNotes = unscopedList
-    ? [
-        `Unscoped list: results span EVERY actor in the space. Scope with ${
-          params.operation === 'list_sessions' ? 'actor_id' : 'filters.actor_id'
-        } if a single actor's view was intended.`,
-      ]
-    : null;
+    (params.operation === 'list_memories' && !(params.filters && params.filters.actor_id))
+  ) {
+    notes.push(
+      `Unscoped list: results span EVERY actor in the space. Scope with ${
+        params.operation === 'list_sessions' ? 'actor_id' : 'filters.actor_id'
+      } if a single actor's view was intended.`,
+    );
+  }
+  // Client-side min_score enforcement (U6, trap 31): the 0.1.7
+  // server-side filter is measured-ineffective — an explicit 0.01 still
+  // returned sub-0.0001 entries. The bridge therefore applies the
+  // threshold itself: sub-threshold entries are removed from `result`
+  // and the note counts them (searchSummary above still describes the
+  // RAW response). Entries without a finite score are KEPT — "not below
+  // threshold" is not a judgement the bridge can make for the server.
+  // The threshold is still sent server-side too (harmless today; the
+  // day upstream honors it, nothing is left below it and the note
+  // simply stops firing).
+  const rawMinScore = params.filters ? params.filters.min_score : undefined;
+  const minThreshold = rawMinScore === null || rawMinScore === undefined ? Number.NaN : Number(rawMinScore);
+  if (
+    params.operation === 'search_memories' &&
+    parsed !== null &&
+    parsed !== undefined &&
+    Array.isArray(parsed.results) &&
+    Number.isFinite(minThreshold)
+  ) {
+    const kept = parsed.results.filter((entry) => {
+      const score = entry && typeof entry === 'object' ? Number(entry.score) : Number.NaN;
+      return !Number.isFinite(score) || score >= minThreshold;
+    });
+    if (kept.length !== parsed.results.length) {
+      notes.push(
+        `filters.min_score=${minThreshold} removed ${
+          parsed.results.length - kept.length
+        } of ${parsed.results.length} server-returned entries CLIENT-side — the 0.1.7 server-side filter is ineffective even when set (measured, trap 31). searchSummary describes the RAW response.`,
+      );
+      parsed = { ...parsed, results: kept };
+    }
+  }
   return {
     ok: !failed,
     service: 'AgentArts',
@@ -516,7 +553,7 @@ function shapeMemoryResult(result, candidate, params, timeoutMs) {
     failureDetected: failed,
     ...(largeOutputFile || failed ? {} : { result: parsed }),
     ...(searchSummary ? { searchSummary } : {}),
-    ...(unscopedListNotes ? { notes: unscopedListNotes } : {}),
+    ...(notes.length > 0 ? { notes } : {}),
     stdout: payloadStdout,
     stderr: redactSecrets(result.stderr || ''),
     ...(result.timedOut
@@ -942,7 +979,7 @@ export const AGENTARTS_MEMORY_TOOL_DEFINITIONS = [
   {
     name: 'huaweicloud_agentarts_memory_read',
     description:
-      "Read the AgentArts memory DATA plane (SDK MemoryClient — the 0.1.7 CLI has NO data-plane subcommands): sessions, messages, and memories of an existing memory space. The one-time data-plane api_key is read from the wrapper-captured 0600 key file (spaces created through the memory create tool); it never enters argv, tool arguments, or output. actor_id is REQUIRED for search_memories — server-side isolation is actor-level only, and an unscoped search silently spans every actor in the space; list_memories without filters.actor_id lists ALL actors' memories (an ops/debug stance). list_messages requires session_id (the SDK's space-wide form builds a broken /sessions/None path in 0.1.7). search_memories results LAG add_messages — extraction is asynchronous, so an empty result immediately after a write is EXPECTED; verify message ingestion with list_messages (immediate). search_memories with an omitted filters.min_score applies NO score cutoff — the SDK filter defaults min_score to None and drops it from the request, so the WHOLE space comes back ranked by similarity; judge relevance by the returned searchSummary score range (measured scale is tiny, top hits ~0.01-0.06), not by result presence. Pagination is 0-based; sessions limit 1-20, messages/memories limit 1-100. Region defaults to cn-southwest-2 (the only e2e-measured region). Read-only: no approval needed.",
+      "Read the AgentArts memory DATA plane (SDK MemoryClient — the 0.1.7 CLI has NO data-plane subcommands): sessions, messages, and memories of an existing memory space. The one-time data-plane api_key is read from the wrapper-captured 0600 key file (spaces created through the memory create tool); it never enters argv, tool arguments, or output. actor_id is REQUIRED for search_memories — server-side isolation is actor-level only, and an unscoped search silently spans every actor in the space; list_memories without filters.actor_id lists ALL actors' memories (an ops/debug stance). list_messages requires session_id (the SDK's space-wide form builds a broken /sessions/None path in 0.1.7). search_memories results LAG add_messages — extraction is asynchronous, so an empty result immediately after a write is EXPECTED; verify message ingestion with list_messages (immediate). search_memories with an omitted filters.min_score applies NO score cutoff — the SDK filter defaults min_score to None and drops it from the request, so the WHOLE space comes back ranked by similarity; a SET filters.min_score is enforced CLIENT-side by this bridge (the 0.1.7 server-side filter is measured-ineffective — an explicit 0.01 still returned sub-0.0001 entries; sub-threshold entries are removed from result, searchSummary describes the raw response and a note counts the cut). Judge relevance by the searchSummary score range (measured band 0.000016-0.14 — relative, not comparable across queries), not by result presence. Pagination is 0-based; sessions limit 1-20, messages/memories limit 1-100 (default 10 — pass 100 to sweep a space). Region defaults to cn-southwest-2 (the only e2e-measured region). Read-only: no approval needed.",
     inputSchema: {
       type: 'object',
       required: ['operation', 'space_id'],
@@ -977,7 +1014,7 @@ export const AGENTARTS_MEMORY_TOOL_DEFINITIONS = [
         filters: {
           type: 'object',
           description:
-            'search_memories: MemorySearchFilter fields (query REQUIRED, plus strategy_type/strategy_id/assistant_id/session_id/memory_type/start_time/end_time/top_k/min_score — actor_id goes in the top-level param; omitted min_score = NO score cutoff, the whole space returns ranked). list_memories: MemoryListFilter fields (strategy_type/strategy_id/actor_id/assistant_id/session_id/start_time/end_time — sort_by/sort_order exist on the SDK dataclass but 0.1.7 never sends them; rejected here). Unknown keys are rejected.',
+            'search_memories: MemorySearchFilter fields (query REQUIRED, plus strategy_type/strategy_id/assistant_id/session_id/memory_type/start_time/end_time/top_k/min_score — actor_id goes in the top-level param; omitted min_score = NO score cutoff, the whole space returns ranked; set min_score = the bridge filters CLIENT-side, the 0.1.7 server-side filter is ineffective even when set). list_memories: MemoryListFilter fields (strategy_type/strategy_id/actor_id/assistant_id/session_id/start_time/end_time — sort_by/sort_order exist on the SDK dataclass but 0.1.7 never sends them; rejected here). Unknown keys are rejected.',
         },
       },
     },
@@ -997,7 +1034,11 @@ export const AGENTARTS_MEMORY_WRITE_TOOL_DEFINITIONS = [
       properties: {
         operation: { type: 'string', enum: MEMORY_WRITE_OPERATIONS },
         space_id: { type: 'string', pattern: '^[A-Za-z0-9_-]+$' },
-        actor_id: { type: 'string', description: 'REQUIRED for create_session.' },
+        actor_id: {
+          type: 'string',
+          description:
+            'REQUIRED for create_session. add_messages: pass actor_id inside each message — the top-level form is rejected (not an add_messages parameter).',
+        },
         session_id: {
           type: 'string',
           description:
@@ -1041,7 +1082,11 @@ export const AGENTARTS_MEMORY_WRITE_TOOL_DEFINITIONS = [
         },
         operation: { type: 'string', enum: MEMORY_WRITE_OPERATIONS },
         space_id: { type: 'string', pattern: '^[A-Za-z0-9_-]+$', description: 'Same space the plan bound.' },
-        actor_id: { type: 'string', description: 'REQUIRED for create_session (the isolation unit).' },
+        actor_id: {
+          type: 'string',
+          description:
+            'REQUIRED for create_session (the isolation unit). add_messages: pass actor_id inside each message — the top-level form is rejected (not an add_messages parameter).',
+        },
         session_id: {
           type: 'string',
           description: 'The id create_session returned (or your custom id); required for add_messages/delete_session.',
