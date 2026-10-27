@@ -41,6 +41,12 @@ export interface TelemetryEvent {
 export interface TelemetryState {
   eventQueue: TelemetryEvent[];
   isFlushing: boolean;
+  // The in-flight flush round's promise, set when a round starts and
+  // cleared when it settles. Awaitability (flushEvents returns a Promise)
+  // needs a rendezvous point: a caller arriving mid-round cannot build a
+  // promise from the round it missed, so the round stores itself here and
+  // late callers chain onto it (see event-pipeline.ts).
+  inflightFlush: Promise<void> | null;
   flushTimer: NodeJS.Timeout | null;
   lastCheckedDate: string;
   installId: string | null;

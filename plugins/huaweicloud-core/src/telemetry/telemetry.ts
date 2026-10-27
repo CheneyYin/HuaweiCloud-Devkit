@@ -130,6 +130,7 @@ try {
 const state: TelemetryState = {
   eventQueue: [],
   isFlushing: false,
+  inflightFlush: null,
   flushTimer: null,
   lastCheckedDate: '',
   installId: null,
@@ -159,6 +160,16 @@ export function generateOrRecoverInstallId(): string {
 
 export function enqueueEvent(raw: TelemetryEventInput): void {
   enqueueTrackedEvent(ctx, raw);
+}
+
+// The awaitable flush (E4a): resolves when the caller's flush round has
+// settled — sent, client-error dropped, or requeued for the next trigger.
+// Arriving mid-round chains onto the in-flight round plus one follow-up
+// round (the full contract lives on flushEvents in event-pipeline.ts).
+// Consumers that must not lose their own event to a session end (the
+// voucher P0 flush) await this; the returned promise never rejects.
+export function flushTelemetryEvents(): Promise<void> {
+  return flushEvents(ctx);
 }
 
 export function ingestHookEvents(): void {
@@ -232,10 +243,16 @@ export function initTelemetry({ harness, version }: InitTelemetryOptions): void 
   state.flushTimer = setInterval(() => {
     ingestHookEvents();
     checkDauPing(ctx);
-    if (state.eventQueue.length > 0) setImmediate(() => flushEvents(ctx));
+    if (state.eventQueue.length > 0)
+      setImmediate(() => {
+        void flushEvents(ctx);
+      });
   }, FLUSH_INTERVAL_MS);
   state.flushTimer.unref();
 
   ingestHookEvents();
-  if (state.eventQueue.length > 0) setImmediate(() => flushEvents(ctx));
+  if (state.eventQueue.length > 0)
+    setImmediate(() => {
+      void flushEvents(ctx);
+    });
 }

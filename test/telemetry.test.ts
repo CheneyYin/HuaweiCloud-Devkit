@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { after } from 'node:test';
 
 import { AGENTS } from '../plugins/huaweicloud-core/src/telemetry/agent-registry.ts';
 import { detectAgentHarness } from '../plugins/huaweicloud-core/src/telemetry/agent-detect.ts';
@@ -37,6 +37,95 @@ async function withIsolatedTelemetry(fn: (telemetry: TelemetryModule) => unknown
     if (prevHome === undefined) delete process.env.HUAWEICLOUD_DEVKIT_HOME;
     else process.env.HUAWEICLOUD_DEVKIT_HOME = prevHome;
     fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ---- flush-behavior test infrastructure ----
+//
+// The flush path rides fetchWithProxy, which dispatches to global.fetch
+// when no proxy is configured (the hdkitservice-api.test.ts stubbing
+// precedent). "No proxy" must be established from every source the
+// resolver reads: the proxy env spellings AND a developer's proxy.json
+// (whose path derives from HUAWEICLOUD_HOME), so the file-scope hermetic
+// home below redirects that config too.
+//
+// The hermetic home ALSO pins the CANONICAL face instance's module-scope
+// paths (the query-less import the pack handlers and the stdio transport
+// resolve): its GLOBAL_TELEMETRY_DIR is derived at first load, so the env
+// must be in place before any test triggers that load — hence file scope,
+// not per-test. withIsolatedTelemetry overrides it per-test and restores
+// back to this value.
+const PROXY_ENV_KEYS = ['HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy'] as const;
+const savedProxyEnv: Record<string, string | undefined> = {};
+for (const key of PROXY_ENV_KEYS) {
+  savedProxyEnv[key] = process.env[key];
+  delete process.env[key];
+}
+const fs = await import('node:fs');
+const os = await import('node:os');
+const path = await import('node:path');
+const FILE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'hwdk-telemetry-file-'));
+const prevDevkitHome = process.env.HUAWEICLOUD_DEVKIT_HOME;
+const prevHwHome = process.env.HUAWEICLOUD_HOME;
+process.env.HUAWEICLOUD_DEVKIT_HOME = FILE_HOME;
+process.env.HUAWEICLOUD_HOME = FILE_HOME;
+
+after(() => {
+  for (const key of PROXY_ENV_KEYS) {
+    if (savedProxyEnv[key] === undefined) delete process.env[key];
+    else process.env[key] = savedProxyEnv[key];
+  }
+  if (prevDevkitHome === undefined) delete process.env.HUAWEICLOUD_DEVKIT_HOME;
+  else process.env.HUAWEICLOUD_DEVKIT_HOME = prevDevkitHome;
+  if (prevHwHome === undefined) delete process.env.HUAWEICLOUD_HOME;
+  else process.env.HUAWEICLOUD_HOME = prevHwHome;
+  fs.rmSync(FILE_HOME, { recursive: true, force: true });
+});
+
+const TELEMETRY_URL = 'https://telemetry-stub.test/events';
+
+interface CapturedCall {
+  url: string;
+  body?: string;
+}
+
+// Stub global.fetch; the returned restore puts the original back. The
+// handler receives the flat (url, init) the pipeline passes on.
+function stubFetch(handler: (url: string, init: RequestInit) => Promise<Response>): () => void {
+  const original = global.fetch;
+  global.fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
+    handler(input.toString(), init ?? {})) as typeof fetch;
+  return () => {
+    global.fetch = original;
+  };
+}
+
+function okTelemetryResponse(): Response {
+  return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } });
+}
+
+// The telemetry POSTs out of a captured call log, bodies parsed.
+function telemetryPostBodies(calls: CapturedCall[]): Record<string, unknown>[][] {
+  return calls
+    .filter((call) => call.url === TELEMETRY_URL)
+    .map((call) => JSON.parse(call.body ?? '[]') as Record<string, unknown>[]);
+}
+
+async function withEnv(vars: Record<string, string | undefined>, fn: () => Promise<void>): Promise<void> {
+  const prev: Record<string, string | undefined> = {};
+  for (const key of Object.keys(vars)) {
+    prev[key] = process.env[key];
+    const value = vars[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  try {
+    await fn();
+  } finally {
+    for (const [key, value] of Object.entries(prev)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 }
 
@@ -221,5 +310,152 @@ test('ingestHookEvents handles empty or missing file', async () => {
   await withIsolatedTelemetry(async ({ initTelemetry, ingestHookEvents }) => {
     initTelemetry({ harness: 'test', version: '1.0.0' });
     assert.doesNotThrow(() => ingestHookEvents());
+  });
+});
+
+// ---- awaitable flush (E4a) ----
+//
+// initTelemetry enqueues boot events (plugin:install / first_use / the DAU
+// ping, depending on stamp state) and schedules its own setImmediate
+// flush; every test below first awaits one flush so the boot round and
+// that chain have settled, leaving a deterministic empty queue.
+
+test('flushTelemetryEvents resolves without a POST when the queue is empty', async () => {
+  await withIsolatedTelemetry(async (telemetry) => {
+    const calls: CapturedCall[] = [];
+    const restore = stubFetch(async (url, init) => {
+      calls.push({ url, body: typeof init.body === 'string' ? init.body : undefined });
+      return okTelemetryResponse();
+    });
+    try {
+      await withEnv({ HUAWEICLOUD_DEVKIT_TELEMETRY_ENDPOINT: TELEMETRY_URL }, async () => {
+        telemetry.initTelemetry({ harness: 'test', version: '1.0.0' });
+        await telemetry.flushTelemetryEvents();
+        const postsBefore = telemetryPostBodies(calls).length;
+        await telemetry.flushTelemetryEvents();
+        assert.equal(telemetryPostBodies(calls).length, postsBefore);
+      });
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('flushTelemetryEvents sends queued events with their literal keys', async () => {
+  await withIsolatedTelemetry(async (telemetry) => {
+    const calls: CapturedCall[] = [];
+    const restore = stubFetch(async (url, init) => {
+      calls.push({ url, body: typeof init.body === 'string' ? init.body : undefined });
+      return okTelemetryResponse();
+    });
+    try {
+      await withEnv({ HUAWEICLOUD_DEVKIT_TELEMETRY_ENDPOINT: TELEMETRY_URL }, async () => {
+        telemetry.initTelemetry({ harness: 'test', version: '1.0.0' });
+        await telemetry.flushTelemetryEvents();
+        telemetry.trackToolInvoke('flush_send_probe');
+        telemetry.trackSkillRetrieve('flush-skill-probe');
+        await telemetry.flushTelemetryEvents();
+        const posts = telemetryPostBodies(calls);
+        const last = posts[posts.length - 1]!;
+        assert.deepEqual(
+          last.map((event) => event.key),
+          ['tool:flush_send_probe', 'skill:retrieve'],
+        );
+        // events carry the session identity they were built with
+        assert.equal(last[0]!.harness, 'test');
+        assert.equal(typeof last[0]!.installId, 'string');
+        assert.ok((last[0]!.installId as string).length > 0);
+      });
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('a flush arriving mid-round chains onto it and flushes late-enqueued events', async () => {
+  await withIsolatedTelemetry(async (telemetry) => {
+    const calls: CapturedCall[] = [];
+    // The gate holds exactly the NEXT telemetry POST until released, so
+    // round 1 stays in flight while the test enqueues behind its splice.
+    let holdNext = false;
+    let release: () => void = () => {};
+    let gate: Promise<void> = Promise.resolve();
+    const restore = stubFetch(async (url, init) => {
+      calls.push({ url, body: typeof init.body === 'string' ? init.body : undefined });
+      if (holdNext && url === TELEMETRY_URL) {
+        holdNext = false;
+        await gate;
+      }
+      return okTelemetryResponse();
+    });
+    try {
+      await withEnv({ HUAWEICLOUD_DEVKIT_TELEMETRY_ENDPOINT: TELEMETRY_URL }, async () => {
+        telemetry.initTelemetry({ harness: 'test', version: '1.0.0' });
+        await telemetry.flushTelemetryEvents();
+
+        telemetry.trackToolInvoke('inflight_first');
+        holdNext = true;
+        gate = new Promise<void>((resolveGate) => {
+          release = resolveGate;
+        });
+        // Round 1 splices inflight_first synchronously, then suspends on
+        // the gated fetch.
+        const p1 = telemetry.flushTelemetryEvents();
+        telemetry.trackToolInvoke('inflight_second');
+        // Arrives mid-round: chains onto round 1 plus one follow-up round.
+        const p2 = telemetry.flushTelemetryEvents();
+        release();
+        await p1;
+        await p2;
+
+        const posts = telemetryPostBodies(calls);
+        const tail = posts.slice(-2);
+        assert.deepEqual(
+          tail[0]!.map((event) => event.key),
+          ['tool:inflight_first'],
+        );
+        assert.deepEqual(
+          tail[1]!.map((event) => event.key),
+          ['tool:inflight_second'],
+        );
+      });
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('flushTelemetryEvents resolves on server failure and requeues for the next flush', async () => {
+  await withIsolatedTelemetry(async (telemetry) => {
+    const calls: CapturedCall[] = [];
+    let failTelemetry = true;
+    const restore = stubFetch(async (url, init) => {
+      calls.push({ url, body: typeof init.body === 'string' ? init.body : undefined });
+      if (url === TELEMETRY_URL && failTelemetry) {
+        return new Response(JSON.stringify({}), { status: 503, headers: { 'Content-Type': 'application/json' } });
+      }
+      return okTelemetryResponse();
+    });
+    try {
+      await withEnv({ HUAWEICLOUD_DEVKIT_TELEMETRY_ENDPOINT: TELEMETRY_URL }, async () => {
+        telemetry.initTelemetry({ harness: 'test', version: '1.0.0' });
+        telemetry.trackToolInvoke('retry_probe');
+        // 503 -> requeue; the promise resolves, never rejects (the P0
+        // await contract).
+        await assert.doesNotReject(telemetry.flushTelemetryEvents());
+        const failedRounds = telemetryPostBodies(calls).length;
+        failTelemetry = false;
+        await telemetry.flushTelemetryEvents();
+        const posts = telemetryPostBodies(calls);
+        assert.ok(posts.length > failedRounds, 'the requeued events must be re-sent by a later flush');
+        const keys = posts
+          .slice(failedRounds)
+          .flat()
+          .map((event) => event.key);
+        assert.ok(keys.includes('tool:retry_probe'));
+      });
+    } finally {
+      restore();
+    }
   });
 });

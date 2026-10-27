@@ -93,6 +93,7 @@ test('telemetry face keeps the public surface under the same import path', () =>
     'resolvePluginDir',
     'generateOrRecoverInstallId',
     'enqueueEvent',
+    'flushTelemetryEvents',
     'ingestHookEvents',
     'trackInstall',
     'trackToolInvoke',
