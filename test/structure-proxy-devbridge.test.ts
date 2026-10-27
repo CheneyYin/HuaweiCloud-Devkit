@@ -568,7 +568,14 @@ test('devbridge 0.2.x flow: auth capability probe, version detection, in-place u
   const deployNginx = readSource(join('src', 'sandbox', 'deploy-nginx.ts'));
   const deployNginxVerify = readSource(join('src', 'sandbox', 'deploy-nginx-verify.ts'));
   assert.match(deployNginx, /DB_NGINX_CONFIG_MISSING=1/);
+  // The presence-inverted pair (interrogate round 2): the script emits
+  // OK-or-MISSING as if/else so every marker is presence-required and a
+  // swallowed marker line reads as the failure direction, never as the
+  // pre-inversion false success.
+  assert.match(deployNginx, /DB_NGINX_CONFIG_OK=1/);
+  assert.match(deployNginx, /else echo "DB_NGINX_CONFIG_MISSING=1"; fi/);
   assert.match(deployNginx, /DB_NGINX_T=PASS/);
+  assert.match(deployNginxVerify, /DB_NGINX_CONFIG_OK=1/);
   assert.match(deployNginxVerify, /export function resolveNginxConfigPath/);
   assert.match(deployNginx, /fix_and_retry/);
 

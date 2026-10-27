@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -6,9 +6,15 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // npm tarballs and built checkouts carry dist/; a raw git or marketplace copy
 // of the plugin does not. Prefer the compiled module and fall back to the
 // TypeScript source (Node >= 22.18 strips types outside node_modules) so the
-// PreToolUse safety gate keeps running instead of crashing open.
+// PreToolUse safety gate keeps running instead of crashing open. Staleness
+// is out of scope: a dist built from an older source tree imports fine and
+// silently runs the old classifier — freshness is the build/install chain's
+// job, not the hook's.
 
 const DENY_PREFIX = 'Huawei Cloud safety hook blocked this action: ';
+
+const POLICY_LOAD_FAILED_REASON =
+  'the safety policy failed to load; commands are denied fail-closed. Reinstall the huaweicloud-devkit plugin.';
 
 function commandText(toolInput) {
   if (typeof toolInput === 'string') return toolInput;
@@ -41,8 +47,11 @@ function deny(reason) {
 // DEFAULT_POLICY throws at module load) cannot classify safely either: deny
 // fail-closed instead of dying with no verdict, which a PreToolUse harness
 // reads as "allow" (the py twin's fail-closed posture, interrogate round 1).
-// The import sits AFTER deny()'s declaration on purpose — the catch arm calls
-// it, and a module-scope call above the declaration would hit the TDZ.
+// The verdict is written SYNCHRONOUSLY before the exit (interrogate round 2):
+// process.exit() does not wait for pending async pipe writes, and a dropped
+// fail-closed verdict reads as allow — the exact failure this guard prevents.
+// (The deny() placement above is cosmetic, not semantic: function
+// declarations hoist, so the import could sit anywhere; it reads best here.)
 let classifyTextCommand;
 try {
   const policyModule = existsSync(join(__dirname, '..', 'dist', 'safety-policy.js'))
@@ -50,10 +59,16 @@ try {
     : await import('../src/safety-policy.ts');
   ({ classifyTextCommand } = policyModule);
 } catch {
-  deny('the safety policy failed to load; commands are denied fail-closed. Reinstall the huaweicloud-devkit plugin.');
-  // Exit-0-with-verdict is the hook's contract (the py deny's sys.exit(0)):
-  // main() must never run against an unloaded classifier. The
-  // n/no-process-exit override covers this entry point.
+  writeSync(
+    1,
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: DENY_PREFIX + POLICY_LOAD_FAILED_REASON,
+      },
+    }) + '\n',
+  );
   process.exit(0);
 }
 
@@ -75,7 +90,18 @@ function main() {
   }
 
   const text = commandText(data.tool_input ?? {});
-  const result = classifyTextCommand(text);
+  // Classify-time failure is the same contract as load-time (interrogate
+  // round 2): a payload whose rules file dies mid-classification
+  // (risk-rule-engine's JSON.parse) must deny fail-closed, not crash
+  // verdict-less — which a PreToolUse harness reads as "allow". The natural
+  // return after deny() lets the process drain (no exit race).
+  let result;
+  try {
+    result = classifyTextCommand(text);
+  } catch {
+    deny(POLICY_LOAD_FAILED_REASON);
+    return;
+  }
   if (result.decision === 'deny') deny(result.reason);
 }
 

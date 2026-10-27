@@ -43,7 +43,7 @@ test('cloud risk rules are present and public-safe', () => {
   }
 });
 
-test('the py hook derives the obfuscation gate write vocabulary from policy.json, never a second hand-maintained list', () => {
+test('the py hook derives the obfuscation gate write vocabulary from policy.json (prefixes), with the OBS half marker-gated', () => {
   // port-v2defects (interrogate round): WRITE_VOCAB_RE was a hardcoded
   // 20-word alternation whose comment claimed to mirror policy.json's 37
   // writeOperationPrefixes — the 17 missing words (invoke/execute/trigger/
@@ -56,21 +56,32 @@ test('the py hook derives the obfuscation gate write vocabulary from policy.json
   // reopening the mangled-write hole.
   const pyHook = readSource(join('hooks', 'huaweicloud-safety.py'));
   assert.match(pyHook, /WRITE_VOCAB_RE = None/);
-  // Every compile of the vocabulary must derive from the policy list (and
-  // carry the OBSUTIL_WRITES union) — the assignment-scan shape, not a
-  // byte-exact line pin, so cosmetic reformatting stays green while a
-  // re-hardcoded alternation (the drift shape, in any spelling or order)
-  // fails: a compile without write_prefixes IS a hand-maintained list.
+  // Every compile of the prefix vocabulary must derive from the policy list —
+  // the assignment-scan shape, not a byte-exact line pin, so cosmetic
+  // reformatting stays green while a re-hardcoded alternation (the drift
+  // shape, in any spelling or order) fails: a compile without write_prefixes
+  // IS a hand-maintained list.
   const vocabAssignments = pyHook.match(/WRITE_VOCAB_RE = re\.compile\([^\n]*\)/g) ?? [];
-  assert.ok(vocabAssignments.length >= 1, 'the vocabulary must be compiled inside load_policy');
+  assert.ok(vocabAssignments.length >= 1, 'the prefix vocabulary must be compiled inside load_policy');
   for (const assignment of vocabAssignments) {
     assert.match(assignment, /write_prefixes/, `policy-derived compile required: ${assignment}`);
-    assert.match(assignment, /OBSUTIL_WRITES/, `the OBS subcommand union must ride the vocabulary: ${assignment}`);
   }
-  // The fail-closed arm sits in the gate's vocabulary clause.
-  assert.ok(
-    pyHook.includes('or WRITE_VOCAB_RE is None\n        or WRITE_VOCAB_RE.search(unquoted)'),
-    'an unavailable derivation must fail the clause CLOSED (the is None arm)',
+  // The OBS subcommand half is a separate module-compiled regex (its own
+  // dual-home doctrine, not foldable into policy.json), gated at the gate by
+  // CLOUD_MARKER_RE so routine expansion-bearing shell idioms stay
+  // legitimate while the mangled OBS writes deny.
+  const obsAssignments = pyHook.match(/OBS_VOCAB_RE = re\.compile\([^\n]*\)/g) ?? [];
+  assert.ok(obsAssignments.length >= 1, 'the OBS vocabulary must be module-compiled');
+  for (const assignment of obsAssignments) {
+    assert.match(assignment, /OBSUTIL_WRITES/, `the OBS vocabulary derives from OBSUTIL_WRITES: ${assignment}`);
+  }
+  assert.match(pyHook, /CLOUD_MARKER_RE = re\.compile\(r"cloud\|\\bOBS\\b", re\.I\)/);
+  // The fail-closed arm sits in the gate's vocabulary clause (whitespace-
+  // tolerant: indentation reflow must not break the pin — interrogate
+  // round 2).
+  assert.match(
+    pyHook,
+    /or WRITE_VOCAB_RE is None\s+or WRITE_VOCAB_RE\.search\(unquoted\)\s+or \(CLOUD_MARKER_RE\.search\(unquoted\) and OBS_VOCAB_RE\.search\(unquoted\)\)/,
   );
 });
 
@@ -78,8 +89,9 @@ test('the py hook degrades coherently: derived vocabularies, isolated fields, fa
   // The read vocabulary is ALSO policy-derived (the last hand-maintained
   // policy mirror), the write gate's read exemption is start-anchored
   // (re.match, TS hasReadPrefix parity), and an unavailable write
-  // vocabulary denies ROUTED hcloud commands instead of silently allowing
-  // plain writes while the mangled forms deny.
+  // vocabulary denies hcloud-LEADING invocations (prose mentions stay
+  // allowed) instead of silently allowing plain writes while the mangled
+  // forms deny.
   const pyHook = readSource(join('hooks', 'huaweicloud-safety.py'));
   assert.match(pyHook, /READ_OPERATION_RE = None/);
   const readAssignments = pyHook.match(/READ_OPERATION_RE = re\.compile\([^\n]*\)/g) ?? [];
@@ -89,8 +101,9 @@ test('the py hook degrades coherently: derived vocabularies, isolated fields, fa
   }
   // Start-anchored read exemption (the drift let `Update-Show-x` allow).
   assert.match(pyHook, /READ_OPERATION_RE is None or not READ_OPERATION_RE\.match\(operation\)/);
-  // The write-gate fail-closed arm with its cause-named reason.
-  assert.match(pyHook, /if not WRITE_OPERATION_RE:[\s\S]{0,900}?denied fail-closed/);
+  // The write-gate fail-closed arm with its cause-named reason (the honest
+  // widened text names the empty-vocabulary cause, not just load failure).
+  assert.match(pyHook, /could not be loaded or carries no write vocabulary/);
   // Per-field isolation: the vocabularies compile FIRST, before the
   // pattern-bearing fields whose invalid regexes must not abort them.
   const writeFirst = pyHook.indexOf('write_prefixes = policy.get');
@@ -104,20 +117,79 @@ test('the py hook degrades coherently: derived vocabularies, isolated fields, fa
   assert.match(pyHook, /if not isinstance\(write_prefixes, list\):/);
   assert.match(pyHook, /if not isinstance\(read_prefixes, list\):/);
 
-  // The TS twin: writeVocabHit unions OBSUTIL_WRITES and treats an empty
-  // prefix list as a hit (the is-None arm's mirror).
+  // The TS twin: writeVocabHit's OBS arm is marker-gated the same way and
+  // treats an empty prefix list as a hit (the is-None arm's mirror).
   const classifyText = readSource(join('src', 'safety', 'classify-text.ts'));
   assert.match(classifyText, /import \{ OBSUTIL_WRITES \} from '\.\/tokens\.ts';/);
   assert.match(classifyText, /writeOperationPrefixes\.length === 0/);
-  assert.match(classifyText, /\[\.\.\.DEFAULT_POLICY\.writeOperationPrefixes, \.\.\.OBSUTIL_WRITES\]\.some/);
+  assert.ok(
+    classifyText.includes('(/(?:cloud|\\bOBS\\b)/i.test(shadowText) &&'),
+    'the OBS vocabulary arm must be cloud-marker-gated',
+  );
+  assert.match(classifyText, /\[\.\.\.OBSUTIL_WRITES\]\.some/);
 
   // The Node hook wrapper fails CLOSED on a payload too broken to load its
   // own policy (DEFAULT_POLICY throws at module load) instead of dying with
-  // no verdict, which a PreToolUse harness reads as "allow". readSource
-  // rewrites legacy .mjs paths to .ts — the hook is a real .mjs, so it is
-  // read directly (the structure-runtime precedent).
+  // no verdict, which a PreToolUse harness reads as "allow" — and its
+  // verdict write is SYNCHRONOUS (process.exit does not wait for pending
+  // async pipe writes; a dropped fail-closed verdict reads as allow).
+  // readSource rewrites legacy .mjs paths to .ts — the hook is a real .mjs,
+  // so it is read directly (the structure-runtime precedent).
   const nodeHook = readFileSync(join(pluginRoot, 'hooks', 'huaweicloud-safety.mjs'), 'utf8');
-  assert.match(nodeHook, /} catch \{\s*\n\s*deny\('the safety policy failed to load/);
+  assert.match(nodeHook, /} catch \{\s*\n\s*writeSync\(/);
+  assert.match(nodeHook, /POLICY_LOAD_FAILED_REASON/);
+  // Classify-time failure (a corrupt rules file) denies the same way.
+  assert.match(
+    nodeHook,
+    /result = classifyTextCommand\(text\);\s*\n\s*\} catch \{\s*\n\s*deny\(POLICY_LOAD_FAILED_REASON\);/,
+  );
+});
+
+test('the safety policy loader rejects an emptied write list (interrogate round 2 parity closure)', () => {
+  // A present-but-empty writeOperationPrefixes reclassifies write commands
+  // as safe — the exact fail-open the non-array throw exists to prevent,
+  // one shape over. loadPolicy now throws, so the degraded surfaces cohere:
+  // py denies fail-closed (unavailable vocabulary), the .mjs hook denies
+  // fail-closed (module-load throw), the MCP server refuses to boot
+  // (fail-loud by design). The absent field still normalizes to [] for
+  // older policies.
+  const policySource = readSource(join('src', 'safety', 'policy.ts'));
+  assert.match(policySource, /must not be empty/);
+  assert.match(policySource, /raw\.writeOperationPrefixes !== undefined && writeOperationPrefixes\.length === 0/);
+});
+
+test('the OBSUTIL_WRITES vocabulary is set-equal across the py hook and the TS tokens module (interrogate round 2)', () => {
+  // 11 of the 28 words had no verdict pin anywhere — a future single-layer
+  // edit could reopen those words' mangled-write holes unpinned (the exact
+  // dual-maintenance drift shape this task exists to kill). One structural
+  // equality assertion kills the whole class. Comment lines are stripped
+  // before extraction (both blocks carry prose with apostrophes/quotes).
+  const stripCommentLines = (block: string, marker: string): string =>
+    block
+      .split('\n')
+      .filter((line) => !line.trim().startsWith(marker))
+      .join('\n');
+  const pyHook = readSource(join('hooks', 'huaweicloud-safety.py'));
+  const pyBlock = stripCommentLines(pyHook.match(/OBSUTIL_WRITES = \{([\s\S]*?)\}/)?.[1] ?? '', '#');
+  const pyWords = new Set([...pyBlock.matchAll(/"([^"]+)"/g)].map((m) => m[1] ?? ''));
+  const tokens = readSource(join('src', 'safety', 'tokens.ts'));
+  const tsBlock = stripCommentLines(
+    tokens.match(/export const OBSUTIL_WRITES = new Set\(\[([\s\S]*?)\]\)/)?.[1] ?? '',
+    '//',
+  );
+  const tsWords = new Set([...tsBlock.matchAll(/'([^']+)'/g)].map((m) => m[1] ?? ''));
+  assert.ok(pyWords.size >= 20, `py OBSUTIL_WRITES parsed sanely (${pyWords.size} words)`);
+  assert.ok(tsWords.size >= 20, `ts OBSUTIL_WRITES parsed sanely (${tsWords.size} words)`);
+  assert.deepEqual(
+    [...pyWords].filter((word) => !tsWords.has(word)),
+    [],
+    'words only in the py hook drift the layers',
+  );
+  assert.deepEqual(
+    [...tsWords].filter((word) => !pyWords.has(word)),
+    [],
+    'words only in the TS tokens drift the layers',
+  );
 });
 
 test('hooks.json uses Node hook and keeps Python hook for Hermes compatibility', () => {

@@ -71,15 +71,24 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
   ["$'\\x68'cloud CodeArtsDeploy DeployApplication --app_id=x", 'deny'],
   // port-v2defects (interrogate round 1): the mangled OBS subcommand face —
   // routing dies with the keyword, so the obfuscation gate's write
-  // vocabulary is the only layer that can fire, and its union with
-  // OBSUTIL_WRITES (both layers) closes the non-prefix subcommand writes
-  // (rm/cp/sync/chattri…). Read subcommands stay allowed.
+  // vocabulary is the only layer that can fire, and its OBS arm (unioned
+  // with OBSUTIL_WRITES on both layers) closes the non-prefix subcommand
+  // writes (rm/cp/sync/chattri…). Read subcommands stay allowed.
   ["$'\\x68'cloud OBS rm obs://b -f", 'deny'],
   ["$'\\x68'cloud OBS cp obs://src obs://dst", 'deny'],
   ["$'\\x68'cloud OBS sync obs://b obs://c", 'deny'],
   ["$'\\x68'cloud OBS chattri obs://b -acl=public-read", 'deny'],
   ["$'\\x68'cloud OBS ls obs://bucket", 'allow'],
   ["$'\\x68'cloud OBS stat obs://b/o", 'allow'],
+  // port-v2defects (interrogate round 2): the OBS arm is MARKER-GATED on
+  // both layers (a cloud spelling or the OBS token must ride the shadow) —
+  // the short subcommand words are routine shell vocabulary, and the
+  // unscoped round-1 union denied these legitimate expansion-bearing
+  // idioms. The mangled forms above still deny (x68cloud is the marker).
+  ['docker rm $(docker ps -aq)', 'allow'],
+  ['mkdir -p $(pwd)/build', 'allow'],
+  ['bash -c "cp $(mktemp -d)/x y"', 'allow'],
+  ['git commit -m "sync $(git rev-parse --short HEAD)"', 'allow'],
   // port-v2defects (interrogate round 1): the write gate's read exemption is
   // anchored at the operation token's START on both layers (TS hasReadPrefix
   // ^prefix parity — py re.match). A write-prefixed operation with an

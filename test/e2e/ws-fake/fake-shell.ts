@@ -236,10 +236,11 @@ const INTENT_TABLE: IntentRow[] = [
     // deployNginx's config-write blob (resolve script + tee heredoc + embedded
     // reload + chmod fixups + the A1 (#935) verify block, one exec) opens with
     // REAL_PROJECT=. The verify block's success markers must be synthesized —
-    // deployNginx's verdict reads them (DB_NGINX_T=PASS, no CONFIG_MISSING).
+    // deployNginx's verdict reads them (DB_NGINX_CONFIG_OK, DB_NGINX_T=PASS;
+    // the OK marker is presence-required since the interrogate-r2 inversion).
     intent: 'deploy-nginx-config-write',
     pattern: /^REAL_PROJECT=\$\(readlink .*$/,
-    run: () => ({ stdout: 'DB_NGINX_T=PASS\n' }),
+    run: () => ({ stdout: 'DB_NGINX_CONFIG_OK=1\nDB_NGINX_T=PASS\n' }),
   },
   {
     // Agent-initiated verification (`ls /workspace/myproject` after an

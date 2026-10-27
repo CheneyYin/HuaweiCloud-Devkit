@@ -100,6 +100,7 @@ test('telemetry face keeps the public surface under the same import path', () =>
   // a face export.
   for (const name of [
     'resolvePluginDir',
+    'globalTelemetryDir',
     'generateOrRecoverInstallId',
     'enqueueEvent',
     'flushTelemetryEvents',

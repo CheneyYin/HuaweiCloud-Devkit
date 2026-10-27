@@ -56,6 +56,17 @@ OBSUTIL_WRITES = {
     # (obsutil self-update — mutates the installed binary).
     "abort", "archive", "create-share", "update",
 }
+# The OBS subcommand half of the obfuscation gate's vocabulary (marker-gated
+# at the gate — see the load_policy comment). Module-compiled, not
+# policy-derived: OBSUTIL_WRITES has its own pinned dual-home doctrine
+# (the KooCLI 7.3.12 lockstep sweep), so it is not foldable into
+# policy.json's prefix list. The cloud marker that gates it: any *cloud
+# spelling (the mangled bin leaves `x68cloud` — a substring match, no \b, or
+# the digits glue would defeat it) or the word-bounded OBS service token
+# (also matches `obs://` — the colon is a boundary). `observations`/`jobs`
+# stay non-markers.
+OBS_VOCAB_RE = re.compile(r"(^|[^a-z])(?:" + "|".join(sorted(OBSUTIL_WRITES)) + ")", re.I)
+CLOUD_MARKER_RE = re.compile(r"cloud|\bOBS\b", re.I)
 
 
 def load_policy():
@@ -91,13 +102,18 @@ def load_policy():
             # writes through the py-hook faces (Hermes importlib, WorkBuddy
             # deploy) while the TS layer denied (writeVocabHit over
             # DEFAULT_POLICY.writeOperationPrefixes in classify-text.ts).
-            # UNIONED with OBSUTIL_WRITES (interrogate round 1): routing
-            # dies with the keyword under ANSI-C mangling, so this vocab is
-            # the only layer that can fire — non-prefix obsutil subcommand
-            # writes (rm/cp/mv/sync/chattri…) must be in it. The
-            # vocabulary's own failure mode lives at the gate: an
-            # unavailable derivation fails the clause CLOSED.
-            WRITE_VOCAB_RE = re.compile(r"(^|[^a-z])(?:" + "|".join(sorted(set(write_prefixes) | OBSUTIL_WRITES)) + ")", re.I)
+            # The OBSUTIL_WRITES union rides a SEPARATE marker-gated regex
+            # (interrogate round 2): routing dies with the keyword under
+            # ANSI-C mangling, so non-prefix obsutil subcommand writes
+            # (rm/cp/mv/sync/chattri…) must be in the vocab — but those
+            # short words are routine shell vocabulary, so that arm fires
+            # only when the shadow also carries a cloud marker (any *cloud
+            # spelling — the mangled bin leaves `x68cloud` — or the OBS
+            # service token), keeping `docker rm $(docker ps -aq)` and
+            # `mkdir -p $(pwd)/build` legitimate. The vocabulary's own
+            # failure mode lives at the gate: an unavailable derivation
+            # fails the clause CLOSED.
+            WRITE_VOCAB_RE = re.compile(r"(^|[^a-z])(?:" + "|".join(write_prefixes) + ")", re.I)
         read_prefixes = policy.get("readOperationPrefixes", [])
         if not isinstance(read_prefixes, list):
             read_prefixes = []
@@ -223,7 +239,16 @@ def record_cli_event(text):
     if not cmd:
         return
     is_read = bool(READ_OPERATION_RE.search(cmd)) if READ_OPERATION_RE else False
-    is_write = bool(WRITE_OPERATION_RE.search(cmd)) if WRITE_OPERATION_RE else False
+    # Per-word write search (interrogate round 2): the cmd string is
+    # "Service Operation" — the write prefix regex's (^|[A-Za-z0-9]) class
+    # never matches the SPACE before the operation, so the canonical
+    # `hcloud ECS CreateServers` labeled cli:invoke. Searching each word
+    # anchors at the operation token's start (compound NovaCreate still
+    # admits mid-token). OBS subcommand writes stay unlabeled (cli:invoke)
+    # — the label vocabulary is the policy prefix list, same as the gate's.
+    is_write = (
+        any(WRITE_OPERATION_RE.search(w) for w in cmd.split()) if WRITE_OPERATION_RE else False
+    )
     event_key = "cli:read" if is_read else ("cli:write" if is_write else "cli:invoke")
     event = {"key": event_key, "value": f"hcloud {cmd}", "capability": "cli"}
     try:
@@ -1223,19 +1248,31 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
         # Fail-closed (interrogate round 1): an unavailable write
         # vocabulary must not reopen PLAIN writes while their mangled
         # forms still deny through the obfuscation gate — an incoherent
-        # posture where only the honest spelling sails through. A routed
-        # hcloud payload denies with the cause named; unrouted text keeps
-        # no jurisdiction here and stays allowed.
+        # posture where only the honest spelling sails through.
+        # Invocation-scoped (interrogate round 2): the scope primitives
+        # (split_shell_segments / hcloud_leading_segment) are policy-free,
+        # so prose that merely MENTIONS hcloud stays allowed — one corrupt
+        # policy.json must not block every Bash command that names the CLI.
+        # hcloud-leading invocations all deny, reads and --help included:
+        # with no vocabulary there is nothing to prove safety with (the
+        # recorded trade). Unrouted text keeps no jurisdiction here.
         if routed is None:
             routed = (
                 HCLOUD_ROUTE_RE.search(strip_shell_quotes(text)) is not None
                 or HCLOUD_ROUTE_RE.search(text) is not None
             )
         if routed:
-            return (
-                "the safety policy could not be loaded; hcloud commands are "
-                "denied fail-closed. Fix or reinstall the plugin's safety/policy.json."
-            )
+            leading = [
+                segment
+                for segment in split_shell_segments(text)
+                if hcloud_leading_segment(split_tokens(segment)) is not None
+            ] or ([text] if hcloud_leading_segment(split_tokens(text)) is not None else [])
+            if leading:
+                return (
+                    "the safety policy could not be loaded or carries no write vocabulary; "
+                    "hcloud commands are denied fail-closed. Fix or reinstall the plugin's "
+                    "safety/policy.json."
+                )
         return None
     if routed is None:
         routed = (
@@ -1556,13 +1593,17 @@ def evaluate(tool_name, tool_input):
     # the escape, so no layer sees 'hcloud', but the unquoted text still
     # carries 'deleteservers'): expansion + a write-op word denies fail-closed.
     # Mirrors the TS gate's writeVocabHit clause (the #927 audit bypass fix);
-    # the vocabulary is the policy.json writeOperationPrefixes list UNIONED
-    # with OBSUTIL_WRITES (both non-prefix subcommand writes and prefix
-    # operations mangle the same way), derived by load_policy from the same
-    # read as WRITE_OPERATION_RE — one list, both gates. The `is None` arm is
-    # the vocabulary's failure mode, chosen FAIL-CLOSED: when the derivation
-    # is unavailable (policy.json missing or corrupt JSON, or the list empty
-    # or non-list — load_policy normalizes non-lists to empty) the clause
+    # the vocabulary is the policy.json writeOperationPrefixes list derived
+    # by load_policy from the same read as WRITE_OPERATION_RE — one list, both
+    # gates — plus the marker-gated OBS_VOCAB_RE arm (interrogate round 2):
+    # the OBS subcommand words fire only when the shadow also carries a cloud
+    # marker (any *cloud spelling — the mangled bin leaves `x68cloud` — or
+    # the OBS service token), so routine expansion-bearing shell idioms
+    # (`docker rm $(docker ps -aq)`, `mkdir -p $(pwd)/build`) stay legitimate
+    # while `$'\x68'cloud OBS rm …` denies. The `is None` arm is the
+    # vocabulary's failure mode, chosen FAIL-CLOSED: when the derivation is
+    # unavailable (policy.json missing or corrupt JSON, or the list empty or
+    # non-list — load_policy normalizes non-lists to empty) the clause
     # treats the vocabulary as hit, so an expansion-bearing command denies
     # instead of the unavailable word list re-opening the mangled-write hole
     # the gate exists to close.
@@ -1571,6 +1612,7 @@ def evaluate(tool_name, tool_input):
         or re.search(r"secret://", unquoted)
         or WRITE_VOCAB_RE is None
         or WRITE_VOCAB_RE.search(unquoted)
+        or (CLOUD_MARKER_RE.search(unquoted) and OBS_VOCAB_RE.search(unquoted))
     ) and OBFUSCATION_RE.search(text):
         return "an obfuscated cloud CLI invocation (shell expansion inside the command) is blocked. Write the command in plain form."
     if (

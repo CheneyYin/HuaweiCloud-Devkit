@@ -92,22 +92,29 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
   // audit: v2 and main both allowed this class before — the sibling
   // operation-token form `$'\x43'reateServers` was already denied).
   //
-  // The vocabulary itself: the policy writeOperationPrefixes UNIONED with
-  // OBSUTIL_WRITES (the py twin's load_policy union, interrogate round 1) —
-  // routing dies with the keyword under ANSI-C mangling, so this vocab is
-  // the only layer that can fire, and non-prefix obsutil subcommand writes
-  // (rm/cp/mv/sync/chattri…) mangle exactly like the prefix operations. An
-  // EMPTY prefix list is an abnormal, hand-mangled policy (the shipped one
-  // is structure-floored at >= 10): treated as a hit so the clause fails
-  // CLOSED, mirroring the py WRITE_VOCAB_RE is-None arm. Residual,
-  // recorded: the TS write gate itself (hasWritePrefix over []) stays
-  // fail-open on that same abnormal shape — pre-existing on main and v2,
-  // out of this fix's surface.
+  // The vocabulary itself: the policy writeOperationPrefixes (this clause's
+  // pre-existing DEFAULT_POLICY read, not options.policy), plus — interrogate
+  // round 2 — the OBS subcommand words in a MARKER-GATED arm: routing dies
+  // with the keyword under ANSI-C mangling, so non-prefix obsutil subcommand
+  // writes (rm/cp/mv/sync/chattri…) mangle exactly like the prefix
+  // operations, but those short words are routine shell vocabulary, so that
+  // arm fires only when the shadow also carries a cloud marker (any *cloud
+  // spelling — the mangled bin leaves `x68cloud` — or the word-bounded OBS
+  // service token, which also matches `obs://`), keeping
+  // `docker rm $(docker ps -aq)` and `mkdir -p $(pwd)/build` legitimate.
+  // The py twin gates the same way (CLOUD_MARKER_RE + OBS_VOCAB_RE).
+  // An EMPTY prefix list cannot occur from the shipped policy (structure
+  // guard floors it at >= 10) and loadPolicy now throws on a present-but-
+  // empty list; the length arm mirrors the py WRITE_VOCAB_RE is-None arm
+  // for any caller hand-feeding such a policy anyway. Residual, recorded:
+  // the TS write gate itself (hasWritePrefix over []) stays fail-open on
+  // that same abnormal shape when passed via options.policy — pre-existing
+  // on main and v2, out of this fix's surface.
   const writeVocabHit =
     DEFAULT_POLICY.writeOperationPrefixes.length === 0 ||
-    [...DEFAULT_POLICY.writeOperationPrefixes, ...OBSUTIL_WRITES].some((word) =>
-      new RegExp(`(^|[^a-z])${word}`, 'i').test(shadowText),
-    );
+    [...DEFAULT_POLICY.writeOperationPrefixes].some((word) => new RegExp(`(^|[^a-z])${word}`, 'i').test(shadowText)) ||
+    (/(?:cloud|\bOBS\b)/i.test(shadowText) &&
+      [...OBSUTIL_WRITES].some((word) => new RegExp(`(^|[^a-z])${word}`, 'i').test(shadowText)));
   if (
     (/(^|[^a-z0-9.-])(?:huaweicloud-devkit|setup-cli\.(?:js|mjs|ts|cjs)|setup\.cjs)|(^|[^a-z0-9.-])hcloud(\.exe)?\s/i.test(
       shadowText,

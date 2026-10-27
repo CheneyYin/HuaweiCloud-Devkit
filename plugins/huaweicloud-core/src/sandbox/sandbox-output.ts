@@ -28,9 +28,11 @@ export function stripTerminalEscapes(text: unknown): string {
   // of that field, still preferable to the unstripped escape blinding the line.
   const csiRe = new RegExp(ESC + '\\[[0-9:;<=>?]*[ -/]*[a-zA-Z]', 'g');
   // OSC analog of the CSI edge below: a mangled/unterminated OSC whose
-  // payload swallows a whole marker line strips the marker entirely —
-  // fail-closed corruption of that line (the anchored parsers read the
-  // marker as absent), the same tradeoff the CSI edge accepts.
+  // payload swallows a whole marker line strips the marker entirely. Every
+  // DB_* marker family that consumes this seam is PRESENCE-REQUIRED (the
+  // deploy-nginx OK/MISSING inversion, interrogate round 2), so a swallow
+  // reads as the marker's ABSENCE — the failure direction — never as a
+  // false success; the affected field's diagnosis degrades, fail-closed.
   const oscRe = new RegExp(ESC + '\\][^' + ESC + '\x07]*(?:\x07|' + ESC + '\\\\)', 'g');
   return raw
     .replace(csiRe, '')
