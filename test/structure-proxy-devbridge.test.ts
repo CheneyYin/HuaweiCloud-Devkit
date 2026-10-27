@@ -301,6 +301,17 @@ test('expose_tunnel re-verifies from an independent exec session and classifies 
   // POST 401 → targeted GRANT → 201 (the ported third beat — anchored on the
   // Step-4 sentence itself, not the same-shaped restart-trap sentence).
   assert.match(postgrest, /After that targeted grant the same `POST \/api\/todos` returns \*\*201\*\*/);
+  // #1021 follow-up: the reboot-recovery guidance must not route the nginx
+  // config through deploy_nginx (its spa/proxy/static templates carry no
+  // /api/ reverse proxy — the restored site would be SPA-only); both
+  // recovery mentions re-apply Step 3's single-origin block instead.
+  assert.doesNotMatch(postgrest, /Re-create via `huaweicloud_sandbox_deploy_nginx`/);
+  assert.doesNotMatch(postgrest, /re-create the nginx config via\s+`huaweicloud_sandbox_deploy_nginx`/);
+  assert.match(postgrest, /Re-apply Step 3's single-origin block/);
+  assert.match(
+    postgrest,
+    /re-apply the Step 3 single-origin nginx\s+config \(never `huaweicloud_sandbox_deploy_nginx`/,
+  );
 
   assert.match(
     deployCheckSource,
@@ -309,6 +320,127 @@ test('expose_tunnel re-verifies from an independent exec session and classifies 
 
   // Retry exhaustion on a gateway-dead URL must fail, not soften to a warning.
   assert.match(devbridgeExposeFlow, /gateway reports the fresh tunnel URL as dead/);
+});
+
+test('huawei-sandbox carries the Stack-Selection Gate (workbench ⇒ PostgREST default) (#1021)', () => {
+  const skill = readFileSync(
+    join(pluginRoot, 'src', 'packs', 'sandbox', 'skills', 'huawei-sandbox', 'SKILL.md'),
+    'utf8',
+  );
+
+  // The gate must exist as a top-level section between the Target-Selection
+  // Gate and the Overview — not buried as a conditional branch inside the
+  // Web Application Deployment section. The lookups are line-anchored (^##)
+  // so a demotion to ### (or a wholesale re-heading under an umbrella
+  // section) cannot keep the pins green.
+  const gateMatch = /^## Stack-Selection Gate \(MANDATORY — do not skip\)$/m.exec(skill);
+  assert.ok(gateMatch, 'Stack-Selection Gate section missing as a top-level heading');
+  const gateStart = gateMatch.index;
+  const targetGate = /^## Target-Selection Gate/m.exec(skill)?.index ?? -1;
+  const overview = /^## Overview/m.exec(skill)?.index ?? -1;
+  assert.ok(targetGate !== -1 && targetGate < gateStart, 'Stack-Selection Gate must follow the Target-Selection Gate');
+  assert.ok(overview !== -1 && gateStart < overview, 'Stack-Selection Gate must precede the Overview');
+
+  const nextHeading = skill.indexOf('\n## ', gateStart + 1);
+  const gate = nextHeading === -1 ? skill.slice(gateStart) : skill.slice(gateStart, nextHeading);
+  assert.match(
+    gate,
+    /you MUST treat it as a \*\*full-stack workbench deployment\*\*/,
+    'gate must force the full-stack classification',
+  );
+  assert.match(gate, /defaults to \*\*PostgreSQL \+ PostgREST\*\*/, 'gate must state the PostgREST default');
+  assert.match(gate, /`question` tool/, 'gate must mandate the question tool for ambiguous backends');
+  assert.match(gate, /NEVER infer or default the stack to SPA/, 'gate must carry the never-default-to-SPA hard rule');
+  assert.match(gate, /Pre-code checkpoint \(MANDATORY\)/, 'gate must carry the pre-code checkpoint');
+  // The STOP-and-redirect beat is what makes the checkpoint more than a
+  // checkbox: an already-started SPA-only deployment must be stopped and
+  // redirected, never papered over with a bolted-on static backend.
+  assert.match(
+    gate,
+    /STOP, tell the developer, and redirect to the full-stack path/,
+    'the checkpoint must STOP and redirect an already-started SPA-only deployment',
+  );
+  assert.match(gate, /bolted-on static backend/, 'the checkpoint must forbid the bolted-on static backend');
+  // Routing: the PostgREST choice lands on the full-stack section FIRST via
+  // its real heading anchor (the T3-landed section), the other two stacks on
+  // the web deployment section — both target headings must exist at the
+  // level the anchors claim, or the routing dead-links.
+  assert.match(
+    gate,
+    /\[Full-Stack: REST API over PostgreSQL\]\(#full-stack-rest-api-over-postgresql-postgrest\)/,
+    'gate must route to the full-stack procedure at its real heading anchor',
+  );
+  assert.match(
+    gate,
+    /\[Web Application Deployment\]\(#web-application-deployment\)/,
+    'gate must route the non-PostgREST stacks to the web deployment section',
+  );
+  assert.match(skill, /^## Web Application Deployment$/m, 'the web deployment heading the anchor targets must exist');
+
+  // The Web Application Deployment backend note keeps its pinned opener and
+  // carries the gate back-reference (dev's reinforcement sentence), so an
+  // agent entering at section level still meets the gate — plus the
+  // reconciliation clause: the Full-Stack section's hand-written
+  // single-origin nginx config must not be re-clobbered by the
+  // deploy_nginx sub-step's SPA/proxy/static template.
+  assert.match(
+    skill,
+    /The backend choice was already confirmed by the \[Stack-Selection Gate\]\(#stack-selection-gate-mandatory--do-not-skip\) before any code was uploaded/,
+    'the Backend present? note must back-reference the gate',
+  );
+  assert.match(
+    skill,
+    /skip the Configure Nginx sub-step/,
+    'the PostgREST path must not re-run deploy_nginx over the single-origin config',
+  );
+
+  // The late-flow catch-all surface: the Critical Warnings table carries a
+  // stack-gate row beside the target-gate row (the target-gate doctrine is
+  // reinforced on four surfaces in this skill — gate section, Activation
+  // bullet, Step 0, the warnings row; the stack gate needs the same
+  // catch-all).
+  assert.match(
+    skill,
+    /Stack not confirmed \(workbench ⇒ SPA\)/,
+    'the Critical Warnings table must carry the stack-gate row',
+  );
+
+  // Trigger words in the frontmatter description so the model hits the skill
+  // on workbench-shaped requests without postgres/数据库 keywords. v2 keeps
+  // its vendor-gate prefix text (pinned in structure-load-path.test.ts) —
+  // the widened run only extends the Triggers list between `web application`
+  // and `hwlink`, and the NOT-for exclusions stay untouched (full-stack
+  // routing never conflicts with the ECS/CCE exclusions).
+  const frontmatter = skill.match(/^---\n[\s\S]*?\n---\n/)?.[0] ?? '';
+  assert.match(
+    frontmatter,
+    /web application, backend service, 工作台, workbench, full-stack, 全栈, CRUD 应用, database-backed REST API, PostgREST, postgres, hwlink/,
+    'the widened trigger run must land between web application and hwlink',
+  );
+  assert.match(
+    frontmatter,
+    /NOT for: ECS instances \(use huawei-ecs\), CCE clusters \(use huawei-cce\)/,
+    'the NOT-for exclusions must stay intact beside the widened triggers',
+  );
+
+  // The workflow sequences the stack gate before any code can land, linking
+  // the gate section at its real heading anchor — position, not just
+  // presence: after Step 0 (the target gate) and before the whole numbered
+  // preflight (whose Connect step can already transfer code via the `git`
+  // parameter, ahead of the explicit upload step).
+  assert.match(
+    skill,
+    /Step 0\.5 — Stack-Selection Gate \(MANDATORY\)\*\*: before uploading or writing any application code, confirm the backend stack via the \[Stack-Selection Gate\]\(#stack-selection-gate-mandatory--do-not-skip\)/,
+    'workflow must sequence the stack gate before code upload, linking the gate at its real anchor',
+  );
+  const step0 = skill.indexOf('**Step 0 — Target-Selection Gate (MANDATORY)**');
+  const step05 = skill.indexOf('**Step 0.5 — Stack-Selection Gate (MANDATORY)**');
+  const preflight = skill.indexOf('Setup is a **plugin-side preflight**');
+  assert.ok(step0 !== -1 && step05 !== -1 && step0 < step05, 'Step 0.5 must follow Step 0 in the workflow');
+  assert.ok(
+    preflight !== -1 && step05 < preflight,
+    'Step 0.5 must precede the whole numbered preflight (the Connect step can already transfer code via the git parameter)',
+  );
 });
 
 test('deploy_check judges reachability by non-000 and probes listed tunnels boundedly', () => {
