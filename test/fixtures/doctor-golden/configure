@@ -1,0 +1,12 @@
+// Extensionless Node entry for the doctor golden harness. Doctor's
+// credentials check spawns `"<HCLOUD_BIN>" configure list` through a shell
+// WITHOUT the HCLOUD_BIN_ARGS_JSON prefix, so with HCLOUD_BIN=node the
+// command is literally `node configure list` resolved against the doctor
+// run's cwd — which the golden harness pins to this directory. The output
+// satisfies the /access.?key/i probe exactly like a configured KooCLI
+// profile, pinning the credentials-PASS path. Named without an extension
+// because the spawned command line has no extension to match.
+console.log('cli-access-key: AKLT-FAKE-GOLDEN');
+console.log('cli-secret-key: ***');
+console.log('cli-region: cn-north-4');
+console.log('cli-project-id: 0681e0e0e00e00e0e00e00e00e00e00e');

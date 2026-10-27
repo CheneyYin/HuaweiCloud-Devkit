@@ -1,30 +1,110 @@
-import {
-  existsSync,
-  readFileSync,
-  writeFileSync,
-  statSync,
-  mkdirSync,
-  renameSync,
-  unlinkSync,
-  appendFileSync,
-} from 'node:fs';
+// Telemetry for huaweicloud-devkit: the session event queue, identity
+// stamps, and the daily install/DAU/first-use pings.
+//
+// Stable public face of the telemetry family (the safety-policy.ts
+// re-export precedent): same exported names, same import path, same
+// behavior. The internals live in stateless siblings — telemetry-types.ts
+// (the shared state/paths/context vocabulary), telemetry-fs.ts (stamp-file
+// IO), telemetry-values.ts (event shaping + the os snapshot),
+// identity-stamps.ts (machine finger, installation id, user hash, install
+// counter, DAU/first-use stamps), hook-ingest.ts (the hook spool seam),
+// event-pipeline.ts (queue, flush, retry, the opt-out gate) — plus the
+// pre-existing agent-detect.ts / invoke-value.ts and the detection data
+// face agent-registry.ts (AGENTS + matcher; the version detectors live in
+// agent-versions.ts / agent-versions-desktop.ts).
+//
+// This module deliberately KEEPS the family's load-bearing module-scope
+// state: resolvePluginDir and every derived path constant, the
+// HUAWEICLOUD_DEVKIT_HOME-derived global telemetry dir, the plugin version,
+// the mutable session state record, and the debug logger.
+// test/telemetry.test.ts (withIsolatedTelemetry) re-imports THIS module
+// with a query string under a fresh HUAWEICLOUD_DEVKIT_HOME — only the
+// face re-evaluates, so state or env-derived constants living in a sibling
+// would silently survive the isolation. Siblings receive everything via
+// the context; they never derive paths or keep module state.
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { homedir, hostname, type as osType, networkInterfaces, release as osRelease } from 'node:os';
-import { createHash, randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-import { fetchWithProxy } from '../proxy/proxy-agent.ts';
 import { asText } from '../lib/as-text.ts';
+import { enqueueTrackedEvent, flushEvents, isTelemetryEnabled } from './event-pipeline.ts';
+import {
+  checkDauPing,
+  clearUserHashFile,
+  consumeInstallCounter,
+  loadCachedUserHash,
+  persistUserHash,
+  recordInstall,
+  recoverInstallId,
+  shouldSendFirstUsePing,
+} from './identity-stamps.ts';
+import { ingestHookSpool } from './hook-ingest.ts';
+import { ensureDir, stampExists } from './telemetry-fs.ts';
+import type { TelemetryContext, TelemetryEventInput, TelemetryPaths, TelemetryState } from './telemetry-types.ts';
+
+// The event pipeline family (queue caps, flush, retry, the opt-out gate).
+export { isTelemetryEnabled } from './event-pipeline.ts';
+// The value-shaping family (the public sanitizer).
+export { sanitizeValue } from './telemetry-values.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const PLUGIN_DIR = join(__dirname, '..', '..');
+
+// The plugin dir must be resolved by marker, never by depth. This module runs
+// in three shapes whose __dirname sits at different depths under the plugin
+// dir: the tsc tree (<plugin>/dist/telemetry/), the TypeScript source
+// (<plugin>/src/telemetry/), and — the shape that broke — the esbuild bundle,
+// where every inlined module's import.meta.url collapses to the bundle file
+// itself (<plugin>/dist/mcp-server.js). A depth-based two-level parent join
+// from __dirname is correct for the first two and one level too high for the
+// bundle: it dropped the telemetry dir into the codex plugin cache's version
+// PARENT, codex 0.162.1 scanned that directory for version dirs, resolved the
+// stray 'telemetry' sibling as the version, and stopped loading the plugin's
+// manifest and .mcp.json — "installed and enabled" in `codex plugin list`
+// with no MCP server in any session afterwards. Markers: every runtime
+// layout keeps dist/ and/or safety/ directly under the plugin dir (dist in
+// built layouts, safety in a raw source checkout).
+export function resolvePluginDir(startDir: string): string {
+  // The raw-checkout marker is safety/ PLUS package.json: the safety family
+  // split put a safety/ directory inside src/ too, and a bare safety/ probe
+  // made src/ win the first climb from src/telemetry — the identity stamps
+  // (install-stamp, dau-stamp, ...) then wrote into the committed source
+  // tree on every source-tree test run (measured 2026-10-27: four stray
+  // zero-byte stamp files in src/telemetry). src/ never carries the
+  // plugin's package.json; every true plugin root (checkout, tsc tree,
+  // bundle, npm/codex cache) does.
+  for (const candidate of [join(startDir, '..'), join(startDir, '..', '..')]) {
+    if (existsSync(join(candidate, 'dist'))) return candidate;
+    if (existsSync(join(candidate, 'safety')) && existsSync(join(candidate, 'package.json'))) return candidate;
+  }
+  return join(startDir, '..', '..');
+}
+const PLUGIN_DIR = resolvePluginDir(__dirname);
 const AGENT_TELEMETRY_DIR = join(PLUGIN_DIR, 'telemetry');
 const GLOBAL_TELEMETRY_DIR = join(
   (process.env.HUAWEICLOUD_DEVKIT_HOME || '').trim() || homedir(),
   '.huaweicloud-devkit',
   'telemetry',
 );
+
+// The family's paths in one record, derived in this module only. The
+// agent-dir paths sit inside the plugin dir (they must resolve to the same
+// locations in the source, tsc, and bundle shapes — see resolvePluginDir);
+// the global identity paths sit under the home override.
+const paths: TelemetryPaths = {
+  agentTelemetryDir: AGENT_TELEMETRY_DIR,
+  hookEventsPath: join(AGENT_TELEMETRY_DIR, 'hook-events.jsonl'),
+  installStampPath: join(AGENT_TELEMETRY_DIR, 'install-stamp'),
+  installCounterPath: join(AGENT_TELEMETRY_DIR, 'install-counter'),
+  dauStampPath: join(AGENT_TELEMETRY_DIR, 'dau-stamp'),
+  firstUseStampPath: join(AGENT_TELEMETRY_DIR, 'first-use-stamp'),
+  debugLogPath: join(AGENT_TELEMETRY_DIR, 'telemetry-debug.log'),
+  globalTelemetryDir: GLOBAL_TELEMETRY_DIR,
+  machineFingerPath: join(GLOBAL_TELEMETRY_DIR, 'machine-finger'),
+  installationIdPath: join(GLOBAL_TELEMETRY_DIR, 'installation-id'),
+  userHashPath: join(GLOBAL_TELEMETRY_DIR, 'user-hash'),
+};
 
 let PLUGIN_VERSION = '0.0.0';
 try {
@@ -43,298 +123,51 @@ try {
 } catch {
   // missing or corrupt package.json means the 0.0.0 fallback version
 }
-function hookEventsPath(): string {
-  return join(AGENT_TELEMETRY_DIR, 'hook-events.jsonl');
-}
-function installStampPath(): string {
-  return join(AGENT_TELEMETRY_DIR, 'install-stamp');
-}
-function installCounterPath(): string {
-  return join(AGENT_TELEMETRY_DIR, 'install-counter');
-}
-function dauStampPath(): string {
-  return join(AGENT_TELEMETRY_DIR, 'dau-stamp');
-}
-function firstUseStampPath(): string {
-  return join(AGENT_TELEMETRY_DIR, 'first-use-stamp');
-}
-const MACHINE_FINGER_PATH = join(GLOBAL_TELEMETRY_DIR, 'machine-finger');
-const INSTALLATION_ID_PATH = join(GLOBAL_TELEMETRY_DIR, 'installation-id');
-const USER_HASH_PATH = join(GLOBAL_TELEMETRY_DIR, 'user-hash');
 
-const MAX_QUEUE_SIZE = 500;
+// The session state — ONE mutable record owned by this module (see the
+// header: the query-string isolation contract). Siblings mutate it only
+// through the context reference below.
+const state: TelemetryState = {
+  eventQueue: [],
+  isFlushing: false,
+  flushTimer: null,
+  lastCheckedDate: '',
+  installId: null,
+  userHash: null,
+  agentHarness: 'unknown',
+  agentVersion: '0.0.0',
+};
+
 const FLUSH_INTERVAL_MS = 60_000;
-const BATCH_SIZE = 100;
-const FETCH_TIMEOUT_MS = 5000;
-const MAX_VALUE_LENGTH = 255;
-const MAX_RETRIES = 3;
-
-const DEFAULT_ENDPOINT = 'https://devkit.huaweicloud.com/rest/developer/server/hdkitservice/telemetry/events';
-
-// `value` stays unknown at the boundary: callers pass strings, but hook-event
-// JSON is parsed and validated before it reaches buildEvent.
-interface TelemetryEventInput {
-  key: string;
-  value?: unknown;
-  capability?: string;
-}
-
-interface TelemetryEvent {
-  key: string;
-  value: string;
-  installId: string | null;
-  userHash: string | null;
-  version: string;
-  harness: string;
-  agentVersion: string;
-  os: string;
-  osVersion: string;
-  capability?: string;
-  _retries?: number;
-}
-
-let eventQueue: TelemetryEvent[] = [];
-let isFlushing = false;
-let flushTimer: NodeJS.Timeout | null = null;
-let lastCheckedDate = '';
-let installId: string | null = null;
-let userHash: string | null = null;
-let agentHarness = 'unknown';
-let agentVersion = '0.0.0';
-const osTypeStr = osType();
-const osVersionStr = osRelease();
 
 const DEBUG = process.env.HUAWEICLOUD_DEVKIT_DEBUG === 'true';
-function debugLogPath(): string {
-  return join(AGENT_TELEMETRY_DIR, 'telemetry-debug.log');
-}
-
 function debugLog(msg: string): void {
   if (!DEBUG) return;
   try {
-    const path = debugLogPath();
-    ensureDir(dirname(path));
-    appendFileSync(path, `${new Date().toISOString()} ${msg}\n`, 'utf8');
-  } catch (_) {
+    ensureDir(dirname(paths.debugLogPath));
+    appendFileSync(paths.debugLogPath, `${new Date().toISOString()} ${msg}\n`, 'utf8');
+  } catch {
     // best-effort: debug logging must never fail telemetry
   }
 }
 
-function ensureDir(dirPath: string = GLOBAL_TELEMETRY_DIR): void {
-  if (!existsSync(dirPath)) {
-    mkdirSync(dirPath, { recursive: true });
-  }
-}
-
-function readTextFile(filePath: string): string | null {
-  try {
-    return readFileSync(filePath, 'utf8').trim();
-  } catch {
-    return null;
-  }
-}
-
-function writeTextFile(filePath: string, content: string): void {
-  ensureDir(dirname(filePath));
-  writeFileSync(filePath, content, 'utf8');
-}
-
-function touchFile(filePath: string): void {
-  ensureDir(dirname(filePath));
-  writeFileSync(filePath, '', 'utf8');
-}
-
-function stampExists(filePath: string): boolean {
-  return existsSync(filePath);
-}
-
-function getStampUTCDate(filePath: string): string | null {
-  try {
-    return new Date(statSync(filePath).mtime).toISOString().slice(0, 10);
-  } catch {
-    return null;
-  }
-}
-
-function getUTCToday(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function generateMachineFinger(): string {
-  const host = hostname();
-  const nets = networkInterfaces();
-  let firstMac = '';
-  for (const key of Object.keys(nets).sort((a, b) => a.localeCompare(b))) {
-    const list = nets[key];
-    if (!list) continue;
-    const iface = list.find((a) => a.mac && a.mac !== '00:00:00:00:00:00');
-    if (iface) {
-      firstMac = iface.mac;
-      break;
-    }
-  }
-  const factor = `${host}|${firstMac}|${osTypeStr}|${homedir()}`;
-  return createHash('sha256').update(factor).digest('hex');
-}
+const ctx: TelemetryContext = { paths, state, pluginVersion: PLUGIN_VERSION, debugLog };
 
 export function generateOrRecoverInstallId(): string {
-  ensureDir();
-  if (existsSync(INSTALLATION_ID_PATH)) {
-    const cached = readTextFile(INSTALLATION_ID_PATH);
-    if (cached) return cached;
-  }
-  const finger = existsSync(MACHINE_FINGER_PATH) ? readTextFile(MACHINE_FINGER_PATH) : generateMachineFinger();
-  if (!finger) {
-    const fallback = randomUUID();
-    writeTextFile(INSTALLATION_ID_PATH, fallback);
-    return fallback;
-  }
-  writeTextFile(MACHINE_FINGER_PATH, finger);
-  const id = createHash('sha256').update(finger).digest('hex');
-  writeTextFile(INSTALLATION_ID_PATH, id);
-  return id;
-}
-
-function loadUserHash(): void {
-  if (existsSync(USER_HASH_PATH)) {
-    const cached = readTextFile(USER_HASH_PATH);
-    if (cached) userHash = cached;
-  }
-}
-
-export function isTelemetryEnabled(): boolean {
-  return process.env.HUAWEICLOUD_DEVKIT_TELEMETRY !== 'off';
-}
-
-function getEndpoint(): string {
-  return process.env.HUAWEICLOUD_DEVKIT_TELEMETRY_ENDPOINT || DEFAULT_ENDPOINT;
-}
-
-function capabilityFromKey(key: string): string | undefined {
-  if (key.startsWith('tool:')) return 'mcp';
-  if (key.startsWith('cli:')) return 'cli';
-  return undefined;
-}
-
-export function sanitizeValue(value: unknown): string {
-  let text = typeof value === 'string' ? value : value == null ? '' : asText(value);
-  text = text.replace(/[\r\n\t]+/g, ' ').trim();
-  if (text.length > MAX_VALUE_LENGTH) {
-    text = text.slice(0, MAX_VALUE_LENGTH - 3) + '...';
-  }
-  return text;
-}
-
-function buildEvent(raw: TelemetryEventInput): TelemetryEvent {
-  const event: TelemetryEvent = {
-    key: raw.key,
-    value: sanitizeValue(raw.value),
-    installId: installId,
-    userHash: userHash,
-    version: PLUGIN_VERSION,
-    harness: agentHarness,
-    agentVersion: agentVersion,
-    os: osTypeStr,
-    osVersion: osVersionStr,
-  };
-  const cap = raw.capability || capabilityFromKey(raw.key);
-  if (cap) event.capability = cap;
-  return event;
-}
-
-// Hook-event JSON arrives as text; only an object carrying a non-empty string
-// key is accepted. Malformed lines are dropped rather than queued.
-function toTelemetryEventInput(value: unknown): TelemetryEventInput | null {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  if (typeof record.key !== 'string' || record.key === '') return null;
-  const input: TelemetryEventInput = { key: record.key, value: record.value };
-  if (typeof record.capability === 'string') input.capability = record.capability;
-  return input;
+  return recoverInstallId(ctx);
 }
 
 export function enqueueEvent(raw: TelemetryEventInput): void {
-  if (!isTelemetryEnabled()) return;
-  if (!installId) return;
-
-  ingestHookEvents();
-
-  checkDauPing();
-
-  const event = buildEvent(raw);
-  eventQueue.push(event);
-
-  if (eventQueue.length > MAX_QUEUE_SIZE) {
-    eventQueue = eventQueue.slice(eventQueue.length - MAX_QUEUE_SIZE);
-  }
-
-  if (eventQueue.length >= BATCH_SIZE) setImmediate(() => flushEvents());
+  enqueueTrackedEvent(ctx, raw);
 }
 
-function checkDauPing(): void {
-  const today = getUTCToday();
-  if (today === lastCheckedDate) return;
-  lastCheckedDate = today;
-  if (!stampExists(dauStampPath()) || getStampUTCDate(dauStampPath()) !== today) {
-    eventQueue.unshift(buildEvent({ key: 'dau:active_today', value: '1' }));
-  }
-}
-
-function shouldSendFirstUsePing(): boolean {
-  return !stampExists(firstUseStampPath());
+export function ingestHookEvents(): void {
+  ingestHookSpool(ctx);
 }
 
 export function trackInstall(): void {
   if (!isTelemetryEnabled()) return;
-  ensureDir(AGENT_TELEMETRY_DIR);
-
-  let count = 0;
-  const existing = readTextFile(installCounterPath());
-  if (existing) count = parseInt(existing, 10) || 0;
-  writeTextFile(installCounterPath(), String(count + 1));
-}
-
-function consumeInstallCounter(): number {
-  ensureDir(AGENT_TELEMETRY_DIR);
-  const existing = readTextFile(installCounterPath());
-  if (!existing) return 0;
-  const count = parseInt(existing, 10) || 0;
-  if (count <= 0) return 0;
-  writeTextFile(installCounterPath(), '0');
-  return count;
-}
-
-export function ingestHookEvents(): void {
-  const hookPath = hookEventsPath();
-  const processingPath = hookPath + '.processing';
-  if (existsSync(processingPath)) {
-    try {
-      const lines = readFileSync(processingPath, 'utf8').trim().split('\n').filter(Boolean);
-      for (const line of lines) {
-        try {
-          const parsed: unknown = JSON.parse(line);
-          const input = toTelemetryEventInput(parsed);
-          if (input) eventQueue.push(buildEvent(input));
-        } catch {
-          // a malformed line is skipped; the rest of the leftover batch still ingests
-        }
-      }
-    } catch {
-      // an unreadable leftover batch is unrecoverable; fall through to cleanup
-    } finally {
-      try {
-        unlinkSync(processingPath);
-      } catch {
-        // best-effort: a failed unlink just retries this leftover on the next ingest
-      }
-    }
-  }
-  if (!existsSync(hookPath)) return;
-  try {
-    renameSync(hookPath, processingPath);
-  } catch {
-    return;
-  }
+  recordInstall(ctx);
 }
 
 export function trackToolInvoke(toolName: string, value = '1'): void {
@@ -359,78 +192,13 @@ export function trackSandboxDisconnect(): void {
 
 export function cacheUserHash(hash: unknown): void {
   if (typeof hash !== 'string' || !hash) return;
-  userHash = hash;
-  ensureDir();
-  writeTextFile(USER_HASH_PATH, hash);
+  state.userHash = hash;
+  persistUserHash(ctx, hash);
 }
 
 export function clearUserHash(): void {
-  userHash = null;
-  try {
-    unlinkSync(USER_HASH_PATH);
-  } catch {
-    // best-effort: the in-memory hash is already cleared; a leftover file only re-caches it next start
-  }
-}
-
-function flushEvents(): void {
-  if (isFlushing) return;
-  if (eventQueue.length === 0) return;
-  isFlushing = true;
-
-  const batch = eventQueue.splice(0, BATCH_SIZE);
-  const keys = batch.map((e) => e.key).join(',');
-  // The queue was checked non-empty above; splice yields a non-empty batch.
-  debugLog(
-    `FLUSH start events=${batch.length} harness=${batch[0]!.harness} agentVersion=${batch[0]!.agentVersion} keys=[${keys}]`,
-  );
-
-  const endpoint = getEndpoint();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
-  fetchWithProxy(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(batch.map(({ _retries, ...rest }) => rest)),
-    signal: controller.signal,
-  })
-    .then((resp) => {
-      clearTimeout(timer);
-      debugLog(`POST status=${resp.status} events=${batch.length}`);
-      if (resp.ok) {
-        for (const event of batch) {
-          if (event.key === 'dau:active_today') touchFile(dauStampPath());
-          if (event.key === 'plugin:install') touchFile(installStampPath());
-          if (event.key === 'plugin:first_use') touchFile(firstUseStampPath());
-        }
-      } else if (resp.status >= 400 && resp.status < 500) {
-        debugLog(`POST status=${resp.status} dropping ${batch.length} events (client error)`);
-      } else {
-        requeueEvents(batch);
-      }
-      isFlushing = false;
-    })
-    .catch((error: unknown) => {
-      clearTimeout(timer);
-      debugLog(`POST FAIL err=${error instanceof Error ? error.message : String(error)} events=${batch.length}`);
-      requeueEvents(batch);
-      isFlushing = false;
-    });
-}
-
-function requeueEvents(batch: TelemetryEvent[]): void {
-  const kept: TelemetryEvent[] = [];
-  for (const event of batch) {
-    const retries = event._retries || 0;
-    if (retries >= MAX_RETRIES) {
-      debugLog(`DROP event key=${event.key} after ${MAX_RETRIES} retries`);
-      continue;
-    }
-    event._retries = retries + 1;
-    kept.push(event);
-  }
-  if (kept.length > 0) eventQueue = [...kept, ...eventQueue];
+  state.userHash = null;
+  clearUserHashFile(ctx);
 }
 
 export interface InitTelemetryOptions {
@@ -439,35 +207,35 @@ export interface InitTelemetryOptions {
 }
 
 export function initTelemetry({ harness, version }: InitTelemetryOptions): void {
-  installId = generateOrRecoverInstallId();
-  agentHarness = harness || 'unknown';
-  agentVersion = version || '0.0.0';
+  state.installId = recoverInstallId(ctx);
+  state.agentHarness = harness || 'unknown';
+  state.agentVersion = version || '0.0.0';
 
-  loadUserHash();
+  loadCachedUserHash(ctx);
 
   if (!isTelemetryEnabled()) return;
 
-  if (!stampExists(installStampPath()) && !existsSync(installCounterPath())) {
+  if (!stampExists(paths.installStampPath) && !existsSync(paths.installCounterPath)) {
     trackInstall();
   }
 
-  const pendingInstalls = consumeInstallCounter();
+  const pendingInstalls = consumeInstallCounter(ctx);
   for (let i = 0; i < pendingInstalls; i++) {
     enqueueEvent({ key: 'plugin:install', value: '1' });
   }
 
-  if (shouldSendFirstUsePing()) {
+  if (shouldSendFirstUsePing(ctx)) {
     enqueueEvent({ key: 'plugin:first_use', value: '1' });
   }
 
-  if (flushTimer) clearInterval(flushTimer);
-  flushTimer = setInterval(() => {
+  if (state.flushTimer) clearInterval(state.flushTimer);
+  state.flushTimer = setInterval(() => {
     ingestHookEvents();
-    checkDauPing();
-    if (eventQueue.length > 0) setImmediate(() => flushEvents());
+    checkDauPing(ctx);
+    if (state.eventQueue.length > 0) setImmediate(() => flushEvents(ctx));
   }, FLUSH_INTERVAL_MS);
-  flushTimer.unref();
+  state.flushTimer.unref();
 
   ingestHookEvents();
-  if (eventQueue.length > 0) setImmediate(() => flushEvents());
+  if (state.eventQueue.length > 0) setImmediate(() => flushEvents(ctx));
 }

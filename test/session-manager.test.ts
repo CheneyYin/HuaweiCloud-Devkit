@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, sep } from 'node:path';
 
+import { fixtureDir } from './fixture-dir.ts';
 import {
   resolveWsExecIndexUrl,
   splitBase64Chunks,
@@ -12,10 +16,20 @@ import {
   resolveProxyNodePort,
   buildExposeRemediation,
   TUNNEL_URL_PATTERN,
+  resolveNginxConfigPath,
+  parseDeployNginxVerifyOutput,
+  evaluateDeployNginxVerify,
   _setSessionConnectorForTests,
   execWithSession,
   closeAllSessions,
+  classifyLocalUploadPath,
+  buildUploadResetCommand,
+  uploadFileWithSession,
 } from '../plugins/huaweicloud-core/src/sandbox/session-manager.ts';
+
+function escapeRegExp(s: string): string {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 // Models the real HwlinkTerminalExecSession failure surface: once the
 // transport dies (state 'closed'), every exec rejects with the
@@ -180,4 +194,173 @@ test('resolveProxyNodePort re-probes past targetPort + 1 when it is occupied', a
   const used = new Set([81, 82]);
   const port = await resolveProxyNodePort(undefined, 80, async (p) => used.has(p));
   assert.equal(port, 83);
+});
+
+// ---------------------------------------------------------------------------
+// A1 (#935): deploy_nginx configName basename sanitation + write verification
+// (ported from main's 1.1.10 issue-935 battery; the doc claim in the sandbox
+// skill — 配置写入后自动回验存在性与 nginx -t — is backed by these paths).
+// ---------------------------------------------------------------------------
+
+test('resolveNginxConfigPath strips path separators from configName (#935 A1)', () => {
+  // Regression input from report 3 problem 2: a path-shaped configName used to
+  // produce `/etc/nginx/conf.d//root/hc-activity.conf` (broken path, tunnel 502).
+  const path = resolveNginxConfigPath('/root/xxx.conf', 'myapp');
+  assert.equal(path, '/etc/nginx/conf.d/xxx.conf');
+  assert.ok(!path.includes('//'), `config path must not contain "//": ${path}`);
+});
+
+test('resolveNginxConfigPath takes the basename of nested relative paths (#935 A1)', () => {
+  assert.equal(resolveNginxConfigPath('./x/y.conf', 'myapp'), '/etc/nginx/conf.d/y.conf');
+  assert.equal(resolveNginxConfigPath('dir/sub/site.conf', 'myapp'), '/etc/nginx/conf.d/site.conf');
+});
+
+test('resolveNginxConfigPath strips Windows-style separators too (#935 A1)', () => {
+  assert.equal(resolveNginxConfigPath('C:\\root\\a.conf', 'myapp'), '/etc/nginx/conf.d/a.conf');
+});
+
+test('resolveNginxConfigPath keeps pure-filename behavior unchanged (#935 A1 constraint)', () => {
+  assert.equal(resolveNginxConfigPath('webapp', 'myapp'), '/etc/nginx/conf.d/webapp.conf');
+  assert.equal(resolveNginxConfigPath('webapp.conf', 'myapp'), '/etc/nginx/conf.d/webapp.conf');
+  // Empty configName falls back to the project name (previous behavior).
+  assert.equal(resolveNginxConfigPath('', 'myapp'), '/etc/nginx/conf.d/myapp.conf');
+});
+
+test('parseDeployNginxVerifyOutput detects a missing config file (tee write failed) (#935 A1)', () => {
+  const stdout = ['some deploy output', 'DB_NGINX_CONFIG_MISSING=1'].join('\n');
+  const verify = parseDeployNginxVerifyOutput(stdout);
+  assert.equal(verify.configMissing, true);
+});
+
+test('parseDeployNginxVerifyOutput captures a failing nginx -t (#935 A1)', () => {
+  const stdout = [
+    'deploy output',
+    'DB_NGINX_T=FAIL',
+    'DB_NGINX_T_OUTPUT: nginx: [emerg] unknown directive "foo" in /etc/nginx/conf.d/x.conf:1',
+    'DB_NGINX_T_OUTPUT: nginx: configuration file /etc/nginx/nginx.conf test failed',
+  ].join('\n');
+  const verify = parseDeployNginxVerifyOutput(stdout);
+  assert.equal(verify.configMissing, false);
+  assert.equal(verify.nginxTest, 'FAIL');
+  assert.match(verify.nginxTestOutput, /unknown directive/);
+});
+
+test('parseDeployNginxVerifyOutput reports PASS for a clean nginx -t (#935 A1)', () => {
+  const verify = parseDeployNginxVerifyOutput('DB_NGINX_T=PASS\n');
+  assert.equal(verify.configMissing, false);
+  assert.equal(verify.nginxTest, 'PASS');
+});
+
+test('evaluateDeployNginxVerify returns ok:false with explicit error on tee write failure (#935 A1)', () => {
+  const result = { exitCode: 0 };
+  const verify = parseDeployNginxVerifyOutput('DB_NGINX_CONFIG_MISSING=1\n');
+  const verdict = evaluateDeployNginxVerify(result, verify, '/etc/nginx/conf.d/xxx.conf');
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.error ?? '', /tee write failed/);
+  assert.match(verdict.error ?? '', /\/etc\/nginx\/conf\.d\/xxx\.conf/);
+});
+
+test('evaluateDeployNginxVerify returns ok:false with explicit error on nginx -t failure (#935 A1)', () => {
+  const result = { exitCode: 0 };
+  const verify = parseDeployNginxVerifyOutput('DB_NGINX_T=FAIL\nDB_NGINX_T_OUTPUT: nginx: [emerg] bad config\n');
+  const verdict = evaluateDeployNginxVerify(result, verify, '/etc/nginx/conf.d/xxx.conf');
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.error ?? '', /nginx -t did not pass/);
+  assert.match(verdict.error ?? '', /bad config/);
+});
+
+test('evaluateDeployNginxVerify returns ok:false on non-zero deploy exit (#935 A1)', () => {
+  const verdict = evaluateDeployNginxVerify(
+    { exitCode: 1 },
+    parseDeployNginxVerifyOutput(''),
+    '/etc/nginx/conf.d/x.conf',
+  );
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.error ?? '', /exited with code 1/);
+});
+
+test('evaluateDeployNginxVerify returns ok:true for a verified write (#935 A1)', () => {
+  const result = { exitCode: 0 };
+  const verify = parseDeployNginxVerifyOutput('DB_NGINX_T=PASS\n');
+  assert.equal(evaluateDeployNginxVerify(result, verify, '/etc/nginx/conf.d/x.conf').ok, true);
+});
+
+// --- 953: upload local-path classification + remote mkdir ---
+// (ported from main's 1.1.10 battery; the report case was an agent handing
+// the MCP server a path from another machine — the old error said "file not
+// found" even when the whole parent tree was absent.)
+
+test('953: buildUploadResetCommand mkdirs the remote parent before any chunk writes', () => {
+  const cmd = buildUploadResetCommand('/workspace/game2048/index.html', '/workspace/game2048/index.html.b64tmp');
+  assert.match(cmd, /^mkdir -p "\$\(dirname "\/workspace\/game2048\/index\.html"\)" && /);
+  assert.match(cmd, /rm -f "\/workspace\/game2048\/index\.html\.b64tmp"$/);
+});
+
+test('953: buildUploadResetCommand quotes paths containing spaces', () => {
+  const cmd = buildUploadResetCommand('/workspace/my site/index .html', '/tmp/x y.b64tmp');
+  assert.ok(cmd.includes('"/workspace/my site/index .html"'));
+  assert.ok(cmd.includes('"/tmp/x y.b64tmp"'));
+});
+
+test('953: classifyLocalUploadPath distinguishes missing file vs missing parent directory', () => {
+  const dir = fixtureDir('upload-classify-');
+  const existingFile = join(dir, 'exists.txt');
+  writeFileSync(existingFile, 'x');
+
+  // Existing file with existing parent -> pass.
+  assert.equal(classifyLocalUploadPath(existingFile, 'file'), null);
+  // Existing directory as file -> type mismatch keeps the old semantics.
+  assert.match((classifyLocalUploadPath(dir, 'file') as Error).message, /path is not a regular file/);
+
+  // Missing file, existing parent -> accurate "not found".
+  const missingFile = join(dir, 'missing.txt');
+  assert.match((classifyLocalUploadPath(missingFile, 'file') as Error).message, /local regular file not found/);
+
+  // Missing file AND missing parent -> names the parent + tmp hint (the #953 report case).
+  const deepMissing = join(dir, 'no', 'such', 'dir', 'file.txt');
+  const err = classifyLocalUploadPath(deepMissing, 'file') as Error;
+  assert.match(err.message, /directory not found/);
+  assert.match(err.message, new RegExp(escapeRegExp(dir + sep + 'no')));
+  assert.match(err.message, /temp directory/);
+  assert.ok(err.message.includes(tmpdir()), 'the hint must name the real OS temp dir');
+
+  // Directory kind mirrors the three states for upload_project — including
+  // the file-as-local_dir type error uploadProjectWithSession throws.
+  assert.equal(classifyLocalUploadPath(dir, 'directory'), null);
+  assert.match((classifyLocalUploadPath(existingFile, 'directory') as Error).message, /path is not a directory/);
+  assert.match((classifyLocalUploadPath(join(dir, 'no', 'dir'), 'directory') as Error).message, /directory not found/);
+});
+
+test('953: uploadFileWithSession creates the remote parent directory on the reset step', async () => {
+  // Drive uploadFileWithSession through the session seam: the reset command
+  // must be the mkdir+rm compound, not the old bare rm.
+  const dir = fixtureDir('upload-reset-');
+  const local = join(dir, 'payload.txt');
+  writeFileSync(local, 'hello-953');
+  const seen: string[] = [];
+  class ResetRecordingSession {
+    state: 'opening' | 'ready' | 'closed' = 'ready';
+    close() {}
+    async exec(command: string): Promise<{ stdout: string; exitCode: number }> {
+      seen.push(command);
+      if (command.includes('md5sum')) {
+        return { stdout: 'f68f65ea754053a8fcf100233c26ce95', exitCode: 0 };
+      }
+      return { stdout: '', exitCode: 0 };
+    }
+  }
+  _setSessionConnectorForTests(() => new ResetRecordingSession() as never);
+  try {
+    await uploadFileWithSession('ws-953', local, '/workspace/game2048/index.html');
+  } finally {
+    _setSessionConnectorForTests(null);
+    closeAllSessions();
+  }
+  const reset = seen.find((c) => c.includes('b64tmp'));
+  assert.ok(reset, 'a reset command targeting the b64tmp file must have run');
+  assert.match(
+    reset ?? '',
+    /^mkdir -p "\$\(dirname "\/workspace\/game2048\/index\.html"\)" && rm -f /,
+    'the reset must mkdir the remote parent before any chunk writes',
+  );
 });

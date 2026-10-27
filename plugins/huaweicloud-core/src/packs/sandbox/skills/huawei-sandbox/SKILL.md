@@ -1,6 +1,6 @@
 ---
 name: huawei-sandbox
-description: 'Use when creating, connecting, or managing Huawei Cloud Sandbox instances and workspace terminals, or when a task needs a temporary runtime to deploy, run, or preview a web application. Covers sandbox lifecycle (check-user, sign-agreement, connect, release), session-based terminal execution, and credential injection. Triggers on: sandbox, workspace, terminal, web app deployment, deploy web app, preview app, deploy github, github repo, deploy repo, website, static site, web application, hwlink, devstation, hdkitservice, remote exec. NOT for: ECS instances (use huawei-ecs), CCE clusters (use huawei-cce).'
+description: 'Use when creating, connecting, or managing Huawei Cloud Sandbox instances and workspace terminals, or when a Huawei Cloud task needs a temporary runtime to deploy, run, or preview a web application. A request that names no cloud vendor is not thereby a Huawei Cloud task: when the vendor is unknown and cannot be inferred, ask which cloud the user means before routing here — deployment/website vocabulary alone is not vendor evidence. Cloud-facing tools take a vendorConfirmed parameter — pass the user’s establishing words, never an invented quote. Covers sandbox lifecycle (check-user, sign-agreement, connect, release), session-based terminal execution, and credential injection. Triggers on: sandbox, workspace, terminal, web app deployment, deploy web app, preview app, deploy github, github repo, deploy repo, website, static site, web application, hwlink, devstation, hdkitservice, remote exec. NOT for: ECS instances (use huawei-ecs), CCE clusters (use huawei-cce).'
 version: 1
 ---
 
@@ -15,8 +15,8 @@ When the developer asks to **deploy / host / publish / 上线 / 部署 / 发布 
 Use the `question` tool and present, in this exact order:
 
 1. **沙箱 (Sandbox)** — temporary runtime, instant preview URL (recommended for quick preview)
-2. **OBS 静态托管** — long-term static hosting + CDN + custom domain
-3. **ECS** — server-based hosting
+2. **OBS 静态托管** — long-term static hosting + CDN + custom domain. **Remind the developer: a custom domain (域名) must be prepared in advance — the default OBS endpoint does not support HTTPS for static hosting**
+3. **ECS** — server-based hosting. **Remind the developer: ECS must be paired with an EIP (弹性公网IP) for public access — extra billing applies**
 4. **CCE** — container-based hosting
 
 Hard rules:
@@ -24,6 +24,7 @@ Hard rules:
 - **NEVER infer or default the target** when it is unstated. Calling `huaweicloud_sandbox_connect` before this choice is made is a violation.
 - Only skip the question when: (a) the developer already named a target (e.g. "部署到 ECS", "用 OBS"), or (b) the developer explicitly asked for a temporary / sandbox / preview runtime.
 - "部署到华为云" / "deploy to Huawei Cloud" / "上线" alone is NOT a named target — still run the gate.
+- Include the OBS domain reminder and the ECS EIP pairing reminder in the options as presented.
 - After the choice: sandbox → continue with this skill; OBS → `huawei-obs`; ECS → `huawei-ecs` / `huawei-iac`; CCE → `huawei-cce`.
 
 ## Overview
@@ -32,8 +33,8 @@ Domain expertise for Huawei Cloud Sandbox (DevStation) instances and workspace t
 
 ## Activation
 
-- **Proactive offering**: when the developer's task needs a temporary runtime (e.g. "deploy this web app", "run this app and preview it"), offer the sandbox proactively — the developer never has to say "use sandbox". Prompt: "This task can be satisfied by a sandbox — use it?"
-- **Static website hosting — present options, sandbox first (MANDATORY)**: when the developer asks to deploy/host/publish a static website or web app without naming a target, do NOT silently pick a service and do NOT default to the sandbox. Run the [Target-Selection Gate](#target-selection-gate-mandatory--do-not-skip) via the `question` tool first. Present, in order: ① 沙箱 (recommended — temporary runtime, instant preview URL) ② OBS 静态托管 (long-term static hosting/CDN) ③ ECS ④ CCE. Recommended prompt: "建议优先部署到沙箱（临时运行环境，可预览访问），也可选择 OBS 静态托管、ECS 或 CCE，你想部署到哪里？" Only if the developer, after being asked, expresses no preference may you proceed with the sandbox.
+- **Proactive offering**: when the developer's Huawei Cloud task needs a temporary runtime (e.g. "deploy this web app", "run this app and preview it"), offer the sandbox proactively — the developer never has to say "use sandbox". A task whose cloud vendor is unknown or named as another cloud is out of scope here; settle the vendor first. Prompt: "This task can be satisfied by a sandbox — use it?"
+- **Static website hosting — present options, sandbox first (MANDATORY)**: when the developer asks to deploy/host/publish a static website or web app without naming a target, do NOT silently pick a service and do NOT default to the sandbox. Run the [Target-Selection Gate](#target-selection-gate-mandatory--do-not-skip) via the `question` tool first. Present, in order: ① 沙箱 (recommended — temporary runtime, instant preview URL) ② OBS 静态托管 (long-term static hosting/CDN; 需提前准备好自定义域名) ③ ECS (需搭配弹性公网IP/EIP 才能公网访问) ④ CCE. Recommended prompt: "建议优先部署到沙箱（临时运行环境，可预览访问），也可选择 OBS 静态托管（需提前准备好自定义域名）、ECS（需搭配弹性公网IP/EIP 才能公网访问）或 CCE，你想部署到哪里？" Only if the developer, after being asked, expresses no preference may you proceed with the sandbox.
 - **Detect web apps in deploy-a-repo prompts**: prompts like "部署 GitHub - <owner>/<repo>" or "deploy <github repo>" do not say "web app". Clone or inspect the repository first (package.json with dev/serve/build scripts, index.html, frontend framework dependencies such as vue/react/angular/vite, static sites, Dockerfile running a web server). If it is a web application, offer the sandbox first: "检测到该项目是 Web 应用，建议优先使用沙箱部署（临时运行环境，可预览访问），是否使用？"
 - **Clone into the sandbox workspace directory**: always put project code under `/workspace/<repo-name>` (create the directory if missing) — `/workspace` is the sandbox's dedicated workspace mount at the filesystem root, not `$HOME/workspace`. Never use `/tmp` or other ephemeral locations. This keeps the project with the sandbox session, is easy to reference for serving/exposing, and survives session-level restarts of the shell.
 - **Deployment must end with a public URL**: after deploying and exposing the app with DevBridge, always return the tunnel URL to the developer as the final result — a deployment without an accessible link is incomplete.
@@ -62,6 +63,14 @@ Domain expertise for Huawei Cloud Sandbox (DevStation) instances and workspace t
 | `huaweicloud_sandbox_connect`     | Connect to sandbox (one user one instance, reuses existing if available) |
 | `huaweicloud_sandbox_credentials` | Inject temporary AK/SK into a running sandbox                            |
 
+### Tunnel Persistence (public URL lifetime)
+
+| Tool                                     | Purpose                                                                                                                                                                                                                                                                                                                                       |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `huaweicloud_sandbox_expose_tunnel`      | Expose a port → public tunnel URL (auth, pre-clean, health check; `expiry_hours` 1-720, def 72). **AUTO-enrolls into the keepalive watchdog** (`keepalive: false` opts out; the merge preserves the watchdog ROSTER — note each expose pre-cleans all tunnels, so prior tunnels' coverage matters only for hosts surviving outside this flow) |
+| `huaweicloud_sandbox_renew_tunnel`       | Renew a tunnel lifetime (`update -e`, rolling window; returns absolute expiresAt)                                                                                                                                                                                                                                                             |
+| `huaweicloud_sandbox_keepalive_watchdog` | Install/replace the 3-layer watchdog: host re-attach + daily 720h renewal + 5-min health check                                                                                                                                                                                                                                                |
+
 ### Terminal Execution
 
 | Tool                                    | Purpose                                                                     |
@@ -85,6 +94,8 @@ Domain expertise for Huawei Cloud Sandbox (DevStation) instances and workspace t
 | Deployment scripts                 | `exec_one_shot+shot`               | Long script, fresh connection avoids session timeouts        |
 | nginx configuration                | `deploy_nginx`                     | Auto-generates correct template + permissions + reload       |
 | Deployment completeness check      | `deploy_check`                     | Verifies nginx, DevBridge, URL, QR before reporting success  |
+| Tunnel lifetime renewal            | `renew_tunnel`                     | Rolling-window renewal, same URL stays alive                 |
+| URL must outlive the session       | `keepalive_watchdog`               | Unattended host re-attach + daily renewal + health check     |
 | Single file upload (<1MB)          | `upload_file`                      | Base64 chunked, reliable for small files                     |
 | Project directory upload (>1MB)    | `upload_project`                   | HTTP tunnel, much faster than base64 for multi-file projects |
 
@@ -146,6 +157,8 @@ Setup is a **plugin-side preflight** — the developer should be asked a questio
    ```
 
    If `source /tmp/hw_creds.sh` returns empty, the credentials injection may not have completed — re-run `huaweicloud_sandbox_credentials`.
+
+   **DevBridge API Key 前置引导（before expose, not mid-expose）**: the address-generation service (DevBridge 0.2.x) requires an API Key. Recent sandbox images auto-acquire one from the platform keyring — but if the sandbox was created on an older image (cannot auto-acquire), prepare the key at THIS stage instead of being interrupted halfway through the expose flow: create it once at https://devstation.connect.huaweicloud.com/space/devbridge/apikey (value shown only once, `devbridge_` prefix), hand it over via `export HW_API_KEY=<key>` locally (preferred) or paste it in the conversation for the `api_key` param, then run `huaweicloud_sandbox_credentials`. Full why/where/how guide: [Step 1, NO_CREDENTIAL branch](#step-1-authenticate--verified-waterfall-keyring-first).
 
 8. **Execute commands**: use `huaweicloud_sandbox_exec_with_session` for interactive work (cd, env setup), or `huaweicloud_sandbox_exec_one_shot` for long-running builds/installs. See [Tool Selection Guide](#tool-selection-guide).
 9. **Upload project** (if deploying local code): `huaweicloud_sandbox_upload_project` to transfer a local project directory into `/workspace/<name>` — uses HTTP tunnel, much faster than base64 for multi-file projects. Use `huaweicloud_sandbox_upload_file` for single files.
@@ -220,6 +233,11 @@ curl -s -o /workspace/<repo>/<file> https://<bucket>.obs.<region>.myhuaweicloud.
 
 Expose a deployed web app to a public URL and return that URL to the developer.
 
+### Workspace URL vs public share link (401 trap — do not confuse them)
+
+- The sandbox **workspace URL** (`https://<port>-<container_id>.workspace.developer.huaweicloud.com/`) is **authenticated**: opening it directly (or sharing it with someone who is not logged in) returns **401 Unauthorized**. A 401 here does NOT mean the port failed to expose — never debug it as an exposure failure.
+- A **publicly shareable address is ONLY the DevBridge tunnel URL** (`https://<id>-<port>.devbridge-s2.hwtunnel.com`, produced in Step 2 below). Public sharing must go through the DevBridge tunnel — never hand the workspace URL to the developer as the deployment result link.
+
 **User-facing language rule**: the tunnel mechanism below is an internal implementation detail. Never mention "DevBridge", "tunnel", or the tunnel CLI to the developer. Tell the developer only: "正在生成访问地址..." while exposing, then hand over the final URL.
 
 ### Step 0: Ensure DevBridge CLI 0.2.x (install or upgrade in place)
@@ -227,7 +245,7 @@ Expose a deployed web app to a public URL and return that URL to the developer.
 **Check the version first.** Sandboxes created before Sep 2026 ship devbridge 0.1.13, whose hardcoded gateway (`cn-north-4-bridge.myhuaweicloud.com`) was migrated and now serves a 「服务已迁移」 placeholder page — 0.1.x can no longer connect:
 
 ```bash
-export PATH="$HOME/.huawei/bin:$PATH"   # PREPEND — appending lets a stale image binary in /usr/local/bin win
+export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"   # PREPEND — appending lets a stale image binary in /usr/local/bin win
 devbridge version 2>/dev/null || echo "not installed"
 ```
 
@@ -245,18 +263,52 @@ curl -fsSL --http1.1 --retry 3 --retry-all-errors --max-time 120 \
 # Note: GitCode repo is named "devbrige" (missing 'd') — this is the actual repo name, not a typo.
 #       GitHub repo is "devspace-devbridge" (correct spelling). Do NOT "fix" the GitCode URL.
 DB_TARGET=$(grep -m1 'DEFAULT_VERSION=' /tmp/devbridge-install.sh | cut -d'"' -f2)
-if ! bash /tmp/devbridge-install.sh -s -u "https://gitcode.com/CloudDeveloperDepartment/devbrige/releases/download/${DB_TARGET}" -v "${DB_TARGET}"; then
-  bash /tmp/devbridge-install.sh -s   # fallback: GitHub (baked-in URL)
+# -p /workspace/.local/bin (deliberate divergence from main, recorded): the
+# installer's default INSTALL_DIR is ~/.huawei/bin — the SYSTEM disk, wiped on
+# reboot (the exact #999 measured failure). The flag is upstream-supported
+# (install.sh -p, --prefix DIR) and also points the installer's ~/.bashrc PATH
+# line at the data disk.
+if ! bash /tmp/devbridge-install.sh -s -p /workspace/.local/bin -u "https://gitcode.com/CloudDeveloperDepartment/devbrige/releases/download/${DB_TARGET}" -v "${DB_TARGET}"; then
+  bash /tmp/devbridge-install.sh -s -p /workspace/.local/bin   # fallback: GitHub (baked-in URL)
 fi
-export PATH="$HOME/.huawei/bin:$PATH"   # PREPEND (session shells do not re-source ~/.bashrc)
+export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"   # PREPEND (session shells do not re-source ~/.bashrc)
+# Layer 3 (both installer paths failed): direct GitHub release tar.gz.
+# Asset naming is fixed: devbridge_linux_arm64_<version>-release.tar.gz (the sandbox
+# is Linux aarch64). If DB_TARGET is empty the installer download itself failed —
+# resolve the latest tag from the GitHub releases API first. The PREPEND above runs
+# FIRST so `command -v` can see a freshly installed binary — otherwise
+# Layer 3 would needlessly re-download after a successful install.
+# Install to /workspace/.local/bin — /workspace is the sandbox's DATA disk and
+# survives reboots; ~/.huawei/bin lives on the SYSTEM disk and a reboot wipes it
+# back to the image state (measured 2026-10-22: an overnight reboot reverted
+# ~/.huawei/bin/devbridge 0.2.2 to the image's 0.1.13 — yesterday's success
+# replayed as today's unexplained failure). (#999)
+if ! command -v devbridge >/dev/null 2>&1; then
+  [ -z "$DB_TARGET" ] && DB_TARGET=$(curl -fsSL --http1.1 --retry 2 --max-time 60 \
+    https://api.github.com/repos/huaweicloud/devspace-devbridge/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)
+  mkdir -p /workspace/.local/bin
+  curl -fsSL --http1.1 --retry 3 --retry-all-errors --max-time 180 \
+    "https://github.com/huaweicloud/devspace-devbridge/releases/download/${DB_TARGET}/devbridge_linux_arm64_${DB_TARGET}.tar.gz" \
+    -o /tmp/devbridge.tar.gz \
+    && rm -rf /tmp/devbridge-pkg && mkdir -p /tmp/devbridge-pkg \
+    && tar -xzf /tmp/devbridge.tar.gz -C /tmp/devbridge-pkg \
+    && install -m 0755 /tmp/devbridge-pkg/devbridge /workspace/.local/bin/devbridge
+  export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"
+fi
 devbridge version                     # must print 0.2.x-release
 
 # Remove the stale image-installed binary so only ONE version remains.
-# (Image sandboxes ship 0.1.x at /usr/local/bin/devbridge; the installer writes ~/.huawei/bin.
-#  Compare against the explicit ~/.huawei/bin path — never `command -v`, which can resolve
-#  to the stale binary itself when PATH order differs.)
-if [ -x "$HOME/.huawei/bin/devbridge" ] && [ -f /usr/local/bin/devbridge ] && [ "$(readlink -f /usr/local/bin/devbridge)" != "$(readlink -f "$HOME/.huawei/bin/devbridge")" ]; then
+# (Image sandboxes ship 0.1.x at /usr/local/bin/devbridge; the installer writes
+# /workspace/.local/bin. Compare against the explicit install path — never
+# `command -v`, which can resolve to the stale binary itself when PATH order differs.)
+if [ -f /usr/local/bin/devbridge ] && [ -x /workspace/.local/bin/devbridge ] && [ "$(readlink -f /usr/local/bin/devbridge)" != "$(readlink -f /workspace/.local/bin/devbridge)" ]; then
   rm -f /usr/local/bin/devbridge && echo "stale /usr/local/bin/devbridge removed"
+fi
+# A leftover 0.2.x in ~/.huawei/bin (installed by older docs or an unprefixed
+# installer run) is valid until the next reboot — deduplicate it against the
+# /workspace copy so the version check above can never report the image's 0.1.x.
+if [ -x "$HOME/.huawei/bin/devbridge" ] && [ -x /workspace/.local/bin/devbridge ] && [ "$(readlink -f "$HOME/.huawei/bin/devbridge")" != "$(readlink -f /workspace/.local/bin/devbridge)" ]; then
+  rm -f "$HOME/.huawei/bin/devbridge" && echo "stale ~/.huawei/bin/devbridge removed"
 fi
 ```
 
@@ -264,18 +316,29 @@ fi
 - **Old tunnels do not survive the upgrade**: 0.1.x-created tunnels are not registered on the s2 gateway — always rebuild the tunnel after upgrading (the expose flow below does this via pre-cleanup).
 - If `10006: quota exceeded` appears after upgrading, stale pre-upgrade tunnels still count against the quota — `devbridge delete-all` and retry.
 
+### Sandbox filesystem persistence: what survives a reboot (#999)
+
+| Path                                         | Type           | After a sandbox reboot                                                               |
+| -------------------------------------------- | -------------- | ------------------------------------------------------------------------------------ |
+| `/workspace` (incl. `/workspace/.local/bin`) | Data disk      | **Survives** — install project code and the devbridge 0.2.x binary here              |
+| `$HOME` (incl. `~/.huawei/bin`)              | System disk    | **Rolled back to the image state** — an installed binary is lost, 0.1.13 returns     |
+| `/usr/local/bin`                             | System disk    | Rolled back — the image-preinstalled 0.1.x returns                                   |
+| `/tmp`                                       | Session-scoped | Cleared — `/tmp/hw_creds.sh`, `/tmp/hw_api_key`, `/tmp/tunnel-keepalive.sh` are gone |
+
+Measured (2026-10-22): an overnight reboot reverted `~/.huawei/bin/devbridge` 0.2.2 to the image's 0.1.13 — **yesterday's successful operation replayed as today's unexplained failure**. Recovery after a reboot: re-run the Step 0 install (or just re-export the PATH to the surviving `/workspace/.local/bin`), and re-run `huaweicloud_sandbox_credentials` to re-inject `/tmp` credentials. The watchdog's tunnel LIST dies with `/tmp` — re-run `huaweicloud_sandbox_keepalive_watchdog` with the full `{tunnel_id, url}` list to restore coverage (a re-expose enrolls only the NEW tunnel it creates).
+
 ### Step 1: Authenticate — verified waterfall, keyring first
 
 Authentication tries three credential sources in order, each verified with a real login + `auth status` before use; a failure falls through to the next tier:
 
 - **Tier 1 — keyring API Key** (preferred): recent sandbox images (hd-space-ai-shell line) get `HW_DEVBRIDGE_API_KEY` auto-injected by the platform into the sandbox keyring — **zero user action, long-lived key**. Read it via `hwcloud keyring get HW_DEVBRIDGE_API_KEY 2>&1` (⚠ the value goes to **stderr** — `2>&1` is mandatory or you silently capture an empty string) and accept only values starting with `devbridge_` (`(not found)` and error text are rejected). If the first read fails, a light revive (restart the D-Bus session bus at `unix:path=/run/dbus-session`, replace a locked keyring daemon with `printf '\n' | gnome-keyring-daemon --unlock`) retries once — no package installs.
-- **Tier 2 — AK/SK** (image builds, legacy sandboxes): image builds keep `--access-key/--secret-key`. STS credentials **must** include `--security-token "$HW_SECURITY_TOKEN"` or the gateway rejects the request with 401 `APIGW.0301`. 0.1.x binaries additionally need `--huaweicloud` (only when their help advertises it).
+- **Tier 2 — AK/SK** (image builds, legacy sandboxes): image builds keep `--access-key/--secret-key`. STS credentials **must** include `--security-token "$HW_SECURITY_TOKEN"` or the gateway rejects the request with 401 `APIGW.0301`. **The `--huaweicloud` SSO login flag does NOT exist in sandbox devbridge 0.2.x binaries (e.g. 0.2.2)** — 文档超前于二进制：不要尝试 `--huaweicloud`，直接使用 `devbridge auth login --access-key/--secret-key`（以下方手动等价脚本以 `auth login --help` 探测为准；0.1.x 的 `--huaweicloud` 条件分支仅 `huaweicloud_sandbox_expose_tunnel` 工具内置的瀑布脚本实现，手动回退一律用直连 `--access-key` 形式）。0.1.x binaries additionally advertised `--huaweicloud` (use it only when their help advertises it).
 - **Tier 3 — `/tmp/hw_api_key`** (release builds, user-provided one-time): the file is written by `huaweicloud_sandbox_credentials` from the local `HW_API_KEY` env (preferred) or the `api_key` param.
 
 `huaweicloud_sandbox_expose_tunnel` runs this waterfall automatically and reports the winning mode (`API_KEY_KEYRING` / `AKSK_SUPPORTED` / `API_KEY_FILE`) or `NO_CREDENTIAL` with a non-sensitive per-tier `attempts` diagnostic. Manual equivalent:
 
 ```bash
-export PATH="$HOME/.huawei/bin:$PATH"
+export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"
 export HOME="${HOME:-/root}"
 # Tier 1: platform-injected keyring key (stderr! prefix filter!)
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/dbus-session}"
@@ -298,6 +361,11 @@ devbridge auth status   # separate step: a status failure must not mask the logi
 - **`API_KEY_KEYRING`** → done, nothing was asked of the user (recent images only; the platform injects and rotates the key).
 - **`AKSK_SUPPORTED`** → done. The temporary AK/SK injected by `huaweicloud_sandbox_credentials` is used directly (validated against IAM before injection). If login fails, surface the CLI error — expired STS token → re-run `huaweicloud_sandbox_credentials`.
 - **`NO_CREDENTIAL`** → first re-run `huaweicloud_sandbox_credentials` and retry (refreshes STS, most common quick fix). Still failing means an older sandbox whose image cannot auto-acquire (images are frozen at sandbox creation and cannot be upgraded in place) — guide the developer through a one-time API Key creation (wait for the key before continuing):
+
+**沙箱凭证与 devbridge 版本差异陷阱（实测 #935 坑2/坑3）**：
+
+- 沙箱内 devbridge 0.2.2 无旧版技能文档所述 `--huaweicloud` 登录标志（文档超前于二进制）—— 应直接使用 `devbridge auth login --access-key/--secret-key`（`auth login --help` 探测到 `--access-key` 支持时走该分支，见上方手动等价脚本）。
+- 沙箱**平台侧**（hdkitservice）注入的 STS 凭证为 obsutil 加密态存储：devbridge 读到密文凭证会报 `APIGW.0301`。这与 DevKit 自己经 `huaweicloud_sandbox_credentials` 写入 `/tmp/hw_creds.sh` 的**明文**凭证是两条通道（该工具一次调用同时刷新两者）；devbridge 瀑布只读明文通道。遇到密文态报错时，重跑 `huaweicloud_sandbox_credentials`（或传 `enable_sts: false` 跳过平台侧 STS 注入）后再创建隧道。
 
 1. **Why (one sentence)**: "沙箱的地址生成服务发布版构建已移除 AK/SK 登录，仅支持 API Key（镜像内置构建仍支持 AK/SK，Agent 已自动探测）。API Key 按账号管理，创建一次长期可用、所有沙箱通用。"
 2. **Where (exact steps)**: open https://devstation.connect.huaweicloud.com/space/devbridge/apikey → 登录控制台 → 选择 DevBridge 场景 → 点击"创建"。**完整值仅在创建时展示一次，立即复制**（`devbridge_` 开头）。
@@ -324,28 +392,36 @@ pkill -f "devbridge host" 2>/dev/null || true
 sleep 2
 devbridge delete-all 2>/dev/null || true
 
-# 1. Start tunnel
-nohup devbridge host -p <port> -e 8 > /tmp/host.log 2>&1 &
+# 1. Start tunnel (setsid-detached so the host survives the exec session; -e 72 = 72h lifetime)
+if command -v setsid > /dev/null 2>&1; then setsid nohup devbridge host -p <port> -e 72 > /tmp/host.log 2>&1 < /dev/null & else nohup devbridge host -p <port> -e 72 > /tmp/host.log 2>&1 < /dev/null & fi
+disown 2>/dev/null || true
 sleep 10 && cat /tmp/host.log
 
-# 2. Extract tunnel URL and health-check before returning
-TUNNEL_URL=$(grep -oP 'Tunnel URL: \K.*' /tmp/host.log)
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$TUNNEL_URL" 2>/dev/null || echo "000")
+# 2. Extract tunnel URL (port-anchored: a multi-port host prints one URL line
+#    per port — never a port-blind extraction) and health-check before returning
+TUNNEL_URL=$(grep -oE "https://[A-Za-z0-9_-]+-<port>\.devbridge-s2\.hwtunnel\.com" /tmp/host.log | head -1)
+# --noproxy is MANDATORY (#1000): the sandbox injects an HTTP proxy that does NOT
+# route the tunnel domain — without it a working tunnel verifies as 502/404 and
+# sends you chasing credentials/version/port.
+HTTP_CODE=$(curl -s --noproxy '*' -o /dev/null -w "%{http_code}" --max-time 10 "$TUNNEL_URL" 2>/dev/null)
 if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "304" ]; then
   echo "Tunnel verified: $TUNNEL_URL (HTTP $HTTP_CODE)"
 else
   echo "WARN: Tunnel URL unreachable (HTTP $HTTP_CODE). Rebuilding tunnel..."
   pkill -f "devbridge host" && sleep 2
   devbridge delete-all 2>/dev/null || true
-  nohup devbridge host -p <port> -e 8 > /tmp/host.log 2>&1 &
+  if command -v setsid > /dev/null 2>&1; then setsid nohup devbridge host -p <port> -e 72 > /tmp/host.log 2>&1 < /dev/null & else nohup devbridge host -p <port> -e 72 > /tmp/host.log 2>&1 < /dev/null & fi
+  disown 2>/dev/null || true
   sleep 10
-  TUNNEL_URL=$(grep -oP 'Tunnel URL: \K.*' /tmp/host.log)
-  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$TUNNEL_URL" 2>/dev/null || echo "000")
+  TUNNEL_URL=$(grep -oE "https://[A-Za-z0-9_-]+-<port>\.devbridge-s2\.hwtunnel\.com" /tmp/host.log | head -1)
+  HTTP_CODE=$(curl -s --noproxy '*' -o /dev/null -w "%{http_code}" --max-time 10 "$TUNNEL_URL" 2>/dev/null)
   echo "Retry tunnel: $TUNNEL_URL (HTTP $HTTP_CODE)"
 fi
 ```
 
 **Never return a tunnel URL without verifying it first** — a stale URL (from a killed tunnel process) will silently fail. Always curl-check before giving the URL to the developer. Note: a migrated gateway serves its placeholder page with **HTTP 200** — a bare status check is not enough when diagnosing "200 but wrong content".
+
+**Proxy trap on verify commands (#1000)**: every curl against `*.hwtunnel.com` MUST pass `--noproxy '*'` — the sandbox injects an HTTP/HTTPS proxy that does not route the tunnel domain, so a proxied verify returns 502/404 fakes while the tunnel is actually serving. If a tunnel "fails" verification, re-test with `--noproxy '*'` BEFORE checking versions/credentials/ports (same trap on the SSH path: huawei-ecs skill references/windows-ssh.md §0.1). localhost curls are unaffected — loopback bypasses the injected proxy.
 
 **Quota recovery**: if the tunnel creation fails with `10006: quota exceeded`:
 
@@ -357,22 +433,47 @@ devbridge list
 # Step B: Remove all stale tunnels
 devbridge delete-all
 # Step C: Retry tunnel creation
-nohup devbridge host -p <port> -e 8 > /tmp/host.log 2>&1 &
+if command -v setsid > /dev/null 2>&1; then setsid nohup devbridge host -p <port> -e 72 > /tmp/host.log 2>&1 < /dev/null & else nohup devbridge host -p <port> -e 72 > /tmp/host.log 2>&1 < /dev/null & fi
+disown 2>/dev/null || true
 sleep 10 && cat /tmp/host.log
 ```
 
 This eliminates the most common deployment failure — historical tunnels from previous sessions accumulating past the max=10 quota.
 
 - The public URL has the form `https://<id>-<port>.devbridge-s2.hwtunnel.com` (from the `Tunnel URL:` line; 8-char lowercase base32 id). The pre-migration bridge domain `cn-north-4-bridge.myhuaweicloud.com` is dead — treat any URL on it as broken and never hand one to the developer.
+- **Start the host so it survives the exec session**: `setsid nohup ... < /dev/null & disown` (all three: setsid detaches the process group, `< /dev/null` drops the controlling tty, disown removes it from the shell's job table). On images without `setsid`, fall back to a bare `nohup ... &` launch (`if command -v setsid ...; else nohup ... ; fi`) and guard `disown` with `2>/dev/null || true` — a missing `setsid` must not leave the host unstarted. A bare `nohup ... &` (when `setsid` IS available) is reaped when the one-shot session ends — the tunnel dies right after a green in-session health check (the "200 but tunnel not found" trap); if an independent re-verify (fresh exec session, GET the URL) fails or answers 200 with a "tunnel not found" body, the URL is NOT persistent — always tell the developer 访问链接将在会话结束后失效，请勿分享 (never say 隧道/DevBridge to the developer — the language rule above). `-e 72` sets the tunnel lifetime in **hours** — surface it to the developer with the URL ("链接已生成，默认自动续期保活" — expiry_hours 默认 72h，keepalive 看门狗每日续到 720h，除非 keepalive:false).
 - **Return this URL to the developer as the deployment result link.** Keep the host process running (do not close the session before handing over the URL).
 - Tunnel `description` (`-d`) accepts only Chinese characters, letters, and digits (0-64). Symbols such as `-`/`_`/spaces are rejected (`Invalid tunnel description`).
 - Official docs: https://huaweicloud.github.io/devspace-devbridge/
 
 **No local downgrade**: if the tunnel tooling cannot be installed in the sandbox, STOP and report a generic error ("无法生成访问地址") without technical detail. Never install it on the developer's local machine — a local install would defeat the purpose of sandbox deployment.
 
+### Step 3: Keep the URL alive (persistence & renewal)
+
+Every tunnel deployed to the sandbox is keepalive-protected by default — `huaweicloud_sandbox_expose_tunnel` AUTO-ENROLLS each exposed tunnel into the watchdog (merged into the existing roster; `keepalive: false` opts out). The enrollment satisfies the developer requirement (unattended renewal + host re-attach + health check) without any manual step.
+
+- **Tunnel lifetime is a rolling window** — renew before expiry and the SAME URL stays alive indefinitely (`huaweicloud_sandbox_renew_tunnel`, or the watchdog's daily 720h renewal).
+- **Host dies (sandbox restart / session teardown)** — the watchdog re-attaches with `devbridge host <id>`; the URL is bound to the tunnel ID and never changes.
+- **Manual install / full-list replacement** — `huaweicloud_sandbox_keepalive_watchdog` with the `{tunnel_id, url}` list (it SETS the list; expose MERGES into it). Full doctrine: `references/tunnel-persistence.md`.
+
+## Full-Stack: REST API over PostgreSQL (PostgREST)
+
+When deploying a **full-stack workbench project** (前后端工作台) or asking for a database-backed REST API inside the sandbox (postgres, postgrest, 数据库, RESTful 接口, 工作台后端):
+
+1. **PostgreSQL 16 from PGDG** — the OS repo only ships PG 13, and PostgREST 16.x requires PG ≥ 14. HCE is NOT el8-lib-compatible: hand-write the repo file (the el8 path is `rhel-8-aarch64` WITH a hyphen), install the RPMs one-per-call with `--nodeps`, and shim the sonames — including the REAL `libicu-60` package (ICU symlinks load but crash on versioned symbols).
+2. **PostgREST `linux-static-aarch64`** — dynamic Ubuntu builds fail on HCE glibc. Create the schema and a read-only `api_user` role (the anon role gates all writes; POST/PATCH → 401).
+3. **Nginx single-origin** — `/` serves the frontend, `/api/` reverse-proxies to PostgREST (no CORS, same origin). The frontend dir needs `chmod o+x` on the whole path chain or nginx returns 403.
+4. **Expose + keep alive (automatic)** — `huaweicloud_sandbox_expose_tunnel` with the nginx port; it AUTO-enrolls the tunnel into the keepalive watchdog. Prefer `expiry_hours: 720` for long-lived workbench deployments.
+
+Complete measured procedure (with the full command chain): see `references/fullstack-postgrest.md`.
+
 ## Web Application Deployment
 
 When deploying a web application to the sandbox, build the app inside the sandbox before exposing it. Source code is uploaded, dependencies installed, and the framework built in the sandbox environment.
+
+**Backend present?** If the project includes a PostgreSQL + PostgREST backend (or the developer asks for one), set up the backend FIRST by following [Full-Stack: REST API over PostgreSQL](#full-stack-rest-api-over-postgresql-postgrest) — install PostgreSQL/PostgREST, create the schema, and point the frontend's nginx `/api/` location at PostgREST — then continue with the steps below. Every tunnel exposed afterwards is auto-enrolled into the keepalive watchdog.
+
+**沙箱无 systemd（实测 #935 报告3 问题3）**：沙箱为无 systemd 的容器环境，`systemctl` 全部失效（`System has not been booted with systemd`）—— 不要用 `systemctl start/reload/restart nginx`。Nginx 配置变更直接使用 `nginx -t` 验证 + `nginx -s reload` 热加载，或直接执行 nginx 二进制（`sudo nginx` 启动 / `nginx -s stop` 停止）。`huaweicloud_sandbox_deploy_nginx` 工具返回的 nextStep 文案与该语义一致（配置写入后自动回验存在性与 `nginx -t`，通过后即生效，无需 systemctl）。
 
 ### Step 1: Detect Framework Locally
 
@@ -866,7 +967,7 @@ When `deploy_check` returns `nextStep: expose_via_devbridge`, it also returns an
 
 Follow the standard [Expose the deployed app](#expose-the-deployed-app-public-url) procedure. The app is already running on the detected port — only DevBridge tunnel setup is needed.
 
-Use `exec_with_session` to background DevBridge. For SSR, DevBridge tunnels the nginx public port (not the Node port directly).
+Use `exec_with_session` for the Expose steps, and copy the guarded `setsid nohup … < /dev/null & disown` launch verbatim — the guard (not the exec flavor) is what makes the host survive the session. For SSR, DevBridge tunnels the nginx public port (not the Node port directly).
 
 **Pre-flight**: always run `devbridge delete-all` before creating a new tunnel to prevent `10006: quota exceeded` from accumulated stale tunnels. If you still get quota error, list tunnels with `devbridge list` (0.2.x plain table; 0.1.x legacy `-j` JSON), delete stale ones, and retry.
 
@@ -912,10 +1013,10 @@ echo "Desktop URL: $TUNNEL_URL"
 
 The tool checks:
 
-- **nginx_serving** — nginx responds with 2xx/3xx on the app port
+- **nginx_serving** — nginx answers on the app port with ANY non-000 HTTP code (404/502 = content issue, not a connectivity issue)
 - **output_dir** — build output directory exists and is non-empty
 - **devbridge_tunnel** — DevBridge tunnel is active (version-aware: 0.1.x JSON / 0.2.x table)
-- **tunnel_url_accessible** — tunnel URL returns 200/304 with real content; a gateway migration placeholder page (「服务已迁移」 with HTTP 200) counts as FAIL
+- **tunnel_url_accessible** — the probed tunnel URL (constructed on the current s2 gateway domain, one probe per listed tunnel, bounded to 5) answers with any non-000 code EXCEPT the gateway-level dead forms, matched by exact body + status: `tunnel not found` (404 — no live host session on the gateway, even if the tunnel still appears in `devbridge list`), `port not configured` (404 — URL port not registered on the tunnel), and `bad gateway` (502 — tunnel alive but the local service is down). A retired pre-migration gateway placeholder is an `expose_tunnel` verdict (host-log marker), not this probe's concern.
 - **qr_code** (cross-platform only) — QR image exists in output dir
 
 Returns `complete: true/false`, `score`, and `nextStep` to fix missing items.
@@ -935,39 +1036,42 @@ Returns `complete: true/false`, `score`, and `nextStep` to fix missing items.
 
 - [Framework Commands](references/framework-commands.md) — command mapping for all supported frameworks
 - [Nginx Templates](references/nginx-templates.md) — nginx configuration templates and fallback
+- [Tunnel persistence](references/tunnel-persistence.md) — renewal, re-attach, and the keepalive watchdog
+- [Full-stack PostgREST](references/fullstack-postgrest.md) — the measured PostgreSQL 16 + PostgREST + nginx procedure
 
 ## Critical Warnings
 
-| Trap                                  | Why                                                                                                                                                                                                                                                                                                               |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Target not confirmed                  | "部署到华为云" without a named target is NOT a go signal. You MUST run the Target-Selection Gate and get an explicit choice before calling any sandbox lifecycle tool. Skipping it and defaulting to the sandbox is a violation.                                                                                  |
-| Agreement required first              | `sandbox_connect` fails if the agreement isn't signed; the `sandbox_check_user` preflight detects this, so surface it to the developer only when signing is needed                                                                                                                                                |
-| Real-name required                    | `sandbox_connect` fails if `realnameVerified=false`; tell the developer once and stop, don't loop on connect                                                                                                                                                                                                      |
-| Never expose tunnel details           | Do not mention "DevBridge"/"tunnel"/"devbridge" to the developer — say "正在生成访问地址..." and hand over only the URL                                                                                                                                                                                           |
-| devbridge auth: probe the build       | `0.2.2-release` has two builds: image builds retain AK/SK login + env auto-read (fully automatic via `/tmp/hw_creds.sh`); release builds accept only API Key (`/tmp/hw_api_key`). Never assume — probe with `devbridge auth login --help 2>&1 \| grep -q -- '--access-key'` (Step 1 of "Expose the deployed app") |
-| devbridge 0.1.x is dead               | Sandboxes created before Sep 2026 ship 0.1.13, which connects to a migrated gateway serving a 「服务已迁移」 placeholder with HTTP 200. Check `devbridge version` first and upgrade in place (Step 0) — old tunnels never survive the upgrade                                                                     |
-| CLI PATH                              | The installer only writes `~/.bashrc`; run `export PATH="$HOME/.huawei/bin:$PATH"` (prepend) in the session before using `devbridge` — appending lets a stale image binary in `/usr/local/bin` win                                                                                                                |
-| Never install tunnel tooling locally  | If the sandbox cannot install it, report a generic error and stop — installing on the developer's machine defeats sandbox deployment                                                                                                                                                                              |
-| Return the deployment URL             | Always hand the public URL from the host log to the developer as the final result                                                                                                                                                                                                                                 |
-| Deploy is not just nginx              | Configuring nginx does NOT complete the deployment. Steps 7 (DevBridge expose) and deploy_check are REQUIRED — `deploy_nginx` returns `nextStep: expose_via_devbridge` as a reminder. Do not stop after nginx.                                                                                                    |
-| Call deploy_check before success      | Always call `huaweicloud_sandbox_deploy_check` before reporting deployment success. A green nginx status does not mean the tunnel is accessible — verify end-to-end with the tool.                                                                                                                                |
-| Session state persists                | `exec_with_session` preserves `cd`, env vars, aliases between calls                                                                                                                                                                                                                                               |
-| Long commands prefer one-shot         | `exec_one_shot` creates a fresh connection per call — more stable for builds, installs, and scripts >30s. See [Tool Selection Guide](#tool-selection-guide).                                                                                                                                                      |
-| SSR nginx/Node ports must differ      | nginx `proxy_pass` targets `<nodePort>`, not `<port>`. `deploy_nginx` auto-defaults `nodePort` to `<port>+1` — always start the Node process with `PORT=<nodePort>` to match. Same-port = EADDRINUSE.                                                                                                             |
-| HTTP 200 ≠ correct content            | A green HTTP check does not guarantee the right project is serving — old processes from a previous session bound to the same port will still return 200. `deploy_check` verifies the deployment fingerprint to catch this.                                                                                        |
-| Destructive commands blocked          | `rm -rf /`, `mkfs`, `dd if=`, fork bombs are denied by safety policy                                                                                                                                                                                                                                              |
-| Workspace ID = dev_stage_id           | Use `dev_stage_id` from `sandbox_connect` as `workspace_id` for terminal exec                                                                                                                                                                                                                                     |
-| Projects live in `/workspace`         | Clone/install project code under `/workspace/<repo-name>` (filesystem-root workspace mount, not `$HOME/workspace`), never in `/tmp` — ephemeral locations lose the project when the sandbox session restarts                                                                                                      |
-| Upload project for local code         | Use `sandbox_upload_project` to transfer local projects — packages as tar.gz, uploads via HTTP tunnel, extracts on sandbox. Much faster than base64 for multi-file projects                                                                                                                                       |
-| Upload file for single files          | Use `sandbox_upload_file` for individual files — base64 chunked, reliable for small files (<1MB)                                                                                                                                                                                                                  |
-| Node.js >= 22 required                | Sandbox terminal uses built-in WebSocket (globalThis.WebSocket); if Node.js is missing, install it from the Huawei Cloud mirror (see "Node.js in the sandbox")                                                                                                                                                    |
-| Sandbox restart kills processes       | After sandbox restarts, all user processes (nginx, Node.js, Python servers) are stopped. Re-run startup commands and verify ports are listening before proceeding.                                                                                                                                                |
-| Cross-platform binaries incompatible  | The sandbox runs Linux. Native binaries built on Windows/macOS (e.g., Prisma client, `node_modules/.prisma/`, platform-specific native addons) will not execute. Always install and build dependencies inside the sandbox, not locally.                                                                           |
-| Cross-platform needs QR code          | When `detect_framework` returns `type: "cross-platform"` (Taro, uni-app), generating a QR code image is **mandatory** — the deployment is incomplete without it. Check the Deployment Completion Check table in Step 7.                                                                                           |
-| Build fails do NOT auto-fix           | When a build exits with non-zero exit code, STOP and present the error + fix options to the developer. Do not silently retry, modify configs, or change source files without explicit approval. See 4c-aux.                                                                                                       |
-| Tunnel description: no spaces/hyphens | `devbridge create <name> -d 'hello world'` fails with `Invalid tunnel description: only Chinese characters, digits, letters, length 0-64`. The message is misleading — the real rule is no spaces/hyphens. Omit `-d` or use bare letters/digits.                                                                  |
-| Use `host`, never `connect`           | `devbridge connect` is the sender side (for on-prem machines dialing out). For public preview it loops `Connection failed, retrying...` forever with no hint. Always use `devbridge host <tunnelId> -p <port>`.                                                                                                   |
-| Port drift detaches the tunnel        | When deploy_nginx auto-increments to a free port, an existing tunnel stays bound to the old port — re-bind: `devbridge port create <tunnelId> -p <newPort> --protocol http -a` and restart `devbridge host`. deploy_nginx emits a warning when this happens.                                                      |
+| Trap                                   | Why                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Target not confirmed                   | "部署到华为云" without a named target is NOT a go signal. You MUST run the Target-Selection Gate and get an explicit choice before calling any sandbox lifecycle tool. Skipping it and defaulting to the sandbox is a violation.                                                                                                                                                                                                                                      |
+| Agreement required first               | `sandbox_connect` fails if the agreement isn't signed; the `sandbox_check_user` preflight detects this, so surface it to the developer only when signing is needed                                                                                                                                                                                                                                                                                                    |
+| Real-name required                     | `sandbox_connect` fails if `realnameVerified=false`; tell the developer once and stop, don't loop on connect                                                                                                                                                                                                                                                                                                                                                          |
+| Never expose tunnel details            | Do not mention "DevBridge"/"tunnel"/"devbridge" to the developer — say "正在生成访问地址..." and hand over only the URL                                                                                                                                                                                                                                                                                                                                               |
+| devbridge auth: probe the build        | `0.2.2-release` has two builds: image builds retain AK/SK login + env auto-read (fully automatic via `/tmp/hw_creds.sh`); release builds accept only API Key (`/tmp/hw_api_key`). Never assume — probe with `devbridge auth login --help 2>&1 \| grep -q -- '--access-key'` (Step 1 of "Expose the deployed app")                                                                                                                                                     |
+| devbridge 0.1.x is dead                | Sandboxes created before Sep 2026 ship 0.1.13, which connects to a migrated gateway serving a 「服务已迁移」 placeholder with HTTP 200. Check `devbridge version` first and upgrade in place (Step 0) — old tunnels never survive the upgrade                                                                                                                                                                                                                         |
+| CLI PATH                               | The installer only writes `~/.bashrc`; run `export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"` (prepend, data-disk first) in the session before using `devbridge` — appending lets a stale image binary in `/usr/local/bin` win, and `~/.huawei/bin` alone is wiped on reboot (#999)                                                                                                                                                                        |
+| Never install tunnel tooling locally   | If the sandbox cannot install it, report a generic error and stop — installing on the developer's machine defeats sandbox deployment                                                                                                                                                                                                                                                                                                                                  |
+| Return the deployment URL              | Always hand the public URL from the host log to the developer as the final result                                                                                                                                                                                                                                                                                                                                                                                     |
+| Deploy is not just nginx               | Configuring nginx does NOT complete the deployment. Steps 7 (DevBridge expose) and deploy_check are REQUIRED — `deploy_nginx` returns `nextStep: expose_via_devbridge` as a reminder. Do not stop after nginx.                                                                                                                                                                                                                                                        |
+| Call deploy_check before success       | Always call `huaweicloud_sandbox_deploy_check` before reporting deployment success. A green nginx status does not mean the tunnel is accessible — verify end-to-end with the tool.                                                                                                                                                                                                                                                                                    |
+| Session state persists                 | `exec_with_session` preserves `cd`, env vars, aliases between calls                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Long commands prefer one-shot          | `exec_one_shot` creates a fresh connection per call — more stable for builds, installs, and scripts >30s. See [Tool Selection Guide](#tool-selection-guide).                                                                                                                                                                                                                                                                                                          |
+| SSR nginx/Node ports must differ       | nginx `proxy_pass` targets `<nodePort>`, not `<port>`. `deploy_nginx` auto-defaults `nodePort` to `<port>+1` — always start the Node process with `PORT=<nodePort>` to match. Same-port = EADDRINUSE.                                                                                                                                                                                                                                                                 |
+| HTTP 200 ≠ correct content             | A green HTTP check does not guarantee the right project is serving — old processes from a previous session bound to the same port will still return 200. `deploy_check` verifies the deployment fingerprint to catch this.                                                                                                                                                                                                                                            |
+| 404 "tunnel not found" ≠ content issue | The s2 gateway answers 404 with body `tunnel not found` when the host process is dead (the tunnel record may STILL show in `devbridge list`) and `port not configured` for an unregistered URL port — both mean the URL is dead, not that the app returned 404. `expose_tunnel`/`deploy_check` verify the probe body and refuse such URLs; a shared sandbox's second deployment also kills earlier URLs (global pre-clean), so re-expose and hand over the fresh URL. |
+| Destructive commands blocked           | `rm -rf /`, `mkfs`, `dd if=`, fork bombs are denied by safety policy                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Workspace ID = dev_stage_id            | Use `dev_stage_id` from `sandbox_connect` as `workspace_id` for terminal exec                                                                                                                                                                                                                                                                                                                                                                                         |
+| Projects live in `/workspace`          | Clone/install project code under `/workspace/<repo-name>` (filesystem-root workspace mount, not `$HOME/workspace`), never in `/tmp` — ephemeral locations lose the project when the sandbox session restarts                                                                                                                                                                                                                                                          |
+| Upload project for local code          | Use `sandbox_upload_project` to transfer local projects — packages as tar.gz, uploads via HTTP tunnel, extracts on sandbox. Much faster than base64 for multi-file projects                                                                                                                                                                                                                                                                                           |
+| Upload file for single files           | Use `sandbox_upload_file` for individual files — base64 chunked, reliable for small files (<1MB)                                                                                                                                                                                                                                                                                                                                                                      |
+| Node.js >= 22 required                 | Sandbox terminal uses built-in WebSocket (globalThis.WebSocket); if Node.js is missing, install it from the Huawei Cloud mirror (see "Node.js in the sandbox")                                                                                                                                                                                                                                                                                                        |
+| Sandbox restart kills processes        | After sandbox restarts, all user processes (nginx, Node.js, Python servers) are stopped. Re-run startup commands and verify ports are listening before proceeding.                                                                                                                                                                                                                                                                                                    |
+| Cross-platform binaries incompatible   | The sandbox runs Linux. Native binaries built on Windows/macOS (e.g., Prisma client, `node_modules/.prisma/`, platform-specific native addons) will not execute. Always install and build dependencies inside the sandbox, not locally.                                                                                                                                                                                                                               |
+| Cross-platform needs QR code           | When `detect_framework` returns `type: "cross-platform"` (Taro, uni-app), generating a QR code image is **mandatory** — the deployment is incomplete without it. Check the Deployment Completion Check table in Step 7.                                                                                                                                                                                                                                               |
+| Build fails do NOT auto-fix            | When a build exits with non-zero exit code, STOP and present the error + fix options to the developer. Do not silently retry, modify configs, or change source files without explicit approval. See 4c-aux.                                                                                                                                                                                                                                                           |
+| Tunnel description: no spaces/hyphens  | `devbridge create <name> -d 'hello world'` fails with `Invalid tunnel description: only Chinese characters, digits, letters, length 0-64`. The message is misleading — the real rule is no spaces/hyphens. Omit `-d` or use bare letters/digits.                                                                                                                                                                                                                      |
+| Use `host`, never `connect`            | `devbridge connect` is the sender side (for on-prem machines dialing out). For public preview it loops `Connection failed, retrying...` forever with no hint. Always use `devbridge host <tunnelId> -p <port>`.                                                                                                                                                                                                                                                       |
+| Port drift detaches the tunnel         | When deploy_nginx auto-increments to a free port, an existing tunnel stays bound to the old port — re-bind: `devbridge port create <tunnelId> -p <newPort> --protocol http -a` and restart `devbridge host`. deploy_nginx emits a warning when this happens.                                                                                                                                                                                                          |
 
 ## Node.js in the sandbox
 

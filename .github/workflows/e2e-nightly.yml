@@ -1,10 +1,10 @@
 name: e2e-nightly
 
-# Agent-level E2E suite (test/e2e/): a real opencode run with a real LLM
-# drives the tarball-installed devkit against the fake Huawei Cloud
-# boundary. Real-LLM cost and latency keep it out of npm test and out of
-# the REQUIRED PR gate; the trigger lanes below are accepted-cost
-# exceptions, not required checks.
+# Agent-level E2E suite (test/e2e/): a real agent run with a real LLM drives
+# the tarball-installed devkit against the fake Huawei Cloud boundary, as a
+# two-driver matrix (opencode and codex legs, E2E_AGENT-keyed). Real-LLM cost
+# and latency keep it out of npm test and out of the REQUIRED PR gate; the
+# trigger lanes below are accepted-cost exceptions, not required checks.
 #
 # Lanes (this file must stay byte-identical on main and v2 — the
 # drift-guard step fails the run on skew once both copies exist; a
@@ -12,7 +12,7 @@ name: e2e-nightly
 #   - nightly cron: schedule events only fire from the default branch,
 #     so main's registered copy owns the cron and checks out v2 — the
 #     suite's bloodline (main itself carries no test/e2e).
-#   - push to v2: full suite on every direct push (accepted LLM cost).
+#   - push to v2: full matrix on every direct push (accepted LLM cost).
 #   - PR into v2, same-repo only: opt-in via the `run-e2e` label; commits
 #     pushed to a labeled PR (synchronize) re-run it automatically. Fork
 #     PRs skip — they cannot see E2E_TEST_MODEL_APIKEY.
@@ -20,9 +20,15 @@ name: e2e-nightly
 #
 # The only required repository setting is the secret E2E_TEST_MODEL_APIKEY
 # (a dedicated E2E key, never a personal auth file); provider/model/baseURL
-# default to the committed values (mirroring test/e2e/.env's non-secret
-# model config) and stay overridable via the E2E_TEST_PROVIDER_ID /
-# E2E_TEST_PROVIDER_BASEURL / E2E_TEST_MODEL vars.
+# default to the committed values (an OpenAI-compatible gateway that serves
+# BOTH wire shapes the legs need: chat for opencode, responses for codex —
+# codex 0.162.1 removed the chat wire, measured) and stay overridable via
+# the E2E_TEST_PROVIDER_ID / E2E_TEST_PROVIDER_BASEURL / E2E_TEST_MODEL
+# vars. A provider swap must keep the responses route or the codex leg
+# fails at its first model call.
+#
+# The @openai/codex pin is shared with ci.yml's real-agent lane — an
+# upgrade is a two-file event.
 #
 # End of life: 'v2' is hardcoded below. When v2 retires (merged and
 # deleted), the trunk checkout fails loud — retarget it in the same
@@ -48,18 +54,30 @@ jobs:
       ((github.event.action == 'synchronize' || github.event.label.name == 'run-e2e') &&
       contains(github.event.pull_request.labels.*.name, 'run-e2e') &&
       github.event.pull_request.head.repo.full_name == github.repository)
+    strategy:
+      # A red leg must not cancel its sibling: the surviving report is the
+      # nightly's triage input.
+      fail-fast: false
+      matrix:
+        agent: [opencode, codex]
     runs-on: ubuntu-24.04
     # Job-level on purpose: a run whose `if` is false (any other label, an
     # unlabeled synchronize) must never join the group — workflow-level
     # cancel-in-progress would cancel the in-flight suite before the job
-    # `if` is evaluated. Trunk lanes (push/schedule/dispatch) serialize in
-    # one group, newest wins; each PR lane is independent.
+    # `if` is evaluated. Trunk lanes (push/schedule/dispatch) serialize per
+    # agent leg, newest wins; each PR lane is independent per leg.
     concurrency:
-      group: ${{ github.event_name == 'pull_request' && format('e2e-pr-{0}', github.event.pull_request.number) || 'e2e-trunk' }}
+      group: ${{ github.event_name == 'pull_request' && format('e2e-pr-{0}-{1}', github.event.pull_request.number, matrix.agent) || format('e2e-trunk-{0}', matrix.agent) }}
       cancel-in-progress: true
-    # 31 cases, attempts cap 2, per-attempt budget caps sum to 147 min
-    # single-pass / 294 min worst case, plus npm ci + npm pack + install.
-    timeout-minutes: 330
+    # Per leg: 33 cases for opencode, 31 cases plus 2 recorded skips for
+    # codex (the installPacks channel has no codex write path), attempts
+    # cap 2, per-attempt budget caps sum to 155 min single-pass / 310 min
+    # worst case for opencode (147/294 for codex), plus the vendor
+    # challenge's one extra model turn per case-session (worst-case
+    # ~= +20 min), npm ci + npm pack + install, and per-attempt
+    # install/teardown cycles. The codex leg carries its own per-turn
+    # overhead (~18.6k base tokens per model turn).
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -85,8 +103,8 @@ jobs:
       - name: Preflight E2E configuration
         env:
           E2E_APIKEY: ${{ secrets.E2E_TEST_MODEL_APIKEY }}
-          E2E_PROVIDER_ID: ${{ vars.E2E_TEST_PROVIDER_ID || 'maas' }}
-          E2E_PROVIDER_BASEURL: ${{ vars.E2E_TEST_PROVIDER_BASEURL || 'https://api.modelarts-maas.com/openai/v1' }}
+          E2E_PROVIDER_ID: ${{ vars.E2E_TEST_PROVIDER_ID || 'opengw' }}
+          E2E_PROVIDER_BASEURL: ${{ vars.E2E_TEST_PROVIDER_BASEURL || 'https://opengw.clouddeveloper.club/v1' }}
           E2E_MODEL: ${{ vars.E2E_TEST_MODEL || 'glm-5.2' }}
         run: |
           if [ -z "$E2E_APIKEY" ]; then
@@ -94,26 +112,45 @@ jobs:
             exit 1
           fi
           echo "E2E configuration present (provider: $E2E_PROVIDER_ID, model: $E2E_MODEL)"
-      - name: Install opencode (pinned)
-        run: npm install -g opencode-ai@1.19.0
-      - name: Run agent-level E2E suite
+      - name: Install agent CLI (pinned)
+        # Per-leg install: a registry failure on one package must not take
+        # the other leg's report down with it. The pins are shared with
+        # ci.yml's real-agent lane — an upgrade is a two-file event.
+        run: |
+          if [ "${{ matrix.agent }}" = "opencode" ]; then
+            npm install -g --no-audit --no-fund opencode-ai@1.19.0
+          else
+            npm install -g --no-audit --no-fund @openai/codex@0.162.1
+          fi
+      - name: Run agent-level E2E suite (${{ matrix.agent }})
         env:
           E2E_ENABLE: '1'
+          E2E_AGENT: ${{ matrix.agent }}
           E2E_APIKEY: ${{ secrets.E2E_TEST_MODEL_APIKEY }}
-          E2E_PROVIDER_ID: ${{ vars.E2E_TEST_PROVIDER_ID || 'maas' }}
-          E2E_PROVIDER_BASEURL: ${{ vars.E2E_TEST_PROVIDER_BASEURL || 'https://api.modelarts-maas.com/openai/v1' }}
+          E2E_PROVIDER_ID: ${{ vars.E2E_TEST_PROVIDER_ID || 'opengw' }}
+          E2E_PROVIDER_BASEURL: ${{ vars.E2E_TEST_PROVIDER_BASEURL || 'https://opengw.clouddeveloper.club/v1' }}
           E2E_MODEL: ${{ vars.E2E_TEST_MODEL || 'glm-5.2' }}
         # Every lane resolves to a ref that carries the suite (v2 is the
         # suite's bloodline; PR merge refs sit on it) — a missing test:e2e
         # here means someone broke it, so fail loud instead of a green
-        # no-op.
+        # no-op. The driver echo grep makes an E2E_AGENT wiring miss fail
+        # loud too: without it, a miss silently runs this leg as a green
+        # duplicate of the other driver.
         run: |
           grep -q '"test:e2e"' package.json || { echo "::error::test:e2e is not defined on the checked-out ref — the E2E lanes require the suite."; exit 1; }
-          npm run test:e2e
-      - name: Upload E2E report
+          set -o pipefail
+          npm run test:e2e 2>&1 | tee e2e-run.log
+          grep -q "\[runner\] driver ${{ matrix.agent }}" e2e-run.log || { echo "::error::driver wiring miss — the ${{ matrix.agent }} leg did not run the ${{ matrix.agent }} driver"; exit 1; }
+      - name: Upload E2E report (${{ matrix.agent }})
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-report
+          name: e2e-report-${{ matrix.agent }}
           path: .e2e-results/
+          # .e2e-results is a dot-directory; upload-artifact >= 4.4.0
+          # excludes hidden paths by default, which silently ate the
+          # suite's report (the "report that always ships" contract).
+          # Safe because the runner scrubs the whole serialized report
+          # with scrubSecrets before it is ever written.
+          include-hidden-files: true
           retention-days: 30

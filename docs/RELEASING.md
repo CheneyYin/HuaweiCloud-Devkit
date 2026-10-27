@@ -116,13 +116,16 @@ Steps:
    npm run smoke:agents
    ```
 
-7. Run the agent-level E2E suite (the only gate that exercises free-choice
-   skill-disclosure behavior, including the two `core-free-choice-*` cases;
-   needs `E2E_ENABLE=1` plus the gitignored `test/e2e/.env` model config and
-   the real agent CLIs on PATH — never part of `npm test` by policy):
+7. Run the agent-level E2E suite for BOTH drivers (the only gate that
+   exercises free-choice skill-disclosure behavior, including the two
+   `core-free-choice-*` cases; needs `E2E_ENABLE=1` plus the gitignored
+   `test/e2e/.env` model config and the real agent CLIs on PATH — never
+   part of `npm test` by policy). The provider must serve the responses
+   wire for the codex leg:
 
    ```powershell
    npm run test:e2e
+   $env:E2E_AGENT = 'codex'; try { npm run test:e2e } finally { Remove-Item Env:E2E_AGENT }
    ```
 
 8. Publish to the `next` tag:

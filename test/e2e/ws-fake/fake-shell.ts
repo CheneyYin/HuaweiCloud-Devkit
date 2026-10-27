@@ -84,7 +84,9 @@ const INTENT_TABLE: IntentRow[] = [
     // full text (benign script edits keep matching; semantic drift breaks
     // the parse pin instead). Answers the all-pass marker vocabulary.
     intent: 'deploy-check-script',
-    pattern: /^echo "=== DEPLOY CHECK ==="$/,
+    // #999: the data-disk PATH export rides the first line (a fresh one-shot
+    // shell cannot see /workspace/.local/bin otherwise); the echo follows.
+    pattern: /^export PATH="\/workspace\/.local\/bin:\$HOME\/\.huawei\/bin:\$PATH"; echo "=== DEPLOY CHECK ==="$/,
     run: () => ({ stdout: DEPLOY_CHECK_ALL_PASS }),
   },
   {
@@ -94,17 +96,36 @@ const INTENT_TABLE: IntentRow[] = [
     // generic `export-path` row or the probe would match it and answer
     // empty stdout (authMode '' → ok:false UNKNOWN, silently wrong).
     intent: 'devbridge-auth-probe',
-    pattern: /^export PATH="\$HOME\/\.huawei\/bin:\$PATH"$/,
+    pattern: /^export PATH="\/workspace\/.local\/bin:\$HOME\/\.huawei\/bin:\$PATH"$/,
     run: () => ({ stdout: DEVBRIDGE_AUTH_KEYRING_STDOUT }),
+  },
+  {
+    // exposeTunnel's #998 version read-back one-shot: the data-disk PATH export
+    // riding the same line as the DB_VERSION echo (the field grammar — the
+    // auth probe's $-anchored row cannot match it, and the generic export-path
+    // row would silently answer '').
+    intent: 'devbridge-version-probe',
+    pattern: /^export PATH="\/workspace\/.local\/bin:\$HOME\/\.huawei\/bin:\$PATH"; echo "DB_VERSION=/,
+    run: () => ({ stdout: 'DB_VERSION=0.2.2-release\n' }),
   },
   {
     // exposeTunnel's expose script AND its retry-cleanup blob — the latter
     // is a single ;-joined line whose prefix is the same pkill, so the
     // anchor must NOT be $-terminated. Synthesizes a healthy tunnel
-    // answer for both callers.
+    // answer for both callers. #999: the export rides the same first line as
+    // the pkill (a leading standalone export would collide with the auth
+    // probe's $-anchored row — first-line recognition cannot tell them apart).
     intent: 'devbridge-expose-script',
-    pattern: /^pkill -f "devbridge host" 2>\/dev\/null \|\| true/,
+    pattern: /^export PATH="\/workspace\/\.local\/bin:\$HOME\/\.huawei\/bin:\$PATH"; pkill -f "devbridge host"/,
     run: () => ({ stdout: DEVBRIDGE_EXPOSE_OK_STDOUT }),
+  },
+  {
+    // exposeTunnel's independent re-verify (#919): a fresh-session GET of the
+    // exposed URL, emitted by buildDevbridgeVerifyScript. Synthesizes the
+    // healthy persistent answer (HTTP 200, body is NOT "tunnel not found").
+    intent: 'devbridge-verify-script',
+    pattern: /^VERIFY_CODE=\$\(curl -s --noproxy '\*' -o \/tmp\/devbridge_verify_body /,
+    run: () => ({ stdout: DEVBRIDGE_VERIFY_OK_STDOUT }),
   },
   {
     intent: 'echo',
@@ -124,7 +145,21 @@ const INTENT_TABLE: IntentRow[] = [
     run: () => ({ stdout: '' }),
   },
   {
-    // upload_file reset: `rm -f "<tmp>"` (double-quoted path).
+    // upload_file reset (#953): `mkdir -p "$(dirname "<remote>")" && rm -f "<tmp>"`
+    // — the compound form since the remote-parent-mkdir fix; the `rm` intent
+    // is preserved so the case expectation and the fs.delete semantics carry
+    // over unchanged.
+    intent: 'rm',
+    pattern: /^mkdir -p "\$\(dirname "[^"]*"\)" && rm -f "([^"]+)"$/,
+    run: (m, fs) => {
+      fs.delete(m[1]!);
+      return { stdout: '' };
+    },
+  },
+  {
+    // upload_file reset, pre-#953 shape: bare `rm -f "<tmp>"`. Kept so
+    // hand-written older scripts still recognize (the protocol pin feeds
+    // both shapes).
     intent: 'rm',
     pattern: /^rm -f "([^"]+)"$/,
     run: (m, fs) => {
@@ -191,12 +226,20 @@ const INTENT_TABLE: IntentRow[] = [
     },
   },
   {
-    // The resolve-script family (multi-line blobs): upload_project's
-    // permission fixup opens with REAL_PATH=, deployNginx's config-write
-    // blob opens with REAL_PROJECT= — both are readlink resolvers.
+    // upload_project's permission fixup opens with REAL_PATH= — a readlink
+    // resolver, no output expected.
     intent: 'resolve-real-path',
-    pattern: /^REAL_(PATH|PROJECT)=\$\(readlink .*$/,
+    pattern: /^REAL_PATH=\$\(readlink .*$/,
     run: () => ({ stdout: '' }),
+  },
+  {
+    // deployNginx's config-write blob (resolve script + tee heredoc + embedded
+    // reload + chmod fixups + the A1 (#935) verify block, one exec) opens with
+    // REAL_PROJECT=. The verify block's success markers must be synthesized —
+    // deployNginx's verdict reads them (DB_NGINX_T=PASS, no CONFIG_MISSING).
+    intent: 'deploy-nginx-config-write',
+    pattern: /^REAL_PROJECT=\$\(readlink .*$/,
+    run: () => ({ stdout: 'DB_NGINX_T=PASS\n' }),
   },
   {
     // Agent-initiated verification (`ls /workspace/myproject` after an
@@ -252,11 +295,11 @@ export function runShellCommand(blob: string, fs: FakeFs): ShellResult {
 // through the product's parseDeployCheckOutput (complete, 6/6, publicUrl),
 // and the product's script must keep emitting this grammar.
 export const DEPLOY_CHECK_ALL_PASS = [
-  'nginx_serving:PASS (port 8080)',
+  'nginx_serving:PASS (port 8080, HTTP 200)',
   'output_dir:PASS',
   'content_verified:PASS',
   'devbridge_tunnel:PASS',
-  'tunnel_url_accessible:PASS',
+  'tunnel_url_accessible:PASS (https://e2e-tunnel-1-8080.devbridge-s2.hwtunnel.com)',
   'qr_code:PASS',
   'SCORE:6/6',
   'TUNNEL_URL:https://e2e-tunnel-1-8080.devbridge-s2.hwtunnel.com',
@@ -273,8 +316,15 @@ export const DEVBRIDGE_EXPOSE_OK_STDOUT = [
   'Tunnel URL: https://e2e-tunnel-1-8080.devbridge-s2.hwtunnel.com',
   'DB_TUNNEL_URL=https://e2e-tunnel-1-8080.devbridge-s2.hwtunnel.com',
   'DB_HTTP_CODE=200',
+  'DB_EXPIRY_HOURS=72',
+  'DB_TUNNEL_BODY=',
   'DB_QUOTA_ERROR=0',
+  'DB_MIGRATION=0',
 ].join('\n');
+
+// The #919 re-verify vocabulary (buildDevbridgeVerifyScript's output grammar) —
+// pinned both-ways through parseDevbridgeVerifyOutput the same way.
+export const DEVBRIDGE_VERIFY_OK_STDOUT = ['DB_VERIFY_HTTP_CODE=200', 'DB_VERIFY_NOT_FOUND=0'].join('\n');
 
 // The client's ready command embeds the nonce as the printf argument
 // `'__WS_EXEC_READY_' '<nonce>__'`.

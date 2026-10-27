@@ -7,10 +7,18 @@
 // persisted in a marker file so a non-standard directory (entered via prompt,
 // whose OFFICE_CLAW_CONFIG_ROOT env does not survive across processes) is
 // still found by later uninstall/update runs.
+//
+// The capabilities-dir path family (the env/marker/skip ordering and the
+// derived file/dir helpers) lives here too — the leaf position below the
+// agents/officeace* family, so the sqlite and registry siblings can resolve
+// paths without a sibling cycle. auth/agent-registration.ts deliberately
+// keeps its own smaller private copy of this resolution: it is the MCP
+// graph's read-side probe and must stay lazily loaded there.
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, platform } from 'node:os';
+import { spawnSync } from 'node:child_process';
 
 function markerPath(): string {
   return join(process.env.HUAWEICLOUD_HOME || homedir(), '.config', 'huaweicloud', 'devkit-officeace-root.json');
@@ -54,4 +62,85 @@ export function writeOfficeaceRootMarker(root: string): void {
   } catch {
     // best-effort: a missing marker just means later runs re-probe for the OfficeAce root
   }
+}
+
+// The Windows-side system probe shared by the installer (setup-cli.ts) and
+// the MCP-side detection (auth/agent-registration.ts): the OfficeAce install
+// dir from the HKCU registry. The caller owns the root-usable predicate and
+// the env/marker/skip ordering around the probe.
+export function readOfficeaceRegistryInstallDir(): string | null {
+  if (platform() !== 'win32') return null;
+  try {
+    const r = spawnSync('reg', ['query', 'HKCU\\SOFTWARE\\OfficeAce\\OfficeAce', '/v', 'InstallDir'], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 5000,
+    });
+    if (r.status === 0) {
+      const m = r.stdout.match(/InstallDir\s+REG_SZ\s+(.+)/);
+      if (m) return m[1]!.trim();
+    }
+  } catch {
+    // best-effort probe: reg query failure just means no registry install dir
+  }
+  return null;
+}
+
+// Registry install dir plus the standard Program Files bases, parameterized
+// by the caller's root-usable predicate — the installer accepts any OfficeAce
+// evidence (isUsableOfficeaceRoot), agent-registration requires
+// capabilities.json. Order (registry before Program Files) matches both
+// call sites' original inline probes.
+export function probeOfficeaceSystemDirs(rootUsable: (dir: string) => boolean): string | null {
+  const regDir = readOfficeaceRegistryInstallDir();
+  if (regDir) {
+    const dir = join(regDir, '.office-claw');
+    if (rootUsable(dir)) return dir;
+  }
+  if (platform() === 'win32') {
+    const bases: Array<string | undefined> = [process.env.ProgramFiles, 'C:\\Program Files', 'D:\\Program Files'];
+    if (process.env.LOCALAPPDATA) bases.push(join(process.env.LOCALAPPDATA, 'Programs'));
+    for (const base of bases) {
+      if (!base) continue;
+      const dir = join(base, 'OfficeAce', '.office-claw');
+      if (rootUsable(dir)) return dir;
+    }
+  }
+  return null;
+}
+
+// ── The capabilities-dir path family ──
+// The env/marker/skip ordering (moved from agents/officeace.ts so the
+// sqlite/registry siblings resolve paths through this leaf without a sibling
+// cycle): OFFICE_CLAW_CONFIG_ROOT, then the persisted marker, then — unless
+// hermetic runs opt out (#654) — the Windows system probes.
+
+export function officeaceCapabilitiesDir(): string | null {
+  const configRoot = process.env.OFFICE_CLAW_CONFIG_ROOT;
+  // isUsableOfficeaceRoot rejects empty/undefined roots, so the truthiness guard
+  // preserves the original call's outcome for a missing env var.
+  if (configRoot && isUsableOfficeaceRoot(configRoot)) return configRoot;
+  const markerRoot = readOfficeaceRootMarker();
+  if (markerRoot) return markerRoot;
+  // Skip system probes (registry / Program Files) so automated environments can
+  // keep OfficeAce detection hermetic — those probes can leak a real OfficeAce
+  // install into a sandboxed/fake HOME (#654).
+  if (process.env.HUAWEICLOUD_DEVKIT_SKIP_OFFICEACE_DETECT === '1') return null;
+  return probeOfficeaceSystemDirs(isUsableOfficeaceRoot);
+}
+
+export function officeaceCapabilitiesDirSafe(): string {
+  return officeaceCapabilitiesDir() || join(homedir(), '.office-claw');
+}
+
+export function officeaceCapabilitiesFile(): string {
+  return join(officeaceCapabilitiesDirSafe(), 'capabilities.json');
+}
+
+export function officeaceSkillsDir(): string {
+  return join(officeaceCapabilitiesDirSafe(), 'skills');
+}
+
+export function officeacePluginsDir(): string {
+  return join(officeaceCapabilitiesDirSafe(), 'huaweicloud-plugins');
 }

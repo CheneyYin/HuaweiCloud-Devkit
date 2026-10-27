@@ -1,4 +1,5 @@
-import { getProxyDispatcher } from './proxy/proxy-agent.ts';
+import { fetchWithProxy } from './proxy/proxy-agent.ts';
+import { asRecord } from './lib/as-record.ts';
 
 const INDEX_URL =
   'https://gitcode.com/api/v5/repos/2501_91318609/skills-for-index/contents/skills-index/index.json?ref=main';
@@ -80,10 +81,6 @@ interface MarketplaceSearchResult {
 let cachedIndex: MarketIndex | null = null;
 let cachedCnEnMap: Record<string, string> | null = null;
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
 function toMarketSkill(value: unknown): MarketSkill {
   const raw = asRecord(value);
   return {
@@ -120,13 +117,10 @@ async function fetchJson(url: string, label = ''): Promise<unknown> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
   try {
-    const dispatcher = await getProxyDispatcher(url);
-    const fetchOpts: RequestInit & { dispatcher?: unknown } = {
+    const resp = await fetchWithProxy(url, {
       headers: { 'User-Agent': 'huaweicloud-devkit/1.0' },
       signal: controller.signal,
-    };
-    if (dispatcher) fetchOpts.dispatcher = dispatcher;
-    const resp = await fetch(url, fetchOpts);
+    });
     const data: unknown = await resp.json();
     const record = asRecord(data);
     if (record.encoding === 'base64' && typeof record.content === 'string' && record.content) {

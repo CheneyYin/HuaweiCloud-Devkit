@@ -1,13 +1,14 @@
 import { z } from 'zod';
 
 import { runHcloud, planHcloudCommand, type HcloudRunResult } from '../../hcloud-cli.ts';
-import { hcloudProbeNextStep, probeHcloud, type ProbeHcloudOptions } from '../../hcloud-probe.ts';
+import { hcloudProbeNextStep, hcloudProbeRaw, probeHcloud, type ProbeHcloudOptions } from '../../hcloud-probe.ts';
 import { redactSecrets } from '../../safety-policy.ts';
 import { asText } from '../../lib/as-text.ts';
-import { consumeApprovalToken, hashArgs } from '../../lib/approval-tokens.ts';
-import { numericArg } from '../../lib/tool-schema-parts.ts';
+import { consumeApprovalToken, hashArgs, inspectApprovalToken } from '../../lib/approval-tokens.ts';
+import { numericArg, vendorConfirmed } from '../../lib/tool-schema-parts.ts';
 import type { PackToolDefinition, LooseToolSchema } from '../../lib/pack-types.ts';
 import type { CallToolOptions, ToolArgs } from '../../tools.ts';
+import { asRecord } from '../../lib/as-record.ts';
 
 // The seven KooCLI-coupled execution tools sunk from core (src/tools.ts):
 // version/profile inspection, plan/read-only/approved command execution,
@@ -19,10 +20,6 @@ import type { CallToolOptions, ToolArgs } from '../../tools.ts';
 // configuration trimmed of this pack has no devkit-side hcloud CLI write
 // path, and the gateway face, when enabled, is a separate delegated write
 // path.
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
 
 export async function runVersionCheck(options: ProbeHcloudOptions = {}) {
   const result = probeHcloud(options);
@@ -36,6 +33,8 @@ export async function runVersionCheck(options: ProbeHcloudOptions = {}) {
     installedVersion: result.installedVersion || undefined,
     versionMismatch: Boolean(result.versionMismatch),
     nextStep: hcloudProbeNextStep(result),
+    // #900: verbose English guidance lives only in this side-channel.
+    raw: hcloudProbeRaw(result),
     authHint:
       'If hcloud is installed but commands fail with "配置文件中不存在配置项", run `npx huaweicloud-devkit auth init` outside agent chat to configure credentials.',
   };
@@ -94,10 +93,80 @@ const SERVICE_EXAMPLES: Record<string, { list: string; create: string; show: str
   DCS: { list: 'DCS ListInstances', create: 'DCS CreateInstance', show: 'DCS ShowInstance' },
 };
 
+// DMS and DEW are Huawei Cloud aggregate service names that do not exist as
+// single KooCLI service identifiers. Each maps to real KooCLI sub-services.
+const AGGREGATE_SERVICE_MAP: Record<string, string[]> = {
+  DMS: ['Kafka', 'RabbitMQ', 'RocketMQ'],
+  DEW: ['KMS', 'CSMS'],
+};
+
+// Identity-class notes per service. BSS leads: its operations are split between
+// Customer-level APIs (work with a normal IAM user) and Partner-level APIs
+// (only valid for a partner/dealer identity). Calling a Partner-level API with a
+// customer credential returns APIGW.0301 even when AK/SK are perfectly valid —
+// the common false-positive diagnosis is "cli-domain-id missing".
+const SERVICE_IDENTITY_NOTES: Record<string, Array<{ identity: string; apis: string[]; note: string }>> = {
+  BSS: [
+    {
+      identity: 'Customer-level (normal IAM user)',
+      apis: [
+        'ShowCustomerAccountBalances',
+        'ListCustomerBillsFeeRecords',
+        'ListCustomerCouponChangeRecords',
+        'ListResourceUsage',
+        'ListCosts',
+      ],
+      note: 'Work with a normal IAM user that has BSS Administrator or Finance role.',
+    },
+    {
+      identity: 'Partner-level (partner/dealer only)',
+      apis: ['ListQuotaCoupons', 'ListSubCustomerCoupons', 'ListSubCustomerBillDetail'],
+      note: 'APIGW.0301 here means the caller identity is not a partner — NOT bad AK/SK or a missing cli-domain-id.',
+    },
+  ],
+};
+
 async function listOperations(service: string | undefined, options: { timeoutMs?: number } = {}) {
   const serviceName = String(service || '').trim();
   if (!/^[A-Za-z][A-Za-z0-9-]{1,63}$/.test(serviceName)) {
     throw new Error('service must be a KooCLI service name such as ECS, VPC, IMS, OBS, RDS, or CDN.');
+  }
+  const upperName = serviceName.toUpperCase();
+  const subServices = AGGREGATE_SERVICE_MAP[upperName];
+  if (subServices && subServices.length) {
+    // Aggregate fan-out: return each sub-service's operations instead of failing
+    // on the aggregate name directly (DMS/DEW do not exist as KooCLI services).
+    const results = await Promise.all(
+      subServices.map(async (sub) => {
+        let result = await runHcloud([sub, '--help'], {
+          timeoutMs: options.timeoutMs,
+          maxRetries: 0,
+        });
+        if (!result.ok) {
+          result = await runHcloud([sub, 'help'], {
+            timeoutMs: options.timeoutMs,
+            maxRetries: 0,
+          });
+        }
+        return {
+          subService: sub,
+          command: `hcloud ${sub} --help`,
+          examples: SERVICE_EXAMPLES[sub.toUpperCase()] || {
+            note: `No cached examples for ${sub}. Use the help text above to discover available operations.`,
+          },
+          result,
+        };
+      }),
+    );
+    return {
+      service: serviceName,
+      aggregate: true,
+      aggregatedFrom: subServices,
+      selectionRule:
+        'DMS/DEW are aggregate service names. Use each sub-service help text below to select the exact KooCLI operation name.',
+      identityNotes: SERVICE_IDENTITY_NOTES[upperName] || null,
+      subServices: results,
+    };
   }
   const isObs = /^obs$/i.test(serviceName);
   const svc = isObs ? 'obs' : serviceName;
@@ -115,8 +184,10 @@ async function listOperations(service: string | undefined, options: { timeoutMs?
   return {
     service: serviceName,
     command: isObs ? 'hcloud obs help' : `hcloud ${svc} --help`,
-    selectionRule: 'Use this help text to select the exact KooCLI operation name before planning any service command.',
-    examples: SERVICE_EXAMPLES[serviceName.toUpperCase()] || {
+    selectionRule:
+      'Use this help text to select the exact KooCLI operation name before planning any service command. After selecting an operation, run "hcloud <Service> <Operation> --help" to confirm exact parameter names before constructing the command.',
+    identityNotes: SERVICE_IDENTITY_NOTES[upperName] || null,
+    examples: SERVICE_EXAMPLES[upperName] || {
       note: `No cached examples for ${serviceName}. Use the help text above to discover available operations.`,
     },
     result,
@@ -128,9 +199,33 @@ async function runApprovedCommand(args: ToolArgs = {}) {
     throw new Error('approvedByUser must be true after explicit user approval for this exact command.');
   }
   const token = String(args.approvalToken || '');
+
+  // D4-24 precise JSON contract (#745): expired and already-consumed tokens
+  // return a structured result instead of throwing a generic Error string, so
+  // clients can machine-assert the two non-success states.
+  const inspection = inspectApprovalToken(token);
+  if (inspection.state === 'already_consumed') {
+    return { status: 'ok', outcome: 'already_processed' };
+  }
+  if (inspection.state === 'expired') {
+    return { status: 'rejected', code: 'CONFIRM_TOKEN_EXPIRED' };
+  }
+  if (inspection.state === 'not_found') {
+    // A token that was never created (typo / unknown / pruned beyond the
+    // tombstone window) is still a rejection, but carries no expired/already
+    // semantics — surface a distinct code so clients can tell the cases apart.
+    return { status: 'rejected', code: 'CONFIRM_TOKEN_NOT_FOUND' };
+  }
+
   const stored = consumeApprovalToken(token);
   if (!stored) {
-    throw new Error('Invalid or expired approval token. Please re-plan the command.');
+    // Defensive: inspectApprovalToken said 'valid' but consume returned null.
+    // The only path is the O_EXCL claim losing a race — another consumer is
+    // spending this exact token right now — so classify as already_consumed
+    // (never a misleading success, never a false not_found).
+    const recheck = inspectApprovalToken(token);
+    if (recheck.state === 'expired') return { status: 'rejected', code: 'CONFIRM_TOKEN_EXPIRED' };
+    return { status: 'ok', outcome: 'already_processed' };
   }
   const providedArgs = Array.isArray(args.args) ? args.args.map(String) : [];
   if (hashArgs(providedArgs) !== stored.argsHash) {
@@ -236,22 +331,26 @@ async function handleListRegions(_args: ToolArgs = {}, _opts: CallToolOptions = 
   return listRegions();
 }
 
-const checkCliSchema = z.looseObject({});
+const checkCliSchema = z.looseObject({ vendorConfirmed });
 const planCliCommandSchema = z.looseObject({
+  vendorConfirmed,
   args: z.array(z.string()).describe('hcloud arguments, excluding the hcloud executable.'),
   allowWrites: z.boolean().optional().describe('Only true after explicit user approval for this exact operation.'),
 });
 const runReadonlyCommandSchema = z.looseObject({
+  vendorConfirmed,
   args: z.array(z.string()),
   timeoutMs: numericArg.optional().describe('Optional timeout in milliseconds. Defaults to 60000.'),
   maxRetries: numericArg.optional().describe('Optional retry count for transient network errors. Defaults to 1.'),
   cwd: z.string().optional().describe('Optional working directory for the hcloud process.'),
 });
 const listOperationsSchema = z.looseObject({
+  vendorConfirmed,
   service: z.string().describe('KooCLI service name, such as ECS, VPC, IMS, OBS, RDS, or CDN.'),
   timeoutMs: numericArg.optional().describe('Optional timeout in milliseconds. Defaults to 60000.'),
 });
 const runApprovedCommandSchema = z.looseObject({
+  vendorConfirmed,
   args: z.array(z.string()).describe('hcloud arguments, excluding the hcloud executable.'),
   approvalToken: z.string().describe('The approvalToken returned by huaweicloud_plan_cli_command.'),
   approvedByUser: z.boolean().describe('Must be true only after the user explicitly approves this exact command.'),
@@ -260,54 +359,58 @@ const runApprovedCommandSchema = z.looseObject({
   cwd: z.string().optional().describe('Optional working directory for the hcloud process.'),
 });
 const showProfileRedactedSchema = z.looseObject({
+  vendorConfirmed,
   profile: z.string().optional().describe('Optional KooCLI profile name.'),
 });
-const listRegionsSchema = z.looseObject({});
+const listRegionsSchema = z.looseObject({ vendorConfirmed });
 
 export const HUAWEICLOUD_CLI_TOOLS = [
   {
     name: 'huaweicloud_check_cli',
     description:
-      'Check whether Huawei Cloud KooCLI hcloud is installed and whether its version matches the plugin paired version. Returns redacted output.',
+      'Check whether Huawei Cloud KooCLI hcloud is installed and whether its version matches the plugin paired version. Returns redacted output. Vendor-gated (vendorConfirmed): call only when the vendor is established — see the vendorConfirmed parameter description; when unknown, ask which cloud the user means first.',
     schema: checkCliSchema,
     handler: handleCheckCli,
   },
   {
     name: 'huaweicloud_plan_cli_command',
-    description: 'Classify and plan a Huawei Cloud hcloud command without executing it.',
+    description:
+      'Classify and plan a Huawei Cloud hcloud command without executing it. Vendor-gated (vendorConfirmed): call only when the vendor is established — see the vendorConfirmed parameter description; when unknown, ask which cloud the user means first.',
     schema: planCliCommandSchema,
     handler: handlePlanCliCommand,
   },
   {
     name: 'huaweicloud_run_readonly_command',
-    description: 'Run a read-only hcloud command through the toolkit safety policy and redact output.',
+    description:
+      'Run a read-only hcloud command through the toolkit safety policy and redact output. Vendor-gated (vendorConfirmed): call only when the vendor is established — see the vendorConfirmed parameter description; when unknown, ask which cloud the user means first.',
     schema: runReadonlyCommandSchema,
     handler: handleRunReadonlyCommand,
   },
   {
     name: 'huaweicloud_list_operations',
     description:
-      'List KooCLI operations for a Huawei Cloud service by running local/read-only hcloud <Service> --help.',
+      'List KooCLI operations for a Huawei Cloud service by running local/read-only hcloud <Service> --help. Vendor-gated (vendorConfirmed): call only when the vendor is established — see the vendorConfirmed parameter description; when unknown, ask which cloud the user means first.',
     schema: listOperationsSchema,
     handler: handleListOperations,
   },
   {
     name: 'huaweicloud_run_approved_command',
     description:
-      'Run a write-capable hcloud command only after the exact command has been shown and explicitly approved by the user.',
+      'Run a write-capable hcloud command only after the exact command has been shown and explicitly approved by the user. Vendor-gated (vendorConfirmed): call only when the vendor is established — see the vendorConfirmed parameter description; when unknown, ask which cloud the user means first.',
     schema: runApprovedCommandSchema,
     handler: handleRunApprovedCommand,
   },
   {
     name: 'huaweicloud_show_profile_redacted',
-    description: 'Inspect a KooCLI profile through hcloud configure show and return only redacted output.',
+    description:
+      'Inspect a KooCLI profile through hcloud configure show and return only redacted output. Vendor-gated (vendorConfirmed): call only when the vendor is established — see the vendorConfirmed parameter description; when unknown, ask which cloud the user means first.',
     schema: showProfileRedactedSchema,
     handler: handleShowProfileRedacted,
   },
   {
     name: 'huaweicloud_list_regions',
     description:
-      'List available Huawei Cloud regions. Returns region IDs, display names, and endpoints. Use when the agent needs to discover available regions before creating resources.',
+      'List available Huawei Cloud regions. Returns region IDs, display names, and endpoints. Use when the agent needs to discover available regions before creating resources. Vendor-gated (vendorConfirmed): call only when the vendor is established — see the vendorConfirmed parameter description; when unknown, ask which cloud the user means first.',
     schema: listRegionsSchema,
     handler: handleListRegions,
   },

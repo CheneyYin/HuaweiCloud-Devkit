@@ -26,7 +26,17 @@ export const STRIP_ENV_KEYS: readonly string[] = [
   'HUAWEICLOUD_REGION',
   'HCLOUD_CONFIG_PATH',
   'HCLOUD_OBS_CONFIG_PATH',
+  // Ambient agent-home overrides (real-agents sandboxEnv precedent): a
+  // host value would redirect the installer, the spawned server, or the
+  // opencode config root out of the throwaway home.
   'DSH_HOME',
+  'ATOMCODE_HOME',
+  'HERMES_HOME',
+  'HUAWEICLOUD_DEVKIT_HOME',
+  'OFFICE_CLAW_CONFIG_ROOT',
+  'OPENCODE_CONFIG_DIR',
+  'OPENCODE_CONFIG',
+  'OPENCODE_TEST_HOME',
   // Pack posture rides the install --packs channel; env must stay unset so
   // the runner controls the only delivery path per case.
   'DEVKIT_PACKS',
@@ -59,10 +69,10 @@ export const RELAXABLE_FIXED_KEYS = ['HUAWEICLOUD_DEVKIT_SKIP_UPDATE'] as const;
 export type RelaxableFixedKey = (typeof RELAXABLE_FIXED_KEYS)[number];
 
 // The cross-platform home relocation recipe (cross-platform-install.test.ts
-// makeEnv precedent) plus XDG relocation: the agent (opencode) resolves its
-// config, data, state, and cache from XDG_* when set — pointing all four
-// inside the throwaway home keeps the session hermetic without relying on
-// the host having them unset.
+// makeEnv precedent) plus XDG relocation and CODEX_HOME: opencode resolves
+// its config, data, state, and cache from XDG_* when set, and codex resolves
+// its whole home from CODEX_HOME — pointing them inside the throwaway home
+// keeps the session hermetic without relying on the host having them unset.
 export function homeOverrides(home: string): Record<string, string> {
   return {
     HOME: home,
@@ -74,6 +84,7 @@ export function homeOverrides(home: string): Record<string, string> {
     XDG_DATA_HOME: join(home, '.local', 'share'),
     XDG_STATE_HOME: join(home, '.local', 'state'),
     XDG_CACHE_HOME: join(home, '.cache'),
+    CODEX_HOME: join(home, '.codex'),
   };
 }
 
@@ -103,4 +114,18 @@ export function buildCaseEnv(input: BuildCaseEnvInput): NodeJS.ProcessEnv {
   Object.assign(env, FIXED_ENV_OVERRIDES);
   for (const key of input.relaxFixed ?? []) delete env[key];
   return env;
+}
+
+// Session-env secret values an agent could echo into its transcript
+// (printenv and friends). The report is an uploaded CI artifact, so the
+// known key values are replaced before anything is recorded or serialized.
+// Short values are skipped: scrubbing an 8-char-or-less string would mangle
+// ordinary transcript text.
+export function scrubSecrets(text: string): string {
+  let scrubbed = text;
+  for (const key of ['E2E_APIKEY', 'E2E_TEST_API_KEY']) {
+    const value = process.env[key];
+    if (value && value.length >= 8) scrubbed = scrubbed.replaceAll(value, '[redacted]');
+  }
+  return scrubbed;
 }

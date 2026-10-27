@@ -419,3 +419,105 @@ test('detectFramework handles non-web monorepo sub-apps gracefully', () => {
     cleanup(d);
   }
 });
+
+// ── main 1.1.9 detection additions ──────────────────────────────────────────
+
+test('detectFramework reads .cjs and .mts config spellings', () => {
+  for (const [config, expected] of [
+    ['next.config.cjs', 'Next.js'],
+    ['nuxt.config.cjs', 'Nuxt'],
+    ['nuxt.config.mts', 'Nuxt'],
+    ['docusaurus.config.cjs', 'Docusaurus'],
+    ['vite.config.cjs', 'Vite (React/Vue/Svelte)'],
+    ['vite.config.mts', 'Vite (React/Vue/Svelte)'],
+  ] as const) {
+    const d = tmpDir();
+    try {
+      writeJson(d, 'package.json', { name: 'cfg-app', dependencies: { some: 'dep' } });
+      touchFile(d, config);
+      const result = detectFramework(d);
+      assert.ok(result, `${config} must be detected`);
+      assert.equal(result!.framework, expected, `${config} -> ${expected}`);
+    } finally {
+      cleanup(d);
+    }
+  }
+});
+
+test('detectFramework: bare react + index.html follows main CRA heuristic (6-dep union)', () => {
+  // Main 1.1.9's block is the 6-dep union over public/index.html|index.html —
+  // a bare react dependency with an index.html reads as CRA there. The
+  // react-scripts-only tighten lives in the deps+src FALLBACK (no index.html
+  // case), which the TS-CRA test covers.
+  const d = tmpDir();
+  try {
+    writeJson(d, 'package.json', {
+      name: 'cdn-react',
+      dependencies: { react: '^18' },
+    });
+    touchFile(d, 'index.html');
+    const result = detectFramework(d);
+    assert.ok(result);
+    assert.equal(result!.framework, 'Create React App', 'main-parity: the 6-dep html heuristic');
+  } finally {
+    cleanup(d);
+  }
+});
+
+test('detectFramework deps+src fallback: vue deps + src/App.vue -> Vue CLI, svelte -> Vite', () => {
+  const vueDir = tmpDir();
+  try {
+    writeJson(vueDir, 'package.json', { name: 'vue-app', dependencies: { vue: '^3' } });
+    touchFile(vueDir, 'src/App.vue');
+    const vue = detectFramework(vueDir);
+    assert.ok(vue);
+    assert.equal(vue!.framework, 'Vue CLI');
+  } finally {
+    cleanup(vueDir);
+  }
+  const svelteDir = tmpDir();
+  try {
+    writeJson(svelteDir, 'package.json', { name: 'svelte-app', dependencies: { svelte: '^4' } });
+    touchFile(svelteDir, 'src/main.js');
+    const svelte = detectFramework(svelteDir);
+    assert.ok(svelte);
+    assert.equal(svelte!.framework, 'Vite (React/Vue/Svelte)');
+  } finally {
+    cleanup(svelteDir);
+  }
+});
+
+test('detectFramework detects a TypeScript CRA scaffold (src/index.tsx, no public/index.html)', () => {
+  // The stock create-react-app --template typescript layout: the deps+src
+  // fallback must recognize the .tsx entry (regression: the over-tightened
+  // first port returned null here).
+  const d = tmpDir();
+  try {
+    writeJson(d, 'package.json', {
+      name: 'cra-ts',
+      dependencies: { react: '^18', 'react-scripts': '^5' },
+    });
+    touchFile(d, 'src/index.tsx');
+    const result = detectFramework(d);
+    assert.ok(result);
+    assert.equal(result.framework, 'Create React App');
+    assert.equal(result.outputDir, 'build');
+  } finally {
+    cleanup(d);
+  }
+});
+
+test('detectFramework static check covers public/index.html and src/index.html (no deps)', () => {
+  for (const entry of ['public/index.html', 'src/index.html']) {
+    const d = tmpDir();
+    try {
+      writeJson(d, 'package.json', { name: 'bare-html' });
+      touchFile(d, entry);
+      const result = detectFramework(d);
+      assert.ok(result, `${entry} must be detected`);
+      assert.equal(result!.framework, 'Static Site');
+    } finally {
+      cleanup(d);
+    }
+  }
+});

@@ -204,7 +204,7 @@ export const sandboxCases: E2eCase[] = [
     // against the fake IAM before injecting via hdkitservice.
     id: 'sandbox-credentials-iam-validated',
     pack: 'sandbox',
-    prompt: '给沙箱工作区 dev_stage_id=ds-e2e-002 注入临时凭证(标准流程:先校验再注入),把注入结果告诉我。',
+    prompt: '给华为云沙箱工作区 dev_stage_id=ds-e2e-002 注入临时凭证(标准流程:先校验再注入),把注入结果告诉我。',
     fixtures: {
       home: {
         '.config/huaweicloud/credentials.json': S1_SEED,
@@ -315,6 +315,10 @@ export const wsSandboxCases: E2eCase[] = [
       { kind: 'toolCall', name: 'huaweicloud_sandbox_expose_tunnel', ok: true },
       { kind: 'ws', intent: 'devbridge-auth-probe', times: { min: 1, max: 1 } },
       { kind: 'ws', intent: 'devbridge-expose-script', times: { min: 1, max: 2 } },
+      // #919: a healthy expose is followed by the independent fresh-session
+      // re-verify of the URL (one tool call runs verify at most once; max 2 is
+      // slack, not a semantic claim).
+      { kind: 'ws', intent: 'devbridge-verify-script', times: { min: 1, max: 2 } },
     ],
     softExpect: [{ kind: 'agentSays', text: { any: ['devbridge-s2.hwtunnel.com', 'e2e-tunnel-1'] } }],
     budget: { timeoutMs: 420_000, attempts: 2 },
@@ -463,8 +467,9 @@ export const wsSandboxCases: E2eCase[] = [
       { kind: 'ws', intent: 'nginx-installed', times: { min: 1, max: 1 } },
       { kind: 'ws', intent: 'port-free', times: { min: 1, max: 2 } },
       // The config-write blob (resolve script + tee heredoc + embedded
-      // reload + chmod fixups, one exec) opens with REAL_PROJECT=.
-      { kind: 'ws', intent: 'resolve-real-path', times: { min: 1, max: 1 } },
+      // reload + chmod fixups + the A1 verify block, one exec) opens with
+      // REAL_PROJECT= — its own intent since the A1 (#935) split.
+      { kind: 'ws', intent: 'deploy-nginx-config-write', times: { min: 1, max: 1 } },
       { kind: 'ws', intent: 'devbridge-active', times: { min: 1, max: 1 } },
     ],
     softExpect: [{ kind: 'agentSays', text: { any: ['nginx', '8080', '配置'] } }],

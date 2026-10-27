@@ -19,12 +19,20 @@ import {
   DEPLOY_CHECK_ALL_PASS,
   DEVBRIDGE_AUTH_KEYRING_STDOUT,
   DEVBRIDGE_EXPOSE_OK_STDOUT,
+  DEVBRIDGE_VERIFY_OK_STDOUT,
   FakeFs,
 } from './e2e/ws-fake/fake-shell.ts';
-import { parseDeployCheckOutput } from '../plugins/huaweicloud-core/src/sandbox/session-manager.ts';
 import {
+  buildUploadResetCommand,
+  parseDeployCheckOutput,
+} from '../plugins/huaweicloud-core/src/sandbox/session-manager.ts';
+import {
+  buildDevbridgeAuthProbe,
+  buildDevbridgeExposeScript,
+  buildDevbridgeVerifyScript,
   parseDevbridgeAuthOutput,
   parseDevbridgeExposeOutput,
+  parseDevbridgeVerifyOutput,
 } from '../plugins/huaweicloud-core/src/sandbox/devbridge-tunnel.ts';
 
 // Golden pins for the hwlink wire protocol the E2E ws-fake shares with the
@@ -101,7 +109,10 @@ test('fake shell intent table: echo answers its text, probes answer empty, unkno
   assert.equal(echo.exitCode, 0);
 
   assert.equal(runShellCommandWithFs('devbridge delete-all 2>/dev/null || true\n').intent, 'devbridge-delete-all');
-  assert.equal(runShellCommandWithFs('export PATH=$HOME/.huawei/bin${PATH:+:$PATH}\n').intent, 'export-path');
+  assert.equal(
+    runShellCommandWithFs('export PATH=/workspace/.local/bin:$HOME/.huawei/bin${PATH:+:$PATH}\n').intent,
+    'export-path',
+  );
   // Unrecognized commands record distinctly — the zero-unknown gate keys on
   // this so product script drift turns cases red instead of degrading.
   assert.equal(runShellCommandWithFs('some-future-script --flag\n').intent, 'unknown');
@@ -116,8 +127,17 @@ test('fake fs round-trip: printf batches → base64 decode → real md5', () => 
   const content = Buffer.from('Hello from the e2e upload case — line two for body mass.\n'.repeat(40), 'utf8');
   const b64 = content.toString('base64');
   const chunks = [b64.slice(0, 30000), b64.slice(30000)].filter(Boolean);
-  const reset = runShellCommand(`rm -f "/tmp/hello.b64tmp"`, fs);
-  assert.equal(reset.intent, 'rm');
+  // The reset pin feeds the PRODUCT's builder output through the recognizer —
+  // a buildUploadResetCommand shape change the fake no longer recognizes
+  // turns this red instead of silently degrading the e2e drift guard.
+  const resetCmd = buildUploadResetCommand('/tmp/hello.txt', '/tmp/hello.b64tmp');
+  assert.equal(
+    resetCmd,
+    'mkdir -p "$(dirname "/tmp/hello.txt")" && rm -f "/tmp/hello.b64tmp"',
+    'the #953 compound reset shape is pinned on the product side',
+  );
+  const reset = runShellCommand(resetCmd, fs);
+  assert.equal(reset.intent, 'rm', 'the fake must recognize the product reset shape');
   for (const chunk of chunks) {
     const append = runShellCommand(`printf '%s' '${chunk}' >> "/tmp/hello.b64tmp"`, fs);
     assert.equal(append.intent, 'printf-append');
@@ -201,7 +221,11 @@ test('deploy-check grammar pin: degraded output yields INCOMPLETE with the faili
 });
 
 test('deploy-check script recognition: the anchored first line dispatches to the synthesis', () => {
-  const result = runShellCommand('echo "=== DEPLOY CHECK ==="\nTOTAL=0\n…', new FakeFs());
+  // #999: the data-disk PATH export rides the same first line as the marker.
+  const result = runShellCommand(
+    'export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"; echo "=== DEPLOY CHECK ==="\nTOTAL=0\n…',
+    new FakeFs(),
+  );
   assert.equal(result.intent, 'deploy-check-script');
   assert.equal(result.stdout, DEPLOY_CHECK_ALL_PASS);
   // The nginx presence probe answers INSTALLED — the product's real gate.
@@ -222,31 +246,56 @@ test('devbridge expose grammar cross-tier pin: fake synthesis parses through the
   assert.equal(parsed.tunnelId, 'e2e-tunnel-1');
   assert.equal(parsed.httpCode, '200');
   assert.equal(parsed.quotaError, false);
+  assert.equal(parsed.expiryHours, 72);
+  assert.equal(parsed.gatewayTunnelError, false);
+  assert.equal(parsed.badGateway, false);
+  assert.equal(parsed.migration, false);
+});
+
+test('devbridge verify grammar cross-tier pin: fake synthesis parses through the product parser', () => {
+  const parsed = parseDevbridgeVerifyOutput(DEVBRIDGE_VERIFY_OK_STDOUT);
+  assert.equal(parsed.httpCode, '200');
+  assert.equal(parsed.notFound, false);
 });
 
 test('devbridge fake rows recognize the real scripts (first-line anchors)', () => {
   // The auth probe's first line is the double-quoted PATH export — unique
   // to the probe; the expose script and cleanup share the pkill first line.
   const fs = new FakeFs();
+  // Builder-driven: the REAL auth probe's first line must stay recognizable —
+  // a PATH-form change the fake no longer matches reds here instead of only
+  // nightly (#999 moved the probe to the data-disk-first PATH).
   const auth = runShellCommand(
-    'export PATH="$HOME/.huawei/bin:$PATH"\nDB_OK=0\ndb_login_ok() { devbridge auth status 2>/dev/null | grep -q "Logged in"; }',
+    buildDevbridgeAuthProbe().split('\n', 1)[0]! +
+      '\nDB_OK=0\ndb_login_ok() { devbridge auth status 2>/dev/null | grep -q "Logged in"; }',
     fs,
   );
   assert.equal(auth.stdout, DEVBRIDGE_AUTH_KEYRING_STDOUT);
-  const expose = runShellCommand(
-    'pkill -f "devbridge host" 2>/dev/null || true\nsleep 2\ndevbridge delete-all > /dev/null 2>&1 || true',
-    fs,
-  );
+  // #999: the expose script (and the retry-cleanup blob) now opens with the
+  // data-disk PATH export riding the same first line as the pkill — feed the
+  // REAL builder so the anchor and the pin stay honest.
+  const expose = runShellCommand(buildDevbridgeExposeScript(8080), fs);
   assert.equal(expose.stdout, DEVBRIDGE_EXPOSE_OK_STDOUT);
-  // The retry-cleanup blob is a single ;-joined line with the same pkill
-  // prefix — the anchor must recognize it too (ZERO_UNKNOWN gate).
   const cleanup = runShellCommand(
-    'pkill -f "devbridge host" 2>/dev/null || true; sleep 2; devbridge delete-all > /dev/null 2>&1 || true',
+    'export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"; pkill -f "devbridge host" 2>/dev/null || true; sleep 2; devbridge delete-all > /dev/null 2>&1 || true',
     fs,
   );
   assert.equal(cleanup.stdout, DEVBRIDGE_EXPOSE_OK_STDOUT);
+  // The #998 version read-back one-shot — its own row, not the generic
+  // export-path fall-through.
+  const versionProbe = runShellCommand(
+    'export PATH="/workspace/.local/bin:$HOME/.huawei/bin:$PATH"; echo "DB_VERSION=$(devbridge version 2>/dev/null | head -1)"',
+    fs,
+  );
+  assert.equal(versionProbe.intent, 'devbridge-version-probe');
+  assert.match(versionProbe.stdout, /DB_VERSION=0\.2\.2-release/);
+  // The #919 re-verify script is built by the product's own builder — feed the
+  // REAL script through the fake so the anchor and the pin stay honest.
+  const verify = runShellCommand(buildDevbridgeVerifyScript('https://e2e-tunnel-1-8080.devbridge-s2.hwtunnel.com'), fs);
+  assert.equal(verify.intent, 'devbridge-verify-script');
+  assert.equal(verify.stdout, DEVBRIDGE_VERIFY_OK_STDOUT);
   // The connect flow's unquoted PATH export still hits the generic row,
   // not the auth-probe row.
-  const plain = runShellCommand('export PATH=$HOME/.huawei/bin${PATH:+:$PATH}', fs);
+  const plain = runShellCommand('export PATH=/workspace/.local/bin:$HOME/.huawei/bin${PATH:+:$PATH}', fs);
   assert.equal(plain.stdout, '');
 });

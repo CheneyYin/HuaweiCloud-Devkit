@@ -44,18 +44,7 @@ export function printKooCliManualInstructions(log: (_line: string) => void = con
     return;
   }
   if (process.platform === 'linux' || process.platform === 'darwin') {
-    const label = process.platform === 'linux' ? 'Linux' : 'macOS';
-    const arch = process.arch;
-    const pkg =
-      process.platform === 'linux'
-        ? arch === 'arm64'
-          ? 'linux-arm64'
-          : 'linux-amd64'
-        : arch === 'arm64'
-          ? 'mac-arm64'
-          : 'mac-amd64';
-    const url = `${baseUrl}/huaweicloud-cli-${pkg}.tar.gz`;
-    const binDir = process.platform === 'linux' ? join(homedir(), '.local', 'bin') : '/usr/local/bin';
+    const { label, pkg, url, binDir } = unixCliSpec(baseUrl);
     log(`\n[${label}] Manual install (pinned to KooCLI ${kooCliVersion || ''}):`);
     log(`  curl -LO "${url}"`);
     log(`  tar -zxvf huaweicloud-cli-${pkg}.tar.gz`);
@@ -69,6 +58,35 @@ export function printKooCliManualInstructions(log: (_line: string) => void = con
     log(
       `\nFull guide: https://support.huaweicloud.com/qs-hcli/hcli_02_003_0${process.platform === 'linux' ? '2' : '3'}.html`,
     );
+  }
+}
+
+// The Linux/macOS download spec shared by the manual instructions and the
+// auto-installer: one platform matrix (label, package, pinned URL, target
+// bin dir) so the two surfaces cannot drift.
+function unixCliSpec(baseUrl: string): { label: string; pkg: string; url: string; binDir: string } {
+  const label = process.platform === 'linux' ? 'Linux' : 'macOS';
+  const arch = process.arch;
+  const pkg =
+    process.platform === 'linux'
+      ? arch === 'arm64'
+        ? 'linux-arm64'
+        : 'linux-amd64'
+      : arch === 'arm64'
+        ? 'mac-arm64'
+        : 'mac-amd64';
+  const url = `${baseUrl}/huaweicloud-cli-${pkg}.tar.gz`;
+  const binDir = process.platform === 'linux' ? join(homedir(), '.local', 'bin') : '/usr/local/bin';
+  return { label, pkg, url, binDir };
+}
+
+// The failure tail both platform branches of installKooCli share: the error,
+// the manual fallback, and the CodeArts-sandbox diagnosis.
+function reportAutoInstallFailure(error: unknown): void {
+  console.log(`\n\x1b[33mAuto-install failed: ${error instanceof Error ? error.message : String(error)}\x1b[0m`);
+  printKooCliManualInstructions();
+  if (detectCodeartsSandbox() === 'sandbox') {
+    printSandboxWarning('沙箱模式拦截了 KooCLI 自动安装（无法创建/写入安装目录）。');
   }
 }
 
@@ -191,11 +209,7 @@ export async function installKooCli(opts: { tty: boolean }): Promise<boolean> {
       console.log('  Or restart terminal and: hcloud version');
       return true;
     } catch (error) {
-      console.log(`\n\x1b[33mAuto-install failed: ${error instanceof Error ? error.message : String(error)}\x1b[0m`);
-      printKooCliManualInstructions();
-      if (detectCodeartsSandbox() === 'sandbox') {
-        printSandboxWarning('沙箱模式拦截了 KooCLI 自动安装（无法创建/写入安装目录）。');
-      }
+      reportAutoInstallFailure(error);
       return false;
     } finally {
       rmSync(scratch, { recursive: true, force: true });
@@ -203,18 +217,7 @@ export async function installKooCli(opts: { tty: boolean }): Promise<boolean> {
   }
 
   if (process.platform === 'linux' || process.platform === 'darwin') {
-    const label = process.platform === 'linux' ? 'Linux' : 'macOS';
-    const arch = process.arch;
-    const pkg =
-      process.platform === 'linux'
-        ? arch === 'arm64'
-          ? 'linux-arm64'
-          : 'linux-amd64'
-        : arch === 'arm64'
-          ? 'mac-arm64'
-          : 'mac-amd64';
-    const url = `${baseUrl}/huaweicloud-cli-${pkg}.tar.gz`;
-    const binDir = process.platform === 'linux' ? join(homedir(), '.local', 'bin') : '/usr/local/bin';
+    const { label, pkg, url, binDir } = unixCliSpec(baseUrl);
     const binPath = join(binDir, 'hcloud');
 
     if (detectCodeartsSandbox() === 'sandbox') {
@@ -279,11 +282,7 @@ export async function installKooCli(opts: { tty: boolean }): Promise<boolean> {
       }
       return true;
     } catch (error) {
-      console.log(`\n\x1b[33mAuto-install failed: ${error instanceof Error ? error.message : String(error)}\x1b[0m`);
-      printKooCliManualInstructions();
-      if (detectCodeartsSandbox() === 'sandbox') {
-        printSandboxWarning('沙箱模式拦截了 KooCLI 自动安装（无法创建/写入安装目录）。');
-      }
+      reportAutoInstallFailure(error);
       return false;
     } finally {
       rmSync(scratch, { recursive: true, force: true });

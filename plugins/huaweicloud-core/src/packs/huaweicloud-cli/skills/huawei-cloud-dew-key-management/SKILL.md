@@ -60,7 +60,7 @@ It enables four capability groups through 10 `huawei_*` actions:
 
 ## Prerequisites
 
-1. **hcloud CLI** (KooCLI 7.2.x or later) installed and authenticated.
+1. **hcloud CLI** (KooCLI 7.2.x or later (7.3.12 verified)) installed and authenticated.
    - Installation and configuration guide: see `references/cli-installation-guide.md`
    - Two supported authentication modes:
      **AK/SK credentials**: environment variables `HUAWEICLOUD_SDK_AK` / `HUAWEICLOUD_SDK_SK` (or `HUAWEI_ACCESS_KEY` / `HUAWEI_SECRET_KEY`) — hcloud auto-detects them, or
@@ -201,7 +201,7 @@ skill-quality-cli run --skill-name huawei-cloud-dew-key-management -- hcloud CSM
 ```
 
 > Note: KooCLI exposes rotation enablement through `CSMS UpdateSecret --auto_rotation=true`
-> (there is no separate `EnableSecretRotation` operation in KooCLI 7.2.x — verified against
+> (there is no separate `EnableSecretRotation` operation in KooCLI 7.2.x/7.3.x (verified on both) — verified against
 > `huaweicloudsdkcsms` 3.1.x, `UpdateSecretRequestBody.auto_rotation`).
 
 ### 4. Manage (R1 — preview + confirm)
@@ -312,7 +312,7 @@ data "huaweicloud_csms_secret" "db" {
 
 ## Parameter Confirmation
 
-All parameters below were verified against `hcloud <Service> <Operation> --help` (KooCLI 7.2.12).
+All parameters below were verified against `hcloud <Service> <Operation> --help` (KooCLI 7.2.12; parameter surfaces re-checked identical on 7.3.12).
 
 ### CSMS
 

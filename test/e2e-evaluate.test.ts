@@ -18,6 +18,7 @@ function recordings(partial: Partial<Recordings>): Recordings {
     ws: [],
     files: {},
     finalText: null,
+    exitCode: 0,
     ...partial,
   };
 }
@@ -143,6 +144,93 @@ test('a vacuous pass is impossible: no boundary activity fails the case even whe
   const verdict = caseWith([{ kind: 'hcloud', head: ['VPC', 'X'], times: { min: 0, max: 0 } }], recordings({}));
   assert.equal(verdict.liveness, false);
   assert.equal(verdict.pass, false);
+});
+
+test('disclosure liveness: never-booted fails, half-dead fails on the model turn, asking passes, overreach fails on assertions', () => {
+  // The vendor-ambiguity guard's evidence mode: an initialize-handshake
+  // disclosure (toolsList/instructions — written at the transport wire
+  // face BEFORE any model turn) conjoined with a zero agent exit code
+  // (the honest cross-leg model-turn proof; codex's -o finalText can
+  // exist for a turn that never completed, so exitCode carries the
+  // proof instead). The conjunction closes the half-dead chain: server
+  // boots and handshakes, then the model wire dies — disclosures alone
+  // would vacuously pass the zero-activity expectations and reset the
+  // runner's dead-agent streak.
+  const expect: Expectation[] = [{ kind: 'hcloud', head: [], times: { min: 0, max: 0 } }];
+  const guardedCase: E2eCase = {
+    id: 'vendor-guard',
+    pack: 'core',
+    prompt: '',
+    fixtures: {},
+    expect,
+    liveness: 'disclosure',
+    budget: { timeoutMs: 1, attempts: 1 },
+  };
+  // Never-booted chain: no initialize, no toolsList — fails on disclosures
+  // even though the zero-hcloud expectation passes vacuously.
+  const dead = evaluateCase(guardedCase, recordings({ exitCode: 1 }));
+  assert.equal(dead.liveness, false);
+  assert.equal(dead.pass, false);
+  // Half-dead chain: handshake completed (disclosures recorded before the
+  // model turn), then the agent exited non-zero — disclosures alone would
+  // pass; the exit-code conjunct catches it.
+  const halfDead = evaluateCase(
+    guardedCase,
+    recordings({
+      disclosures: [{ event: 'toolsList', toolCount: 52 }, { event: 'instructions' }],
+      exitCode: 1,
+    }),
+  );
+  assert.equal(halfDead.liveness, false);
+  assert.equal(halfDead.pass, false);
+  // Timeout-kill signal death: exitCode null with disclosures — same
+  // failure as a non-zero exit (null is not a completed model turn).
+  const killed = evaluateCase(
+    guardedCase,
+    recordings({
+      disclosures: [{ event: 'toolsList', toolCount: 52 }],
+      exitCode: null,
+    }),
+  );
+  assert.equal(killed.liveness, false);
+  // toolsListChanged is NOT a handshake event: a change-notification-only
+  // recording is not initialize proof (it fires from packs_configure in an
+  // already-initialized session — unreachable without prior handshake
+  // events in a real trace, and the filter keeps the mode's documented
+  // contract frozen).
+  const changedOnly = evaluateCase(
+    guardedCase,
+    recordings({
+      disclosures: [{ event: 'toolsListChanged', toolCount: 51 }],
+      exitCode: 0,
+    }),
+  );
+  assert.equal(changedOnly.liveness, false);
+  // Live chain, model correctly asks instead of calling: zero boundary
+  // activity, handshake disclosures present, clean exit — passes.
+  const asking = evaluateCase(
+    guardedCase,
+    recordings({
+      disclosures: [{ event: 'toolsList', toolCount: 52 }, { event: 'instructions' }],
+      exitCode: 0,
+    }),
+  );
+  assert.equal(asking.liveness, true);
+  assert.equal(asking.pass, true);
+  // Live chain, model overreaches: disclosures prove the chain, the
+  // zero-hcloud assertion carries the failure (red for the right
+  // reason, never the vacuous-green of a dead or half-dead harness).
+  const overreach = evaluateCase(
+    guardedCase,
+    recordings({
+      disclosures: [{ event: 'toolsList', toolCount: 52 }],
+      hcloud: [{ argv: ['ECS', 'ListServersDetails'] }],
+      exitCode: 0,
+    }),
+  );
+  assert.equal(overreach.liveness, true);
+  assert.equal(overreach.pass, false);
+  assert.equal(overreach.expectations[0]!.pass, false);
 });
 
 test('noToolCall fails with the offending args as evidence when the forbidden call happened', () => {

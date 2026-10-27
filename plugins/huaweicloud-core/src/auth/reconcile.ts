@@ -12,9 +12,11 @@ import {
   readLastSync,
   resolveCredentialsWithRuntime,
 } from './credentials.ts';
+import { errorFromTable } from './error-table.ts';
 import { resolveHcloudCommand } from '../hcloud-probe.ts';
 import { redactSecrets } from '../safety-policy.ts';
 import { asText } from '../lib/as-text.ts';
+import { asRecord } from '../lib/as-record.ts';
 
 export { hasRuntimeCredentials };
 
@@ -35,6 +37,11 @@ export interface KooCliProfiles {
 
 export interface KooCliProfilesError {
   error: string;
+  // #900: unified shape from the shared ERROR_TABLE (auth/error-table.ts).
+  code?: string;
+  messageZh?: string;
+  action?: string;
+  nextStep?: string;
 }
 
 export type KooCliProfilesResult = KooCliProfiles | KooCliProfilesError;
@@ -76,10 +83,6 @@ interface LastSyncRecord {
   s1Fingerprint?: unknown;
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
 function toLastSync(value: unknown): LastSyncRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
@@ -113,7 +116,12 @@ export function isManualModified(path: string): boolean {
 
 export function readKooCliProfiles(): KooCliProfilesResult {
   const configPath = kooCliConfigPath();
-  if (!existsSync(configPath)) return { error: 'KooCLI config not found' };
+  if (!existsSync(configPath)) {
+    // #900: bare string replaced by the unified ERROR_TABLE shape; the old
+    // English text survives only as the distinguishing detail argument.
+    const e = errorFromTable('HDKIT_KOOCLI_NOT_READY', 'KooCLI config not found');
+    return { error: e.messageZh, code: e.code, messageZh: e.messageZh, action: e.action, nextStep: e.nextStep };
+  }
   try {
     const raw = asRecord(JSON.parse(readFileSync(configPath, 'utf8')));
     const current = asText(raw.current || 'default');
@@ -143,7 +151,9 @@ export function readKooCliProfiles(): KooCliProfilesResult {
       }),
     };
   } catch {
-    return { error: 'KooCLI config parse failed' };
+    // #900: bare string replaced by the unified ERROR_TABLE shape.
+    const e = errorFromTable('HDKIT_KOOCLI_NOT_READY', 'KooCLI config parse failed');
+    return { error: e.messageZh, code: e.code, messageZh: e.messageZh, action: e.action, nextStep: e.nextStep };
   }
 }
 
@@ -285,21 +295,9 @@ export function exportStateForStatus(_jailed?: boolean) {
   };
 }
 
-export function runHcloudConfigure(
-  profile: string,
-  ak: string,
-  sk: string,
-  region?: string,
-): { ok: boolean; error: string } {
+// Shared spawn shape for the KooCLI configure verbs: ok + redacted stderr.
+function runHcloudConfigureArgs(args: string[]): { ok: boolean; error: string } {
   const { executable, argsPrefix } = resolveHcloudCommand();
-  const args = [
-    'configure',
-    'set',
-    `--cli-profile=${profile}`,
-    `--cli-access-key=${ak}`,
-    `--cli-secret-key=${sk}`,
-    `--cli-region=${region || ''}`,
-  ];
   const r = spawnSync(executable, [...argsPrefix, ...args], {
     shell: false,
     windowsHide: true,
@@ -314,4 +312,34 @@ export function runHcloudConfigure(
         .slice(0, 240),
     ),
   };
+}
+
+export function runHcloudConfigure(
+  profile: string,
+  ak: string,
+  sk: string,
+  region?: string,
+): { ok: boolean; error: string } {
+  return runHcloudConfigureArgs([
+    'configure',
+    'set',
+    `--cli-profile=${profile}`,
+    `--cli-access-key=${ak}`,
+    `--cli-secret-key=${sk}`,
+    `--cli-region=${region || ''}`,
+  ]);
+}
+
+// Delete a KooCLI profile (best-effort). The #920 purge seam, shared by ALL
+// THREE KooCLI write paths (the auth_switch persist tool path, syncAuth, and
+// the setup-cli `auth init` path): `configure set` REFUSES an empty --cli-security-token, so
+// a stale/expired token already in the profile can never be overwritten — it
+// poisons every hcloud call with APIGW.0301 while the writer still reports
+// success. The documented manual bypass is `hcloud configure delete
+// --cli-profile=<profile>` followed by a re-configure; this helper makes that
+// path a runtime step instead of user knowledge.
+// A missing profile reports a non-zero status, which callers treat as
+// "nothing to clean" — never as an error.
+export function runHcloudProfileDelete(profile: string): { ok: boolean; error: string } {
+  return runHcloudConfigureArgs(['configure', 'delete', `--cli-profile=${profile}`]);
 }

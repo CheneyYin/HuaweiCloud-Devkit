@@ -1,0 +1,26 @@
+
+╔══════════════════════════════════════════════╗
+║     HuaweiCloud DevKit v2.0.0                 ║
+║     https://github.com/huaweicloud   ║
+╚══════════════════════════════════════════════╝
+
+HuaweiCloud DevKit Doctor
+
+  [PASS] Node.js >= 22.18
+  [PASS] MCP server installed
+  [PASS] MCP server can start (OfficeAce)
+  [FAIL] Runtime deps (undici) installed — Run: npx huaweicloud-devkit install
+  [FAIL] Safety policy installed — Run: npx huaweicloud-devkit install
+  [PASS] Secret vault ready (env custody, 0 secret(s))
+  [PASS] Safety hook runtime (Node)
+  [PASS] MCP configured
+  [FAIL] Hermes MCP Python SDK — Run: pip3 install mcp
+  [PASS] hcloud CLI installed
+    Version: <hcloud-version>
+  [PASS] hcloud credentials configured
+  [FAIL] Skills tree (server data; MCP catalog + stdio skillRoot instructions) — Run: npx huaweicloud-devkit install (from a git checkout: npm run build first)
+  [INFO] Packs (OfficeAce): core, huaweicloud-cli
+  [WARN] Packs (OfficeAce): the secret vault is initialized but the secrets pack is trimmed — the vault MCP tools (huaweicloud_secret_set/list/delete) are not disclosed on this target; secret:// refs still resolve wherever their consumers are enabled. Enable: npx huaweicloud-devkit packs enable secrets --target <agent>
+
+Results: 8 pass, 1 warn, 4 fail
+Fix failures above, then restart your session.

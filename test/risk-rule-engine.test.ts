@@ -14,6 +14,27 @@ test('loadRiskRules loads the public catalog', () => {
   assert.ok(catalog.rules.some((rule) => rule.id === 'hwc-network-public-admin-port'));
 });
 
+// #954 pair-change: GetCallerIdentity left the STS credential warn (it is a
+// first-class read the devkit itself performs); the credential-returning pair
+// keeps the warn. Pinned both directions so the alternation cannot drift.
+test('STS credential warn covers the credential pair, not GetCallerIdentity (#954)', () => {
+  const gci = evaluateCommandRisk('hcloud STS GetCallerIdentity --cli-region=cn-north-4');
+  assert.equal(
+    gci.findings.some((f) => f.ruleId === 'hwc-command-sts-credential'),
+    false,
+  );
+  for (const cmd of [
+    'hcloud STS AssumeAgency --agency_urn=<urn> --agency_session_name=<n> --duration_seconds=3600',
+    'hcloud STS GetTemporaryCredential --cli-region=cn-north-4',
+  ]) {
+    const result = evaluateCommandRisk(cmd);
+    assert.ok(
+      result.findings.some((f) => f.ruleId === 'hwc-command-sts-credential'),
+      `${cmd} must carry the STS credential warn`,
+    );
+  }
+});
+
 test('evaluateCommandRisk blocks public SSH exposure', () => {
   const result = evaluateCommandRisk(
     'hcloud VPC CreateSecurityGroupRule --security_group_rule.protocol=tcp --security_group_rule.port_range_min=22 --security_group_rule.port_range_max=22 --security_group_rule.remote_ip_prefix=0.0.0.0/0',

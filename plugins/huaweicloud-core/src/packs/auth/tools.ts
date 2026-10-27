@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
+import { vendorConfirmed } from '../../lib/tool-schema-parts.ts';
 import { getAuthStatus, syncAuth } from '../../auth/service.ts';
+import { checkAccountType } from '../../auth/account-type.ts';
 import {
   setRuntimeCredentials,
   clearRuntimeCredentials,
@@ -14,6 +16,7 @@ import {
   readImportFile,
   clearImportFile,
   pendingConfirms,
+  consumedConfirms,
   refreshUserHashAfterAuthChange,
 } from '../../lib/credentials.ts';
 import { resolveSecretValue } from '../../lib/secret-vault/store.ts';
@@ -160,19 +163,42 @@ async function handleAuthSwitch(args: ToolArgs = {}, _opts: CallToolOptions = {}
 }
 
 async function handleAuthConfirm(args: ToolArgs = {}, _opts: CallToolOptions = {}) {
-  const pending = pendingConfirms.get(args.token || '');
-  if (!pending) throw new Error('confirmToken not found or expired.');
-  pendingConfirms.delete(args.token || '');
+  // D4-24 precise JSON contract (#745): a missing or already-consumed confirm
+  // token returns a structured result instead of throwing a generic Error
+  // string, mirroring runApprovedCommand's contract. Tombstones are kept
+  // in-memory only: confirm tokens are session-scoped and never persisted
+  // across processes.
+  const token = String(args.token || '');
+  const pending = pendingConfirms.get(token);
+  if (!pending) {
+    if (token && consumedConfirms.has(token)) {
+      return { status: 'ok', outcome: 'already_processed' };
+    }
+    return { status: 'rejected', code: 'CONFIRM_TOKEN_NOT_FOUND' };
+  }
   if (args.decision === 's1') {
+    pendingConfirms.delete(token);
+    consumedConfirms.set(token, { consumedAt: Date.now() });
     return { status: 'ok', outcome: 'aborted', message: '保持 S1 现有账号，未覆盖。' };
   }
+  // v2 deviation from main's ordering, deliberate (D4-24's own goal is
+  // machine-assertable states that do not lie): the token is tombstoned only
+  // AFTER the persist completes. main tombstoned first, so a persist that
+  // THREW (unresolvable secret ref, EACCES on S1) followed by a retry
+  // returned already_processed for an action that never ran. Here a thrown
+  // persist leaves the token PENDING, so the retry re-attempts it — the
+  // persist body is synchronous, so no interleaving window exists between
+  // the delete and the tombstone.
   const confirmed = persistCredentials(pending.newAk, pending.newSk, pending.newSecurityToken, pending.newRegion);
+  pendingConfirms.delete(token);
+  consumedConfirms.set(token, { consumedAt: Date.now() });
   if (pending.fromImport && confirmed.status !== 'partial') clearImportFile();
   refreshUserHashAfterAuthChange();
   return confirmed;
 }
 
 const authStatusSchema = z.looseObject({
+  vendorConfirmed,
   target: z
     .string()
     .optional()
@@ -191,6 +217,7 @@ const authSyncSchema = z.looseObject({
 });
 
 const authInitSchema = z.looseObject({
+  vendorConfirmed,
   ak: z.string().optional().describe('Huawei Cloud Access Key (required unless clear=true)'),
   sk: z.string().optional().describe('Huawei Cloud Secret Key (required unless clear=true)'),
   region: z.string().optional().describe('Default region (optional)'),
@@ -198,6 +225,7 @@ const authInitSchema = z.looseObject({
 });
 
 const authSwitchSchema = z.looseObject({
+  vendorConfirmed,
   mode: z.enum(['import', 'memory', 'mcp-config']).optional().describe('Credential source channel'),
   action: z.enum(['persist', 'temporary', 'clear']).optional().describe('Apply scope'),
   ak: z.string().optional(),
@@ -211,11 +239,24 @@ const authConfirmSchema = z.looseObject({
   decision: z.enum(['s1', 'newImported']).optional(),
 });
 
+async function handleCheckAccountType(args: ToolArgs = {}, _opts: CallToolOptions = {}) {
+  return checkAccountType({ region: typeof args.region === 'string' ? args.region : undefined });
+}
+
+const checkAccountTypeSchema = z.looseObject({
+  region: z
+    .string()
+    .optional()
+    .describe(
+      'Optional region ID for the region-level GetCallerIdentity endpoint (e.g., cn-north-4). Defaults to the configured cli-region.',
+    ),
+});
+
 export const AUTH_TOOLS = [
   {
     name: 'huaweicloud_auth_status',
     description:
-      'Check unified Huawei Cloud authentication status across the global credential vault, OBS, KooCLI, and all supported agent MCP registrations. Returns only redacted/status information, never credentials.',
+      'Check unified Huawei Cloud authentication status across the global credential vault, OBS, KooCLI, and all supported agent MCP registrations. Returns only redacted/status information, never credentials. Vendor-gated (vendorConfirmed): call only when the vendor is established — see the vendorConfirmed parameter description; when unknown, ask which cloud the user means first.',
     schema: authStatusSchema,
     handler: handleAuthStatus,
   },
@@ -229,14 +270,14 @@ export const AUTH_TOOLS = [
   {
     name: 'huaweicloud_auth_init',
     description:
-      'Set or clear runtime Huawei Cloud credentials (AK/SK) for this MCP session. Runtime credentials take highest priority over environment variables and config files for all subsequent API calls. Use when switching accounts within the same Agent session — call with AK/SK to switch, or with clear=true to fall back to env/file credentials.',
+      'Set or clear runtime Huawei Cloud credentials (AK/SK) for this MCP session. Runtime credentials take highest priority over environment variables and config files for all subsequent API calls. Use when switching accounts within the same Agent session — call with AK/SK to switch, or with clear=true to fall back to env/file credentials. Vendor-gated (vendorConfirmed): call only when the vendor is established — see the vendorConfirmed parameter description; when unknown, ask which cloud the user means first.',
     schema: authInitSchema,
     handler: handleAuthInit,
   },
   {
     name: 'huaweicloud_auth_switch',
     description:
-      'Switch Huawei Cloud credentials within the current session. action=temporary keeps AK/SK in memory only (restart loses them; hcloud commands are unaffected and an A+C warning will be raised). action=persist writes S1 (single source of truth) with configuredBySession flag and propagates to S2 (KooCLI current profile) and S3 (OBS). action=clear resets runtime credentials. mode=import reads AK/SK from ~/.config/huaweicloud/creds-import.json then wipes it (SK never enters conversation). mode=memory passes AK/SK as tool arguments (SK is visible to model - prefer import). mode=mcp-config reads the injected mcp_settings environment.',
+      'Switch Huawei Cloud credentials within the current session. action=temporary keeps AK/SK in memory only (restart loses them; hcloud commands are unaffected and an A+C warning will be raised). action=persist writes S1 (single source of truth) with configuredBySession flag and propagates to S2 (KooCLI current profile) and S3 (OBS). action=clear resets runtime credentials. mode=import reads AK/SK from ~/.config/huaweicloud/creds-import.json then wipes it (SK never enters conversation). mode=memory passes AK/SK as tool arguments (SK is visible to model - prefer import). mode=mcp-config reads the injected mcp_settings environment. Vendor-gated (vendorConfirmed): call only when the vendor is established — see the vendorConfirmed parameter description; when unknown, ask which cloud the user means first.',
     schema: authSwitchSchema,
     handler: handleAuthSwitch,
   },
@@ -246,6 +287,13 @@ export const AUTH_TOOLS = [
       'Confirm a pending credential reconciliation choice returned by auth_switch persist when S1 already holds a different account (R2). decision=s1 keeps S1 as source of truth and propagates it; decision=newImported propagates the newly imported account into S1 and mirrors.',
     schema: authConfirmSchema,
     handler: handleAuthConfirm,
+  },
+  {
+    name: 'huaweicloud_check_account_type',
+    description:
+      'Check whether the current credentials belong to the primary account or an IAM sub-user. Runs STS GetCallerIdentity + IAM KeystoneListAuthDomains (both read-only, no identity-policy permission required) and applies the validated rule: username == domainName -> primary account, otherwise IAM sub-user. Use before sandbox deployment (primary-account prechecks), account confirmation, or any task that needs to know who the current AK/SK belongs to. Returns isPrimaryAccount, applicable, domainId, domainName, userId, username, principalUrn, and an evidence string. Agency-session credentials are detected and reported as applicable:false.',
+    schema: checkAccountTypeSchema,
+    handler: handleCheckAccountType,
   },
 ] as const satisfies readonly PackToolDefinition[];
 
@@ -260,6 +308,7 @@ export const AUTH_TOOL_SCHEMAS: Readonly<Record<AuthToolName, LooseToolSchema>> 
   huaweicloud_auth_init: authInitSchema,
   huaweicloud_auth_switch: authSwitchSchema,
   huaweicloud_auth_confirm: authConfirmSchema,
+  huaweicloud_check_account_type: checkAccountTypeSchema,
 };
 
 // Dispatch map merged into PACK_TOOL_HANDLERS in packs/registry.ts. Typed over
@@ -271,4 +320,5 @@ export const AUTH_TOOL_HANDLERS: Readonly<Record<AuthToolName, PackToolDefinitio
   huaweicloud_auth_init: handleAuthInit,
   huaweicloud_auth_switch: handleAuthSwitch,
   huaweicloud_auth_confirm: handleAuthConfirm,
+  huaweicloud_check_account_type: handleCheckAccountType,
 };

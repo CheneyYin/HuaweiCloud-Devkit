@@ -1,0 +1,33 @@
+
+╔══════════════════════════════════════════════╗
+║     HuaweiCloud DevKit v2.0.0                 ║
+║     https://github.com/huaweicloud   ║
+╚══════════════════════════════════════════════╝
+
+HuaweiCloud DevKit Doctor
+
+  [PASS] Node.js >= 22.18
+  [PASS] MCP server installed
+  [PASS] MCP server can start (OpenCode)
+  [PASS] Runtime deps (undici) installed
+  [PASS] Safety policy installed
+  [PASS] Secret vault ready (env custody, 0 secret(s))
+  [PASS] Safety hook runtime (Node)
+  [PASS] MCP configured
+  [PASS] Skills-tree permission seam (allow + edit deny)
+  [PASS] hcloud CLI installed
+    Version: <hcloud-version>
+  [PASS] hcloud credentials configured
+  [PASS] Skills tree (server data; MCP catalog + stdio skillRoot instructions)
+  [INFO] Packs (OpenCode): all — DEVKIT_PACKS not set
+  [WARN] open-mcp-gateway not found — npx huaweicloud-devkit dep install open-mcp-gateway
+  [INFO] devbridge: sandbox-resident, not probed host-side
+
+Results: 12 pass, 1 warn, 0 fail
+
+All checks passed. You can now describe your Huawei Cloud task
+
+╔══════════════════════════════════════════╗
+║  请重启 OpenCode！MCP 工具尚未激活     ║
+║  关闭当前会话 → 重新打开即可             ║
+╚══════════════════════════════════════════╝

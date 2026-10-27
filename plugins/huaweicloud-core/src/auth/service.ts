@@ -1,28 +1,31 @@
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 
 import { getAgentRegistrationStatuses, type AgentRegistrationStatus } from './agent-registration.ts';
 import { resolveAndApplyProjectId } from './project-id.ts';
 import {
   globalCredentialsPath,
+  isCodeArtsContext,
   isPlaceholder,
   obsConfigPath,
+  parseStsExpiry,
   readCodeArtsCredentials,
   readGlobalCredentials,
   readGlobalCredentialsResolved,
   readGlobalCredentialsStrict,
+  resolveCredentialsWithRuntime,
   writeLastSync,
   writeObsConfig,
 } from './credentials.ts';
+import { buildOnboardingSteps, errorFromTable, type GuidanceStep } from './error-table.ts';
 import {
   fingerprint,
   exportStateForStatus,
   hasRuntimeCredentials,
   resolveManagedProfile,
   runHcloudConfigure,
+  runHcloudProfileDelete,
 } from './reconcile.ts';
-import { hcloudProbeNextStep, probeHcloud } from '../hcloud-probe.ts';
+import { hcloudProbeNextStep, hcloudProbeRaw, probeHcloud } from '../hcloud-probe.ts';
 
 interface CredentialRecord {
   ak?: string;
@@ -47,11 +50,9 @@ function asCredentialRecord(value: unknown): CredentialRecord | null {
 }
 
 function isCodeArtsHome(): boolean {
-  return (
-    existsSync(join(process.cwd(), '.codeartsdoer')) ||
-    existsSync(join(homedir(), '.codeartsdoer')) ||
-    existsSync(join(homedir(), '.codeartswork'))
-  );
+  // #900: same context detector the resolveCredentials failure path uses —
+  // the codearts flag must select the identical builder variant on both paths.
+  return isCodeArtsContext();
 }
 
 function envHasRealTriplet(): boolean {
@@ -65,13 +66,9 @@ function envHasRealTriplet(): boolean {
   );
 }
 
-export interface OnboardingStep {
-  order?: number;
-  action: string;
-  args?: Record<string, string>;
-  label?: string;
-  target?: string;
-}
+// The onboarding step shape is the error-table leaf's GuidanceStep — one
+// definition shared by computeOnboarding and the resolver's failure path.
+export type OnboardingStep = GuidanceStep;
 
 export interface OnboardingResult {
   needsSetup: boolean;
@@ -197,32 +194,12 @@ export function computeOnboarding({
     scenario = 4;
     reason = 'import-injected';
     message = '检测到配置中已有有效账号,可导入为正式凭证。';
-    steps = [
-      {
-        order: 1,
-        action: 'switch-persist',
-        args: { mode: codeArts ? 'mcp-config' : 'import', action: 'persist' },
-        label: '导入该账号',
-      },
-    ];
+    steps = buildOnboardingSteps(4, { codearts: codeArts });
   } else {
     scenario = 3;
     reason = 's1-missing';
     message = '未配置华为云凭证,需要完成登录后才能使用云能力。';
-    steps = [
-      { order: 1, action: 'obtain-aksk', target: 'console', label: '获取 AK/SK(华为云控制台)' },
-      ...(codeArts
-        ? [
-            {
-              order: 2,
-              action: 'write-import',
-              target: join(homedir(), '.config', 'huaweicloud', 'creds-import.json'),
-              label: '把 AK/SK 写入 creds-import.json',
-            },
-            { order: 3, action: 'auth_switch', args: { mode: 'import', action: 'persist' }, label: '执行导入完成配置' },
-          ]
-        : [{ order: 2, action: 'auth-init', args: {}, label: '运行 npx huaweicloud-devkit auth init' }]),
-    ];
+    steps = buildOnboardingSteps(3, { codearts: codeArts });
   }
 
   if (s1RefError) {
@@ -243,23 +220,71 @@ export function computeOnboarding({
   return { needsSetup: true, scenario, reason, message, steps, accountHint };
 }
 
+// Compute temporary-STS expiry info for auth_status. Permanent AK/SK creds carry
+// no security token and therefore have no expiry — we return null so callers only
+// see expiry for the platform-injected temporary STS case.
+function computeStsExpiry(): {
+  expiresAt: number | null;
+  expiresAtUtc: string | null;
+  expiresAtLocal: string | null;
+  remainingMs: number | null;
+  status: string;
+} | null {
+  // The ACTIVE credential set (runtime-first), not the S1 display read: the
+  // panel's "sts" half reflects what a tool call would actually authenticate
+  // with right now.
+  let creds;
+  try {
+    creds = asCredentialRecord(resolveCredentialsWithRuntime({ allowMissing: true }));
+  } catch {
+    creds = null;
+  }
+  if (!creds?.ak || !creds?.sk || !creds.securityToken) return null;
+  const expiresAt = parseStsExpiry({ securityToken: creds.securityToken });
+  if (expiresAt === null)
+    return { status: 'unknown', expiresAt: null, expiresAtUtc: null, expiresAtLocal: null, remainingMs: null };
+  const remainingMs = expiresAt - Date.now();
+  const expiresAtUtc = new Date(expiresAt).toISOString();
+  const expiresAtLocal = new Date(expiresAt).toString();
+  let status = 'valid';
+  if (remainingMs <= 0) status = 'expired';
+  else if (remainingMs <= 5 * 60 * 1000) status = 'expiring_soon';
+  return { expiresAt, expiresAtUtc, expiresAtLocal, remainingMs, status };
+}
+
 export function getAuthStatus(target = 'all') {
   const credentials = readGlobalCredentialsForStatus();
   const reconciled = { ...exportStateForStatus(), runtimeActive: hasRuntimeCredentials() };
   const hcloud = probeHcloud();
   const s4Creds = asCredentialRecord(readCodeArtsCredentials());
   const onboarding = computeOnboarding({ credentials, reconciled });
+  const stsExpiry = computeStsExpiry();
+  // The credential panel (#919 follow-up UX): one glance separates the
+  // temporary STS (same source as the sandbox MCP session) from the permanent
+  // S1 store, and names which one is active.
+  const credentialPanel = {
+    sts: stsExpiry,
+    s1: {
+      configured: Boolean(credentials?.ak && credentials?.sk),
+      fingerprint: credentials?.ak ? fingerprint(credentials.ak, credentials.sk) : null,
+      persistent: true, // permanent, no expiry
+    },
+    activeSource: stsExpiry ? 'temporary-sts' : credentials?.ak ? 's1-persistent' : 'none',
+  };
   return {
     target,
     credentialsConfigured: Boolean(credentials?.ak && credentials?.sk),
     credentialsPath: globalCredentialsPath(),
     mcpSettingsConfigured: Boolean(s4Creds?.ak && s4Creds?.sk),
     mcpSettingsSource: s4Creds ? 'codearts' : null,
+    stsExpiry,
+    credentialPanel,
     obsConfigured: existsSync(obsConfigPath()),
     obsConfigPath: obsConfigPath(),
     kooCliInstalled: hcloud.installed,
     kooCliStatus: hcloud.status,
     kooCliNextStep: hcloudProbeNextStep(hcloud),
+    kooCliRaw: hcloudProbeRaw(hcloud),
     reconciled,
     onboarding,
     agents: getAgentRegistrationStatuses(target).agents,
@@ -276,6 +301,10 @@ export interface SyncAuthFailure {
   ok: false;
   error: string;
   nextStep: string;
+  code?: string;
+  messageZh?: string;
+  action?: string;
+  raw?: string;
   obs?: ObsSyncTarget;
 }
 
@@ -303,17 +332,28 @@ export function syncAuth(target = 'all'): SyncAuthResult {
   }
   const credentials = asCredentialRecord(strict.credentials);
   if (!credentials?.ak || !credentials?.sk) {
+    // #900: unified error shape from the shared ERROR_TABLE.
+    const e = errorFromTable('HDKIT_CRED_MISSING');
     return {
       ok: false,
-      error: 'Global credentials are not configured.',
-      nextStep: 'Run "npx huaweicloud-devkit auth init" first.',
+      error: e.messageZh,
+      code: e.code,
+      messageZh: e.messageZh,
+      action: e.action,
+      nextStep: e.nextStep,
     };
   }
   if (hasRuntimeCredentials()) {
+    // R10: runtime credentials suppress auto-sync. The codename stays in code
+    // comments only, never in user-facing strings (#900).
+    const e = errorFromTable('HDKIT_SYNC_SKIPPED_RUNTIME');
     return {
       ok: false,
-      error: 'Runtime credentials are active; auto-sync suppressed (R10).',
-      nextStep: 'Run huaweicloud_auth_switch action=clear or action=persist first.',
+      error: e.messageZh,
+      code: e.code,
+      messageZh: e.messageZh,
+      action: e.action,
+      nextStep: e.nextStep,
     };
   }
 
@@ -343,25 +383,60 @@ export function syncAuth(target = 'all'): SyncAuthResult {
 
   const hcloud = probeHcloud();
   if (!hcloud.ok) {
+    // #900: three probe states share the table code; the detail distinguishes.
+    const detail =
+      hcloud.status === 'sandbox_home_failure'
+        ? '无法解析用户主目录'
+        : hcloud.status === 'privacy_pending'
+          ? '隐私协议待同意'
+          : '';
+    const e = errorFromTable('HDKIT_KOOCLI_NOT_READY', detail);
     return {
       ok: false,
-      error:
-        hcloud.status === 'sandbox_home_failure'
-          ? 'KooCLI detected but cannot resolve the user home directory in this agent sandbox.'
-          : hcloud.status === 'privacy_pending'
-            ? 'KooCLI privacy agreement is pending.'
-            : 'KooCLI not ready.',
+      error: e.messageZh,
+      code: e.code,
+      messageZh: e.messageZh,
+      action: e.action,
+      // #900 issue comment: nextStep is the executable table action; the
+      // verbose English guidance survives only in the `raw` side-channel.
       nextStep: hcloudProbeNextStep(hcloud),
+      raw: hcloudProbeRaw(hcloud),
       obs: { configured: true, path: obs.path, endpoint: obs.endpoint },
     };
   }
 
+  // #920: the same purge the persist path walks — `configure set` refuses an
+  // empty --cli-security-token, so a stale token in the profile would survive
+  // this sync and poison every hcloud call with APIGW.0301 while syncAuth
+  // still reports ok. Best-effort, shared seam, nothing to clean is fine —
+  // but the outcome is SURFACED (profileReset), never silently swallowed.
+  const purge = runHcloudProfileDelete(profile);
+  const profileReset = purge.ok || /not (exist|found)/i.test(purge.error || '');
+
   const { ok, error } = runHcloudConfigure(profile, credentials.ak, credentials.sk, credentials.region);
   if (!ok) {
+    // #900: `hcloud configure set` failures are usually a missing/invalid
+    // project_id for the target region; anything else keeps the raw (already
+    // redacted) stderr as the detail argument.
+    const detail = String(error || '').trim();
+    const projectIdCause = /project[_\s-]?id/i.test(detail);
+    const e = projectIdCause
+      ? errorFromTable('HDKIT_PROJECT_ID_MISSING', detail)
+      : errorFromTable('HDKIT_KOOCLI_NOT_READY', detail || 'KooCLI 配置同步失败');
+    // For the non-projectId configure failure the table's KOOCLI_NOT_READY
+    // action ("install-hcloud") would advise reinstalling a CLI the probe just
+    // passed — the coherent remediation is the survivor's auth-init refresh,
+    // so action follows nextStep's verb instead of the table default.
+    const configureFailureAction = projectIdCause ? e.action : 'npx huaweicloud-devkit auth init';
     return {
       ok: false,
-      error: error || 'KooCLI config sync failed',
-      nextStep: 'Run "npx huaweicloud-devkit auth init" in a real terminal to refresh the KooCLI config.',
+      error: e.messageZh,
+      code: e.code,
+      messageZh: e.messageZh,
+      action: configureFailureAction,
+      nextStep: projectIdCause
+        ? e.nextStep
+        : 'Run "npx huaweicloud-devkit auth init" in a real terminal to refresh the KooCLI config.',
       obs: { configured: true, path: obs.path, endpoint: obs.endpoint },
     };
   }
@@ -374,11 +449,25 @@ export function syncAuth(target = 'all'): SyncAuthResult {
     ok: true,
     profile,
     obs: { configured: true, path: obs.path, endpoint: obs.endpoint },
-    hcloud: { ok: true, message: `KooCLI config synced to profile=${profile}` },
+    hcloud: {
+      ok: true,
+      message: profileReset
+        ? `KooCLI config synced to profile=${profile}`
+        : `KooCLI config synced to profile=${profile} (profile reset failed: ${
+            purge.error || 'unknown error'
+          } — a stale security token may survive the sync)`,
+    },
     credentialsConfigured: true,
     agents: getAgentRegistrationStatuses(target).agents,
     note: 'OBS credentials were synced from the global credential vault. Agent MCP registration is managed by "npx huaweicloud-devkit install --target <agent>".',
   };
-  if (project.ok) result.projectId = project.projectId;
+  if (project.ok) {
+    result.projectId = project.projectId;
+  } else {
+    // The purge above wiped the profile's cli-project-id, and the restoration
+    // failed — a lie-by-omission here would leave region-scoped calls broken
+    // with APIGW.0301 on an ok:true result (the round-4 review gap).
+    result.hcloud.message += ` (project-id not restored after the profile reset: ${project.reason} — region-scoped hcloud calls may fail with APIGW.0301 until configured)`;
+  }
   return result;
 }

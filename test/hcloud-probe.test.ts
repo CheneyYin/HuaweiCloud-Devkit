@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { classifyHcloudProbe, hcloudProbeNextStep } from '../plugins/huaweicloud-core/src/hcloud-probe.ts';
+import {
+  classifyHcloudProbe,
+  hcloudProbeNextStep,
+  hcloudProbeRaw,
+} from '../plugins/huaweicloud-core/src/hcloud-probe.ts';
 import { getKooCliVersion } from '../plugins/huaweicloud-core/src/koocli-version.ts';
 
 test('hcloud probe classifies matching KooCLI version as ok', () => {
@@ -18,7 +22,9 @@ test('hcloud probe classifies version mismatch separately from not installed', (
   assert.equal(result.installed, true);
   assert.equal(result.ok, true);
   assert.equal(result.versionMismatch, true);
-  assert.match(hcloudProbeNextStep(result), /version mismatch/i);
+  // #900: top-level nextStep is an executable command; English detail only in raw.
+  assert.match(hcloudProbeNextStep(result), /^npx /);
+  assert.match(hcloudProbeRaw(result), /version mismatch/i);
 });
 
 test('hcloud probe classifies privacy agreement pending', () => {
@@ -27,7 +33,8 @@ test('hcloud probe classifies privacy agreement pending', () => {
   assert.equal(result.installed, true);
   assert.equal(result.ok, false);
   assert.equal(result.errorCode, 'HCLOUD_PRIVACY_PENDING');
-  assert.match(hcloudProbeNextStep(result), /privacy/i);
+  assert.match(hcloudProbeNextStep(result), /^npx /);
+  assert.match(hcloudProbeRaw(result), /privacy/i);
 });
 
 test('hcloud probe classifies Codex Windows sandbox home failures', () => {
@@ -36,7 +43,8 @@ test('hcloud probe classifies Codex Windows sandbox home failures', () => {
   assert.equal(result.installed, true);
   assert.equal(result.ok, false);
   assert.equal(result.errorCode, 'HCLOUD_SANDBOX_HOME_FAILURE');
-  assert.match(hcloudProbeNextStep(result), /HCLOUD_BIN|Codex|sandbox/i);
+  assert.match(hcloudProbeNextStep(result), /^npx /);
+  assert.match(hcloudProbeRaw(result), /HCLOUD_BIN|Codex|sandbox/i);
 });
 
 test('hcloud probe classifies executable not found', () => {
@@ -45,12 +53,29 @@ test('hcloud probe classifies executable not found', () => {
   assert.equal(result.installed, false);
   assert.equal(result.ok, false);
   assert.equal(result.errorCode, 'HCLOUD_NOT_FOUND');
-  // The friendly first-use hint: background auto-install may be running,
-  // fixed install dirs are picked up on the next call (no restart), and
-  // the install log path is quoted for support escalation.
-  assert.match(hcloudProbeNextStep(result), /install-hcloud/);
-  assert.match(hcloudProbeNextStep(result), /Background auto-install/);
-  assert.match(hcloudProbeNextStep(result), /no agent restart needed/);
-  assert.match(hcloudProbeNextStep(result), /koocli-install\.log/);
-  assert.doesNotMatch(hcloudProbeNextStep(result), /restart the agent/i);
+  assert.match(hcloudProbeNextStep(result), /install-hcloud/i);
+});
+
+test('not_found nextStep is an executable command routed through ERROR_TABLE (#900)', () => {
+  const result = classifyHcloudProbe({ error: { code: 'ENOENT' }, stdout: '', stderr: '' });
+  const msg = hcloudProbeNextStep(result);
+  // d11-41-nextstep-actionable: nextStep must start with npx/hcloud, not English prose.
+  assert.match(msg, /^(npx |hcloud )/);
+  assert.equal(msg, 'npx huaweicloud-devkit install-hcloud');
+  assert.doesNotMatch(msg, /KooCLI is not installed/); // no English sentence at top level
+  // Verbose English guidance lives only in the raw side-channel: background
+  // auto-install may be running, fixed install dirs are picked up on the next
+  // call (no restart), and the install log path is quoted for escalation.
+  const raw = hcloudProbeRaw(result);
+  assert.match(raw, /install-hcloud/i);
+  assert.match(raw, /Background auto-install/);
+  assert.match(raw, /no agent restart needed/);
+  assert.match(raw, /koocli-install\.log/);
+  assert.doesNotMatch(raw, /restart the agent/i);
+});
+
+test('ok probe nextStep is a directly callable tool name, not English prose (#900)', () => {
+  const result = classifyHcloudProbe({ status: 0, stdout: `当前KooCLI版本:${getKooCliVersion()}`, stderr: '' });
+  assert.equal(hcloudProbeNextStep(result), 'huaweicloud_show_profile_redacted');
+  assert.match(hcloudProbeRaw(result), /huaweicloud_show_profile_redacted/);
 });

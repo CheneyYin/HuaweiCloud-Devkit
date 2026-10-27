@@ -190,7 +190,7 @@ skill-quality-cli run --skill-name huawei-cloud-cts-trace-management -- hcloud C
 
 ## Parameter Confirmation
 
-All parameter names below were verified against `hcloud CTS <Operation> --help` (KooCLI 7.2.12).
+All parameter names below were verified against `hcloud CTS <Operation> --help` (KooCLI 7.2.12; parameter surfaces re-checked identical on 7.3.12).
 Values in `{}` are placeholders — replace with real values. **Do not invent parameter names.**
 
 ### Parameter Validation (Security — mandatory before execution)

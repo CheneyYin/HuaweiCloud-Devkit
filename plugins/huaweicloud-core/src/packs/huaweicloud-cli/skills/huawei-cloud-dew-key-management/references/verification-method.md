@@ -96,4 +96,4 @@ Use a **dedicated sandbox project/account**; never run against production.
 - `hcloud CSMS DownloadSecretBlob ...` and `hcloud KMS DecryptData ...` must be **blocked**
   by the action policy (verify the agent refuses / the MCP safety policy rejects the call).
 - Management commands without user confirmation must not execute (R1/R2 gate).
-- `--help` parameter names must match the SKILL.md tables (KooCLI 7.2.12 baseline).
+- `--help` parameter names must match the SKILL.md tables (KooCLI 7.2.12 baseline; parameter surfaces re-checked identical on 7.3.12).

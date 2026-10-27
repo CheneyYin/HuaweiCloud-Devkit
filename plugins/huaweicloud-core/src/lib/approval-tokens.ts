@@ -47,7 +47,30 @@ interface ApprovalEntry {
   createdAt: number;
 }
 
-type ApprovalMap = Record<string, ApprovalEntry>;
+// Tombstone for a consumed token (D4-24, #745): consumption writes
+// { consumedAt, createdAt } instead of deleting the entry, so a repeat
+// huaweicloud_run_approved_command call can be classified as
+// already_processed rather than not_found. Tombstones age out with the same
+// TTL (createdAt is the original mint time).
+interface ApprovalTombstone {
+  consumedAt: number;
+  createdAt: number;
+}
+
+type ApprovalMap = Record<string, ApprovalEntry | ApprovalTombstone>;
+
+// Approval token lifecycle states, surfaced to callers so they can emit the
+// precise JSON contract required by D4-24 (#745):
+//   'valid'            — token exists, not expired, not yet consumed
+//   'expired'          — token exists but createdAt is past APPROVAL_TTL_MS
+//   'already_consumed' — token was consumed on a prior call (tombstone kept)
+//   'not_found'        — token was never created (unknown / typo / pruned)
+export type ApprovalTokenState = 'valid' | 'expired' | 'already_consumed' | 'not_found';
+
+export interface ApprovalInspection {
+  state: ApprovalTokenState;
+  entry?: ApprovalEntry;
+}
 
 const APPROVAL_TTL_MS = 5 * 60_000;
 
@@ -124,6 +147,11 @@ function readApprovals(): ApprovalMap {
     for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
       if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
       const entry = value as Record<string, unknown>;
+      if (typeof entry.consumedAt === 'number' && typeof entry.createdAt === 'number') {
+        // Tombstone (D4-24): consumed, kept for already_processed classification.
+        result[key] = { consumedAt: entry.consumedAt, createdAt: entry.createdAt };
+        continue;
+      }
       if (typeof entry.argsHash !== 'string' || typeof entry.createdAt !== 'number') continue;
       result[key] = { argsHash: entry.argsHash, argsRedacted: entry.argsRedacted, createdAt: entry.createdAt };
     }
@@ -215,11 +243,35 @@ export function createApprovalToken(rawArgs: unknown): string {
 // marker files outside the marker directory.
 const TOKEN_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+function isTombstone(entry: ApprovalEntry | ApprovalTombstone): entry is ApprovalTombstone {
+  return (entry as ApprovalTombstone).consumedAt !== undefined;
+}
+
+// Inspect a token's lifecycle state WITHOUT consuming it. Used by
+// runApprovedCommand to decide between the 'expired' / 'already_consumed'
+// / 'not_found' JSON shapes (D4-24, #745). Aged-but-unpruned tombstones read
+// as not_found — the same answer the next mint's prune would give, so the
+// classification is time-consistent across the TTL boundary instead of
+// depending on unrelated mints.
+export function inspectApprovalToken(token: string): ApprovalInspection {
+  if (!TOKEN_SHAPE.test(token)) return { state: 'not_found' };
+  const entry = readApprovals()[token];
+  if (!entry) return { state: 'not_found' };
+  if (isTombstone(entry)) {
+    return Date.now() - entry.createdAt > APPROVAL_TTL_MS ? { state: 'not_found' } : { state: 'already_consumed' };
+  }
+  if (Date.now() - entry.createdAt > APPROVAL_TTL_MS) return { state: 'expired' };
+  return { state: 'valid', entry };
+}
+
+// Mint→approve→run across processes: consume claims the entry and replaces it
+// with a tombstone. Returns the claimed entry on success, null otherwise
+// (unknown, already-consumed, or expired — classify via inspectApprovalToken).
 export function consumeApprovalToken(token: string): ApprovalEntry | null {
   if (!TOKEN_SHAPE.test(token)) return null;
   const map = readApprovals();
   const entry = map[token];
-  if (!entry) return null;
+  if (!entry || isTombstone(entry)) return null;
   if (Date.now() - entry.createdAt > APPROVAL_TTL_MS) {
     delete map[token];
     writeApprovals(map);
@@ -227,10 +279,12 @@ export function consumeApprovalToken(token: string): ApprovalEntry | null {
   }
   // Claim after validation: the marker exists only for tokens that were
   // real and unexpired at read time. A crash between claim and the
-  // delete-write below can burn a valid token without spending it —
+  // tombstone-write below can burn a valid token without spending it —
   // fail-closed, rare, accepted.
   if (!claimSingleUse(token)) return null;
-  delete map[token];
+  // Tombstone instead of deleting outright (D4-24): a repeat call is
+  // already_processed, not not_found.
+  map[token] = { consumedAt: Date.now(), createdAt: entry.createdAt };
   writeApprovals(map);
   return entry;
 }

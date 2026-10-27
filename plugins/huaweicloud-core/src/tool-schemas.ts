@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { ToolName } from './tools.ts';
 import type { LooseToolSchema } from './lib/pack-types.ts';
 import { PACK_IDS } from './lib/pack-types.ts';
-import { looseObject } from './lib/tool-schema-parts.ts';
+import { looseObject, vendorConfirmed } from './lib/tool-schema-parts.ts';
 import { UPDATE_TOOL_SCHEMAS } from './packs/update/tools.ts';
 import { HUAWEICLOUD_OPEN_MCP_TOOL_SCHEMAS } from './packs/huaweicloud-open-mcp/tools.ts';
 import { HUAWEICLOUD_CLI_TOOL_SCHEMAS } from './packs/huaweicloud-cli/tools.ts';
@@ -47,6 +47,7 @@ const TOOL_SCHEMAS = {
       .describe('Deployment plan as an object, array, or string.'),
   }),
   huaweicloud_service_catalog: z.looseObject({
+    vendorConfirmed,
     intent: z
       .string()
       .optional()
@@ -91,7 +92,9 @@ const TOOL_SCHEMAS = {
   // spread keeps them in TOOL_SCHEMAS so the satisfies check below still
   // covers every ToolName key.
   ...AUTH_TOOL_SCHEMAS,
-  // The sandbox pack owns its tool schemas (src/packs/sandbox/tools.ts);
+  // The sandbox pack owns its tool schemas (src/packs/sandbox/schemas.ts
+  // since the pack's family split; its tools.ts face re-exports them as
+  // SANDBOX_TOOL_SCHEMAS);
   // the spread keeps them in TOOL_SCHEMAS so the satisfies check below still
   // covers every ToolName key.
   ...SANDBOX_TOOL_SCHEMAS,

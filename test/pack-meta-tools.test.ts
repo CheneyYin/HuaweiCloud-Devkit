@@ -70,7 +70,7 @@ interface ClientToolResult {
   isError?: boolean;
 }
 
-test('huaweicloud_list_packs returns all 10 packs, sandbox carries exactly 12 tool names', async () => {
+test('huaweicloud_list_packs returns all 10 packs, sandbox carries exactly 14 tool names', async () => {
   const result = (await callTool('huaweicloud_list_packs', {})) as ListPacksPayload;
   assert.equal(result.ok, true);
   assert.equal(result.count, 10);
@@ -88,17 +88,17 @@ test('huaweicloud_list_packs returns all 10 packs, sandbox carries exactly 12 to
   assert.equal(cliPack!.skills.length, 20);
   assert.ok(cliPack!.skills.includes('huawei-ecs'));
   const sandbox = result.packs.find((pack) => pack.id === 'sandbox');
-  assert.equal(sandbox!.tools.length, 12);
+  assert.equal(sandbox!.tools.length, 14);
   assert.ok(sandbox!.tools.includes('huaweicloud_sandbox_connect'));
 });
 
-test('huaweicloud_pack_info returns the 12 sandbox tools with name, description, and schema', async () => {
+test('huaweicloud_pack_info returns the 14 sandbox tools with name, description, and schema', async () => {
   const result = (await callTool('huaweicloud_pack_info', { pack: 'sandbox' })) as PackInfoPayload;
   assert.equal(result.ok, true);
   assert.equal(result.pack, 'sandbox');
   assert.deepEqual(result.skills, ['huawei-sandbox']);
   assert.equal(result.enabled, true);
-  assert.equal(result.tools.length, 12);
+  assert.equal(result.tools.length, 14);
   for (const entry of result.tools) {
     assert.equal(typeof entry.name, 'string');
     assert.ok(entry.name.startsWith('huaweicloud_sandbox_'));
@@ -110,8 +110,8 @@ test('huaweicloud_pack_info returns the 12 sandbox tools with name, description,
 });
 
 // pack_info and list_skills serve the same refusal for an unknown pack id
-// (they share the packNotFound helper in tools.ts); one assertion body pins
-// both surfaces instead of a parallel test pair.
+// (they share the packNotFound helper in capability-catalog.ts); one
+// assertion body pins both surfaces instead of a parallel test pair.
 async function assertBogusPackError(toolName: 'huaweicloud_pack_info' | 'huaweicloud_list_skills'): Promise<void> {
   const result = (await callTool(toolName, { pack: 'bogus' })) as ToolErrorPayload;
   assert.equal(result.ok, false);
@@ -165,6 +165,7 @@ test('huaweicloud_list_skills catalogs the enabled non-core skills with parsed d
     'flavors.md',
     'hc-activity.md',
     'troubleshooting.md',
+    'windows-ssh.md',
   ]);
   assert.ok(isAbsolute(result.skillRoot ?? ''), 'stdio sessions disclose the tree location as an absolute path');
   assert.ok(
@@ -365,7 +366,7 @@ test('pack_info schema output matches the tools/list rendering after stripping i
         compared++;
       }
     }
-    assert.equal(compared, 51, 'every registered tool must be compared');
+    assert.equal(compared, 55, 'every registered tool must be compared');
   } finally {
     await client.close();
     await server.close();

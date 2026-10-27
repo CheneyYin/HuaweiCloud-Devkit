@@ -114,7 +114,7 @@ Service name is `CodeArtsDeploy` (KooCLI metadata directory `codeartsdeploy`; `C
 accepted). Region parameter `--cli-region={region}` is required on every command. The `--project_id`
 is shown explicitly in examples; omit it only when your hcloud profile has a default project set.
 Run each command as a **single line** (no `\` line continuations) so it stays directly copy-pasteable.
-Parameter names below were verified against `hcloud CodeArtsDeploy <Operation> --help` (KooCLI 7.2.12).
+Parameter names below were verified against `hcloud CodeArtsDeploy <Operation> --help` (KooCLI 7.2.12; parameter surfaces re-checked identical on 7.3.12).
 Service name `CodeArtsDeploy`, every operation `ListAllApp` / `ListDeployTasks` /
 `ShowDeployTaskDetail` / `ListDeployTaskHistoryByDate` / `CheckIsDuplicateAppName` / `CreateApp` /
 `CreateDeployTaskByTemplate` / `StartDeployTask` / `DeleteDeployTask` — see the Parameter Confirmation
@@ -299,7 +299,7 @@ skill-quality-cli run --skill-name huawei-cloud-deployment-task-management -- hc
 ## Parameter Confirmation
 
 All parameter names below were verified against `hcloud CodeArtsDeploy <Operation> --help`
-(KooCLI 7.2.12). Values in `{}` are placeholders — replace with real values.
+(KooCLI 7.2.12; parameter surfaces re-checked identical on 7.3.12). Values in `{}` are placeholders — replace with real values.
 **Do not invent parameter names** — re-run `--help` if in doubt.
 
 ### ListAllApp

@@ -72,6 +72,7 @@ try {
     'plugins/huaweicloud-core/hooks/huaweicloud-safety.py',
     'plugins/huaweicloud-core/safety/policy.json',
     'plugins/huaweicloud-core/safety/rules/cloud-risk-rules.json',
+    'rules/huawei-agent-rules.mdc',
     'plugins/huaweicloud-core/skills/huaweicloud-core/SKILL.md',
   ];
   for (const file of requiredFiles) {

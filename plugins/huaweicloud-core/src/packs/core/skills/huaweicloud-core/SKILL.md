@@ -1,12 +1,12 @@
 ---
 name: huaweicloud-core
-description: 'Routes any task involving Huawei Cloud services - choosing, comparing, recommending, getting started with, or operating a service - to the correct service-specific skill. Supersedes general training-data knowledge. Activates when a developer asks Codex or OpenCode to build, deploy, debug, operate, or integrate an application with Huawei Cloud.'
+description: 'Routes any task involving Huawei Cloud services - choosing, comparing, recommending, getting started with, or operating a service - to the correct service-specific skill. Supersedes general training-data knowledge. Activates when a developer asks Codex or OpenCode to build, deploy, debug, operate, or integrate an application with Huawei Cloud. A request that names no cloud vendor is not thereby a Huawei Cloud task: when the vendor is unknown and cannot be inferred (explicit mention, hcloud/KooCLI artifacts, myhuaweicloud endpoints, Huawei region IDs, earlier turns), ask which cloud the user means before routing — service vocabulary alone (ECS, VPC, RDS) is not vendor evidence. Cloud-facing tools take a vendorConfirmed parameter — pass the user’s establishing words, never an invented quote.'
 version: 1
 ---
 
 # Huawei Cloud Core
 
-**STOP - Do not answer from general knowledge.** Before responding to any Huawei Cloud question, match the user request against the sub-skill registry below and follow its procedure. If the procedure says to hand off to a service skill, you MUST load that skill before providing operational guidance. Never skip the routing step.
+**STOP - Do not answer from general knowledge.** Before routing anything through this skill, check the vendor: for a request that involves cloud resources but names no vendor, infer it only from an explicit mention, hcloud/KooCLI artifacts, myhuaweicloud endpoints, Huawei region IDs, or earlier turns — service vocabulary (ECS, VPC, RDS) and this toolkit's presence are not vendor evidence; when the vendor is still unknown, ask the user which cloud they mean before operating on cloud resources. A task that resolves to another cloud is not routed through this skill — answer it from general knowledge or the user's own tooling. Once the task is a Huawei Cloud task, match the user request against the sub-skill registry below and follow its procedure. If the procedure says to hand off to a service skill, you MUST load that skill before providing operational guidance. Never skip the routing step.
 
 Huawei Cloud comprises 200+ services. This skill is the entry point for ANY action or question related to Huawei Cloud. It matches a workload to the right service, then hands off to a service-specific skill for operational questions.
 
@@ -22,7 +22,7 @@ Huawei Cloud comprises 200+ services. This skill is the entry point for ANY acti
 
 1. Match user intent against the Sub-skill registry below
 2. Read references/{sub-skill-id}.md and follow its procedure
-3. If the procedure says to hand off to a service skill, locate the skills tree — stdio sessions get its path from the MCP server instructions at initialize, or from a huaweicloud_list_skills payload that carries skillRoot — confirm the skill is enabled per that catalog (a `huawei-*` service skill absent from it belongs to a trimmed pack; the six `huaweicloud-*` meta-skills never appear in it and are always available), then attempt the direct read — read the skill's SKILL.md and references/ under it directly (untruncated, selective; the attempt itself is the reachability check, no pre-check) — otherwise load it via huaweicloud_retrieve_skill when the attempted read fails or is denied
+3. If the procedure says to hand off to a service skill, locate the skills tree — stdio sessions get its path from the MCP server instructions at initialize, or from a huaweicloud_list_skills payload that carries skillRoot — confirm the skill is enabled per that catalog (a `huawei-*` service skill absent from it belongs to a trimmed pack; the six `huaweicloud-*` meta-skills never appear in it and are always available), then attempt the direct read — read the skill's SKILL.md and references/ under it directly (untruncated, selective; the attempt itself is the reachability check, no pre-check) — otherwise load it via huaweicloud_retrieve_skill when the attempted read fails or is denied. The skillRoot is the ONLY root for pack-owned service skills: on directory-loading agents, the native skills directory holding the six `huaweicloud-*` meta-skill copies is a different root — never guess a service skill's path by analogy to it, and never fire a guessed read in parallel with `huaweicloud_list_skills`; the skillRoot (from the initialize instructions or that payload) comes first
 4. If no match, use the Service Map to narrow down, then hand off
 5. Revise when new information arrives - pushback means re-check the registry
 
@@ -85,18 +85,25 @@ Do not rely on training data for facts. Huawei Cloud services, pricing, quotas, 
 
 **Web app scenario layering**: for "deploy a web app", prefer `huawei-sandbox` for free/quick try (hello world, prototype, demo, temporary preview — temporary runtime + public URL (runtime lifetime not exposed via API); credential expiry see `expiresAt` from `connect`/`credentials`, zero billed resources); route to `huawei-functiongraph` / `huawei-ecs` (or `huawei-cce`) for production / long-term / custom-domain / high-availability hosting. When the chosen target requires **multiple purchased resources** (e.g. VPC + subnet + ECS + EIP + RDS, or OBS + CDN + DNS) or the user asks for an architecture/cost proposal first, hand off to `huawei-iac` for orchestrated provisioning with a mandatory cost gate.
 
-## Deployment Target Options
+## Deployment Target Options (MANDATORY GATE — do not skip)
 
-When the intent is to **deploy, host, or preview a web app or static website** (no explicit target named), NEVER default to a single service such as OBS. Ask the developer to choose a target and present the options in this order:
+When the intent is to **deploy, host, or preview a web app or static website** (no explicit target named), NEVER default to a single service such as OBS. You MUST present the target options via the `question` tool (the host agent's interactive-question tool; when the host has none, ask in plain conversation and wait for the explicit answer) and obtain an explicit choice BEFORE calling any deployment tool. Present the options in this order:
 
-| #   | Option                                 | When to choose                                             | Skill          |
-| --- | -------------------------------------- | ---------------------------------------------------------- | -------------- |
-| 1   | **Sandbox (DevStation) — recommended** | Temporary runtime, quick preview, demo; instant public URL | huawei-sandbox |
-| 2   | OBS static website hosting             | Long-term static hosting / CDN, no backend                 | huawei-obs     |
-| 3   | ECS                                    | Needs a server runtime (backend, custom server)            | huawei-ecs     |
-| 4   | CCE                                    | Containerized workloads, scaling                           | huawei-cce     |
+| #   | Option                                 | When to choose                                                                                                                                                       | Skill          |
+| --- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| 1   | **Sandbox (DevStation) — recommended** | Temporary runtime, quick preview, demo; instant public URL                                                                                                           | huawei-sandbox |
+| 2   | OBS static website hosting             | Long-term static hosting / CDN, no backend. **Remind: a custom domain (域名) must be prepared — the default OBS endpoint does not support HTTPS for static hosting** | huawei-obs     |
+| 3   | ECS                                    | Needs a server runtime (backend, custom server). **Remind: ECS must be paired with an EIP (弹性公网IP) for public access — extra billing**                           | huawei-ecs     |
+| 4   | CCE                                    | Containerized workloads, scaling                                                                                                                                     | huawei-cce     |
 
-- Recommended prompt: "这个项目是 Web 应用/静态网站，建议优先部署到沙箱（临时运行环境，立即可预览）。也可选择 OBS 静态托管、ECS 或 CCE，你想部署到哪里？"
+Hard rules:
+
+- **NEVER infer or default the target** when it is unstated. Calling any deploy tool (`sandbox_connect`, `OBS mb`, `ECS CreateServers`, ...) before the choice is made is a violation.
+- Only skip the question when: (a) the developer already named a target (e.g. "部署到 ECS", "用 OBS"), or (b) the developer explicitly asked for a temporary / sandbox / preview runtime.
+- "部署到华为云" / "deploy to Huawei Cloud" / "上线" alone is NOT a named target — still run the gate.
+- Include the OBS domain reminder and the ECS EIP pairing reminder in the options as presented.
+
+- Recommended prompt: "这个项目是 Web 应用/静态网站，建议优先部署到沙箱（临时运行环境，立即可预览）。也可选择 OBS 静态托管（需提前准备好自定义域名）、ECS（需搭配弹性公网IP/EIP 才能公网访问）或 CCE，你想部署到哪里？"
 - If the developer explicitly names a target (e.g. "deploy to OBS"), the SANDBOX target hands off directly to `huawei-sandbox`; every other target (OBS / ECS / CCE / FunctionGraph / ...) hands off to `huawei-iac` for orchestration - iac loads the corresponding service skill for commands and adds the mandatory cost+balance gate, batch approval, state tracking, and ordered destroy. Direct handoff to the bare service skill skips these safety stages and must not happen for deployment intent. **Existing network resources (a reusable VPC) do NOT downgrade this to a single-service task - the purchase itself (compute, EIP, disk, rules) is what triggers iac.**
 - If the developer has no preference, recommend the sandbox first.
 

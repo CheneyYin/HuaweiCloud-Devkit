@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 
-import { compareVersion, getKooCliVersion, parseHcloudVersion } from './koocli-version.ts';
+import { errorFromTable } from './auth/error-table.ts';
+import { compareVersion, getKooCliVersion, parseHcloudVersion, stripKooCliUpdateBanner } from './koocli-version.ts';
 import { redactSecrets } from './safety-policy.ts';
 import { DEPENDENCIES } from './lib/dependency-model.ts';
 import { resolveDependencyCommand } from './lib/dep-resolve.ts';
@@ -78,8 +79,12 @@ export function classifyHcloudProbe(
   result: HcloudProbeResultLike,
   requiredVersion: string | null = getKooCliVersion(),
 ): HcloudProbeClassification {
-  const stdout = String(result.stdout || '');
-  const stderr = String(result.stderr || '');
+  // A4 (#935): the 7.2.x banner names the TARGET version (更新至 7.3.12) —
+  // unstripped, parseHcloudVersion's first-match wins the banner's version and
+  // the installed-vs-paired mismatch (and check_cli's soft hint) silently
+  // disappears. Strip before any version parsing.
+  const stdout = stripKooCliUpdateBanner(String(result.stdout || ''));
+  const stderr = stripKooCliUpdateBanner(String(result.stderr || ''));
   const output = `${stdout}${stderr}`;
   const installedVersion = parseHcloudVersion(output);
 
@@ -148,8 +153,11 @@ export function probeHcloud(options: ProbeHcloudOptions = {}) {
     timeout: options.timeoutMs ?? 5000,
   });
   const classified = classifyHcloudProbe(r, options.requiredVersion);
-  const stdout = redactSecrets(String(r.stdout || '').trim());
-  const stderr = redactSecrets(String(r.stderr || r.error?.message || '').trim());
+  // A4 (#935): surfaced probe output is agent-facing — the banner rides every
+  // 7.2.x command, `hcloud version` included; check_cli/doctor's own soft
+  // hint stays the only sanctioned upgrade nudge.
+  const stdout = redactSecrets(stripKooCliUpdateBanner(String(r.stdout || '').trim()));
+  const stderr = redactSecrets(stripKooCliUpdateBanner(String(r.stderr || r.error?.message || '').trim()));
   return {
     executable,
     exitCode: r.status,
@@ -160,7 +168,12 @@ export function probeHcloud(options: ProbeHcloudOptions = {}) {
   };
 }
 
-export function hcloudProbeNextStep(probe: HcloudProbeClassification): string {
+// #900 (issue comment Required 1): every not-ready probe state routes through
+// the shared ERROR_TABLE.HDKIT_KOOCLI_NOT_READY so nextStep is always a
+// directly executable command (d11-41-nextstep-actionable). The verbose
+// English guidance is preserved verbatim in hcloudProbeRaw() — a docs/debug
+// side-channel — and must never leak back into the top-level nextStep.
+export function hcloudProbeRaw(probe: HcloudProbeClassification): string {
   if (probe.status === 'ok')
     return 'Use huaweicloud_show_profile_redacted to inspect the active KooCLI profile safely.';
   if (probe.status === 'version_mismatch') {
@@ -179,4 +192,18 @@ export function hcloudProbeNextStep(probe: HcloudProbeClassification): string {
     );
   }
   return 'Install Huawei Cloud KooCLI: npx huaweicloud-devkit install-hcloud. Configure credentials outside the agent conversation.';
+}
+
+export function hcloudProbeNextStep(probe: HcloudProbeClassification): string {
+  if (probe.status === 'ok') return 'huaweicloud_show_profile_redacted';
+  const detail =
+    probe.status === 'version_mismatch'
+      ? `版本不匹配(已装 ${probe.installedVersion ?? '未知'},插件配套 ${probe.requiredVersion ?? '未知'})`
+      : probe.status === 'sandbox_home_failure'
+        ? '无法解析用户主目录'
+        : probe.status === 'privacy_pending'
+          ? '隐私协议待同意'
+          : '';
+  const e = errorFromTable('HDKIT_KOOCLI_NOT_READY', detail);
+  return e.nextStep;
 }

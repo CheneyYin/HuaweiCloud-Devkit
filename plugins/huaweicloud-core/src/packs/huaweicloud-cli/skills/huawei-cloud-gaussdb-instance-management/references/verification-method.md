@@ -37,7 +37,7 @@ How to verify the output of each `huawei_*` action after execution.
 
 ## Reusable Sample Data
 
-Concrete values for business/optional parameters, verified against KooCLI 7.2.12
+Concrete values for business/optional parameters, verified against KooCLI 7.2.12 (parameter surfaces re-checked identical on 7.3.12)
 help output in `cn-north-4`. Use these for verification runs and automated tests
 instead of empty placeholders.
 

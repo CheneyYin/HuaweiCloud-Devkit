@@ -1,6 +1,6 @@
 # OBS Bucket Lifecycle
 
-> KooCLI OBS uses obsutil-style commands. `OBS CreateBucket` → `OBS mb`. `SetBucketWebsite` is NOT supported in KooCLI OBS (use API/SDK).
+> KooCLI OBS uses obsutil-style commands. `OBS CreateBucket` → `OBS mb`. `SetBucketWebsite` (API-style) is not a KooCLI operation: 7.3.12+ ships `hcloud OBS website obs://<bucket> -method=put -localfile=<xml>`; the plugin's `huaweicloud_obs_set_website_config` tool (set/get/delete) needs no XML file. 7.2.x had neither.
 
 ## Create Bucket
 
@@ -24,7 +24,7 @@ hcloud OBS lifecycle obs://<bucket> -method=put -localfile=<lifecycle.json>
 
 ## Static Website
 
-Not available via KooCLI OBS CLI. Use `hcloud OBS chattri obs://<bucket> -acl=public-read` for bucket ACL, or use API/SDK for website configuration.
+On KooCLI 7.3.12+: `hcloud OBS website obs://<bucket> -method=put -localfile=<xml>`. On older versions: `huaweicloud_obs_set_website_config` (the plugin tool) or the console. Use `hcloud OBS chattri obs://<bucket> -acl=public-read` for bucket ACL either way.
 
 ## Cross-Region Replication
 

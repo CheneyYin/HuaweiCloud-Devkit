@@ -1,10 +1,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
 import { codexPluginProbe } from '../codex-probe.ts';
+import { probeOfficeaceSystemDirs } from '../officeace-paths.ts';
+import { asRecord } from '../lib/as-record.ts';
 
 export const SUPPORTED_AGENT_TARGETS: string[] = [
   'opencode',
@@ -30,14 +31,17 @@ export const SUPPORTED_AGENT_TARGETS: string[] = [
 // relative XDG_CONFIG_HOME still splits installer (~/.config) from agent
 // (<cwd>/<relative>). Matching cwd-dependent resolution would be worse;
 // every opencode path derivation — the write side (configRoot in
-// setup-cli.ts), the detection side below, and the agent-presence probe —
+// src/targets.ts), the detection side below, and the agent-presence probe —
 // must share this resolver regardless.
 export function xdgConfigHome(): string {
   const xdg = process.env.XDG_CONFIG_HOME;
   return xdg && isAbsolute(xdg) ? xdg : join(homedir(), '.config');
 }
 
-function opencodeConfigFile(): string {
+// The canonical jsonc-then-json preference: the detection side here and the
+// installer's write side (re-exported through src/targets.ts) must resolve
+// the same file or a written config goes unread.
+export function opencodeConfigFile(): string {
   const jsonc = join(xdgConfigHome(), 'opencode', 'opencode.jsonc');
   if (existsSync(jsonc)) return jsonc;
   return join(xdgConfigHome(), 'opencode', 'opencode.json');
@@ -50,10 +54,6 @@ function readJsonSafe(path: string): unknown {
   } catch {
     return null;
   }
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 function opencodeRegistered(): boolean {
@@ -123,42 +123,13 @@ function dshRegistered(): boolean {
   }
 }
 
-function readOfficeaceRegistryInstallDir(): string | null {
-  if (process.platform !== 'win32') return null;
-  try {
-    const r = spawnSync('reg', ['query', 'HKCU\\SOFTWARE\\OfficeAce\\OfficeAce', '/v', 'InstallDir'], {
-      encoding: 'utf8',
-      windowsHide: true,
-      timeout: 5000,
-    });
-    if (r.status === 0) {
-      const m = r.stdout.match(/InstallDir\s+REG_SZ\s+(.+)/);
-      if (m) return m[1]!.trim();
-    }
-  } catch {
-    // best-effort: a failed reg query falls through to the Program Files probing below
-  }
-  return null;
-}
-
+// The shared Windows-side probe (registry + Program Files) lives in
+// officeace-paths.ts; agent-registration's predicate requires
+// capabilities.json, the installer's accepts any OfficeAce evidence.
 function officeaceCapabilitiesDir(): string | null {
   const configRoot = process.env.OFFICE_CLAW_CONFIG_ROOT;
   if (configRoot && existsSync(join(configRoot, 'capabilities.json'))) return configRoot;
-  const regDir = readOfficeaceRegistryInstallDir();
-  if (regDir) {
-    const dir = join(regDir, '.office-claw');
-    if (existsSync(join(dir, 'capabilities.json'))) return dir;
-  }
-  if (process.platform === 'win32') {
-    const bases: Array<string | undefined> = [process.env.ProgramFiles, 'C:\\Program Files', 'D:\\Program Files'];
-    if (process.env.LOCALAPPDATA) bases.push(join(process.env.LOCALAPPDATA, 'Programs'));
-    for (const base of bases) {
-      if (!base) continue;
-      const dir = join(base, 'OfficeAce', '.office-claw');
-      if (existsSync(join(dir, 'capabilities.json'))) return dir;
-    }
-  }
-  return null;
+  return probeOfficeaceSystemDirs((dir) => existsSync(join(dir, 'capabilities.json')));
 }
 
 function officeaceCapabilitiesDirSafe(): string {

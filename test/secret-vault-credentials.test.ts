@@ -33,6 +33,13 @@ function withVaultHome(fn: (home: string) => void): void {
   const previous = {
     HUAWEICLOUD_HOME: process.env.HUAWEICLOUD_HOME,
     HCLOUD_OBS_CONFIG_PATH: process.env.HCLOUD_OBS_CONFIG_PATH,
+    // The #920 persist purge (runHcloudProfileDelete) reads the KooCLI config
+    // and spawns the resolved hcloud binary: without these two, a dev machine
+    // with a real ~/.hcloud/config.json and a real hcloud on PATH would have
+    // its REAL current profile deleted by persistCredentials in these tests.
+    HCLOUD_CONFIG_PATH: process.env.HCLOUD_CONFIG_PATH,
+    HCLOUD_BIN: process.env.HCLOUD_BIN,
+    HCLOUD_BIN_ARGS_JSON: process.env.HCLOUD_BIN_ARGS_JSON,
     HW_ACCESS_KEY: process.env.HW_ACCESS_KEY,
     HW_SECRET_KEY: process.env.HW_SECRET_KEY,
     HW_SECURITY_TOKEN: process.env.HW_SECURITY_TOKEN,
@@ -42,10 +49,16 @@ function withVaultHome(fn: (home: string) => void): void {
   };
   process.env.HUAWEICLOUD_HOME = home;
   process.env.HCLOUD_OBS_CONFIG_PATH = join(home, '.obsutilconfig');
+  process.env.HCLOUD_CONFIG_PATH = join(home, '.hcloud', 'config.json');
   process.env.HW_VAULT_MASTER_KEY = Buffer.alloc(32, 0x44).toString('base64');
   for (const key of ['HW_ACCESS_KEY', 'HW_SECRET_KEY', 'HW_SECURITY_TOKEN', 'HW_REGION', 'HUAWEICLOUD_REGION']) {
     delete process.env[key];
   }
+  // Point at a nonexistent binary: a resolve failure keeps the persist's
+  // profile resolution null (no purge, no configure) — the vault behavior
+  // under test is unaffected, and no real hcloud can ever run.
+  process.env.HCLOUD_BIN = join(home, 'no-such-hcloud');
+  delete process.env.HCLOUD_BIN_ARGS_JSON;
   clearCustodyCache();
   try {
     return fn(home);

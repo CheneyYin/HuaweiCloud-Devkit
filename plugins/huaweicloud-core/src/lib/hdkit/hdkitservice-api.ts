@@ -1,7 +1,8 @@
-import { getProxyDispatcher } from '../../proxy/proxy-agent.ts';
+import { fetchWithProxy } from '../../proxy/proxy-agent.ts';
 import { cacheUserHash } from '../../telemetry/telemetry.ts';
 import { readInstalledVersion } from '../../update-check.ts';
 import { getCredentials } from './hwlink-api.ts';
+import { asRecord } from '../as-record.ts';
 import { asText } from '../as-text.ts';
 
 interface HdkitError extends Error {
@@ -17,10 +18,6 @@ interface HttpResponseLike {
   ok: boolean;
   status: number;
   text(): Promise<string>;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 function getHdkitBaseUrl(): string {
@@ -57,22 +54,12 @@ async function hdkitRequest(
 
   let resp: HttpResponseLike;
   try {
-    const dispatcher = await getProxyDispatcher(url);
-    const fetchOpts: RequestInit = {
+    resp = await fetchWithProxy(url, {
       method,
       headers,
       body: body ? JSON.stringify(body) : undefined,
       signal: controller.signal,
-    };
-    if (dispatcher) {
-      const { fetch: undiciFetch } = await import('undici');
-      // Bridge the duplicated undici type packages (@types/node's undici-types
-      // vs the undici npm package); both describe the same runtime RequestInit.
-      const init = { ...fetchOpts, dispatcher } as unknown as Parameters<typeof undiciFetch>[1];
-      resp = await undiciFetch(url, init);
-    } else {
-      resp = await fetch(url, fetchOpts);
-    }
+    });
   } finally {
     clearTimeout(timer);
   }
@@ -152,21 +139,26 @@ export async function hdkitCredentials(
   return await hdkitRequest('POST', 'credentials', body);
 }
 
+// The voucher endpoints answer failures with a { claimed: false } shape
+// instead of throwing, so the claim flow can warn rather than abort. The
+// three endpoints share the fallback; only the service-unavailable wording
+// differs.
+function voucherFallback(error: unknown, unavailableMessage: string): Record<string, unknown> {
+  const err = error as { message?: unknown; code?: unknown; remediation?: unknown };
+  return {
+    claimed: false,
+    message: typeof err.message === 'string' && err.message ? err.message : unavailableMessage,
+    code: err.code,
+    ...(err.remediation ? { remediation: err.remediation } : {}),
+  };
+}
+
 export async function hdkitVoucherStatus(domainId?: string): Promise<Record<string, unknown>> {
   try {
     const path = domainId ? `voucher/status?domain_id=${encodeURIComponent(domainId)}` : 'voucher/status';
     return await hdkitRequest('GET', path, undefined, 30000);
   } catch (error) {
-    const err = error as { message?: unknown; code?: unknown; remediation?: unknown };
-    return {
-      claimed: false,
-      message:
-        typeof err.message === 'string' && err.message
-          ? err.message
-          : 'Incentive service unavailable, please try again later',
-      code: err.code,
-      ...(err.remediation ? { remediation: err.remediation } : {}),
-    };
+    return voucherFallback(error, 'Incentive service unavailable, please try again later');
   }
 }
 
@@ -175,16 +167,7 @@ export async function hdkitVoucherClaim(domainId?: string): Promise<Record<strin
     const body: Record<string, unknown> = domainId ? { domain_id: domainId } : {};
     return await hdkitRequest('POST', 'voucher/claim', body);
   } catch (error) {
-    const err = error as { message?: unknown; code?: unknown; remediation?: unknown };
-    return {
-      claimed: false,
-      message:
-        typeof err.message === 'string' && err.message
-          ? err.message
-          : 'Incentive service unavailable, please try again later',
-      code: err.code,
-      ...(err.remediation ? { remediation: err.remediation } : {}),
-    };
+    return voucherFallback(error, 'Incentive service unavailable, please try again later');
   }
 }
 
@@ -193,15 +176,6 @@ export async function hdkitCompetitionVoucherClaim(domainId?: string): Promise<R
     const body: Record<string, unknown> = domainId ? { domain_id: domainId } : {};
     return await hdkitRequest('POST', 'competition/voucher/claim', body);
   } catch (error) {
-    const err = error as { message?: unknown; code?: unknown; remediation?: unknown };
-    return {
-      claimed: false,
-      message:
-        typeof err.message === 'string' && err.message
-          ? err.message
-          : 'Competition voucher service unavailable, please try again later',
-      code: err.code,
-      ...(err.remediation ? { remediation: err.remediation } : {}),
-    };
+    return voucherFallback(error, 'Competition voucher service unavailable, please try again later');
   }
 }

@@ -82,3 +82,4 @@ Domain expertise for Huawei Cloud Virtual Private Cloud (VPC). Covers VPC/subnet
 - VPC Docs: https://support.huaweicloud.com/vpc/
 - Subnet guide: references/subnet.md
 - Security group: references/security-group.md
+- Network (EIP/NAT/VPN) + ELB pointers: references/network.md

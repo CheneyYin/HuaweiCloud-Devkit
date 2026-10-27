@@ -17,6 +17,7 @@ import { getToolSchema, assertConstructedSchemas } from './tool-schemas.ts';
 import { peekCachedUpdateInfo, applyUpdateHint, readInstalledVersion } from './update-check.ts';
 import { initTelemetry } from './telemetry/telemetry.ts';
 import { detectAgent } from './telemetry/agent-detect.ts';
+import { asRecord } from './lib/as-record.ts';
 
 const pkgVersion = readInstalledVersion() || '0.0.0';
 
@@ -85,6 +86,33 @@ const pkgVersion = readInstalledVersion() || '0.0.0';
 const TRIMMED_CAPABILITY_RULE =
   "That unavailability is about the capability, not just the skill text or the MCP tools: a trimmed pack's services are unavailable through every execution path, including hcloud commands run directly from your shell — never silently proceed that way; confirm with the user instead. ";
 
+// Vendor boundary, shared by every instruction form. Measured failure
+// (live probe, 2026-10-23, opencode 1.19.0 + glm-5.2, twice-stable): with
+// a vendor-neutral prompt ("查看ECS实例列表") in a context carrying no
+// Huawei Cloud signal, the model called auth_status then
+// run_readonly_command(ECS ListServersDetails) without ever asking which
+// cloud the user meant — every disclosure surface conditioned on "the task
+// IS a Huawei Cloud task" while none defined what makes it one, so tool
+// availability stood in as intent evidence. The rule defines the
+// inference boundary explicitly (vendor mention, hcloud artifacts,
+// myhuaweicloud endpoints, Huawei region IDs, earlier turns — generic
+// service vocabulary and the devkit's own presence do NOT infer it) and
+// gates both cloud-resource operations AND the Huawei Cloud
+// tooling/credential/account probe face (CLI install checks, profile
+// reads, auth status — the measured first moves); devkit meta tools
+// (check_update, list_skills, ...) fall outside by construction — the
+// probe clause names tooling/credential/account state, not the plugin's
+// own version, catalog, or skills. The wording leads with the procedure
+// and keeps the other-cloud allowance positive ("remain answerable from
+// general knowledge") — evaluative classifications and
+// exemption-from-prohibition phrasing primed refusal in the 2026-10-19
+// retrieve_skill measurement.
+const VENDOR_BOUNDARY_RULE =
+  'Vendor boundary: tools or skills being available in this session is not evidence of which cloud the user means. ' +
+  "For a request that involves cloud resources but names no vendor, infer the vendor only from an explicit mention, hcloud/KooCLI artifacts, myhuaweicloud endpoints, Huawei region IDs, or earlier turns of this conversation — generic service vocabulary (ECS, VPC, RDS, serverless) and the devkit's own presence do not infer it. " +
+  "When the vendor is still unknown, ask the user which cloud they mean before operating on cloud resources through any tool or hcloud command, and before probing Huawei Cloud tooling, credential, or account state (CLI install checks, profile reads, auth status). Cloud-facing tools enforce this with a vendorConfirmed parameter — pass the user's establishing words as its value, never an invented quote. " +
+  "Requests that are not cloud tasks are outside this rule; tasks for other clouds remain answerable from general knowledge — the devkit's tools themselves only operate on Huawei Cloud. ";
+
 export function instructionsFor(remote: boolean, runtimePacks = false): string {
   if (remote) {
     return (
@@ -95,6 +123,7 @@ export function instructionsFor(remote: boolean, runtimePacks = false): string {
       'Which skills are ENABLED is pack-gated (the operator controls pack posture); ' +
       'a huawei-* service skill absent from the catalog belongs to a trimmed pack; treat it as unavailable. ' +
       TRIMMED_CAPABILITY_RULE +
+      VENDOR_BOUNDARY_RULE +
       'Route Huawei Cloud tasks through the huaweicloud-core skill; browse packs with huaweicloud_list_packs.'
     );
   }
@@ -112,6 +141,19 @@ export function instructionsFor(remote: boolean, runtimePacks = false): string {
     `To load a skill, attempt the direct read first: read ${SKILLS_ROOT}/<name>/SKILL.md and the references/ files you need with your file tools — untruncated and selective. ` +
     'Do not pre-check reachability and do not call huaweicloud_retrieve_skill before attempting — the attempt itself is the check. ' +
     'If a direct read of the tree fails or is denied, load the skill with huaweicloud_retrieve_skill instead — it needs no file access. ' +
+    // Measured miss (2026-10-23, live session): with the six meta-skill
+    // native copies listed in the agent's own skills directory, a session
+    // guessed a service skill's path by analogy to that directory and
+    // fired the guessed read in parallel with list_skills instead of
+    // waiting for skillRoot — File not found on the first move. The
+    // clause names the two roots and the sequencing rule. Scoped to
+    // pack-owned service skills (marketplace-installed skills legitimately
+    // live in the agent skills directory); the native-copy reference is
+    // conditional because only the eight directory-loading agents carry
+    // those copies — the manifest-surface harnesses have no such
+    // directory, and the stdio instructions render on both.
+    "Root disambiguation: huawei-* pack-owned service skills live only in this tree — on directory-loading agents, the native skills directory carrying the six huaweicloud-* meta-skill copies in your context is a different root, so never guess a service skill's path by analogy to it; the tree location stated above (skillRoot, the field a huaweicloud_list_skills payload carries) must be in hand before the first service-skill read, never fetched in parallel with a guessed one. " +
+    VENDOR_BOUNDARY_RULE +
     'Route Huawei Cloud tasks through the huaweicloud-core skill; browse packs with huaweicloud_list_packs.'
   );
 }
@@ -167,10 +209,6 @@ export function _isHintConsumed(sessionId: string): boolean {
 // Both call sites hand over the full initialize params; the client identity
 // lives one level down at params.clientInfo. A call site that passed params
 // straight into detectAgent silently degraded agent detection to env-only.
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
 export function toClientInfo(params: unknown): { name: string | null; version: string | null } {
   const info = asRecord(asRecord(params).clientInfo);
   return {

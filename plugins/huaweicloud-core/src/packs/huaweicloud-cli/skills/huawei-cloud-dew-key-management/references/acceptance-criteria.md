@@ -37,11 +37,11 @@
 
 ## CLI dependency declaration
 
-| #     | Criterion                                                     | Verification                                                                 |
-| ----- | ------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| AC-30 | `hcloud DEW/CSMS/KMS/CTS` CLI dependency declared correctly   | hcloud CLI in Prerequisites; service names match `hcloud <svc> --help` usage |
-| AC-31 | Every concrete command includes `--cli-region`                | grep check                                                                   |
-| AC-32 | Parameter names match `hcloud --help` exactly (KooCLI 7.2.12) | Verified during Phase 2 research                                             |
+| #     | Criterion                                                                                                        | Verification                                                                 |
+| ----- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| AC-30 | `hcloud DEW/CSMS/KMS/CTS` CLI dependency declared correctly                                                      | hcloud CLI in Prerequisites; service names match `hcloud <svc> --help` usage |
+| AC-31 | Every concrete command includes `--cli-region`                                                                   | grep check                                                                   |
+| AC-32 | Parameter names match `hcloud --help` exactly (KooCLI 7.2.12; parameter surfaces re-checked identical on 7.3.12) | Verified during Phase 2 research                                             |
 
 ## Quality & compliance
 

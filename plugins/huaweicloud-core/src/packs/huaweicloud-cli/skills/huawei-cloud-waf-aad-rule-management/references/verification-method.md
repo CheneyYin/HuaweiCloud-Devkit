@@ -6,7 +6,7 @@ operations require preview + user confirmation (R2/R1).
 ## 1. Environment checks
 
 ```bash
-hcloud version                       # >= 7.2.12
+hcloud version                       # >= 7.2.12 (7.3.12 parameter surfaces verified identical)
 hcloud WAF --help | head -30         # WAF service + operations list
 hcloud AAD --help | head -30         # AAD service + operations list
 # profile status via huaweicloud_show_profile_redacted (raw configure list is hook-blocked)

@@ -7,7 +7,7 @@
       "type": "query",
       "executor": "cli",
       "command": "hcloud CTS ListOperations --cli-region={region}",
-      "note": "Read-only R3 query. Verified against real hcloud KooCLI 7.2.12 (cn-north-4). project_id auto-filled from the authenticated profile."
+      "note": "Read-only R3 query. Verified against real hcloud KooCLI 7.2.12 (cn-north-4); parameter surfaces re-checked identical on 7.3.12. project_id auto-filled from the authenticated profile."
     },
     {
       "id": "TC-02",
@@ -15,7 +15,7 @@
       "type": "query",
       "executor": "cli",
       "command": "hcloud CTS ListTrackers --cli-region={region}",
-      "note": "Read-only R3 query. Verified against real hcloud KooCLI 7.2.12 (cn-north-4). project_id auto-filled from the authenticated profile."
+      "note": "Read-only R3 query. Verified against real hcloud KooCLI 7.2.12 (cn-north-4); parameter surfaces re-checked identical on 7.3.12. project_id auto-filled from the authenticated profile."
     },
     {
       "id": "TC-03",
@@ -23,7 +23,7 @@
       "type": "query",
       "executor": "cli",
       "command": "hcloud CTS ListTraces --cli-region={region} --trace_type=system --limit=5",
-      "note": "Read-only R3 query. Verified against real hcloud KooCLI 7.2.12 (cn-north-4)."
+      "note": "Read-only R3 query. Verified against real hcloud KooCLI 7.2.12 (cn-north-4); parameter surfaces re-checked identical on 7.3.12."
     },
     {
       "id": "TC-04",
@@ -31,7 +31,7 @@
       "type": "query",
       "executor": "cli",
       "command": "hcloud CTS ListNotifications --cli-region={region} --notification_type=smn",
-      "note": "Read-only R3 query. Verified against real hcloud KooCLI 7.2.12 (cn-north-4)."
+      "note": "Read-only R3 query. Verified against real hcloud KooCLI 7.2.12 (cn-north-4); parameter surfaces re-checked identical on 7.3.12."
     },
     {
       "id": "TC-05",
@@ -71,7 +71,7 @@
       "type": "query",
       "executor": "cli",
       "command": "hcloud CTS ListQuotas --cli-region={region}",
-      "note": "Read-only R3 query. Verified against real hcloud KooCLI 7.2.12 (cn-north-4)."
+      "note": "Read-only R3 query. Verified against real hcloud KooCLI 7.2.12 (cn-north-4); parameter surfaces re-checked identical on 7.3.12."
     },
     {
       "id": "TC-10",

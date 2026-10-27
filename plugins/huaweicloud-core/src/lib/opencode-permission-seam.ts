@@ -29,14 +29,12 @@
 // the permission surface has been measured against. Which release
 // introduced external_directory is unknown; treat older or unparsable
 // versions as unsupported (skip the write) rather than guess.
+import { asRecord } from './as-record.ts';
+
 export const OPENCODE_SEAM_FLOOR = '1.19.0';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return isRecord(value) ? value : {};
 }
 
 // The glob set the seam covers: the plugin-dir skills tree (server data)

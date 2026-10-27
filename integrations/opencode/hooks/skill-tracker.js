@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 const DEBUG = process.env.HUAWEICLOUD_DEVKIT_DEBUG === 'true';
 
@@ -81,37 +82,89 @@ function classifyHcloud(text) {
 // installed as native copies (system-prompt disclosure), and those native
 // loads produce no telemetry by design.
 
+// The one shared classification body: both the V1 string-keyed hook and the
+// V2 context-registered hook feed bash commands through it.
+function trackBashCommand(cmd) {
+  try {
+    debugLog('HOOK tool.execute.before tool=bash');
+    if (!cmd) return;
+    const result = classifyHcloud(cmd);
+    if (result) writeEvent(result.key, result.value, { capability: 'cli' });
+  } catch (error) {
+    debugLog(`HOOK ERROR: ${error?.message || error}`);
+  }
+}
+
 function getHooks() {
   return {
     'tool.execute.before': function (input, output) {
-      try {
-        debugLog(`HOOK tool.execute.before tool=${input?.tool}`);
-        if (input.tool === 'bash') {
-          const cmd = output?.args?.command || '';
-          if (!cmd) return;
-          const result = classifyHcloud(cmd);
-          if (result) writeEvent(result.key, result.value, { capability: 'cli' });
-        }
-      } catch (error) {
-        debugLog(`HOOK ERROR: ${error?.message || error}`);
-      }
+      if (input?.tool !== 'bash') return;
+      trackBashCommand(output?.args?.command || '');
     },
   };
 }
 
-// ── Export: function-as-object serves both IDE and CLI ────────
+// ── Export: dual export serves OpenCode V1 and V2 ─────────────
 //
-//  IDE : plugin.default()      -> returns hooks
-//  CLI : plugin.default.server -> returns hooks (via { id, server })
+//  V1 loader: `server()` -> returns the legacy string-keyed hooks map.
+//  V2 loader: `id` + `setup(ctx)` -> registers hooks on the owning context
+//  domains: `ctx.tool.hook('execute.before', ...)` whose single event carries
+//  `.tool` and `.input` (replacing V1's (input, output) pair).
+//
+//  Deviation from main 1.1.9's setupV2, deliberate: main additionally tracked
+//  `skill` tool events and message.part.updated skill-root reads here. This
+//  tree's server-data doctrine (guarded by structure.test.ts's hook deny)
+//  keeps skill-load classification OUT of the hooks — skill retrieval
+//  telemetry rides trackSkillRetrieve on the MCP face, and native/direct
+//  loads are a designed blind spot. The V2 port therefore registers only the
+//  bash hcloud classifier, the one channel with no MCP-side telemetry path.
 
-function plugin() {
-  debugLog('=== PLUGIN EXPORT CALLED ===');
-  return getHooks();
+async function setupV2(ctx) {
+  await ctx.tool.hook('execute.before', (event) => {
+    if (event?.tool !== 'bash') return;
+    trackBashCommand(event?.input?.command ?? event?.args?.command ?? '');
+  });
+  // No-op cleanup, same shape main's setupV2 returned: a V2 host may invoke
+  // the setup return value unguarded, and undefined is not callable. There is
+  // nothing to tear down (no event subscription in this doctrine).
+  return () => {};
 }
 
-plugin.id = 'huaweicloud-skill-tracker';
-plugin.server = async () => getHooks();
+// `Plugin.define` is a type/runtime helper injected lazily so a V1 host that
+// lacks `@opencode/plugin` still loads (fallback to an identity define).
+let Plugin = { define: (def) => def };
+try {
+  const require = createRequire(import.meta.url);
+  for (const pkg of ['@opencode/plugin', '@opencode-ai/plugin']) {
+    try {
+      const mod = require(pkg);
+      if (mod?.Plugin?.define) {
+        Plugin = mod.Plugin;
+        break;
+      }
+      if (typeof mod?.define === 'function') {
+        Plugin = mod;
+        break;
+      }
+    } catch (_) {
+      // not installed in this host; keep the identity define
+    }
+  }
+} catch (_) {
+  // createRequire unavailable; keep the identity define
+}
 
-export default plugin;
+export default {
+  ...Plugin.define({
+    id: 'huaweicloud-skill-tracker',
+    async setup(ctx) {
+      return setupV2(ctx);
+    },
+  }),
+  async server() {
+    debugLog('=== PLUGIN EXPORT CALLED ===');
+    return getHooks();
+  },
+};
 
 debugLog('=== PLUGIN INIT DONE ===');

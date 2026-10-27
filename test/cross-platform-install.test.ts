@@ -92,6 +92,7 @@ test('install creates correct dir structure under homedir', () => {
     assert.equal(runCli(home, cwd, ['install', '--target', 'opencode']).status, 0);
     assert.ok(existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins', 'dist', 'mcp-server.js')));
     assert.ok(existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins', 'safety', 'policy.json')));
+    assert.ok(existsSync(join(home, '.config', 'opencode', 'huaweicloud-plugins', 'rules', 'huawei-agent-rules.mdc')));
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });

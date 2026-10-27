@@ -1,111 +1,30 @@
-// Full-scenario matrix for the credential reconciliation feature.
-// Every test is hermetic: HUAWEICLOUD_HOME points at a temp dir, HW_* / HCLOUD_*
-// env vars are wiped and restored, runtime credentials are cleared, and none of
-// the developer's real ~/.config/huaweicloud or ~/.hcloud files are touched.
-// Only masked fingerprints (sha256(ak+sk).slice(0,8)) appear in assertions.
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import test from 'node:test';
 
+import { syncAuth } from '../plugins/huaweicloud-core/src/auth/service.ts';
+import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
+import { fingerprint, runHcloudConfigure, scanState } from '../plugins/huaweicloud-core/src/auth/reconcile.ts';
 import {
-  backupGlobalCredentials,
-  clearRuntimeCredentials,
   globalCredentialsPath,
   hasRuntimeCredentials,
   lastSyncPath,
   readGlobalCredentials,
-  resolveCredentials,
   resolveCredentialsWithRuntime,
-  restoreGlobalCredentialsBackup,
   setRuntimeCredentials,
   writeGlobalCredentials,
-  writeLastSync,
   writeObsConfig,
 } from '../plugins/huaweicloud-core/src/auth/credentials.ts';
-import { fingerprint, runHcloudConfigure, scanState } from '../plugins/huaweicloud-core/src/auth/reconcile.ts';
-import { syncAuth, type SyncAuthResult } from '../plugins/huaweicloud-core/src/auth/service.ts';
-import { callTool } from '../plugins/huaweicloud-core/src/tools.ts';
-
-const FAKE_HCLOUD = fileURLToPath(new URL('./fixtures/fake-hcloud.ts', import.meta.url));
-const FAKE_HCLOUD_FAIL = fileURLToPath(new URL('./fixtures/fake-hcloud-fail-config.ts', import.meta.url));
-
-const ENV_KEYS = [
-  'HUAWEICLOUD_HOME',
-  'HCLOUD_CONFIG_PATH',
-  'HCLOUD_OBS_CONFIG_PATH',
-  'HW_ACCESS_KEY',
-  'HW_SECRET_KEY',
-  'HW_SECURITY_TOKEN',
-  'HW_REGION',
-  'HUAWEICLOUD_REGION',
-  'HCLOUD_BIN',
-  'HCLOUD_BIN_ARGS_JSON',
-  'HCLOUD_FAKE_LOG',
-  'CODEARTS_PROJECT_DIR',
-];
-
-type AuthSwitchResult =
-  | { status: 'needs_confirmation'; confirmToken: string }
-  | { status: 'error'; scope: string; error: string }
-  | { status: 'ok' | 'cleared' | 'partial'; scope?: string; backedUp?: boolean; outcome?: string };
-
-function withTempHome(fn: (dir: string) => void | Promise<void>): void | Promise<void> {
-  const dir = mkdtempSync(join(tmpdir(), 'huaweicloud-e2e-'));
-  const prev: Record<string, string | undefined> = {};
-  for (const key of ENV_KEYS) prev[key] = process.env[key];
-  process.env.HUAWEICLOUD_HOME = dir;
-  process.env.HCLOUD_CONFIG_PATH = join(dir, '.hcloud', 'config.json');
-  process.env.HCLOUD_OBS_CONFIG_PATH = join(dir, '.obsutilconfig');
-  for (const key of ENV_KEYS) {
-    if (key !== 'HUAWEICLOUD_HOME' && key !== 'HCLOUD_CONFIG_PATH' && key !== 'HCLOUD_OBS_CONFIG_PATH')
-      delete process.env[key];
-  }
-  clearRuntimeCredentials();
-  const cleanup = () => {
-    clearRuntimeCredentials();
-    for (const key of ENV_KEYS) {
-      if (prev[key] === undefined) delete process.env[key];
-      else process.env[key] = prev[key];
-    }
-    rmSync(dir, { recursive: true, force: true });
-  };
-  try {
-    const result = fn(dir);
-    if (result && typeof result.then === 'function') {
-      return result.finally(cleanup);
-    }
-    cleanup();
-    return result;
-  } catch (error) {
-    cleanup();
-    throw error;
-  }
-}
-
-// The fake KooCLI config is wired to HCLOUD_CONFIG_PATH (set in withTempHome),
-// so readKooCliProfiles reads it instead of the real ~/.hcloud/config.json.
-interface FakeKooCliProfile {
-  name: string;
-  accessKeyId: string;
-  secretAccessKey: string;
-  region: string;
-}
-
-function writeFakeKooCli(current: string, profiles: FakeKooCliProfile[]) {
-  const p = join(process.env.HUAWEICLOUD_HOME!, '.hcloud', 'config.json');
-  mkdirSync(dirname(p), { recursive: true });
-  writeFileSync(p, JSON.stringify({ current, profiles }, null, 2));
-  return p;
-}
-
-function setFakeHcloud(logPath: string, fixture: string = FAKE_HCLOUD) {
-  process.env.HCLOUD_BIN = process.execPath;
-  process.env.HCLOUD_BIN_ARGS_JSON = JSON.stringify([fixture]);
-  process.env.HCLOUD_FAKE_LOG = logPath;
-}
+import type { AuthSwitchResult } from './cred-reconcile-harness.ts';
+import type { SyncAuthResult } from '../plugins/huaweicloud-core/src/auth/service.ts';
+import {
+  assertDeleteBeforeSet,
+  readHcloudCalls,
+  setFakeHcloud,
+  withTempHome,
+  writeFakeKooCli,
+} from './cred-reconcile-harness.ts';
 
 test('01 auth init path keeps S1/S2-current/S3 fingerprints equal', () => {
   withTempHome((dir) => {
@@ -166,8 +85,13 @@ test('04 syncAuth is rejected (R10) while runtime credentials are active', () =>
     setRuntimeCredentials('E2E4_RT_AK', 'E2E4_RT_SK');
     const res = syncAuth('all');
     assert.equal(res.ok, false);
-    assert.match(res.error, /R10/);
-    assert.match(res.error, /auto-sync suppressed/);
+    // #900: the unified ERROR_TABLE shape — messageZh carries the Chinese
+    // verdict, action is executable, and no internal codename (R10) leaks.
+    assert.equal(res.code, 'HDKIT_SYNC_SKIPPED_RUNTIME');
+    assert.match(res.messageZh ?? '', /运行时凭证生效,自动同步已跳过。/);
+    assert.equal(res.action, 'huaweicloud_auth_switch action=clear');
+    assert.equal(res.nextStep, res.action);
+    assert.doesNotMatch(res.error, /R10/);
   });
 });
 
@@ -188,6 +112,15 @@ test('05 syncAuth propagates S1 into the KooCLI current profile', () => {
     assert.match(logContent, /--cli-profile=deploy/);
     assert.match(logContent, /--cli-access-key=E2E5_AK/);
     assert.equal(existsSync(lastSyncPath()), true, 'syncAuth must write the .last_sync marker');
+
+    // #920: syncAuth walks the SAME purge as the persist path — delete before
+    // set — and the honest message carries no stale-token warning on success.
+    assertDeleteBeforeSet(readHcloudCalls(log));
+    assert.match(res.hcloud.message, /synced to profile=deploy/);
+    assert.doesNotMatch(res.hcloud.message, /profile reset failed/);
+    assert.doesNotMatch(res.hcloud.message, /project-id not restored/);
+    // And the purge's project-id wipe is restored end-to-end.
+    assert.equal(res.projectId, 'proj-e2e-001');
   });
 });
 
@@ -195,6 +128,7 @@ test('06 auth_switch temporary activates runtime; auth_sync is then rejected (R1
   await withTempHome(async () => {
     writeGlobalCredentials({ ak: 'E2E6_AK', sk: 'E2E6_SK', region: 'cn-north-4' });
     const out = (await callTool('huaweicloud_auth_switch', {
+      vendorConfirmed: 'test: vendor established by the harness',
       mode: 'memory',
       action: 'temporary',
       ak: 'E2E6_RT_AK',
@@ -207,7 +141,10 @@ test('06 auth_switch temporary activates runtime; auth_sync is then rejected (R1
 
     const sync = (await callTool('huaweicloud_auth_sync', { target: 'all' })) as SyncAuthResult;
     assert.equal(sync.ok, false);
-    assert.match(sync.error, /R10/);
+    // #900: the table shape — Chinese messageZh, executable action, no codename.
+    assert.equal(sync.code, 'HDKIT_SYNC_SKIPPED_RUNTIME');
+    assert.match(sync.messageZh ?? '', /运行时凭证生效,自动同步已跳过。/);
+    assert.doesNotMatch(sync.error, /R10/);
   });
 });
 
@@ -220,6 +157,7 @@ test('07 auth_switch persist first time writes configuredBySession and keeps fil
     writeFakeKooCli('deploy', [{ name: 'deploy', accessKeyId: ak, secretAccessKey: sk, region }]);
 
     const out = (await callTool('huaweicloud_auth_switch', {
+      vendorConfirmed: 'test: vendor established by the harness',
       mode: 'memory',
       action: 'persist',
       ak,
@@ -242,6 +180,7 @@ test('08 auth_switch persist with conflicting S1 returns needs_confirmation and 
   await withTempHome(async () => {
     writeGlobalCredentials({ ak: 'E2E8_A_AK', sk: 'E2E8_A_SK', region: 'cn-north-4' });
     const out = (await callTool('huaweicloud_auth_switch', {
+      vendorConfirmed: 'test: vendor established by the harness',
       mode: 'memory',
       action: 'persist',
       ak: 'E2E8_B_AK',
@@ -265,6 +204,7 @@ test('09 auth_confirm decision=newImported applies the new account and backs up 
     writeGlobalCredentials({ ak: 'E2E9_A_AK', sk: 'E2E9_A_SK', region });
 
     const switched = (await callTool('huaweicloud_auth_switch', {
+      vendorConfirmed: 'test: vendor established by the harness',
       mode: 'memory',
       action: 'persist',
       ak: newAk,
@@ -274,6 +214,7 @@ test('09 auth_confirm decision=newImported applies the new account and backs up 
     assert.equal(switched.status, 'needs_confirmation');
 
     const out = (await callTool('huaweicloud_auth_confirm', {
+      vendorConfirmed: 'test: vendor established by the harness',
       token: switched.confirmToken,
       decision: 'newImported',
     })) as AuthSwitchResult;
@@ -295,6 +236,7 @@ test('10 auth_confirm decision=s1 aborts and leaves S1 unchanged', async () => {
   await withTempHome(async () => {
     writeGlobalCredentials({ ak: 'E2E10_A_AK', sk: 'E2E10_A_SK', region: 'cn-north-4' });
     const switched = (await callTool('huaweicloud_auth_switch', {
+      vendorConfirmed: 'test: vendor established by the harness',
       mode: 'memory',
       action: 'persist',
       ak: 'E2E10_B_AK',
@@ -304,6 +246,7 @@ test('10 auth_confirm decision=s1 aborts and leaves S1 unchanged', async () => {
     assert.equal(switched.status, 'needs_confirmation');
 
     const out = (await callTool('huaweicloud_auth_confirm', {
+      vendorConfirmed: 'test: vendor established by the harness',
       token: switched.confirmToken,
       decision: 's1',
     })) as AuthSwitchResult;
@@ -327,6 +270,7 @@ test('10b auth_confirm(newImported) from import clears the import file on succes
     writeFileSync(importFile, JSON.stringify({ ak: newAk, sk: newSk, region }), 'utf8');
 
     const switched = (await callTool('huaweicloud_auth_switch', {
+      vendorConfirmed: 'test: vendor established by the harness',
       mode: 'import',
       action: 'persist',
     })) as AuthSwitchResult;
@@ -334,6 +278,7 @@ test('10b auth_confirm(newImported) from import clears the import file on succes
     assert.equal(existsSync(importFile), true, 'import file kept while awaiting confirmation');
 
     const out = (await callTool('huaweicloud_auth_confirm', {
+      vendorConfirmed: 'test: vendor established by the harness',
       token: switched.confirmToken,
       decision: 'newImported',
     })) as AuthSwitchResult;
@@ -352,7 +297,10 @@ test('11 auth_switch clear empties runtime and lets syncAuth run again', async (
     ]);
     setRuntimeCredentials('E2E11_RT_AK', 'E2E11_RT_SK');
 
-    const out = (await callTool('huaweicloud_auth_switch', { action: 'clear' })) as AuthSwitchResult;
+    const out = (await callTool('huaweicloud_auth_switch', {
+      vendorConfirmed: 'test: vendor established by the harness',
+      action: 'clear',
+    })) as AuthSwitchResult;
     assert.equal(out.status, 'cleared');
     assert.equal(hasRuntimeCredentials(), false);
 
@@ -370,214 +318,5 @@ test('11 auth_switch clear empties runtime and lets syncAuth run again', async (
     assert.equal((res as { error?: string }).error, undefined);
     assert.doesNotMatch(JSON.stringify(res), /R10/);
     assert.match(readFileSync(log, 'utf8'), /--cli-access-key=E2E11_AK/);
-  });
-});
-
-test('12 auth_switch mode=import reads creds-import.json then wipes it', async () => {
-  await withTempHome(async (dir) => {
-    const importPath = join(dir, '.config', 'huaweicloud', 'creds-import.json');
-    mkdirSync(dirname(importPath), { recursive: true });
-    writeFileSync(importPath, JSON.stringify({ ak: 'E2E12_IMP_AK', sk: 'E2E12_IMP_SK', region: 'cn-north-4' }));
-
-    const out = (await callTool('huaweicloud_auth_switch', {
-      mode: 'import',
-      action: 'temporary',
-    })) as AuthSwitchResult;
-    assert.equal(out.status, 'ok');
-    assert.equal(out.scope, 'temporary');
-    assert.equal(existsSync(importPath), false, 'import file must be wiped after reading');
-
-    const resolved = resolveCredentialsWithRuntime({});
-    assert.equal(resolved!.ak, 'E2E12_IMP_AK');
-    assert.equal(resolved!.sk, 'E2E12_IMP_SK');
-  });
-});
-
-test('13 without configuredBySession, env credentials win over S1', () => {
-  withTempHome(() => {
-    writeGlobalCredentials({ ak: 'E2E13_S1_AK', sk: 'E2E13_S1_SK', region: 'cn-north-4' });
-    process.env.HW_ACCESS_KEY = 'E2E13_ENV_AK';
-    process.env.HW_SECRET_KEY = 'E2E13_ENV_SK';
-    const creds = resolveCredentials();
-    assert.equal(creds!.ak, 'E2E13_ENV_AK');
-    assert.equal(creds!.sk, 'E2E13_ENV_SK');
-  });
-});
-
-test('14 with configuredBySession=true, S1 wins over env (R9)', () => {
-  withTempHome(() => {
-    writeGlobalCredentials({ ak: 'E2E14_S1_AK', sk: 'E2E14_S1_SK', region: 'cn-north-4', configuredBySession: true });
-    process.env.HW_ACCESS_KEY = 'E2E14_ENV_AK';
-    process.env.HW_SECRET_KEY = 'E2E14_ENV_SK';
-    const creds = resolveCredentials();
-    assert.equal(creds!.ak, 'E2E14_S1_AK');
-    assert.equal(creds!.sk, 'E2E14_S1_SK');
-  });
-});
-
-test('15 active runtime shows in scanState and suppresses auto-write (R10)', () => {
-  withTempHome(() => {
-    writeGlobalCredentials({ ak: 'E2E15_AK', sk: 'E2E15_SK', region: 'cn-north-4' });
-    setRuntimeCredentials('E2E15_RT_AK', 'E2E15_RT_SK');
-
-    const scan = scanState();
-    assert.equal(scan.hasRuntime, true);
-    assert.equal(scan.stores.runtimeFingerprint, fingerprint('E2E15_RT_AK', 'E2E15_RT_SK'));
-
-    const res = syncAuth('all');
-    assert.equal(res.ok, false);
-    assert.match(res.error, /R10/);
-  });
-});
-
-test('16 restoreGlobalCredentialsBackup restores the previous S1', () => {
-  withTempHome(() => {
-    writeGlobalCredentials({ ak: 'E2E16_A_AK', sk: 'E2E16_A_SK', region: 'cn-north-4' });
-    assert.ok(backupGlobalCredentials(), 'initial backup must succeed');
-    writeGlobalCredentials({ ak: 'E2E16_B_AK', sk: 'E2E16_B_SK', region: 'cn-north-4' });
-    assert.equal(readGlobalCredentials()!.ak, 'E2E16_B_AK');
-    assert.equal(restoreGlobalCredentialsBackup(), true);
-    assert.equal(readGlobalCredentials()!.ak, 'E2E16_A_AK');
-  });
-});
-
-test('17 persist with securityToken is rejected (R3) and S1 is not written (mode=memory)', async () => {
-  await withTempHome(async () => {
-    const out = (await callTool('huaweicloud_auth_switch', {
-      mode: 'memory',
-      action: 'persist',
-      ak: 'E2E17_AK',
-      sk: 'E2E17_SK',
-      securityToken: 'E2E17_TOKEN',
-      region: 'cn-north-4',
-    })) as AuthSwitchResult;
-    assert.equal(out.status, 'error');
-    assert.equal(out.scope, 'rejected');
-    assert.match(out.error, /R3/);
-    assert.equal(existsSync(globalCredentialsPath()), false, 'S1 must not be written for STS credentials');
-  });
-});
-
-test('18 persist via mcp-config with platform STS token is rejected (R3) and S1 untouched', async () => {
-  await withTempHome(async (dir) => {
-    const mcpDir = join(dir, 'codearts');
-    mkdirSync(join(mcpDir, '.codeartsdoer', 'mcp'), { recursive: true });
-    writeFileSync(
-      join(mcpDir, '.codeartsdoer', 'mcp', 'mcp_settings.json'),
-      JSON.stringify({
-        mcpServers: {
-          'huaweicloud-devkit': {
-            env: {
-              HW_ACCESS_KEY: 'E2E18_MCP_AK',
-              HW_SECRET_KEY: 'E2E18_MCP_SK',
-              HW_SECURITY_TOKEN: 'E2E18_MCP_TOKEN',
-              HW_REGION: 'cn-north-4',
-            },
-          },
-        },
-      }),
-      'utf8',
-    );
-    process.env.CODEARTS_PROJECT_DIR = mcpDir;
-
-    const out = (await callTool('huaweicloud_auth_switch', {
-      mode: 'mcp-config',
-      action: 'persist',
-    })) as AuthSwitchResult;
-    assert.equal(out.status, 'error');
-    assert.equal(out.scope, 'rejected');
-    assert.match(out.error, /R3/);
-    assert.equal(existsSync(globalCredentialsPath()), false, 'S1 must not be written for platform STS token');
-
-    const stored = readGlobalCredentials();
-    assert.ok(!stored?.securityToken, 'no token may be at rest in S1');
-  });
-});
-
-test('19 malformed creds-import.json is still wiped even though the import is rejected', async () => {
-  await withTempHome(async (dir) => {
-    const importPath = join(dir, '.config', 'huaweicloud', 'creds-import.json');
-    mkdirSync(dirname(importPath), { recursive: true });
-    writeFileSync(importPath, '{not-valid-json', 'utf8');
-
-    await assert.rejects(
-      callTool('huaweicloud_auth_switch', { mode: 'import', action: 'temporary' }),
-      /ak and sk are required/,
-    );
-    assert.equal(existsSync(importPath), false, 'malformed import file must still be wiped');
-  });
-});
-
-test('20 syncAuth returns ok:false and skips .last_sync when S2 configure fails', () => {
-  withTempHome((dir) => {
-    setFakeHcloud(join(dir, 'hcloud.log'), FAKE_HCLOUD_FAIL);
-    writeFakeKooCli('deploy', [
-      { name: 'deploy', accessKeyId: 'E2E20_OLD_AK', secretAccessKey: 'E2E20_OLD_SK', region: 'cn-north-4' },
-    ]);
-    writeGlobalCredentials({ ak: 'E2E20_AK', sk: 'E2E20_SK', region: 'cn-north-4' });
-
-    const res = syncAuth('all');
-    assert.equal(res.ok, false);
-    assert.ok(res.error, 'failure must carry an error message');
-    assert.equal(existsSync(lastSyncPath()), false, 'no .last_sync marker may be stamped when S2 sync failed');
-  });
-});
-
-test('21 scanState trusts fresh DevKit sync marker when KooCLI stores transformed SK', () => {
-  withTempHome(() => {
-    const ak = 'E2E21_AK';
-    const sk = 'E2E21_SK';
-    const region = 'cn-north-4';
-    writeGlobalCredentials({ ak, sk, region });
-    writeFakeKooCli('deploy', [
-      { name: 'deploy', accessKeyId: ak, secretAccessKey: 'encrypted-or-transformed-by-koocli', region },
-    ]);
-    writeLastSync({ kooCliProfile: 'deploy', s1Fingerprint: fingerprint(ak, sk) });
-
-    const scan = scanState();
-    assert.equal(scan.stores.currentFingerprint, fingerprint(ak, sk));
-    assert.equal(
-      scan.inconsistencies.some((i) => i.store === 'S2-current'),
-      false,
-    );
-  });
-});
-
-test('22 scanState still reports S2-current mismatch when KooCLI AK differs from S1', () => {
-  withTempHome(() => {
-    const ak = 'E2E22_AK';
-    const sk = 'E2E22_SK';
-    const region = 'cn-north-4';
-    writeGlobalCredentials({ ak, sk, region });
-    writeFakeKooCli('deploy', [
-      { name: 'deploy', accessKeyId: 'E2E22_OTHER_AK', secretAccessKey: 'encrypted-or-transformed-by-koocli', region },
-    ]);
-    writeLastSync({ kooCliProfile: 'deploy', s1Fingerprint: fingerprint(ak, sk) });
-
-    const scan = scanState();
-    const inc = scan.inconsistencies.find((i) => i.store === 'S2-current');
-    assert.ok(inc, 'expected an S2-current inconsistency');
-  });
-});
-
-test('23 scanState reports manualModified when KooCLI config is newer than .last_sync', () => {
-  withTempHome(() => {
-    const ak = 'E2E23_AK';
-    const sk = 'E2E23_SK';
-    const region = 'cn-north-4';
-    writeGlobalCredentials({ ak, sk, region });
-    writeFileSync(
-      lastSyncPath(),
-      JSON.stringify({ ts: Date.now() - 60_000, kooCliProfile: 'deploy', s1Fingerprint: fingerprint(ak, sk) }),
-      'utf8',
-    );
-    writeFakeKooCli('deploy', [
-      { name: 'deploy', accessKeyId: ak, secretAccessKey: 'encrypted-or-transformed-by-koocli', region },
-    ]);
-
-    const scan = scanState();
-    const inc = scan.inconsistencies.find((i) => i.store === 'S2-current');
-    assert.ok(inc, 'expected an S2-current inconsistency after manual KooCLI edit');
-    assert.equal(inc.manualModified, true);
   });
 });

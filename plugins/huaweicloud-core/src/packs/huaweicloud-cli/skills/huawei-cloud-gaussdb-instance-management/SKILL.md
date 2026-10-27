@@ -209,7 +209,7 @@ hcloud gaussdbforopengauss DeleteInstance --cli-region={region} --instance_id={i
 `--region` are also KooCLI system-parameter names, so passing them directly on the
 command line triggers the interactive ambiguity prompt above (EOF in non-interactive
 mode). The whole request body therefore goes into a JSON file referenced by
-`--cli-jsonInput` — verified with KooCLI 7.2.12. Note the API still requires the
+`--cli-jsonInput` — verified with KooCLI 7.2.12 (parameter surfaces re-checked identical on 7.3.12). Note the API still requires the
 `region` body field; it just lives inside the JSON now. Replace every placeholder
 value before running; the command returns a `job_id` on success.
 
@@ -314,7 +314,7 @@ ID (look it up with `hcloud IAM KeystoneListProjects --cli-region={region}`):
 
 ## Parameter Confirmation
 
-All parameter names below were extracted verbatim from `hcloud <Service> <Operation> --help` output (KooCLI 7.2.12). Re-verify with `--help` before first execution.
+All parameter names below were extracted verbatim from `hcloud <Service> <Operation> --help` output (KooCLI 7.2.12; parameter surfaces re-checked identical on 7.3.12). Re-verify with `--help` before first execution.
 
 | Action                        | Required params                                                                                                                                                                                                                                                                                                                                                                      | Optional params                                                                                                                      |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |

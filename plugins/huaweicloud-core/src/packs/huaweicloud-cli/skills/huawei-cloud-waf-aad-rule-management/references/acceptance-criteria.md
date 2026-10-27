@@ -38,7 +38,7 @@ Maps the 17 `huawei_*` actions from GitCode issue #474 to acceptance checks.
 
 - [ ] SKILL.md conforms to GitCode Skill registration spec (frontmatter, required sections, ≤ 500 lines)
 - [ ] 17 `huawei_*` actions are all documented and routable to the verified CLI operations above
-- [ ] `hcloud WAF` / `hcloud AAD` dependencies correctly declared (KooCLI 7.2.12)
+- [ ] `hcloud WAF` / `hcloud AAD` dependencies correctly declared (KooCLI 7.2.12; parameter surfaces re-checked identical on 7.3.12)
 - [ ] R3 read-only actions auto-execute; R2/R1 manage actions require preview + confirmation
 - [ ] AAD create/delete limitation declared; console guidance + `ListPackage` diagnostic path provided
 - [ ] Critical Warnings present: CNAME redirect, premium instance, Standard vs Enterprise, rule order, report-mode-first

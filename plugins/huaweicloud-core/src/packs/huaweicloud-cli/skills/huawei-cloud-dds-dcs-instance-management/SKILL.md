@@ -233,7 +233,7 @@ hcloud DDS CreateInstance --cli-region={region} \
 #   echo b | hcloud DDS CreateInstance --cli-region={region} ... (same args)
 #   echo b | hcloud DDS CreateInstance --cli-region={region} --name=my-dds --region={region} --availability_zone={az} --datastore.type=DDS-Community --datastore.version=5.0 --datastore.storage_engine=wiredTiger --mode=ReplicaSet --flavor.1.type=replica --flavor.1.num=3 --flavor.1.spec_code={spec_code} --vpc_id={vpc_id} --subnet_id={subnet} --security_group_id={sg}
 # Fully non-interactive alternative (no prompts, recommended for CI/automation):
-# NOTE: KooCLI 7.2.12 requires the API params to be wrapped under a "body" key
+# NOTE: KooCLI (verified 7.2.12 and 7.3.12) requires the API params to be wrapped under a "body" key
 # {vpc_id, subnet_id, security_group_id, region} are required body params besides
 # the direct flags shown above; `--project_id` is required on the `--cli-jsonInput`
 # path (unlike the bare form, where it is auto-resolved from the profile).

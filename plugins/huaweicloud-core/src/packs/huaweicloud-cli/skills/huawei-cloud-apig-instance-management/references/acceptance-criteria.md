@@ -40,7 +40,7 @@ The huawei-cloud-apig-instance-management skill is accepted when all of the foll
       `ListApisBindedToSignatureKeyV2`, `ListApisBindedToAclPolicyV2`,
       `ListApisBindedToRequestThrottlingPolicyV2`
       (throttling uses `RequestThrottlingPolicyV2` naming, NOT `ThrottlingPolicyV2`)
-- [ ] Required parameters present for each operation (verified against `--help`, KooCLI 7.2.12)
+- [ ] Required parameters present for each operation (verified against `--help`, KooCLI 7.2.12; parameter surfaces re-checked identical on 7.3.12)
 - [ ] Every concrete command includes `--cli-region`
 
 ## E. Safety

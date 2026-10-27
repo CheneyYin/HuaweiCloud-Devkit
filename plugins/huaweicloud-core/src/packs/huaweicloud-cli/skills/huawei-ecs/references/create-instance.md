@@ -34,13 +34,38 @@ hcloud VPC ListVpcs --cli-region=<region>
 hcloud VPC ListSubnets --vpc_id=<vpc-id> --cli-region=<region>
 If no VPC/subnet exists: load `huawei-vpc` skill → create VPC → create subnet (with DNS) → create security group → return here.
 
+**子网 DNS 前置修复（实测 #935 坑4）**：模板/预置子网的 `dnsList` 可能为空 —— 这会让 cloud-init 域名解析与 yum/dnf 安装**静默失败**（表现为下载/安装卡死且无明确报错，或 `Could not resolve host`）。创建 ECS 前先检查并补充华为云内网 DNS：
+
+```bash
+hcloud VPC ShowSubnet --subnet_id=<subnet-id> --cli-region=<region>   # 查看 dnsList（顺带记下 vpc_id 与 subnet name —— 下一步必填）
+# dnsList 为空（或缺少内网 DNS）时先修复再建实例（UpdateSubnet 必填 --vpc_id + --subnet.name）：
+hcloud VPC UpdateSubnet --cli-region=<region> --vpc_id=<vpc-id> --subnet_id=<subnet-id> --subnet.name=<name> \
+  --subnet.dnsList.1=100.125.1.250 --subnet.dnsList.2=100.125.129.250
+```
+
+`100.125.1.250` / `100.125.129.250` 是 cn-north-4 的华为云内网 DNS（实测值）。**内网 DNS 按区域不同** —— 其他区域用 `hcloud DNS ListNameServers --type=private` 或 `VPC UpdateSubnet --help` 链接的 DNS FAQ 表取本区域地址，不要跨区域套用。实例内自救兜底见下方 user_data 模板的「DNS 兜底」注释，但**修复子网 DNS 是唯一能让 cloud-init 首次开机就正常解析的路径**（user_data 只在 first boot 执行，错过即需人工补救）。
+
 ## 5. Create keypair (recommended over adminPass)
 
 **MCP 环境下必须用"本地生成 + 导入"流程**——`NovaCreateKeypair` 返回的 `private_key` 会被 MCP 脱敏管道替换为 `<redacted>`，而私钥仅此一次机会，读不到即作废：
 
 ```bash
-# 1. 本地生成
-ssh-keygen -t rsa -b 2048 -f ./<name> -N '""'
+# 1. 本地生成 — bash / Git Bash / WSL（无 passphrase）
+ssh-keygen -t rsa -b 2048 -f ./<name> -N ''
+```
+
+```powershell
+# 1. 本地生成 — Windows PowerShell（无 passphrase，实测验证的写法）
+# ⚠️ 引号陷阱：-N '""' 会把字面量 "" 设为私钥 passphrase（实测确认），后续 SSH 症状极具误导性：
+#    ECS 已 ACTIVE、22 端口可达、服务端日志显示 "accepts key"，签名后仍 Permission denied ——
+#    服务端接受了密钥却拒绝，排查路径反直觉。本地剥掉 passphrase（ssh-keygen -p）立即恢复，服务器侧零改动。
+# 正确写法：--% 停止解析符 + -N ""（PowerShell 会丢弃空字符串参数，-N '' 直接报
+# "option requires an argument -- N"；--% 让该行剩余部分按 cmd 规则原样传递，"" 由 CRT 解析为空串）。
+# 注意：--% 之后到行尾全部原样传递 —— 该行不能再跟任何其他命令或注释。
+ssh-keygen --% -t rsa -b 2048 -f .\<name> -N ""
+```
+
+```bash
 # 2. 导入公钥
 hcloud ECS NovaCreateKeypair --keypair.name=<name> --keypair.public_key=<本地 .pub 文件内容>
 # 3. 使用私钥文件 ./<name> 连接实例
@@ -77,8 +102,9 @@ export PATH=/usr/local/lib/nodejs/node-${NODE_VERSION}-linux-${ARCH}/bin:$PATH
 ln -sf /usr/local/lib/nodejs/node-${NODE_VERSION}-linux-${ARCH}/bin/{node,npm,npx} /usr/local/bin/
 # npm registry 指向华为云
 npm config set registry https://repo.huaweicloud.com/repository/npm/
-# DNS 兜底（子网 dnsList 缺失时自救）
-grep -q 100.125.0.20 /etc/resolv.conf || echo "nameserver 100.125.0.20" >> /etc/resolv.conf
+# DNS 兜底（子网 dnsList 缺失时自救；cn-north-4 的内网 DNS —— 其他区域
+# 见上方 DNS 前置修复段落的区域差异说明，勿跨区域套用）
+grep -q 100.125.1.250 /etc/resolv.conf || echo "nameserver 100.125.1.250" >> /etc/resolv.conf || true
 ```
 
 **可观测性模板**（实测教训：cloud-init 失败后无感知、固定 sleep 空等 ≈8 分钟）：
@@ -105,6 +131,38 @@ SCRIPT
 hcloud ECS CreateServers ... --server.user_data=$user_data
 ```
 
+#### Large user_data: pass via JSON file, do NOT abandon the MCP channel
+
+The inline form above works only while the base64 blob fits the tool-call parameter limit (a few KB). The API itself accepts user_data up to **32KB before encoding** (`--server.user_data` in `hcloud ECS CreateServers --help`) — so a full bootstrap script (22KB base64 observed in the wild) is well within the API limit but **cannot be handed through a single MCP tool call**. When that happens, keep the MCP approval channel (plan → approve → run) and move the parameters to a local JSON file instead:
+
+```bash
+# 1. Generate the API parameter skeleton (writes a JSON file into the CURRENT directory
+#    and prints its path; the middle filename segment is the CLI language, not the region):
+hcloud ECS CreateServers --skeleton
+#    -> ECS_CreateServers_<lang>-<timestamp>.json, structured as header / path / body.
+#    user_data lives at body.server.user_data (base64-encoded, same as inline).
+
+# 2. The generated file ENDS with a `骨架填写完成后,请删除此行及下列参数描述信息` separator
+#    plus a parameter-description block — delete the separator and everything below it
+#    first (only the leading JSON object is valid --cli-jsonInput input; the raw
+#    as-generated file fails to parse). Then fill in the real values
+#    (name/flavorRef/imageRef/nics/... and body.server.user_data),
+#    keep only the fields you actually use, and execute with the file:
+
+hcloud ECS CreateServers --cli-region=<region> --cli-jsonInput=./ECS_CreateServers_<lang>-<timestamp>.json
+
+# 3. Optional pre-flight: --dryrun validates and prints the request payload WITHOUT creating anything:
+hcloud ECS CreateServers --cli-region=<region> --cli-jsonInput=./<file>.json --dryrun
+```
+
+`--cli-jsonInput` / `--skeleton` / `--dryrun` are **global flags — they are NOT listed in operation-level `--help` output** (only in `hcloud --help`), so agents routinely miss them.
+
+> **Anti-pattern (observed in the wild, #964)**: when the base64 blob exceeded the tool parameter limit, the agent dropped the MCP tools entirely and ran `hcloud` directly in a shell — which also silently bypassed the plan → approve → run approval layer. The JSON-file path above keeps oversized parameters on the approved channel. Never abandon the MCP wrapper just because one parameter is too long.
+>
+> **Skeleton side effect**: `--skeleton` writes its JSON file to the current working directory and prints the path to stdout (the skeleton content itself goes to the file). Clean it up or keep it as the record of what was created.
+
+The security and recovery notes below apply to user_data in general (inline or JSON-file form):
+
 > **Security**: Never embed secrets (passwords, AK/SK, tokens) in user_data. It is stored unencrypted and readable from within the instance via IMDS. Fetch secrets at boot from DEW/CSMS instead.
 >
 > **Debugging**: If the script didn't run, check `/var/log/cloud-init-output.log` on the instance.
@@ -114,6 +172,22 @@ hcloud ECS CreateServers ... --server.user_data=$user_data
 > 1. Fix the root cause (e.g., update subnet DNS via `VPC UpdateSubnet`)
 > 2. Either: SSH into the instance and run the setup commands manually (see `huawei-ecs` → SSH Connection Verification → Running Commands Inside the Instance)
 > 3. Or: Delete the instance and recreate with corrected user_data (fresh boot)
+
+### Update site content on an already-running instance (no rebuild)
+
+user_data/cloud-init 方式**仅适用于创建时写入** —— 已运行实例更新站点内容不要重建实例，直接上传 + reload：
+
+```bash
+# 上传新产物（Windows 路径：references/windows-ssh.md §2）
+scp -i <key> ./dist.tar.gz root@<eip>:/root/
+# 或 rsync（增量，仅传变化文件）
+rsync -avz --delete -e "ssh -i <key>" ./dist/ root@<eip>:/var/www/site/
+
+# SSH 内解压并热加载 nginx（无需重建实例）
+ssh -i <key> root@<eip> 'tar -xzf /root/dist.tar.gz -C /var/www/site/ && nginx -t && nginx -s reload'
+```
+
+要点：`nginx -s reload` 热加载配置与静态内容，连接不断；`nginx -t` 先验证配置再 reload，避免 reload 一个坏配置。Node 应用则重启进程（`pm2 reload` 或 kill + nohup 重启）。
 
 ## 7. EIP (two methods)
 
@@ -171,14 +245,16 @@ hcloud ECS ListServersDetails --cli-region=<region> --server_id=<instance-id>
 
 curl http://<eip-address>
 # Expected: HTTP 200 (if port 80 open and web server installed)
+```
 
 ## 9. Delete instance (with cleanup)
+
 hcloud ECS DeleteServers --servers.1.id=<instance-id> --delete_publicip=true --delete_volume=true
 Warning: --delete_publicip and --delete_volume default to false. Set to true to avoid orphaned charges.
 
 ## Constraints
+
 - Name: 1-64 chars, letters/digits/hyphens
 - Flavor: must be available in target region — always ListFlavors first
 - Root volume: SSD 40GB min
 - Keypair is safer than adminPass (passwords leak into shell history)
-```

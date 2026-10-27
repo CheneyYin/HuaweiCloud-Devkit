@@ -26,7 +26,7 @@ Checklist for accepting the huawei-cloud-smn-dms-message skill.
 
 - [ ] Every command contains `--cli-region`.
 - [ ] Service names are real KooCLI services: `SMN`, `Kafka`, `RabbitMQ`, `RocketMQ`. **No `hcloud DMS`.**
-- [ ] Operations use PascalCase and were verified via `--help` on KooCLI 7.2.12.
+- [ ] Operations use PascalCase and were verified via `--help` on KooCLI 7.2.12 (parameter surfaces re-checked identical on 7.3.12).
 - [ ] DMS actions route by engine (Kafka/RabbitMQ/RocketMQ), never a single "DMS" service.
 - [ ] Required parameters per command match the `--help` output.
 

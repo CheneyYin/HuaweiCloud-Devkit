@@ -2,13 +2,14 @@
   "name": "huaweicloud-devkit",
   "mcpName": "io.github.huaweicloud/huaweicloud-devkit",
   "version": "2.0.0",
-  "kooCliVersion": "7.2.12",
+  "kooCliVersion": "7.3.12",
   "description": "Agent toolkit that helps coding agents use Huawei Cloud Skills, KooCLI, APIs, SDKs, and future MCP capabilities safely and accurately.",
   "type": "module",
   "files": [
     "cordis.patch.yml",
     "bin",
     ".agents",
+    "rules",
     "plugins/huaweicloud-core",
     "!plugins/huaweicloud-core/src/packs/*/skills",
     "!plugins/huaweicloud-core/skills.new-*",
@@ -60,7 +61,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@types/node": "^22.20.4",
     "@types/ws": "^8.18.1",
     "esbuild": "0.28.2",
@@ -71,15 +72,15 @@
     "eslint-plugin-unicorn": "^73.0.0",
     "globals": "^17.11.0",
     "jscpd": "5.4.1",
-    "markdownlint-cli2": "^0.23.2",
+    "markdownlint-cli2": "^0.24.0",
     "prettier": "^3.9.6",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.70.1",
     "ws": "^8.18.3",
-    "zod": "4.6.5"
+    "zod": "4.6.7"
   },
   "overrides": {
-    "smol-toml": "1.8.0"
+    "smol-toml": "1.9.1"
   },
   "keywords": [
     "huaweicloud",
