@@ -127,9 +127,7 @@ test('#1040 telemetry flush sends X-HW-Agent header', async () => {
   const prevHome = process.env.HUAWEICLOUD_DEVKIT_HOME;
   process.env.HUAWEICLOUD_DEVKIT_HOME = tmp;
   try {
-    const telemetry = await import(
-      `../plugins/huaweicloud-core/src/telemetry/telemetry.mjs?iso1040=${Date.now()}`
-    );
+    const telemetry = await import(`../plugins/huaweicloud-core/src/telemetry/telemetry.mjs?iso1040=${Date.now()}`);
     const originalFetch = global.fetch;
     let capturedHeaders = null;
     global.fetch = async (_url, opts) => {
