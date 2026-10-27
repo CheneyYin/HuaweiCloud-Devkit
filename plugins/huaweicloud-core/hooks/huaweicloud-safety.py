@@ -195,7 +195,15 @@ def strip_shell_quotes(text):
     quoting (``$'get'``) must not slip past the raw-text regexes the shell
     would still execute. Variable indirection (``$S``) remains a documented
     residual — a text gate cannot see through expansion. None of the
-    canonical command tokens contain the stripped characters."""
+    canonical command tokens contain the stripped characters.
+
+    Line continuations drop FIRST (interrogate round 4): bash removes the
+    \\<newline> pair at parser level, and the surviving newline broke
+    contiguity everywhere (``h\\<LF>cloud`` never routed,
+    ``De\\<LF>leteServers`` never matched a prefix). Single-quoted spans
+    keep the pair in real bash — over-stripping there only ever JOINS text
+    (fail-closed toward detection, never hides a marker)."""
+    text = re.sub(r"\\\n", "", text)
     return re.sub(r"['\"\\\\$`]", "", text)
 
 
@@ -240,6 +248,18 @@ def decode_ansi_c_spans(text):
             out.append(ch)
             i += 1
             continue
+        if ch == "\\" and i + 1 < n:
+            # Outside quotes a backslash escapes the NEXT character (both
+            # stay — the shadow's own backslash-strip handles them).
+            # Without this, an escaped quote opened PHANTOM quote state and
+            # disabled the entire decode for the rest of the payload
+            # (interrogate round 4: \' ; h$'\x63'loud … let the mangled
+            # write through every layer), and \$' mis-parsed as an ANSI-C
+            # span opener instead of \$ + plain quotes.
+            out.append(ch)
+            out.append(text[i + 1])
+            i += 2
+            continue
         if ch == "$" and i + 1 < n and text[i + 1] == "'":
             j = i + 2
             span = []
@@ -259,9 +279,12 @@ def decode_ansi_c_spans(text):
                     m = ANSI_C_DECODE_RE.match(text, j)
                     if m:
                         digits = m.group(1) or m.group(2) or m.group(3) or m.group(4)
-                        radix = 16 if (m.group(2) is None) else 8
+                        is_octal = m.group(2) is not None
+                        radix = 8 if is_octal else 16
                         try:
                             value = int(digits, radix)
+                            if is_octal:
+                                value &= 0xFF  # bash masks \NNN to 8 bits (NUL-truncating >0o377)
                             if 0 <= value <= 0x10FFFF:
                                 span.append(chr(value))
                                 j = m.end()
@@ -828,7 +851,15 @@ def split_tokens(text):
     backslash escapes (``\\"`` nests quotes — the canonical bash way to
     embed a Windows wrapper); single-quoted spans do not (POSIX). Plain
     words strip a leading/trailing quote like the TS per-token edge
-    replace, so the two tokenizers agree on mangled spellings."""
+    replace, so the two tokenizers agree on mangled spellings.
+
+    Line continuations are removed before scanning (interrogate round 4):
+    bash drops the \\<newline> pair at parser level, and the word scan
+    would otherwise split ``De\\<LF>leteServers`` into two tokens leaving
+    the operation slot reading ``De\\``. Single-quoted spans keep the pair
+    in real bash — over-stripping there only ever JOINS tokens
+    (fail-closed toward classification, never hides one)."""
+    text = re.sub(r"\\\n", "", text)
     tokens = []
     i, n = 0, len(text)
     while i < n:
@@ -1096,21 +1127,36 @@ def split_shell_segments(text, seps_out=None):
             i += 1
             continue
         if quote is not None:
-            current += ch
             if ch == "\\" and i + 1 < n:
                 # Backslash escapes the next char — BOTH chars stay in the
-                # segment (the base append above already keeps the
-                # backslash), so the downstream escape-aware tokenizer can
-                # regroup the span (`bash -c "cmd /c \"hcloud …\""`).
+                # segment (the downstream escape-aware tokenizer can regroup
+                # the span, `bash -c "cmd /c \"hcloud …\""`), EXCEPT the
+                # line continuation: bash removes the \<newline> PAIR at
+                # parser level inside double quotes too (interrogate round
+                # 4: `hcloud ECS "De\<LF>leteServers"` hid the operation
+                # from every shadow); the single-quote span keeps the pair
+                # (literal there).
+                if quote == '"' and text[i + 1] == "\n":
+                    i += 2
+                    continue
+                current += ch
                 current += text[i + 1]
                 i += 2
                 continue
+            current += ch
             if ch == quote:
                 quote = None
             i += 1
             continue
         if ch == "\\" and i + 1 < n:
-            # Same drive-path preservation as the quoted branch.
+            # Same drive-path preservation as the quoted branch — and the
+            # line-continuation drop: bash removes the \<newline> PAIR, so
+            # the newline is dropped entirely (interrogate round 4:
+            # `h\<LF>cloud` hid the bin from every shadow — routing, vocab,
+            # and decode all saw a newline inside the token).
+            if text[i + 1] == "\n":
+                i += 2
+                continue
             current += (ch if _is_windows_path_word(current) else "") + text[i + 1]
             i += 2
             continue
@@ -1657,8 +1703,12 @@ def evaluate(tool_name, tool_input):
     # spans build, reconstructed — h$'\x63'loud is the hcloud the shell
     # executes. Presence gates below that bear on cloud-command or
     # secret-reveal detection search BOTH shadows; with no $' span the
-    # decoded candidate is the original text (zero cost).
-    decoded_unquoted = strip_shell_quotes(decode_ansi_c_spans(text))
+    # decoded candidate is the original text. Skipped for over-cap payloads
+    # (interrogate round 4: an unrouted 10 MB escape flood must not pay the
+    # decode's linear pass before the gates' other candidates handle it).
+    decoded_unquoted = (
+        unquoted if len(text) > 262144 else strip_shell_quotes(decode_ansi_c_spans(text))
+    )
     candidates = (unquoted, decoded_unquoted)
     normalized = re.sub(r"/{2,}", "/", text)
     normalized = re.sub(r"/\./", "/", normalized)

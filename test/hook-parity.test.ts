@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
 import { classifyTextCommand } from '../plugins/huaweicloud-core/src/safety-policy.ts';
+import { decodeAnsiCSpans } from '../plugins/huaweicloud-core/src/safety/shell-text.ts';
 
 // The TS classifier and the python hook are two hand-maintained
 // implementations of one safety policy. This battery runs the SAME command
@@ -97,6 +98,31 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
   ["$'\\x68'$'\\x63'loud ECS $'\\x44'eleteServers --server.id=x", 'deny'],
   ["h$'\\x63'loud ECS ListServers", 'deny'],
   ["h$'\\x63'loud configure show", 'deny'],
+  // port-v2defects (interrogate round 4): the phantom-quote defeat — a
+  // backslash-escaped quote OUTSIDE quotes opened phantom quote state in
+  // the decoders and disabled the whole decode for the rest of the payload
+  // (\' ; h$'\x63'loud … allowed on every layer while bash ran the write).
+  // The outside-quote backslash branch closes it; \$' stays \$ + plain
+  // quotes (the echo \$'hcloud' shape still denies via the PRE-EXISTING
+  // stripped-shadow class — recorded residual, not pinned here).
+  ["\\' ; h$'\\x63'loud ECS $'\\x44'eleteServers --server.id=x", 'deny'],
+  ["\\\" ; h$'\\x63'loud ECS $'\\x44'eleteServers --server.id=x", 'deny'],
+  ["\\' ; h$'\\x63'loud $'\\x4f'BS rm mybucket", 'deny'],
+  ["grep foo\\' bar ; h$'\\x63'loud ECS $'\\x44'eleteServers", 'deny'],
+  // port-v2defects (interrogate round 4): the line-continuation channel —
+  // bash removes the \\<LF> pair at parser level, and the surviving
+  // newline broke contiguity in every shadow (h\\<LF>cloud never routed;
+  // De\\<LF>leteServers never matched a prefix). The pair now drops in the
+  // segment splitters, the tokenizers, and the quote-stripped shadows —
+  // inside single quotes the pair is literal and over-stripping there
+  // only ever joins text (fail-closed, never hides a marker).
+  ['h\\\ncloud ECS DeleteServers --server.id=x', 'deny'],
+  ['hcloud ECS De\\\nleteServers --server.id=x', 'deny'],
+  ['hcloud ECS "De\\\nleteServers" --server.id=x', 'deny'],
+  ['h\\\ncloud OBS rm mybucket', 'deny'],
+  ["printf $'%s\\n' hello", 'allow'],
+  ["echo $(date +$'%Y-%m-%d')", 'allow'],
+  ["awk $'\\t' '{print $1}'", 'allow'],
   // The $(…)-substitution residual (documented): printf-built bins stay
   // opaque to the decode; the OBS-token marker arm still catches the
   // service-token-literal form.
@@ -654,3 +680,78 @@ test('the env-dump flag chain stays linear on the -u/-- adversarial shape (ReDoS
   assert.equal(py.status, 0, `python hook crashed on the -u/-- chain: ${py.stderr.slice(0, 200)}`);
   assert.equal(py.stdout.trim().length > 0 ? 'deny' : 'allow', 'allow');
 });
+
+// port-v2defects (interrogate round 4): the ANSI-C decoders are TWINS —
+// decodeAnsiCSpans (src/safety/shell-text.ts) and decode_ansi_c_spans
+// (hooks/huaweicloud-safety.py) must produce byte-identical output on the
+// adversarial corpus, or the layers drift at the decode seam (verdict
+// parity cannot see a digit-class drift unless a battery row happens to
+// cross it). The corpus covers the state machine's edges: escape radices
+// and digit caps, quote interactions (\' closers, \$' non-spans, $' inside
+// plain quotes), adjacent spans, unterminated spans, over-range code
+// points, and the outside-quote backslash branch (round 4's phantom-quote
+// fix).
+test('the ANSI-C decoders agree byte-for-byte on the adversarial corpus (interrogate round 4)', () => {
+  const corpus: string[] = [
+    "h$'\\x63'loud $'\\x4f'BS rm b",
+    "h$'\\143'loud $'\\117'BS cp a b",
+    "h$'\\u0063'loud $'\\U0000004f'BS sync a b",
+    "h$'\\X63'loud", // capital X: not an escape, stays literal
+    "$'\\x6'loud", // 1 hex digit
+    "$'\\x687'loud", // digit cap: \x68 then literal 7
+    "$'\\1039'loud", // octal cap: \103 then literal 9
+    "$'\\400'x", // over-range octal: masked to 8 bits both twins
+    "$'\\U00110000'x", // over-range unicode: stays literal both twins
+    "$'\\u00e9'caf\\u00e9",
+    "a$'\\x68''b", // span adjacent to plain quotes
+    "$'\\x68'$'\\x63'loud ECS",
+    "echo '$'\\x68'' is a literal", // $ inside plain quotes: not a span
+    "echo \\$'hcloud' ECS x", // \$: escaped dollar + PLAIN quotes (not a span)
+    "\\' ; h$'\\x63'loud ECS $'\\x44'eleteServers --server.id=x",
+    "\\\" ; h$'\\x63'loud ECS",
+    "grep foo\\' bar ; h$'\\x63'loud",
+    "back\\\\slash $'\\x68'x", // \\ inside and outside spans
+    "$'a\\'b'c", // \' does not close the span
+    "$'a\\qb'c", // unrecognized escape stays literal
+    "unterminated $'\\x68'loud", // no closer: original text returned
+    "$'' empty span",
+    "$''''$'\\x68'x",
+    '$"lo\\x63ale" $\'\\x68\'y', // $" passes through untouched
+    "x $'h\\$(y)e'z", // $( inside a span stays
+    "tab$'\\t'newline$'\\n'end",
+    'h\\cloud ECS x', // plain backslash escape (no span)
+    'h\\\ncloud ECS x', // line continuation outside spans
+    "printf $'%s\\n' hello",
+    "PS1=$'\\u2560\\u2500' prompt",
+  ];
+  const ts = corpus.map((probe) => decodeAnsiCSpans(probe));
+  const py = spawnSync('python3', ['-c', PY_DECODE_DRIVER], {
+    input: JSON.stringify(corpus),
+    encoding: 'utf8',
+    timeout: 30000,
+  });
+  const unavailable = (py.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT';
+  if (unavailable) return; // python3 not on PATH: TS-only environment
+  assert.equal(py.status, 0, `decode driver crashed: ${py.stderr.slice(0, 300)}`);
+  const pyOut = JSON.parse(py.stdout) as string[];
+  assert.equal(pyOut.length, corpus.length, 'the driver must answer one line per probe');
+  for (let i = 0; i < corpus.length; i++) {
+    assert.deepEqual(
+      ts[i],
+      pyOut[i],
+      `decode drift on ${JSON.stringify(corpus[i])}: ts=${JSON.stringify(ts[i])} py=${JSON.stringify(pyOut[i])}`,
+    );
+  }
+});
+
+// One python3 process decodes the whole corpus via importlib (the Hermes
+// load path) and answers JSON — kept as a string so the driver ships with
+// the test.
+const PY_DECODE_DRIVER = [
+  'import importlib.util, json, sys',
+  'spec = importlib.util.spec_from_file_location("h", "plugins/huaweicloud-core/hooks/huaweicloud-safety.py")',
+  'm = importlib.util.module_from_spec(spec)',
+  'spec.loader.exec_module(m)',
+  'corpus = json.load(sys.stdin)',
+  'print(json.dumps([m.decode_ansi_c_spans(p) for p in corpus]))',
+].join('\n');

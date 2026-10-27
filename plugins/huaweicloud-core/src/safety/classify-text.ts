@@ -13,13 +13,6 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
   const policy = options.policy || DEFAULT_POLICY;
   const text = asText(command || '');
   const shadowText = stripShellQuotes(text);
-  // The ANSI-C-decoded shadow (interrogate round 3): the argv letters `$'…'`
-  // spans build, reconstructed — `h$'\x63'loud` is the `hcloud` the shell
-  // executes. Presence gates below that bear on cloud-command or
-  // secret-reveal detection search BOTH shadows; with no `$'` span the
-  // decoded candidate is the original text (zero cost).
-  const decodedShadowText = stripShellQuotes(decodeAnsiCSpans(text));
-  const shadowCandidates = [shadowText, decodedShadowText];
 
   // Length cap: a routed payload past 256 KiB cannot execute through any
   // wrapper chain (MAX_ARG_STRLEN), and classifying pathological nests
@@ -36,6 +29,16 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
       };
     }
   }
+  // The ANSI-C-decoded shadow (interrogate round 3): the argv letters `$'…'`
+  // spans build, reconstructed — `h$'\x63'loud` is the `hcloud` the shell
+  // executes. Presence gates below that bear on cloud-command or
+  // secret-reveal detection search BOTH shadows; with no `$'` span the
+  // decoded candidate is the original text. Computed AFTER the length cap
+  // and skipped for over-cap payloads (interrogate round 4: an unrouted
+  // 10 MB escape flood must not pay the decode's linear pass — measured
+  // ~0.75 ms/KB — before the gates' other candidates handle it).
+  const decodedShadowText = text.length > 262_144 ? shadowText : stripShellQuotes(decodeAnsiCSpans(text));
+  const shadowCandidates = [shadowText, decodedShadowText];
 
   // Raw, shadow, and path-normalized forms (shared with the MCP file gate):
   // a quote pair inside the path (`~/.config/huawei'cloud/secrets'/.master-

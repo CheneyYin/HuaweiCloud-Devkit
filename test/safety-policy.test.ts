@@ -223,11 +223,14 @@ test('the reveal deny survives npm separators; ANSI-C escape obfuscation is deni
   // with the ANSI-C decode feeding the gate's candidates, the mangled
   // subcommand reconstructs to `secret get` and the reveal-family check
   // fires FIRST with its more actionable message — still denied outright,
-  // now with the remediation that actually matches the intent.
+  // now with the remediation that actually matches the intent. The reason
+  // is pinned to the SPECIFIC reveal text (interrogate round 4: the old
+  // /vault secrets|obfuscated/ alternation passed with the decode
+  // reverted, via the obfuscation fallback — vacuous).
   const obfuscated = 'npx huaweicloud-devkit secret $' + "'\\x67et' secret://user/hw-sk --stdout";
   const result = classifyTextCommand(obfuscated);
   assert.equal(result.decision, 'deny');
-  assert.match(result.reason ?? '', /vault secrets|obfuscated/i);
+  assert.match(result.reason ?? '', /vault secrets/i);
 });
 
 test('the env-dump family closes the full-dump and pipe-grep forms', () => {

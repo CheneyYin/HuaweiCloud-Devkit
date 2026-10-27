@@ -80,13 +80,21 @@ test('the py hook derives the obfuscation gate write vocabulary from policy.json
   // The ANSI-C decode (interrogate round 3): both layers reconstruct the
   // argv letters $'…' spans build, and the gate's clauses search BOTH
   // shadow candidates — mangle-past-the-marker no longer hides the bin.
+  // The decode is size-guarded (round 4: an over-cap payload skips the
+  // linear pass) and the outside-quote backslash branch defeats the
+  // phantom-quote poisoning (`\' ; h$'…` no longer disables the decode).
   assert.match(pyHook, /def decode_ansi_c_spans\(text\):/);
-  assert.match(pyHook, /decoded_unquoted = strip_shell_quotes\(decode_ansi_c_spans\(text\)\)/);
+  assert.match(
+    pyHook,
+    /decoded_unquoted = \(\s*unquoted if len\(text\) > 262144 else strip_shell_quotes\(decode_ansi_c_spans\(text\)\)\s*\)/,
+  );
+  assert.match(pyHook, /# Outside quotes a backslash escapes the NEXT character/);
   const shellText = readSource(join('src', 'safety', 'shell-text.ts'));
   assert.match(shellText, /export function decodeAnsiCSpans\(text: string\): string \{/);
+  assert.match(shellText, /Outside quotes a backslash escapes the NEXT character/);
   const classifyText = readSource(join('src', 'safety', 'classify-text.ts'));
   assert.match(classifyText, /decodeAnsiCSpans/);
-  assert.match(classifyText, /const decodedShadowText = stripShellQuotes\(decodeAnsiCSpans\(text\)\)/);
+  assert.match(classifyText, /text\.length > 262_144 \? shadowText : stripShellQuotes\(decodeAnsiCSpans\(text\)\)/);
   // The fail-closed arm sits in the gate's vocabulary clause (whitespace-
   // tolerant: indentation reflow must not break the pin — interrogate
   // round 2).
