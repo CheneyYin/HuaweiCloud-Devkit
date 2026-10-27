@@ -4,6 +4,8 @@
 // functions so the verdict is unit-testable. deploy-nginx.ts folds them into
 // its deploy script; session-manager.ts re-exports them as the public face.
 
+import { stripTerminalEscapes } from './sandbox-output.ts';
+
 // A1 (#935): normalize configName to a bare filename — a path-shaped value
 // (e.g. a local path echoed back by a caller) must never splice into a broken
 // target like `/etc/nginx/conf.d//root/hc-activity.conf` (nginx never serves
@@ -30,8 +32,12 @@ export interface ParsedDeployNginxVerify {
 //   DB_NGINX_CONFIG_MISSING=1  — the target config file does not exist
 //   DB_NGINX_T=PASS|FAIL       — nginx -t verdict, with failure output echoed
 //                                as `DB_NGINX_T_OUTPUT: ...` lines
+// The markers are ANCHORED (^…$), so OSC-integration shells that wrap every
+// line in \x1b]133;C\x07 blind the parse — every successful deploy would read
+// as "nginx -t did not pass" (port-v2defects; the #946 single-seam doctrine:
+// stripTerminalEscapes folds in here like every sandbox-output parser).
 export function parseDeployNginxVerifyOutput(stdout: string | undefined): ParsedDeployNginxVerify {
-  const text = String(stdout || '');
+  const text = stripTerminalEscapes(stdout);
   const configMissing = /DB_NGINX_CONFIG_MISSING=1/.test(text);
   const nginxTest = text.match(/^DB_NGINX_T=(\w+)$/m)?.[1] ?? '';
   const nginxTestOutput = (text.match(/^DB_NGINX_T_OUTPUT: .*$/gm) ?? [])

@@ -251,6 +251,34 @@ test('parseDeployNginxVerifyOutput reports PASS for a clean nginx -t (#935 A1)',
   assert.equal(verify.nginxTest, 'PASS');
 });
 
+test('parseDeployNginxVerifyOutput survives OSC/CSI-wrapped output (#946 shell shape, port-v2defects)', () => {
+  // Integration-enabled shells wrap EVERY line in OSC 133 markers (the
+  // devbridge-auth/devbridge-expose comment testimony): the anchored
+  // ^DB_NGINX_T= lookup read empty, so every SUCCESSFUL deploy_nginx
+  // returned ok:false "nginx -t did not pass" with an empty diagnosis
+  // (DB_NGINX_T_OUTPUT equally blinded) — fail-closed toward false
+  // failure, but the tool was broken on a real shell class. The parser
+  // folds stripTerminalEscapes in like every sandbox-output parser.
+  const osc = '\x1b]133;C\x07';
+  const pass = parseDeployNginxVerifyOutput(['deploy output', `${osc}DB_NGINX_T=PASS`].join('\r\n'));
+  assert.equal(pass.configMissing, false);
+  assert.equal(pass.nginxTest, 'PASS', 'OSC-wrapped PASS marker must be stripped and read');
+  const fail = parseDeployNginxVerifyOutput(
+    [`${osc}DB_NGINX_T=FAIL`, `${osc}DB_NGINX_T_OUTPUT: nginx: [emerg] unknown directive "foo"`].join('\r\n'),
+  );
+  assert.equal(fail.nginxTest, 'FAIL');
+  assert.match(fail.nginxTestOutput, /unknown directive/);
+  const missing = parseDeployNginxVerifyOutput(`\x1b[?2026h${osc}DB_NGINX_CONFIG_MISSING=1\r\n`);
+  assert.equal(missing.configMissing, true, 'OSC/CSI-wrapped missing marker must be read');
+  // The verdict composes: a wrapped-but-successful deploy must be ok:true.
+  const verdict = evaluateDeployNginxVerify(
+    { exitCode: 0 },
+    parseDeployNginxVerifyOutput(`${osc}DB_NGINX_T=PASS`),
+    '/etc/nginx/conf.d/x.conf',
+  );
+  assert.equal(verdict.ok, true, 'a successful OSC-shell deploy must not read as failed');
+});
+
 test('evaluateDeployNginxVerify returns ok:false with explicit error on tee write failure (#935 A1)', () => {
   const result = { exitCode: 0 };
   const verify = parseDeployNginxVerifyOutput('DB_NGINX_CONFIG_MISSING=1\n');

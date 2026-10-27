@@ -1,15 +1,17 @@
 // The single escape-stripping seam for sandbox command output (#946), extracted
 // from session-manager so every sandbox-output parser entry point — the
-// deploy-check parser, the upload md5 verify, and the devbridge-tunnel
-// family's parser modules (devbridge-auth/expose/verify/renew/keepalive) —
-// folds in one copy instead of re-rolling the regexes.
+// deploy-check parser, the deploy-nginx-verify parser, the upload md5 verify,
+// and the devbridge-tunnel family's parser modules (devbridge-auth/expose/
+// verify/renew/keepalive) — folds in one copy instead of re-rolling the
+// regexes.
 
 // Strip terminal escape sequences from sandbox command output (#946): CSI
 // color/cursor codes and OSC shell-integration markers (shells with integration
 // enabled wrap EVERY line in \x1b]133;C\x07, which blinds anchored ^DB_...=
 // parsers), then normalize \r\n / \r line endings to \n. The single copy —
-// every sandbox-output parser entry point (parseDeployCheckOutput and the
-// devbridge-tunnel parsers) folds this in instead of re-rolling the regexes.
+// every sandbox-output parser entry point (parseDeployCheckOutput,
+// parseDeployNginxVerifyOutput, and the devbridge-tunnel parsers) folds this
+// in instead of re-rolling the regexes.
 // Use new RegExp to avoid ESLint no-control-regex on literal control chars in regex.
 export function stripTerminalEscapes(text: unknown): string {
   // Callers pass ws-exec stdout (string | undefined at runtime); a non-string
