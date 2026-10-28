@@ -379,6 +379,25 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
   ['no\'de\' -e \'require("child_process").execSync("hcloud ECS DeleteServers")\'', 'deny'],
   ['py"thon3" -c \'import os; os.system("hcloud ECS DeleteServers")\'', 'deny'],
   ['#' + 'x'.repeat(262200) + '\n${X:-hcloud} ECS DeleteServers', 'deny'],
+  // port-v2defects (interrogate round 16, the clean-round fixes): the
+  // quote-mangled SHELL heredoc heads (`ba'sh' <<EOF` — the word-gluing
+  // doctrine reached the shell twin), the quote-mangled interpreter CODE
+  // FLAGS (`python3 -'c'`), the py glued-path expansion SLOT (TS parity),
+  // and the pipe-fed shell stdin (`echo '…' | bash` — the xargs-feeder
+  // doctrine: the previous segment's args are the script; a
+  // heredoc-to-pipe composition lands the body inline).
+  ["ba'sh' <<EOF\nhcloud ECS DeleteServers\nEOF", 'deny'],
+  ["bas'h' <<EOF\nhcloud ECS DeleteServers\nEOF", 'deny'],
+  ["da'sh' <<<'hcloud ECS Delete'", 'deny'],
+  ["python3 -'c' 'import os; os.system(\"hcloud ECS DeleteServers\")'", 'deny'],
+  ["perl -'e' 'system(\"hcloud ECS DeleteServers\")'", 'deny'],
+  ['node -\'e\' \'require("child_process").execSync("hcloud ECS DeleteServers")\'', 'deny'],
+  ["pyth'on3' -'c' 'import os; os.system(\"hcloud ECS DeleteServers\")'", 'deny'],
+  ["echo 'hcloud ECS DeleteServers' | bash", 'deny'],
+  ["echo 'hcloud ECS DeleteServers' | sh", 'deny'],
+  ['cat <<EOF | bash\nhcloud ECS DeleteServers\nEOF', 'deny'],
+  ['"hcl"oud ${X:-ECS} ${X:-DeleteServers}', 'deny'],
+  ["echo 'hcloud ECS ListServers' | bash", 'allow'],
   // The astral row: 200k valid surrogate pairs = 800 KB bytes / 400,000
   // UTF-16 units / 200,000 code points — over the byte cap on both twins,
   // over the OLD TS unit cap (400,002 > 262,144) but under the OLD py

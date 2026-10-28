@@ -232,6 +232,18 @@ test('the py hook degrades coherently: derived vocabularies, isolated fields, fa
   assert.match(pyHook, /"busybox"/);
   assert.ok(pyHook.includes('or re.search(r"<<<?", segment)'), 'the stdin-heredoc code-context arm');
   assert.ok(pyHook.includes('b.lower() in segment.lower()'), 'contiguous presence (the ${X:-hcloud} fix)');
+  // Round 16: the mangled-flag normalizer, the mangled shell heads, the
+  // glued slot rule, and the pipe-fed shell stdin.
+  assert.match(pyHook, /def _normalize_flag_token\(token\):/);
+  assert.match(pyHook, /_normalize_flag_token\(tokens\[i\]\)/);
+  assert.match(classifyText, /function normalizeFlagToken\(token: string\): string \{/);
+  assert.match(classifyText, /function shellHeadBefore\(segment: string, endIndex: number\): boolean \{/);
+  assert.ok(
+    classifyText.includes(".replace(/['\"\\\\$]/g, '')"),
+    'the shell head word strips quotes (the ba-sh mangle fix)',
+  );
+  assert.match(pyHook, /_shell_head_ok = bool\(/);
+  assert.ok(pyHook.includes('_gslot_argv'), 'the glued-path slot rule');
   assert.doesNotMatch(pyHook, /nested_shadow = strip_shell_quotes\(nested\)/);
   assert.match(classifyText, /function opaqueCarrierDenied\(/);
   assert.match(classifyText, /function interpreterHeadOf\(/);

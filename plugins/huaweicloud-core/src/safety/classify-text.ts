@@ -114,8 +114,8 @@ function scriptTextOf(tokens: string[], depth = 0): string | null {
   const interpreter = interpreterHeadOf(first);
   if (interpreter !== null && tokens.length > 1) {
     let i = 1;
-    while (i < tokens.length && /^-[a-bd-z][a-z]*$/i.test(String(tokens[i]))) i++;
-    const flag = String(tokens[i] ?? '');
+    while (i < tokens.length && /^-[a-bd-z][a-z]*$/i.test(normalizeFlagToken(tokens[i] ?? ''))) i++;
+    const flag = normalizeFlagToken(tokens[i] ?? '');
     const codeFlag =
       interpreter === 'python' ? /^-[a-z]*c[a-z]*$/i.test(flag) : /^-[a-z]*e[a-z]*$/i.test(flag) || flag === '--eval';
     if (codeFlag && i + 1 < tokens.length) {
@@ -177,6 +177,14 @@ function interpreterSystemCommands(code: string): string | null {
   let m: RegExpExecArray | null;
   while ((m = re.exec(code)) !== null) commands.push(m[2] ?? '');
   return commands.length > 0 ? commands.join(';\n') : null;
+}
+
+// Round 16 C4: closed-quote-mangled code flags (`-'c'`) — strip quotes/
+// backslashes/dollars from a flag token before the code-flag class tests
+// (the word-gluing doctrine; the head got it in round 15, the flags did
+// not).
+function normalizeFlagToken(token: string): string {
+  return String(token).replace(/['"\\$]/g, '');
 }
 
 // Interpreter head normalization (interrogate round 13): basename +
@@ -263,9 +271,10 @@ function opaqueCarrierDenied(segment: string, plainTokens: string[], wholeText: 
       // Round 14 C4: a stdin heredoc (`python3 <<'EOF' …`) is code context
       // too — the body is interpreter code.
       codeContext =
-        rest.some((tok) =>
-          head === 'python' ? /^-[a-z]*c[a-z]*$/i.test(tok) : /^-[a-z]*e[a-z]*$/i.test(tok) || tok === '--eval',
-        ) || /<<<?/.test(segment);
+        rest.some((tok) => {
+          const f = normalizeFlagToken(tok);
+          return head === 'python' ? /^-[a-z]*c[a-z]*$/i.test(f) : /^-[a-z]*e[a-z]*$/i.test(f) || f === '--eval';
+        }) || /<<<?/.test(segment);
     }
   }
   if (!fragmented && !marker && !codeContext) return null;
@@ -316,7 +325,11 @@ function shellHeadBefore(segment: string, endIndex: number): boolean {
     }
     break;
   }
-  const headWord = probe.length > 0 ? basenameOf(String(probe[0]).toLowerCase()) : '';
+  // Round 16 C1: closed-quote mid-token mangling (`ba'sh'`) — strip
+  // quotes/backslashes/dollars from the head word before matching (the
+  // word-gluing doctrine; round 15 fixed the interpreter heads, this is
+  // the shell twin).
+  const headWord = probe.length > 0 ? basenameOf(String(probe[0]).toLowerCase()).replace(/['"\\$]/g, '') : '';
   return /^(bash|sh|zsh|dash)(\.exe)?$/.test(headWord);
 }
 
@@ -384,9 +397,12 @@ function gluedWriteDenied(
       if (interpHead !== null) {
         const rest = probeStream.slice(1).map((token) => String(token));
         const codeForm =
-          rest.some((tok) =>
-            interpHead === 'python' ? /^-[a-z]*c[a-z]*$/i.test(tok) : /^-[a-z]*e[a-z]*$/i.test(tok) || tok === '--eval',
-          ) ||
+          rest.some((tok) => {
+            const f = normalizeFlagToken(tok);
+            return interpHead === 'python'
+              ? /^-[a-z]*c[a-z]*$/i.test(f)
+              : /^-[a-z]*e[a-z]*$/i.test(f) || f === '--eval';
+          }) ||
           (interpHead === 'awk' && rest.some((tok) => !tok.startsWith('-'))) ||
           /<<<?/.test(segment);
         if (codeForm) {
@@ -465,6 +481,33 @@ function gluedWriteDenied(
     if (plainLeading) {
       segSaw.value = true;
       saw.value = true;
+    }
+    // Round 16 C3: a pipe-fed SHELL reads its stdin as a SCRIPT —
+    // `echo 'hcloud …' | bash` executes the piped line. The xargs-feeder
+    // doctrine: the previous segment's tokens reaching a listed shell
+    // consumer are the script. (bash/sh are listed carriers; the encoded
+    // pipe form is already denied by the risk catalog.)
+    if (
+      !plainLeading &&
+      prevTokens.length > 0 &&
+      stream.length > 0 &&
+      /^(bash|sh|zsh|dash)(\.exe)?$/.test(basenameOf(String(stream[0]).toLowerCase()).replace(/['"\\$]/g, '')) &&
+      script === null &&
+      heredoc === null
+    ) {
+      // The feeder is the previous segment's ARGUMENTS (the command word —
+      // echo/printf/cat — produces them): skip it, mirroring the xargs
+      // feeder's args-after-the-command semantics. A heredoc-to-pipe
+      // composition (`cat <<EOF | bash\n<body>\nEOF`) lands the BODY
+      // inline in the shell's own segment (the marker line split at the
+      // pipe) — the post-newline text is the script too.
+      const nested = gluedWriteDenied(prevTokens.slice(1).join(' '), options, narrowRouted, depth + 1, segSaw);
+      if (nested) return nested;
+      const inlineNl = segment.indexOf('\n');
+      if (inlineNl >= 0) {
+        const inlineNested = gluedWriteDenied(segment.slice(inlineNl + 1), options, narrowRouted, depth + 1, segSaw);
+        if (inlineNested) return inlineNested;
+      }
     }
     const gluedTokens = splitSimpleCommandGlued(segment);
     const { stream: gluedStream } = unwrapWithWindowsFlag(gluedTokens);

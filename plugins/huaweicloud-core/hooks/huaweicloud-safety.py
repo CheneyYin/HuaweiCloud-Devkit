@@ -1504,7 +1504,12 @@ def _heredoc_script_text(segment):
             head_probe = _skip_prefix_args(head_base or head_lower, head_probe[1:])
             continue
         break
-    if not head_probe or not re.match(r"^(bash|sh|zsh|dash)(\.exe)?$", basename_of(str(head_probe[0]).lower())):
+    # Round 16 C1: closed-quote mid-token mangling (`ba'sh'`) — strip
+    # quotes/backslashes/dollars from the head word before matching.
+    if not head_probe or not re.match(
+        r"^(bash|sh|zsh|dash)(\.exe)?$",
+        re.sub(r"['\"\\$]", "", basename_of(str(head_probe[0]).lower())),
+    ):
         return None
     rest = segment[m.start():]
     hs = re.match(r"^<<<\s*(.+)$", rest)
@@ -1534,6 +1539,14 @@ def _interpreter_system_commands(code):
     for m in re.finditer(r"(?:^|[;\n}])\s*(?:os\.)?system\(\s*(['\"])([\s\S]*?)\1\s*\)", code):
         commands.append(m.group(2))
     return ";\n".join(commands) if commands else None
+
+
+def _normalize_flag_token(token):
+    """Round 16 C4: closed-quote-mangled code flags (`-'c'`) — strip
+    quotes/backslashes/dollars from a flag token before the code-flag
+    class tests (the word-gluing doctrine). Mirrored by
+    normalizeFlagToken in classify-text.ts."""
+    return re.sub(r"['\"\\$]", "", str(token))
 
 
 def _interpreter_head_of(head):
@@ -1655,7 +1668,7 @@ def _opaque_carrier_denied(segment, tokens, whole_text):
             # is code context too — the body is interpreter code.
             code_context = (
                 any(
-                    re.match(r"^-[a-z]*c[a-z]*$", t, re.I) if head == "python" else (re.match(r"^-[a-z]*e[a-z]*$", t, re.I) or t == "--eval")
+                    (lambda f: re.match(r"^-[a-z]*c[a-z]*$", f, re.I) if head == "python" else (re.match(r"^-[a-z]*e[a-z]*$", f, re.I) or f == "--eval"))(_normalize_flag_token(t))
                     for t in rest
                 )
                 or re.search(r"<<<?", segment) is not None
@@ -1684,7 +1697,7 @@ def _script_of(tokens):
         # the c-cluster.
         i = 1
         while i < len(tokens):
-            tok = str(tokens[i])
+            tok = _normalize_flag_token(tokens[i])
             if re.match(r"^--[a-z-]+$", tok, re.I):
                 i += 1
                 continue
@@ -1697,7 +1710,7 @@ def _script_of(tokens):
                 i += 1
                 continue
             break
-        if i + 1 < len(tokens) and re.match(r"^-[a-z]*c[a-z]*$", str(tokens[i]), re.I):
+        if i + 1 < len(tokens) and re.match(r"^-[a-z]*c[a-z]*$", _normalize_flag_token(tokens[i]), re.I):
             script = str(tokens[i + 1]).replace('\\"', '"').replace('\\\\', '\\')
             # When the script word is ITSELF a bin or wrapper head (the
             # flattened join of a quoted original), the tail tokens belong
@@ -1735,9 +1748,9 @@ def _script_of(tokens):
     interp = _interpreter_head_of(first)
     if interp is not None and len(tokens) > 1:
         i = 1
-        while i < len(tokens) and re.match(r"^-[a-bd-z][a-z]*$", str(tokens[i]), re.I):
+        while i < len(tokens) and re.match(r"^-[a-bd-z][a-z]*$", _normalize_flag_token(tokens[i]), re.I):
             i += 1
-        flag = str(tokens[i]) if i < len(tokens) else ""
+        flag = _normalize_flag_token(tokens[i]) if i < len(tokens) else ""
         code_flag = (
             re.match(r"^-[a-z]*c[a-z]*$", flag, re.I)
             if interp == "python"
@@ -1865,7 +1878,7 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
             _rest = [str(t) for t in _probe_stream[1:]]
             _code_form = (
                 any(
-                    re.match(r"^-[a-z]*c[a-z]*$", t, re.I) if _interp == "python" else (re.match(r"^-[a-z]*e[a-z]*$", t, re.I) or t == "--eval")
+                    (lambda f: re.match(r"^-[a-z]*c[a-z]*$", f, re.I) if _interp == "python" else (re.match(r"^-[a-z]*e[a-z]*$", f, re.I) or f == "--eval"))(_normalize_flag_token(t))
                     for t in _rest
                 )
                 or (_interp == "awk" and any(not t.startswith("-") for t in _rest))
@@ -1975,7 +1988,8 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
                         continue
                     break
                 if not dangling_probe or not re.match(
-                    r"^(bash|sh|zsh|dash)(\.exe)?$", basename_of(str(dangling_probe[0]).lower())
+                    r"^(bash|sh|zsh|dash)(\.exe)?$",
+                    re.sub(r"['\"\\$]", "", basename_of(str(dangling_probe[0]).lower())),
                 ):
                     continue
                 if True:
@@ -2025,6 +2039,35 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
                                 if reason:
                                     return reason
                                 carrier_traversed = True
+        # Round 16 C3: a pipe-fed SHELL reads its stdin as a SCRIPT —
+        # `echo 'hcloud …' | bash` executes the piped line. The xargs-feeder
+        # doctrine: the previous segment's ARGS reaching a listed shell
+        # consumer are the script; a heredoc-to-pipe composition lands the
+        # body inline in the shell's own segment (post-newline text too).
+        _shell_stream, _ = _leading_segment_probe(tokens)
+        _shell_head_ok = bool(
+            _shell_stream
+            and re.match(
+                r"^(bash|sh|zsh|dash)(\.exe)?$",
+                re.sub(r"['\"\\$]", "", basename_of(str(_shell_stream[0]).lower())),
+            )
+        )
+        if (
+            _shell_head_ok
+            and s > 0
+            and not any(re.match(r"^-[a-z]*c$", _normalize_flag_token(t), re.I) for t in tokens[1:])
+            and not re.search(r"<<<?", segment)
+        ):
+            _feeder_args = split_tokens(segments[s - 1])[1:]
+            if _feeder_args:
+                reason = hcloud_write_blocked(" ".join(str(t) for t in _feeder_args), depth + 1, routed, None, seg_saw)
+                if reason:
+                    return reason
+            _inline_nl = segment.find("\n")
+            if _inline_nl >= 0:
+                reason = hcloud_write_blocked(segment[_inline_nl + 1:], depth + 1, routed, None, seg_saw)
+                if reason:
+                    return reason
         stripped = hcloud_leading_segment(tokens)
         if stripped is None:
             # Glued-bin fallback, PER SEGMENT (interrogate round 10): bash
@@ -2044,6 +2087,14 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
                     saw[0] = True
                     seg_saw[0] = True
                     glued_argv = [t for t in glued_stripped[1:] if not t.startswith("-")]
+                    # Round 16 C2: the expansion SLOT rule on the glued path
+                    # (TS parity — `"hcl"oud ${X:-ECS} ${X:-Delete}`
+                    # executed while the plain-path-only rule missed it).
+                    _gslot_argv = [t for t in glued_stripped[1:] if not str(t).startswith("-")]
+                    if any(re.search(r"\$\{", str(t)) for t in _gslot_argv[:2]):
+                        _opaque = _opaque_carrier_denied(segment, tokens, segment)
+                        if _opaque:
+                            return _opaque
                     segment_has_xargs = any(
                         str(t).lower() == "xargs" or basename_of(str(t).lower()) == "xargs"
                         for t in tokens
@@ -2254,6 +2305,28 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
             # the operation slot denies (xargs appends stdin in order).
             for word in feeder:
                 reason = _classify_leading(["hcloud"] + own + [str(word)], own + [str(word)], routed)
+                if reason:
+                    return reason
+        # Round 16 C3: a pipe-fed SHELL reads its stdin as a SCRIPT —
+        # `echo 'hcloud …' | bash` executes the piped line. The xargs-feeder
+        # doctrine: the previous segment's ARGS reaching a listed shell
+        # consumer are the script; a heredoc-to-pipe composition lands the
+        # body inline in the shell's own segment (post-newline text too).
+        _shell_stream, _ = _leading_segment_probe(tokens)
+        _shell_head = (
+            re.match(r"^(bash|sh|zsh|dash)(\.exe)?$", re.sub(r"['\"\\$]", "", basename_of(str(_shell_stream[0]).lower())))
+            if _shell_stream
+            else None
+        )
+        if _shell_head and s > 0 and stripped is not None and not argv:
+            _feeder_args = split_tokens(segments[s - 1])[1:]
+            if _feeder_args:
+                reason = hcloud_write_blocked(" ".join(str(t) for t in _feeder_args), depth + 1, routed, None, seg_saw)
+                if reason:
+                    return reason
+            _inline_nl = segment.find("\n")
+            if _inline_nl >= 0:
+                reason = hcloud_write_blocked(segment[_inline_nl + 1:], depth + 1, routed, None, seg_saw)
                 if reason:
                     return reason
         # Round 15 C-X: an expansion-built OPERATION/SERVICE/SUBCOMMAND
