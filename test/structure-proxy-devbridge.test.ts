@@ -473,6 +473,11 @@ test('stripTerminalEscapes is the single escape-stripping seam for sandbox outpu
   const sandboxOutput = readSource(join('src', 'sandbox', 'sandbox-output.ts'));
   // The deploy-check parser lives in deploy-check.ts since the same split.
   const deployCheckSource = readSource(join('src', 'sandbox', 'deploy-check.ts'));
+  // The nginx-verify parser lives in deploy-nginx-verify.ts since the
+  // deploy-nginx family split (port-v2defects: it was the one anchored-marker
+  // parser left outside the seam — every successful deploy_nginx read as
+  // failed on OSC-integration shells).
+  const deployNginxVerifySource = readSource(join('src', 'sandbox', 'deploy-nginx-verify.ts'));
   // The devbridge parsers live in their canonical modules since the
   // devbridge-tunnel modularization (auth probe parser in devbridge-auth.ts,
   // the expose/probe parsers in devbridge-expose.ts).
@@ -518,6 +523,11 @@ test('stripTerminalEscapes is the single escape-stripping seam for sandbox outpu
 
   // Every sandbox-output parser entry point folds the stripper in.
   assert.match(deployCheckSource, /parseDeployCheckOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/);
+  assert.match(
+    deployNginxVerifySource,
+    /parseDeployNginxVerifyOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/,
+  );
+  assert.match(deployNginxVerifySource, /import \{ stripTerminalEscapes \} from '\.\/sandbox-output\.ts';/);
   assert.match(devbridgeExpose, /parseDevbridgeExposeOutput\(stdout[\s\S]{0,600}?stripTerminalEscapes\(stdout\)/);
   assert.match(devbridgeAuth, /parseDevbridgeAuthOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/);
   assert.match(devbridgeVerify, /parseDevbridgeVerifyOutput\(stdout[\s\S]{0,400}?stripTerminalEscapes\(stdout\)/);
@@ -558,7 +568,14 @@ test('devbridge 0.2.x flow: auth capability probe, version detection, in-place u
   const deployNginx = readSource(join('src', 'sandbox', 'deploy-nginx.ts'));
   const deployNginxVerify = readSource(join('src', 'sandbox', 'deploy-nginx-verify.ts'));
   assert.match(deployNginx, /DB_NGINX_CONFIG_MISSING=1/);
+  // The presence-inverted pair (interrogate round 2): the script emits
+  // OK-or-MISSING as if/else so every marker is presence-required and a
+  // swallowed marker line reads as the failure direction, never as the
+  // pre-inversion false success.
+  assert.match(deployNginx, /DB_NGINX_CONFIG_OK=1/);
+  assert.match(deployNginx, /else echo "DB_NGINX_CONFIG_MISSING=1"; fi/);
   assert.match(deployNginx, /DB_NGINX_T=PASS/);
+  assert.match(deployNginxVerify, /DB_NGINX_CONFIG_OK=1/);
   assert.match(deployNginxVerify, /export function resolveNginxConfigPath/);
   assert.match(deployNginx, /fix_and_retry/);
 

@@ -89,6 +89,21 @@ const GLOBAL_TELEMETRY_DIR = join(
   'telemetry',
 );
 
+// The face-owned global-dir derivation, surfaced for INSTALL/UNINSTALL
+// consumers outside the family (the workbuddy agent module's directory
+// bookkeeping): the server's global telemetry state (exit spool,
+// machine-finger, installation-id, user-hash) lives under
+// HUAWEICLOUD_DEVKIT_HOME when set, so the installer must create — and the
+// uninstaller remove — the SAME directory the server writes. A consumer
+// re-rolling a bare-homedir() join ignores the override (the
+// port-v2defects residue: install created an orphan dir under the real
+// home while the server wrote under the override; uninstall deleted the
+// real home's and left the override's behind). Returns the face's
+// import-time derivation — the same value every family consumer uses.
+export function globalTelemetryDir(): string {
+  return GLOBAL_TELEMETRY_DIR;
+}
+
 // The family's paths in one record, derived in this module only. The
 // agent-dir paths sit inside the plugin dir (they must resolve to the same
 // locations in the source, tsc, and bundle shapes — see resolvePluginDir);
