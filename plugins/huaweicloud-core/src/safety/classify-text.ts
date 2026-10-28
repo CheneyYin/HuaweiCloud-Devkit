@@ -5,6 +5,8 @@ import { credentialFileCandidates } from './credential-path.ts';
 import { DEFAULT_POLICY } from './default-policy.ts';
 import { matchesAny, type ClassifyOptions } from './policy.ts';
 import { applyRawCommandRiskRules } from './risk-merge.ts';
+import { unwrapSecretExecWrapper } from './secret-exec.ts';
+import { unwrapSkillQualityCli } from './skill-quality-cli.ts';
 import {
   decodeAnsiCSpans,
   splitShellSegments,
@@ -12,42 +14,183 @@ import {
   splitSimpleCommandGlued,
   stripShellQuotes,
 } from './shell-text.ts';
-import { OBSUTIL_WRITES, COMMAND_POSITION_PREFIXES, SHELL_FIRST_TOKENS, isHcloudToken } from './tokens.ts';
+import {
+  basenameOf,
+  COMMAND_POSITION_PREFIXES,
+  isEnvAssignment,
+  isHcloudToken,
+  isRedirectionToken,
+  OBSUTIL_WRITES,
+  SHELL_FIRST_TOKENS,
+  skipPrefixArguments,
+} from './tokens.ts';
 import { unwrapWithWindowsFlag } from './unwrap.ts';
+import { windowsScriptArgAt } from './windows.ts';
 import { SECRET_SHADOW_RE, SECRET_TEXT_RE } from './vocabulary.ts';
 
-// Flatten shell -c / eval SCRIPT tokens through the GLUED tokenizer
-// (interrogate round 10): py's write-gate recursion re-classifies the
-// script text with the glued pass at every depth, so `"hcl"oud …` inside a
-// script denies there; unwrapCore's own script re-tokenization is
-// non-glued and would re-fragment the span. Mirrors py's join doctrine:
-// a script word that is itself a command head (shell/eval/prefix/hcloud
-// bin) re-joins the invocation's tail — the flattened join of a quoted
-// original. Depth-capped like the unwrap loops.
-function flattenGluedScripts(tokens: string[], depth = 0): string[] {
-  if (depth >= 10 || tokens.length === 0) return tokens;
+// The SCRIPT a wrapper carries (py's _script_of doctrine, interrogate
+// round 11): shell -c / eval / windows-payload script text, with the
+// head-stripping (redirections, env assignments, prefixes) py's probe
+// loop applies — so `watch bash -c '…'`, `2>/dev/null bash -c '…'`,
+// `HW_REGION=x bash -c '…'` all reach the script. The script re-runs the
+// full segment walk (glued fallback included) recursively — that
+// recursion is where py catches non-first-command and prefix-wrapped
+// glued writes. Depth-capped at 18 (py's nested budget, one past the
+// Linux executability ceiling).
+function scriptTextOf(tokens: string[], depth = 0): string | null {
+  if (depth >= 10 || tokens.length === 0) return null;
   const first = String(tokens[0]).toLowerCase();
-  if (SHELL_FIRST_TOKENS.has(first) && /^-[a-z]*c$/i.test(String(tokens[1] ?? '')) && tokens.length > 2) {
+  const base = basenameOf(String(tokens[0]).toLowerCase());
+  const isShell = SHELL_FIRST_TOKENS.has(first) || (base !== first && SHELL_FIRST_TOKENS.has(base));
+  if (isShell && /^-[a-z]*c$/i.test(String(tokens[1] ?? '')) && tokens.length > 2) {
     const script = String(tokens[2]).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-    const inner = flattenGluedScripts(splitSimpleCommandGlued(script), depth + 1);
-    const tail = tokens.slice(3).map((token) => String(token));
-    const head = inner.length > 0 ? String(inner[0]).toLowerCase() : '';
+    // py's join doctrine: a script word that is itself a command head
+    // re-joins the invocation's tail — the flattened join of a quoted
+    // original.
+    const headTok = splitSimpleCommand(script)[0];
+    const head = headTok !== undefined ? String(headTok).toLowerCase() : '';
     const headIsCommandish =
-      inner.length > 0 &&
+      headTok !== undefined &&
       (SHELL_FIRST_TOKENS.has(head) ||
         head === 'eval' ||
         COMMAND_POSITION_PREFIXES.has(head) ||
-        isHcloudToken(String(inner[0])));
-    return headIsCommandish && tail.length > 0 ? [...inner, ...tail] : inner;
+        isHcloudToken(String(headTok)));
+    return headIsCommandish && tokens.length > 3
+      ? [script, ...tokens.slice(3).map((token) => String(token))].join(' ')
+      : script;
   }
   if (first === 'eval' && tokens.length > 1) {
-    const joined = tokens
+    return tokens
       .slice(1)
       .map((token) => String(token).replace(/\\"/g, '"').replace(/\\\\/g, '\\'))
       .join(' ');
-    return flattenGluedScripts(splitSimpleCommandGlued(joined), depth + 1);
   }
-  return tokens;
+  // watch runs its command arguments as an sh -c SCRIPT (the join of the
+  // words after its own flags — interrogate round 11: `watch -n1 '"hcl"oud
+  // ECS Delete'` executes the glued bin through that join).
+  if (first === 'watch' && tokens.length > 1) {
+    return skipPrefixArguments('watch', tokens.slice(1))
+      .map((token) => String(token))
+      .join(' ');
+  }
+  const win = windowsScriptArgAt(tokens, 0);
+  if (win !== null) return win;
+  if (isRedirectionToken(String(tokens[0]))) return scriptTextOf(tokens.slice(1), depth + 1);
+  if (isEnvAssignment(first)) return scriptTextOf(tokens.slice(1), depth + 1);
+  const secretExecChild = unwrapSecretExecWrapper(tokens);
+  if (secretExecChild) return scriptTextOf(secretExecChild, depth + 1);
+  const sqcChild = unwrapSkillQualityCli(tokens);
+  if (sqcChild) return scriptTextOf(sqcChild, depth + 1);
+  if (COMMAND_POSITION_PREFIXES.has(first) || COMMAND_POSITION_PREFIXES.has(base)) {
+    return scriptTextOf(skipPrefixArguments(base, tokens.slice(1)), depth + 1);
+  }
+  return null;
+}
+
+// The body of a heredoc/herestring a SHELL bin reads as its script
+// (interrogate round 11: `bash <<EOF\n"hcl"oud ECS Delete\nEOF` executes
+// the body — the -c machinery never fires without the flag). The segment
+// keeps the body inline (splitShellSegments models heredocs), so the body
+// is sliced between the marker line and the delimiter line.
+function heredocScriptText(segment: string): string | null {
+  const markerAt = segment.search(/<<<?-?/);
+  if (markerAt < 0) return null;
+  const head = segment.slice(0, markerAt);
+  if (!/(^|\s|\/)(bash|sh|zsh|dash)(\.exe)?\s*$/.test(head)) return null;
+  const rest = segment.slice(markerAt);
+  const herestring = /^<<<\s*(.+)$/m.exec(rest);
+  if (herestring) {
+    // The herestring word is ONE argv-ish blob bash parses as a script:
+    // strip the edge quotes so the walk's tokenizers see the command.
+    return (herestring[1] ?? '').replace(/^['"]|['"]$/g, '');
+  }
+  const m = /^<<-?\s*('?)([A-Za-z0-9_]+)\1?[ \t]*\n/.exec(rest);
+  if (!m) return null;
+  const delim = m[2]!;
+  const body = rest.slice(m[0].length);
+  const end = body.indexOf(`\n${delim}`);
+  return end < 0 ? body : body.slice(0, end);
+}
+
+// The glued-bin walk (interrogate rounds 9-11): per segment, the script
+// carriers (shell -c / eval / windows payloads / heredoc bodies) recurse
+// into the full walk, and the GLUED re-join of every segment classifies —
+// for fragments AND for plain-leading segments (the glued argv differs
+// from plain exactly when quotes fragmented an argv word — the ownership
+// is the VERDICT COMPARISON, not a skip). The empty-argv + plain-leading
+// shape stays owned by the standard machinery (xargs-feeder context); a
+// glued bin the plain stream never saw takes the PREVIOUS segment's
+// tokens as its feeder (the xargs doctrine). Returns the deny verdict or
+// null.
+function gluedWriteDenied(
+  text: string,
+  options: ClassifyOptions,
+  narrowRouted: boolean,
+  depth: number,
+): RiskDecision | null {
+  if (depth >= 18) return null;
+  const segments = splitShellSegments(text);
+  let prevTokens: string[] = [];
+  for (const segment of segments) {
+    const plainTokens = splitSimpleCommand(segment);
+    const script = scriptTextOf(plainTokens);
+    if (script !== null) {
+      const nested = gluedWriteDenied(script, options, narrowRouted, depth + 1);
+      if (nested) return nested;
+    }
+    const heredoc = heredocScriptText(segment);
+    if (heredoc !== null) {
+      const nested = gluedWriteDenied(heredoc, options, narrowRouted, depth + 1);
+      if (nested) return nested;
+    }
+    const { stream } = unwrapWithWindowsFlag(plainTokens);
+    const plainLeading = stream.length > 0 && isHcloudToken(String(stream[0]));
+    const gluedTokens = splitSimpleCommandGlued(segment);
+    const { stream: gluedStream } = unwrapWithWindowsFlag(gluedTokens);
+    if (gluedStream.length > 0 && isHcloudToken(String(gluedStream[0]))) {
+      const gluedArgv = gluedStream.slice(1);
+      if (gluedArgv.length === 0 && plainLeading) {
+        // The xargs-owned shape ([prefix… hcloud], no argv): the standard
+        // machinery classified it with feeder context — an empty-args
+        // re-classification would deny the pinned read-feeders.
+      } else if (
+        gluedArgv.length === 0 &&
+        !plainLeading &&
+        plainTokens.some((token) => {
+          const t = String(token).toLowerCase();
+          return t === 'xargs' || basenameOf(t) === 'xargs';
+        })
+      ) {
+        // A glued bin the standard machinery never saw, fed by the pipe:
+        // the previous segment's words are the argv (any write-shaped
+        // feeder word denies — the xargs doctrine).
+        const feeder = prevTokens
+          .slice(1)
+          .flatMap((token) => String(token).split(/\s+/))
+          .filter(Boolean)
+          .map((word) => word.replace(/^['"]|['"]$/g, ''));
+        for (const word of feeder) {
+          const verdict = classifyHcloudArgs([...gluedTokens, word], {
+            ...options,
+            rawCommand: text,
+            _narrowRouted: narrowRouted,
+            _segmentDepth: 1,
+          });
+          if (verdict.decision === 'deny') return verdict;
+        }
+      } else {
+        const verdict = classifyHcloudArgs(gluedTokens, {
+          ...options,
+          rawCommand: text,
+          _narrowRouted: narrowRouted,
+          _segmentDepth: 1,
+        });
+        if (verdict.decision === 'deny') return verdict;
+      }
+    }
+    prevTokens = plainTokens;
+  }
+  return null;
 }
 
 export function classifyTextCommand(command: unknown, options: ClassifyOptions = {}): RiskDecision {
@@ -367,46 +510,21 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
       _narrowRouted: narrowRouted,
     });
     if (standard.decision === 'deny') return standard;
-    // Glued-bin fallback (interrogate rounds 9-10): bash glues adjacent
+    // Glued-bin fallback (interrogate rounds 9-11): bash glues adjacent
     // quoted spans and word characters into ONE word — `"hcl"oud ECS
     // Delete` runs hcloud with full argv — while splitSimpleCommand keeps
-    // the span/fragment distinction (other consumers rely on it), so a
-    // quote-INITIAL mangled bin never yields an hcloud-leading argv. The
-    // shadow routes it, so this pass only runs for routed payloads. The
-    // gate is the FULL unwrap grammar via unwrapWithWindowsFlag (round 10:
-    // the round-9 hand-rolled prefix walk missed shells/eval/env
-    // assignments/redirections/wrappers and multi-segment payloads), run
-    // PER splitShellSegments segment plus the whole text — a glued bin in
-    // any segment classifies, and a leading READ never masks a later glued
-    // write. Shell -c / eval SCRIPT tokens are flattened through the glued
-    // tokenizer first (py's recursion doctrine: the script word that is
-    // itself a command head re-joins its tail) — unwrapCore's own script
-    // re-tokenization is non-glued and would re-fragment the span. A
-    // quoted argument mention (`docker stop 'hcloud'`, `pip install
-    // "hcloud"`) keeps its orphan-allow: the unwrapped head is not the bin.
-    for (const segment of [...splitShellSegments(text), text]) {
-      // Segments the PLAIN tokenizer resolves are owned by the standard
-      // machinery above (segment scanning with xargs-feeder context — a
-      // glued re-run without that context denied the pinned
-      // `echo List | xargs hcloud && echo done` allow through the
-      // empty-args arm); the glued attempt covers only the fragments.
-      const plainStream = unwrapWithWindowsFlag(splitSimpleCommand(segment)).stream;
-      if (plainStream.length > 0 && isHcloudToken(String(plainStream[0]))) continue;
-      const gluedTokens = flattenGluedScripts(splitSimpleCommandGlued(segment));
-      const { stream } = unwrapWithWindowsFlag(gluedTokens);
-      if (stream.length > 0 && isHcloudToken(String(stream[0]))) {
-        const glued = classifyHcloudArgs(gluedTokens, {
-          ...options,
-          rawCommand: text,
-          _narrowRouted: narrowRouted,
-          // The glued tokens ARE the pre-classified argv — the raw-text
-          // segment pass would take the orphan path (no literal hcloud
-          // segment in the raw text) and never reach commandOperation.
-          _segmentDepth: 1,
-        });
-        if (glued.decision === 'deny') return glued;
-      }
-    }
+    // the span/fragment distinction, so a quote-INITIAL mangled bin never
+    // yields an hcloud-leading argv. The shadow routes it, so this pass
+    // only runs for routed payloads. The recursive walk (gluedWriteDenied,
+    // above) mirrors py's doctrine end to end: script carriers (shell -c /
+    // eval / windows payloads / heredoc bodies) re-run the full walk, the
+    // glued re-join of every segment classifies (fragments AND
+    // plain-leading segments — the verdict comparison, not a skip), and
+    // glued xargs bins take the pipe feeder. A quoted argument mention
+    // (`docker stop 'hcloud'`, `pip install "hcloud"`) keeps its
+    // orphan-allow: the unwrapped head is not the bin.
+    const glued = gluedWriteDenied(text, options, narrowRouted, 0);
+    if (glued?.decision === 'deny') return glued;
     return standard;
   }
 

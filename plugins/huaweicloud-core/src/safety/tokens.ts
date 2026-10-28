@@ -109,6 +109,9 @@ export const PREFIX_FLAGS_WITH_VALUE = new Map<string, ReadonlySet<string>>([
   ['stdbuf', new Set(['-o', '-e', '-i'])],
   ['env', new Set(['-u', '--unset'])],
   ['timeout', new Set(['--signal', '-s', '-k', '--kill-after'])],
+  // watch's -n/--interval carry the interval; -d/-t/-g/-b/-e are boolean
+  // (the COMMAND words follow the flags — never consume them).
+  ['watch', new Set(['-n', '--interval'])],
   // cmd.exe's `start` takes slash flags (`/b /wait /min …`); `/d <path>`
   // carries a value.
   ['start', new Set(['/d'])],

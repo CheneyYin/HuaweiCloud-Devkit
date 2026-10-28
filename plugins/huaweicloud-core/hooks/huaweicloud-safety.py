@@ -455,6 +455,9 @@ PREFIX_FLAGS_WITH_VALUE = {
     "stdbuf": {"-o", "-e", "-i"},
     "env": {"-u", "--unset"},
     "timeout": {"--signal", "-s", "-k", "--kill-after"},
+    # watch's -n/--interval carry the interval; -d/-t/-g/-b/-e are boolean
+    # (the COMMAND words follow the flags — never consume them).
+    "watch": {"-n", "--interval"},
     # cmd.exe's `start` takes slash flags (`/b /wait /min …`); `/d <path>`
     # carries a value.
     "start": {"/d"},
@@ -1267,6 +1270,14 @@ def split_shell_segments(text, seps_out=None):
             i += 1
             continue
         if ch in ";&|\n\r)":
+            # `&` directly after `>`/`<` is the redirection-dup operator
+            # (`2>&1`, `<&0`) — part of the redirection token, not a
+            # separator (interrogate round 11: `2>&1 bash -c '…'` split
+            # mid-redirection and the script never reached _script_of).
+            if ch == "&" and i > 0 and text[i - 1] in "><":
+                current += ch
+                i += 1
+                continue
             if ch == "\n" and pending_heredoc is not None:
                 heredoc_delim = pending_heredoc
                 pending_heredoc = None
@@ -1445,6 +1456,34 @@ def _classify_leading(stripped, argv, routed):
     return WRITE_BLOCK_REASON if _stripped_write_deny(stripped, argv) else None
 
 
+def _heredoc_script_text(segment):
+    """The body of a heredoc/herestring a SHELL bin reads as its script
+    (interrogate round 11: `bash <<EOF\\n"hcl"oud ECS Delete\\nEOF` executes
+    the body — the -c machinery never fires without the flag). The head
+    before the marker must be a shell bin (a plain `cat <<EOF` body is
+    data, not a script). Mirrored by heredocScriptText in
+    classify-text.ts."""
+    m = re.search(r"<<<?", segment)
+    if m is None:
+        return None
+    head = segment[: m.start()]
+    if not re.search(r"(^|\s|/)(bash|sh|zsh|dash)(\.exe)?\s*$", head, re.I):
+        return None
+    rest = segment[m.start():]
+    hs = re.match(r"^<<<\s*(.+)$", rest, re.M)
+    if hs:
+        # The herestring word is ONE argv-ish blob bash parses as a script:
+        # strip the edge quotes so the walk's tokenizers see the command.
+        return re.sub(r"^['\"]|['\"]$", "", hs.group(1))
+    mm = re.match(r"^<<-?\s*(['\"]?)([A-Za-z0-9_]+)\1?[ \t]*\n", rest)
+    if not mm:
+        return None
+    delim = mm.group(2)
+    body = rest[mm.end():]
+    end = body.find("\n" + delim)
+    return body if end < 0 else body[:end]
+
+
 def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
     """Block reason (or None to allow) when any hcloud-leading command
     segment in the payload carries a write operation and no read prefix.
@@ -1516,6 +1555,15 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
     segment_seps = []
     segments = split_shell_segments(text, segment_seps)
     saw_leading = False
+    # The glued walk's scope (interrogate round 11): BROAD routing — the
+    # narrow tail's end-of-string exclusion left `echo ECS Delete | xargs
+    # "hcl"oud` (the glued bin at EOF) outside the glued fallback entirely.
+    # Narrow implies broad, so this is a superset of `routed`; the
+    # empty-args arm stays narrow-gated (the pinned bare-hcloud allows).
+    glued_scope = (
+        HCLOUD_ROUTE_BROAD_RE.search(strip_shell_quotes(text)) is not None
+        or HCLOUD_ROUTE_BROAD_RE.search(text) is not None
+    )
     for s, segment in enumerate(segments):
         tokens = split_tokens(segment)
         # Nested scripts, BEFORE unwrapping flattens them. Wrapper
@@ -1547,9 +1595,14 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
                 head = str(probe[0]).lower()
                 base = basename_of(head)
                 is_env_assignment = bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", str(probe[0])))
-                if head not in COMMAND_PREFIXES and base not in COMMAND_PREFIXES and not is_env_assignment:
+                # Redirection tokens strip too (interrogate round 11):
+                # `2>/dev/null bash -c '…'` never reached _script_of while
+                # bash executes the script.
+                if is_redirection_token(str(probe[0])):
+                    probe = probe[1:]
+                elif head not in COMMAND_PREFIXES and base not in COMMAND_PREFIXES and not is_env_assignment:
                     break
-                if is_env_assignment:
+                elif is_env_assignment:
                     probe = probe[1:]
                 else:
                     probe = _skip_prefix_args(base or head, probe[1:])
@@ -1564,6 +1617,17 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
                     reason = hcloud_write_blocked(nested, depth + 1, routed, nested_feeder)
                     if reason:
                         return reason
+            # Heredoc/herestring SCRIPT bodies (interrogate round 11): a
+            # shell bin reading its script from stdin — `bash <<EOF
+            # <body> EOF` executes the body; the -c machinery never fires
+            # without the flag. The segment keeps the body inline
+            # (split_shell_segments models heredocs).
+            heredoc_script = _heredoc_script_text(segment)
+            if heredoc_script is not None:
+                nested_feeder = split_tokens(segments[s - 1])[1:] if s > 0 else inherited_feeder
+                reason = hcloud_write_blocked(heredoc_script, depth + 1, routed, nested_feeder)
+                if reason:
+                    return reason
         stripped = hcloud_leading_segment(tokens)
         if stripped is None:
             # Glued-bin fallback, PER SEGMENT (interrogate round 10): bash
@@ -1576,13 +1640,35 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
             # the standard xargs machinery keeps handling the segments it
             # already classifies (the whole-text re-run denied a pinned
             # xargs allow through the empty-args arm).
-            if routed:
+            if glued_scope:
                 glued_stripped = hcloud_leading_segment(split_tokens_glued(segment))
                 if glued_stripped is not None:
                     glued_argv = [t for t in glued_stripped[1:] if not t.startswith("-")]
-                    reason = _classify_leading(glued_stripped, glued_argv, routed)
-                    if reason:
-                        return reason
+                    if (
+                        not glued_argv
+                        and s > 0
+                        and any(
+                            str(t).lower() == "xargs" or basename_of(str(t).lower()) == "xargs"
+                            for t in tokens
+                        )
+                    ):
+                        # A glued bin the standard machinery never saw, fed
+                        # by the pipe (interrogate round 11): the previous
+                        # segment's words are the argv — any write-shaped
+                        # feeder word denies (the xargs doctrine).
+                        feeder_words = [
+                            re.sub(r"^['\"]|['\"]$", "", w)
+                            for t in split_tokens(segments[s - 1])[1:]
+                            for w in str(t).split()
+                        ]
+                        for word in feeder_words:
+                            reason = _classify_leading(glued_stripped, [str(word)], routed)
+                            if reason:
+                                return reason
+                    else:
+                        reason = _classify_leading(glued_stripped, glued_argv, routed)
+                        if reason:
+                            return reason
             continue
         saw_leading = True
         windows_payload = _LEADING_WINDOWS_PAYLOAD[0]
@@ -1737,6 +1823,21 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
         reason = _classify_leading(stripped, argv, routed)
         if reason:
             return reason
+        # Glued comparison for PLAIN-LEADING segments (interrogate round
+        # 11): the glued argv differs from plain exactly when quotes
+        # fragmented an argv word — `hcloud ECS "De"leteServers` is the
+        # write DeleteServers to bash and a read-looking `De` to the plain
+        # tokenizer. The ownership is the VERDICT COMPARISON, not a skip:
+        # classify the glued re-join too (the empty-argv shape stays owned
+        # by the standard machinery above — xargs-feeder context).
+        if glued_scope:
+            glued_stripped = hcloud_leading_segment(split_tokens_glued(segment))
+            if glued_stripped is not None:
+                glued_argv = [t for t in glued_stripped[1:] if not t.startswith("-")]
+                if glued_argv or len(stripped) > 1:
+                    reason = _classify_leading(glued_stripped, glued_argv, routed)
+                    if reason:
+                        return reason
         # A windows payload's brace grammar makes every LATER hcloud
         # occurrence a live command site (`try { read } finally { write }` —
         # `}` is not a segment separator, so the blocks stay one segment):
@@ -1767,7 +1868,7 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
     # the per-segment fallback above handles everything else. Gated on `not
     # saw_leading` (the standard machinery classified those segments with
     # full context); routed-only (benign unrouted commands skip it).
-    if not saw_leading and routed:
+    if not saw_leading and glued_scope:
         stripped = hcloud_leading_segment(split_tokens_glued(text))
         if stripped is not None:
             argv = [t for t in stripped[1:] if not t.startswith("-")]
@@ -1808,6 +1909,12 @@ def _script_of(tokens):
     # is the whole tail, not just the first word.
     if first == "eval" and len(tokens) > 1:
         return " ".join(str(t).replace('\\"', '"').replace('\\\\', '\\') for t in tokens[1:])
+    # watch runs its command arguments as an sh -c SCRIPT (the join of the
+    # words after its own flags — interrogate round 11: `watch -n1
+    # '"hcl"oud ECS Delete'` executes the glued bin through that join).
+    if first == "watch" and len(tokens) > 1:
+        rest = _skip_prefix_args("watch", tokens[1:])
+        return " ".join(str(t) for t in rest)
     return _windows_script_arg_at(tokens, 0)
 
 

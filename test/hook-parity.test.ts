@@ -207,6 +207,42 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
   ['true && "hcl"oud ECS Delete', 'deny'],
   ['hcloud ECS ListServers; "hcl"oud ECS Delete', 'deny'],
   ['hcloud --help; "hcl"oud OBS rm mybucket', 'deny'],
+  // port-v2defects (interrogate round 11): the script-carrier completion —
+  // prefix-wrapped shells (env/sudo/timeout/secret-exec/skill-quality +
+  // bash -c), redirection-first scripts (2>/dev/null, 2>&1 — the `&` of a
+  // redirection-dup operator is part of the token, not a separator),
+  // heredoc/herestring bodies as shell scripts, watch's sh -c join, glued
+  // xargs bins fed by the pipe, and quote-mangled ARGV under a
+  // plain-leading bin (the ownership is the verdict comparison, not a
+  // skip). All real-bash-executable proofs from the round.
+  ['env HW_REGION=x bash -c \'"hcl"oud ECS Delete\'', 'deny'],
+  ['sudo bash -c \'"hcl"oud ECS Delete\'', 'deny'],
+  ['timeout 5 bash -c \'"hcl"oud ECS Delete\'', 'deny'],
+  ['huaweicloud-devkit secret exec --env K=x -- bash -c \'"hcl"oud ECS Delete\'', 'deny'],
+  ['skill-quality-cli run -- bash -c \'"hcl"oud ECS Delete\'', 'deny'],
+  ['2>/dev/null bash -c \'"hcl"oud ECS Delete\'', 'deny'],
+  ['2>&1 bash -c \'"hcl"oud ECS Delete\'', 'deny'],
+  ['2>/dev/null eval \'"hcl"oud ECS Delete\'', 'deny'],
+  ['hcloud ECS "De"leteServers', 'deny'],
+  ['hcloud "EC"S DeleteServers', 'deny'],
+  ['hcloud OB"S" rm obs://bucket/obj -f', 'deny'],
+  ['hcloud config"ure" show', 'deny'],
+  ['hcloud ECS Li"stServers', 'allow'],
+  ['bash <<EOF\n"hcl"oud ECS DeleteServers --server.id=x\nEOF', 'deny'],
+  ['bash <<EOF\nhcloud ECS DeleteServers\nEOF', 'deny'],
+  ["bash <<'EOF'\nhcloud ECS DeleteServers\nEOF", 'deny'],
+  ["bash <<<'hcloud ECS Delete'", 'deny'],
+  ['bash <<EOF\nhcloud ECS ListServers\nEOF', 'allow'],
+  ['cat <<EOF\nhcloud ECS DeleteServers\nEOF', 'allow'],
+  ['echo ECS Delete | xargs "hcl"oud', 'deny'],
+  ['echo List | xargs "hcl"oud && echo done', 'allow'],
+  ['watch -n1 \'"hcl"oud ECS Delete\'', 'deny'],
+  ['watch -n 5 hcloud ECS ListServers', 'allow'],
+  ['bash -c "echo x; \\"hcl\\"oud ECS Delete"', 'deny'],
+  ['bash -c \'hcloud ECS ListServers; "hcl"oud ECS Delete\'', 'deny'],
+  ['bash -c "if true; then \\"hcl\\"oud ECS Delete; fi"', 'deny'],
+  ['bash -c "echo x; \\"hcl\\"oud ECS ListServers"', 'allow'],
+  ['2>&1 hcloud ECS ListServers', 'allow'],
   // The astral row: 200k valid surrogate pairs = 800 KB bytes / 400,000
   // UTF-16 units / 200,000 code points — over the byte cap on both twins,
   // over the OLD TS unit cap (400,002 > 262,144) but under the OLD py

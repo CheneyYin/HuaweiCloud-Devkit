@@ -130,6 +130,15 @@ export function splitShellSegments(text: string, sepsOut?: string[]): string[] {
       continue;
     }
     if (separators.has(ch)) {
+      // `&` directly after `>`/`<` is the redirection-dup operator
+      // (`2>&1`, `<&0`) — part of the redirection token, not a separator
+      // (interrogate round 11: `2>&1 bash -c '…'` split mid-redirection
+      // and the script never reached the wrapper walk).
+      if (ch === '&' && i > 0 && (text[i - 1] === '>' || text[i - 1] === '<')) {
+        current += ch;
+        i++;
+        continue;
+      }
       if (ch === '\n' && pendingHeredoc !== null) {
         // The heredoc body starts here.
         heredocDelim = pendingHeredoc;

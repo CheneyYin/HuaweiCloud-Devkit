@@ -182,15 +182,28 @@ test('the py hook degrades coherently: derived vocabularies, isolated fields, fa
   const classifyText = readSource(join('src', 'safety', 'classify-text.ts'));
   // Round 10: the TS glued gate reuses the FULL unwrap grammar
   // (unwrapWithWindowsFlag) per segment, skips plain-leading segments (the
-  // standard machinery owns them — xargs-feeder context), and flattens
-  // shell -c / eval scripts through the glued tokenizer.
-  assert.match(
-    classifyText,
-    /import \{ OBSUTIL_WRITES, COMMAND_POSITION_PREFIXES, SHELL_FIRST_TOKENS, isHcloudToken \} from '\.\/tokens\.ts';/,
-  );
+  // Round 10-11: the TS glued gate reuses the FULL unwrap grammar and is
+  // RECURSIVE (scriptTextOf / heredocScriptText / gluedWriteDenied).
   assert.match(classifyText, /import \{ unwrapWithWindowsFlag \} from '\.\/unwrap\.ts';/);
-  assert.match(classifyText, /function flattenGluedScripts\(tokens: string\[\], depth = 0\): string\[\] \{/);
-  assert.match(classifyText, /const plainStream = unwrapWithWindowsFlag\(splitSimpleCommand\(segment\)\)\.stream;/);
+  assert.match(classifyText, /import \{ unwrapSecretExecWrapper \} from '\.\/secret-exec\.ts';/);
+  assert.match(classifyText, /import \{ unwrapSkillQualityCli \} from '\.\/skill-quality-cli\.ts';/);
+  // Round 11: the TS walk is RECURSIVE (py's doctrine): scriptTextOf
+  // extracts shell -c / eval / watch-join / windows / secret-exec /
+  // skill-quality script carriers with head-stripping (redirections, env
+  // assignments, prefixes); heredocScriptText slices shell-stdin script
+  // bodies; gluedWriteDenied re-runs the walk per segment with the
+  // verdict-comparison ownership (plain-leading segments get the glued
+  // re-join too) and the xargs pipe feeder for glued bins.
+  assert.match(classifyText, /function scriptTextOf\(tokens: string\[\], depth = 0\): string \| null \{/);
+  assert.match(classifyText, /function heredocScriptText\(segment: string\): string \| null \{/);
+  assert.match(classifyText, /function gluedWriteDenied\(/);
+  assert.match(classifyText, /const glued = gluedWriteDenied\(text, options, narrowRouted, 0\);/);
+  // The py twin: the heredoc helper, the broad glued scope, the
+  // redirection-dup splitter guard, and watch's script-join.
+  assert.match(pyHook, /def _heredoc_script_text\(segment\):/);
+  assert.match(pyHook, /glued_scope = \(/);
+  assert.match(pyHook, /if ch == "&" and i > 0 and text\[i - 1\] in "><":/);
+  assert.match(pyHook, /if first == "watch" and len\(tokens\) > 1:/);
   // The py twin: the per-segment glued fallback inside the walk.
   assert.match(pyHook, /glued_stripped = hcloud_leading_segment\(split_tokens_glued\(segment\)\)/);
   assert.match(classifyText, /writeOperationPrefixes\.length === 0/);
