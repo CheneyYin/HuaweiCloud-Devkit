@@ -38,26 +38,34 @@ import { SECRET_SHADOW_RE, SECRET_TEXT_RE } from './vocabulary.ts';
 // glued writes. Depth-capped at 18 (py's nested budget, one past the
 // Linux executability ceiling).
 function scriptTextOf(tokens: string[], depth = 0): string | null {
-  if (depth >= 10 || tokens.length === 0) return null;
+  if (depth >= 18 || tokens.length === 0) return null;
   const first = String(tokens[0]).toLowerCase();
   const base = basenameOf(String(tokens[0]).toLowerCase());
   const isShell = SHELL_FIRST_TOKENS.has(first) || (base !== first && SHELL_FIRST_TOKENS.has(base));
-  if (isShell && /^-[a-z]*c$/i.test(String(tokens[1] ?? '')) && tokens.length > 2) {
-    const script = String(tokens[2]).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-    // py's join doctrine: a script word that is itself a command head
-    // re-joins the invocation's tail — the flattened join of a quoted
-    // original.
-    const headTok = splitSimpleCommand(script)[0];
-    const head = headTok !== undefined ? String(headTok).toLowerCase() : '';
-    const headIsCommandish =
-      headTok !== undefined &&
-      (SHELL_FIRST_TOKENS.has(head) ||
-        head === 'eval' ||
-        COMMAND_POSITION_PREFIXES.has(head) ||
-        isHcloudToken(String(headTok)));
-    return headIsCommandish && tokens.length > 3
-      ? [script, ...tokens.slice(3).map((token) => String(token))].join(' ')
-      : script;
+  if (isShell) {
+    // Flags may precede -c (interrogate round 12: `bash -e -c '…'` executes
+    // the script) — skip non-c flag clusters, then require the c-cluster.
+    let i = 1;
+    while (i < tokens.length && /^-[a-bd-z]+$/i.test(String(tokens[i]))) i++;
+    if (/^-[a-z]*c$/i.test(String(tokens[i] ?? '')) && i + 1 < tokens.length) {
+      const script = String(tokens[i + 1])
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, '\\');
+      // py's join doctrine: a script word that is itself a command head
+      // re-joins the invocation's tail — the flattened join of a quoted
+      // original.
+      const headTok = splitSimpleCommand(script)[0];
+      const head = headTok !== undefined ? String(headTok).toLowerCase() : '';
+      const headIsCommandish =
+        headTok !== undefined &&
+        (SHELL_FIRST_TOKENS.has(head) ||
+          head === 'eval' ||
+          COMMAND_POSITION_PREFIXES.has(head) ||
+          isHcloudToken(String(headTok)));
+      return headIsCommandish && i + 2 < tokens.length
+        ? [script, ...tokens.slice(i + 2).map((token) => String(token))].join(' ')
+        : script;
+    }
   }
   if (first === 'eval' && tokens.length > 1) {
     return tokens
@@ -73,6 +81,28 @@ function scriptTextOf(tokens: string[], depth = 0): string | null {
       .map((token) => String(token))
       .join(' ');
   }
+  // Interpreter carriers (interrogate round 12): perl/python/node/ruby -e
+  // or -c, and awk's program argument, carry CODE whose system()-embedded
+  // string is a shell command — `python3 -c 'import os;
+  // os.system("hcloud ECS DeleteServers")'` executes the write. The
+  // system("…")/system('…') inner string re-runs the walk.
+  if (['perl', 'python', 'python3', 'node', 'ruby'].includes(first) && tokens.length > 2) {
+    const flag = String(tokens[1]);
+    if (flag === '-e' || flag === '-c' || flag === '--eval' || flag === '--command') {
+      return interpreterSystemCommand(
+        tokens
+          .slice(2)
+          .map((token) => String(token))
+          .join(' '),
+      );
+    }
+  }
+  if (first === 'awk' && tokens.length > 1) {
+    const program = tokens.findIndex((token, idx) => idx > 0 && !String(token).startsWith('-'));
+    if (program > 0) {
+      return interpreterSystemCommand(String(tokens[program]));
+    }
+  }
   const win = windowsScriptArgAt(tokens, 0);
   if (win !== null) return win;
   if (isRedirectionToken(String(tokens[0]))) return scriptTextOf(tokens.slice(1), depth + 1);
@@ -87,24 +117,43 @@ function scriptTextOf(tokens: string[], depth = 0): string | null {
   return null;
 }
 
+// The shell command embedded in interpreter code via system("…") /
+// os.system('…') (interrogate round 12) — the direct-string form only;
+// indirection through variables and other invocation APIs is a documented
+// residual (the shell-indirection doctrine).
+function interpreterSystemCommand(code: string): string | null {
+  const m = /(?:os\.)?system\(\s*(['"])([\s\S]*?)\1\s*\)/.exec(code);
+  return m ? (m[2] ?? null) : null;
+}
+
 // The body of a heredoc/herestring a SHELL bin reads as its script
 // (interrogate round 11: `bash <<EOF\n"hcl"oud ECS Delete\nEOF` executes
 // the body — the -c machinery never fires without the flag). The segment
 // keeps the body inline (splitShellSegments models heredocs), so the body
-// is sliced between the marker line and the delimiter line.
+// is sliced between the marker line and the delimiter line. Round 12
+// completions: the head's FIRST word (after optional redirections) must be
+// the shell bin — flags and stdin-redirects may sit between it and the
+// marker (`bash -s <<EOF`, `bash < in <<EOF`), and an argument-position
+// shell word (`echo sh <<EOF`) does NOT make the body a script; the marker
+// line may carry trailing live text (`bash <<EOF 2>/dev/null`, `bash
+// <<EOF; echo hi`); the delimiter may be double-quoted; the herestring
+// match is position-0 (a `<<<` line INSIDE a body is body text, not the
+// marker — the /m port bug).
 function heredocScriptText(segment: string): string | null {
   const markerAt = segment.search(/<<<?-?/);
   if (markerAt < 0) return null;
   const head = segment.slice(0, markerAt);
-  if (!/(^|\s|\/)(bash|sh|zsh|dash)(\.exe)?\s*$/.test(head)) return null;
+  if (!/^\s*(?:\d*[<>]&?\d*\s+)*(?:\S*\/)?(?:bash|sh|zsh|dash)(?:\.exe)?\s/i.test(head)) {
+    return null;
+  }
   const rest = segment.slice(markerAt);
-  const herestring = /^<<<\s*(.+)$/m.exec(rest);
+  const herestring = /^<<<\s*(.+)$/.exec(rest);
   if (herestring) {
     // The herestring word is ONE argv-ish blob bash parses as a script:
     // strip the edge quotes so the walk's tokenizers see the command.
     return (herestring[1] ?? '').replace(/^['"]|['"]$/g, '');
   }
-  const m = /^<<-?\s*('?)([A-Za-z0-9_]+)\1?[ \t]*\n/.exec(rest);
+  const m = /^<<-?\s*(['"]?)([A-Za-z0-9_]+)\1?[^\n]*\n/.exec(rest);
   if (!m) return null;
   const delim = m[2]!;
   const body = rest.slice(m[0].length);
@@ -131,17 +180,74 @@ function gluedWriteDenied(
   if (depth >= 18) return null;
   const segments = splitShellSegments(text);
   let prevTokens: string[] = [];
-  for (const segment of segments) {
+  for (let segIndex = 0; segIndex < segments.length; segIndex++) {
+    const segment = segments[segIndex]!;
     const plainTokens = splitSimpleCommand(segment);
     const script = scriptTextOf(plainTokens);
     if (script !== null) {
       const nested = gluedWriteDenied(script, options, narrowRouted, depth + 1);
       if (nested) return nested;
+      // The SCRIPT-SHADOW pass (interrogate round 12): the `'\''` quoting
+      // idiom drifts span boundaries at deep nest levels (both twins
+      // missed executable mangled writes at depths 8-9). The quote-stripped
+      // shadow of a CARRIER's script flattens the nested quoting into a
+      // live `bash -c bash -c … hcloud ECS Delete` stream the walk
+      // classifies. Scoped to carrier scripts ONLY — the top-level text
+      // never shadows (quoted PROSE stays prose: `echo "step1; hcloud
+      // …"` keeps its echo head). Terminates: the shadow of a shadow is
+      // itself.
+      const scriptShadow = stripShellQuotes(script);
+      if (scriptShadow !== script) {
+        const shadowNested = gluedWriteDenied(scriptShadow, options, narrowRouted, depth + 1);
+        if (shadowNested) return shadowNested;
+      }
     }
     const heredoc = heredocScriptText(segment);
     if (heredoc !== null) {
       const nested = gluedWriteDenied(heredoc, options, narrowRouted, depth + 1);
       if (nested) return nested;
+    }
+    // A DANGLING heredoc marker (interrogate round 12): `bash <<EOF; echo
+    // hi` splits the segment at the `;` mid-line, so the marker segment
+    // carries no body — bash starts the body at the LINE's newline, which
+    // lands in the NEXT segment. The next segment's text after its first
+    // newline, up to the delimiter line, is the script.
+    const dangling = /<<-?\s*(['"]?)([A-Za-z0-9_]+)\1?[^\n]*$/.exec(segment);
+    if (dangling && segIndex + 1 < segments.length) {
+      const danglingHead = segment.slice(0, dangling.index ?? 0);
+      if (/^\s*(?:\d*[<>]&?\d*\s+)*(?:\S*\/)?(?:bash|sh|zsh|dash)(?:\.exe)?\s/i.test(danglingHead)) {
+        const delim = dangling[2]!;
+        const next = segments[segIndex + 1]!;
+        const nl = next.indexOf('\n');
+        if (nl >= 0) {
+          const body = next.slice(nl + 1);
+          const end = body.indexOf(`\n${delim}`);
+          if (end >= 0) {
+            const nested = gluedWriteDenied(body.slice(0, end), options, narrowRouted, depth + 1);
+            if (nested) return nested;
+          }
+        }
+      }
+    }
+    // find -exec/-execdir carriers (interrogate round 12): the argv
+    // between the flag and the `\;`/`;`/`+` terminator is a command
+    // position — `find … -exec hcloud ECS Delete {} \;` executes it. The
+    // joined payload re-runs the walk — extracted from BOTH tokenizations
+    // (the plain one fragments a glued bin).
+    for (const tokenSource of [plainTokens, splitSimpleCommandGlued(segment)]) {
+      for (let e = 0; e < tokenSource.length; e++) {
+        const tok = String(tokenSource[e]).toLowerCase();
+        if (tok === '-exec' || tok === '-execdir') {
+          const end = tokenSource.findIndex(
+            (t, idx) => idx > e && (String(t) === '\\;' || String(t) === ';' || String(t) === '+'),
+          );
+          const payload = tokenSource.slice(e + 1, end > 0 ? end : tokenSource.length);
+          if (payload.length > 0) {
+            const nested = gluedWriteDenied(payload.join(' '), options, narrowRouted, depth + 1);
+            if (nested) return nested;
+          }
+        }
+      }
     }
     const { stream } = unwrapWithWindowsFlag(plainTokens);
     const plainLeading = stream.length > 0 && isHcloudToken(String(stream[0]));
@@ -149,18 +255,15 @@ function gluedWriteDenied(
     const { stream: gluedStream } = unwrapWithWindowsFlag(gluedTokens);
     if (gluedStream.length > 0 && isHcloudToken(String(gluedStream[0]))) {
       const gluedArgv = gluedStream.slice(1);
+      const segmentHasXargs = plainTokens.some((token) => {
+        const t = String(token).toLowerCase();
+        return t === 'xargs' || basenameOf(t) === 'xargs';
+      });
       if (gluedArgv.length === 0 && plainLeading) {
         // The xargs-owned shape ([prefix… hcloud], no argv): the standard
         // machinery classified it with feeder context — an empty-args
         // re-classification would deny the pinned read-feeders.
-      } else if (
-        gluedArgv.length === 0 &&
-        !plainLeading &&
-        plainTokens.some((token) => {
-          const t = String(token).toLowerCase();
-          return t === 'xargs' || basenameOf(t) === 'xargs';
-        })
-      ) {
+      } else if (gluedArgv.length === 0 && !plainLeading && prevTokens.length > 0 && segmentHasXargs) {
         // A glued bin the standard machinery never saw, fed by the pipe:
         // the previous segment's words are the argv (any write-shaped
         // feeder word denies — the xargs doctrine).
@@ -178,6 +281,23 @@ function gluedWriteDenied(
           });
           if (verdict.decision === 'deny') return verdict;
         }
+      } else if (!plainLeading && segmentHasXargs && prevTokens.length > 0) {
+        // A glued xargs bin with its OWN argv (interrogate round 12:
+        // `echo DeleteServers | xargs "hcl"oud ECS` — xargs appends the
+        // stdin AFTER the own args): merge the feeder into the glued argv,
+        // the standard machinery's xargs semantics.
+        const feeder = prevTokens
+          .slice(1)
+          .flatMap((token) => String(token).split(/\s+/))
+          .filter(Boolean)
+          .map((word) => word.replace(/^['"]|['"]$/g, ''));
+        const verdict = classifyHcloudArgs([...gluedTokens, ...feeder], {
+          ...options,
+          rawCommand: text,
+          _narrowRouted: narrowRouted,
+          _segmentDepth: 1,
+        });
+        if (verdict.decision === 'deny') return verdict;
       } else {
         const verdict = classifyHcloudArgs(gluedTokens, {
           ...options,

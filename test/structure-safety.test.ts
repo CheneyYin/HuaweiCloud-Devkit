@@ -206,6 +206,20 @@ test('the py hook degrades coherently: derived vocabularies, isolated fields, fa
   assert.match(pyHook, /if first == "watch" and len\(tokens\) > 1:/);
   // The py twin: the per-segment glued fallback inside the walk.
   assert.match(pyHook, /glued_stripped = hcloud_leading_segment\(split_tokens_glued\(segment\)\)/);
+  // Round 12: the flags-before--c scan (the skip class excludes c —
+  // [a-bd-z]), the heredoc first-word head check, the find-exec carrier,
+  // the interpreter system() extraction, the script-shadow pass (scoped to
+  // carrier scripts, empty-args suppressed on prose artifacts), and the
+  // 18-deep unwrap budgets.
+  assert.match(pyHook, /re\.match\(r"\^-\[a-bd-z\]\+\$", str\(tokens\[i\]\), re\.I\)/);
+  assert.match(pyHook, /def _interpreter_system_command\(code\):/);
+  assert.match(pyHook, /nested_shadow = strip_shell_quotes\(nested\)/);
+  assert.match(pyHook, /if not \(shadow_pass and not argv and len\(stripped\) == 1\):/);
+  assert.match(pyHook, /in \("-exec", "-execdir"\)/);
+  assert.ok(classifyText.includes('/^-[a-bd-z]+$/i'), 'the flags-before--c skip class must exclude c');
+  assert.match(classifyText, /function interpreterSystemCommand\(code: string\): string \| null \{/);
+  assert.match(classifyText, /const scriptShadow = stripShellQuotes\(script\);/);
+  assert.match(classifyText, /tok === '-exec' \|\| tok === '-execdir'/);
   assert.match(classifyText, /writeOperationPrefixes\.length === 0/);
   assert.ok(
     classifyText.includes('shadowCandidates.some((candidate) => /\\bOBS\\b/i.test(candidate)) &&'),

@@ -1055,7 +1055,7 @@ _LEADING_WINDOWS_PAYLOAD = [False]
 def _leading_segment_core(tokens):
     """(leading token list or None, entered-windows-payload flag)."""
     in_windows_payload = False
-    for _ in range(10):
+    for _ in range(18):
         if not tokens:
             return None, in_windows_payload
         first = tokens[0].lower()
@@ -1459,23 +1459,27 @@ def _classify_leading(stripped, argv, routed):
 def _heredoc_script_text(segment):
     """The body of a heredoc/herestring a SHELL bin reads as its script
     (interrogate round 11: `bash <<EOF\\n"hcl"oud ECS Delete\\nEOF` executes
-    the body — the -c machinery never fires without the flag). The head
-    before the marker must be a shell bin (a plain `cat <<EOF` body is
-    data, not a script). Mirrored by heredocScriptText in
-    classify-text.ts."""
+    the body — the -c machinery never fires without the flag). Round 12
+    completions: the head's FIRST word (after optional redirections) must
+    be the shell bin — flags and stdin-redirects may sit between it and
+    the marker (`bash -s <<EOF`, `bash < in <<EOF`), and an
+    argument-position shell word (`echo sh <<EOF`) does NOT make the body
+    a script; the marker line may carry trailing live text (`bash <<EOF
+    2>/dev/null`, `bash <<EOF; echo hi`); the delimiter may be
+    double-quoted. Mirrored by heredocScriptText in classify-text.ts."""
     m = re.search(r"<<<?", segment)
     if m is None:
         return None
     head = segment[: m.start()]
-    if not re.search(r"(^|\s|/)(bash|sh|zsh|dash)(\.exe)?\s*$", head, re.I):
+    if not re.match(r"^\s*(?:\d*[<>]&?\d*\s+)*(?:\S*/)?(?:bash|sh|zsh|dash)(?:\.exe)?\s", head, re.I):
         return None
     rest = segment[m.start():]
-    hs = re.match(r"^<<<\s*(.+)$", rest, re.M)
+    hs = re.match(r"^<<<\s*(.+)$", rest)
     if hs:
         # The herestring word is ONE argv-ish blob bash parses as a script:
         # strip the edge quotes so the walk's tokenizers see the command.
         return re.sub(r"^['\"]|['\"]$", "", hs.group(1))
-    mm = re.match(r"^<<-?\s*(['\"]?)([A-Za-z0-9_]+)\1?[ \t]*\n", rest)
+    mm = re.match(r"^<<-?\s*(['\"]?)([A-Za-z0-9_]+)\1?[^\n]*\n", rest)
     if not mm:
         return None
     delim = mm.group(2)
@@ -1484,7 +1488,76 @@ def _heredoc_script_text(segment):
     return body if end < 0 else body[:end]
 
 
-def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
+def _interpreter_system_command(code):
+    """The shell command embedded in interpreter code via system("…") /
+    os.system('…') (interrogate round 12) — the direct-string form only;
+    indirection through variables and other invocation APIs is a
+    documented residual (the shell-indirection doctrine). Mirrored by
+    interpreterSystemCommand in classify-text.ts."""
+    m = re.search(r"(?:os\.)?system\(\s*(['\"])([\s\S]*?)\1\s*\)", code)
+    return m.group(2) if m else None
+
+
+def _script_of(tokens):
+    """The quoted script argument of a shell -c / eval / Windows script
+    wrapper (cmd /c, powershell -Command) token stream, or None."""
+    if not tokens:
+        return None
+    first = tokens[0].lower()
+    base = basename_of(tokens[0]).lower()
+    shell_like = first in SHELL_FIRST or (base != first and base in SHELL_FIRST)
+    if shell_like:
+        # Flags may precede -c (interrogate round 12: `bash -e -c '…'`
+        # executes the script) — skip non-c flag clusters, then require
+        # the c-cluster.
+        i = 1
+        while i < len(tokens) and re.match(r"^-[a-bd-z]+$", str(tokens[i]), re.I):
+            i += 1
+        if i + 1 < len(tokens) and re.match(r"^-[a-z]*c$", str(tokens[i]), re.I):
+            script = str(tokens[i + 1]).replace('\\"', '"').replace('\\\\', '\\')
+            # When the script word is ITSELF a bin or wrapper head (the
+            # flattened join of a quoted original), the tail tokens belong
+            # to the same command: return them joined, or the nested scan
+            # sees a bare bin and hits the empty-args guard on a
+            # legitimate read.
+            head_tok = split_tokens(script)[0] if split_tokens(script) else None
+            head_is_commandish = (
+                head_tok is not None
+                and (
+                    _is_hcloud_head(head_tok)
+                    or str(head_tok).lower() in SHELL_FIRST
+                    or str(head_tok).lower() == "eval"
+                    or str(head_tok).lower() in COMMAND_PREFIXES
+                )
+            )
+            if head_is_commandish and i + 2 < len(tokens):
+                return " ".join([script] + [str(t) for t in tokens[i + 2:]])
+            return script
+    # eval evaluates the JOIN of all its arguments — the script string
+    # is the whole tail, not just the first word.
+    if first == "eval" and len(tokens) > 1:
+        return " ".join(str(t).replace('\\"', '"').replace('\\\\', '\\') for t in tokens[1:])
+    # watch runs its command arguments as an sh -c SCRIPT (the join of the
+    # words after its own flags — interrogate round 11: `watch -n1
+    # '"hcl"oud ECS Delete'` executes the glued bin through that join).
+    if first == "watch" and len(tokens) > 1:
+        rest = _skip_prefix_args("watch", tokens[1:])
+        return " ".join(str(t) for t in rest)
+    # Interpreter carriers (interrogate round 12): perl/python/node/ruby
+    # -e or -c, and awk's program argument — the system()-embedded string
+    # is a shell command.
+    if first in ("perl", "python", "python3", "node", "ruby") and len(tokens) > 2:
+        flag = str(tokens[1])
+        if flag in ("-e", "-c", "--eval", "--command"):
+            return _interpreter_system_command(" ".join(str(t) for t in tokens[2:]))
+    if first == "awk" and len(tokens) > 1:
+        program = next((str(t) for idx, t in enumerate(tokens) if idx > 0 and not str(t).startswith("-")), None)
+        if program is not None:
+            return _interpreter_system_command(program)
+    return _windows_script_arg_at(tokens, 0)
+
+
+def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, shadow_pass=False):
     """Block reason (or None to allow) when any hcloud-leading command
     segment in the payload carries a write operation and no read prefix.
     Positional like the TS layer; nested `bash -c`/`eval` scripts re-scan
@@ -1589,7 +1662,7 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
             # head check — probe PAST the prefixes (and their value
             # flags) so the nested segment/feeder semantics fire.
             probe = list(tokens)
-            for _ in range(10):
+            for _ in range(18):
                 if not probe:
                     break
                 head = str(probe[0]).lower()
@@ -1617,6 +1690,23 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
                     reason = hcloud_write_blocked(nested, depth + 1, routed, nested_feeder)
                     if reason:
                         return reason
+                    # The SCRIPT-SHADOW pass (interrogate round 12): the
+                    # `'\''` quoting idiom drifts span boundaries at deep
+                    # nest levels (both twins missed executable mangled
+                    # writes at depths 8-9). The quote-stripped shadow of
+                    # a CARRIER's script flattens the nested quoting into
+                    # a live `bash -c bash -c … hcloud ECS Delete` stream
+                    # the walk classifies. Scoped to carrier scripts ONLY
+                    # — the top-level text never shadows (quoted PROSE
+                    # stays prose: `echo "step1; hcloud …"` keeps its echo
+                    # head). Terminates: the shadow of a shadow is itself.
+                    nested_shadow = strip_shell_quotes(nested)
+                    if nested_shadow != nested:
+                        reason = hcloud_write_blocked(
+                            nested_shadow, depth + 1, routed, nested_feeder, True
+                        )
+                        if reason:
+                            return reason
             # Heredoc/herestring SCRIPT bodies (interrogate round 11): a
             # shell bin reading its script from stdin — `bash <<EOF
             # <body> EOF` executes the body; the -c machinery never fires
@@ -1628,6 +1718,47 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
                 reason = hcloud_write_blocked(heredoc_script, depth + 1, routed, nested_feeder)
                 if reason:
                     return reason
+            # A DANGLING heredoc marker (interrogate round 12): `bash
+            # <<EOF; echo hi` splits the segment at the `;` mid-line, so
+            # the marker segment carries no body — bash starts the body at
+            # the LINE's newline, which lands in the NEXT segment. The
+            # next segment's text after its first newline, up to the
+            # delimiter line, is the script.
+            dangling = re.search(r"<<-?\s*(['\"]?)([A-Za-z0-9_]+)\1?[^\n]*$", segment)
+            if dangling is not None and s + 1 < len(segments):
+                dangling_head = segment[: dangling.start()]
+                if re.match(
+                    r"^\s*(?:\d*[<>]&?\d*\s+)*(?:\S*/)?(?:bash|sh|zsh|dash)(?:\.exe)?\s",
+                    dangling_head,
+                    re.I,
+                ):
+                    delim = dangling.group(2)
+                    nxt = segments[s + 1]
+                    nl = nxt.find("\n")
+                    if nl >= 0:
+                        body = nxt[nl + 1:]
+                        end = body.find("\n" + delim)
+                        if end >= 0:
+                            reason = hcloud_write_blocked(body[:end], depth + 1, routed)
+                            if reason:
+                                return reason
+            # find -exec/-execdir carriers (interrogate round 12): the argv
+            # between the flag and the `\;`/`;`/`+` terminator is a command
+            # position — `find … -exec hcloud ECS Delete {} \;` executes
+            # it. The joined payload re-runs the walk — extracted from
+            # BOTH tokenizations (the plain one fragments a glued bin).
+            for token_source in (tokens, split_tokens_glued(segment)):
+                for e, t in enumerate(token_source):
+                    if str(t).lower() in ("-exec", "-execdir"):
+                        end = next(
+                            (k for k in range(e + 1, len(token_source)) if str(token_source[k]) in ("\\;", ";", "+")),
+                            len(token_source),
+                        )
+                        payload = token_source[e + 1:end]
+                        if payload:
+                            reason = hcloud_write_blocked(" ".join(str(x) for x in payload), depth + 1, routed)
+                            if reason:
+                                return reason
         stripped = hcloud_leading_segment(tokens)
         if stripped is None:
             # Glued-bin fallback, PER SEGMENT (interrogate round 10): bash
@@ -1644,13 +1775,14 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
                 glued_stripped = hcloud_leading_segment(split_tokens_glued(segment))
                 if glued_stripped is not None:
                     glued_argv = [t for t in glued_stripped[1:] if not t.startswith("-")]
+                    segment_has_xargs = any(
+                        str(t).lower() == "xargs" or basename_of(str(t).lower()) == "xargs"
+                        for t in tokens
+                    )
                     if (
                         not glued_argv
                         and s > 0
-                        and any(
-                            str(t).lower() == "xargs" or basename_of(str(t).lower()) == "xargs"
-                            for t in tokens
-                        )
+                        and segment_has_xargs
                     ):
                         # A glued bin the standard machinery never saw, fed
                         # by the pipe (interrogate round 11): the previous
@@ -1665,6 +1797,24 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
                             reason = _classify_leading(glued_stripped, [str(word)], routed)
                             if reason:
                                 return reason
+                    elif (
+                        glued_argv
+                        and segment_has_xargs
+                        and s > 0
+                    ):
+                        # A glued xargs bin with its OWN argv (interrogate
+                        # round 12: `echo DeleteServers | xargs "hcl"oud
+                        # ECS` — xargs appends the stdin AFTER the own
+                        # args): merge the feeder into the glued argv, the
+                        # standard machinery's xargs semantics.
+                        feeder_words = [
+                            re.sub(r"^['\"]|['\"]$", "", w)
+                            for t in split_tokens(segments[s - 1])[1:]
+                            for w in str(t).split()
+                        ]
+                        reason = _classify_leading(glued_stripped, glued_argv + feeder_words, routed)
+                        if reason:
+                            return reason
                     else:
                         reason = _classify_leading(glued_stripped, glued_argv, routed)
                         if reason:
@@ -1820,9 +1970,14 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
                 reason = _classify_leading(["hcloud"] + own + [str(word)], own + [str(word)], routed)
                 if reason:
                     return reason
-        reason = _classify_leading(stripped, argv, routed)
-        if reason:
-            return reason
+        # A shadow-pass BARE BIN is a prose artifact (interrogate round 12:
+        # the script-shadow flattens quoted description prose into
+        # `…;hcloud;DeleteServers` segments — the real empty-args doctrine
+        # stays for genuine payloads; TS's guard skips the same shape).
+        if not (shadow_pass and not argv and len(stripped) == 1):
+            reason = _classify_leading(stripped, argv, routed)
+            if reason:
+                return reason
         # Glued comparison for PLAIN-LEADING segments (interrogate round
         # 11): the glued argv differs from plain exactly when quotes
         # fragmented an argv word — `hcloud ECS "De"leteServers` is the
@@ -1876,46 +2031,6 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None):
             if reason:
                 return reason
     return None
-
-
-def _script_of(tokens):
-    """The quoted script argument of a shell -c / eval / Windows script
-    wrapper (cmd /c, powershell -Command) token stream, or None."""
-    if not tokens:
-        return None
-    first = tokens[0].lower()
-    base = basename_of(tokens[0]).lower()
-    shell_like = first in SHELL_FIRST or (base != first and base in SHELL_FIRST)
-    if shell_like and len(tokens) > 2 and re.match(r"^-[a-z]*c$", tokens[1], re.I):
-        script = str(tokens[2]).replace('\\"', '"').replace('\\\\', '\\')
-        # When the script word is ITSELF a bin or wrapper head (the
-        # flattened join of a quoted original), the tail tokens belong to
-        # the same command: return them joined, or the nested scan sees a
-        # bare bin and hits the empty-args guard on a legitimate read.
-        head_tok = split_tokens(script)[0] if split_tokens(script) else None
-        head_is_commandish = (
-            head_tok is not None
-            and (
-                _is_hcloud_head(head_tok)
-                or str(head_tok).lower() in SHELL_FIRST
-                or str(head_tok).lower() == "eval"
-                or str(head_tok).lower() in COMMAND_PREFIXES
-            )
-        )
-        if head_is_commandish and len(tokens) > 3:
-            return " ".join([script] + [str(t) for t in tokens[3:]])
-        return script
-    # eval evaluates the JOIN of all its arguments — the script string
-    # is the whole tail, not just the first word.
-    if first == "eval" and len(tokens) > 1:
-        return " ".join(str(t).replace('\\"', '"').replace('\\\\', '\\') for t in tokens[1:])
-    # watch runs its command arguments as an sh -c SCRIPT (the join of the
-    # words after its own flags — interrogate round 11: `watch -n1
-    # '"hcl"oud ECS Delete'` executes the glued bin through that join).
-    if first == "watch" and len(tokens) > 1:
-        rest = _skip_prefix_args("watch", tokens[1:])
-        return " ".join(str(t) for t in rest)
-    return _windows_script_arg_at(tokens, 0)
 
 
 def evaluate(tool_name, tool_input):

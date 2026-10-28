@@ -243,6 +243,41 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
   ['bash -c "if true; then \\"hcl\\"oud ECS Delete; fi"', 'deny'],
   ['bash -c "echo x; \\"hcl\\"oud ECS ListServers"', 'allow'],
   ['2>&1 hcloud ECS ListServers', 'allow'],
+  // port-v2defects (interrogate round 12): the script-carrier details —
+  // heredoc markers with double-quoted delimiters, flags between the shell
+  // and the marker (`bash -s <<EOF`), trailing live text on the marker
+  // line (`bash <<EOF 2>/dev/null`, the `;`/`&&` splits whose body lands
+  // in the NEXT segment), flags before -c (`bash -e -c`), a `<<<` line
+  // INSIDE a body (body text, not the marker), find -exec command
+  // positions (plain and mangled), interpreter system() carriers, glued
+  // xargs bins with their own argv, 11+ strippable stacks, and the
+  // deep-nest `'\''` idiom at depths 8-9 (the script-shadow pass — both
+  // twins had missed the executable zone). The over-deny control: a shell
+  // word in ARGUMENT position (`echo sh <<EOF`) does not make the body a
+  // script.
+  ['bash <<"EOF"\nhcloud ECS DeleteServers\nEOF', 'deny'],
+  ['bash -s <<EOF\nhcloud ECS DeleteServers\nEOF', 'deny'],
+  ['bash -x <<EOF\nhcloud ECS DeleteServers\nEOF', 'deny'],
+  ['bash <<EOF 2>/dev/null\nhcloud ECS DeleteServers\nEOF', 'deny'],
+  ['bash <<EOF; echo hi\nhcloud ECS DeleteServers\nEOF', 'deny'],
+  ['bash <<EOF && echo done\nhcloud ECS DeleteServers\nEOF', 'deny'],
+  ['bash <<EOF\nhcloud ECS DeleteServers\n<<< harmless\nEOF', 'deny'],
+  ["bash -e -c 'hcloud ECS DeleteServers'", 'deny'],
+  ['bash -u -c \'"hcl"oud ECS Delete\'', 'deny'],
+  ['find /tmp -name x.log -exec hcloud ECS DeleteServers {} \\;', 'deny'],
+  ['find /tmp -name x.log -exec "hcl"oud ECS Delete {} \\;', 'deny'],
+  ['find /tmp -name x.log -exec hcloud ECS DeleteServers {} +', 'deny'],
+  ['python3 -c \'import os; os.system("hcloud ECS DeleteServers")\'', 'deny'],
+  ['perl -e \'system("hcloud ECS DeleteServers")\'', 'deny'],
+  ['awk \'BEGIN{system("hcloud ECS DeleteServers")}\'', 'deny'],
+  ['echo DeleteServers | xargs "hcl"oud ECS', 'deny'],
+  ['echo ListServers | xargs "hcl"oud ECS', 'allow'],
+  ['X0=1 X1=1 X2=1 X3=1 X4=1 X5=1 X6=1 X7=1 X8=1 X9=1 X10=1 hcloud ECS DeleteServers', 'deny'],
+  ['echo sh <<EOF\nhcloud ECS DeleteServers\nEOF', 'allow'],
+  ['bash <<EOF\nhcloud ECS ListServers\nEOF', 'allow'],
+  ["python3 -c 'print(1+1)'", 'allow'],
+  ["awk '{print $1}' file.txt", 'allow'],
+  ['find /tmp -name x.log -delete', 'allow'],
   // The astral row: 200k valid surrogate pairs = 800 KB bytes / 400,000
   // UTF-16 units / 200,000 code points — over the byte cap on both twins,
   // over the OLD TS unit cap (400,002 > 262,144) but under the OLD py

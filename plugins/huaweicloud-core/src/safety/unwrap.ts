@@ -39,9 +39,11 @@ function unwrapCore(args: string[], onWindowsPayload: ((entered: boolean) => voi
   // fail-closed doctrine the skill-quality-cli REMAINDER walk applies to
   // unknown flag grammar.
   let inWindowsPayload = false;
-  // Depth-capped: shell wrappers do not nest arbitrarily, and a malicious
-  // input cannot loop here because every branch strictly shrinks `current`.
-  for (let depth = 0; depth < 10; depth++) {
+  // Depth-capped (interrogate round 12: flat prefix/env stacks past 10
+  // stalled the unwrap — `X1=1 … X11=1 hcloud …` executes; 18 matches the
+  // walk's budget). A malicious input cannot loop here because every
+  // branch strictly shrinks `current`.
+  for (let depth = 0; depth < 18; depth++) {
     if (!current.length) return current;
     const first = String(current[0]).toLowerCase();
     const isShell = SHELL_FIRST_TOKENS.has(first);
