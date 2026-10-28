@@ -39,10 +39,17 @@ function unwrapCore(args: string[], onWindowsPayload: ((entered: boolean) => voi
   // fail-closed doctrine the skill-quality-cli REMAINDER walk applies to
   // unknown flag grammar.
   let inWindowsPayload = false;
+  // Env assignments strip UNBOUNDED before the loop (interrogate round 13:
+  // `X1=1 … X19=1 hcloud …` executes — assignments are linear, no nesting,
+  // so no budget is charged; the 18 budget stays for the nested carriers a
+  // malicious input could otherwise loop). A malicious input cannot loop
+  // here because every branch strictly shrinks `current`.
+  while (current.length > 0 && isEnvAssignment(String(current[0]).toLowerCase())) {
+    current = current.slice(1);
+  }
   // Depth-capped (interrogate round 12: flat prefix/env stacks past 10
   // stalled the unwrap — `X1=1 … X11=1 hcloud …` executes; 18 matches the
-  // walk's budget). A malicious input cannot loop here because every
-  // branch strictly shrinks `current`.
+  // walk's budget).
   for (let depth = 0; depth < 18; depth++) {
     if (!current.length) return current;
     const first = String(current[0]).toLowerCase();

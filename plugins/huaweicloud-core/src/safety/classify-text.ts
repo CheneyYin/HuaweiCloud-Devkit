@@ -43,11 +43,30 @@ function scriptTextOf(tokens: string[], depth = 0): string | null {
   const base = basenameOf(String(tokens[0]).toLowerCase());
   const isShell = SHELL_FIRST_TOKENS.has(first) || (base !== first && SHELL_FIRST_TOKENS.has(base));
   if (isShell) {
-    // Flags may precede -c (interrogate round 12: `bash -e -c '…'` executes
-    // the script) — skip non-c flag clusters, then require the c-cluster.
+    // Flags may precede -c (interrogate rounds 12-13: `bash -e -c '…'` and
+    // `bash -o pipefail -c '…'` both execute the script) — skip non-c flag
+    // clusters, LONG flags, and value-bearing flags with their values, then
+    // require a c-CONTAINING cluster (c anywhere: -ce, -cxe).
     let i = 1;
-    while (i < tokens.length && /^-[a-bd-z]+$/i.test(String(tokens[i]))) i++;
-    if (/^-[a-z]*c$/i.test(String(tokens[i] ?? '')) && i + 1 < tokens.length) {
+    while (i < tokens.length) {
+      const tok = String(tokens[i]);
+      if (/^--[a-z-]+$/i.test(tok)) {
+        i++;
+        continue;
+      }
+      // Value-bearing flags FIRST (o is inside the [a-bd-z] class — the
+      // generic skip must not eat their values): -o pipefail → skip 2.
+      if (/^-o$/i.test(tok) || /^--option$/i.test(tok)) {
+        i += 2;
+        continue;
+      }
+      if (/^-[a-bd-z]+$/i.test(tok)) {
+        i++;
+        continue;
+      }
+      break;
+    }
+    if (/^-[a-z]*c[a-z]*$/i.test(String(tokens[i] ?? '')) && i + 1 < tokens.length) {
       const script = String(tokens[i + 1])
         .replace(/\\"/g, '"')
         .replace(/\\\\/g, '\\');
@@ -81,26 +100,50 @@ function scriptTextOf(tokens: string[], depth = 0): string | null {
       .map((token) => String(token))
       .join(' ');
   }
-  // Interpreter carriers (interrogate round 12): perl/python/node/ruby -e
-  // or -c, and awk's program argument, carry CODE whose system()-embedded
+  // Interpreter carriers (interrogate rounds 12-13): perl/python/node/ruby
+  // code flags and awk's program argument carry CODE whose system()-embedded
   // string is a shell command — `python3 -c 'import os;
-  // os.system("hcloud ECS DeleteServers")'` executes the write. The
-  // system("…")/system('…') inner string re-runs the walk.
-  if (['perl', 'python', 'python3', 'node', 'ruby'].includes(first) && tokens.length > 2) {
-    const flag = String(tokens[1]);
-    if (flag === '-e' || flag === '-c' || flag === '--eval' || flag === '--command') {
-      return interpreterSystemCommand(
+  // os.system("hcloud ECS DeleteServers")'` executes the write. Round 13:
+  // the head is NORMALIZED (interpreterHeadOf — version-suffix collapse,
+  // awk family), benign flags before the code flag are skipped
+  // (`python3 -u -c …`), awk's -v/-f value flags are skipped, and the flag
+  // table is per-interpreter (perl/ruby/node: -e only — their -c is
+  // syntax-check; python: -c). The system() strings re-run the walk; the
+  // OTHER invocation APIs (subprocess/execSync/popen) are closed by the
+  // deny-opaque gate's code-context signal, not enumerated here.
+  const interpreter = interpreterHeadOf(first);
+  if (interpreter !== null && tokens.length > 1) {
+    let i = 1;
+    while (i < tokens.length && /^-[a-bd-z][a-z]*$/i.test(String(tokens[i]))) i++;
+    const flag = String(tokens[i] ?? '');
+    const codeFlag =
+      interpreter === 'python' ? /^-[a-z]*c[a-z]*$/i.test(flag) : /^-[a-z]*e[a-z]*$/i.test(flag) || flag === '--eval';
+    if (codeFlag && i + 1 < tokens.length) {
+      return interpreterSystemCommands(
         tokens
-          .slice(2)
+          .slice(i + 1)
           .map((token) => String(token))
           .join(' '),
       );
     }
-  }
-  if (first === 'awk' && tokens.length > 1) {
-    const program = tokens.findIndex((token, idx) => idx > 0 && !String(token).startsWith('-'));
-    if (program > 0) {
-      return interpreterSystemCommand(String(tokens[program]));
+    if (interpreter === 'awk') {
+      // awk: skip -v/-f value flags and plain flags before the program.
+      let j = 1;
+      while (j < tokens.length) {
+        const tok = String(tokens[j]);
+        if (tok === '-v' || tok === '-f' || tok === '--file' || tok === '--assign') {
+          j += 2;
+          continue;
+        }
+        if (/^-[a-z]+$/i.test(tok)) {
+          j++;
+          continue;
+        }
+        break;
+      }
+      if (j < tokens.length) {
+        return interpreterSystemCommands(String(tokens[j]));
+      }
     }
   }
   const win = windowsScriptArgAt(tokens, 0);
@@ -121,9 +164,106 @@ function scriptTextOf(tokens: string[], depth = 0): string | null {
 // os.system('…') (interrogate round 12) — the direct-string form only;
 // indirection through variables and other invocation APIs is a documented
 // residual (the shell-indirection doctrine).
-function interpreterSystemCommand(code: string): string | null {
-  const m = /(?:os\.)?system\(\s*(['"])([\s\S]*?)\1\s*\)/.exec(code);
-  return m ? (m[2] ?? null) : null;
+// The shell command(s) embedded in interpreter code via system("…") /
+// os.system('…') (interrogate rounds 12-13) — ALL matches at STATEMENT
+// position (preceded by start/;/newline/} — `print("system('…')")` is a
+// printed string, not a call), joined with ';' so the walk classifies each
+// as its own segment. Direct-string form only; variable indirection and
+// other invocation APIs are the documented residual — for those, the
+// deny-opaque gate below is the closure.
+function interpreterSystemCommands(code: string): string | null {
+  const re = /(?:^|[;\n}])\s*(?:os\.)?system\(\s*(['"])([\s\S]*?)\1\s*\)/g;
+  const commands: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(code)) !== null) commands.push(m[2] ?? '');
+  return commands.length > 0 ? commands.join(';\n') : null;
+}
+
+// Interpreter head normalization (interrogate round 13): basename +
+// version-suffix collapse — python3.11 → python, gawk/mawk/nawk → awk,
+// perl5 → perl, nodejs → node, raku → ruby.
+function interpreterHeadOf(head: string): 'python' | 'perl' | 'ruby' | 'node' | 'awk' | null {
+  const h = String(head)
+    .toLowerCase()
+    .replace(/[\d.]+$/, '');
+  if (/^(python|pypy)$/.test(h)) return 'python';
+  if (/^perl$/.test(h)) return 'perl';
+  if (/^(ruby|raku)$/.test(h)) return 'ruby';
+  if (/^node$/.test(h)) return 'node';
+  if (/^(awk|gawk|mawk|nawk)$/.test(h)) return 'awk';
+  return null;
+}
+
+// The DENY-OPAQUE pivot (interrogate round 13, the coordinator's design
+// boundary): enumerating bash's carrier grammar to SEE THROUGH it is
+// non-convergent — the carrier space is unbounded (xargs/env/nohup/awk
+// system()/perl -e/python -c/make -f/ssh/parallel/…). When the walk hits a
+// context it cannot fully traverse AND one of OUR tokens appears in the
+// line in any walkable form, deny fail-closed with the sanctioned-paths
+// remediation instead of vision. The three opacity signals:
+//   (a) FRAGMENTED token — the glued/decoded re-join reveals our bin while
+//       the raw segment hides it (`"hcl"oud`): the fragmentation itself is
+//       what required vision;
+//   (b) EXPANSION marker — $' / $" / $( / backtick / <( / >( anywhere in
+//       the payload (the substitution splits the marker from its segment):
+//       the walk cannot reconstruct substitution-built argv;
+//   (c) INTERPRETER CODE — a code-flag argument (-c/-e code, awk program):
+//       code context is definitionally non-traversable, and a token inside
+//       code could execute through any invocation API (the exact
+//       subprocess/execSync family round 13 proved executable).
+// Lines with no token anywhere stay allowed (not our business); plain
+// contiguous tokens inside plain quoting with no markers stay allowed
+// (prose mentions — the git-commit/echo/docker pinned allows): the
+// over-deny direction is fail-closed by doctrine, the 3-layer model's MCP
+// approval chain is the backstop for what one text layer cannot prove.
+function opaqueCarrierDenied(segment: string, plainTokens: string[], wholeText: string): RiskDecision | null {
+  const gluedJoined = splitSimpleCommandGlued(segment).join(' ');
+  const decoded = stripShellQuotes(decodeAnsiCSpans(segment));
+  const bins = [
+    'hcloud',
+    'hcloud.exe',
+    'huaweicloud-devkit',
+    'setup-cli.js',
+    'setup-cli.mjs',
+    'setup-cli.ts',
+    'setup-cli.cjs',
+    'setup.cjs',
+  ];
+  const wordIn = (text: string, bin: string): boolean =>
+    new RegExp(`(^|[^a-z0-9.-])${bin.replace(/[.\-_]/g, (c) => `\\${c}`)}([^a-z0-9.-]|$)`, 'i').test(text);
+  const contiguousIn = (text: string, bin: string): boolean => text.toLowerCase().includes(bin);
+  const presentAnywhere = (bin: string): boolean =>
+    wordIn(segment, bin) || wordIn(gluedJoined, bin) || wordIn(decoded, bin);
+  const hasToken = bins.some((bin) => presentAnywhere(bin));
+  if (!hasToken) return null;
+  // (a) fragmented token: a walkable re-join reveals the bin the raw hides.
+  const fragmented = bins.some(
+    (bin) => (wordIn(gluedJoined, bin) || wordIn(decoded, bin)) && !contiguousIn(segment, bin),
+  );
+  // (b) expansion marker anywhere in the payload.
+  const marker = /\$['"]|\$\(|`|<\(|>\(/.test(wholeText);
+  // (c) interpreter code context: the probe-stripped head is an interpreter
+  // with a code flag (or an awk program).
+  let codeContext = false;
+  const { stream } = unwrapWithWindowsFlag(plainTokens);
+  const head = stream.length > 0 ? interpreterHeadOf(basenameOf(String(stream[0]).toLowerCase())) : null;
+  if (head !== null) {
+    const rest = stream.slice(1).map((token) => String(token));
+    if (head === 'awk') {
+      codeContext = rest.some((tok) => !tok.startsWith('-')) || rest.includes('-v') || rest.includes('-f');
+    } else {
+      codeContext = rest.some((tok) =>
+        head === 'python' ? /^-[a-z]*c[a-z]*$/i.test(tok) : /^-[a-z]*e[a-z]*$/i.test(tok) || tok === '--eval',
+      );
+    }
+  }
+  if (!fragmented && !marker && !codeContext) return null;
+  return {
+    decision: 'deny',
+    risk: 'invalid',
+    reason:
+      'an opaque command carrier (script/interpreter/exec context) mentions Huawei Cloud commands but cannot be safely classified. Write the command in plain form, or use the sanctioned MCP paths (huaweicloud_run_readonly_command for reads / huaweicloud_run_approved_command for writes).',
+  };
 }
 
 // The body of a heredoc/herestring a SHELL bin reads as its script
@@ -140,13 +280,16 @@ function interpreterSystemCommand(code: string): string | null {
 // match is position-0 (a `<<<` line INSIDE a body is body text, not the
 // marker — the /m port bug).
 function heredocScriptText(segment: string): string | null {
-  const markerAt = segment.search(/<<<?-?/);
-  if (markerAt < 0) return null;
-  const head = segment.slice(0, markerAt);
-  if (!/^\s*(?:\d*[<>]&?\d*\s+)*(?:\S*\/)?(?:bash|sh|zsh|dash)(?:\.exe)?\s/i.test(head)) {
+  const markerIndex = segment.search(/<<<?-?/);
+  if (markerIndex < 0) return null;
+  const head = segment.slice(0, markerIndex);
+  // Round 13: redirections may carry OPERANDS before the bin (`< in bash
+  // <<EOF`, `2>/dev/null bash <<EOF` — POSIX grammar allows redirections
+  // before the command name); operator-only forms (`2>&1 bash …`) too.
+  if (!/^\s*(?:\s*(?:\d*[<>]&?\d*|\S*[<>]\S*|[<>]\s+\S+)\s+)*(?:\S*\/)?(?:bash|sh|zsh|dash)(?:\.exe)?\s/i.test(head)) {
     return null;
   }
-  const rest = segment.slice(markerAt);
+  const rest = segment.slice(markerIndex);
   const herestring = /^<<<\s*(.+)$/.exec(rest);
   if (herestring) {
     // The herestring word is ONE argv-ish blob bash parses as a script:
@@ -176,6 +319,7 @@ function gluedWriteDenied(
   options: ClassifyOptions,
   narrowRouted: boolean,
   depth: number,
+  saw: { value: boolean } = { value: false },
 ): RiskDecision | null {
   if (depth >= 18) return null;
   const segments = splitShellSegments(text);
@@ -185,26 +329,17 @@ function gluedWriteDenied(
     const plainTokens = splitSimpleCommand(segment);
     const script = scriptTextOf(plainTokens);
     if (script !== null) {
-      const nested = gluedWriteDenied(script, options, narrowRouted, depth + 1);
+      const nested = gluedWriteDenied(script, options, narrowRouted, depth + 1, saw);
       if (nested) return nested;
-      // The SCRIPT-SHADOW pass (interrogate round 12): the `'\''` quoting
-      // idiom drifts span boundaries at deep nest levels (both twins
-      // missed executable mangled writes at depths 8-9). The quote-stripped
-      // shadow of a CARRIER's script flattens the nested quoting into a
-      // live `bash -c bash -c … hcloud ECS Delete` stream the walk
-      // classifies. Scoped to carrier scripts ONLY — the top-level text
-      // never shadows (quoted PROSE stays prose: `echo "step1; hcloud
-      // …"` keeps its echo head). Terminates: the shadow of a shadow is
-      // itself.
-      const scriptShadow = stripShellQuotes(script);
-      if (scriptShadow !== script) {
-        const shadowNested = gluedWriteDenied(scriptShadow, options, narrowRouted, depth + 1);
-        if (shadowNested) return shadowNested;
-      }
+      // (The round-12 SCRIPT-SHADOW pass was REMOVED in the round-13 pivot:
+      // it un-quoted PROSE inside carrier scripts — `bash -c 'echo "step1;
+      // hcloud …"'` denied a benign echo — and its purpose (the deep-nest
+      // `'\''` idiom) is closed by the deny-opaque gate's fragmented-token
+      // signal below, with strictly less false-positive surface.)
     }
     const heredoc = heredocScriptText(segment);
     if (heredoc !== null) {
-      const nested = gluedWriteDenied(heredoc, options, narrowRouted, depth + 1);
+      const nested = gluedWriteDenied(heredoc, options, narrowRouted, depth + 1, saw);
       if (nested) return nested;
     }
     // A DANGLING heredoc marker (interrogate round 12): `bash <<EOF; echo
@@ -215,7 +350,11 @@ function gluedWriteDenied(
     const dangling = /<<-?\s*(['"]?)([A-Za-z0-9_]+)\1?[^\n]*$/.exec(segment);
     if (dangling && segIndex + 1 < segments.length) {
       const danglingHead = segment.slice(0, dangling.index ?? 0);
-      if (/^\s*(?:\d*[<>]&?\d*\s+)*(?:\S*\/)?(?:bash|sh|zsh|dash)(?:\.exe)?\s/i.test(danglingHead)) {
+      if (
+        /^\s*(?:\s*(?:\d*[<>]&?\d*|\S*[<>]\S*|[<>]\s+\S+)\s+)*(?:\S*\/)?(?:bash|sh|zsh|dash)(?:\.exe)?\s/i.test(
+          danglingHead,
+        )
+      ) {
         const delim = dangling[2]!;
         const next = segments[segIndex + 1]!;
         const nl = next.indexOf('\n');
@@ -223,36 +362,45 @@ function gluedWriteDenied(
           const body = next.slice(nl + 1);
           const end = body.indexOf(`\n${delim}`);
           if (end >= 0) {
-            const nested = gluedWriteDenied(body.slice(0, end), options, narrowRouted, depth + 1);
+            const nested = gluedWriteDenied(body.slice(0, end), options, narrowRouted, depth + 1, saw);
             if (nested) return nested;
           }
         }
       }
     }
-    // find -exec/-execdir carriers (interrogate round 12): the argv
+    // find -exec/-execdir carriers (interrogate rounds 12-13): the argv
     // between the flag and the `\;`/`;`/`+` terminator is a command
     // position — `find … -exec hcloud ECS Delete {} \;` executes it. The
     // joined payload re-runs the walk — extracted from BOTH tokenizations
-    // (the plain one fragments a glued bin).
-    for (const tokenSource of [plainTokens, splitSimpleCommandGlued(segment)]) {
-      for (let e = 0; e < tokenSource.length; e++) {
-        const tok = String(tokenSource[e]).toLowerCase();
-        if (tok === '-exec' || tok === '-execdir') {
-          const end = tokenSource.findIndex(
-            (t, idx) => idx > e && (String(t) === '\\;' || String(t) === ';' || String(t) === '+'),
-          );
-          const payload = tokenSource.slice(e + 1, end > 0 ? end : tokenSource.length);
-          if (payload.length > 0) {
-            const nested = gluedWriteDenied(payload.join(' '), options, narrowRouted, depth + 1);
-            if (nested) return nested;
+    // (the plain one fragments a glued bin), and GATED ON THE HEAD BEING
+    // FIND (round 13: `echo -exec hcloud …` is an echo argument, not a
+    // carrier — the over-deny class).
+    const { stream: headStream } = unwrapWithWindowsFlag(plainTokens);
+    const headIsFind = headStream.length > 0 && basenameOf(String(headStream[0]).toLowerCase()) === 'find';
+    if (headIsFind) {
+      for (const tokenSource of [plainTokens, splitSimpleCommandGlued(segment)]) {
+        for (let e = 0; e < tokenSource.length; e++) {
+          const tok = String(tokenSource[e]).toLowerCase();
+          if (tok === '-exec' || tok === '-execdir') {
+            const end = tokenSource.findIndex(
+              (t, idx) => idx > e && (String(t) === '\\;' || String(t) === ';' || String(t) === '+'),
+            );
+            const payload = tokenSource.slice(e + 1, end > 0 ? end : tokenSource.length);
+            if (payload.length > 0) {
+              const nested = gluedWriteDenied(payload.join(' '), options, narrowRouted, depth + 1, saw);
+              if (nested) return nested;
+            }
           }
         }
       }
     }
     const { stream } = unwrapWithWindowsFlag(plainTokens);
     const plainLeading = stream.length > 0 && isHcloudToken(String(stream[0]));
+    if (plainLeading) saw.value = true;
     const gluedTokens = splitSimpleCommandGlued(segment);
     const { stream: gluedStream } = unwrapWithWindowsFlag(gluedTokens);
+    const gluedLeading = gluedStream.length > 0 && isHcloudToken(String(gluedStream[0]));
+    if (gluedLeading) saw.value = true;
     if (gluedStream.length > 0 && isHcloudToken(String(gluedStream[0]))) {
       const gluedArgv = gluedStream.slice(1);
       const segmentHasXargs = plainTokens.some((token) => {
@@ -307,6 +455,22 @@ function gluedWriteDenied(
         });
         if (verdict.decision === 'deny') return verdict;
       }
+    }
+    // The DENY-OPAQUE gate (interrogate round 13, the pivot): this segment
+    // was NOT a plain-leading hcloud command AND its glued re-join was not
+    // hcloud-leading either (either the standard machinery classified one
+    // of those forms, or the segment carries something we could not
+    // traverse). If our token hides in it fragmented/marked/code-context
+    // form, deny fail-closed.
+    // The gate's traversal signal is `saw` (interrogate round 13): whether
+    // ANY level of the walk — this segment's plain/glued streams or any
+    // nested carrier's — ever classified our bin at a command position. A
+    // traversed-but-unseen payload (the deep-nest idiom: extraction
+    // succeeds but the mangled script never yields a leading bin) still
+    // gates; a classified read does not.
+    if (!saw.value) {
+      const opaque = opaqueCarrierDenied(segment, plainTokens, text);
+      if (opaque) return opaque;
     }
     prevTokens = plainTokens;
   }

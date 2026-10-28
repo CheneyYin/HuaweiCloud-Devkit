@@ -211,14 +211,27 @@ test('the py hook degrades coherently: derived vocabularies, isolated fields, fa
   // the interpreter system() extraction, the script-shadow pass (scoped to
   // carrier scripts, empty-args suppressed on prose artifacts), and the
   // 18-deep unwrap budgets.
-  assert.match(pyHook, /re\.match\(r"\^-\[a-bd-z\]\+\$", str\(tokens\[i\]\), re\.I\)/);
-  assert.match(pyHook, /def _interpreter_system_command\(code\):/);
-  assert.match(pyHook, /nested_shadow = strip_shell_quotes\(nested\)/);
-  assert.match(pyHook, /if not \(shadow_pass and not argv and len\(stripped\) == 1\):/);
+  assert.match(pyHook, /re\.match\(r"\^-\[a-bd-z\]\+\$", tok, re\.I\)/);
+
   assert.match(pyHook, /in \("-exec", "-execdir"\)/);
+  // Round 13 / the DESIGN PIVOT: the vision tail closes by DENIAL — the
+  // opaque gate (fragmented-token / expansion-marker / interpreter-code
+  // signals) denies what the walk cannot traverse, gated on the walk never
+  // having seen our bin at a classifiable position (the `saw` accumulator)
+  // — and the script-shadow pass it replaces is gone.
+  assert.match(pyHook, /def _opaque_carrier_denied\(segment, tokens, whole_text\):/);
+  assert.match(pyHook, /def _interpreter_head_of\(head\):/);
+  assert.match(pyHook, /def _interpreter_system_commands\(code\):/);
+  assert.match(pyHook, /saw\[0\] = True/);
+  assert.match(pyHook, /if glued_scope and not saw\[0\]:/);
+  assert.doesNotMatch(pyHook, /nested_shadow = strip_shell_quotes\(nested\)/);
+  assert.match(classifyText, /function opaqueCarrierDenied\(/);
+  assert.match(classifyText, /function interpreterHeadOf\(/);
+  assert.match(classifyText, /function interpreterSystemCommands\(/);
+  assert.match(classifyText, /saw\.value = true/);
+  assert.ok(classifyText.includes('if (!saw.value) {'), 'the opaque gate fires only when the walk never saw the bin');
+  assert.doesNotMatch(classifyText, /const scriptShadow = stripShellQuotes\(script\);/);
   assert.ok(classifyText.includes('/^-[a-bd-z]+$/i'), 'the flags-before--c skip class must exclude c');
-  assert.match(classifyText, /function interpreterSystemCommand\(code: string\): string \| null \{/);
-  assert.match(classifyText, /const scriptShadow = stripShellQuotes\(script\);/);
   assert.match(classifyText, /tok === '-exec' \|\| tok === '-execdir'/);
   assert.match(classifyText, /writeOperationPrefixes\.length === 0/);
   assert.ok(

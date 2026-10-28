@@ -1055,6 +1055,11 @@ _LEADING_WINDOWS_PAYLOAD = [False]
 def _leading_segment_core(tokens):
     """(leading token list or None, entered-windows-payload flag)."""
     in_windows_payload = False
+    # Env assignments strip UNBOUNDED before the loop (interrogate round
+    # 13: `X1=1 … X19=1 hcloud …` executes — assignments are linear, no
+    # nesting, so no budget is charged).
+    while tokens and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", str(tokens[0])):
+        tokens = tokens[1:]
     for _ in range(18):
         if not tokens:
             return None, in_windows_payload
@@ -1471,7 +1476,11 @@ def _heredoc_script_text(segment):
     if m is None:
         return None
     head = segment[: m.start()]
-    if not re.match(r"^\s*(?:\d*[<>]&?\d*\s+)*(?:\S*/)?(?:bash|sh|zsh|dash)(?:\.exe)?\s", head, re.I):
+    if not re.match(
+        r"^\s*(?:\s*(?:\d*[<>]&?\d*|\S*[<>]\S*|[<>]\s+\S+)\s+)*(?:\S*/)?(?:bash|sh|zsh|dash)(?:\.exe)?\s",
+        head,
+        re.I,
+    ):
         return None
     rest = segment[m.start():]
     hs = re.match(r"^<<<\s*(.+)$", rest)
@@ -1488,14 +1497,115 @@ def _heredoc_script_text(segment):
     return body if end < 0 else body[:end]
 
 
-def _interpreter_system_command(code):
-    """The shell command embedded in interpreter code via system("…") /
-    os.system('…') (interrogate round 12) — the direct-string form only;
-    indirection through variables and other invocation APIs is a
-    documented residual (the shell-indirection doctrine). Mirrored by
-    interpreterSystemCommand in classify-text.ts."""
-    m = re.search(r"(?:os\.)?system\(\s*(['\"])([\s\S]*?)\1\s*\)", code)
-    return m.group(2) if m else None
+def _interpreter_system_commands(code):
+    """The shell command(s) embedded in interpreter code via system("…") /
+    os.system('…') (interrogate rounds 12-13) — ALL matches at STATEMENT
+    position (preceded by start/;/newline/} — ``print("system('…')")`` is
+    a printed string, not a call), joined with ';' so the walk classifies
+    each as its own segment. Direct-string form only; variable
+    indirection and other invocation APIs are the documented residual —
+    for those, the deny-opaque gate is the closure. Mirrored by
+    interpreterSystemCommands in classify-text.ts."""
+    commands = []
+    for m in re.finditer(r"(?:^|[;\n}])\s*(?:os\.)?system\(\s*(['\"])([\s\S]*?)\1\s*\)", code):
+        commands.append(m.group(2))
+    return ";\n".join(commands) if commands else None
+
+
+def _interpreter_head_of(head):
+    """Interpreter head normalization (interrogate round 13): basename +
+    version-suffix collapse — python3.11 -> python, gawk/mawk/nawk -> awk,
+    perl5 -> perl, nodejs -> node, raku -> ruby. Mirrored by
+    interpreterHeadOf in classify-text.ts."""
+    h = re.sub(r"[\d.]+$", "", str(head).lower())
+    if re.match(r"^(python|pypy)$", h):
+        return "python"
+    if h == "perl":
+        return "perl"
+    if re.match(r"^(ruby|raku)$", h):
+        return "ruby"
+    if h == "node":
+        return "node"
+    if re.match(r"^(awk|gawk|mawk|nawk)$", h):
+        return "awk"
+    return None
+
+
+OPAQUE_BINS = (
+    "hcloud",
+    "hcloud.exe",
+    "huaweicloud-devkit",
+    "setup-cli.js",
+    "setup-cli.mjs",
+    "setup-cli.ts",
+    "setup-cli.cjs",
+    "setup.cjs",
+)
+
+
+def _opaque_word_in(text, bin_name):
+    return re.search(r"(^|[^a-z0-9.-])" + re.escape(bin_name) + r"([^a-z0-9.-]|$)", text, re.I) is not None
+
+
+def _opaque_carrier_denied(segment, tokens, whole_text):
+    """The DENY-OPAQUE pivot (interrogate round 13, the coordinator's design
+    boundary): enumerating bash's carrier grammar to SEE THROUGH it is
+    non-convergent — the carrier space is unbounded. When the walk hits a
+    context it cannot fully traverse AND one of OUR tokens appears in the
+    line in any walkable form, deny fail-closed with the sanctioned-paths
+    remediation instead of vision. The three opacity signals: (a) FRAGMENTED
+    token (a glued/decoded re-join reveals the bin the raw segment hides),
+    (b) EXPANSION marker ($'/$"/$(/backtick/<(>( anywhere in the payload),
+    (c) INTERPRETER CODE context (a code-flag argument / awk program).
+    Lines with no token stay allowed; plain contiguous tokens inside plain
+    quoting with no markers stay allowed (prose). Mirrored by
+    opaqueCarrierDenied in classify-text.ts."""
+    glued = " ".join(split_tokens_glued(segment))
+    decoded = strip_shell_quotes(decode_ansi_c_spans(segment))
+    present = [b for b in OPAQUE_BINS if _opaque_word_in(segment, b) or _opaque_word_in(glued, b) or _opaque_word_in(decoded, b)]
+    if not present:
+        return None
+    fragmented = any(
+        (_opaque_word_in(glued, b) or _opaque_word_in(decoded, b)) and b.lower() not in segment.lower()
+        for b in present
+    )
+    marker = re.search(r"\$['\"]|\$\(|`|<\(|>\(", whole_text) is not None
+    code_context = False
+    # The effective head: strip redirections/env/prefixes (a light
+    # probe — NOT _leading_segment_core, which returns None unless the
+    # head is hcloud itself).
+    probe = list(tokens)
+    for _ in range(18):
+        if not probe:
+            break
+        head_tok = str(probe[0])
+        if is_redirection_token(head_tok) or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", head_tok):
+            probe = probe[1:]
+            continue
+        head_lower = head_tok.lower()
+        head_base = basename_of(head_lower)
+        if head_lower in COMMAND_PREFIXES or head_base in COMMAND_PREFIXES:
+            probe = _skip_prefix_args(head_base or head_lower, probe[1:])
+            continue
+        break
+    head = _interpreter_head_of(basename_of(str(probe[0]).lower())) if probe else None
+    if head is not None:
+        rest = [str(t) for t in probe[1:]]
+        if head == "awk":
+            code_context = any(not t.startswith("-") for t in rest) or "-v" in rest or "-f" in rest
+        else:
+            code_context = any(
+                re.match(r"^-[a-z]*c[a-z]*$", t, re.I) if head == "python" else (re.match(r"^-[a-z]*e[a-z]*$", t, re.I) or t == "--eval")
+                for t in rest
+            )
+    if not fragmented and not marker and not code_context:
+        return None
+    return (
+        "an opaque command carrier (script/interpreter/exec context) mentions Huawei Cloud "
+        "commands but cannot be safely classified. Write the command in plain form, or use "
+        "the sanctioned MCP paths (huaweicloud_run_readonly_command for reads / "
+        "huaweicloud_run_approved_command for writes)."
+    )
 
 
 def _script_of(tokens):
@@ -1511,9 +1621,21 @@ def _script_of(tokens):
         # executes the script) — skip non-c flag clusters, then require
         # the c-cluster.
         i = 1
-        while i < len(tokens) and re.match(r"^-[a-bd-z]+$", str(tokens[i]), re.I):
-            i += 1
-        if i + 1 < len(tokens) and re.match(r"^-[a-z]*c$", str(tokens[i]), re.I):
+        while i < len(tokens):
+            tok = str(tokens[i])
+            if re.match(r"^--[a-z-]+$", tok, re.I):
+                i += 1
+                continue
+            # Value-bearing flags FIRST (o is inside [a-bd-z] — the generic
+            # skip must not eat their values): -o pipefail -> skip 2.
+            if re.match(r"^-o$", tok, re.I) or re.match(r"^--option$", tok, re.I):
+                i += 2
+                continue
+            if re.match(r"^-[a-bd-z]+$", tok, re.I):
+                i += 1
+                continue
+            break
+        if i + 1 < len(tokens) and re.match(r"^-[a-z]*c[a-z]*$", str(tokens[i]), re.I):
             script = str(tokens[i + 1]).replace('\\"', '"').replace('\\\\', '\\')
             # When the script word is ITSELF a bin or wrapper head (the
             # flattened join of a quoted original), the tail tokens belong
@@ -1543,29 +1665,54 @@ def _script_of(tokens):
     if first == "watch" and len(tokens) > 1:
         rest = _skip_prefix_args("watch", tokens[1:])
         return " ".join(str(t) for t in rest)
-    # Interpreter carriers (interrogate round 12): perl/python/node/ruby
-    # -e or -c, and awk's program argument — the system()-embedded string
-    # is a shell command.
-    if first in ("perl", "python", "python3", "node", "ruby") and len(tokens) > 2:
-        flag = str(tokens[1])
-        if flag in ("-e", "-c", "--eval", "--command"):
-            return _interpreter_system_command(" ".join(str(t) for t in tokens[2:]))
-    if first == "awk" and len(tokens) > 1:
-        program = next((str(t) for idx, t in enumerate(tokens) if idx > 0 and not str(t).startswith("-")), None)
-        if program is not None:
-            return _interpreter_system_command(program)
+    # Interpreter carriers (interrogate rounds 12-13): the head is
+    # NORMALIZED (_interpreter_head_of — version-suffix collapse, awk
+    # family), benign flags before the code flag are skipped, awk's -v/-f
+    # value flags are skipped, and the flag table is per-interpreter
+    # (perl/ruby/node: -e only — their -c is syntax-check; python: -c).
+    interp = _interpreter_head_of(first)
+    if interp is not None and len(tokens) > 1:
+        i = 1
+        while i < len(tokens) and re.match(r"^-[a-bd-z][a-z]*$", str(tokens[i]), re.I):
+            i += 1
+        flag = str(tokens[i]) if i < len(tokens) else ""
+        code_flag = (
+            re.match(r"^-[a-z]*c[a-z]*$", flag, re.I)
+            if interp == "python"
+            else (re.match(r"^-[a-z]*e[a-z]*$", flag, re.I) or flag == "--eval")
+        )
+        if code_flag and i + 1 < len(tokens):
+            return _interpreter_system_commands(" ".join(str(t) for t in tokens[i + 1:]))
+        if interp == "awk":
+            j = 1
+            while j < len(tokens):
+                tok = str(tokens[j])
+                if tok in ("-v", "-f", "--file", "--assign"):
+                    j += 2
+                    continue
+                if re.match(r"^-[a-z]+$", tok, re.I):
+                    j += 1
+                    continue
+                break
+            if j < len(tokens):
+                return _interpreter_system_commands(str(tokens[j]))
     return _windows_script_arg_at(tokens, 0)
 
 
-def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, shadow_pass=False):
+def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=None):
     """Block reason (or None to allow) when any hcloud-leading command
     segment in the payload carries a write operation and no read prefix.
+    `saw` (a one-element list) accumulates whether ANY level of the walk
+    ever saw our bin at a classifiable command position — the deny-opaque
+    gate's traversal signal (interrogate round 13).
     Positional like the TS layer; nested `bash -c`/`eval` scripts re-scan
     recursively with the TOP-LEVEL routing verdict threaded through (TS
     computes routing once at text entry); `xargs hcloud` merges the
     preceding piped segment's tokens as candidate operations; OBS util
     subcommands classify through the same write list; `hcloud configure
     show/get/list/…` is a credential read (policy vocabulary, TS parity)."""
+    if saw is None:
+        saw = [False]
     if not WRITE_OPERATION_RE:
         # Fail-closed (interrogate round 1): an unavailable write
         # vocabulary must not reopen PLAIN writes while their mangled
@@ -1646,6 +1793,7 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, shad
         # executability ceiling): adversarial nests five-plus deep
         # genuinely execute, and beyond the budget the unwrap path
         # re-tokenizes WITHOUT re-splitting `;` — the write launders.
+        carrier_traversed = False
         if depth < 18:
             candidates = [tokens]
             cursor = tokens
@@ -1687,26 +1835,17 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, shad
                     # piped context feeds it, so the outer feeder threads
                     # down (an xargs inside the script inherits the pipe).
                     nested_feeder = split_tokens(segments[s - 1])[1:] if s > 0 else inherited_feeder
-                    reason = hcloud_write_blocked(nested, depth + 1, routed, nested_feeder)
+                    reason = hcloud_write_blocked(nested, depth + 1, routed, nested_feeder, saw)
                     if reason:
                         return reason
-                    # The SCRIPT-SHADOW pass (interrogate round 12): the
-                    # `'\''` quoting idiom drifts span boundaries at deep
-                    # nest levels (both twins missed executable mangled
-                    # writes at depths 8-9). The quote-stripped shadow of
-                    # a CARRIER's script flattens the nested quoting into
-                    # a live `bash -c bash -c … hcloud ECS Delete` stream
-                    # the walk classifies. Scoped to carrier scripts ONLY
-                    # — the top-level text never shadows (quoted PROSE
-                    # stays prose: `echo "step1; hcloud …"` keeps its echo
-                    # head). Terminates: the shadow of a shadow is itself.
-                    nested_shadow = strip_shell_quotes(nested)
-                    if nested_shadow != nested:
-                        reason = hcloud_write_blocked(
-                            nested_shadow, depth + 1, routed, nested_feeder, True
-                        )
-                        if reason:
-                            return reason
+                    carrier_traversed = True
+                    # (The round-12 SCRIPT-SHADOW pass was REMOVED in the
+                    # round-13 pivot: it un-quoted PROSE inside carrier
+                    # scripts — `bash -c 'echo "step1; hcloud …"'` denied a
+                    # benign echo — and its purpose (the deep-nest `'\''`
+                    # idiom) is closed by the deny-opaque gate's
+                    # fragmented-token signal, with strictly less
+                    # false-positive surface.)
             # Heredoc/herestring SCRIPT bodies (interrogate round 11): a
             # shell bin reading its script from stdin — `bash <<EOF
             # <body> EOF` executes the body; the -c machinery never fires
@@ -1715,9 +1854,10 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, shad
             heredoc_script = _heredoc_script_text(segment)
             if heredoc_script is not None:
                 nested_feeder = split_tokens(segments[s - 1])[1:] if s > 0 else inherited_feeder
-                reason = hcloud_write_blocked(heredoc_script, depth + 1, routed, nested_feeder)
+                reason = hcloud_write_blocked(heredoc_script, depth + 1, routed, nested_feeder, saw)
                 if reason:
                     return reason
+                carrier_traversed = True
             # A DANGLING heredoc marker (interrogate round 12): `bash
             # <<EOF; echo hi` splits the segment at the `;` mid-line, so
             # the marker segment carries no body — bash starts the body at
@@ -1728,7 +1868,7 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, shad
             if dangling is not None and s + 1 < len(segments):
                 dangling_head = segment[: dangling.start()]
                 if re.match(
-                    r"^\s*(?:\d*[<>]&?\d*\s+)*(?:\S*/)?(?:bash|sh|zsh|dash)(?:\.exe)?\s",
+                    r"^\s*(?:\s*(?:\d*[<>]&?\d*|\S*[<>]\S*|[<>]\s+\S+)\s+)*(?:\S*/)?(?:bash|sh|zsh|dash)(?:\.exe)?\s",
                     dangling_head,
                     re.I,
                 ):
@@ -1739,26 +1879,45 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, shad
                         body = nxt[nl + 1:]
                         end = body.find("\n" + delim)
                         if end >= 0:
-                            reason = hcloud_write_blocked(body[:end], depth + 1, routed)
+                            reason = hcloud_write_blocked(body[:end], depth + 1, routed, None, saw)
                             if reason:
                                 return reason
-            # find -exec/-execdir carriers (interrogate round 12): the argv
-            # between the flag and the `\;`/`;`/`+` terminator is a command
-            # position — `find … -exec hcloud ECS Delete {} \;` executes
-            # it. The joined payload re-runs the walk — extracted from
-            # BOTH tokenizations (the plain one fragments a glued bin).
-            for token_source in (tokens, split_tokens_glued(segment)):
-                for e, t in enumerate(token_source):
-                    if str(t).lower() in ("-exec", "-execdir"):
-                        end = next(
-                            (k for k in range(e + 1, len(token_source)) if str(token_source[k]) in ("\\;", ";", "+")),
-                            len(token_source),
-                        )
-                        payload = token_source[e + 1:end]
-                        if payload:
-                            reason = hcloud_write_blocked(" ".join(str(x) for x in payload), depth + 1, routed)
-                            if reason:
-                                return reason
+                            carrier_traversed = True
+            # find -exec/-execdir carriers (interrogate rounds 12-13): the
+            # argv between the flag and the `\;`/`;`/`+` terminator is a
+            # command position — extracted from BOTH tokenizations (the
+            # plain one fragments a glued bin) and GATED ON THE HEAD BEING
+            # FIND (round 13: `echo -exec hcloud …` is an echo argument,
+            # not a carrier — the over-deny class).
+            head_probe = list(tokens)
+            for _ in range(18):
+                if not head_probe:
+                    break
+                head_tok = str(head_probe[0])
+                if is_redirection_token(head_tok) or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", head_tok):
+                    head_probe = head_probe[1:]
+                    continue
+                head_lower = head_tok.lower()
+                head_base = basename_of(head_lower)
+                if head_lower in COMMAND_PREFIXES or head_base in COMMAND_PREFIXES:
+                    head_probe = _skip_prefix_args(head_base or head_lower, head_probe[1:])
+                    continue
+                break
+            head_is_find = head_probe and basename_of(str(head_probe[0]).lower()) == "find"
+            if head_is_find:
+                for token_source in (tokens, split_tokens_glued(segment)):
+                    for e, t in enumerate(token_source):
+                        if str(t).lower() in ("-exec", "-execdir"):
+                            end = next(
+                                (k for k in range(e + 1, len(token_source)) if str(token_source[k]) in ("\\;", ";", "+")),
+                                len(token_source),
+                            )
+                            payload = token_source[e + 1:end]
+                            if payload:
+                                reason = hcloud_write_blocked(" ".join(str(x) for x in payload), depth + 1, routed, None, saw)
+                                if reason:
+                                    return reason
+                                carrier_traversed = True
         stripped = hcloud_leading_segment(tokens)
         if stripped is None:
             # Glued-bin fallback, PER SEGMENT (interrogate round 10): bash
@@ -1771,9 +1930,11 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, shad
             # the standard xargs machinery keeps handling the segments it
             # already classifies (the whole-text re-run denied a pinned
             # xargs allow through the empty-args arm).
+            glued_stripped = None
             if glued_scope:
                 glued_stripped = hcloud_leading_segment(split_tokens_glued(segment))
                 if glued_stripped is not None:
+                    saw[0] = True
                     glued_argv = [t for t in glued_stripped[1:] if not t.startswith("-")]
                     segment_has_xargs = any(
                         str(t).lower() == "xargs" or basename_of(str(t).lower()) == "xargs"
@@ -1819,8 +1980,19 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, shad
                         reason = _classify_leading(glued_stripped, glued_argv, routed)
                         if reason:
                             return reason
+            # The DENY-OPAQUE gate (interrogate round 13, the pivot): this
+            # segment was NOT a plain-leading hcloud command AND its glued
+            # re-join was not hcloud-leading either (either the standard
+            # machinery classified one of those forms, or the segment
+            # carries something we could not traverse). If our token hides
+            # in it fragmented/marked/code-context form, deny fail-closed.
+            if glued_scope and not saw[0]:
+                opaque_reason = _opaque_carrier_denied(segment, tokens, text)
+                if opaque_reason:
+                    return opaque_reason
             continue
         saw_leading = True
+        saw[0] = True
         windows_payload = _LEADING_WINDOWS_PAYLOAD[0]
         argv = [t for t in stripped[1:] if not t.startswith("-")]
         # xargs feed: the preceding segment's tokens become argv after the
@@ -1970,14 +2142,9 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, shad
                 reason = _classify_leading(["hcloud"] + own + [str(word)], own + [str(word)], routed)
                 if reason:
                     return reason
-        # A shadow-pass BARE BIN is a prose artifact (interrogate round 12:
-        # the script-shadow flattens quoted description prose into
-        # `…;hcloud;DeleteServers` segments — the real empty-args doctrine
-        # stays for genuine payloads; TS's guard skips the same shape).
-        if not (shadow_pass and not argv and len(stripped) == 1):
-            reason = _classify_leading(stripped, argv, routed)
-            if reason:
-                return reason
+        reason = _classify_leading(stripped, argv, routed)
+        if reason:
+            return reason
         # Glued comparison for PLAIN-LEADING segments (interrogate round
         # 11): the glued argv differs from plain exactly when quotes
         # fragmented an argv word — `hcloud ECS "De"leteServers` is the

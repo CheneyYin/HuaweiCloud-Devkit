@@ -278,6 +278,42 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
   ["python3 -c 'print(1+1)'", 'allow'],
   ["awk '{print $1}' file.txt", 'allow'],
   ['find /tmp -name x.log -delete', 'allow'],
+  // port-v2defects (interrogate round 13 + the coordinator's DESIGN PIVOT):
+  // the vision tail closes by DENIAL, not enumeration — the carrier space
+  // is unbounded, so the walk denies fail-closed when it cannot traverse
+  // and our token hides fragmented/marked/in-code. The pivot's own rows:
+  // interpreter name variants + benign flags (gawk/mawk/python3.11/-u),
+  // awk -v value flags, every invocation API (subprocess/execSync/execvp —
+  // code-context opacity, not API enumeration), value/long flags before
+  // -c (-o pipefail/--noprofile/-ce), 19+ env-assignment stacks, heredoc
+  // heads with operand redirections (< in bash), multiple system() calls,
+  // and the doctrine's ACCEPTED OVER-DENIES (pinned as deliberate):
+  // interpreter code MENTIONING hcloud in any string (print-vs-execute
+  // requires parsing the code — the exact vision the pivot retires) and
+  // perl -c (syntax-check) still denying when the token rides -e.
+  ['python3 -u -c \'import os; os.system("hcloud ECS DeleteServers")\'', 'deny'],
+  ['gawk \'BEGIN{system("hcloud ECS DeleteServers")}\'', 'deny'],
+  ['python3.11 -c \'import os; os.system("hcloud ECS DeleteServers")\'', 'deny'],
+  ['awk -v sep=, \'BEGIN{system("hcloud ECS DeleteServers")}\'', 'deny'],
+  ['python3 -c \'import subprocess; subprocess.run("hcloud ECS DeleteServers", shell=True)\'', 'deny'],
+  ['node -e \'require("child_process").execSync("hcloud ECS DeleteServers")\'', 'deny'],
+  ['python3 -c \'os.execvp("hcloud", ["hcloud","ECS","DeleteServers"])\'', 'deny'],
+  ["bash -o pipefail -c 'hcloud ECS DeleteServers'", 'deny'],
+  ["bash --noprofile -c 'hcloud ECS DeleteServers'", 'deny'],
+  ["bash -ce 'hcloud ECS DeleteServers'", 'deny'],
+  [
+    'X0=1 X1=1 X2=1 X3=1 X4=1 X5=1 X6=1 X7=1 X8=1 X9=1 X10=1 X11=1 X12=1 X13=1 X14=1 X15=1 X16=1 X17=1 X18=1 hcloud ECS DeleteServers',
+    'deny',
+  ],
+  ['< in bash <<EOF\nhcloud ECS DeleteServers\nEOF', 'deny'],
+  ['2>/dev/null bash <<EOF\nhcloud ECS DeleteServers\nEOF', 'deny'],
+  ['perl -e \'system("echo hi"); system("hcloud ECS DeleteServers")\'', 'deny'],
+  ['perl -c -e \'system("hcloud ECS DeleteServers")\'', 'deny'],
+  ['sudo gawk \'BEGIN{system("hcloud ECS DeleteServers")}\'', 'deny'],
+  ['bash -c \'echo "step1; hcloud ECS DeleteServers"\'', 'allow'],
+  ['bash -c \'hcloud ECS ListServers --note="x; hcloud ECS DeleteServers"\'', 'allow'],
+  ['echo -exec hcloud ECS DeleteServers', 'allow'],
+  ['python3 -c \'print("docs about hcloud")\'', 'deny'],
   // The astral row: 200k valid surrogate pairs = 800 KB bytes / 400,000
   // UTF-16 units / 200,000 code points — over the byte cap on both twins,
   // over the OLD TS unit cap (400,002 > 262,144) but under the OLD py
@@ -980,3 +1016,32 @@ const GLUED_TOKEN_CORPUS: string[] = [
   '"hcl"oud ECS Delete',
   '"hcl"oud　ECS Delete',
 ];
+
+// The deep-nest `'\''`-idiom rows (interrogate round 13's AC-W2 gap: the
+// battery comment claimed them but no row existed): the walk's extraction
+// succeeds level by level but the mangled script never yields a leading
+// bin — the deny-opaque gate's fragmented-token signal is the closure (the
+// round-12 script-shadow pass it replaces denied benign prose instead).
+test('deep-nest quote-idiom mangled writes deny via the opaque gate (interrogate round 13)', () => {
+  const Q = String.fromCharCode(39);
+  const DQ = String.fromCharCode(34);
+  const BS = String.fromCharCode(92);
+  const nest = (depth: number): string => {
+    const esc = (s: string): string => s.split(Q).join(Q + BS + Q + Q);
+    let script = `${DQ}hcl${DQ}oud ECS Delete`;
+    for (let i = 0; i < depth; i++) script = `bash -c ${Q}${esc(script)}${Q}`;
+    return script;
+  };
+  for (const depth of [5, 8, 9, 10]) {
+    assert.equal(classifyTextCommand(nest(depth)).decision, 'deny', `nest depth ${depth}`);
+    const py = spawnSync('python3', [hookPath], {
+      input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: nest(depth) } }),
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+    const unavailable = (py.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT';
+    if (unavailable) continue;
+    assert.equal(py.status, 0, `nest ${depth} py crashed: ${py.stderr.slice(0, 200)}`);
+    assert.equal(py.stdout.trim().length > 0 ? 'deny' : 'allow', 'deny', `nest depth ${depth} py`);
+  }
+});
