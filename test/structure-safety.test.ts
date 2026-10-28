@@ -230,7 +230,7 @@ test('the py hook degrades coherently: derived vocabularies, isolated fields, fa
   assert.match(pyHook, /seg_saw = \[False\]/);
   assert.match(pyHook, /saw\[0\] = saw\[0\] or seg_saw\[0\]/);
   assert.match(pyHook, /"busybox"/);
-  assert.ok(pyHook.includes('or re.search(r"<<<?", segment)'), "the stdin-heredoc code-context arm");
+  assert.ok(pyHook.includes('or re.search(r"<<<?", segment)'), 'the stdin-heredoc code-context arm');
   assert.ok(pyHook.includes('b.lower() in segment.lower()'), 'contiguous presence (the ${X:-hcloud} fix)');
   assert.doesNotMatch(pyHook, /nested_shadow = strip_shell_quotes\(nested\)/);
   assert.match(classifyText, /function opaqueCarrierDenied\(/);

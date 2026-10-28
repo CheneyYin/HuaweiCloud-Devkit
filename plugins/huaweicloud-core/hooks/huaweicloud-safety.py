@@ -1479,12 +1479,32 @@ def _heredoc_script_text(segment):
     m = re.search(r"<<<?", segment)
     if m is None:
         return None
-    head = segment[: m.start()]
-    if not re.match(
-        r"^\s*(?:\s*(?:\d*[<>]&?\d*|\S*[<>]\S*|[<>]\s+\S+)\s+)*(?:\S*/)?(?:bash|sh|zsh|dash)(?:\.exe)?\s",
-        head,
-        re.I,
-    ):
+    # Round 15 C-A: prefixes/env assignments/redirections may sit before
+    # the shell head (`env bash <<EOF`, `X=1 bash <<EOF`, `timeout 5 bash
+    # <<EOF`, `< in bash <<EOF`) — strip them with the walk's own probe
+    # grammar (prefix + value-flag aware; a greedy regex ate the shell word
+    # as a prefix argument). The head's first non-strippable word must be
+    # the shell bin; an argument-position shell word (`echo sh <<EOF`)
+    # does not make the body a script.
+    head_probe = split_tokens(segment[: m.start()])
+    for _ in range(18):
+        if not head_probe:
+            break
+        head_tok = str(head_probe[0])
+        if is_redirection_token(head_tok):
+            # A BARE operator carries its operand as the NEXT token.
+            head_probe = head_probe[2:] if re.match(r"^[<>]&?$", head_tok) else head_probe[1:]
+            continue
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", head_tok):
+            head_probe = head_probe[1:]
+            continue
+        head_lower = head_tok.lower()
+        head_base = basename_of(head_lower)
+        if head_lower in COMMAND_PREFIXES or head_base in COMMAND_PREFIXES:
+            head_probe = _skip_prefix_args(head_base or head_lower, head_probe[1:])
+            continue
+        break
+    if not head_probe or not re.match(r"^(bash|sh|zsh|dash)(\.exe)?$", basename_of(str(head_probe[0]).lower())):
         return None
     rest = segment[m.start():]
     hs = re.match(r"^<<<\s*(.+)$", rest)
@@ -1521,7 +1541,10 @@ def _interpreter_head_of(head):
     version-suffix collapse — python3.11 -> python, gawk/mawk/nawk -> awk,
     perl5 -> perl, nodejs -> node, raku -> ruby. Mirrored by
     interpreterHeadOf in classify-text.ts."""
-    h = re.sub(r"[\d.]+$", "", str(head).lower())
+    # Round 15 C-B: closed-quote mangling (`pyth'on3'`) — strip quotes,
+    # backslashes, and dollars before matching (the round-9 word-gluing
+    # doctrine).
+    h = re.sub(r"[\d.]+$", "", re.sub(r"['\"\\$]", "", str(head).lower()))
     if re.match(r"^(python|pypy)$", h):
         return "python"
     if h == "perl":
@@ -1932,12 +1955,30 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
             # delimiter line, is the script.
             dangling = re.search(r"<<-?\s*(['\"]?)([A-Za-z0-9_]+)\1?[^\n]*$", segment)
             if dangling is not None and s + 1 < len(segments):
-                dangling_head = segment[: dangling.start()]
-                if re.match(
-                    r"^\s*(?:\s*(?:\d*[<>]&?\d*|\S*[<>]\S*|[<>]\s+\S+)\s+)*(?:\S*/)?(?:bash|sh|zsh|dash)(?:\.exe)?\s",
-                    dangling_head,
-                    re.I,
+                # Round 15 C-A: the probe grammar (prefix/env/redirection
+                # aware — a greedy regex ate the shell word).
+                dangling_probe = split_tokens(segment[: dangling.start()])
+                for _ in range(18):
+                    if not dangling_probe:
+                        break
+                    dtok = str(dangling_probe[0])
+                    if is_redirection_token(dtok):
+                        dangling_probe = dangling_probe[2:] if re.match(r"^[<>]&?$", dtok) else dangling_probe[1:]
+                        continue
+                    if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", dtok):
+                        dangling_probe = dangling_probe[1:]
+                        continue
+                    dlower = dtok.lower()
+                    dbase = basename_of(dlower)
+                    if dlower in COMMAND_PREFIXES or dbase in COMMAND_PREFIXES:
+                        dangling_probe = _skip_prefix_args(dbase or dlower, dangling_probe[1:])
+                        continue
+                    break
+                if not dangling_probe or not re.match(
+                    r"^(bash|sh|zsh|dash)(\.exe)?$", basename_of(str(dangling_probe[0]).lower())
                 ):
+                    continue
+                if True:
                     delim = dangling.group(2)
                     nxt = segments[s + 1]
                     nl = nxt.find("\n")
@@ -2215,6 +2256,17 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
                 reason = _classify_leading(["hcloud"] + own + [str(word)], own + [str(word)], routed)
                 if reason:
                     return reason
+        # Round 15 C-X: an expansion-built OPERATION/SERVICE/SUBCOMMAND
+        # slot (`hcloud ECS ${X:-DeleteServers}`) — the bin IS seen, but the
+        # classification is unprovable (the write vocabulary cannot match
+        # `:-Delete`). The slot rule: the first two non-flag argv entries
+        # carrying `${` deny opaque. Flag-position expansions
+        # (`--cli-region=${REGION}`) stay allowed.
+        _slot_argv = [t for t in stripped[1:] if not str(t).startswith("-")]
+        if any(re.search(r"\$\{", str(t)) for t in _slot_argv[:2]):
+            _opaque = _opaque_carrier_denied(segment, tokens, segment)
+            if _opaque:
+                return _opaque
         reason = _classify_leading(stripped, argv, routed)
         if reason:
             return reason
@@ -2328,6 +2380,7 @@ def evaluate(tool_name, tool_input):
     # payload exists).
     if text_bytes > 262144 and (
         OBFUSCATION_RE.search(text_cont)
+        or re.search(r"\$\{", text_cont)
         or HCLOUD_ROUTE_RE.search(unquoted)
         or HCLOUD_ROUTE_RE.search(text)
     ):

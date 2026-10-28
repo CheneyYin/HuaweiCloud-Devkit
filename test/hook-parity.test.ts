@@ -351,6 +351,34 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
   ['nohup hcloud ECS ListServers', 'allow'],
   ['timeout 30 hcloud ECS ListServers --cli-region=cn-north-4', 'allow'],
   ['hcloud ECS ListServers; echo done && git commit -m "hcloud cleanup notes"', 'allow'],
+  // port-v2defects (interrogate round 15, the clean-round fixes): the
+  // expansion-built OPERATION/SERVICE/SUBCOMMAND slot under a seen bin
+  // (the slot rule — flag-position ${ stays allowed); prefix/env/busybox
+  // before the heredoc shell head (the probe grammar); closed-quote-
+  // mangled interpreter heads (the word-gluing doctrine); and the over-cap
+  // ${ boundary parity.
+  ['hcloud ECS ${X:-DeleteServers}', 'deny'],
+  ['sh -c "hcloud ECS ${X:-DeleteServers}"', 'deny'],
+  ['hcloud ECS ListServers; hcloud ECS ${X:-DeleteServers}', 'deny'],
+  ['hcloud ${X:-OBS} rm obs://b -f', 'deny'],
+  ['hcloud OBS ${X:-rm} obs://b -f', 'deny'],
+  ['hcloud FunctionGraph ${X:-InvokeFunction}', 'deny'],
+  ['hcloud configure ${X:-set}', 'deny'],
+  ['hcloud ECS ${X:-RebootServers --server.id=x}', 'deny'],
+  ['hcloud ECS ListServers --cli-region=${REGION}', 'allow'],
+  ['${X:-ECS} DeleteServers', 'allow'],
+  ['env bash <<EOF\nhcloud ECS DeleteServers\nEOF', 'deny'],
+  ['X=1 bash <<EOF\nhcloud ECS DeleteServers\nEOF', 'deny'],
+  ['timeout 5 bash <<EOF\nhcloud ECS DeleteServers\nEOF', 'deny'],
+  ['busybox sh <<EOF\nhcloud ECS DeleteServers\nEOF', 'deny'],
+  ['sudo bash <<EOF\nhcloud ECS DeleteServers\nEOF', 'deny'],
+  ['< in bash <<EOF\nhcloud ECS DeleteServers\nEOF', 'deny'],
+  ["pyth'on3' -c 'import os; os.system(\"hcloud ECS DeleteServers\")'", 'deny'],
+  ["per'l' -e 'system(\"hcloud ECS DeleteServers\")'", 'deny'],
+  ["g'awk' 'BEGIN{system(\"hcloud ECS DeleteServers\")}'", 'deny'],
+  ['no\'de\' -e \'require("child_process").execSync("hcloud ECS DeleteServers")\'', 'deny'],
+  ['py"thon3" -c \'import os; os.system("hcloud ECS DeleteServers")\'', 'deny'],
+  ['#' + 'x'.repeat(262200) + '\n${X:-hcloud} ECS DeleteServers', 'deny'],
   // The astral row: 200k valid surrogate pairs = 800 KB bytes / 400,000
   // UTF-16 units / 200,000 code points — over the byte cap on both twins,
   // over the OLD TS unit cap (400,002 > 262,144) but under the OLD py

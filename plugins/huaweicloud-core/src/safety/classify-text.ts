@@ -183,8 +183,12 @@ function interpreterSystemCommands(code: string): string | null {
 // version-suffix collapse — python3.11 → python, gawk/mawk/nawk → awk,
 // perl5 → perl, nodejs → node, raku → ruby.
 function interpreterHeadOf(head: string): 'python' | 'perl' | 'ruby' | 'node' | 'awk' | null {
+  // Round 15 C-B: closed-quote mangling (`pyth'on3'`) — strip quotes,
+  // backslashes, and dollars before matching (the round-9 word-gluing
+  // doctrine; `pyth'on3'` reconstructs to python3).
   const h = String(head)
     .toLowerCase()
+    .replace(/['"\\$]/g, '')
     .replace(/[\d.]+$/, '');
   if (/^(python|pypy)$/.test(h)) return 'python';
   if (/^perl$/.test(h)) return 'perl';
@@ -286,16 +290,43 @@ function opaqueCarrierDenied(segment: string, plainTokens: string[], wholeText: 
 // <<EOF; echo hi`); the delimiter may be double-quoted; the herestring
 // match is position-0 (a `<<<` line INSIDE a body is body text, not the
 // marker — the /m port bug).
+// Round 15 C-A: the shell-head check via the walk's own probe grammar —
+// prefixes (value-flag aware), env assignments, and redirections (a BARE
+// operator carries its operand as the next token) may all sit before the
+// shell bin. The head's first non-strippable word must be the shell bin;
+// an argument-position shell word (`echo sh <<EOF`) does not make the
+// body a script.
+function shellHeadBefore(segment: string, endIndex: number): boolean {
+  let probe = splitSimpleCommand(segment.slice(0, endIndex)).map((t) => String(t));
+  for (let d = 0; d < 18 && probe.length > 0; d++) {
+    const tok = probe[0]!;
+    if (isRedirectionToken(tok)) {
+      probe = /^[<>]&?$/.test(tok) ? probe.slice(2) : probe.slice(1);
+      continue;
+    }
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tok)) {
+      probe = probe.slice(1);
+      continue;
+    }
+    const lower = tok.toLowerCase();
+    const base = basenameOf(lower);
+    if (COMMAND_POSITION_PREFIXES.has(lower) || COMMAND_POSITION_PREFIXES.has(base)) {
+      probe = skipPrefixArguments(base, probe.slice(1));
+      continue;
+    }
+    break;
+  }
+  const headWord = probe.length > 0 ? basenameOf(String(probe[0]).toLowerCase()) : '';
+  return /^(bash|sh|zsh|dash)(\.exe)?$/.test(headWord);
+}
+
 function heredocScriptText(segment: string): string | null {
   const markerIndex = segment.search(/<<<?-?/);
   if (markerIndex < 0) return null;
-  const head = segment.slice(0, markerIndex);
-  // Round 13: redirections may carry OPERANDS before the bin (`< in bash
-  // <<EOF`, `2>/dev/null bash <<EOF` — POSIX grammar allows redirections
-  // before the command name); operator-only forms (`2>&1 bash …`) too.
-  if (!/^\s*(?:\s*(?:\d*[<>]&?\d*|\S*[<>]\S*|[<>]\s+\S+)\s+)*(?:\S*\/)?(?:bash|sh|zsh|dash)(?:\.exe)?\s/i.test(head)) {
-    return null;
-  }
+  // Round 15 C-A: the shell-head probe (prefix/env/redirection aware —
+  // `env bash <<EOF`, `X=1 bash <<EOF`, `timeout 5 bash <<EOF`,
+  // `< in bash <<EOF`).
+  if (!shellHeadBefore(segment, markerIndex)) return null;
   const rest = segment.slice(markerIndex);
   const herestring = /^<<<\s*(.+)$/.exec(rest);
   if (herestring) {
@@ -386,12 +417,10 @@ function gluedWriteDenied(
     // newline, up to the delimiter line, is the script.
     const dangling = /<<-?\s*(['"]?)([A-Za-z0-9_]+)\1?[^\n]*$/.exec(segment);
     if (dangling && segIndex + 1 < segments.length) {
-      const danglingHead = segment.slice(0, dangling.index ?? 0);
-      if (
-        /^\s*(?:\s*(?:\d*[<>]&?\d*|\S*[<>]\S*|[<>]\s+\S+)\s+)*(?:\S*\/)?(?:bash|sh|zsh|dash)(?:\.exe)?\s/i.test(
-          danglingHead,
-        )
-      ) {
+      // Round 15 C-A: the probe grammar (prefix/env/redirection aware —
+      // a greedy regex ate the shell word as a prefix argument).
+      const danglingHeadOk = shellHeadBefore(segment, dangling.index ?? 0);
+      if (danglingHeadOk) {
         const delim = dangling[2]!;
         const next = segments[segIndex + 1]!;
         const nl = next.indexOf('\n');
@@ -443,6 +472,21 @@ function gluedWriteDenied(
     if (gluedLeading) {
       segSaw.value = true;
       saw.value = true;
+    }
+    // Round 15 C-X: an expansion-built OPERATION/SERVICE/SUBCOMMAND slot
+    // (`hcloud ECS ${X:-DeleteServers}`) — the bin IS seen, so the gate is
+    // suppressed, but the classification itself is unprovable (the write
+    // vocabulary cannot match `:-Delete`). The slot rule: the first two
+    // non-flag argv entries carrying `${` deny opaque. Flag-position
+    // expansions (`--cli-region=${REGION}`) stay allowed — the slot is the
+    // rule, not the flag.
+    const expansionInSlot = (streamTokens: string[]): boolean => {
+      const argv = streamTokens.slice(1).filter((t) => !String(t).startsWith('-'));
+      return argv.slice(0, 2).some((t) => /\$\{/.test(String(t)));
+    };
+    if ((plainLeading && expansionInSlot(stream)) || (gluedLeading && expansionInSlot(gluedStream))) {
+      const opaque = opaqueCarrierDenied(segment, plainTokens, segment);
+      if (opaque) return opaque;
     }
     if (gluedStream.length > 0 && isHcloudToken(String(gluedStream[0]))) {
       const gluedArgv = gluedStream.slice(1);
@@ -571,7 +615,7 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
     if (
       /(^|[^a-z0-9.-])hcloud(\.exe)?[\s)\]}'"<]/i.test(shadowText) ||
       /(^|[^a-z0-9.-])hcloud(\.exe)?[\s)\]}'"<]/i.test(text) ||
-      /\$['"]|\$\(|`/.test(contDropped)
+      /\$['"]|\$\(|\$\{|`/.test(contDropped)
     ) {
       return {
         decision: 'deny',
@@ -860,8 +904,10 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
   // default-expanded bin never routed and the opaque gate never ran). The
   // walk's own signals are the scope: no token → every pass returns null;
   // prose pins (contiguous token, no marker, no code context) pass the
-  // gate untouched.
-  {
+  // gate untouched. Over-cap payloads skip it (round 15 W2: the unrouted
+  // walk measured 5.3s at 9MB — past the 5s hook timeout, the verdict
+  // swallows; py skips the walk for over-cap unrouted already).
+  if (textBytes <= 262_144) {
     const glued = gluedWriteDenied(text, options, narrowRouted, 0);
     if (glued?.decision === 'deny') return glued;
   }
