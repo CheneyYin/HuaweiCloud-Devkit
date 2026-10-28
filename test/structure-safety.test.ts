@@ -203,7 +203,7 @@ test('the py hook degrades coherently: derived vocabularies, isolated fields, fa
   assert.match(pyHook, /def _heredoc_script_text\(segment\):/);
   assert.match(pyHook, /glued_scope = \(/);
   assert.match(pyHook, /if ch == "&" and i > 0 and text\[i - 1\] in "><":/);
-  assert.match(pyHook, /if first == "watch" and len\(tokens\) > 1:/);
+  assert.ok(pyHook.includes('== "watch" and len(tokens) > 1:'), 'the watch head strips quote-mangling');
   // The py twin: the per-segment glued fallback inside the walk.
   assert.match(pyHook, /glued_stripped = hcloud_leading_segment\(split_tokens_glued\(segment\)\)/);
   // Round 12: the flags-before--c scan (the skip class excludes c —

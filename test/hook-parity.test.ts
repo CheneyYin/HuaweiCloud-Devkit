@@ -398,6 +398,26 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
   ['cat <<EOF | bash\nhcloud ECS DeleteServers\nEOF', 'deny'],
   ['"hcl"oud ${X:-ECS} ${X:-DeleteServers}', 'deny'],
   ["echo 'hcloud ECS ListServers' | bash", 'allow'],
+  // port-v2defects (interrogate round 17, the clean-round fixes): the
+  // mangled shell -c flag (TS's flag-skip now normalizes), the mangled
+  // xargs/watch heads, and the pipe-feeder completions — the walk-back
+  // through pass-through middles, per-word feeder classification
+  // (printf's format arg), interpreter consumers (the code-context deny),
+  // and the glued xargs arms using the walked-back feeder.
+  ["bash -'o' pipefail -c 'hcloud ECS DeleteServers'", 'deny'],
+  ["bash -'c' 'echo; hcloud ECS DeleteServers' && echo done", 'deny'],
+  ['echo DeleteServers | x\'args\' "hcl"oud ECS', 'deny'],
+  ["echo DeleteServers | x'args' hcloud ECS", 'deny'],
+  ["wat'ch' -n1 'hcloud ECS DeleteServers'", 'deny'],
+  ["echo 'hcloud ECS DeleteServers' | cat | bash", 'deny'],
+  ["echo 'hcloud ECS DeleteServers' | tee /dev/null | bash", 'deny'],
+  ["echo 'hcloud ECS DeleteServers' | head -1 | bash", 'deny'],
+  ['echo \'import os; os.system("hcloud ECS DeleteServers")\' | python3', 'deny'],
+  ['echo \'system("hcloud ECS DeleteServers")\' | perl', 'deny'],
+  ["printf '%s\\n' 'hcloud ECS DeleteServers' | bash", 'deny'],
+  ['echo DeleteServers | cat | xargs "hcl"oud ECS', 'deny'],
+  ['ls | sh', 'allow'],
+  ["echo 'docs' | bash", 'allow'],
   // The astral row: 200k valid surrogate pairs = 800 KB bytes / 400,000
   // UTF-16 units / 200,000 code points — over the byte cap on both twins,
   // over the OLD TS unit cap (400,002 > 262,144) but under the OLD py

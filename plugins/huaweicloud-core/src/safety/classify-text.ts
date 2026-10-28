@@ -49,7 +49,10 @@ function scriptTextOf(tokens: string[], depth = 0): string | null {
     // require a c-CONTAINING cluster (c anywhere: -ce, -cxe).
     let i = 1;
     while (i < tokens.length) {
-      const tok = String(tokens[i]);
+      // Round 17 C1: the flag-skip compares the NORMALIZED token (the
+      // round-16 normalizer reached the interpreter branch but not this
+      // one — `bash -'o' pipefail -c` executed).
+      const tok = normalizeFlagToken(tokens[i] ?? '');
       if (/^--[a-z-]+$/i.test(tok)) {
         i++;
         continue;
@@ -66,7 +69,7 @@ function scriptTextOf(tokens: string[], depth = 0): string | null {
       }
       break;
     }
-    if (/^-[a-z]*c[a-z]*$/i.test(String(tokens[i] ?? '')) && i + 1 < tokens.length) {
+    if (/^-[a-z]*c[a-z]*$/i.test(normalizeFlagToken(tokens[i] ?? '')) && i + 1 < tokens.length) {
       const script = String(tokens[i + 1])
         .replace(/\\"/g, '"')
         .replace(/\\\\/g, '\\');
@@ -95,7 +98,8 @@ function scriptTextOf(tokens: string[], depth = 0): string | null {
   // watch runs its command arguments as an sh -c SCRIPT (the join of the
   // words after its own flags — interrogate round 11: `watch -n1 '"hcl"oud
   // ECS Delete'` executes the glued bin through that join).
-  if (first === 'watch' && tokens.length > 1) {
+  // Round 17 C3: the watch head strips quote-mangling (`wat'ch'`).
+  if (first.replace(/['"\\$]/g, '') === 'watch' && tokens.length > 1) {
     return skipPrefixArguments('watch', tokens.slice(1))
       .map((token) => String(token))
       .join(' ');
@@ -482,31 +486,100 @@ function gluedWriteDenied(
       segSaw.value = true;
       saw.value = true;
     }
-    // Round 16 C3: a pipe-fed SHELL reads its stdin as a SCRIPT —
-    // `echo 'hcloud …' | bash` executes the piped line. The xargs-feeder
-    // doctrine: the previous segment's tokens reaching a listed shell
-    // consumer are the script. (bash/sh are listed carriers; the encoded
-    // pipe form is already denied by the risk catalog.)
-    if (
-      !plainLeading &&
-      prevTokens.length > 0 &&
-      stream.length > 0 &&
-      /^(bash|sh|zsh|dash)(\.exe)?$/.test(basenameOf(String(stream[0]).toLowerCase()).replace(/['"\\$]/g, '')) &&
-      script === null &&
-      heredoc === null
-    ) {
-      // The feeder is the previous segment's ARGUMENTS (the command word —
-      // echo/printf/cat — produces them): skip it, mirroring the xargs
-      // feeder's args-after-the-command semantics. A heredoc-to-pipe
-      // composition (`cat <<EOF | bash\n<body>\nEOF`) lands the BODY
-      // inline in the shell's own segment (the marker line split at the
-      // pipe) — the post-newline text is the script too.
-      const nested = gluedWriteDenied(prevTokens.slice(1).join(' '), options, narrowRouted, depth + 1, segSaw);
-      if (nested) return nested;
-      const inlineNl = segment.indexOf('\n');
-      if (inlineNl >= 0) {
-        const inlineNested = gluedWriteDenied(segment.slice(inlineNl + 1), options, narrowRouted, depth + 1, segSaw);
-        if (inlineNested) return inlineNested;
+    // The walk-back (round 17 C4/C7): the feeder args from the previous
+    // segment, walking back through pass-through middles
+    // (cat/sort/tee/head/tail/uniq/wc/tr — their args are redirects or
+    // limits, the stdin content still flows). Shared by the pipe-consumer
+    // checks and the glued xargs arms.
+    const pipeWalkBackFeeder = (): string[] => {
+      const passThrough = new Set(['cat', 'sort', 'tee', 'head', 'tail', 'uniq', 'wc', 'tr']);
+      for (let back = segIndex - 1; back >= 0; back--) {
+        const backTokens = splitSimpleCommand(segments[back]!).map((t) => String(t));
+        const head = backTokens[0]?.toLowerCase() ?? '';
+        if (passThrough.has(head)) continue;
+        return backTokens.slice(1);
+      }
+      return [];
+    };
+    // Round 16 C3 + round 17 C4/C5/C6: a pipe-fed SHELL or INTERPRETER
+    // reads its stdin as a SCRIPT/CODE — `echo 'hcloud …' | bash` executes
+    // the piped line. The xargs-feeder doctrine, completed: (a) the
+    // WALK-BACK through pass-through middles (`… | cat | bash` — the same
+    // walk-back the plain xargs path owns); (b) PER-WORD feeder
+    // classification (printf's format arg precedes the data — any
+    // write-shaped word denies, the xargs per-word doctrine); (c)
+    // INTERPRETER consumers get the code-context deny when the walked-back
+    // feeder carries our token. A heredoc-to-pipe composition lands the
+    // body inline in the consumer's own segment (post-newline text too).
+    {
+      const consumerHead = stream.length > 0 ? basenameOf(String(stream[0]).toLowerCase()).replace(/['"\\$]/g, '') : '';
+      const isPipeShell =
+        !plainLeading &&
+        prevTokens.length > 0 &&
+        /^(bash|sh|zsh|dash)(\.exe)?$/.test(consumerHead) &&
+        script === null &&
+        heredoc === null &&
+        !stream.slice(1).some((t) => /^-[a-z]*c$/i.test(normalizeFlagToken(t)));
+      const consumerInterp = interpreterHeadOf(consumerHead);
+      const isPipeInterpreter =
+        !plainLeading && prevTokens.length > 0 && consumerInterp !== null && script === null && heredoc === null;
+      if (isPipeShell || isPipeInterpreter) {
+        const feederTokens = pipeWalkBackFeeder();
+        if (isPipeInterpreter) {
+          // The interpreter consumer: the feeder args are CODE — the
+          // code-context doctrine denies when our token rides them (the
+          // deny is direct: the opaque gate is segment-scoped and the
+          // token lives in the FEEDER, not the consumer segment).
+          const feederText = feederTokens.join(' ');
+          const pipeBins = [
+            'hcloud',
+            'hcloud.exe',
+            'huaweicloud-devkit',
+            'setup-cli.js',
+            'setup-cli.mjs',
+            'setup-cli.ts',
+            'setup-cli.cjs',
+            'setup.cjs',
+          ];
+          if (pipeBins.some((bin) => feederText.toLowerCase().includes(bin))) {
+            return {
+              decision: 'deny',
+              risk: 'invalid',
+              reason:
+                'an opaque command carrier (script/interpreter/exec context) mentions Huawei Cloud commands but cannot be safely classified. Write the command in plain form, or use the sanctioned MCP paths (huaweicloud_run_readonly_command for reads / huaweicloud_run_approved_command for writes).',
+            };
+          }
+        } else {
+          // The shell consumer: per-word fail-closed (printf's format arg
+          // precedes the data), plus the whole-args walk and the inline
+          // body.
+          const feederWords = feederTokens
+            .flatMap((t) => t.split(/\s+/))
+            .filter(Boolean)
+            .map((w) => w.replace(/^['"]|['"]$/g, ''));
+          for (const word of feederWords) {
+            const verdict = classifyHcloudArgs(['hcloud', word], {
+              ...options,
+              rawCommand: text,
+              _narrowRouted: narrowRouted,
+              _segmentDepth: 1,
+            });
+            if (verdict.decision === 'deny') return verdict;
+          }
+          const nested = gluedWriteDenied(feederTokens.join(' '), options, narrowRouted, depth + 1, segSaw);
+          if (nested) return nested;
+          const inlineNl = segment.indexOf('\n');
+          if (inlineNl >= 0) {
+            const inlineNested = gluedWriteDenied(
+              segment.slice(inlineNl + 1),
+              options,
+              narrowRouted,
+              depth + 1,
+              segSaw,
+            );
+            if (inlineNested) return inlineNested;
+          }
+        }
       }
     }
     const gluedTokens = splitSimpleCommandGlued(segment);
@@ -533,8 +606,13 @@ function gluedWriteDenied(
     }
     if (gluedStream.length > 0 && isHcloudToken(String(gluedStream[0]))) {
       const gluedArgv = gluedStream.slice(1);
-      const segmentHasXargs = plainTokens.some((token) => {
-        const t = String(token).toLowerCase();
+      // Round 17 C2: the xargs head comparison strips quote-mangling
+      // (`x'args'`) — the glued re-join reconstructs it but this key read
+      // the plain stream.
+      const segmentHasXargs = [...plainTokens, ...gluedTokens].some((token) => {
+        const t = String(token)
+          .toLowerCase()
+          .replace(/['"\\$]/g, '');
         return t === 'xargs' || basenameOf(t) === 'xargs';
       });
       if (gluedArgv.length === 0 && plainLeading) {
@@ -543,10 +621,11 @@ function gluedWriteDenied(
         // re-classification would deny the pinned read-feeders.
       } else if (gluedArgv.length === 0 && !plainLeading && prevTokens.length > 0 && segmentHasXargs) {
         // A glued bin the standard machinery never saw, fed by the pipe:
-        // the previous segment's words are the argv (any write-shaped
-        // feeder word denies — the xargs doctrine).
-        const feeder = prevTokens
-          .slice(1)
+        // the WALKED-BACK segment's words are the argv (round 17 C7: the
+        // immediately-previous segment may be a bare pass-through —
+        // `… | cat | xargs "hcl"oud …` — whose args are empty; the
+        // walk-back finds the real feeder).
+        const feeder = pipeWalkBackFeeder()
           .flatMap((token) => String(token).split(/\s+/))
           .filter(Boolean)
           .map((word) => word.replace(/^['"]|['"]$/g, ''));
@@ -562,10 +641,9 @@ function gluedWriteDenied(
       } else if (!plainLeading && segmentHasXargs && prevTokens.length > 0) {
         // A glued xargs bin with its OWN argv (interrogate round 12:
         // `echo DeleteServers | xargs "hcl"oud ECS` — xargs appends the
-        // stdin AFTER the own args): merge the feeder into the glued argv,
-        // the standard machinery's xargs semantics.
-        const feeder = prevTokens
-          .slice(1)
+        // stdin AFTER the own args): merge the WALKED-BACK feeder (round
+        // 17 C7) into the glued argv.
+        const feeder = pipeWalkBackFeeder()
           .flatMap((token) => String(token).split(/\s+/))
           .filter(Boolean)
           .map((word) => word.replace(/^['"]|['"]$/g, ''));

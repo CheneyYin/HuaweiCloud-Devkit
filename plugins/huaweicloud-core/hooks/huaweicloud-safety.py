@@ -1737,7 +1737,8 @@ def _script_of(tokens):
     # watch runs its command arguments as an sh -c SCRIPT (the join of the
     # words after its own flags — interrogate round 11: `watch -n1
     # '"hcl"oud ECS Delete'` executes the glued bin through that join).
-    if first == "watch" and len(tokens) > 1:
+    # Round 17 C3: the watch head strips quote-mangling (`wat'ch'`).
+    if re.sub(r"['\"\\$]", "", first) == "watch" and len(tokens) > 1:
         rest = _skip_prefix_args("watch", tokens[1:])
         return " ".join(str(t) for t in rest)
     # Interpreter carriers (interrogate rounds 12-13): the head is
@@ -2039,35 +2040,64 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
                                 if reason:
                                     return reason
                                 carrier_traversed = True
-        # Round 16 C3: a pipe-fed SHELL reads its stdin as a SCRIPT —
-        # `echo 'hcloud …' | bash` executes the piped line. The xargs-feeder
-        # doctrine: the previous segment's ARGS reaching a listed shell
-        # consumer are the script; a heredoc-to-pipe composition lands the
-        # body inline in the shell's own segment (post-newline text too).
+        # Round 16 C3 + round 17 C4/C5/C6: a pipe-fed SHELL or INTERPRETER
+        # reads its stdin as a SCRIPT/CODE — the xargs-feeder doctrine,
+        # completed: the WALK-BACK through pass-through middles, PER-WORD
+        # feeder classification (printf's format arg precedes the data),
+        # and INTERPRETER consumers (the code-context deny when the
+        # walked-back feeder carries our token).
+        _pipe_pass_through = {"cat", "sort", "tee", "head", "tail", "uniq", "wc", "tr"}
+
+        def _pipe_walk_back_feeder():
+            k = s - 1
+            while k >= 0:
+                seg_toks = split_tokens(segments[k])
+                head_tok = str(seg_toks[0] or "").lower() if seg_toks else ""
+                if head_tok in _pipe_pass_through:
+                    k -= 1
+                    continue
+                return [str(t) for t in seg_toks[1:]]
+            return []
+
         _shell_stream, _ = _leading_segment_probe(tokens)
-        _shell_head_ok = bool(
-            _shell_stream
-            and re.match(
-                r"^(bash|sh|zsh|dash)(\.exe)?$",
-                re.sub(r"['\"\\$]", "", basename_of(str(_shell_stream[0]).lower())),
-            )
+        _consumer_head = (
+            re.sub(r"['\"\\$]", "", basename_of(str(_shell_stream[0]).lower())) if _shell_stream else ""
         )
+        _shell_head_ok = bool(_shell_stream and re.match(r"^(bash|sh|zsh|dash)(\.exe)?$", _consumer_head))
+        _interp_head_ok = _interpreter_head_of(_consumer_head) if _consumer_head else None
         if (
-            _shell_head_ok
+            (_shell_head_ok or _interp_head_ok)
             and s > 0
             and not any(re.match(r"^-[a-z]*c$", _normalize_flag_token(t), re.I) for t in tokens[1:])
             and not re.search(r"<<<?", segment)
         ):
-            _feeder_args = split_tokens(segments[s - 1])[1:]
-            if _feeder_args:
-                reason = hcloud_write_blocked(" ".join(str(t) for t in _feeder_args), depth + 1, routed, None, seg_saw)
-                if reason:
-                    return reason
-            _inline_nl = segment.find("\n")
-            if _inline_nl >= 0:
-                reason = hcloud_write_blocked(segment[_inline_nl + 1:], depth + 1, routed, None, seg_saw)
-                if reason:
-                    return reason
+            _feeder_args = _pipe_walk_back_feeder()
+            if _interp_head_ok:
+                _feeder_text = " ".join(_feeder_args)
+                if any(b.lower() in _feeder_text.lower() for b in OPAQUE_BINS):
+                    return (
+                        "an opaque command carrier (script/interpreter/exec context) mentions Huawei Cloud "
+                        "commands but cannot be safely classified. Write the command in plain form, or use "
+                        "the sanctioned MCP paths (huaweicloud_run_readonly_command for reads / "
+                        "huaweicloud_run_approved_command for writes)."
+                    )
+            elif _shell_head_ok:
+                _feeder_words = [
+                    re.sub(r"^['\"]|['\"]$", "", w) for t in _feeder_args for w in str(t).split()
+                ]
+                for word in _feeder_words:
+                    _pv = hcloud_write_blocked("hcloud " + str(word), depth + 1, routed, None, seg_saw)
+                    if _pv:
+                        return _pv
+                if _feeder_args:
+                    reason = hcloud_write_blocked(" ".join(str(t) for t in _feeder_args), depth + 1, routed, None, seg_saw)
+                    if reason:
+                        return reason
+                _inline_nl = segment.find("\n")
+                if _inline_nl >= 0:
+                    reason = hcloud_write_blocked(segment[_inline_nl + 1:], depth + 1, routed, None, seg_saw)
+                    if reason:
+                        return reason
         stripped = hcloud_leading_segment(tokens)
         if stripped is None:
             # Glued-bin fallback, PER SEGMENT (interrogate round 10): bash
@@ -2095,9 +2125,12 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
                         _opaque = _opaque_carrier_denied(segment, tokens, segment)
                         if _opaque:
                             return _opaque
+                    # Round 17 C2: the xargs head comparison strips
+                    # quote-mangling (`x'args'`) on BOTH token streams.
                     segment_has_xargs = any(
-                        str(t).lower() == "xargs" or basename_of(str(t).lower()) == "xargs"
-                        for t in tokens
+                        re.sub(r"['\"\\$]", "", str(t).lower()) == "xargs"
+                        or basename_of(re.sub(r"['\"\\$]", "", str(t).lower())) == "xargs"
+                        for t in list(tokens) + split_tokens_glued(segment)
                     )
                     if (
                         not glued_argv
@@ -2110,7 +2143,7 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
                         # feeder word denies (the xargs doctrine).
                         feeder_words = [
                             re.sub(r"^['\"]|['\"]$", "", w)
-                            for t in split_tokens(segments[s - 1])[1:]
+                            for t in _pipe_walk_back_feeder()
                             for w in str(t).split()
                         ]
                         for word in feeder_words:
@@ -2129,7 +2162,7 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
                         # standard machinery's xargs semantics.
                         feeder_words = [
                             re.sub(r"^['\"]|['\"]$", "", w)
-                            for t in split_tokens(segments[s - 1])[1:]
+                            for t in _pipe_walk_back_feeder()
                             for w in str(t).split()
                         ]
                         reason = _classify_leading(glued_stripped, glued_argv + feeder_words, routed)
