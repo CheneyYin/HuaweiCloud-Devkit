@@ -158,7 +158,12 @@ function scriptTextOf(tokens: string[], depth = 0): string | null {
   if (secretExecChild) return scriptTextOf(secretExecChild, depth + 1);
   const sqcChild = unwrapSkillQualityCli(tokens);
   if (sqcChild) return scriptTextOf(sqcChild, depth + 1);
-  if (COMMAND_POSITION_PREFIXES.has(first) || COMMAND_POSITION_PREFIXES.has(base)) {
+  // Round 19 F3: the prefix comparison strips quote-mangling
+  // (`busyb'ox' awk`, `en'v' watch -n1 …`).
+  if (
+    COMMAND_POSITION_PREFIXES.has(first.replace(/['"\\$]/g, '')) ||
+    COMMAND_POSITION_PREFIXES.has(base.replace(/['"\\$]/g, ''))
+  ) {
     return scriptTextOf(skipPrefixArguments(base, tokens.slice(1)), depth + 1);
   }
   return null;
@@ -321,7 +326,9 @@ function shellHeadBefore(segment: string, endIndex: number): boolean {
       probe = probe.slice(1);
       continue;
     }
-    const lower = tok.toLowerCase();
+    // Round 19 F2: the prefix comparison strips quote-mangling
+    // (`en'v' bash <<EOF`).
+    const lower = tok.toLowerCase().replace(/['"\\$]/g, '');
     const base = basenameOf(lower);
     if (COMMAND_POSITION_PREFIXES.has(lower) || COMMAND_POSITION_PREFIXES.has(base)) {
       probe = skipPrefixArguments(base, probe.slice(1));
@@ -525,14 +532,16 @@ function gluedWriteDenied(
         // and misread `true` as the content head).
         const rawHead = basenameOf((backTokens[0] ?? '').toLowerCase().replace(/['"\\$]/g, ''));
         if (controlHeads.has(rawHead)) continue;
-        // Prefix/env probe (bounded) — `command cat`, `env cat`.
+        // Prefix/env probe (bounded) — `command cat`, `env cat`; the
+        // prefix comparison strips quote-mangling (round 19 F1:
+        // `comm'and' cat`).
         for (let p = 0; p < 18 && backTokens.length > 0; p++) {
           const t0 = backTokens[0]!;
           if (isRedirectionToken(t0) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(t0)) {
             backTokens = backTokens.slice(1);
             continue;
           }
-          const lower = t0.toLowerCase();
+          const lower = t0.toLowerCase().replace(/['"\\$]/g, '');
           const base = basenameOf(lower);
           if (COMMAND_POSITION_PREFIXES.has(lower) || COMMAND_POSITION_PREFIXES.has(base)) {
             backTokens = skipPrefixArguments(base, backTokens.slice(1));

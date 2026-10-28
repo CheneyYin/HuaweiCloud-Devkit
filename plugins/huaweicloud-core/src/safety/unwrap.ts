@@ -86,9 +86,15 @@ function unwrapCore(args: string[], onWindowsPayload: ((entered: boolean) => voi
       current = current.slice(1);
       continue;
     }
+    // Round 19 F4: the prefix comparison strips quote-mangling
+    // (`en'v' python3 -c …` — the probe never reached the interpreter).
     if (
-      COMMAND_POSITION_PREFIXES.has(first) ||
-      COMMAND_POSITION_PREFIXES.has(basenameOf(String(current[0])).toLowerCase())
+      COMMAND_POSITION_PREFIXES.has(first.replace(/['"\\$]/g, '')) ||
+      COMMAND_POSITION_PREFIXES.has(
+        basenameOf(String(current[0]))
+          .toLowerCase()
+          .replace(/['"\\$]/g, ''),
+      )
     ) {
       // Locator carve-out: `where hcloud`, `if exist hcloud` probe the
       // bin's PRESENCE (cmd builtins) — a bare bin with no argv is the

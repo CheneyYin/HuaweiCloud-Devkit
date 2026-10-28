@@ -431,6 +431,23 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
   ["echo 'import os; os.system(\"hcloud ECS DeleteServers\")' | ca't' | python3", 'deny'],
   ['echo DeleteServers | c\'at\' | xargs "hcl"oud ECS', 'deny'],
   ["ls | c'at' | bash", 'allow'],
+  // port-v2defects (interrogate round 19, the clean-round fixes): the
+  // prefix-token and value-flag comparisons inside the probes read the
+  // token raw while the heads were normalized — `comm'and' cat`,
+  // `en'v' python3 -c`, `env -'u' X cat`, `busyb'ox' awk`, and the
+  // standard-path xargs detector (`x'args'`) all executed. Every prefix,
+  // flag, and head comparison in the probe grammar now strips
+  // quote-mangling (both twins, all sites).
+  ["echo 'hcloud ECS DeleteServers' | comm'and' cat | bash", 'deny'],
+  ["echo 'hcloud ECS DeleteServers' | en'v' cat | bash", 'deny'],
+  ["echo 'import os; os.system(\"hcloud ECS DeleteServers\")' | comm'and' cat | python3", 'deny'],
+  ["echo 'hcloud ECS DeleteServers' | env -'u' X cat | bash", 'deny'],
+  ["en'v' bash <<EOF\nhcloud ECS DeleteServers\nEOF", 'deny'],
+  ["sud'o' bash <<EOF\nhcloud ECS DeleteServers\nEOF", 'deny'],
+  ["busyb'ox' awk 'BEGIN{system(\"hcloud ECS DeleteServers\")}'", 'deny'],
+  ["en'v' watch -n1 'hcloud ECS DeleteServers'", 'deny'],
+  ["en'v' python3 -c 'import os; os.system(\"hcloud ECS DeleteServers\")'", 'deny'],
+  ["en'v' bash -c 'echo; hcloud ECS DeleteServers'", 'deny'],
   // The astral row: 200k valid surrogate pairs = 800 KB bytes / 400,000
   // UTF-16 units / 200,000 code points — over the byte cap on both twins,
   // over the OLD TS unit cap (400,002 > 262,144) but under the OLD py

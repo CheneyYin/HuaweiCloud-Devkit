@@ -304,7 +304,10 @@ export function skipPrefixArguments(prefix: string, tokens: string[]): string[] 
     (isFlagOrDuration(String(rest[0])) ||
       ((prefix === 'start' || prefix === 'call') && String(rest[0]).startsWith('/')))
   ) {
-    const flag = String(rest[0]);
+    // Round 19 F1b: the value-flag comparison strips quote-mangling
+    // (`env -'u' X cat` — the flag token read raw missed its value class,
+    // eating the operand as the content head).
+    const flag = String(rest[0]).replace(/['"\\$]/g, '');
     rest = rest.slice(1);
     if (!flag.includes('=') && valueFlags.has(flag) && rest.length > 0) {
       rest = rest.slice(1);

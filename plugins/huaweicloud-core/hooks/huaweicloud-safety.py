@@ -1000,7 +1000,8 @@ def _skip_prefix_args(prefix, tokens):
         or re.match(r"^\d*\.?\d+[smh]?$", rest[0], re.I)
         or (prefix in ("start", "call") and rest[0].startswith("/"))
     ):
-        flag = rest[0]
+        # Round 19 F1b: the value-flag comparison strips quote-mangling.
+        flag = re.sub(r"['\"\\$]", "", str(rest[0]))
         rest = rest[1:]
         if "=" not in flag and flag in value_flags and rest:
             rest = rest[1:]
@@ -1109,8 +1110,11 @@ def _leading_segment_core(tokens):
         if is_redirection_token(tokens[0]):
             tokens = tokens[1:]
             continue
-        if first in COMMAND_PREFIXES or basename_of(tokens[0].lower()) in COMMAND_PREFIXES:
-            prefix = first if first in COMMAND_PREFIXES else basename_of(tokens[0].lower())
+        # Round 19 F3/F4: the prefix comparison strips quote-mangling.
+        _nf = re.sub(r"['\"\\$]", "", first)
+        _nb = re.sub(r"['\"\\$]", "", basename_of(tokens[0].lower()))
+        if _nf in COMMAND_PREFIXES or _nb in COMMAND_PREFIXES:
+            prefix = _nf if _nf in COMMAND_PREFIXES else _nb
             # Locator carve-out: `where hcloud`, `if exist hcloud` probe
             # the bin's PRESENCE (cmd builtins) — a bare bin with no argv
             # is the probe shape, not a command; stripping the locator
@@ -1498,7 +1502,8 @@ def _heredoc_script_text(segment):
         if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", head_tok):
             head_probe = head_probe[1:]
             continue
-        head_lower = head_tok.lower()
+        # Round 19 F2: the prefix comparison strips quote-mangling.
+        head_lower = re.sub(r"['\"\\$]", "", head_tok.lower())
         head_base = basename_of(head_lower)
         if head_lower in COMMAND_PREFIXES or head_base in COMMAND_PREFIXES:
             head_probe = _skip_prefix_args(head_base or head_lower, head_probe[1:])
@@ -1600,7 +1605,8 @@ def _leading_segment_probe(tokens):
         if is_redirection_token(head_tok) or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", head_tok):
             probe = probe[1:]
             continue
-        head_lower = head_tok.lower()
+        # Round 19 F4: the prefix comparison strips quote-mangling.
+        head_lower = re.sub(r"['\"\\$]", "", head_tok.lower())
         head_base = basename_of(head_lower)
         if head_lower in COMMAND_PREFIXES or head_base in COMMAND_PREFIXES:
             probe = _skip_prefix_args(head_base or head_lower, probe[1:])
@@ -1652,7 +1658,8 @@ def _opaque_carrier_denied(segment, tokens, whole_text):
         if is_redirection_token(head_tok) or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", head_tok):
             probe = probe[1:]
             continue
-        head_lower = head_tok.lower()
+        # Round 19 F4: the prefix comparison strips quote-mangling.
+        head_lower = re.sub(r"['\"\\$]", "", head_tok.lower())
         head_base = basename_of(head_lower)
         if head_lower in COMMAND_PREFIXES or head_base in COMMAND_PREFIXES:
             probe = _skip_prefix_args(head_base or head_lower, probe[1:])
@@ -1924,12 +1931,18 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
                 # bash executes the script.
                 if is_redirection_token(str(probe[0])):
                     probe = probe[1:]
-                elif head not in COMMAND_PREFIXES and base not in COMMAND_PREFIXES and not is_env_assignment:
+                elif (
+                    re.sub(r"['\"\\$]", "", head) not in COMMAND_PREFIXES
+                    and re.sub(r"['\"\\$]", "", base) not in COMMAND_PREFIXES
+                    and not is_env_assignment
+                ):
                     break
                 elif is_env_assignment:
                     probe = probe[1:]
                 else:
-                    probe = _skip_prefix_args(base or head, probe[1:])
+                    probe = _skip_prefix_args(
+                        re.sub(r"['\"\\$]", "", base) or re.sub(r"['\"\\$]", "", head), probe[1:]
+                    )
                 candidates.append(probe)
             for candidate in candidates:
                 nested = _script_of(candidate)
@@ -2065,7 +2078,8 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
                 if raw_head in _pipe_control:
                     k -= 1
                     continue
-                # Prefix/env probe (bounded) — `command cat`, `env cat`.
+                # Prefix/env probe (bounded) — `command cat`, `env cat`;
+                # the prefix comparison strips quote-mangling (round 19 F1).
                 probe = list(seg_toks)
                 for _ in range(18):
                     if not probe:
@@ -2074,7 +2088,7 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
                     if is_redirection_token(t0) or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t0):
                         probe = probe[1:]
                         continue
-                    lower = t0.lower()
+                    lower = re.sub(r"['\"\\$]", "", t0.lower())
                     base = basename_of(lower)
                     if lower in COMMAND_PREFIXES or base in COMMAND_PREFIXES:
                         probe = _skip_prefix_args(base or lower, probe[1:])
@@ -2228,12 +2242,15 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
         # (inside a quoted windows payload the whole command is one
         # token; the child inherits the pipe and executes the merge).
         def _is_xargs_token(t):
-            tl = str(t).lower()
-            if tl == "xargs" or basename_of(t).lower() == "xargs":
+            # Round 19: the xargs comparison strips quote-mangling
+            # (`x'args'`) — round 17 fixed the GLUED arms' key but this
+            # (the standard path's detector) read the raw token.
+            tl = re.sub(r"['\"\\$]", "", str(t).lower())
+            if tl == "xargs" or basename_of(tl) == "xargs":
                 return True
             if re.search(r"\s", str(t)):
                 words = split_tokens(str(t))
-                return bool(words) and str(words[0]).lower() == "xargs"
+                return bool(words) and re.sub(r"['\"\\$]", "", str(words[0]).lower()) == "xargs"
             return False
 
         # Trailing redirection feeders: herestring words and a

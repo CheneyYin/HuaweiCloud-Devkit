@@ -13,12 +13,28 @@ import { splitSimpleCommand } from './shell-text.ts';
 // executes the merged write). A span token whose FIRST word is xargs
 // counts too.
 export function segmentBearsXargs(tokens: string[], unwrappedRaw: string[]): boolean {
+  // Round 19: the xargs comparison strips quote-mangling (`x'args'`) —
+  // py's twin got the same normalization at its detector.
   const isXargsToken = (token: unknown): boolean => {
-    const t = String(token).toLowerCase();
-    if (t === 'xargs' || basenameOf(String(token)).toLowerCase() === 'xargs') return true;
+    const t = String(token)
+      .toLowerCase()
+      .replace(/['"\\$]/g, '');
+    if (
+      t === 'xargs' ||
+      basenameOf(
+        String(token)
+          .toLowerCase()
+          .replace(/['"\\$]/g, ''),
+      ) === 'xargs'
+    )
+      return true;
     if (/\s/.test(String(token))) {
       const firstWord = splitSimpleCommand(String(token))[0];
-      return String(firstWord ?? '').toLowerCase() === 'xargs';
+      return (
+        String(firstWord ?? '')
+          .toLowerCase()
+          .replace(/['"\\$]/g, '') === 'xargs'
+      );
     }
     return false;
   };
@@ -82,7 +98,8 @@ export function collectFeederWords(
       const headTok = String(segToks[0] ?? '').toLowerCase();
       const args = segToks.slice(1).map(String);
       const isCtrl =
-        controlHeadWords.has(headTok.replace(/['"\\$]/g, '')) || (passThroughBins.has(headTok) && args.length === 0);
+        controlHeadWords.has(headTok.replace(/['"\\$]/g, '')) ||
+        (passThroughBins.has(headTok.replace(/['"\\$]/g, '')) && args.length === 0);
       const sepAfter = segmentSeps[k] ?? '';
       const sepBefore = k > 0 ? (segmentSeps[k - 1] ?? '') : '';
       // `)` (substitution/subshell body) and `>(` (process substitution)
