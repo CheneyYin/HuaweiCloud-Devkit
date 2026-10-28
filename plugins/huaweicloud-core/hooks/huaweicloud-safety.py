@@ -438,7 +438,11 @@ SHELL_FIRST = {"bash", "sh", "zsh", "dash", "bash.exe", "sh.exe", "/bin/bash", "
 COMMAND_PREFIXES = {
     "sudo", "nohup", "env", "time", "do", "then", "elif", "elseif", "else", "xargs",
     "if", "while", "until", "exec", "command", "coproc", "!", "{", "(", "timeout",
-    "watch", "nice", "stdbuf", "setsid", "ionice", "start", "call",
+    "watch",
+    # busybox: the applet dispatcher — `busybox sh -c '…'` / `busybox awk
+    # '…'` run the applet named as the next token (interrogate round 14 C3).
+    "busybox",
+    "nice", "stdbuf", "setsid", "ionice", "start", "call",
     # PowerShell scriptblock control grammar and cmd `if`-condition words:
     # a wrapper payload headed by these runs its body, so the re-base must
     # see through them. None is a plausible bare POSIX program name.
@@ -1547,6 +1551,28 @@ def _opaque_word_in(text, bin_name):
     return re.search(r"(^|[^a-z0-9.-])" + re.escape(bin_name) + r"([^a-z0-9.-]|$)", text, re.I) is not None
 
 
+def _leading_segment_probe(tokens):
+    """The effective head stream after stripping redirections, env
+    assignments, and command-position prefixes (a light probe — NOT
+    _leading_segment_core, which returns None unless the head is hcloud).
+    Round 14's shared shape for the interpreter-code checks."""
+    probe = list(tokens)
+    for _ in range(18):
+        if not probe:
+            break
+        head_tok = str(probe[0])
+        if is_redirection_token(head_tok) or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", head_tok):
+            probe = probe[1:]
+            continue
+        head_lower = head_tok.lower()
+        head_base = basename_of(head_lower)
+        if head_lower in COMMAND_PREFIXES or head_base in COMMAND_PREFIXES:
+            probe = _skip_prefix_args(head_base or head_lower, probe[1:])
+            continue
+        break
+    return probe, None
+
+
 def _opaque_carrier_denied(segment, tokens, whole_text):
     """The DENY-OPAQUE pivot (interrogate round 13, the coordinator's design
     boundary): enumerating bash's carrier grammar to SEE THROUGH it is
@@ -1562,14 +1588,22 @@ def _opaque_carrier_denied(segment, tokens, whole_text):
     opaqueCarrierDenied in classify-text.ts."""
     glued = " ".join(split_tokens_glued(segment))
     decoded = strip_shell_quotes(decode_ansi_c_spans(segment))
-    present = [b for b in OPAQUE_BINS if _opaque_word_in(segment, b) or _opaque_word_in(glued, b) or _opaque_word_in(decoded, b)]
+    # Presence is CONTIGUOUS-includes (round 14 C1: `${X:-hcloud}` — the
+    # wordIn boundary excludes `-`, so the default-expanded token was
+    # invisible; the coordinator's rule is "appears ANYWHERE in the line").
+    present = [
+        b
+        for b in OPAQUE_BINS
+        if b.lower() in segment.lower() or _opaque_word_in(glued, b) or _opaque_word_in(decoded, b)
+    ]
     if not present:
         return None
     fragmented = any(
         (_opaque_word_in(glued, b) or _opaque_word_in(decoded, b)) and b.lower() not in segment.lower()
         for b in present
     )
-    marker = re.search(r"\$['\"]|\$\(|`|<\(|>\(", whole_text) is not None
+    # Round 14 (C1): ${ parameter expansion joins the marker set.
+    marker = re.search(r"\$['\"]|\$\(|\$\{|`|<\(|>\(", whole_text) is not None
     code_context = False
     # The effective head: strip redirections/env/prefixes (a light
     # probe — NOT _leading_segment_core, which returns None unless the
@@ -1594,9 +1628,14 @@ def _opaque_carrier_denied(segment, tokens, whole_text):
         if head == "awk":
             code_context = any(not t.startswith("-") for t in rest) or "-v" in rest or "-f" in rest
         else:
-            code_context = any(
-                re.match(r"^-[a-z]*c[a-z]*$", t, re.I) if head == "python" else (re.match(r"^-[a-z]*e[a-z]*$", t, re.I) or t == "--eval")
-                for t in rest
+            # Round 14 C4: a stdin heredoc (`python3 <<'EOF' … body … EOF`)
+            # is code context too — the body is interpreter code.
+            code_context = (
+                any(
+                    re.match(r"^-[a-z]*c[a-z]*$", t, re.I) if head == "python" else (re.match(r"^-[a-z]*e[a-z]*$", t, re.I) or t == "--eval")
+                    for t in rest
+                )
+                or re.search(r"<<<?", segment) is not None
             )
     if not fragmented and not marker and not code_context:
         return None
@@ -1785,7 +1824,34 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
         or HCLOUD_ROUTE_BROAD_RE.search(text) is not None
     )
     for s, segment in enumerate(segments):
+        # Per-segment traversal scope (interrogate round 14 C2): a read
+        # classified in ONE segment's subtree must not switch the opaque
+        # gate off for LATER segments. seg_saw resets per segment and ORs
+        # into the caller's accumulator.
+        seg_saw = [False]
         tokens = split_tokens(segment)
+        # Interpreter-code opacity, UNCONDITIONAL (round 14 C2's leak
+        # within the code itself: `system("read"); subprocess.run("write")`
+        # — the system()-read masked the subprocess write). Code context is
+        # definitionally opaque: ANY token in the segment denies, before
+        # any extraction (the -c/-e flag, an awk program, or a stdin
+        # heredoc — round 14 C4: `python3 <<'EOF'`).
+        _probe_stream, _ = _leading_segment_probe(tokens)
+        _interp = _interpreter_head_of(basename_of(str(_probe_stream[0]).lower())) if _probe_stream else None
+        if _interp is not None:
+            _rest = [str(t) for t in _probe_stream[1:]]
+            _code_form = (
+                any(
+                    re.match(r"^-[a-z]*c[a-z]*$", t, re.I) if _interp == "python" else (re.match(r"^-[a-z]*e[a-z]*$", t, re.I) or t == "--eval")
+                    for t in _rest
+                )
+                or (_interp == "awk" and any(not t.startswith("-") for t in _rest))
+                or re.search(r"<<<?", segment)
+            )
+            if _code_form:
+                _opaque = _opaque_carrier_denied(segment, tokens, segment)
+                if _opaque:
+                    return _opaque
         # Nested scripts, BEFORE unwrapping flattens them. Wrapper
         # unwrapping runs to a FIXPOINT (same-wrapper compositions with
         # compound inner scripts reach their innermost script too). The
@@ -1835,7 +1901,7 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
                     # piped context feeds it, so the outer feeder threads
                     # down (an xargs inside the script inherits the pipe).
                     nested_feeder = split_tokens(segments[s - 1])[1:] if s > 0 else inherited_feeder
-                    reason = hcloud_write_blocked(nested, depth + 1, routed, nested_feeder, saw)
+                    reason = hcloud_write_blocked(nested, depth + 1, routed, nested_feeder, seg_saw)
                     if reason:
                         return reason
                     carrier_traversed = True
@@ -1854,7 +1920,7 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
             heredoc_script = _heredoc_script_text(segment)
             if heredoc_script is not None:
                 nested_feeder = split_tokens(segments[s - 1])[1:] if s > 0 else inherited_feeder
-                reason = hcloud_write_blocked(heredoc_script, depth + 1, routed, nested_feeder, saw)
+                reason = hcloud_write_blocked(heredoc_script, depth + 1, routed, nested_feeder, seg_saw)
                 if reason:
                     return reason
                 carrier_traversed = True
@@ -1879,7 +1945,7 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
                         body = nxt[nl + 1:]
                         end = body.find("\n" + delim)
                         if end >= 0:
-                            reason = hcloud_write_blocked(body[:end], depth + 1, routed, None, saw)
+                            reason = hcloud_write_blocked(body[:end], depth + 1, routed, None, seg_saw)
                             if reason:
                                 return reason
                             carrier_traversed = True
@@ -1914,7 +1980,7 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
                             )
                             payload = token_source[e + 1:end]
                             if payload:
-                                reason = hcloud_write_blocked(" ".join(str(x) for x in payload), depth + 1, routed, None, saw)
+                                reason = hcloud_write_blocked(" ".join(str(x) for x in payload), depth + 1, routed, None, seg_saw)
                                 if reason:
                                     return reason
                                 carrier_traversed = True
@@ -1935,6 +2001,7 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
                 glued_stripped = hcloud_leading_segment(split_tokens_glued(segment))
                 if glued_stripped is not None:
                     saw[0] = True
+                    seg_saw[0] = True
                     glued_argv = [t for t in glued_stripped[1:] if not t.startswith("-")]
                     segment_has_xargs = any(
                         str(t).lower() == "xargs" or basename_of(str(t).lower()) == "xargs"
@@ -1986,13 +2053,19 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
             # machinery classified one of those forms, or the segment
             # carries something we could not traverse). If our token hides
             # in it fragmented/marked/code-context form, deny fail-closed.
-            if glued_scope and not saw[0]:
+            # Round 14 C1: the gate runs UN-gated on glued_scope — the
+            # routing boundary excludes `-`, so `${X:-hcloud} …` (the
+            # default-expanded bin) never routed and the marker signal
+            # never ran. The gate's own signals are the scope.
+            if not seg_saw[0]:
                 opaque_reason = _opaque_carrier_denied(segment, tokens, text)
                 if opaque_reason:
                     return opaque_reason
+            saw[0] = saw[0] or seg_saw[0]
             continue
         saw_leading = True
         saw[0] = True
+        seg_saw[0] = True
         windows_payload = _LEADING_WINDOWS_PAYLOAD[0]
         argv = [t for t in stripped[1:] if not t.startswith("-")]
         # xargs feed: the preceding segment's tokens become argv after the

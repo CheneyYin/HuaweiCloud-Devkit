@@ -314,6 +314,43 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
   ['bash -c \'hcloud ECS ListServers --note="x; hcloud ECS DeleteServers"\'', 'allow'],
   ['echo -exec hcloud ECS DeleteServers', 'allow'],
   ['python3 -c \'print("docs about hcloud")\'', 'deny'],
+  // port-v2defects (interrogate round 14, the exit round on the pivot):
+  // ${ parameter expansion joins the marker set; the `saw` accumulator is
+  // PER-SEGMENT (a read in one segment must never mask a write in
+  // another); busybox is the applet dispatcher; and interpreter code
+  // through a stdin heredoc is code context. The benign controls pin the
+  // prose boundary.
+  ['${X:-hcloud} ECS DeleteServers', 'deny'],
+  ["bash -c '${X:-hcloud} ECS DeleteServers'", 'deny'],
+  ['${HCLOUD_BIN:-hcloud} ECS DeleteServers', 'deny'],
+  ['${X:-hcloud} OBS rm obs://b/k', 'deny'],
+  ['hcloud ECS ListServers; node -e \'require("child_process").execSync("hcloud ECS DeleteServers")\'', 'deny'],
+  [
+    'hcloud ECS ListServers; python3 -c \'import subprocess; subprocess.run(["hcloud","ECS","DeleteServers"])\'',
+    'deny',
+  ],
+  [
+    'bash -c \'hcloud ECS ListServers\'; node -e \'require("child_process").execSync("hcloud ECS DeleteServers")\'',
+    'deny',
+  ],
+  ['hcloud --help; python3 -c \'import subprocess; subprocess.run(["hcloud"])\'', 'deny'],
+  [
+    'python3 -c \'import os,subprocess; os.system("hcloud ECS ListServers"); subprocess.run(["hcloud","ECS","DeleteServers"])\'',
+    'deny',
+  ],
+  ['node -e \'require("child_process").execSync("hcloud ECS DeleteServers")\'; hcloud ECS ListServers', 'deny'],
+  ["busybox sh -c 'hcloud ECS DeleteServers'", 'deny'],
+  ['busybox awk \'BEGIN{system("hcloud ECS DeleteServers")}\'', 'deny'],
+  ["env busybox sh -c 'hcloud ECS DeleteServers'", 'deny'],
+  ['nice busybox awk \'BEGIN{system("hcloud ECS DeleteServers")}\'', 'deny'],
+  ['python3 <<\'PYEOF\'\nimport os; os.system("hcloud ECS DeleteServers")\nPYEOF', 'deny'],
+  ['python3 - <<\'PYEOF\'\nimport subprocess; subprocess.run(["hcloud","ECS","DeleteServers"])\nPYEOF', 'deny'],
+  ['git log --oneline | grep hcloud', 'allow'],
+  ['rg -n "hcloud ECS ListServers" README.md', 'allow'],
+  ['man hcloud', 'allow'],
+  ['nohup hcloud ECS ListServers', 'allow'],
+  ['timeout 30 hcloud ECS ListServers --cli-region=cn-north-4', 'allow'],
+  ['hcloud ECS ListServers; echo done && git commit -m "hcloud cleanup notes"', 'allow'],
   // The astral row: 200k valid surrogate pairs = 800 KB bytes / 400,000
   // UTF-16 units / 200,000 code points — over the byte cap on both twins,
   // over the OLD TS unit cap (400,002 > 262,144) but under the OLD py

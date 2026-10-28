@@ -232,8 +232,11 @@ function opaqueCarrierDenied(segment: string, plainTokens: string[], wholeText: 
   const wordIn = (text: string, bin: string): boolean =>
     new RegExp(`(^|[^a-z0-9.-])${bin.replace(/[.\-_]/g, (c) => `\\${c}`)}([^a-z0-9.-]|$)`, 'i').test(text);
   const contiguousIn = (text: string, bin: string): boolean => text.toLowerCase().includes(bin);
+  // Presence is CONTIGUOUS-includes (round 14 C1: `${X:-hcloud}` — the
+  // wordIn boundary excludes `-`, so the default-expanded token was
+  // invisible; the coordinator's rule is "appears ANYWHERE in the line").
   const presentAnywhere = (bin: string): boolean =>
-    wordIn(segment, bin) || wordIn(gluedJoined, bin) || wordIn(decoded, bin);
+    contiguousIn(segment, bin) || wordIn(gluedJoined, bin) || wordIn(decoded, bin);
   const hasToken = bins.some((bin) => presentAnywhere(bin));
   if (!hasToken) return null;
   // (a) fragmented token: a walkable re-join reveals the bin the raw hides.
@@ -241,7 +244,8 @@ function opaqueCarrierDenied(segment: string, plainTokens: string[], wholeText: 
     (bin) => (wordIn(gluedJoined, bin) || wordIn(decoded, bin)) && !contiguousIn(segment, bin),
   );
   // (b) expansion marker anywhere in the payload.
-  const marker = /\$['"]|\$\(|`|<\(|>\(/.test(wholeText);
+  // Round 14 (C1): ${ parameter expansion joins the marker set.
+  const marker = /\$['"]|\$\(|\$\{|`|<\(|>\(/.test(wholeText);
   // (c) interpreter code context: the probe-stripped head is an interpreter
   // with a code flag (or an awk program).
   let codeContext = false;
@@ -252,9 +256,12 @@ function opaqueCarrierDenied(segment: string, plainTokens: string[], wholeText: 
     if (head === 'awk') {
       codeContext = rest.some((tok) => !tok.startsWith('-')) || rest.includes('-v') || rest.includes('-f');
     } else {
-      codeContext = rest.some((tok) =>
-        head === 'python' ? /^-[a-z]*c[a-z]*$/i.test(tok) : /^-[a-z]*e[a-z]*$/i.test(tok) || tok === '--eval',
-      );
+      // Round 14 C4: a stdin heredoc (`python3 <<'EOF' …`) is code context
+      // too — the body is interpreter code.
+      codeContext =
+        rest.some((tok) =>
+          head === 'python' ? /^-[a-z]*c[a-z]*$/i.test(tok) : /^-[a-z]*e[a-z]*$/i.test(tok) || tok === '--eval',
+        ) || /<<<?/.test(segment);
     }
   }
   if (!fragmented && !marker && !codeContext) return null;
@@ -326,10 +333,40 @@ function gluedWriteDenied(
   let prevTokens: string[] = [];
   for (let segIndex = 0; segIndex < segments.length; segIndex++) {
     const segment = segments[segIndex]!;
+    // Per-segment traversal scope (interrogate round 14 C2): a read
+    // classified in ONE segment's subtree must not switch the opaque gate
+    // off for LATER segments — `hcloud List; node -e '…write…'` allowed
+    // the write half. segSaw resets per segment and ORs into the caller's
+    // accumulator.
+    const segSaw = { value: false };
     const plainTokens = splitSimpleCommand(segment);
+    // Interpreter-code opacity, UNCONDITIONAL (round 14 C2's leak within
+    // the code itself: `python3 -c 'system("read"); subprocess.run("write")'`
+    // — the system()-read masked the subprocess write). Code context is
+    // definitionally opaque: ANY token in the segment denies, before any
+    // extraction (the -c/-e flag, an awk program, or a stdin heredoc —
+    // round 14 C4: `python3 <<'EOF'`).
+    {
+      const { stream: probeStream } = unwrapWithWindowsFlag(plainTokens);
+      const interpHead =
+        probeStream.length > 0 ? interpreterHeadOf(basenameOf(String(probeStream[0]).toLowerCase())) : null;
+      if (interpHead !== null) {
+        const rest = probeStream.slice(1).map((token) => String(token));
+        const codeForm =
+          rest.some((tok) =>
+            interpHead === 'python' ? /^-[a-z]*c[a-z]*$/i.test(tok) : /^-[a-z]*e[a-z]*$/i.test(tok) || tok === '--eval',
+          ) ||
+          (interpHead === 'awk' && rest.some((tok) => !tok.startsWith('-'))) ||
+          /<<<?/.test(segment);
+        if (codeForm) {
+          const interpOpaque = opaqueCarrierDenied(segment, plainTokens, segment);
+          if (interpOpaque) return interpOpaque;
+        }
+      }
+    }
     const script = scriptTextOf(plainTokens);
     if (script !== null) {
-      const nested = gluedWriteDenied(script, options, narrowRouted, depth + 1, saw);
+      const nested = gluedWriteDenied(script, options, narrowRouted, depth + 1, segSaw);
       if (nested) return nested;
       // (The round-12 SCRIPT-SHADOW pass was REMOVED in the round-13 pivot:
       // it un-quoted PROSE inside carrier scripts — `bash -c 'echo "step1;
@@ -339,7 +376,7 @@ function gluedWriteDenied(
     }
     const heredoc = heredocScriptText(segment);
     if (heredoc !== null) {
-      const nested = gluedWriteDenied(heredoc, options, narrowRouted, depth + 1, saw);
+      const nested = gluedWriteDenied(heredoc, options, narrowRouted, depth + 1, segSaw);
       if (nested) return nested;
     }
     // A DANGLING heredoc marker (interrogate round 12): `bash <<EOF; echo
@@ -362,7 +399,7 @@ function gluedWriteDenied(
           const body = next.slice(nl + 1);
           const end = body.indexOf(`\n${delim}`);
           if (end >= 0) {
-            const nested = gluedWriteDenied(body.slice(0, end), options, narrowRouted, depth + 1, saw);
+            const nested = gluedWriteDenied(body.slice(0, end), options, narrowRouted, depth + 1, segSaw);
             if (nested) return nested;
           }
         }
@@ -387,7 +424,7 @@ function gluedWriteDenied(
             );
             const payload = tokenSource.slice(e + 1, end > 0 ? end : tokenSource.length);
             if (payload.length > 0) {
-              const nested = gluedWriteDenied(payload.join(' '), options, narrowRouted, depth + 1, saw);
+              const nested = gluedWriteDenied(payload.join(' '), options, narrowRouted, depth + 1, segSaw);
               if (nested) return nested;
             }
           }
@@ -396,11 +433,17 @@ function gluedWriteDenied(
     }
     const { stream } = unwrapWithWindowsFlag(plainTokens);
     const plainLeading = stream.length > 0 && isHcloudToken(String(stream[0]));
-    if (plainLeading) saw.value = true;
+    if (plainLeading) {
+      segSaw.value = true;
+      saw.value = true;
+    }
     const gluedTokens = splitSimpleCommandGlued(segment);
     const { stream: gluedStream } = unwrapWithWindowsFlag(gluedTokens);
     const gluedLeading = gluedStream.length > 0 && isHcloudToken(String(gluedStream[0]));
-    if (gluedLeading) saw.value = true;
+    if (gluedLeading) {
+      segSaw.value = true;
+      saw.value = true;
+    }
     if (gluedStream.length > 0 && isHcloudToken(String(gluedStream[0]))) {
       const gluedArgv = gluedStream.slice(1);
       const segmentHasXargs = plainTokens.some((token) => {
@@ -468,10 +511,11 @@ function gluedWriteDenied(
     // traversed-but-unseen payload (the deep-nest idiom: extraction
     // succeeds but the mangled script never yields a leading bin) still
     // gates; a classified read does not.
-    if (!saw.value) {
+    if (!segSaw.value) {
       const opaque = opaqueCarrierDenied(segment, plainTokens, text);
       if (opaque) return opaque;
     }
+    saw.value = saw.value || segSaw.value;
     prevTokens = plainTokens;
   }
   return null;
@@ -798,8 +842,7 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
     // quoted spans and word characters into ONE word — `"hcl"oud ECS
     // Delete` runs hcloud with full argv — while splitSimpleCommand keeps
     // the span/fragment distinction, so a quote-INITIAL mangled bin never
-    // yields an hcloud-leading argv. The shadow routes it, so this pass
-    // only runs for routed payloads. The recursive walk (gluedWriteDenied,
+    // yields an hcloud-leading argv. The recursive walk (gluedWriteDenied,
     // above) mirrors py's doctrine end to end: script carriers (shell -c /
     // eval / windows payloads / heredoc bodies) re-run the full walk, the
     // glued re-join of every segment classifies (fragments AND
@@ -810,6 +853,17 @@ export function classifyTextCommand(command: unknown, options: ClassifyOptions =
     const glued = gluedWriteDenied(text, options, narrowRouted, 0);
     if (glued?.decision === 'deny') return glued;
     return standard;
+  }
+
+  // The walk also runs UNROUTED (interrogate round 14 C1: `${X:-hcloud}
+  // ECS Delete` — the routing boundary excludes `-`, so the
+  // default-expanded bin never routed and the opaque gate never ran). The
+  // walk's own signals are the scope: no token → every pass returns null;
+  // prose pins (contiguous token, no marker, no code context) pass the
+  // gate untouched.
+  {
+    const glued = gluedWriteDenied(text, options, narrowRouted, 0);
+    if (glued?.decision === 'deny') return glued;
   }
 
   return applyRawCommandRiskRules(

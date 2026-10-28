@@ -50,6 +50,10 @@ export const COMMAND_POSITION_PREFIXES = new Set([
   '(',
   'timeout',
   'watch',
+  // busybox: the applet dispatcher — `busybox sh -c '…'` / `busybox awk
+  // '…'` run the applet named as the next token (interrogate round 14 C3:
+  // both the walk families and the interpreter table missed it).
+  'busybox',
   'nice',
   'stdbuf',
   'setsid',

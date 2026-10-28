@@ -223,13 +223,24 @@ test('the py hook degrades coherently: derived vocabularies, isolated fields, fa
   assert.match(pyHook, /def _interpreter_head_of\(head\):/);
   assert.match(pyHook, /def _interpreter_system_commands\(code\):/);
   assert.match(pyHook, /saw\[0\] = True/);
-  assert.match(pyHook, /if glued_scope and not saw\[0\]:/);
+  assert.match(pyHook, /if not seg_saw\[0\]:/);
+  // Round 14 (the exit round on the pivot): ${ joins the marker set, the
+  // saw accumulator is PER-SEGMENT (seg_saw, ORed into the caller's saw),
+  // busybox dispatches applets, and stdin heredocs are interpreter code.
+  assert.match(pyHook, /seg_saw = \[False\]/);
+  assert.match(pyHook, /saw\[0\] = saw\[0\] or seg_saw\[0\]/);
+  assert.match(pyHook, /"busybox"/);
+  assert.ok(pyHook.includes('or re.search(r"<<<?", segment)'), "the stdin-heredoc code-context arm");
+  assert.ok(pyHook.includes('b.lower() in segment.lower()'), 'contiguous presence (the ${X:-hcloud} fix)');
   assert.doesNotMatch(pyHook, /nested_shadow = strip_shell_quotes\(nested\)/);
   assert.match(classifyText, /function opaqueCarrierDenied\(/);
   assert.match(classifyText, /function interpreterHeadOf\(/);
   assert.match(classifyText, /function interpreterSystemCommands\(/);
   assert.match(classifyText, /saw\.value = true/);
-  assert.ok(classifyText.includes('if (!saw.value) {'), 'the opaque gate fires only when the walk never saw the bin');
+  assert.ok(
+    classifyText.includes('if (!segSaw.value) {'),
+    'the opaque gate fires only when the segment subtree never saw the bin',
+  );
   assert.doesNotMatch(classifyText, /const scriptShadow = stripShellQuotes\(script\);/);
   assert.ok(classifyText.includes('/^-[a-bd-z]+$/i'), 'the flags-before--c skip class must exclude c');
   assert.match(classifyText, /tok === '-exec' \|\| tok === '-execdir'/);
