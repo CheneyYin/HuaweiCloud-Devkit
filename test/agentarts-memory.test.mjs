@@ -9,10 +9,12 @@ import {
   planAgentartsMemoryWrite,
   runAgentartsMemoryWrite,
   callAgentartsMemoryTool,
+} from '../plugins/huaweicloud-core/src/agentarts-memory.mjs';
+import {
   AGENTARTS_MEMORY_TOOL_DEFINITIONS,
   AGENTARTS_MEMORY_WRITE_TOOL_DEFINITIONS,
   MEMORY_READ_OPERATIONS,
-} from '../plugins/huaweicloud-core/src/agentarts-memory.mjs';
+} from '../plugins/huaweicloud-core/src/agentarts-memory-tools.mjs';
 import { planAgentartsCommand } from '../plugins/huaweicloud-core/src/agentarts-cli.mjs';
 import { setRuntimeCredentials } from '../plugins/huaweicloud-core/src/auth/credentials.mjs';
 
@@ -75,6 +77,31 @@ test('memory read validates the boundary before any spawn', async () => {
       { operation: 'get_last_k_messages', space_id: 'sp1', session_id: 's1', k: 0 },
       /k must be a positive integer/,
     );
+    // Top-level numerics are strict-typed (interrogate round 2): the
+    // same mistyped-value class the filter checks reject — limit: true
+    // used to coerce to 1 and ride the request.
+    await bad({ operation: 'list_sessions', space_id: 'sp1', limit: true }, /limit must be an integer \(got boolean\)/);
+    await bad(
+      { operation: 'list_messages', space_id: 'sp1', session_id: 's1', limit: '20' },
+      /limit must be an integer \(got string\)/,
+    );
+    await bad(
+      { operation: 'get_last_k_messages', space_id: 'sp1', session_id: 's1', k: '3' },
+      /k must be a positive integer/,
+    );
+    // k is REQUIRED (interrogate round 3, unanimous regression): the R2
+    // optional-field guard let a missing/null k reach the snippet as a
+    // raw KeyError.
+    await bad({ operation: 'get_last_k_messages', space_id: 'sp1', session_id: 's1' }, /k must be a positive integer/);
+    await bad(
+      { operation: 'get_last_k_messages', space_id: 'sp1', session_id: 's1', k: null },
+      /k must be a positive integer/,
+    );
+    // region: mistyped values are rejected, not silently defaulted
+    // (interrogate round 3 — the silent default substituted which
+    // regional endpoint serves the request).
+    await bad({ operation: 'list_sessions', space_id: 'sp1', region: 42 }, /region must be a non-empty string/);
+    await bad({ operation: 'list_sessions', space_id: 'sp1', region: '' }, /region must be a non-empty string/);
     await bad({ operation: 'list_memories', space_id: 'sp1', filters: ['nope'] }, /filters must be an object/);
     // list_messages requires session_id: the SDK's space-wide form builds a
     // broken /sessions/None path in 0.1.7 (memory_service.py).
@@ -126,22 +153,22 @@ test('memory read fails with the bootstrap remediation when no key file exists',
   });
 });
 
-test('memory read carries the key env-only and never in argv', async () => {
+test('memory read carries the key env-only; the request rides stdin, never argv', async () => {
   await withIsolation(async (home) => {
     writeKeyFile(home, 'sp1', KEY);
     const seen = [];
     const out = await readAgentartsMemory(
       { operation: 'list_sessions', space_id: 'sp1' },
       {
-        runCandidate: async (candidate, args, childEnv) => {
-          seen.push({ candidate, args, childEnv });
+        runCandidate: async (candidate, args, childEnv, stdinData) => {
+          seen.push({ candidate, args, childEnv, stdinData });
           return { exitCode: 0, stdout: '{"items": [], "total": 0}', stderr: '' };
         },
       },
     );
     assert.equal(out.ok, true);
     assert.equal(seen.length, 1);
-    const { args, childEnv } = seen[0];
+    const { args, childEnv, stdinData } = seen[0];
     // Env-only transport: the key rides the allowlist child env…
     assert.equal(childEnv.HUAWEICLOUD_SDK_MEMORY_API_KEY, KEY);
     // …never argv (process-list visible)…
@@ -150,13 +177,17 @@ test('memory read carries the key env-only and never in argv', async () => {
     // credential surface than every other agentarts tool).
     assert.equal(childEnv.HUAWEICLOUD_SDK_AK, undefined);
     assert.equal(childEnv.HUAWEICLOUD_SDK_SK, undefined);
-    // The request JSON carries only non-secret params, region defaulted.
-    const request = JSON.parse(args[args.length - 1]);
+    // The request rides STDIN (interrogate round 2): argv is the fixed
+    // snippet only — arbitrary search query text is process-list
+    // visible in argv and oversize queries hit E2BIG. Only non-secret
+    // params, region defaulted.
+    assert.equal(args.length, 2);
+    const request = JSON.parse(stdinData);
     assert.deepEqual(request, { operation: 'list_sessions', space_id: 'sp1', region: 'cn-southwest-2' });
   });
 });
 
-test('search_memories injects actor_id into the request filters', async () => {
+test('search_memories injects actor_id into the request filters (stdin transport)', async () => {
   await withIsolation(async (home) => {
     writeKeyFile(home, 'sp1', KEY);
     let request = null;
@@ -168,8 +199,8 @@ test('search_memories injects actor_id into the request filters', async () => {
         filters: { query: 'deploy steps', top_k: 5, min_score: null },
       },
       {
-        runCandidate: async (_candidate, args) => {
-          request = JSON.parse(args[args.length - 1]);
+        runCandidate: async (_candidate, _args, _childEnv, stdinData) => {
+          request = JSON.parse(stdinData);
           return { exitCode: 0, stdout: '{"records": []}', stderr: '' };
         },
       },
@@ -432,14 +463,17 @@ test('a set filters.min_score is enforced CLIENT-side (server-side filter measur
       stderr: '',
     };
     // min_score=0.01 (the measured trap-31 shape: the server returned
-    // sub-threshold entries anyway). The bridge cuts them from `result`
-    // and reports the cut — searchSummary still describes the RAW set.
+    // sub-threshold entries anyway). The bridge cuts them from `result`,
+    // corrects `total` to the kept count (a filtered view mimicking
+    // pagination must not advertise the raw total), and reports the cut —
+    // searchSummary still describes the RAW set.
     const cut = await search({ query: 'deploy', top_k: 10, min_score: 0.01 }, async () => fullResponse);
     assert.equal(cut.ok, true);
     assert.deepEqual(
       cut.result.results.map((r) => r.record.id),
       ['m2', 'm3'],
     );
+    assert.equal(cut.result.total, 2);
     assert.deepEqual(cut.searchSummary, { resultCount: 3, maxScore: 0.14, minScore: 0.000016 });
     assert.ok(cut.notes.length >= 1);
     assert.match(cut.notes[0], /removed 1 of 3 server-returned entries CLIENT-side/);
@@ -470,20 +504,89 @@ test('a set filters.min_score is enforced CLIENT-side (server-side filter measur
       scoreless.result.results.map((r) => r.record.id),
       ['no-score', 'm2'],
     );
+    // A serialized null score (Python None → JSON null — the realistic
+    // unscored wire shape) is SCORELESS too: kept by the filter and
+    // excluded from the digest (interrogate round 2 — Number(null) === 0
+    // used to cut it and flatten the digest's lower bound).
+    const nullScores = await search({ query: 'deploy', min_score: 0.01 }, async () => ({
+      exitCode: 0,
+      stdout: JSON.stringify({
+        results: [
+          { record: { id: 'null-score' }, score: null },
+          { record: { id: 'bool-score' }, score: true },
+          { record: { id: 'm2' }, score: 0.042 },
+        ],
+        total: 3,
+        query: 'deploy',
+      }),
+      stderr: '',
+    }));
+    assert.equal(nullScores.ok, true);
+    assert.deepEqual(
+      nullScores.result.results.map((r) => r.record.id),
+      ['null-score', 'bool-score', 'm2'],
+    );
+    assert.deepEqual(nullScores.searchSummary, { resultCount: 3, maxScore: 0.042, minScore: 0.042 });
+    // A SET min_score whose result went to the side file (truncation)
+    // carries an explicit NOT-applied note — "no notes" must not be
+    // ambiguous between "nothing was cut" and "the filter never ran".
+    const padding = 'x'.repeat(60_000);
+    const truncated = await search({ query: 'deploy', min_score: 0.05 }, async () => ({
+      exitCode: 0,
+      stdout: JSON.stringify({
+        results: [
+          { record: { id: 'm1', blob: padding }, score: 0.01 },
+          { record: { id: 'm2', blob: padding }, score: 0.05 },
+        ],
+        total: 2,
+        query: 'deploy',
+      }),
+      stderr: '',
+    }));
+    assert.equal(truncated.ok, true);
+    assert.equal('result' in truncated, false);
+    assert.deepEqual(truncated.searchSummary, { resultCount: 2, maxScore: 0.05, minScore: 0.01 });
+    assert.ok(truncated.notes.length >= 1);
+    assert.match(truncated.notes[0], /min_score was NOT applied/);
+    assert.match(truncated.notes[0], /side file, whose contents are UNFILTERED/);
+    // A present-but-wrong-shape result (parsed ok:true, no results
+    // array — SDK/server drift) gets its OWN honest note, not a false
+    // truncation claim (interrogate round 3).
+    const drifted = await search({ query: 'deploy', min_score: 0.05 }, async () => ({
+      exitCode: 0,
+      stdout: '{"records": []}',
+      stderr: '',
+    }));
+    assert.equal(drifted.ok, true);
+    assert.ok(drifted.result !== undefined);
+    assert.ok(drifted.notes.length >= 1);
+    assert.match(drifted.notes[0], /did not carry a results array/);
+    assert.doesNotMatch(drifted.notes[0], /truncated/);
     // min_score: null (dropped from the request) never triggers the
     // client-side filter.
     const nullMin = await search({ query: 'deploy', min_score: null }, async () => fullResponse);
     assert.equal(nullMin.ok, true);
     assert.equal(nullMin.result.results.length, 3);
     assert.equal('notes' in nullMin, false);
-    // A numeric STRING threshold coerces (validation does not type-check
-    // filter values; the request would carry the string server-side).
-    const stringMin = await search({ query: 'deploy', min_score: '0.01' }, async () => fullResponse);
-    assert.equal(stringMin.ok, true);
-    assert.deepEqual(
-      stringMin.result.results.map((r) => r.record.id),
-      ['m2', 'm3'],
-    );
+    // Mistyped filter VALUES are rejected at the boundary, not coerced
+    // (interrogate round 1: the old Number() coercion silently turned
+    // true into threshold 1 and 'abc' into no-filter-at-all).
+    const badValue = async (filters, pattern) => {
+      const out = await search(filters, async () => fullResponse);
+      assert.equal(out.ok, false, JSON.stringify(filters));
+      assert.match(out.error, pattern);
+    };
+    await badValue({ query: 'deploy', min_score: '0.01' }, /min_score must be a finite number \(got string\)/);
+    await badValue({ query: 'deploy', min_score: true }, /min_score must be a finite number \(got boolean\)/);
+    await badValue({ query: 'deploy', min_score: '' }, /min_score must be a finite number \(got string\)/);
+    await badValue({ query: 'deploy', min_score: [0.01] }, /min_score must be a finite number \(got object\)/);
+    await badValue({ query: 'deploy', top_k: 'abc' }, /top_k must be a finite number \(got string\)/);
+    await badValue({ query: 'deploy', top_k: 2.5 }, /top_k must be a positive integer/);
+    await badValue({ query: 'deploy', session_id: 42 }, /session_id must be a non-empty string \(got number\)/);
+    // start_time: null is legal (unset — dropped from the request).
+    const unsetTime = await search({ query: 'deploy', start_time: null }, async () => fullResponse);
+    assert.equal(unsetTime.ok, true);
+    await badValue({ query: 'deploy', start_time: {} }, /start_time must be a non-empty string \(got object\)/);
     // min_score set but the response is unparseable (failure): no filter
     // path, no note — failure contract owns the payload.
     const failedSearch = await search({ query: 'deploy', min_score: 0.01 }, async () => ({
@@ -529,6 +632,73 @@ test('unscoped list_sessions/list_memories results carry an all-actors note', as
     const single = await run('get_memory', { memory_id: 'm1' });
     assert.equal(single.ok, true);
     assert.equal('notes' in single, false);
+    // The advisory describes RESULTS — a FAILED unscoped list carries no
+    // note (nothing to misdescribe; interrogate round 1).
+    const failedUnscoped = await readAgentartsMemory(
+      { operation: 'list_sessions', space_id: 'sp1' },
+      {
+        runCandidate: async () => ({ exitCode: 1, stdout: '', stderr: 'ValueError: auth' }),
+      },
+    );
+    assert.equal(failedUnscoped.ok, false);
+    assert.equal('notes' in failedUnscoped, false);
+    // A mistyped top-level actor_id is rejected at the boundary (the
+    // request builder would silently drop it, turning a "scoped" call
+    // into an unscoped one with no note).
+    const badActor = await run('list_sessions', { actor_id: 42 });
+    assert.equal(badActor.ok, false);
+    assert.match(badActor.error, /actor_id must be a non-empty string when provided/);
+  });
+});
+
+test('a memory_id containing the module-missing marker cannot flip a completed batch (anchored marker)', async () => {
+  await withIsolation(async (home) => {
+    writeKeyFile(home, 'sp1', KEY);
+    // Interrogate round 3, reproduced end-to-end by the reviewer: the
+    // unanchored /AGENTARTS_SDK_MISSING/ stderr grep crossed the R1
+    // per-id progress channel — an id carrying the marker substring
+    // made the chain re-run the irreversible batch on every candidate
+    // and report the install remediation. The marker is anchored to its
+    // whole-line emitted form; progress lines are always JSON objects.
+    const plan = planAgentartsMemoryWrite({
+      operation: 'delete_memories',
+      space_id: 'sp1',
+      memory_ids: ['m-normal', 'AGENTARTS_SDK_MISSING'],
+    });
+    assert.equal(plan.ok, true);
+    const out = await runAgentartsMemoryWrite(
+      {
+        operation: 'delete_memories',
+        space_id: 'sp1',
+        memory_ids: ['m-normal', 'AGENTARTS_SDK_MISSING'],
+        approvedByUser: true,
+        approvalToken: plan.approvalToken,
+      },
+      {
+        runCandidate: async () => ({
+          exitCode: 0,
+          stdout: '{"deleted": ["AGENTARTS_SDK_MISSING", "m-normal"], "failed": []}',
+          stderr:
+            '{"progress": "deleted", "memory_id": "m-normal"}\n{"progress": "deleted", "memory_id": "AGENTARTS_SDK_MISSING"}\n',
+        }),
+      },
+    );
+    assert.equal(out.ok, true);
+    assert.deepEqual(out.result, { deleted: ['AGENTARTS_SDK_MISSING', 'm-normal'], failed: [] });
+    assert.equal('unshaped' in out, false);
+    // The REAL marker (a whole stderr line) still classifies
+    // module-missing and advances the chain.
+    const missing = await readAgentartsMemory(
+      { operation: 'list_sessions', space_id: 'sp1' },
+      {
+        runCandidate: async (candidate) =>
+          candidate.includes('python3')
+            ? { exitCode: 0, stdout: '{"items": []}', stderr: '' }
+            : { exitCode: 3, stdout: '', stderr: 'AGENTARTS_SDK_MISSING\n' },
+      },
+    );
+    assert.equal(missing.ok, true);
+    assert.equal(missing.executable.includes('python3'), true);
   });
 });
 
@@ -602,9 +772,19 @@ test('memory write plan validates the boundary (write-specific rules)', async ()
       assert.equal(out.ok, false, JSON.stringify(params));
       assert.match(out.error, pattern);
     };
+    // Write-side region typing (interrogate round 3): the silent
+    // cn-southwest-2 default must not bind into the approved request.
+    await bad(
+      { operation: 'create_session', space_id: 'sp1', actor_id: 'u1', region: 42 },
+      /region must be a non-empty string/,
+    );
+    await bad(
+      { operation: 'delete_memory', space_id: 'sp1', memory_id: 'm1', region: '' },
+      /region must be a non-empty string/,
+    );
     await bad(
       { operation: 'list_sessions', space_id: 'sp1' },
-      /operation must be one of: create_session, add_messages, delete_session, delete_memory/,
+      /operation must be one of: create_session, add_messages, delete_session, delete_memory, delete_memories/,
     );
     await bad({ operation: 'create_session', space_id: 'sp1' }, /actor_id is REQUIRED for create_session/);
     await bad(
@@ -626,7 +806,7 @@ test('memory write plan validates the boundary (write-specific rules)', async ()
         session_id: 's1',
         messages: [{ role: 'user', content: 'x', meta: 5 }],
       },
-      /messages\[0\]\.meta must be a string/,
+      /messages\[0\]\.meta must be a non-empty string when provided/,
     );
     await bad({ operation: 'delete_session', space_id: 'sp1' }, /session_id is required for delete_session/);
     await bad({ operation: 'delete_memory', space_id: 'sp1' }, /memory_id is required for delete_memory/);
@@ -678,6 +858,25 @@ test('memory write plan mints a bound token with the right labels', async () => 
     const del = planAgentartsMemoryWrite({ operation: 'delete_memory', space_id: 'sp1', memory_id: 'm9' });
     assert.equal(del.ok, true);
     assert.deepEqual(del.labels, ['irreversible']);
+
+    // An EMPTY meta object is dropped from the canonical request
+    // (interrogate round 8): the snippet treats {} as unset, so the
+    // approval must not show a field the execution drops.
+    const emptyMeta = planAgentartsMemoryWrite({
+      operation: 'create_session',
+      space_id: 'sp1',
+      actor_id: 'u1',
+      meta: {},
+    });
+    assert.equal(emptyMeta.ok, true);
+    assert.equal('meta' in emptyMeta.request, false);
+    const populatedMeta = planAgentartsMemoryWrite({
+      operation: 'create_session',
+      space_id: 'sp1',
+      actor_id: 'u1',
+      meta: { topic: 'deploy' },
+    });
+    assert.deepEqual(populatedMeta.request.meta, { topic: 'deploy' });
 
     const soft = planAgentartsMemoryWrite({ operation: 'delete_session', space_id: 'sp1', session_id: 's1' });
     assert.deepEqual(soft.labels, []);
@@ -842,6 +1041,337 @@ test('memory write canonicalizes meta key order (binding is semantic, not byte-l
         meta: { beta: 2, alpha: 1 },
       },
       { runCandidate: async () => ({ exitCode: 0, stdout: '{"id": "s9"}', stderr: '' }) },
+    );
+    assert.equal(out.ok, true);
+  });
+});
+
+test('delete_memories plan validates the batch boundary', async () => {
+  await withIsolation(async (home) => {
+    writeKeyFile(home, 'sp1', KEY);
+    const bad = async (params, pattern) => {
+      const out = planAgentartsMemoryWrite(params);
+      assert.equal(out.ok, false, JSON.stringify(params));
+      assert.match(out.error, pattern);
+    };
+    await bad({ operation: 'delete_memories', space_id: 'sp1' }, /memory_ids must be a non-empty array/);
+    await bad(
+      { operation: 'delete_memories', space_id: 'sp1', memory_ids: [] },
+      /memory_ids must be a non-empty array/,
+    );
+    await bad(
+      { operation: 'delete_memories', space_id: 'sp1', memory_ids: ['m1', ''] },
+      /memory_ids\[1\] must be a non-empty string/,
+    );
+    await bad(
+      { operation: 'delete_memories', space_id: 'sp1', memory_ids: ['m1', 42] },
+      /memory_ids\[1\] must be a non-empty string/,
+    );
+    // Duplicates are REJECTED, not silently deduped (the approval shows
+    // the exact request; a deduped execution would differ from it).
+    await bad(
+      { operation: 'delete_memories', space_id: 'sp1', memory_ids: ['m1', 'm2', 'm1'] },
+      /memory_ids\[2\] duplicates "m1"/,
+    );
+    // The SINGULAR key on the batch op (and vice versa): the silent-no-op
+    // class, rejected by per-operation applicability.
+    await bad(
+      { operation: 'delete_memories', space_id: 'sp1', memory_ids: ['m1'], memory_id: 'm1' },
+      /"memory_id" is not a parameter of delete_memories/,
+    );
+    await bad(
+      { operation: 'delete_memory', space_id: 'sp1', memory_id: 'm1', memory_ids: ['m1'] },
+      /"memory_ids" is not a parameter of delete_memory/,
+    );
+  });
+});
+
+test('delete_memories plan: irreversible label, batch-scope note, sorted canonical ids', async () => {
+  await withIsolation(async (home) => {
+    writeKeyFile(home, 'sp1', KEY);
+    const plan = planAgentartsMemoryWrite({
+      operation: 'delete_memories',
+      space_id: 'sp1',
+      memory_ids: ['m-zeta', 'm-alpha', 'm-mid'],
+    });
+    assert.equal(plan.ok, true);
+    assert.deepEqual(plan.labels, ['irreversible']);
+    // One approval covers the whole batch — stated with the id count…
+    assert.match(plan.approvalNote, /One approval covers the whole id batch/);
+    assert.match(plan.approvalNote, /3 ids is an irreversible delete/);
+    // …and with the auto-scaled execution budget (interrogate round 2:
+    // N sequential deletes under one child process — 2s/id + 30s grace,
+    // floored at the single-op default).
+    assert.match(plan.approvalNote, /Execution budget: 120000 ms/);
+    // The canonical request SORTS the ids (deletion order is
+    // semantically irrelevant; order-only differences must not
+    // spuriously mismatch the token).
+    assert.deepEqual(plan.request.memory_ids, ['m-alpha', 'm-mid', 'm-zeta']);
+    // Order-insensitive binding end-to-end: a write with the ids in a
+    // DIFFERENT order still matches the plan's token.
+    const out = await runAgentartsMemoryWrite(
+      {
+        operation: 'delete_memories',
+        space_id: 'sp1',
+        memory_ids: ['m-mid', 'm-zeta', 'm-alpha'],
+        approvedByUser: true,
+        approvalToken: plan.approvalToken,
+      },
+      {
+        // 3 ids → floor 120s; a 100-id batch scales to 230s (the
+        // auto-scale the plan's budget sentence promises).
+        timeoutMs: undefined,
+        runCandidate: async (_candidate, args, _childEnv, stdin) => {
+          // The request rides STDIN like every write; the snippet's
+          // batch branch is in the argv snippet string.
+          assert.ok(String(args[1]).includes('delete_memories'));
+          assert.ok(String(args[1]).includes('for mid in params["memory_ids"]'));
+          const request = JSON.parse(stdin);
+          assert.deepEqual(request.memory_ids, ['m-alpha', 'm-mid', 'm-zeta']);
+          return { exitCode: 0, stdout: '{"deleted": ["m-alpha", "m-mid", "m-zeta"], "failed": []}', stderr: '' };
+        },
+      },
+    );
+    assert.equal(out.ok, true);
+    assert.deepEqual(out.result, { deleted: ['m-alpha', 'm-mid', 'm-zeta'], failed: [] });
+    // A batch with ONE id changed → mismatch, token NOT consumed.
+    const changedPlan = planAgentartsMemoryWrite({
+      operation: 'delete_memories',
+      space_id: 'sp1',
+      memory_ids: ['m-zeta', 'm-alpha', 'm-mid'],
+    });
+    const mismatch = await runAgentartsMemoryWrite(
+      {
+        operation: 'delete_memories',
+        space_id: 'sp1',
+        memory_ids: ['m-alpha', 'm-mid', 'm-other'],
+        approvedByUser: true,
+        approvalToken: changedPlan.approvalToken,
+      },
+      { runCandidate: async () => ({ exitCode: 0, stdout: '{}', stderr: '' }) },
+    );
+    assert.equal(mismatch.ok, false);
+    assert.equal(mismatch.code, 'CONFIRM_TOKEN_MISMATCH');
+    // The timeout budget scales with the batch (the plan's promise):
+    // 100 ids → 100 × 2000 + 30000 = 230000 ms, above the 120s floor.
+    const bigPlan = planAgentartsMemoryWrite({
+      operation: 'delete_memories',
+      space_id: 'sp1',
+      memory_ids: Array.from({ length: 100 }, (_, i) => `m-${i}`),
+    });
+    assert.match(bigPlan.approvalNote, /Execution budget: 230000 ms/);
+  });
+});
+
+test('delete_memories partial failure: structured partial field, stderr trail, batch burn note', async () => {
+  await withIsolation(async (home) => {
+    writeKeyFile(home, 'sp1', KEY);
+    const plan = planAgentartsMemoryWrite({
+      operation: 'delete_memories',
+      space_id: 'sp1',
+      memory_ids: ['m1', 'm2', 'm3'],
+    });
+    assert.equal(plan.ok, true);
+    // The snippet's partial-failure shape: per-id progress lines on
+    // STDERR, the deleted/failed report on STDOUT (Python json.dumps
+    // formatting — spaces after separators), exit 1. The mock mirrors the
+    // real format (interrogate round 1: the old mock emitted compact JS
+    // JSON the real snippet never produces).
+    const report = {
+      deleted: ['m1', 'm3'],
+      failed: [{ memory_id: 'm2', error: 'NotFoundError: memory not found' }],
+    };
+    const partial = await runAgentartsMemoryWrite(
+      {
+        operation: 'delete_memories',
+        space_id: 'sp1',
+        memory_ids: ['m1', 'm2', 'm3'],
+        approvedByUser: true,
+        approvalToken: plan.approvalToken,
+      },
+      {
+        runCandidate: async () => ({
+          exitCode: 1,
+          stdout: `{"deleted": ["m1", "m3"], "failed": [{"memory_id": "m2", "error": "NotFoundError: memory not found"}]}`,
+          stderr:
+            '{"progress": "deleted", "memory_id": "m1"}\n{"progress": "failed", "memory_id": "m2"}\n{"progress": "deleted", "memory_id": "m3"}\n',
+        }),
+      },
+    );
+    assert.equal(partial.ok, false);
+    assert.equal(partial.failureDetected, true);
+    // The retry decision rides a STRUCTURED partial field (parsed from
+    // the raw stdout, so a truncated payload stdout cannot cut it);
+    // `result` stays dropped per the shared failure contract.
+    assert.deepEqual(partial.partial, report);
+    assert.equal('result' in partial, false);
+    // The stderr progress trail rides the payload (the timeout path's
+    // machine-readable evidence).
+    assert.match(partial.stderr, /"progress": "deleted", "memory_id": "m1"/);
+    // The burn note is batch-aware: re-plan ONLY the still-present ids,
+    // and the timeout path names its reconciliation.
+    assert.match(partial.error, /single-use token was consumed/);
+    assert.match(partial.error, /re-plan ONLY the ids still present/);
+    assert.match(partial.error, /On a TIMEOUT the stdout report may be missing/);
+    assert.match(partial.error, /get_memory per id is the direct check/);
+    assert.match(partial.error, /a not-found id is deleted/);
+  });
+});
+
+test('a mid-batch timeout leaves the stderr trail and the timeout-shaped burn note', async () => {
+  await withIsolation(async (home) => {
+    writeKeyFile(home, 'sp1', KEY);
+    const plan = planAgentartsMemoryWrite({
+      operation: 'delete_memories',
+      space_id: 'sp1',
+      memory_ids: ['m1', 'm2', 'm3'],
+    });
+    assert.equal(plan.ok, true);
+    // SIGKILL mid-loop: stdout is empty (the report only prints after the
+    // loop), stderr carries two completed progress lines. No partial
+    // field is derivable — the note must point at stderr + list_memories.
+    const timedOut = await runAgentartsMemoryWrite(
+      {
+        operation: 'delete_memories',
+        space_id: 'sp1',
+        memory_ids: ['m1', 'm2', 'm3'],
+        approvedByUser: true,
+        approvalToken: plan.approvalToken,
+      },
+      {
+        runCandidate: async () => ({
+          exitCode: null,
+          stdout: '',
+          stderr: '{"progress": "deleted", "memory_id": "m1"}\n{"progress": "deleted", "memory_id": "m2"}\n',
+          timedOut: true,
+        }),
+      },
+    );
+    assert.equal(timedOut.ok, false);
+    assert.equal(timedOut.timedOut, true);
+    assert.equal('partial' in timedOut, false);
+    assert.match(timedOut.stderr, /"progress": "deleted", "memory_id": "m1"/);
+    assert.match(timedOut.error, /On a TIMEOUT the stdout report may be missing/);
+    assert.match(timedOut.error, /stderr carries one JSON progress line per completed id/);
+  });
+});
+
+test('the no-python-candidate fallthrough still discloses the burned token', async () => {
+  await withIsolation(async (home) => {
+    writeKeyFile(home, 'sp1', KEY);
+    const plan = planAgentartsMemoryWrite({
+      operation: 'delete_memories',
+      space_id: 'sp1',
+      memory_ids: ['m1'],
+    });
+    assert.equal(plan.ok, true);
+    // Every candidate fails to spawn: runOverPythonCandidates returns
+    // its generic install remediation WITHOUT calling shapeResult — the
+    // consumed-token disclosure must come from the wrapper (interrogate
+    // round 1; pre-existing since U3).
+    const out = await runAgentartsMemoryWrite(
+      {
+        operation: 'delete_memories',
+        space_id: 'sp1',
+        memory_ids: ['m1'],
+        approvedByUser: true,
+        approvalToken: plan.approvalToken,
+      },
+      {
+        runCandidate: async () => ({ exitCode: null, stdout: '', stderr: '', spawnError: new Error('gone') }),
+      },
+    );
+    assert.equal(out.ok, false);
+    assert.match(out.error, /No python candidate could import agentarts/);
+    assert.match(out.error, /already CONSUMED by this attempt and stays burned/);
+    assert.match(out.error, /replaying this token returns already_processed without executing anything/);
+    // And that replay really does return already_processed with the
+    // batch-aware guidance (not the add_messages text).
+    const replay = await runAgentartsMemoryWrite(
+      {
+        operation: 'delete_memories',
+        space_id: 'sp1',
+        memory_ids: ['m1'],
+        approvedByUser: true,
+        approvalToken: plan.approvalToken,
+      },
+      {
+        runCandidate: async () => ({ exitCode: 0, stdout: '{}', stderr: '' }),
+      },
+    );
+    assert.equal(replay.ok, true);
+    assert.equal(replay.outcome, 'already_processed');
+    assert.match(replay.note, /get_memory per id is the direct per-id check/);
+    assert.match(replay.note, /re-plan ONLY the ids still present/);
+    // The add_messages replay note keeps its own guidance.
+    const msgPlan = planAgentartsMemoryWrite({
+      operation: 'add_messages',
+      space_id: 'sp1',
+      session_id: 's1',
+      messages: [{ role: 'user', content: 'x' }],
+    });
+    await runAgentartsMemoryWrite(
+      {
+        operation: 'add_messages',
+        space_id: 'sp1',
+        session_id: 's1',
+        messages: [{ role: 'user', content: 'x' }],
+        approvedByUser: true,
+        approvalToken: msgPlan.approvalToken,
+      },
+      {
+        runCandidate: async () => ({ exitCode: 0, stdout: '{"id": "s9"}', stderr: '' }),
+      },
+    );
+    const msgReplay = await runAgentartsMemoryWrite(
+      {
+        operation: 'add_messages',
+        space_id: 'sp1',
+        session_id: 's1',
+        messages: [{ role: 'user', content: 'x' }],
+        approvedByUser: true,
+        approvalToken: msgPlan.approvalToken,
+      },
+      {
+        runCandidate: async () => ({ exitCode: 0, stdout: '{}', stderr: '' }),
+      },
+    );
+    assert.equal(msgReplay.ok, true);
+    assert.match(msgReplay.note, /list_messages is immediate/);
+  });
+});
+
+test('canonical id sorting is code-unit ordered (locale-independent binding)', async () => {
+  await withIsolation(async (home) => {
+    writeKeyFile(home, 'sp1', KEY);
+    // 'ä' sorts AFTER 'z' by code unit, but BEFORE it under many
+    // collations — localeCompare here would make the canonical order
+    // environment-dependent (interrogate round 1).
+    const ids = ['ä', 'z', 'a'];
+    const plan = planAgentartsMemoryWrite({ operation: 'delete_memories', space_id: 'sp1', memory_ids: ids });
+    assert.equal(plan.ok, true);
+    assert.deepEqual(plan.request.memory_ids, ['a', 'z', 'ä']);
+    // Reordered write still binds (order-insensitive, code-unit canon).
+    const out = await runAgentartsMemoryWrite(
+      {
+        operation: 'delete_memories',
+        space_id: 'sp1',
+        memory_ids: ['z', 'a', 'ä'],
+        approvedByUser: true,
+        approvalToken: plan.approvalToken,
+      },
+      {
+        runCandidate: async (_candidate, args, _childEnv, stdin) => {
+          // The snippet emits per-id stderr progress (interrogate round 1).
+          assert.ok(String(args[1]).includes('file=sys.stderr, flush=True'));
+          assert.deepEqual(JSON.parse(stdin).memory_ids, ['a', 'z', 'ä']);
+          return {
+            exitCode: 0,
+            stdout: '{"deleted": ["a", "z", "ä"], "failed": []}',
+            stderr: '',
+          };
+        },
+      },
     );
     assert.equal(out.ok, true);
   });

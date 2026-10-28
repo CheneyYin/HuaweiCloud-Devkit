@@ -1409,6 +1409,32 @@ test('huawei-agentarts skill ships with routing floor and core registry wiring',
   assert.match(workflows, /append-merge/);
   assert.match(workflows, /never named Alice/);
 
+  // U7 (friction fix 9): batch delete_memories — one approval per id
+  // array, sorted canonical ids, partial-failure contract.
+  assert.match(body, /delete_memories batch irreversible/);
+  assert.match(body, /ONE approval covers the whole id array/);
+  assert.match(body, /delete in batches through delete_memories/);
+  assert.match(workflows, /Batch deletion \(`delete_memories`\)/);
+  assert.match(workflows, /ONE approval\s+covers the whole array/);
+  assert.match(workflows, /loops the SDK's single-record delete/);
+  assert.match(workflows, /re-plan ONLY\s+the\s+still-present ids/);
+  // R1 hardening pins: structured partial field, stderr progress trail,
+  // locale-independent canonical sort, boundary filter-value typing.
+  assert.match(workflows, /STRUCTURED/);
+  assert.match(workflows, /JSON progress line per id to STDERR/);
+  assert.match(workflows, /CODE UNIT \(locale-independent/);
+  assert.match(workflows, /mistyped value is rejected, never silently coerced/);
+  // R2 hardening pins: timeout budget auto-scale, get_memory per-id check,
+  // null-score semantics, truncation NOT-applied disclosure.
+  assert.match(workflows, /timeout auto-scales with the batch/);
+  assert.match(workflows, /2s per id \+ 30s grace, floor 120s/);
+  assert.match(workflows, /get_memory per id is the direct check/);
+  assert.match(workflows, /serialized `null` score counts as scoreless/);
+  assert.match(workflows, /NOT-applied note/);
+  // The old no-batch teaching is gone from both surfaces.
+  assert.doesNotMatch(body, /N records = N approval round-trips, no batch\/undo/);
+  assert.doesNotMatch(workflows, /no batch, no undo/);
+
   // Core skill routes agent workloads and declares the gate exemption (D15).
   const core = readFileSync(join(pluginRoot, 'skills', 'huaweicloud-core', 'SKILL.md'), 'utf8');
   assert.match(core, /huawei-agentarts/);
@@ -1569,7 +1595,7 @@ test('the agentarts memory data-plane read bridge registers with its safety cont
   const { TOOL_DEFINITIONS } = await import('../plugins/huaweicloud-core/src/tools.mjs');
   const def = TOOL_DEFINITIONS.find((t) => t.name === 'huaweicloud_agentarts_memory_read');
   assert.ok(def, 'tools.mjs missing huaweicloud_agentarts_memory_read');
-  const { MEMORY_READ_OPERATIONS } = await import('../plugins/huaweicloud-core/src/agentarts-memory.mjs');
+  const { MEMORY_READ_OPERATIONS } = await import('../plugins/huaweicloud-core/src/agentarts-memory-tools.mjs');
   // Exactly the 8 read-only data-plane methods (the 4 writes are a separate
   // approval-gated unit; the operation enum must not grow silently).
   assert.deepEqual(
@@ -1609,12 +1635,49 @@ test('the agentarts memory WRITE bridge registers with its approval contract pin
   const write = TOOL_DEFINITIONS.find((t) => t.name === 'huaweicloud_agentarts_memory_write');
   assert.ok(plan, 'tools.mjs missing huaweicloud_agentarts_memory_plan');
   assert.ok(write, 'tools.mjs missing huaweicloud_agentarts_memory_write');
-  const { MEMORY_WRITE_OPERATIONS } = await import('../plugins/huaweicloud-core/src/agentarts-memory.mjs');
-  // Exactly the 4 write methods — the enum must not grow silently.
+  const { MEMORY_WRITE_OPERATIONS } = await import('../plugins/huaweicloud-core/src/agentarts-memory-tools.mjs');
+  // The 4 SDK write methods plus the U7 bridge-composed batch delete —
+  // the enum must not grow silently.
   assert.deepEqual(
     [...MEMORY_WRITE_OPERATIONS].sort((a, b) => a.localeCompare(b)),
-    ['add_messages', 'create_session', 'delete_memory', 'delete_session'],
+    ['add_messages', 'create_session', 'delete_memories', 'delete_memory', 'delete_session'],
   );
+  // WRITE_OPERATION_META key parity (interrogate round 3): the plan
+  // path looks the registry up WITHOUT a fallback — an enum entry
+  // without a meta entry must fail loudly, and this pin makes the gap
+  // visible in CI the moment it appears (the ?? default used to absorb
+  // it silently, labels included).
+  {
+    const source = readFileSync(join(root, 'plugins/huaweicloud-core/src/agentarts-memory.mjs'), 'utf8');
+    const metaKeys = [
+      ...source.matchAll(/^ {2}(create_session|add_messages|delete_session|delete_memory|delete_memories): \{/gm),
+    ].map((m) => m[1]);
+    const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+    assert.deepEqual(
+      [...metaKeys].sort(byCodeUnit),
+      [...MEMORY_WRITE_OPERATIONS].sort(byCodeUnit),
+      'WRITE_OPERATION_META must cover every MEMORY_WRITE_OPERATIONS entry exactly',
+    );
+    assert.doesNotMatch(
+      source,
+      /WRITE_OPERATION_META\[params\.operation\] \?\?/,
+      'the meta lookup must have no ?? fallback',
+    );
+  }
+  // U7: the batch op is registered on both tool surfaces with its
+  // partial-failure contract (R1: structured partial field + stderr
+  // progress trail + timeout reconciliation).
+  assert.match(plan.description, /delete_memories \(BATCH irreversible delete/);
+  assert.match(write.description, /BATCH irreversible delete/);
+  assert.match(write.description, /structured `partial` field/);
+  assert.match(write.description, /re-plan ONLY the still-present ids/);
+  assert.match(write.description, /stderr carries one JSON progress line per completed id/);
+  assert.match(
+    write.description,
+    /authoritative reconciliation is memory_read \(get_memory per id is the direct check/,
+  );
+  assert.ok('memory_ids' in plan.inputSchema.properties, 'plan schema missing memory_ids');
+  assert.ok('memory_ids' in write.inputSchema.properties, 'write schema missing memory_ids');
   // Writes are token-gated: the plan mints the token, the write consumes
   // it, and the texts teach the binding + single-use semantics.
   assert.match(plan.description, /approvalToken/);

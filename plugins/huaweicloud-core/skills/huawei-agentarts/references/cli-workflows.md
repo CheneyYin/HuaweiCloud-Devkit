@@ -249,6 +249,34 @@ soft delete — unreachable through this toolkit immediately, retained
 server-side for async cleanup (90-365 days per the SDK), no in-toolkit
 recovery.
 
+Batch deletion (`delete_memories`): pass `memory_ids[]` and ONE approval
+covers the whole array — the bridge loops the SDK's single-record delete
+internally (0.1.7 has no server-side batch; upstream ask #15). The
+canonical request sorts the ids by CODE UNIT (locale-independent — the
+token binding must not depend on the process locale), so a plan/write
+id-order difference still binds; duplicates are rejected at plan time (a
+duplicate would fail server-side on the second delete). The execution
+timeout auto-scales with the batch (2s per id + 30s grace, floor 120s —
+a heuristic until per-id latency is measured; the plan states the exact
+budget). Enumerate first (`memory_read list_memories`, limit 100 +
+offset to sweep), then plan the batch from real ids. Partial failure:
+the executed snippet emits one JSON progress line per id to STDERR as it
+goes (a mid-batch timeout still leaves that trail), and on any failure
+prints `{"deleted": [...], "failed": [{"memory_id", "error"}]}` to
+stdout and exits 1 — the failure payload surfaces that report as a
+STRUCTURED `partial` field plus a batch-aware burn note: re-plan ONLY
+the still-present ids. On a TIMEOUT the stdout report may be missing —
+read the stderr progress trail and reconcile with memory_read
+(get_memory per id is the direct check — a not-found id is deleted;
+list_memories the sweep form). Still no undo — every id in the batch is
+an irreversible delete. Filter values (min_score/top_k numbers, string
+fields) and top-level limit/offset/k are type-checked at the tool
+boundary — a mistyped value is rejected, never silently coerced; a
+serialized `null` score counts as scoreless (kept by the client-side
+min_score filter, excluded from searchSummary); a set min_score whose
+result went to the truncation side file carries an explicit
+NOT-applied note.
+
 Three retention/recall traps worth knowing before you lean on the data:
 
 - **Message TTL is 7 days by default** (`message_ttl_hours: 168`, range
@@ -288,8 +316,9 @@ Three retention/recall traps worth knowing before you lean on the data:
   as "Alice 觉得…") and stores its own paraphrase, not your verbatim
   text. Consequences: record count is unpredictable from message count;
   "delete that memory" requires enumerating first (list_memories /
-  search_memories); `delete_memory` is single-record and irreversible —
-  N records = N approval round-trips, no batch, no undo; and there is NO
+  search_memories); deletion is irreversible with no undo — batch the
+  ids through `delete_memories` (one approval per array, see the
+  failure/retry section above); and there is NO
   message-level delete in 0.1.7 (only `delete_session` soft delete).
   Control what gets inferred by controlling the session context you
   write into.

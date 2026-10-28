@@ -15,6 +15,8 @@ import {
   agentartsVenvBin,
   listAgentartsAgents,
   MEMORY_SUBCOMMAND_VALUE_FLAGS,
+  runPythonSnippet,
+  childDeathVerdict,
 } from '../plugins/huaweicloud-core/src/agentarts-cli.mjs';
 import { createApprovalToken, planHcloudCommand } from '../plugins/huaweicloud-core/src/hcloud-cli.mjs';
 import { scrubPositionalSecrets } from '../plugins/huaweicloud-core/src/approval-tokens.mjs';
@@ -86,6 +88,24 @@ async function withIsolation(fn) {
         '    echo \'{"id": "space-hang-001", "api_key": "KEY_ONETIME_hang42", "name": "s"}\'',
         '    sleep 2',
         '    exit 0;;',
+        '  *" --stub-drain-gap "*)',
+        '    echo \'{"items": []}\'',
+        '    (sleep 2) &',
+        '    exit 0;;',
+        '  *" --stub-fast-exit "*)',
+        '    echo \'{"items": []}\'',
+        '    exit 0;;',
+        '  *" --stub-grandchild-alive "*)',
+        '    echo \'{"items": []}\'',
+        '    (sleep 8) &',
+        '    sleep 30;;',
+        '  *" --stub-exited-grandchild "*)',
+        '    echo \'{"items": []}\'',
+        '    (sleep 8) &',
+        '    exit 0;;',
+        '  *" --stub-self-kill "*)',
+        '    echo \'{"items": []}\'',
+        '    kill -TERM $$;;',
         '  *" --stub-stdin "*)',
         '    if read -t 2 line; then echo "STDIN_LEAK: $line" >&2; exit 1; fi',
         '    echo "OK"',
@@ -556,16 +576,390 @@ test('runs without devkit credentials fail closed with a clear pointer (env-or-f
   });
 });
 
-test('list agents runs the stub sibling python, passes argv-as-data, and parses the list', async () => {
+test('runPythonSnippet timeout: stderr drains before resolve and multibyte survives (real spawn)', async () => {
   await withIsolation(async ({ home }) => {
-    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
-    // A stub python BESIDE the stub CLI: prints a JSON array, echoes the
-    // json argv element ($3: $1=-c $2=snippet $3=json) to stderr so the
-    // data-channel contract is asserted with a real spawn.
+    // The R2/R3 timeout contract, exercised against a REAL child (the
+    // memory-bridge tests all inject outcomes through runCandidate —
+    // none executes the mark+SIGKILL+resolve-from-close machinery this
+    // pins). The stub writes two flushed stderr progress lines carrying
+    // multibyte text, spaced so the first lands as its own chunk, then
+    // hangs past the timeout. Contract: every pre-kill line survives
+    // into the accumulated stderr (close fires after stdio drains), and
+    // setEncoding('utf8') never emits U+FFFD for codepoints that straddle
+    // chunk boundaries.
     const stubPython = join(home, 'python');
     writeFileSync(
       stubPython,
-      ['#!/bin/bash', 'echo \'[{"name":"demo-agent","status":"RUNNING"}]\'', 'echo "JSONARG=$3" >&2', ''].join('\n'),
+      [
+        '#!/bin/bash',
+        'printf \'{"progress": "deleted", "memory_id": "记忆-alpha"}\\n\' >&2',
+        'sleep 0.25',
+        'printf \'{"progress": "deleted", "memory_id": "记忆-beta"}\\n\' >&2',
+        'sleep 30',
+        '',
+      ].join('\n'),
+      { encoding: 'utf8', mode: 0o755 },
+    );
+    chmodSync(stubPython, 0o755);
+    const out = await runPythonSnippet(stubPython, ['-c', 'pass'], {}, 1500, null);
+    assert.equal(out.timedOut, true);
+    assert.match(out.stderr, /"memory_id": "记忆-alpha"/);
+    assert.match(out.stderr, /"memory_id": "记忆-beta"/);
+    assert.ok(
+      !out.stderr.includes('\uFFFD'),
+      'multibyte must survive chunk boundaries (setEncoding, not per-chunk toString)',
+    );
+  });
+});
+
+test('runPythonSnippet multibyte stdout decodes whole (real spawn)', async () => {
+  await withIsolation(async ({ home }) => {
+    // Same corruption class on the stdout channel: a CJK-dense payload
+    // emitted in two spaced bursts, split MID-CODEPOINT at a byte
+    // offset chosen inside a multibyte char. Per-chunk
+    // toString('utf8') corrupted exactly this shape (interrogate round
+    // 3, 20/20); setEncoding must decode it whole.
+    const payload = JSON.stringify({ results: Array.from({ length: 400 }, (_, i) => ({ id: `记忆-${i}` })) });
+    const payloadFile = join(home, 'payload.json');
+    writeFileSync(payloadFile, payload, 'utf8');
+    const bytes = readFileSync(payloadFile);
+    // First occurrence of 记 (e3 ae a0-class sequence); split inside it.
+    const splitAt = bytes.indexOf(Buffer.from('记', 'utf8')) + 1;
+    assert.ok(splitAt > 0 && splitAt < bytes.length, 'payload must contain the multibyte marker');
+    const stubPython = join(home, 'python');
+    writeFileSync(
+      stubPython,
+      [
+        '#!/bin/bash',
+        `head -c ${splitAt} "${payloadFile}"`,
+        'sleep 0.25',
+        `tail -c +${splitAt + 1} "${payloadFile}"`,
+        '',
+      ].join('\n'),
+      { encoding: 'utf8', mode: 0o755 },
+    );
+    chmodSync(stubPython, 0o755);
+    const out = await runPythonSnippet(stubPython, ['-c', 'pass'], {}, 5000, null);
+    assert.equal(out.exitCode, 0);
+    const parsed = JSON.parse(out.stdout);
+    assert.equal(parsed.results.length, 400);
+    assert.ok(!out.stdout.includes('\uFFFD'), 'multibyte must survive the mid-codepoint chunk split');
+  });
+});
+
+test('an exited child still draining stdio is not stamped timedOut (CLI runner guard)', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // The already-ended guard (interrogate round 4, ported from
+    // runPythonSnippet): the stub prints, forks a subshell that HOLDS
+    // the stdout pipe, and exits 0 — the exit→close gap (~2s) overlaps
+    // the 500ms timer. Without the guard the runner stamps
+    // timedOut:true onto a successful exit (a false failure that
+    // invites a retry → duplicate space + orphan one-time key).
+    const out = await runAgentartsReadonlyCommand(['memory', 'list', '--stub-drain-gap'], { timeoutMs: 500 });
+    assert.equal(out.ok, true);
+    assert.equal('timedOut' in out, false);
+    assert.equal(out.exitCode, 0);
+  });
+});
+
+test('an exited child still draining stdio is not stamped timedOut (snippet runner guard)', async () => {
+  await withIsolation(async ({ home }) => {
+    // Same guard on runPythonSnippet: the R3 fix line had no regression
+    // test of its own (interrogate round 4) — this pins it.
+    const stubPython = join(home, 'python');
+    writeFileSync(stubPython, ['#!/bin/bash', 'echo \'{"items": []}\'', '(sleep 2) &', 'exit 0', ''].join('\n'), {
+      encoding: 'utf8',
+      mode: 0o755,
+    });
+    chmodSync(stubPython, 0o755);
+    const out = await runPythonSnippet(stubPython, ['-c', 'pass'], {}, 500, null);
+    assert.equal(out.exitCode, 0);
+    assert.equal('timedOut' in out, false);
+  });
+});
+
+test('list agents rejects mistyped params instead of coercing them', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // The memory-bridge boundary policy, applied to the third SDK
+    // surface (interrogate round 4): limit: true used to coerce to 1
+    // and ride the request; region: '' silently bound the default.
+    const bad = await listAgentartsAgents({ limit: true });
+    assert.equal(bad.ok, false);
+    assert.match(bad.error, /limit must be an integer \(got boolean\)/);
+    const badRegion = await listAgentartsAgents({ region: 42 });
+    assert.equal(badRegion.ok, false);
+    assert.match(badRegion.error, /region must be a non-empty string/);
+    const badName = await listAgentartsAgents({ agent_name: 7 });
+    assert.equal(badName.ok, false);
+    assert.match(badName.error, /agent_name must be a non-empty string/);
+    const badOffset = await listAgentartsAgents({ offset: '5' });
+    assert.equal(badOffset.ok, false);
+    assert.match(badOffset.error, /offset must be an integer \(got string\)/);
+  });
+});
+
+test('a successful exit queued behind loop congestion is not stamped timedOut (authoritative close args)', async () => {
+  await withIsolation(async ({ home }) => {
+    // Interrogate round 5, reproduced 3/3 by the reviewer: the child's
+    // OS exit and the deadline BOTH queue behind a blocked event loop;
+    // when it resumes, the timer (timers phase) runs BEFORE the exit is
+    // reaped (poll phase), so the flag alone saw "not exited" and
+    // stamped timedOut onto a successful exit. The close handler's
+    // arguments are authoritative: a genuine SIGKILL death closes with
+    // code === null, a normal exit never does.
+    const stubPython = join(home, 'python');
+    writeFileSync(stubPython, ['#!/bin/bash', 'echo \'{"items": []}\'', 'exit 0', ''].join('\n'), {
+      encoding: 'utf8',
+      mode: 0o755,
+    });
+    chmodSync(stubPython, 0o755);
+    const run = runPythonSnippet(stubPython, ['-c', 'pass'], {}, 150, null);
+    // Block the loop from before the child's exit until past the
+    // deadline — both events queue; timers fire first on resume.
+    const blockUntil = Date.now() + 400;
+    while (Date.now() < blockUntil) {
+      /* synchronous block */
+    }
+    const out = await run;
+    assert.equal(out.exitCode, 0);
+    assert.equal('timedOut' in out, false, 'a normal exit must never carry timedOut');
+  });
+});
+
+test('a grandchild holding the stdio pipe cannot hang the promise past its deadline (grace-bounded force resolve)', async () => {
+  await withIsolation(async ({ home }) => {
+    // Interrogate round 5: close only fires when EVERY pipe writer
+    // releases — the stub's forked subshell holds stdout for 8s while
+    // the (killed) parent's deadline was 500ms. Pre-R5 the promise
+    // would pend until the grandchild exits (or forever for a
+    // long-lived one); the force resolve bounds it at deadline + grace.
+    const stubPython = join(home, 'python');
+    writeFileSync(stubPython, ['#!/bin/bash', 'echo \'{"items": []}\'', '(sleep 8) &', 'sleep 30', ''].join('\n'), {
+      encoding: 'utf8',
+      mode: 0o755,
+    });
+    chmodSync(stubPython, 0o755);
+    const startedAt = Date.now();
+    const out = await runPythonSnippet(stubPython, ['-c', 'pass'], {}, 500, null);
+    const elapsed = Date.now() - startedAt;
+    assert.equal(out.timedOut, true);
+    // Bounded: deadline (500ms) + grace (5s) + spawn slop — NOT the
+    // grandchild's 8s, and never the parent's 30s.
+    assert.ok(elapsed < 7_500, `force resolve must bound the wait (took ${elapsed}ms)`);
+    assert.match(out.stdout, /"items": \[\]/, 'drained-so-far output rides the forced outcome');
+  });
+});
+
+test('an EXITED child with a pipe-holding grandchild settles bounded with the NORMAL outcome (round 6)', async () => {
+  await withIsolation(async ({ home }) => {
+    // Interrogate round 6: the force settle was armed only on the kill
+    // path — the already-ended early return left an exited child with a
+    // pipe-holding grandchild pending forever. Now both branches arm
+    // the settle, and the force callback decides from the AUTHORITATIVE
+    // exit state: exitCode set → the normal outcome, no timedOut stamp.
+    const stubPython = join(home, 'python');
+    writeFileSync(stubPython, ['#!/bin/bash', 'echo \'{"items": []}\'', '(sleep 8) &', 'exit 0', ''].join('\n'), {
+      encoding: 'utf8',
+      mode: 0o755,
+    });
+    chmodSync(stubPython, 0o755);
+    const startedAt = Date.now();
+    const out = await runPythonSnippet(stubPython, ['-c', 'pass'], {}, 500, null);
+    const elapsed = Date.now() - startedAt;
+    assert.equal(out.exitCode, 0);
+    assert.equal('timedOut' in out, false, 'a reaped successful exit must never carry timedOut');
+    assert.ok(elapsed < 7_500, `the exited branch must also be bounded (took ${elapsed}ms)`);
+    assert.match(out.stdout, /"items": \[\]/);
+  });
+});
+
+test('CLI runner: a successful exit queued behind loop congestion is not stamped timedOut', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // The R5 authoritative-args gate, driven on the CLI runner too
+    // (interrogate round 6: the R5 tests covered only the snippet
+    // runner).
+    const run = runAgentartsReadonlyCommand(['memory', 'list', '--stub-fast-exit'], { timeoutMs: 150 });
+    const blockUntil = Date.now() + 400;
+    while (Date.now() < blockUntil) {
+      /* synchronous block across exit + deadline */
+    }
+    const out = await run;
+    assert.equal(out.ok, true);
+    assert.equal('timedOut' in out, false);
+    assert.equal(out.exitCode, 0);
+  });
+});
+
+test('CLI runner: a killed child with a pipe-holding grandchild settles bounded with the timeout outcome', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const startedAt = Date.now();
+    const out = await runAgentartsReadonlyCommand(['memory', 'list', '--stub-grandchild-alive'], {
+      timeoutMs: 500,
+    });
+    const elapsed = Date.now() - startedAt;
+    assert.equal(out.ok, false);
+    assert.equal(out.timedOut, true);
+    assert.ok(elapsed < 7_500, `force resolve must bound the CLI runner too (took ${elapsed}ms)`);
+  });
+});
+
+test('CLI runner: an EXITED child with a pipe-holding grandchild settles bounded with the normal outcome', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const startedAt = Date.now();
+    const out = await runAgentartsReadonlyCommand(['memory', 'list', '--stub-exited-grandchild'], {
+      timeoutMs: 500,
+    });
+    const elapsed = Date.now() - startedAt;
+    assert.equal(out.ok, true);
+    assert.equal(out.exitCode, 0);
+    assert.equal('timedOut' in out, false, 'a reaped successful exit must never carry timedOut');
+    assert.ok(elapsed < 7_500, `the exited branch must be bounded on the CLI runner too (took ${elapsed}ms)`);
+  });
+});
+
+test('the child-death verdict state machine decides the full observable grid (round 8)', () => {
+  // Table-driven over every reachable (exitCode, signalCode, timedOut)
+  // cell — the drift surface that produced the R4/R6/R7-R8 port bugs is
+  // now ONE function, and this grid pins it. Cells: normal exit dominates
+  // everything (a stamped flag on a reaped success is still a success —
+  // the R6 fix); a reaped non-SIGKILL signal is a FOREIGN death
+  // REGARDLESS of the flag (the R8 fix: the flag means "we sent a
+  // kill", not "we caused the death" — in the reap-lag window it is
+  // stamped on foreign deaths too); SIGKILL+flag is an AMBIGUOUS
+  // timeout (ours vs a foreign one that won the pre-reap race —
+  // indistinguishable, disclosed); SIGKILL without the flag is a foreign
+  // death; both null is the conservative timeout (loop blocked through
+  // the grace, disclosed residual).
+  const grid = [
+    [
+      { exitCode: 0, signalCode: null, timedOut: false },
+      { kind: 'normal', code: 0 },
+    ],
+    [
+      { exitCode: 0, signalCode: null, timedOut: true },
+      { kind: 'normal', code: 0 },
+    ],
+    [
+      { exitCode: 2, signalCode: null, timedOut: false },
+      { kind: 'normal', code: 2 },
+    ],
+    [{ exitCode: null, signalCode: 'SIGTERM', timedOut: false }, { kind: 'signal_death' }],
+    [{ exitCode: null, signalCode: 'SIGTERM', timedOut: true }, { kind: 'signal_death' }],
+    [{ exitCode: null, signalCode: 'SIGHUP', timedOut: true }, { kind: 'signal_death' }],
+    [
+      { exitCode: null, signalCode: 'SIGKILL', timedOut: true },
+      { kind: 'timeout', ambiguous: true },
+    ],
+    [{ exitCode: null, signalCode: 'SIGKILL', timedOut: false }, { kind: 'signal_death' }],
+    [
+      { exitCode: null, signalCode: null, timedOut: true },
+      { kind: 'timeout', ambiguous: false },
+    ],
+    [
+      { exitCode: null, signalCode: null, timedOut: false },
+      { kind: 'timeout', ambiguous: false },
+    ],
+  ];
+  for (const [input, expected] of grid) {
+    assert.deepEqual(childDeathVerdict(input), expected, JSON.stringify(input));
+  }
+});
+
+test('a foreign-signal death in the reap-lag window settles honestly through the force path (round 8)', async () => {
+  await withIsolation(async ({ home }) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // The R8 reproduced cell: a foreign TERM lands ~50ms before the
+    // 500ms deadline, the event loop is blocked across death + deadline
+    // (timers phase runs before the poll-phase reap), so the timer
+    // stamps the flag on a death it did not cause; a grandchild holds
+    // the pipes past the grace so the FORCE path resolves. Pre-R8 this
+    // stamped timedOut (the force gate trusted the flag); the close path
+    // resolved the same death honestly — a path-dependent verdict on
+    // identical ground truth.
+    const stubPython = join(home, 'python');
+    writeFileSync(
+      stubPython,
+      ['#!/bin/bash', 'echo \'{"items": []}\'', '(sleep 8) &', 'sleep 0.45', 'kill -TERM $$', ''].join('\n'),
+      { encoding: 'utf8', mode: 0o755 },
+    );
+    chmodSync(stubPython, 0o755);
+    const run = runPythonSnippet(stubPython, ['-c', 'pass'], {}, 500, null);
+    const blockUntil = Date.now() + 600;
+    while (Date.now() < blockUntil) {
+      /* synchronous block across foreign death + deadline */
+    }
+    const out = await run;
+    assert.equal(out.exitCode, null);
+    assert.equal('timedOut' in out, false, 'a reaped foreign-signal death must never carry timedOut');
+    assert.match(out.stdout, /"items": \[\]/);
+  });
+});
+
+test('a foreign-signal death is never misattributed as a timeout (round 7, both runners)', async () => {
+  await withIsolation(async ({ home }) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // A7/B7's reproduced case: a child killed by an EXTERNAL signal
+    // (OOM/cgroup/kill) before its deadline, with a grandchild holding
+    // the pipes past the grace. The R6 force branch stamped timedOut on
+    // it (exitCode === null bucket); the same death without the
+    // grandchild settled via close with NO stamp — a path-dependent
+    // verdict on identical ground truth. The verdict matrix now: only
+    // OUR SIGKILL is a timeout; a foreign signal is an honest
+    // signal-death failure (the CLI runner previously reported ok:true
+    // for it — C7's sharpest finding, an OOM-killed approved create
+    // reading as success).
+    const stubPython = join(home, 'python');
+    writeFileSync(
+      stubPython,
+      ['#!/bin/bash', 'echo \'{"items": []}\'', '(sleep 8) &', 'kill -TERM $$', ''].join('\n'),
+      { encoding: 'utf8', mode: 0o755 },
+    );
+    chmodSync(stubPython, 0o755);
+    const startedAt = Date.now();
+    const out = await runPythonSnippet(stubPython, ['-c', 'pass'], {}, 500, null);
+    const elapsed = Date.now() - startedAt;
+    assert.equal(out.exitCode, null);
+    assert.equal('timedOut' in out, false, 'a foreign-signal death is not a wrapper timeout');
+    assert.ok(elapsed < 7_500, `the foreign-death branch must also be bounded (took ${elapsed}ms)`);
+    assert.match(out.stdout, /"items": \[\]/);
+
+    // The CLI runner's close path: same death, no grandchild — honest
+    // failure, exitCode null, no timedOut, and the signal-death error.
+    const cliOut = await runAgentartsReadonlyCommand(['memory', 'list', '--stub-self-kill'], {
+      timeoutMs: 5000,
+    });
+    assert.equal(cliOut.ok, false);
+    assert.equal(cliOut.exitCode, null);
+    assert.equal('timedOut' in cliOut, false);
+    assert.equal(cliOut.failureDetected, true);
+    assert.match(cliOut.error, /died to a signal/);
+    assert.match(cliOut.error, /not a wrapper timeout/);
+  });
+});
+
+test('list agents runs the stub sibling python, passes stdin-as-data, and parses the list', async () => {
+  await withIsolation(async ({ home }) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // A stub python BESIDE the stub CLI: prints a JSON array, echoes the
+    // STDIN request to stderr so the data-channel contract is asserted
+    // with a real spawn (interrogate round 3 moved list_agents off argv —
+    // argv is process-list visible and an oversize agent_name would hit
+    // E2BIG, which the candidate chain misdiagnoses as install-SDK).
+    const stubPython = join(home, 'python');
+    writeFileSync(
+      stubPython,
+      [
+        '#!/bin/bash',
+        'echo \'[{"name":"demo-agent","status":"RUNNING"}]\'',
+        'echo "STDINARG=$(cat)" >&2',
+        'echo "ARGC=$#" >&2',
+        '',
+      ].join('\n'),
       { encoding: 'utf8', mode: 0o755 },
     );
     chmodSync(stubPython, 0o755);
@@ -574,8 +968,9 @@ test('list agents runs the stub sibling python, passes argv-as-data, and parses 
     assert.equal(result.executable, stubPython);
     assert.equal(result.count, 1);
     assert.equal(result.agents[0].name, 'demo-agent');
-    // The JSON request is a SEPARATE argv element — never woven into the snippet.
-    assert.match(result.stderr, /^JSONARG=\{"region":"cn-southwest-2"\}$/m);
+    // The JSON request rides STDIN — argv carries only -c + the snippet.
+    assert.match(result.stderr, /^ARGC=2$/m);
+    assert.match(result.stderr, /^STDINARG=\{"region":"cn-southwest-2"\}$/m);
     assert.doesNotMatch(JSON.stringify(result), /AKVALUE123|SKVALUE456/);
   });
 });
@@ -650,26 +1045,31 @@ test('list agents exit-code contract: ours, with detectFailure as the second lay
   });
 });
 
-test('list agents pagination omission and explicit params shape the JSON arg', async () => {
+test('list agents pagination omission and explicit params shape the stdin request', async () => {
   await withIsolation(async () => {
     setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
-    let seenArgs;
-    const capture = async (candidate, args) => {
-      seenArgs = args;
+    let seen;
+    const capture = async (candidate, args, _childEnv, stdinData) => {
+      seen = { args, stdinData };
       return { exitCode: 0, stdout: '[]', stderr: '' };
     };
     // Omitted params never reach the request — SDK defaults stay the single
     // source of truth.
     await listAgentartsAgents({}, { runCandidate: capture });
-    assert.deepEqual(JSON.parse(seenArgs[2]), { region: 'cn-southwest-2' });
-    assert.equal(seenArgs[0], '-c');
-    assert.ok(seenArgs[1].includes('get_agents'));
+    assert.equal(seen.args.length, 2);
+    assert.ok(seen.args[1].includes('get_agents'));
+    assert.deepEqual(JSON.parse(seen.stdinData), { region: 'cn-southwest-2' });
     // Explicit params all travel.
     await listAgentartsAgents({ agent_name: 'demo', limit: 100, offset: 2 }, { runCandidate: capture });
-    assert.deepEqual(JSON.parse(seenArgs[2]), { region: 'cn-southwest-2', agent_name: 'demo', limit: 100, offset: 2 });
+    assert.deepEqual(JSON.parse(seen.stdinData), {
+      region: 'cn-southwest-2',
+      agent_name: 'demo',
+      limit: 100,
+      offset: 2,
+    });
     // Region override travels too.
     await listAgentartsAgents({ region: 'cn-north-4' }, { runCandidate: capture });
-    assert.deepEqual(JSON.parse(seenArgs[2]), { region: 'cn-north-4' });
+    assert.deepEqual(JSON.parse(seen.stdinData), { region: 'cn-north-4' });
   });
 });
 

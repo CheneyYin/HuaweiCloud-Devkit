@@ -15,8 +15,8 @@ import { AGENTARTS_TOOL_DEFINITIONS, callAgentartsTool } from './agentarts-cli.m
 import {
   AGENTARTS_MEMORY_TOOL_DEFINITIONS,
   AGENTARTS_MEMORY_WRITE_TOOL_DEFINITIONS,
-  callAgentartsMemoryTool,
-} from './agentarts-memory.mjs';
+} from './agentarts-memory-tools.mjs';
+import { callAgentartsMemoryTool } from './agentarts-memory.mjs';
 import { searchMarketplace } from './search-market.mjs';
 import { getServiceIcon } from './icon-library.mjs';
 import { detectFramework } from './detect-framework.mjs';

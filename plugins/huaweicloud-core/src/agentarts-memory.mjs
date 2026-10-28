@@ -17,10 +17,12 @@
 // the child env (HUAWEICLOUD_SDK_MEMORY_API_KEY), and never appears in
 // argv, the tool arguments, or the payload.
 //
-// Request transport: the WRITE request (user conversation content —
-// batches can exceed the kernel's per-argument argv limit and argv is
-// process-list visible) travels via STDIN, not argv; read requests are
-// small id/limit shapes and stay argv-as-data.
+// Request transport: BOTH bridges' requests travel via STDIN, not argv
+// (interrogate round 2 aligned the read side with the write side): argv
+// is process-list visible (a search query is arbitrary
+// conversation-derived text, not an id/limit shape) and a document-sized
+// query would hit the kernel per-argument limit as E2BIG, which the
+// candidate chain misdiagnosed as "install the SDK".
 //
 // Accepted residual: message content is the USER's data and may contain
 // credential-shaped text the user chose to memorize. The plan payload
@@ -48,35 +50,10 @@ import {
   runOverPythonCandidates,
   saveLargeOutput,
 } from './agentarts-cli.mjs';
+import { MEMORY_READ_OPERATIONS, MEMORY_WRITE_OPERATIONS } from './agentarts-memory-tools.mjs';
 import { createApprovalTokenStore, hashNamespacedArgs } from './approval-tokens.mjs';
 import { redactCredentialShapes } from './redact-core.mjs';
 import { redactSecrets } from './safety-policy.mjs';
-
-// The 8 read-only data-plane methods, transcribed from the pinned venv's
-// sdk/memory/client.py. Signatures with per-op required params:
-// - list_sessions(space_id, actor_id?, limit 1-20 def 20, offset def 0)
-// - get_session(space_id, session_id)
-// - get_last_k_messages(session_id, k, space_id)  [k positive int]
-// - get_message(message_id, space_id, session_id) [note the arg order]
-// - list_messages(space_id, session_id?, limit 1-100 def 10, offset def 0)
-// - search_memories(space_id, MemorySearchFilter) — actor_id REQUIRED at
-//   this tool's boundary: server-side isolation is ACTOR-level only
-//   (scope_id never leaves the client), so an unscoped search silently
-//   returns every actor's memories.
-// - list_memories(space_id, limit 1-100 def 10, offset def 0, MemoryListFilter?)
-//   — actor_id optional and documented: omitting it lists ALL actors'
-//   memories in the space (an ops/debug stance, stated in the tool text).
-// - get_memory(space_id, memory_id)
-export const MEMORY_READ_OPERATIONS = [
-  'list_sessions',
-  'get_session',
-  'get_last_k_messages',
-  'get_message',
-  'list_messages',
-  'search_memories',
-  'list_memories',
-  'get_memory',
-];
 
 const LIMIT_RANGES = {
   list_sessions: [1, 20],
@@ -93,7 +70,12 @@ const MEMORY_READ_SNIPPET = [
   '    print("AGENTARTS_SDK_MISSING", file=sys.stderr)',
   '    sys.exit(3)',
   'try:',
-  '    params = json.loads(sys.argv[1])',
+  // Reads ride STDIN too (interrogate round 2): the old argv transport
+  // put filters.query — arbitrary conversation-derived text — on the
+  // process list, and a document-sized query hit the kernel per-argument
+  // limit as E2BIG, which the candidate chain misdiagnosed as
+  // "install the SDK". Same rationale as the write bridge.
+  '    params = json.loads(sys.stdin.read())',
   '    client = MemoryClient(region_name=params["region"])',
   '    op = params["operation"]',
   '    space = params["space_id"]',
@@ -185,6 +167,36 @@ function validateFilterKeys(operation, filters) {
   return null;
 }
 
+// Filter VALUE validation (interrogate round 1): keys were allowlisted,
+// values rode through unchecked — and U6 made min_score load-bearing
+// (the bridge enforces it), so a mistyped value must be REJECTED at this
+// boundary, not Number()-coerced deep in the shaper (measured failure
+// modes of the coercion: true → threshold 1 silently nukes every entry;
+// 'abc' → NaN → the user's threshold invisibly does nothing; [0.01] →
+// 0.01; '' → 0). The top-level limit/offset/k checks above enforce the
+// same policy (interrogate round 2 aligned them). NUMERIC_FILTER_FIELDS
+// can only arrive on the search path — validateFilterKeys runs first
+// and rejects top_k/min_score as unknown keys for list_memories.
+const NUMERIC_FILTER_FIELDS = new Set(['top_k', 'min_score']);
+function validateFilterValues(filters) {
+  for (const [key, value] of Object.entries(filters)) {
+    if (value === null || value === undefined) continue; // unset — dropped from the request
+    if (NUMERIC_FILTER_FIELDS.has(key)) {
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        return `filters.${key} must be a finite number (got ${typeof value}) — mistyped filter values are rejected, not coerced.`;
+      }
+      if (key === 'top_k' && (!Number.isSafeInteger(value) || value < 1)) {
+        return 'filters.top_k must be a positive integer.';
+      }
+      continue;
+    }
+    if (typeof value !== 'string' || value.length === 0) {
+      return `filters.${key} must be a non-empty string (got ${typeof value}) — mistyped filter values are rejected, not coerced.`;
+    }
+  }
+  return null;
+}
+
 // Legal top-level parameter keys per bridge — a typo'd field must not
 // vanish silently (the silent-no-op class; a typo'd idempotency_key on a
 // retry would disarm the duplicate-write guard).
@@ -213,6 +225,7 @@ const MEMORY_WRITE_PARAM_KEYS = [
   'idempotency_key',
   'is_force_extract',
   'memory_id',
+  'memory_ids',
   'region',
 ];
 
@@ -233,6 +246,7 @@ const OP_PARAM_APPLICABILITY = {
   add_messages: ['session_id', 'messages', 'timestamp', 'idempotency_key', 'is_force_extract'],
   delete_session: ['session_id'],
   delete_memory: ['memory_id'],
+  delete_memories: ['memory_ids'],
 };
 
 function rejectUnknownParams(params, legalKeys, operation) {
@@ -307,8 +321,14 @@ function validateMemoryRead(params) {
   if (range) {
     for (const field of ['limit', 'offset']) {
       if (params[field] !== undefined && params[field] !== null) {
-        const value = Number(params[field]);
-        if (!Number.isSafeInteger(value)) return `${field} must be an integer.`;
+        // Strict typing (interrogate round 2): no Number() coercion —
+        // limit: true would become 1 and limit: '20' would pass, the
+        // exact mistyped-value class validateFilterValues rejects one
+        // branch below. null = unset.
+        const value = params[field];
+        if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
+          return `${field} must be an integer (got ${typeof value}) — mistyped values are rejected, not coerced.`;
+        }
         if (field === 'limit' && (value < range[0] || value > range[1])) {
           return `limit must be ${range[0]}-${range[1]} for ${params.operation} (SDK range).`;
         }
@@ -316,9 +336,15 @@ function validateMemoryRead(params) {
       }
     }
   }
+  // get_last_k_messages: k is a REQUIRED positional with no unset
+  // semantics (unlike limit/offset, where null = SDK default) — the R2
+  // strict-typing pass wrongly copied the optional-field guard here,
+  // letting a missing k reach the snippet as KeyError (interrogate
+  // round 3, unanimous).
   if (params.operation === 'get_last_k_messages') {
-    const k = Number(params.k);
-    if (!Number.isSafeInteger(k) || k < 1) return 'k must be a positive integer for get_last_k_messages.';
+    if (typeof params.k !== 'number' || !Number.isSafeInteger(params.k) || params.k < 1) {
+      return 'k must be a positive integer (mistyped values are rejected, not coerced).';
+    }
   }
   if (params.filters !== undefined && params.filters !== null) {
     // Only the two list/search operations take filters — on the other six
@@ -332,6 +358,25 @@ function validateMemoryRead(params) {
     }
     const filterError = validateFilterKeys(params.operation, params.filters);
     if (filterError) return filterError;
+    const valueError = validateFilterValues(params.filters);
+    if (valueError) return valueError;
+  }
+  // Top-level actor_id on the list ops: the request builder drops a
+  // non-string silently, which would turn a "scoped" call into an
+  // unscoped one with no note (the advisory checks what the user SENT,
+  // not what rode the wire) — reject the misinput at the boundary.
+  if (params.operation === 'list_sessions' && params.actor_id !== undefined && params.actor_id !== null) {
+    if (typeof params.actor_id !== 'string' || params.actor_id.length === 0) {
+      return 'actor_id must be a non-empty string when provided.';
+    }
+  }
+  // region: same boundary policy (interrogate round 3) — a mistyped
+  // region silently became the cn-southwest-2 default, substituting
+  // which regional endpoint serves the request with no signal.
+  if (params.region !== undefined && params.region !== null) {
+    if (typeof params.region !== 'string' || params.region.length === 0) {
+      return 'region must be a non-empty string when provided.';
+    }
   }
   return null;
 }
@@ -393,7 +438,9 @@ export async function readAgentartsMemory(params = {}, options = {}) {
     if (typeof params[field] === 'string' && params[field]) request[field] = params[field];
   }
   for (const field of ['k', 'limit', 'offset']) {
-    if (params[field] !== undefined && params[field] !== null) request[field] = Number(params[field]);
+    // Strict-typed at the boundary (typeof number) — pass through; the
+    // old Number() coercion here accepted what validation now rejects.
+    if (params[field] !== undefined && params[field] !== null) request[field] = params[field];
   }
   if (params.filters !== undefined && params.filters !== null) {
     const filters = { ...(params.filters || {}) };
@@ -414,14 +461,22 @@ export async function readAgentartsMemory(params = {}, options = {}) {
   // than every other agentarts tool, on purpose.
   const childEnv = { ...buildChildEnv({ injectCredentials: false }), HUAWEICLOUD_SDK_MEMORY_API_KEY: keyLoad.key };
   const timeoutMs = options.timeoutMs ?? READONLY_TIMEOUT_MS;
-  const args = ['-c', MEMORY_READ_SNIPPET, jsonArg];
+  const args = ['-c', MEMORY_READ_SNIPPET];
 
   return runOverPythonCandidates({
     args,
     childEnv,
     timeoutMs,
+    // The request rides STDIN (see the snippet comment): query text is
+    // process-list visible in argv and can exceed the kernel arg limit.
+    stdinData: jsonArg,
     runCandidate: options.runCandidate,
-    shapeResult: (result, candidate) => shapeMemoryResult(result, candidate, params, timeoutMs),
+    // Parse ONCE per call, threaded into both consumers (envelope +
+    // enrichment — one derivation, one truth; interrogate round 2).
+    shapeResult: (result, candidate) => {
+      const parsed = parseSnippetStdout(result);
+      return enrichMemoryRead(shapeMemoryResult(result, candidate, params, timeoutMs, parsed), params, parsed);
+    },
   });
 }
 
@@ -432,6 +487,16 @@ export async function readAgentartsMemory(params = {}, options = {}) {
 // sent and "result present" says nothing about relevance. The score
 // RANGE is the relevance signal; this aggregates it without touching
 // content (the no-content-scan contract is unchanged — pure numbers).
+// Score typing (interrogate round 2): only a genuine finite number
+// counts. Number() coercion here would turn a serialized null
+// (Python None → JSON null — the realistic unscored wire shape) into 0,
+// flattening the digest's lower bound and cutting "scoreless entries
+// are KEPT" down to the absent-key case; `true` would become 1.
+function entryScore(entry) {
+  return entry && typeof entry === 'object' && typeof entry.score === 'number' && Number.isFinite(entry.score)
+    ? entry.score
+    : Number.NaN;
+}
 function searchScoreSummary(parsed) {
   if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.results)) return null;
   const summary = { resultCount: parsed.results.length };
@@ -439,7 +504,7 @@ function searchScoreSummary(parsed) {
   let min = Infinity;
   let seen = 0;
   for (const entry of parsed.results) {
-    const score = entry && typeof entry === 'object' ? Number(entry.score) : Number.NaN;
+    const score = entryScore(entry);
     if (!Number.isFinite(score)) continue;
     if (score > max) max = score;
     if (score < min) min = score;
@@ -452,98 +517,48 @@ function searchScoreSummary(parsed) {
   return summary;
 }
 
-// Shared payload shaper for the read and write bridges (identical failure
-// contract, redaction, and truncation semantics).
-function shapeMemoryResult(result, candidate, params, timeoutMs) {
+// Parse the snippet's stdout into a redacted object, or null. Computed
+// ONCE per call in the shapeResult closure and threaded into both the
+// envelope and the read enrichment (interrogate round 2: two independent
+// derivations of "the parsed result" could silently diverge if one call
+// site were later edited — one derivation, one truth).
+function parseSnippetStdout(result) {
+  if (result.timedOut || result.exitCode !== 0) return null;
+  try {
+    const parsed = JSON.parse(result.stdout);
+    return parsed === null || parsed === undefined ? null : redactSecrets(parsed);
+  } catch {
+    return null;
+  }
+}
+
+// Shared payload ENVELOPE for the read and write bridges (identical
+// failure contract, redaction, and truncation semantics). Pure: parse,
+// redact, fail, truncate, assemble — no operation-specific enrichment.
+// Read-specific post-processing (searchSummary, advisories, the
+// client-side filter) lives in enrichMemoryRead; write-specific
+// post-processing (the partial report, burn notes) lives in the write
+// bridge's shapeResult callback. Both extensions compose AROUND this
+// envelope — every new concern grows its bridge, not the shared path.
+function shapeMemoryResult(result, candidate, params, timeoutMs, parsed = parseSnippetStdout(result)) {
   // Trustworthy exit codes (see the module header): exit 0 means the
   // snippet printed result JSON — a parse failure on exit 0 is a
   // pollution detector, NOT a content scan. No failure signature runs
   // against the payload: memory CONTENT is by design a store of
   // failure experience (tracebacks, ERROR lines), so scanning it
   // guarantees false positives on successful reads.
-  let parsed = null;
-  if (!result.timedOut && result.exitCode === 0) {
-    try {
-      parsed = JSON.parse(result.stdout);
-    } catch {
-      parsed = null;
-    }
-    // Parsed results pass the SAME redaction as the string paths — the
-    // object path masks credential-shaped fields (trap 27 class).
-    if (parsed !== null && parsed !== undefined) parsed = redactSecrets(parsed);
-  }
   const failed = result.timedOut || result.exitCode !== 0 || parsed === null;
   const safeStdout = redactSecrets(result.stdout || '');
   // Truncation applies to successes AND failures (a long timeout can
   // accumulate a lot of output). When the side file fires, `result`
   // is dropped — the file pointer is the contract; returning an
   // untruncated parsed object next to a truncated stdout would defeat
-  // the whole large-output machinery. searchSummary SURVIVES truncation
-  // by design: it is three numbers off the full parsed set — exactly
-  // the judgement aid a too-big-to-inline result list needs.
+  // the whole large-output machinery.
   const largeOutputFile = saveLargeOutput(safeStdout);
   const payloadStdout = largeOutputFile
     ? `${safeStdout.slice(0, 2000)}\n...(truncated, full output saved to ${largeOutputFile})`
     : safeStdout;
   const parsePolluted = !result.timedOut && result.exitCode === 0 && parsed === null;
-  // search_memories only: the score digest over the RAW server response
-  // (see searchScoreSummary) — computed BEFORE the client-side filter so
-  // it always describes what the server actually did.
-  const searchSummary =
-    params.operation === 'search_memories' && parsed !== null && parsed !== undefined
-      ? searchScoreSummary(parsed)
-      : null;
-  // Advisory notes (mutually exclusive by operation, one array): the
-  // unscoped-list advisory (A7) and the client-side-filter report (U6).
-  const notes = [];
-  // Unscoped list advisory (A7): list_sessions/list_memories without an
-  // actor scope span EVERY actor's data in the space — legal (ops/debug
-  // stance) but easy to misread as one actor's view. The note names the
-  // scoping parameter per operation (top-level actor_id for
-  // list_sessions; filters.actor_id for list_memories — the top-level
-  // form is rejected there as not-a-parameter).
-  if (
-    (params.operation === 'list_sessions' && !params.actor_id) ||
-    (params.operation === 'list_memories' && !(params.filters && params.filters.actor_id))
-  ) {
-    notes.push(
-      `Unscoped list: results span EVERY actor in the space. Scope with ${
-        params.operation === 'list_sessions' ? 'actor_id' : 'filters.actor_id'
-      } if a single actor's view was intended.`,
-    );
-  }
-  // Client-side min_score enforcement (U6, trap 31): the 0.1.7
-  // server-side filter is measured-ineffective — an explicit 0.01 still
-  // returned sub-0.0001 entries. The bridge therefore applies the
-  // threshold itself: sub-threshold entries are removed from `result`
-  // and the note counts them (searchSummary above still describes the
-  // RAW response). Entries without a finite score are KEPT — "not below
-  // threshold" is not a judgement the bridge can make for the server.
-  // The threshold is still sent server-side too (harmless today; the
-  // day upstream honors it, nothing is left below it and the note
-  // simply stops firing).
-  const rawMinScore = params.filters ? params.filters.min_score : undefined;
-  const minThreshold = rawMinScore === null || rawMinScore === undefined ? Number.NaN : Number(rawMinScore);
-  if (
-    params.operation === 'search_memories' &&
-    parsed !== null &&
-    parsed !== undefined &&
-    Array.isArray(parsed.results) &&
-    Number.isFinite(minThreshold)
-  ) {
-    const kept = parsed.results.filter((entry) => {
-      const score = entry && typeof entry === 'object' ? Number(entry.score) : Number.NaN;
-      return !Number.isFinite(score) || score >= minThreshold;
-    });
-    if (kept.length !== parsed.results.length) {
-      notes.push(
-        `filters.min_score=${minThreshold} removed ${
-          parsed.results.length - kept.length
-        } of ${parsed.results.length} server-returned entries CLIENT-side — the 0.1.7 server-side filter is ineffective even when set (measured, trap 31). searchSummary describes the RAW response.`,
-      );
-      parsed = { ...parsed, results: kept };
-    }
-  }
   return {
     ok: !failed,
     service: 'AgentArts',
@@ -552,8 +567,6 @@ function shapeMemoryResult(result, candidate, params, timeoutMs) {
     exitCode: result.exitCode,
     failureDetected: failed,
     ...(largeOutputFile || failed ? {} : { result: parsed }),
-    ...(searchSummary ? { searchSummary } : {}),
-    ...(notes.length > 0 ? { notes } : {}),
     stdout: payloadStdout,
     stderr: redactSecrets(result.stderr || ''),
     ...(result.timedOut
@@ -568,8 +581,95 @@ function shapeMemoryResult(result, candidate, params, timeoutMs) {
   };
 }
 
-// The 4 WRITE data-plane methods (U3), token-gated like every approved
-// cloud write in this repo. Signatures (pinned venv client.py):
+// Read-bridge post-processing, composed around the envelope at the read
+// call site only (writes never run this). Takes the envelope payload
+// plus the SAME parsed stdout the envelope consumed (the envelope may
+// have dropped `result` to the side file, but searchSummary must survive
+// truncation).
+function enrichMemoryRead(payload, params, parsed) {
+  if (!payload.ok) return payload; // advisories describe RESULTS — a failed call has none
+  const notes = [];
+  // Unscoped-list advisory (U5/A7): list_sessions/list_memories without
+  // an actor scope span EVERY actor's data in the space — legal
+  // (ops/debug stance) but easy to misread as one actor's view. The
+  // note names the scoping parameter per operation (top-level actor_id
+  // for list_sessions; filters.actor_id for list_memories — the
+  // top-level form is rejected there as not-a-parameter). Typed at the
+  // boundary, so presence here means "a real non-empty scope".
+  if (
+    (params.operation === 'list_sessions' && !params.actor_id) ||
+    (params.operation === 'list_memories' && !(params.filters && params.filters.actor_id))
+  ) {
+    notes.push(
+      `Unscoped list: results span EVERY actor in the space. Scope with ${
+        params.operation === 'list_sessions' ? 'actor_id' : 'filters.actor_id'
+      } if a single actor's view was intended.`,
+    );
+  }
+  if (params.operation === 'search_memories' && parsed !== null && parsed !== undefined) {
+    // The score digest over the RAW server response — computed BEFORE
+    // the client-side filter so it always describes what the server
+    // actually did (and it survives truncation: three numbers, set
+    // directly on the payload).
+    const searchSummary = searchScoreSummary(parsed);
+    if (searchSummary) payload.searchSummary = searchSummary;
+    // Client-side min_score enforcement (U6, trap 31): the 0.1.7
+    // server-side filter is measured-ineffective — an explicit 0.01
+    // still returned sub-0.0001 entries. The bridge applies the
+    // threshold itself when `result` is present (not truncated):
+    // sub-threshold entries are removed, `total` is corrected to the
+    // kept count (a filtered view that mimics pagination must not
+    // advertise the raw total — an agent trusting it would re-query for
+    // entries the filter removed), and the note counts the cut.
+    // searchSummary still describes the RAW response. Entries without a
+    // finite score are KEPT — "not below threshold" is not a judgement
+    // the bridge can make for the server. min_score is typed at the
+    // boundary (finite number), so no coercion runs here.
+    const minScore = params.filters ? params.filters.min_score : undefined;
+    if (typeof minScore === 'number' && Number.isFinite(minScore)) {
+      if (payload.result && Array.isArray(payload.result.results)) {
+        const kept = payload.result.results.filter((entry) => {
+          // entryScore (interrogate round 2): only genuine finite numbers
+          // compare — a serialized null (Python None) is scoreless and
+          // KEPT, not coerced to 0 and cut.
+          const score = entryScore(entry);
+          return !Number.isFinite(score) || score >= minScore;
+        });
+        if (kept.length !== payload.result.results.length) {
+          notes.push(
+            `filters.min_score=${minScore} removed ${
+              payload.result.results.length - kept.length
+            } of ${payload.result.results.length} server-returned entries CLIENT-side — the 0.1.7 server-side filter is ineffective even when set (measured, trap 31). searchSummary describes the RAW response.`,
+          );
+          payload.result = { ...payload.result, results: kept, total: kept.length };
+        }
+      } else if (!('result' in payload)) {
+        // Truncation disclosure (interrogate round 2; shape split round
+        // 3): the threshold was SET but could not be applied — `result`
+        // went to the side file unfiltered. Without this note, "no
+        // notes" is ambiguous between "nothing was cut" and "the filter
+        // never ran". The envelope omits `result` ONLY on truncation
+        // (failure already early-returned above), so this branch is
+        // exactly the truncation case.
+        notes.push(
+          'filters.min_score was NOT applied — the result was truncated to the side file, whose contents are UNFILTERED. Apply the threshold yourself when reading the saved output; searchSummary describes the raw response.',
+        );
+      } else {
+        // Present-but-unexpected shape (a parsed, ok:true response whose
+        // body is not {results: [...]} — SDK/server drift): honest
+        // disclosure, no false truncation claim (interrogate round 3).
+        notes.push(
+          'filters.min_score was NOT applied — the response did not carry a results array (unexpected shape; no searchSummary either). Inspect stdout/side file before trusting any relevance judgement.',
+        );
+      }
+    }
+  }
+  if (notes.length > 0) payload.notes = notes;
+  return payload;
+}
+
+// The WRITE data-plane operations (U3 + U7), token-gated like every
+// approved cloud write in this repo. Signatures (pinned venv client.py):
 // - create_memory_session(space_id, id?, actor_id?, assistant_id?, meta?)
 //   — actor_id REQUIRED at this boundary (the isolation model; a session
 //   without an actor breaks actor-scoped retrieval).
@@ -583,15 +683,53 @@ function shapeMemoryResult(result, candidate, params, timeoutMs) {
 //   cleanup per the SDK docstring): approved, not irreversible-labeled.
 // - delete_memory(space_id, memory_id) — the SDK docstring says
 //   "this operation is irreversible": carries the irreversible label.
-export const MEMORY_WRITE_OPERATIONS = ['create_session', 'add_messages', 'delete_session', 'delete_memory'];
-const MEMORY_WRITE_LABELS = {
-  delete_memory: ['irreversible'],
+// - delete_memories(space_id, memory_ids[]) — a BRIDGE composition (U7;
+//   the 0.1.7 SDK has no batch method, upstream ask #15): the snippet
+//   loops client.delete_memory per id, emitting one JSON progress line
+//   per id to STDERR (flushed — a mid-batch timeout still leaves a
+//   machine-readable trail). ONE approval covers the whole id batch;
+//   per-id failures are collected and reported honestly (a structured
+//   `partial` {deleted, failed} field on the failure payload; partial
+//   deletion exits 1 with the report on stdout). The canonical request
+//   SORTS the ids — deletion order is semantically irrelevant, and the
+//   token binds the canonical bytes (an id-order-only difference must
+//   not spuriously mismatch).
+// MEMORY_WRITE_OPERATIONS itself lives in agentarts-memory-tools.mjs.
+// Per-operation WRITE metadata as data (interrogate round 2 collapsed
+// the scattered per-op conditionals into one registry): labels carried
+// on the plan/approval surface, and the approval-scope sentence naming
+// what one approval covers. A new write operation that forgets an entry
+// shows up as a lookup gap here, not as a silently missing branch four
+// functions apart. replayGuidanceNote and the failure batchNote stay
+// functions — they interpolate live values, they are not pure lookups.
+const WRITE_OPERATION_META = {
+  create_session: { labels: [], approvalScope: null },
+  add_messages: {
+    labels: [],
+    approvalScope: ' One approval covers the whole message batch.',
+  },
+  delete_session: { labels: [], approvalScope: null },
+  delete_memory: { labels: ['irreversible'], approvalScope: null },
+  delete_memories: {
+    labels: ['irreversible'],
+    approvalScope: (idCount) =>
+      ` One approval covers the whole id batch — each of the ${idCount} ids is an irreversible delete.`,
+  },
 };
 
 // TextMessage's role Literal (config.py:904-905) — 'tool' is NOT a
 // TextMessage role; the tool-call/result message shapes are separate
 // dataclasses this bridge deliberately does not expose.
 const TEXT_MESSAGE_ROLES = new Set(['user', 'assistant', 'system']);
+
+// delete_memories runs N sequential network deletes inside ONE child
+// process — the single-op default timeout is not a budget for it
+// (interrogate round 2). Auto-scale at 2s/id + 30s grace, floored at
+// the single-op default. HEURISTIC: per-id latency is unmeasured (S0);
+// a real measurement retunes the per-id constant, not the shape.
+function batchTimeoutMs(idCount) {
+  return Math.max(DEFAULT_APPROVED_TIMEOUT_MS, idCount * 2000 + 30_000);
+}
 
 function validateMemoryWrite(params) {
   if (!MEMORY_WRITE_OPERATIONS.includes(params.operation)) {
@@ -650,8 +788,14 @@ function validateMemoryWrite(params) {
         return `messages[${index}].content must be a non-empty string (the SDK raises on empty content).`;
       }
       for (const field of ['actor_id', 'assistant_id', 'meta']) {
-        if (message[field] !== undefined && message[field] !== null && typeof message[field] !== 'string') {
-          return `messages[${index}].${field} must be a string when provided.`;
+        // Empty strings are rejected (interrogate round 2): the
+        // canonicalizer drops falsy strings, so an '' would silently
+        // vanish from the approved request — the approval must show what
+        // the caller sent or not accept it (same rule as create_session).
+        if (message[field] !== undefined && message[field] !== null) {
+          if (typeof message[field] !== 'string' || message[field].length === 0) {
+            return `messages[${index}].${field} must be a non-empty string when provided.`;
+          }
         }
       }
     }
@@ -683,18 +827,47 @@ function validateMemoryWrite(params) {
       return 'memory_id is required for delete_memory.';
     }
   }
+  // region: same boundary policy as the read bridge (interrogate round
+  // 3) — a mistyped region must not silently become the default that
+  // the token then binds.
+  if (params.region !== undefined && params.region !== null) {
+    if (typeof params.region !== 'string' || params.region.length === 0) {
+      return 'region must be a non-empty string when provided.';
+    }
+  }
+  if (params.operation === 'delete_memories') {
+    if (!Array.isArray(params.memory_ids) || params.memory_ids.length === 0) {
+      return 'memory_ids must be a non-empty array (one approval covers the whole batch — every id is an irreversible delete).';
+    }
+    const seen = new Set();
+    for (const [index, id] of params.memory_ids.entries()) {
+      if (typeof id !== 'string' || id.length === 0) {
+        return `memory_ids[${index}] must be a non-empty string.`;
+      }
+      // Duplicates are rejected, not silently deduped: the approval shows
+      // the exact request, and a silently-deduped execution would differ
+      // from what the user approved (the no-silent-no-op class).
+      if (seen.has(id)) {
+        return `memory_ids[${index}] duplicates "${id}" — pass each id once (a duplicate would fail server-side on the second delete).`;
+      }
+      seen.add(id);
+    }
+  }
   return null;
 }
 
 // Deep-sort object keys so semantically identical requests (same meta with
 // different key order) produce the SAME canonical JSON — the token binds
-// bytes, and key-order-only differences would spuriously mismatch.
+// bytes, and key-order-only differences would spuriously mismatch. Default
+// code-unit sort (object keys are always strings, so no coercion runs):
+// locale-sensitive ordering would make the canonical form
+// environment-dependent across plan/write processes (interrogate round 1).
 function deepSortKeys(value) {
   if (Array.isArray(value)) return value.map((item) => deepSortKeys(item));
   if (value && typeof value === 'object') {
     return Object.fromEntries(
       Object.keys(value)
-        .sort((a, b) => a.localeCompare(b))
+        .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
         .map((key) => [key, deepSortKeys(value[key])]),
     );
   }
@@ -715,7 +888,14 @@ function buildMemoryWriteRequest(params) {
     for (const field of ['assistant_id', 'session_id']) {
       if (typeof params[field] === 'string' && params[field]) request[field] = params[field];
     }
-    if (params.meta !== undefined && params.meta !== null) request.meta = deepSortKeys(params.meta);
+    // An EMPTY meta object is dropped from the canonical request
+    // (interrogate round 8): the Python snippet's `if params.get("meta")`
+    // treats {} as unset, so keeping it in the approval would diverge
+    // what the user approved from what executes — plan and execution
+    // must agree ({} is semantically unset server-side).
+    if (params.meta !== undefined && params.meta !== null && Object.keys(params.meta).length > 0) {
+      request.meta = deepSortKeys(params.meta);
+    }
   }
   if (params.operation === 'add_messages') {
     request.session_id = params.session_id;
@@ -734,6 +914,17 @@ function buildMemoryWriteRequest(params) {
   }
   if (params.operation === 'delete_session') request.session_id = params.session_id;
   if (params.operation === 'delete_memory') request.memory_id = params.memory_id;
+  // delete_memories: the canonical form SORTS the ids — deletion order is
+  // semantically irrelevant (unlike add_messages, where message order is
+  // conversation order), so an id-order-only difference between plan and
+  // write must not spuriously mismatch the token (the same class as meta
+  // deep-sorting). Default code-unit sort, NOT localeCompare: the token
+  // binds bytes and plan/write may run in different processes or locales
+  // (interrogate round 1) — locale-sensitive ordering would make the
+  // canonical form environment-dependent.
+  if (params.operation === 'delete_memories') {
+    request.memory_ids = [...params.memory_ids].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  }
   return request;
 }
 
@@ -781,8 +972,27 @@ export function planAgentartsMemoryWrite(params = {}) {
       'Some request content (message bodies or metadata) matches credential shapes (api_key/password/token patterns — the check is over-inclusive on ordinary key:value phrasing). Storing credentials in cloud memory makes them retrievable by every actor-scoped query — confirm the user intends THIS content to be memorized before presenting the request for approval.',
     );
   }
-  const labels = MEMORY_WRITE_LABELS[params.operation] ?? [];
+  // No ?? fallback (interrogate round 3): a write operation added to the
+  // enum without a meta entry must FAIL LOUDLY here, not silently lose
+  // its labels and approval-scope text — the ?? default did the opposite
+  // of the registry's stated purpose. Key parity with
+  // MEMORY_WRITE_OPERATIONS is pinned in structure.test.mjs.
+  const meta = WRITE_OPERATION_META[params.operation];
+  const labels = meta.labels;
   const labelSuffix = labels.length > 0 ? ` Labels: ${labels.join(', ')}.` : '';
+  // Approval-scope sentence per operation (WRITE_OPERATION_META): the
+  // approval's coverage stated in the vocabulary of THIS operation —
+  // an add_messages batch is messages; a delete_memories batch is
+  // irreversible deletes, with its timeout budget (interrogate round 2:
+  // the batch runs N sequential deletes under one child process — the
+  // default timeout auto-scales at 2s/id + 30s grace, a heuristic until
+  // per-id latency is measured on a real space).
+  const scopeText =
+    typeof meta.approvalScope === 'function' ? meta.approvalScope(request.memory_ids.length) : meta.approvalScope;
+  const timeoutBudgetNote =
+    params.operation === 'delete_memories'
+      ? ` Execution budget: ${batchTimeoutMs(params.memory_ids.length)} ms (auto-scaled: 2s per id + 30s grace, floor 120s).`
+      : '';
   return {
     ok: true,
     service: 'AgentArts',
@@ -792,7 +1002,7 @@ export function planAgentartsMemoryWrite(params = {}) {
     warnings,
     request,
     approvalToken,
-    approvalNote: `Present the request above to the user.${labelSuffix} On explicit approval, run huaweicloud_agentarts_memory_write with THIS approvalToken, the SAME parameters, and approvedByUser: true (the token binds them exactly); otherwise discard it. One approval covers the whole add_messages batch.`,
+    approvalNote: `Present the request above to the user.${labelSuffix} On explicit approval, run huaweicloud_agentarts_memory_write with THIS approvalToken, the SAME parameters, and approvedByUser: true (the token binds them exactly); otherwise discard it.${scopeText ?? ''}${timeoutBudgetNote}`,
   };
 }
 
@@ -830,6 +1040,25 @@ const MEMORY_WRITE_SNIPPET = [
   '    elif op == "delete_memory":',
   '        client.delete_memory(space, params["memory_id"])',
   '        result = {"deleted": True, "memory_id": params["memory_id"]}',
+  '    elif op == "delete_memories":',
+  // Per-id progress rides STDERR with flush=True (interrogate round 1):
+  // stdout stays the single-JSON-per-result contract the envelope parses,
+  // while a mid-batch SIGKILL (timeout) still leaves a machine-readable
+  // trail of completed ids — runPythonSnippet accumulates stderr
+  // continuously, so the trail survives the kill.
+  '        deleted, failed = [], []',
+  '        for mid in params["memory_ids"]:',
+  '            try:',
+  '                client.delete_memory(space, mid)',
+  '                deleted.append(mid)',
+  '                print(json.dumps({"progress": "deleted", "memory_id": mid}, ensure_ascii=False), file=sys.stderr, flush=True)',
+  '            except Exception as error:',
+  '                failed.append({"memory_id": mid, "error": "{}: {}".format(type(error).__name__, error)})',
+  '                print(json.dumps({"progress": "failed", "memory_id": mid}, ensure_ascii=False), file=sys.stderr, flush=True)',
+  '        if failed:',
+  '            print(json.dumps({"deleted": deleted, "failed": failed}, ensure_ascii=False))',
+  '            sys.exit(1)',
+  '        result = {"deleted": deleted, "failed": []}',
   '    else:',
   '        print("AGENTARTS_MEMORY_BAD_OPERATION", file=sys.stderr)',
   '        sys.exit(2)',
@@ -838,6 +1067,22 @@ const MEMORY_WRITE_SNIPPET = [
   '    print("{}: {}".format(type(error).__name__, error), file=sys.stderr)',
   '    sys.exit(1)',
 ].join('\n');
+
+// Replay (already_consumed) guidance, per-operation (interrogate round 1):
+// the old single note taught add_messages verification to every op — a
+// delete_memories replay needs list_memories per id instead.
+function replayGuidanceNote(operation, concurrency) {
+  const prefix = concurrency
+    ? 'This token was consumed by a concurrent call — the write may already have executed.'
+    : 'This token was already used — the write may already have executed.';
+  if (operation === 'add_messages') {
+    return `${prefix} Verify with huaweicloud_agentarts_memory_read (list_messages is immediate; search lags extraction) BEFORE re-planning anything, and pass idempotency_key on retries.`;
+  }
+  if (operation === 'delete_memories') {
+    return `${prefix} Verify with huaweicloud_agentarts_memory_read — get_memory per id is the direct per-id check (a not-found id is deleted), list_memories the sweep form — BEFORE re-planning, and re-plan ONLY the ids still present.`;
+  }
+  return `${prefix} Verify with huaweicloud_agentarts_memory_read BEFORE re-planning anything.`;
+}
 
 export async function runAgentartsMemoryWrite({ approvalToken, approvedByUser, ...params } = {}, options = {}) {
   const invalid = validateMemoryWrite(params);
@@ -880,7 +1125,7 @@ export async function runAgentartsMemoryWrite({ approvalToken, approvedByUser, .
       ok: true,
       status: 'ok',
       outcome: 'already_processed',
-      note: 'This token was already used — the write may already have executed. Verify with huaweicloud_agentarts_memory_read (list_messages is immediate; search lags extraction) BEFORE re-planning anything, and pass idempotency_key on add_messages retries.',
+      note: replayGuidanceNote(params.operation, false),
     };
   }
   if (inspection.state === 'expired') {
@@ -939,7 +1184,7 @@ export async function runAgentartsMemoryWrite({ approvalToken, approvedByUser, .
         ok: true,
         status: 'ok',
         outcome: 'already_processed',
-        note: 'This token was consumed by a concurrent call — the write may already have executed. Verify with huaweicloud_agentarts_memory_read before re-planning anything.',
+        note: replayGuidanceNote(params.operation, true),
       };
     }
     return {
@@ -952,162 +1197,69 @@ export async function runAgentartsMemoryWrite({ approvalToken, approvedByUser, .
     };
   }
   const childEnv = { ...buildChildEnv({ injectCredentials: false }), HUAWEICLOUD_SDK_MEMORY_API_KEY: keyLoad.key };
-  const timeoutMs = options.timeoutMs ?? DEFAULT_APPROVED_TIMEOUT_MS;
+  const timeoutMs =
+    options.timeoutMs ??
+    (params.operation === 'delete_memories' && Array.isArray(params.memory_ids)
+      ? batchTimeoutMs(params.memory_ids.length)
+      : DEFAULT_APPROVED_TIMEOUT_MS);
   // The request rides STDIN (module header): conversation batches can
   // exceed the kernel argv limit and argv is process-list visible.
   const args = ['-c', MEMORY_WRITE_SNIPPET];
-  return runOverPythonCandidates({
+  const outcome = await runOverPythonCandidates({
     args,
     childEnv,
     timeoutMs,
     stdinData: JSON.stringify(request),
     runCandidate: options.runCandidate,
     shapeResult: (result, candidate) => {
+      // Envelope only — write-specific post-processing composes here,
+      // symmetric with enrichMemoryRead on the read bridge.
       const payload = shapeMemoryResult(result, candidate, params, timeoutMs);
       if (!payload.ok) {
-        payload.error = `${payload.error || 'Execution failed.'} The single-use token was consumed by this attempt — re-plan for a retry (and pass idempotency_key on add_messages retries to guard against a timeout that may have landed server-side).`;
+        // Structured partial report (interrogate round 1): on a failed
+        // batch delete the snippet's exit-1 stdout IS the
+        // {deleted, failed} report. Parse the RAW stdout — the payload's
+        // stdout may be a truncated pointer to the side file, and the
+        // retry decision ("re-plan only what survived") must not depend
+        // on regexing a possibly-cut string.
+        if (params.operation === 'delete_memories' && !result.timedOut && result.exitCode === 1) {
+          try {
+            const report = JSON.parse(result.stdout);
+            if (report && Array.isArray(report.deleted) && Array.isArray(report.failed)) {
+              payload.partial = redactSecrets(report);
+            }
+          } catch {
+            // stdout is not the report (pollution) — the envelope carries it.
+          }
+        }
+        // Batch deletes carry a partial-execution hazard the single-op
+        // note does not cover: a mid-batch failure leaves SOME ids
+        // already deleted, and re-planning the whole batch would fail
+        // on them again. The timeout path names its own reconciliation
+        // (stderr progress trail + list_memories).
+        const batchNote =
+          params.operation === 'delete_memories'
+            ? ' For a batch delete: the partial field (when present) lists per-id outcomes — re-plan ONLY the ids still present. On a TIMEOUT the stdout report may be missing: stderr carries one JSON progress line per completed id, and the authoritative reconciliation is memory_read (get_memory per id is the direct check — a not-found id is deleted; list_memories the sweep form).'
+            : '';
+        payload.error = `${payload.error || 'Execution failed.'} The single-use token was consumed by this attempt — re-plan for a retry (and pass idempotency_key on add_messages retries to guard against a timeout that may have landed server-side).${batchNote}`;
       }
       return payload;
     },
   });
+  // Fallthrough honesty (interrogate round 1; round 2 made the signal
+  // EXPLICIT): when NO python candidate could run the SDK,
+  // runOverPythonCandidates returns its generic install remediation
+  // marked unshaped: true — shapeResult never ran, so the
+  // consumed-token disclosure must come from here. Without it a later
+  // replay would report already_processed ("may have executed") for a
+  // write that never ran.
+  if (!outcome.ok && outcome.unshaped === true) {
+    outcome.error = `${outcome.error} The single-use approval token was already CONSUMED by this attempt and stays burned — after fixing the SDK install, re-plan (replaying this token returns already_processed without executing anything).`;
+  }
+  return outcome;
 }
 
-// Tool surface: definitions exported so tools.mjs stays a thin
-// registration site (the agentarts-cli pattern — dispatch lives in
-// callAgentartsMemoryTool, definitions carry no handlers).
-export const AGENTARTS_MEMORY_TOOL_DEFINITIONS = [
-  {
-    name: 'huaweicloud_agentarts_memory_read',
-    description:
-      "Read the AgentArts memory DATA plane (SDK MemoryClient — the 0.1.7 CLI has NO data-plane subcommands): sessions, messages, and memories of an existing memory space. The one-time data-plane api_key is read from the wrapper-captured 0600 key file (spaces created through the memory create tool); it never enters argv, tool arguments, or output. actor_id is REQUIRED for search_memories — server-side isolation is actor-level only, and an unscoped search silently spans every actor in the space; list_memories without filters.actor_id lists ALL actors' memories (an ops/debug stance). list_messages requires session_id (the SDK's space-wide form builds a broken /sessions/None path in 0.1.7). search_memories results LAG add_messages — extraction is asynchronous, so an empty result immediately after a write is EXPECTED; verify message ingestion with list_messages (immediate). search_memories with an omitted filters.min_score applies NO score cutoff — the SDK filter defaults min_score to None and drops it from the request, so the WHOLE space comes back ranked by similarity; a SET filters.min_score is enforced CLIENT-side by this bridge (the 0.1.7 server-side filter is measured-ineffective — an explicit 0.01 still returned sub-0.0001 entries; sub-threshold entries are removed from result, searchSummary describes the raw response and a note counts the cut). Judge relevance by the searchSummary score range (measured band 0.000016-0.14 — relative, not comparable across queries), not by result presence. Pagination is 0-based; sessions limit 1-20, messages/memories limit 1-100 (default 10 — pass 100 to sweep a space). Region defaults to cn-southwest-2 (the only e2e-measured region). Read-only: no approval needed.",
-    inputSchema: {
-      type: 'object',
-      required: ['operation', 'space_id'],
-      properties: {
-        operation: {
-          type: 'string',
-          enum: MEMORY_READ_OPERATIONS,
-          description:
-            'The read operation. Required params: get_session/get_last_k_messages/list_messages → session_id; get_message → message_id + session_id; get_memory → memory_id; search_memories → actor_id + filters.query.',
-        },
-        space_id: {
-          type: 'string',
-          pattern: '^[A-Za-z0-9_-]+$',
-          description: 'Memory space ID (the create tool captured its key file).',
-        },
-        actor_id: {
-          type: 'string',
-          description:
-            'Actor whose perspective filters the query. REQUIRED for search_memories (actor-level server isolation); optional filter for list_sessions/list_memories.',
-        },
-        session_id: { type: 'string' },
-        message_id: { type: 'string' },
-        memory_id: { type: 'string' },
-        k: { type: 'integer', minimum: 1, description: 'get_last_k_messages: how many trailing messages.' },
-        limit: {
-          type: 'integer',
-          description:
-            'Page size: sessions 1-20 (default 20), messages/memories 1-100 (default 10). NOT a parameter of search_memories — its result size is filters.top_k (default 10, server-side).',
-        },
-        offset: { type: 'integer', minimum: 0, description: '0-based pagination offset.' },
-        region: { type: 'string', description: 'Defaults to cn-southwest-2.' },
-        filters: {
-          type: 'object',
-          description:
-            'search_memories: MemorySearchFilter fields (query REQUIRED, plus strategy_type/strategy_id/assistant_id/session_id/memory_type/start_time/end_time/top_k/min_score — actor_id goes in the top-level param; omitted min_score = NO score cutoff, the whole space returns ranked; set min_score = the bridge filters CLIENT-side, the 0.1.7 server-side filter is ineffective even when set). list_memories: MemoryListFilter fields (strategy_type/strategy_id/actor_id/assistant_id/session_id/start_time/end_time — sort_by/sort_order exist on the SDK dataclass but 0.1.7 never sends them; rejected here). Unknown keys are rejected.',
-        },
-      },
-    },
-  },
-];
-
-// Write-bridge tool definitions (token-gated like every approved cloud
-// write in this repo).
-export const AGENTARTS_MEMORY_WRITE_TOOL_DEFINITIONS = [
-  {
-    name: 'huaweicloud_agentarts_memory_plan',
-    description:
-      'Plan an AgentArts memory DATA-PLANE WRITE (SDK MemoryClient — the 0.1.7 CLI has no data-plane subcommands): create_session, add_messages (a whole batch per approval), delete_session (soft delete: unreachable through this toolkit immediately, retained server-side for async cleanup 90-365 days per the SDK — no in-toolkit recovery), delete_memory (irreversible). Validates the request, reads nothing from the cloud, and returns the exact request plus an approvalToken. Present the request to the user; on explicit approval run huaweicloud_agentarts_memory_write with the token and the SAME parameters. The token binds the exact planned request — changed parameters need a fresh plan. The one-time data-plane api_key rides the wrapper-captured 0600 key file (env-only). actor_id is REQUIRED for create_session (the actor is the isolation unit). TextMessage roles: user/assistant/system only.',
-    inputSchema: {
-      type: 'object',
-      required: ['operation', 'space_id'],
-      properties: {
-        operation: { type: 'string', enum: MEMORY_WRITE_OPERATIONS },
-        space_id: { type: 'string', pattern: '^[A-Za-z0-9_-]+$' },
-        actor_id: {
-          type: 'string',
-          description:
-            'REQUIRED for create_session. add_messages: pass actor_id inside each message — the top-level form is rejected (not an add_messages parameter).',
-        },
-        session_id: {
-          type: 'string',
-          description:
-            'Required for add_messages/delete_session; optional custom id for create_session. For add_messages, use the id create_session returned (or the custom id you passed to it) — create_session is the first step of the write loop.',
-        },
-        assistant_id: { type: 'string', description: 'create_session/add_messages optional.' },
-        meta: { type: 'object', description: 'create_session: session metadata object.' },
-        messages: {
-          type: 'array',
-          description:
-            'add_messages: non-empty array of {role: user|assistant|system, content: non-empty string, actor_id?, assistant_id?, meta? (strings)}. One approval covers the whole batch.',
-          items: { type: 'object' },
-        },
-        timestamp: { type: 'integer', description: 'add_messages: message time in ms.' },
-        idempotency_key: { type: 'string', description: 'add_messages: duplicate-submission guard.' },
-        is_force_extract: {
-          type: 'boolean',
-          description:
-            'add_messages: force memory extraction (default false — extraction is async; a write is not immediately retrievable).',
-        },
-        memory_id: { type: 'string', description: 'delete_memory.' },
-        region: { type: 'string', description: 'Defaults to cn-southwest-2.' },
-      },
-    },
-  },
-  {
-    name: 'huaweicloud_agentarts_memory_write',
-    description:
-      'Execute a PLANNED and USER-APPROVED AgentArts memory data-plane write. Requires approvedByUser: true (the explicit attestation — same gate as every approved runner in this toolkit), the approvalToken from huaweicloud_agentarts_memory_plan, and the EXACT same parameters (the token binds them; a mismatch rejects without consuming the token). Single-use: a successful execution consumes the token; replaying it returns already_processed — verify with huaweicloud_agentarts_memory_read before re-planning anything. A failed execution burns the token (re-plan to retry; pass idempotency_key on add_messages retries — a timeout may have landed server-side). delete_memory is irreversible; delete_session is a soft delete (unreachable immediately, server-side retention 90-365 days); add_messages extraction is asynchronous (not immediately searchable — use is_force_extract consciously).',
-    inputSchema: {
-      type: 'object',
-      required: ['approvalToken', 'approvedByUser', 'operation', 'space_id'],
-      properties: {
-        approvalToken: {
-          type: 'string',
-          description: 'The approvalToken returned by huaweicloud_agentarts_memory_plan for THIS exact request.',
-        },
-        approvedByUser: {
-          type: 'boolean',
-          description: 'Must be true — set it only after the user explicitly approved the plan request you presented.',
-        },
-        operation: { type: 'string', enum: MEMORY_WRITE_OPERATIONS },
-        space_id: { type: 'string', pattern: '^[A-Za-z0-9_-]+$', description: 'Same space the plan bound.' },
-        actor_id: {
-          type: 'string',
-          description:
-            'REQUIRED for create_session (the isolation unit). add_messages: pass actor_id inside each message — the top-level form is rejected (not an add_messages parameter).',
-        },
-        session_id: {
-          type: 'string',
-          description: 'The id create_session returned (or your custom id); required for add_messages/delete_session.',
-        },
-        assistant_id: { type: 'string' },
-        meta: { type: 'object', description: 'create_session: session metadata object.' },
-        messages: {
-          type: 'array',
-          items: { type: 'object' },
-          description: 'add_messages: the EXACT batch from the plan (role/content/optional strings).',
-        },
-        timestamp: { type: 'integer', description: 'add_messages: message time in ms.' },
-        idempotency_key: { type: 'string', description: 'add_messages: duplicate-submission guard — pass on retries.' },
-        is_force_extract: { type: 'boolean', description: 'add_messages: force extraction (default false).' },
-        memory_id: { type: 'string', description: 'delete_memory.' },
-        region: { type: 'string', description: 'Defaults to cn-southwest-2 (bound by the plan).' },
-      },
-    },
-  },
-];
-
+// Tool dispatch (definitions live in agentarts-memory-tools.mjs).
 export async function callAgentartsMemoryTool(name, rawArgs = {}) {
   if (name === 'huaweicloud_agentarts_memory_read') return readAgentartsMemory(rawArgs);
   if (name === 'huaweicloud_agentarts_memory_plan') return planAgentartsMemoryWrite(rawArgs);

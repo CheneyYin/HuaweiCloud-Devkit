@@ -35,6 +35,12 @@ const OPERATION_TIMEOUT_MS = {
   'runtime download-files': 900_000,
 };
 export const DEFAULT_APPROVED_TIMEOUT_MS = 120_000;
+// Grace window after a timeout SIGKILL before the force resolve fires
+// (interrogate round 5): close fires only when every stdio pipe writer
+// releases — an orphaned grandchild inheriting the pipes (docker-backed
+// commands) would otherwise leave the promise pending forever past its
+// own deadline.
+const STREAM_DRAIN_GRACE_MS = 5_000;
 const LARGE_OUTPUT_THRESHOLD = 50_000;
 const OUTPUT_DIR = join('/tmp', 'huaweicloud-devkit');
 
@@ -741,6 +747,12 @@ async function runAgentarts(canonicalArgs, classification, options = {}) {
       env: childEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    // StringDecoder decode (interrogate round 3): per-chunk
+    // toString('utf8') corrupts codepoints split across chunk
+    // boundaries — CLI output carries the same multibyte-dense payloads
+    // as the SDK bridge.
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -748,6 +760,7 @@ async function runAgentarts(canonicalArgs, classification, options = {}) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (forceTimer !== null) clearTimeout(forceTimer);
       resolve(outcome);
     };
     // Key capture + payload scrubbing + truncation, shared by the close
@@ -829,21 +842,115 @@ async function runAgentarts(canonicalArgs, classification, options = {}) {
           : {}),
       };
     };
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
+    // Timeout contract (R4 port + R5 bounds): mark + KILL in the timer,
+    // resolve from the close handler so stdio DRAINS first — the one-time
+    // api_key JSON a timed-out create already flushed must reach
+    // captureAndScrub, not race data-event delivery. Two R5 refinements:
+    // (1) the close handler's ARGUMENTS are authoritative for the
+    // timedOut stamp (a genuine SIGKILL death closes with code === null;
+    // a normal exit never does) — the timer-side flag alone raced the
+    // poll phase, and loop congestion between the child's OS exit and
+    // the deadline stamped timedOut onto successful exits; (2) a
+    // grace-bounded force resolve (the hcloud runner's forceTimer
+    // pattern) — close only fires when EVERY pipe writer releases, and
+    // an orphaned grandchild inheriting stdio (docker-backed commands)
+    // would leave the promise pending forever past its own deadline.
+    let timedOut = false;
+    let forceTimer = null;
+    // Outcome builders shared by the close handler and the force settle
+    // (interrogate round 6): both resolution paths must produce the
+    // SAME shapes. Round 7 completed the verdict matrix so every
+    // ground-truth state resolves identically no matter which path
+    // wins: normal exit → contract verdict; our SIGKILL → timeout;
+    // foreign-signal death → honest signal-death failure (previously
+    // ok:true on this runner for an OOM-killed approved create);
+    // unreaped-at-grace → conservative timeout.
+    const settleNormally = (code) => {
+      // Exit-code contract (measured): operational failures exit 0, usage
+      // errors exit 2. Exit 2 is honored as a usage-error-certain failure
+      // signal — it is the backstop that makes the invoke-family
+      // box-form exemption sound (their stderr can carry child output,
+      // so the box signatures alone would miss the box-only dangling
+      // form). Other nonzero codes stay ignored (unmeasured; the output
+      // signatures remain the detector for them). code === null is a
+      // SIGNAL death (no exit code exists) — foreign kill (OOM, cgroup,
+      // external signal), never a wrapper timeout: fail honestly
+      // instead of ruling through the contract that has no answer here.
+      const failed = code === null || detectFailure(stdout, stderr, classification.operation) || code === 2;
+      finish({
+        ok: !failed,
+        exitCode: code,
+        ...(code === null
+          ? {
+              error:
+                'agentarts command died to a signal (no exit code) — externally killed (OOM/cgroup/kill), not a wrapper timeout.',
+            }
+          : {}),
+        stderr: redactSecrets(stderr),
+        failureDetected: failed,
+        ...captureAndScrub(),
+      });
+    };
+    const settleTimedOut = (ambiguousSigkill = false) => {
       finish({
         ok: false,
-        error: `agentarts command timed out after ${timeoutMs} ms.`,
+        // Ambiguity disclosure (interrogate round 8): our SIGKILL and a
+        // foreign one that won the pre-reap race are indistinguishable —
+        // assert neither with false certainty; name both.
+        error: ambiguousSigkill
+          ? `agentarts command died to SIGKILL at the ${timeoutMs} ms deadline — either the wrapper timeout fired, or an external kill (OOM/cgroup/kill -9) landed first; the two are indistinguishable here.`
+          : `agentarts command timed out after ${timeoutMs} ms.`,
         timedOut: true,
         stderr: redactSecrets(stderr),
         ...captureAndScrub(),
       });
+    };
+    const armForceSettle = () => {
+      // Bounded resolution in BOTH timer branches (interrogate round 6):
+      // close only fires when EVERY pipe writer releases — a grandchild
+      // inheriting the pipes pends the promise past deadline + grace
+      // whether we KILLED the child or it exited on its own. The verdict
+      // comes from the SHARED state machine (round 8 — the R7 force
+      // branch lagged the tightened close gate because the matrix lived
+      // as two hand-maintained copies), with the same ambiguity
+      // disclosure on the SIGKILL cell.
+      forceTimer = setTimeout(() => {
+        const verdict = childDeathVerdict({ exitCode: child.exitCode, signalCode: child.signalCode, timedOut });
+        const settle =
+          verdict.kind === 'normal'
+            ? () => settleNormally(verdict.code)
+            : verdict.kind === 'signal_death'
+              ? () => settleNormally(null)
+              : () => settleTimedOut(verdict.ambiguous);
+        // Detach (interrogate round 7): the pipes are still held — the
+        // drained-so-far strings are final by this mechanism's own
+        // contract, and without destroying the streams a pipe-holding
+        // grandchild appends into unreachable closure strings for as
+        // long as it lives (measured 50MB+ RSS growth in the motivating
+        // docker shape). destroy() also releases our read fds.
+        child.stdout.destroy();
+        child.stderr.destroy();
+        settle();
+      }, STREAM_DRAIN_GRACE_MS);
+    };
+    const timer = setTimeout(() => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        // Already ended (R3): no kill — but the settle is still armed:
+        // the exit→close gap plus a pipe-holding grandchild would
+        // otherwise pend forever (round 6: R5 bounded only the killed
+        // half of this branch pair).
+        armForceSettle();
+        return;
+      }
+      timedOut = true;
+      child.kill('SIGKILL');
+      armForceSettle();
     }, timeoutMs);
     child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString('utf8');
+      stdout += chunk;
     });
     child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString('utf8');
+      stderr += chunk;
     });
     child.on('error', (error) => {
       finish({
@@ -851,28 +958,23 @@ async function runAgentarts(canonicalArgs, classification, options = {}) {
         error: `Failed to launch ${executable}: ${error.message}. Install the SDK: npx huaweicloud-devkit install-agentarts (or pip install agentarts-sdk==${pinnedSdkVersion() || 'the pinned version'} -i ${AGENTARTS_SDK_MIRROR}; AGENTARTS_BIN points at a non-PATH install).`,
       });
     });
-    child.on('close', (code) => {
-      // Single capture per run: a timed-out (or spawn-failed) invocation
-      // already settled the promise with its own captureAndScrub pass —
-      // without this guard the late close would run the whole block AGAIN
-      // (a second orphaned side file ~30s later, and a late duplicate key
-      // write that can contradict the reported capture-failure).
+    child.on('close', (code, signal) => {
+      // Single capture per run: a spawn-failed or force-settled
+      // invocation already settled the promise — without this guard the
+      // late close would run the whole block AGAIN (a second orphaned
+      // side file, and a late duplicate key write contradicting the
+      // reported capture).
       if (settled) return;
-      // Exit-code contract (measured): operational failures exit 0, usage
-      // errors exit 2. Exit 2 is honored as a usage-error-certain failure
-      // signal — it is the backstop that makes the invoke-family box-form
-      // exemption sound (their stderr can carry child output, so the box
-      // signatures alone would miss the box-only dangling form). Other
-      // nonzero codes stay ignored (unmeasured; the output signatures
-      // remain the detector for them).
-      const failed = detectFailure(stdout, stderr, classification.operation) || code === 2;
-      finish({
-        ok: !failed,
-        exitCode: code,
-        stderr: redactSecrets(stderr),
-        failureDetected: failed,
-        ...captureAndScrub(),
-      });
+      // The SHARED verdict state machine (round 8): only our SIGKILL is
+      // a timeout (with the disclosed ambiguity); a foreign-signal death
+      // settles as an honest failure; a normal exit takes the contract
+      // verdict.
+      const verdict = childDeathVerdict({ exitCode: code, signalCode: signal, timedOut });
+      if (verdict.kind === 'timeout') {
+        settleTimedOut(verdict.ambiguous);
+        return;
+      }
+      settleNormally(code);
     });
   });
 }
@@ -1050,8 +1152,11 @@ export async function runAgentartsApprovedCommand(args = {}) {
 // command (the 43 help fixtures prove it), so this runs an inline snippet
 // through the python that owns the resolved agentarts CLI. Two contracts
 // differ from the CLI runners, both deliberate:
-// - Parameters travel as a SEPARATE argv element (sys.argv[1]) parsed with
-//   json.loads — never woven into code. A JSON string is not a Python
+// - Parameters travel as STDIN JSON parsed with json.loads — never woven
+//   into code and never on argv (process-list visible; an oversize value
+//   would hit the kernel arg limit as E2BIG, which the candidate chain
+//   misdiagnoses as "install the SDK" — the same rationale as the memory
+//   bridges, interrogate round 3). A JSON string is not a Python
 //   literal (true/false/null), so weaving would silently corrupt any
 //   future boolean/null parameter.
 // - The snippet's exit codes are OURS and trustworthy (the CLI's exit-0
@@ -1067,7 +1172,7 @@ const LIST_AGENTS_SNIPPET = [
   '    print("AGENTARTS_SDK_MISSING", file=sys.stderr)',
   '    sys.exit(3)',
   'try:',
-  '    params = json.loads(sys.argv[1])',
+  '    params = json.loads(sys.stdin.read())',
   '    client = RuntimeClient(control_endpoint=get_control_plane_endpoint(params.get("region")))',
   '    kwargs = {}',
   '    if params.get("agent_name"):',
@@ -1099,43 +1204,154 @@ export function pythonCandidatesForAgentarts() {
   return [...new Set(candidates)];
 }
 
+// The child-death verdict state machine (interrogate round 8): ONE
+// decision function consumed by BOTH runners' close handlers and force
+// settles. Every defect in this subsystem since R4 was a drift between
+// the duplicated copies or between branches of one copy (R4: mechanisms
+// on one runner only; R6: the settle armed in one branch pair only;
+// R7/R8: the close gates tightened while the force gates lagged). The
+// observable ground-truth states:
+// - exitCode set → the child COMPLETED → normal(code).
+// - signalCode set and not SIGKILL → a FOREIGN signal death
+//   (cgroup/TERM/HUP; OOM uses SIGKILL) → signal_death — REGARDLESS of
+//   the timedOut flag: the flag means "we SENT a kill", not "we CAUSED
+//   the death", and in the reap-lag window (the timers phase runs
+//   before the poll-phase reap) it is stamped on foreign deaths too.
+// - signalCode SIGKILL with the flag → timeout, AMBIGUOUS: our kill and
+//   a foreign SIGKILL that won the pre-reap race are indistinguishable
+//   from the observable API — the timeout verdict's text must name both
+//   possibilities (the CLI runner does).
+// - signalCode SIGKILL without the flag → a foreign SIGKILL that landed
+//   after the timer's observation → signal_death.
+// - both null (the exit was never reaped — a loop blocked through the
+//   grace) → the conservative timeout (disclosed residual, R6).
+export function childDeathVerdict({ exitCode, signalCode, timedOut }) {
+  if (exitCode !== null && exitCode !== undefined) return { kind: 'normal', code: exitCode };
+  if (signalCode !== null && signalCode !== undefined && (signalCode !== 'SIGKILL' || !timedOut)) {
+    return { kind: 'signal_death' };
+  }
+  return { kind: 'timeout', ambiguous: signalCode === 'SIGKILL' };
+}
+
 export function runPythonSnippet(candidate, args, childEnv, timeoutMs, stdinData = null) {
   return new Promise((resolve) => {
     const child = spawn(candidate, args, {
       shell: false,
       windowsHide: true,
       env: childEnv,
-      // 'pipe' for stdin only when the caller sends data — the write bridge
+      // 'pipe' for stdin only when the caller sends data — every SDK
+      // snippet consumer (both memory bridges and list_agents)
       // transports the request JSON via stdin (a conversation batch can
       // exceed the kernel's per-argument limit in argv, and argv is
-      // process-list visible).
+      // process-list visible — including arbitrary search query text
+      // and agent-name filters).
       stdio: [stdinData === null ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     });
     if (stdinData !== null) {
       child.stdin.on('error', () => {});
       child.stdin.end(stdinData, 'utf8');
     }
+    // Decode with a StringDecoder, not per-chunk toString (interrogate
+    // round 3, critical): a UTF-8 codepoint split across a pipe chunk
+    // boundary becomes U+FFFD in per-chunk decoding — the bridge's
+    // payload is exactly multibyte-dense content (Chinese memory text),
+    // and the corrupted JSON still PARSES, so nothing downstream can
+    // catch it. setEncoding makes 'data' emit decoded strings that
+    // always respect codepoint boundaries (measured 0/10 corrupted vs
+    // 20/20 before).
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let timedOut = false;
+    let forceTimer = null;
     const finish = (outcome) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (forceTimer !== null) clearTimeout(forceTimer);
       resolve(outcome);
     };
+    const armForceSettle = () => {
+      // Bounded resolution in BOTH timer branches (interrogate round 6,
+      // mirroring runAgentarts): close only fires when EVERY pipe writer
+      // releases — a grandchild inheriting the pipes pends the promise
+      // past deadline + grace whether we KILLED the child or it exited
+      // on its own. At fire time the authoritative state decides (round
+      // 7 completed the matrix, mirroring runAgentarts): exitCode set →
+      // completed → the normal outcome; timedOut (our SIGKILL, unreaped
+      // through the grace) → the timeout outcome; signalCode set without
+      // our kill → a FOREIGN-signal death → the close-path shape (no
+      // timedOut stamp); both null (loop blocked the entire grace) → the
+      // conservative timeout outcome. The streams are destroyed after
+      // choosing — the drained-so-far strings are final, and a
+      // pipe-holding grandchild would otherwise append into unreachable
+      // closure strings for as long as it lives (round 7, measured
+      // 50MB+ RSS growth).
+      forceTimer = setTimeout(() => {
+        // The SHARED verdict state machine (round 8 — the R7 force
+        // branch lagged the tightened close gate): exitCode set → the
+        // normal outcome; a reaped non-SIGKILL signal (or a SIGKILL we
+        // never sent) → the close-path signal-death shape, no timedOut
+        // stamp; SIGKILL with our flag, or unreaped-at-grace → the
+        // timeout outcome.
+        const verdict = childDeathVerdict({ exitCode: child.exitCode, signalCode: child.signalCode, timedOut });
+        const outcome =
+          verdict.kind === 'normal'
+            ? { exitCode: verdict.code, stdout, stderr }
+            : verdict.kind === 'signal_death'
+              ? { exitCode: null, stdout, stderr }
+              : { exitCode: null, stdout, stderr, timedOut: true };
+        child.stdout.destroy();
+        child.stderr.destroy();
+        finish(outcome);
+      }, STREAM_DRAIN_GRACE_MS);
+    };
     const timer = setTimeout(() => {
+      // Mark and KILL, but resolve from the close handler: SIGKILL
+      // prompts close, and close fires only after the stdio streams have
+      // DRAINED — flushed progress lines the child already wrote (e.g.
+      // per-id stderr from the batch-delete snippet) survive into the
+      // accumulated strings. Resolving here with the-so-far strings
+      // instead would drop data events still queued on the event loop
+      // (interrogate round 2) — the timeout trail was probabilistic,
+      // not a contract.
+      // Already-ended guard (interrogate round 3): if the child exited
+      // normally and only the exit→close gap (stdio still draining)
+      // outlived the timer, kill is a no-op on the dead child — do not
+      // stamp timedOut onto a successful exit. The force settle is still
+      // armed (round 6): a pipe-holding grandchild would otherwise pend
+      // the promise forever in this branch too.
+      if (child.exitCode !== null || child.signalCode !== null) {
+        armForceSettle();
+        return;
+      }
+      timedOut = true;
       child.kill('SIGKILL');
-      finish({ exitCode: null, stdout, stderr, timedOut: true });
+      armForceSettle();
     }, timeoutMs);
     child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString('utf8');
+      stdout += chunk;
     });
     child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString('utf8');
+      stderr += chunk;
     });
     child.on('error', (error) => finish({ exitCode: null, stdout, stderr, spawnError: error }));
-    child.on('close', (code) => finish({ exitCode: code, stdout, stderr }));
+    // Authoritative timedOut (interrogate round 5; signal tightened
+    // round 7): only OUR SIGKILL is a timeout — a foreign-signal death
+    // also closes with code === null, and the code-only gate would
+    // stamp a timeout on an OOM/external kill that never reached its
+    // deadline. The snippet's exit-code contract (exit 0 = JSON printed)
+    // rules the null case failed downstream, same as before.
+    child.on('close', (code, signal) => {
+      // The SHARED verdict state machine (round 8): only our SIGKILL is
+      // a timeout; a foreign-signal death carries no stamp (the
+      // snippet's exit-code contract rules exit-null failed downstream,
+      // same as before); a normal exit is a normal exit.
+      const verdict = childDeathVerdict({ exitCode: code, signalCode: signal, timedOut });
+      finish({ exitCode: code, stdout, stderr, ...(verdict.kind === 'timeout' ? { timedOut: true } : {}) });
+    });
   });
 }
 
@@ -1166,12 +1382,16 @@ export async function runOverPythonCandidates({
     // stderr can be a RUNTIME import failure inside the SDK (scoped import
     // try in the snippets) — that is a final failure, not a reason to
     // advance the chain with a misleading install-the-SDK remediation.
-    const moduleMissing = result.exitCode === 3 || /AGENTARTS_SDK_MISSING/.test(result.stderr || '');
+    const moduleMissing = result.exitCode === 3 || /^AGENTARTS_SDK_MISSING$/m.test(result.stderr || '');
     if (result.spawnError || moduleMissing) continue;
     return shapeResult(result, candidate);
   }
+  // unshaped: an EXPLICIT fallthrough marker (interrogate round 2) — the
+  // write bridge appends its burned-token disclosure by branching on
+  // this, not on the absence of payload fields another module owns.
   return {
     ok: false,
+    unshaped: true,
     error: `No python candidate could import agentarts (tried: ${pythonCandidatesForAgentarts().join(', ')}). Install the SDK: npx huaweicloud-devkit install-agentarts (or pip install agentarts-sdk==${pinnedSdkVersion() || 'the pinned version'} -i ${AGENTARTS_SDK_MIRROR}).`,
   };
 }
@@ -1184,25 +1404,56 @@ export async function listAgentartsAgents(params = {}, options = {}) {
   if (options.injectCredentials !== false && !hasInjectableCredentials()) {
     return missingCredentialError();
   }
+  // Boundary typing (interrogate round 4 — the same policy the memory
+  // bridges enforce): mistyped values are rejected, not coerced. The old
+  // Number()/String()/|| coercions silently accepted limit: true → 1,
+  // limit: 'abc' → NaN → JSON null → silently dropped to the SDK
+  // default, region: '' → the cn-southwest-2 default, and region: 42
+  // riding as a number into a raw Python-side failure.
+  if (params.region !== undefined && params.region !== null) {
+    if (typeof params.region !== 'string' || params.region.length === 0) {
+      return { ok: false, error: 'region must be a non-empty string when provided.' };
+    }
+  }
+  if (params.agent_name !== undefined && params.agent_name !== null) {
+    if (typeof params.agent_name !== 'string' || params.agent_name.length === 0) {
+      return { ok: false, error: 'agent_name must be a non-empty string when provided.' };
+    }
+  }
+  for (const field of ['limit', 'offset']) {
+    if (params[field] !== undefined && params[field] !== null) {
+      if (typeof params[field] !== 'number' || !Number.isSafeInteger(params[field])) {
+        return {
+          ok: false,
+          error: `${field} must be an integer (got ${typeof params[field]}) — mistyped values are rejected, not coerced.`,
+        };
+      }
+      if (field === 'limit' && params[field] < 1) return { ok: false, error: 'limit must be >= 1.' };
+      if (field === 'offset' && params[field] < 0) return { ok: false, error: 'offset must be >= 0.' };
+    }
+  }
   // The request carries ONLY what the caller passed (plus region, which the
   // wrapper must supply: the SDK's region env chain is not in the allowlist
   // child env). Omitted pagination keys keep the SDK defaults as the single
   // source of truth — the server-side base is unmeasured, so guessing one
   // here would weld the guess into every call.
-  const request = { region: params.region || 'cn-southwest-2' };
-  if (params.agent_name) request.agent_name = String(params.agent_name);
-  if (params.limit !== undefined && params.limit !== null) request.limit = Number(params.limit);
-  if (params.offset !== undefined && params.offset !== null) request.offset = Number(params.offset);
+  const request = { region: typeof params.region === 'string' && params.region ? params.region : 'cn-southwest-2' };
+  if (typeof params.agent_name === 'string' && params.agent_name) request.agent_name = params.agent_name;
+  if (params.limit !== undefined && params.limit !== null) request.limit = params.limit;
+  if (params.offset !== undefined && params.offset !== null) request.offset = params.offset;
   const jsonArg = JSON.stringify(request);
 
   const childEnv = buildChildEnv(options);
   const timeoutMs = options.timeoutMs ?? READONLY_TIMEOUT_MS;
-  const args = ['-c', LIST_AGENTS_SNIPPET, jsonArg];
+  const args = ['-c', LIST_AGENTS_SNIPPET];
 
   return runOverPythonCandidates({
     args,
     childEnv,
     timeoutMs,
+    // The request rides STDIN (see the snippet's header comment) — argv
+    // stays the fixed snippet only.
+    stdinData: jsonArg,
     runCandidate: options.runCandidate,
     shapeResult: (result, candidate) => {
       const failed =
