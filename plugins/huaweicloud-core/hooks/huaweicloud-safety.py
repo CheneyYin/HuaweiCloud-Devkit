@@ -2048,15 +2048,43 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
         # walked-back feeder carries our token).
         _pipe_pass_through = {"cat", "sort", "tee", "head", "tail", "uniq", "wc", "tr"}
 
+        # Round 18 C1/C2/C3: the head comparison uses the recognition
+        # grammar — quote-strip + basename + prefix/env probe; CONTROL
+        # heads flow through BEFORE the probe (the pipe data reaches the
+        # body; probing would strip the `if` and misread `true`).
+        _pipe_control = {
+            "if", "while", "until", "for", "case", "then", "do", "else",
+            "elif", "fi", "done", "esac", "{", "}", "(", ")", "!",
+        }
+
         def _pipe_walk_back_feeder():
             k = s - 1
             while k >= 0:
                 seg_toks = split_tokens(segments[k])
-                head_tok = str(seg_toks[0] or "").lower() if seg_toks else ""
-                if head_tok in _pipe_pass_through:
+                raw_head = basename_of(re.sub(r"['\"\\$]", "", str(seg_toks[0] or "").lower())) if seg_toks else ""
+                if raw_head in _pipe_control:
                     k -= 1
                     continue
-                return [str(t) for t in seg_toks[1:]]
+                # Prefix/env probe (bounded) — `command cat`, `env cat`.
+                probe = list(seg_toks)
+                for _ in range(18):
+                    if not probe:
+                        break
+                    t0 = str(probe[0])
+                    if is_redirection_token(t0) or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t0):
+                        probe = probe[1:]
+                        continue
+                    lower = t0.lower()
+                    base = basename_of(lower)
+                    if lower in COMMAND_PREFIXES or base in COMMAND_PREFIXES:
+                        probe = _skip_prefix_args(base or lower, probe[1:])
+                        continue
+                    break
+                head = basename_of(re.sub(r"['\"\\$]", "", str(probe[0] or "").lower())) if probe else ""
+                if head in _pipe_pass_through or head in _pipe_control:
+                    k -= 1
+                    continue
+                return [str(t) for t in probe[1:]]
             return []
 
         _shell_stream, _ = _leading_segment_probe(tokens)
@@ -2250,7 +2278,10 @@ def hcloud_write_blocked(text, depth=0, routed=None, inherited_feeder=None, saw=
                     seg_toks = split_tokens(segments[k])
                     head_tok = str(seg_toks[0] or "").lower() if seg_toks else ""
                     args = [str(t) for t in seg_toks[1:]]
-                    is_ctrl = head_tok in control_head_words or (head_tok in pass_through_bins and not args)
+                    # Round 18 C3: the control/pass-through comparison strips
+                    # quote-mangling (`i'f'`, `the'n'`).
+                    _nh = re.sub(r"['\"\\\\$]", "", head_tok)
+                    is_ctrl = _nh in control_head_words or (_nh in pass_through_bins and not args)
                     sep_after = segment_seps[k] if k < len(segment_seps) else ""
                     sep_before = segment_seps[k - 1] if k > 0 and k - 1 < len(segment_seps) else ""
                     # `)` (substitution body) and `>(` (process

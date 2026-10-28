@@ -81,7 +81,8 @@ export function collectFeederWords(
       const segToks = splitSimpleCommand(scannerSegments[k]!);
       const headTok = String(segToks[0] ?? '').toLowerCase();
       const args = segToks.slice(1).map(String);
-      const isCtrl = controlHeadWords.has(headTok) || (passThroughBins.has(headTok) && args.length === 0);
+      const isCtrl =
+        controlHeadWords.has(headTok.replace(/['"\\$]/g, '')) || (passThroughBins.has(headTok) && args.length === 0);
       const sepAfter = segmentSeps[k] ?? '';
       const sepBefore = k > 0 ? (segmentSeps[k - 1] ?? '') : '';
       // `)` (substitution/subshell body) and `>(` (process substitution)

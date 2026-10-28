@@ -492,11 +492,56 @@ function gluedWriteDenied(
     // limits, the stdin content still flows). Shared by the pipe-consumer
     // checks and the glued xargs arms.
     const pipeWalkBackFeeder = (): string[] => {
+      // Round 18 C1/C2/C3: the head comparison uses the design's own
+      // recognition grammar — quote-strip + basename + prefix/env probe
+      // (`c'at'`, `/usr/bin/cat`, `command cat`, `env cat`), and CONTROL
+      // heads flow through too (their args are conditions; the pipe data
+      // still reaches the body — the xargs walk-back's control-flow
+      // doctrine).
       const passThrough = new Set(['cat', 'sort', 'tee', 'head', 'tail', 'uniq', 'wc', 'tr']);
+      const controlHeads = new Set([
+        'if',
+        'while',
+        'until',
+        'for',
+        'case',
+        'then',
+        'do',
+        'else',
+        'elif',
+        'fi',
+        'done',
+        'esac',
+        '{',
+        '}',
+        '(',
+        ')',
+        '!',
+      ]);
       for (let back = segIndex - 1; back >= 0; back--) {
-        const backTokens = splitSimpleCommand(segments[back]!).map((t) => String(t));
-        const head = backTokens[0]?.toLowerCase() ?? '';
-        if (passThrough.has(head)) continue;
+        let backTokens = splitSimpleCommand(segments[back]!).map((t) => String(t));
+        // CONTROL heads flow through BEFORE any prefix probe (`if true;`
+        // — the pipe data reaches the body; probing would strip the `if`
+        // and misread `true` as the content head).
+        const rawHead = basenameOf((backTokens[0] ?? '').toLowerCase().replace(/['"\\$]/g, ''));
+        if (controlHeads.has(rawHead)) continue;
+        // Prefix/env probe (bounded) — `command cat`, `env cat`.
+        for (let p = 0; p < 18 && backTokens.length > 0; p++) {
+          const t0 = backTokens[0]!;
+          if (isRedirectionToken(t0) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(t0)) {
+            backTokens = backTokens.slice(1);
+            continue;
+          }
+          const lower = t0.toLowerCase();
+          const base = basenameOf(lower);
+          if (COMMAND_POSITION_PREFIXES.has(lower) || COMMAND_POSITION_PREFIXES.has(base)) {
+            backTokens = skipPrefixArguments(base, backTokens.slice(1));
+            continue;
+          }
+          break;
+        }
+        const head = basenameOf((backTokens[0] ?? '').toLowerCase().replace(/['"\\$]/g, ''));
+        if (passThrough.has(head) || controlHeads.has(head)) continue;
         return backTokens.slice(1);
       }
       return [];

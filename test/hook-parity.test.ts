@@ -418,6 +418,19 @@ const BATTERY: Array<[command: string, verdict: 'deny' | 'allow']> = [
   ['echo DeleteServers | cat | xargs "hcl"oud ECS', 'deny'],
   ['ls | sh', 'allow'],
   ["echo 'docs' | bash", 'allow'],
+  // port-v2defects (interrogate round 18, the clean-round fixes): the
+  // walk-back head comparisons use the recognition grammar — quote-strip
+  // + basename + prefix probe (`c'at'`, `/usr/bin/cat`, `command cat`),
+  // and CONTROL heads flow through BEFORE the probe (`if true; the'n' …`
+  // — probing would strip the `if` and misread `true` as the content).
+  ["echo 'hcloud ECS DeleteServers' | c'at' | bash", 'deny'],
+  ["echo 'hcloud ECS DeleteServers' | /usr/bin/cat | bash", 'deny'],
+  ["echo 'hcloud ECS DeleteServers' | command cat | bash", 'deny'],
+  ["echo DeleteServers | if true; the'n' xargs hcloud ECS; fi", 'deny'],
+  ["echo DeleteServers | i'f' true; the'n' xargs hcloud ECS; fi", 'deny'],
+  ["echo 'import os; os.system(\"hcloud ECS DeleteServers\")' | ca't' | python3", 'deny'],
+  ['echo DeleteServers | c\'at\' | xargs "hcl"oud ECS', 'deny'],
+  ["ls | c'at' | bash", 'allow'],
   // The astral row: 200k valid surrogate pairs = 800 KB bytes / 400,000
   // UTF-16 units / 200,000 code points — over the byte cap on both twins,
   // over the OLD TS unit cap (400,002 > 262,144) but under the OLD py
