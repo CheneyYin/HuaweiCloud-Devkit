@@ -123,7 +123,9 @@ async function runFlushRound(ctx: TelemetryContext): Promise<void> {
   try {
     const resp = await fetchWithProxy(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      // #1040: 对外上报统一携带 X-HW-Agent（值=initTelemetry 缓存的
+      // harness，未初始化会话读 state 的 'unknown' 默认值）。
+      headers: { 'Content-Type': 'application/json', 'X-HW-Agent': ctx.state.agentHarness || 'unknown' },
       body: JSON.stringify(batch.map(({ _retries, ...rest }) => rest)),
       signal: controller.signal,
     });
