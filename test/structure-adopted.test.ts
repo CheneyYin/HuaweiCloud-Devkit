@@ -212,30 +212,37 @@ test(
   },
 );
 
-test('agent CLI pins stay in lockstep across ci.yml and e2e-nightly.yml', () => {
-  // The codex and opencode pins are a two-file obligation (the real-agent
-  // lane and the e2e matrix leg must test the same binaries); nothing else
-  // fails on divergence, so this pin makes the obligation mechanical.
+test('agent CLI pins stay in lockstep across e2e-nightly.yml install sites', () => {
+  // The codex and opencode pins are a two-place obligation within
+  // e2e-nightly.yml (the e2e matrix install step and the real-agents job
+  // must test the same binaries — the lane moved out of ci.yml, whose PR
+  // gate never installs agent CLIs); nothing else fails on divergence, so
+  // this pin makes the obligation mechanical.
   const ci = readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
   const nightly = readFileSync(join(root, '.github', 'workflows', 'e2e-nightly.yml'), 'utf8');
   const extract = (text: string, pkg: string): string[] =>
     [...text.matchAll(new RegExp(`${pkg}@(\\d+\\.\\d+\\.\\d+)`, 'g'))].map((m) => m[1]!);
   for (const pkg of ['opencode-ai', '@openai/codex']) {
-    const ciPins = extract(ci, pkg);
-    const nightlyPins = extract(nightly, pkg);
-    assert.ok(ciPins.length > 0, `${pkg} must stay pinned in ci.yml`);
-    assert.ok(nightlyPins.length > 0, `${pkg} must stay pinned in e2e-nightly.yml`);
-    for (const pin of nightlyPins) {
-      assert.ok(
-        ciPins.includes(pin),
-        `${pkg}@${pin} (e2e-nightly.yml) has no matching pin in ci.yml — the agent CLI pins are a two-file event`,
-      );
-    }
+    const pins = extract(nightly, pkg);
+    assert.ok(
+      pins.length >= 2,
+      `${pkg} must stay pinned in e2e-nightly.yml's agent-CLI install sites (the e2e matrix step and the real-agents job)`,
+    );
+    assert.ok(
+      new Set(pins).size === 1,
+      `${pkg} pins disagree inside e2e-nightly.yml (${pins.join(', ')}) — the agent CLI pins are a two-place event within the file`,
+    );
+    assert.equal(
+      extract(ci, pkg).length,
+      0,
+      `${pkg} must not be pinned in ci.yml — the plain PR gate never installs agent CLIs (the real-agents lane lives in e2e-nightly.yml)`,
+    );
   }
-  // The hermes leg is E2E-only (no ci.yml real-agent lane), so its pin is
-  // single-file: the install.sh invocation must carry an exact --commit
-  // (a floating --channel stable would drift the leg's spike-validated
-  // mechanism set silently).
+  // The hermes leg is E2E-only (the real-agents job installs
+  // opencode/codex, never hermes), so its pin is single-site: the
+  // install.sh invocation must carry an exact --commit (a floating
+  // --channel stable would drift the leg's spike-validated mechanism set
+  // silently).
   const hermesCommit = [...nightly.matchAll(/install\.sh \| bash -s -- [^\n]*--commit ([0-9a-f]{40})/g)].map(
     (m) => m[1]!,
   );

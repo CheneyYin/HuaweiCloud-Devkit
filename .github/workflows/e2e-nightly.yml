@@ -27,8 +27,9 @@ name: e2e-nightly
 # vars. A provider swap must keep the responses route or the codex leg
 # fails at its first model call.
 #
-# The @openai/codex pin is shared with ci.yml's real-agent lane — an
-# upgrade is a two-file event.
+# The opencode/codex pins are shared between this file's two install
+# sites (the e2e matrix step and the real-agents job) — an upgrade is a
+# two-place event within this file.
 #
 # End of life: 'v2' is hardcoded below. When v2 retires (merged and
 # deleted), the trunk checkout fails loud — retarget it in the same
@@ -125,10 +126,11 @@ jobs:
           fi
           echo "E2E configuration present (provider: $E2E_PROVIDER_ID, model: $E2E_MODEL)"
       - name: Install agent CLI (pinned)
-        # Per-leg install: a registry failure on one package must not take
+        # Per-leg install: a registry failure on one leg's package must not take
         # the other leg's report down with it. The opencode/codex pins are
-        # shared with ci.yml's real-agent lane — an upgrade is a two-file
-        # event. The hermes pin is E2E-only (no real-agent lane): the exact
+        # shared with the real-agents job below — an upgrade is a two-place
+        # event within this file. The hermes pin is E2E-only (the real-agents
+        # job installs opencode/codex, never hermes): the exact
         # stable commit the driver was spike-validated against; an upgrade
         # is an explicit suite event (docs/e2e-testing-design.md, "The
         # hermes driver"). The install prepares the machine-scoped owner
@@ -143,6 +145,13 @@ jobs:
             curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --non-interactive --skip-browser --skip-computer-use --commit bf0203a794a07aac3ff764972ab9087baa4e4f4e
             echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           fi
+      - name: hermes driver guard (pre-budget)
+        # The driver's own guard tests, before the leg spends LLM budget: a
+        # red here is a driver break (config surgery, installs template),
+        # not a case failure. Runs from source — the driver imports node
+        # builtins and repo .ts only, so no build and no module mocks.
+        if: matrix.agent == 'hermes'
+        run: node --test test/e2e-driver-hermes.test.ts
       - name: Run agent-level E2E suite (${{ matrix.agent }})
         env:
           E2E_ENABLE: '1'
@@ -175,3 +184,49 @@ jobs:
           # with scrubSecrets before it is ever written.
           include-hidden-files: true
           retention-days: 30
+
+  # Real-agent lifecycle lane, moved from ci.yml (the plain PR gate never
+  # installs agent CLIs — agent-CLI-dependent coverage lives where the
+  # CLIs are): installs the actual opencode/codex CLIs and drives them
+  # through install -> agent-visible state -> uninstall inside sandboxed
+  # config dirs (the test skips itself unless DEVKIT_REAL_AGENT_TESTS is
+  # set, so an operator firing this workflow without the env never pays
+  # the lane's cost). The CLIs are exact-pinned because the test asserts
+  # agent output contracts (mcp list rendering, plugin list --json shape)
+  # verified against these versions — bump a pin only together with a
+  # green run of DEVKIT_REAL_AGENT_TESTS=1 node --test
+  # test/real-agents.test.ts, and in lockstep with the e2e matrix install
+  # step above (a two-place event within this file, pinned by
+  # structure-adopted.test.ts). No needs: gate is carried from ci.yml —
+  # this workflow has no test job, and a dangling one would fail the
+  # whole file at validation.
+  real-agents:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    if: >-
+      github.event_name != 'pull_request' ||
+      ((github.event.action == 'synchronize' || github.event.label.name == 'run-e2e') &&
+      contains(github.event.pull_request.labels.*.name, 'run-e2e') &&
+      github.event.pull_request.head.repo.full_name == github.repository)
+    concurrency:
+      group: ${{ github.event_name == 'pull_request' && format('real-agents-pr-{0}', github.event.pull_request.number) || 'real-agents-trunk' }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Same ref policy as the e2e job: trunk lanes test v2 (the
+          # suite's bloodline), push and PR lanes test the triggering ref.
+          ref: ${{ (github.event_name == 'push' || github.event_name == 'pull_request') && github.ref || 'v2' }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: install agent CLIs (exact-pinned)
+        run: npm install -g --no-audit --no-fund opencode-ai@1.19.0 @openai/codex@0.162.1
+      - run: node --test test/real-agents.test.ts
+        env:
+          DEVKIT_REAL_AGENT_TESTS: '1'

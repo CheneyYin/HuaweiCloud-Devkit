@@ -450,7 +450,8 @@ the responses route or the codex leg fails at its first model call
 (measured: maas has no responses route). The preflight step fails fast on a
 missing secret. Both agent CLIs are pinned to the versions the suite was
 verified against (an upgrade is an explicit suite event; the codex pin is
-shared with ci.yml's real-agent lane). Local runs read the gitignored
+shared with the real-agents job in this same workflow — a two-place event
+within the file). Local runs read the gitignored
 `test/e2e/.env` instead; the report records agent/model/agentVersion per
 run so drift between the two sources is visible, not silent. Each leg's
 run step greps the runner's driver echo so an `E2E_AGENT` wiring miss

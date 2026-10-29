@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
@@ -67,58 +68,98 @@ function fakeHermesHome(packs?: string): { home: string; serverJs: string; confi
   return { home, serverJs, configPath };
 }
 
-// templateHermesInstalls resolves the owner from os.homedir(); posix
-// os.homedir honors $HOME, so faking it around the real function makes
-// the guard exercise the production path.
+// The prepare-path test exercises the machine-scoped owner install (the
+// committed dependency state the e2e-nightly hermes leg's pinned install
+// step — or a dev machine with hermes — provides). Where that state is
+// absent the test would only measure templateHermesInstalls' own refusal,
+// so it skips with the real venues named. Install-state-keyed on purpose,
+// never the real-agents ciSkip env-demand clause: the owner tree IS the
+// precondition under test, and the nightly guard step (which runs right
+// after the pinned install) is where the skip must stay silent.
+function hermesOwnerInstallSkip(): string | false {
+  const installsRoot = join(homedir(), '.hermes', 'installs');
+  let keys: string[];
+  try {
+    keys = readdirSync(installsRoot, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name);
+  } catch {
+    keys = [];
+  }
+  if (keys.length !== 1) {
+    return (
+      `no single hermes install key under ${installsRoot} (found: ${keys.join(', ') || '(none)'}) — ` +
+      'this guard runs where the pinned hermes CLI is installed: the e2e-nightly hermes leg ' +
+      '(dispatch-only until the nightly cron is registered on main) or a dev machine with hermes'
+    );
+  }
+  return false;
+}
+
+// os.homedir honors $HOME on posix and USERPROFILE on win32 — fake both so
+// the owner root reaches the production resolver on every platform (the
+// Windows CI failure named the real runner profile through the gap).
 function withFakeOwnerHome<T>(owner: string, fn: () => T): T {
   const savedHome = process.env.HOME;
+  const savedProfile = process.env.USERPROFILE;
   process.env.HOME = owner;
+  process.env.USERPROFILE = owner;
   try {
     return fn();
   } finally {
-    process.env.HOME = savedHome;
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    if (savedProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = savedProfile;
   }
 }
 
-test('hermes prepare rewrites mcp_servers args to the loader form and appends the providers map', () => {
-  const { home, configPath } = fakeHermesHome();
-  const ctx: DriverContext = { home, workdir: home, platform: process.platform };
-  withModelEnv(() => hermesDriver.prepare(ctx));
-  const content = readFileSync(configPath, 'utf8');
-  // The loader sits in front of the server in the args array, the command
-  // is the absolute node binary (hermes filters MCP child env, so PATH
-  // resolution cannot be trusted there — the codex precedent).
-  assert.ok(
-    content.includes(`args: ["${join(home, 'mcp-env-loader.mjs').replaceAll('\\', '/')}", `),
-    'args must lead with the loader',
-  );
-  assert.ok(
-    content.includes(`command: ${JSON.stringify(process.execPath)}`),
-    'command must be the absolute node binary',
-  );
-  assert.ok(!content.includes('command: "node"'), 'the bare node command must be gone');
-  // The model config rides the providers: map with key_env E2E_APIKEY —
-  // the legacy custom_providers list does not resolve on v0.22.5.
-  assert.ok(content.includes('model:\n  provider: "e2e-hermes"'), 'model.provider must select the e2e-hermes provider');
-  assert.ok(
-    content.includes('providers:\n  e2e-hermes:\n    base_url: "https://example.invalid/v1"'),
-    'the providers map must carry the base URL',
-  );
-  assert.ok(content.includes('key_env: "E2E_APIKEY"'), 'key_env must name E2E_APIKEY');
-  assert.ok(content.includes('api_mode: "chat_completions"'), 'api_mode must pin the chat wire');
-  assert.ok(!content.includes('custom_providers'), 'the legacy provider list must not appear');
-  // Eager tool listing: progressive disclosure would hide the devkit tools
-  // behind tool_search bridges the cases' prompts do not model.
-  assert.ok(content.includes('tools:\n  tool_search:\n    enabled: "off"'), 'tool_search must be off');
-  // The loader script itself is the shared source.
-  assert.ok(existsSync(join(home, 'mcp-env-loader.mjs')), 'prepare must write the env loader');
-  assert.ok(
-    readFileSync(join(home, 'mcp-env-loader.mjs'), 'utf8').includes('mcp-env.json'),
-    'the loader must read mcp-env.json',
-  );
-  // The installer's hooks block survives the surgery untouched.
-  assert.ok(content.includes('fail_closed: true'), 'the installer hooks block must survive');
-});
+test(
+  'hermes prepare rewrites mcp_servers args to the loader form and appends the providers map',
+  { skip: hermesOwnerInstallSkip() },
+  () => {
+    const { home, configPath } = fakeHermesHome();
+    const ctx: DriverContext = { home, workdir: home, platform: process.platform };
+    withModelEnv(() => hermesDriver.prepare(ctx));
+    const content = readFileSync(configPath, 'utf8');
+    // The loader sits in front of the server in the args array, the command
+    // is the absolute node binary (hermes filters MCP child env, so PATH
+    // resolution cannot be trusted there — the codex precedent).
+    assert.ok(
+      content.includes(`args: ["${join(home, 'mcp-env-loader.mjs').replaceAll('\\', '/')}", `),
+      'args must lead with the loader',
+    );
+    assert.ok(
+      content.includes(`command: ${JSON.stringify(process.execPath)}`),
+      'command must be the absolute node binary',
+    );
+    assert.ok(!content.includes('command: "node"'), 'the bare node command must be gone');
+    // The model config rides the providers: map with key_env E2E_APIKEY —
+    // the legacy custom_providers list does not resolve on v0.22.5.
+    assert.ok(
+      content.includes('model:\n  provider: "e2e-hermes"'),
+      'model.provider must select the e2e-hermes provider',
+    );
+    assert.ok(
+      content.includes('providers:\n  e2e-hermes:\n    base_url: "https://example.invalid/v1"'),
+      'the providers map must carry the base URL',
+    );
+    assert.ok(content.includes('key_env: "E2E_APIKEY"'), 'key_env must name E2E_APIKEY');
+    assert.ok(content.includes('api_mode: "chat_completions"'), 'api_mode must pin the chat wire');
+    assert.ok(!content.includes('custom_providers'), 'the legacy provider list must not appear');
+    // Eager tool listing: progressive disclosure would hide the devkit tools
+    // behind tool_search bridges the cases' prompts do not model.
+    assert.ok(content.includes('tools:\n  tool_search:\n    enabled: "off"'), 'tool_search must be off');
+    // The loader script itself is the shared source.
+    assert.ok(existsSync(join(home, 'mcp-env-loader.mjs')), 'prepare must write the env loader');
+    assert.ok(
+      readFileSync(join(home, 'mcp-env-loader.mjs'), 'utf8').includes('mcp-env.json'),
+      'the loader must read mcp-env.json',
+    );
+    // The installer's hooks block survives the surgery untouched.
+    assert.ok(content.includes('fail_closed: true'), 'the installer hooks block must survive');
+  },
+);
 
 test('hermes surgery preserves the DEVKIT_PACKS posture line from install --packs', () => {
   const { home, configPath } = fakeHermesHome('voucher');

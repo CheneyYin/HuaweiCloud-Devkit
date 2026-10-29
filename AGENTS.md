@@ -27,7 +27,7 @@ npm run test:e2e         # agent-level E2E (real opencode, codex, or hermes + LL
                          #   subcommand runs chain-only
 
 node --test test/structure.test.ts    # single test file
-node --test test/real-agents.test.ts  # real opencode/codex lifecycle (needs the CLIs on PATH; CI: DEVKIT_REAL_AGENT_TESTS=1)
+node --test test/real-agents.test.ts  # real opencode/codex lifecycle (needs the CLIs on PATH; CI lane: e2e-nightly.yml's real-agents job, DEVKIT_REAL_AGENT_TESTS=1)
 node ./scripts/validate-package.mjs   # validation alone
 ```
 
