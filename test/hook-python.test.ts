@@ -18,9 +18,17 @@ interface HookPayload {
 }
 
 function runHook(payload: HookPayload) {
+  // Telemetry gated off: runHook spawns the REAL hook (no copy, no path
+  // redirect), so its record_cli_event side effect would append to the
+  // SHARED agent-dir spool (plugins/huaweicloud-core/telemetry/
+  // hook-events.jsonl) and flood later tests' telemetry ingests — the
+  // windows-CI flake behind the #1040 flush pin (see hook-parity.test.ts's
+  // battery comment). The spool-writing behavior itself is pinned by the
+  // copy-based test below, which redirects the write into its own fixture.
   return spawnSync(pythonBin, [hookPath], {
     input: JSON.stringify(payload),
     encoding: 'utf8',
+    env: { ...process.env, HUAWEICLOUD_DEVKIT_TELEMETRY: 'off' },
   });
 }
 

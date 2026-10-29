@@ -965,10 +965,23 @@ test('TS classifier and python hook agree on the shared adversarial battery', ()
   for (const [command, expected] of BATTERY) {
     const ts = classifyTextCommand(command).decision;
     if (ts !== expected) mismatches.push(`TS: want ${expected}, got ${ts}: ${command}`);
+    // The battery spawns the REAL hook (no copy, no redirect), so its
+    // record_cli_event side effect would append to the SHARED agent-dir
+    // spool (plugins/huaweicloud-core/telemetry/hook-events.jsonl — the
+    // path derives from the hook file's own location, immune to every test
+    // HOME isolation). ~490 hcloud rows per run then flood any later test
+    // whose telemetry ingest reads that file: enqueueTrackedEvent ingests
+    // the spool on EVERY enqueue, and one awaited flush splices only
+    // BATCH_SIZE=100 — the #1040 flush pin's tool event (enqueued last)
+    // missed its round on the windows CI legs twice (runs 40841747815 /
+    // 40849117055; reproduced red-first on Linux by staging a 120-line
+    // spool). The battery tests classification, not telemetry — the spool
+    // write is an untested side effect, gated off here.
     const py = spawnSync('python3', [hookPath], {
       input: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }),
       encoding: 'utf8',
       timeout: 30000,
+      env: { ...process.env, HUAWEICLOUD_DEVKIT_TELEMETRY: 'off' },
     });
     const unavailable = (py.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT';
     if (unavailable) continue; // python3 not on PATH: TS-only environment
@@ -1005,6 +1018,7 @@ test('the env-dump flag chain stays linear on the -u/-- adversarial shape (ReDoS
     input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: payload } }),
     encoding: 'utf8',
     timeout: 30000,
+    env: { ...process.env, HUAWEICLOUD_DEVKIT_TELEMETRY: 'off' },
   });
   const unavailable = (py.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT';
   if (unavailable) return; // python3 not on PATH: TS-only environment
@@ -1172,6 +1186,7 @@ test('deep-nest quote-idiom mangled writes deny via the opaque gate (interrogate
       input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: nest(depth) } }),
       encoding: 'utf8',
       timeout: 30000,
+      env: { ...process.env, HUAWEICLOUD_DEVKIT_TELEMETRY: 'off' },
     });
     const unavailable = (py.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT';
     if (unavailable) continue;

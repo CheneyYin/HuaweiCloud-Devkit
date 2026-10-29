@@ -389,3 +389,33 @@ test('the signing test vectors never spell a contiguous Signature=<hex> literal'
   assert.doesNotMatch(vectors, /Signature=[0-9a-f]{64}/);
   assert.match(vectors, /Signature=' \+ DIGEST_/);
 });
+
+test('real-hook spawns gate the shared spool writes (the #1040 windows-CI flood)', () => {
+  // The safety py hook's record_cli_event appends to
+  // plugins/huaweicloud-core/telemetry/hook-events.jsonl — a path derived
+  // from the hook file's own location, immune to every test HOME
+  // isolation, and READ by the repo telemetry module's enqueue-side
+  // ingest. A test spawning the real hook with inherited env floods that
+  // shared file (~490 hcloud battery rows); any later test's telemetry
+  // ingest then carries the flood into its queue, and one awaited flush
+  // splices only BATCH_SIZE=100 — the #1040 flush pin's tool event
+  // (enqueued last) missed its round on the windows CI legs twice
+  // (2026-10-29, runs 40841747815 / 40849117055; reproduced red-first on
+  // Linux with a staged 120-line spool). Every REAL-hook spawn (the
+  // [hookPath] argument — copies like [hookCopy] redirect their writes
+  // into their own fixtures and need no gate) must carry the
+  // HUAWEICLOUD_DEVKIT_TELEMETRY=off gate. A new ungated spawn site
+  // re-opens the class — this pin makes it a named failure.
+  for (const file of ['hook-parity.test.ts', 'hook-python.test.ts']) {
+    const body = readFileSync(join(root, 'test', file), 'utf8');
+    const spawnBlocks = body.split('spawnSync(').slice(1);
+    const realHookBlocks = spawnBlocks.filter((block) => block.includes('[hookPath]'));
+    assert.ok(realHookBlocks.length > 0, `${file} lost its real-hook spawns — stale pin?`);
+    for (const block of realHookBlocks) {
+      assert.ok(
+        block.includes("HUAWEICLOUD_DEVKIT_TELEMETRY: 'off'"),
+        `${file} spawns the real hook without the telemetry-off gate — the shared agent-dir spool floods later tests' telemetry ingests`,
+      );
+    }
+  }
+});

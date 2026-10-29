@@ -234,7 +234,22 @@ test('#1040 telemetry flush sends the X-HW-Agent header and installSegment as it
 
       const events = telemetryBodies.flat();
       const toolEvents = events.filter((event) => event.key === 'tool:huaweicloud_check_cli');
-      assert.ok(toolEvents.length > 0, 'the tracked tool event must be in a flushed batch');
+      assert.ok(
+        toolEvents.length > 0,
+        // Forensics (the 2026-10-29 windows-CI reds, runs 40841747815 /
+        // 40849117055): the tool event missed the flush round's
+        // splice(0, BATCH_SIZE=100) because enqueueTrackedEvent had
+        // ingested a suite-shared agent-dir hook spool ahead of it — the
+        // hook battery tests spawned the real py hook without gating its
+        // record_cli_event writes. Batches-without-the-tool-event below
+        // means exactly that: an ingest-flooded queue, not a pipeline
+        // defect. The spawn sites now gate telemetry off; a stale local
+        // spool file (pre-fix runs) still poisons once — delete
+        // plugins/huaweicloud-core/telemetry/hook-events.jsonl*.
+        `the tracked tool event must be in a flushed batch — batches=[${telemetryBodies
+          .map((batch) => batch.map((event) => String(event.key)).join(','))
+          .join(' || ')}] posts=${telemetryHeaders.length}`,
+      );
       const expectedSegment = installSegment();
       for (const event of events) {
         assert.ok(!String(event.harness).includes('|'), 'no event harness may carry the install-segment separator');
