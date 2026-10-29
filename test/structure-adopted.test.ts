@@ -232,6 +232,25 @@ test('agent CLI pins stay in lockstep across ci.yml and e2e-nightly.yml', () => 
       );
     }
   }
+  // The hermes leg is E2E-only (no ci.yml real-agent lane), so its pin is
+  // single-file: the install.sh invocation must carry an exact --commit
+  // (a floating --channel stable would drift the leg's spike-validated
+  // mechanism set silently).
+  const hermesCommit = [...nightly.matchAll(/install\.sh \| bash -s -- [^\n]*--commit ([0-9a-f]{40})/g)].map(
+    (m) => m[1]!,
+  );
+  assert.equal(
+    hermesCommit.length,
+    1,
+    'e2e-nightly.yml must pin the hermes install to exactly one 40-hex commit — an upgrade is an explicit suite event',
+  );
+  // And the nightly-only staging: the job-level if must keep the hermes
+  // leg off the push and PR lanes (accepted LLM cost, staged rollout).
+  assert.match(
+    nightly,
+    /matrix\.agent != 'hermes' \|\| github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'/,
+    'the hermes leg must stay nightly/dispatch-only until promoted',
+  );
 });
 
 test('the e2e driver echo and the workflow grep agree on the contract', () => {
