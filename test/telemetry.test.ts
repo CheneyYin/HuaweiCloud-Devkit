@@ -178,9 +178,12 @@ test('detectAgentHarness detects opencode from env', () => {
   }
 });
 
-test('detectAgentHarness returns null when nothing matches', () => {
+test('detectAgentHarness returns unknown when nothing matches', () => {
   withNoAgentEnv(() => {
-    assert.equal(detectAgentHarness(), null);
+    // #1040: the fallback converged to 'unknown' — no clientInfo.name
+    // passthrough (probe clients like 'startup'), no installSegment '|'
+    // concatenation, never null.
+    assert.equal(detectAgentHarness(), 'unknown');
   });
 });
 
