@@ -4,7 +4,12 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { redactSecrets, resolveAgentartsTier, resolveAgentartsGroupTokens } from './safety-policy.mjs';
+import {
+  redactSecrets,
+  resolveAgentartsTier,
+  resolveAgentartsGroupTokens,
+  AGENTARTS_GROUP_LEVEL_VALUE_FLAGS,
+} from './safety-policy.mjs';
 import { getProxySettings } from './proxy/proxy-config.mjs';
 import { resolveCredentialsWithRuntime } from './auth/credentials.mjs';
 import { createApprovalTokenStore, scrubPositionalSecrets, argsMatchPlanBinding } from './approval-tokens.mjs';
@@ -187,74 +192,393 @@ export const MEMORY_SUBCOMMAND_VALUE_FLAGS = new Map([
   ['uninstall', new Set()],
 ]);
 
-// Single-pass, value-slot-aware scan of a memory-family argv, mirroring
-// click: a bare value-taking flag CONSUMES the next token (dash-prefixed
-// included); inline `--flag=v` / `-sv` forms are self-contained; --help/-h
-// at an option position is eager help. Returns the LAST --strategies and
-// --output values ('' when the flag dangles, null when absent — only
-// meaningful on subcommands that take those flags), whether a GENUINE
-// help token exists, and the dangling flag (if any). Help matching is
-// case-insensitive to mirror the classifier it overrides
-// (safety-policy.mjs lowercases every token); flag matching stays
-// case-sensitive like click. `from` is the index AFTER the group and
-// subcommand tokens: value flags are only parsed there (pre-subcommand
-// tokens parse at the ROOT context, which has no value flags on 0.1.7),
-// while help detection covers the whole argv (root --help is genuine
-// help). Scope of the click model: for argvs click executes, the scan's
-// view matches click's; positional-arity divergences (extra positionals,
-// unknown root options) pass the plan and fail at run, where the
-// usage-error signatures catch the click error.
-function scanMemoryArgs(args, valueFlags, from = 0) {
-  let strategies = null;
-  let output = null;
-  let region = null;
+// Value flags for the OTHER subcommand groups, the group-level option
+// panels, and the root-level commands — same fixture source
+// (gateway_*.txt / config_*.txt / runtime_*.txt / init.txt / launch.txt /
+// invoke.txt / destroy.txt / dev.txt), same pinning test. Two display
+// artifacts are repaired from the fixtures' own evidence: rich truncates
+// long flag names with an ellipsis (`--outbound-network-configurat…` in
+// gateway_create.txt, `--credential-provider-config…` in
+// gateway_update-target.txt — the full spellings come from the sibling
+// fixtures where the name fits), and enum-typed options (init --template
+// <basic|langgraph|langchain…>) take values like any other.
+const GATEWAY_SUBCOMMAND_VALUE_FLAGS = new Map([
+  ['get', new Set()],
+  [
+    'list',
+    new Set([
+      '--name',
+      '--status',
+      '--gateway-id',
+      '--tag-key-exists',
+      '--tag-key-matches',
+      '--tag-value-matches',
+      '--tag-match-policy',
+      '--limit',
+      '--offset',
+    ]),
+  ],
+  ['get-target', new Set()],
+  ['list-targets', new Set(['--limit', '--offset'])],
+  [
+    'create',
+    new Set([
+      '--name',
+      '-n',
+      '--description',
+      '-d',
+      '--protocol-type',
+      '--authorizer-type',
+      '--agency-name',
+      '--authorizer-configuration',
+      '--protocol-configuration',
+      '--log-delivery-configuration',
+      '--outbound-network-configuration',
+      '--tags',
+    ]),
+  ],
+  ['update', new Set(['--description', '-d', '--protocol-configuration', '--log-delivery-configuration', '--tags'])],
+  ['delete', new Set()],
+  [
+    'create-target',
+    new Set(['--target-configuration', '--name', '-n', '--description', '-d', '--credential-provider-configuration']),
+  ],
+  [
+    'update-target',
+    new Set(['--name', '-n', '--description', '-d', '--target-configuration', '--credential-provider-configuration']),
+  ],
+  ['delete-target', new Set()],
+]);
+const CONFIG_SUBCOMMAND_VALUE_FLAGS = new Map([
+  ['get', new Set(['--agent', '-a'])],
+  ['list', new Set()],
+  ['list-env', new Set(['--agent', '-a'])],
+  ['remove', new Set()],
+  ['remove-env', new Set(['--agent', '-a'])],
+  ['set', new Set(['--agent', '-a'])],
+  ['set-env', new Set(['--agent', '-a'])],
+  ['set-default', new Set()],
+]);
+const RUNTIME_SUBCOMMAND_VALUE_FLAGS = new Map([
+  [
+    'invoke',
+    new Set([
+      '--agent',
+      '-a',
+      '--mode',
+      '-m',
+      '--region',
+      '-r',
+      '--port',
+      '-p',
+      '--endpoint',
+      '-e',
+      '--session',
+      '-s',
+      '--bearer-token',
+      '-bt',
+      '--timeout',
+      '--user-id',
+      '-u',
+      '--custom-path',
+    ]),
+  ],
+  [
+    'exec-command',
+    new Set([
+      '--agent',
+      '-a',
+      '--session',
+      '-s',
+      '--bearer-token',
+      '-bt',
+      '--region',
+      '-r',
+      '--endpoint',
+      '-e',
+      '--user-id',
+      '-u',
+      '--timeout',
+    ]),
+  ],
+  [
+    'start-session',
+    new Set(['--agent', '-a', '--region', '-r', '--bearer-token', '-bt', '--endpoint', '-e', '--user-id', '-u']),
+  ],
+  [
+    'stop-session',
+    new Set([
+      '--agent',
+      '-a',
+      '--session',
+      '-s',
+      '--bearer-token',
+      '-bt',
+      '--region',
+      '-r',
+      '--endpoint',
+      '-e',
+      '--user-id',
+      '-u',
+    ]),
+  ],
+  [
+    'upload-files',
+    new Set([
+      '--agent',
+      '-a',
+      '--session',
+      '-s',
+      '--files',
+      '-f',
+      '--path',
+      '-p',
+      '--file-user-id',
+      '--file-group-id',
+      '--file-mode',
+      '-m',
+      '--bearer-token',
+      '-bt',
+      '--region',
+      '-r',
+      '--endpoint',
+      '-e',
+      '--user-id',
+      '-u',
+      '--timeout',
+    ]),
+  ],
+  [
+    'download-files',
+    new Set([
+      '--agent',
+      '-a',
+      '--session',
+      '-s',
+      '--path',
+      '-p',
+      '--output',
+      '-o',
+      '--bearer-token',
+      '-bt',
+      '--region',
+      '-r',
+      '--endpoint',
+      '-e',
+      '--user-id',
+      '-u',
+      '--timeout',
+    ]),
+  ],
+]);
+export const SUBCOMMAND_VALUE_FLAGS = new Map([
+  ['memory', MEMORY_SUBCOMMAND_VALUE_FLAGS],
+  ['gateway', GATEWAY_SUBCOMMAND_VALUE_FLAGS],
+  ['config', CONFIG_SUBCOMMAND_VALUE_FLAGS],
+  ['runtime', RUNTIME_SUBCOMMAND_VALUE_FLAGS],
+]);
+// Root-level commands (no subcommands table): init/dev are local tier,
+// launch/invoke/destroy approved. Their tables exist for the SAME
+// position-aware detection — trap 26a's recorded non-memory residue:
+// `launch --agent --help` classified local and steered to Bash EXECUTES
+// the deploy with agent='--help'.
+export const ROOT_COMMAND_VALUE_FLAGS = new Map([
+  ['init', new Set(['--name', '-n', '--template', '-t', '--path', '-p', '--region', '-r', '--swr-org', '--swr-repo'])],
+  [
+    'launch',
+    new Set([
+      '--agent',
+      '-a',
+      '--mode',
+      '-m',
+      '--tag',
+      '-t',
+      '--local-port',
+      '-l',
+      '--swr-org',
+      '--swr-repo',
+      '--description',
+      '-d',
+    ]),
+  ],
+  [
+    'invoke',
+    new Set([
+      '--agent',
+      '-a',
+      '--mode',
+      '-m',
+      '--region',
+      '-r',
+      '--port',
+      '-p',
+      '--endpoint',
+      '-e',
+      '--session',
+      '-s',
+      '--bearer-token',
+      '-bt',
+      '--timeout',
+      '--user-id',
+      '-u',
+      '--custom-path',
+    ]),
+  ],
+  ['destroy', new Set(['--agent', '-a', '--region', '-r'])],
+  ['dev', new Set(['--port', '-p', '--host', '-h', '--config', '-c', '--env', '-e'])],
+]);
+// Group-level options (parsed BEFORE any subcommand token): only the
+// config wizard takes value flags at group level; gateway/memory/runtime
+// groups offer --help only (fixtures). CANONICAL source is
+// safety-policy.mjs (the subcommand locator consumes the same map);
+// re-exported here so the fixture-pin test and resolveCommandValueFlags
+// share one truth.
+export const GROUP_LEVEL_VALUE_FLAGS = AGENTARTS_GROUP_LEVEL_VALUE_FLAGS;
+const EMPTY_VALUE_FLAGS = new Set();
+
+// Resolve the value-flag set for an argv's command context. undefined =
+// no scan (unknown group — the classifier's fail-safe verdict stands).
+// The EMPTY set still scans: bare/root-metadata argvs (group '' — every
+// root option is a boolean, fixture-pinned) and UNKNOWN subcommands get
+// genuine-help detection with nothing consumed; an unknown subcommand's
+// run then fails honestly at click parse ("No such command" — itself the
+// discovery output the agent needs, G2 session).
+export function resolveCommandValueFlags(group, sub) {
+  if (group === '') return EMPTY_VALUE_FLAGS;
+  if (ROOT_COMMAND_VALUE_FLAGS.has(group)) return ROOT_COMMAND_VALUE_FLAGS.get(group);
+  if (!SUBCOMMAND_VALUE_FLAGS.has(group)) return undefined;
+  if (sub === undefined) return GROUP_LEVEL_VALUE_FLAGS.get(group) ?? EMPTY_VALUE_FLAGS;
+  return SUBCOMMAND_VALUE_FLAGS.get(group).get(sub) ?? EMPTY_VALUE_FLAGS;
+}
+
+// Single-pass, value-slot-aware scan of a command argv, mirroring click's
+// THREE parsing regions: the pre-group root region (root options are all
+// booleans, fixture-pinned — nothing consumes there), the GROUP option
+// region (groupRegion — only config takes value flags there, canonical
+// map in safety-policy.mjs), and the SUBCOMMAND region (valueFlags, from
+// `from`). A bare value-taking flag CONSUMES the next token
+// (dash-prefixed included); inline `--flag=v` / `-fv` forms are
+// self-contained; --help/-h at an option position in ANY region is eager
+// help. The `--` end-of-options separator is modeled per region (rounds
+// 9/11: a `--help` AFTER the context's `--` is a POSITIONAL to click —
+// `memory create -- --help` smuggled a credentialed write through the
+// help path; a help token in a GROUP-region VALUE slot — `config --name
+// --help set-env K V` — did the same, because the group region between
+// groupIndex and subIndex was unmodeled once a subcommand resolved): a
+// `--` in the group region ends GROUP-region parsing only (the
+// subcommand parser restarts fresh — endOfOptions resets at `from`); a
+// `--` at i >= from ends the rest. A `--` before the group token belongs
+// to the root parser and needs NO special handling here (round 10
+// deleted the R9 pre-from model as over-engineered): click's
+// resolve_command re-parses an option-like first leftover into the ROOT
+// panel — a help token there is genuinely answered with a panel, so
+// plain genuineHelp detection is already click-faithful; the runner's
+// root-separator-reparse flag carries the acceptance. Returns subcommand
+// flag values as a CHRONOLOGICAL entry list (cross-spelling last-wins is
+// the consumer's pickLastValue — round 9: an insertion-ordered object
+// picked the wrong occurrence for interleaved `-o json --output json -o
+// table`; group-region values are NOT recorded — no guard consumes
+// them), '' when a subcommand flag dangles, whether a GENUINE help token
+// exists at an option position (helpIndex is FIRST-wins — click's eager
+// help fires at the first option-position encounter, and a help token
+// BEFORE the group token is root-level eager help printing the ROOT
+// panel), the dangling flag (if any), and mid-argv dash-value
+// consumption. Help matching is case-insensitive to mirror the
+// classifier it overrides (safety-policy.mjs lowercases every token) —
+// `--HELP`/`-h` therefore verdict as help and the run fails honestly
+// with click's usage error, keeping the two surfaces' verdicts
+// consistent; flag matching stays case-sensitive like click. Scope of the
+// click model: for argvs click executes, the scan's view matches click's;
+// positional-arity divergences (extra positionals, unknown root options)
+// pass the plan and fail at run, where the usage-error signatures catch
+// the click error.
+function scanValueFlagArgs(args, valueFlags, from = 0, groupRegion = null) {
+  const entries = [];
   let genuineHelp = false;
+  let helpIndex = -1;
   let danglingFlag = null;
   const consumedDashPrefixed = [];
+  let endOfOptions = false;
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
-    if (i >= from && valueFlags.has(arg)) {
+    // The subcommand parser restarts option parsing: a group-region `--`
+    // (or the group region simply ending) does not bleed into the
+    // subcommand context.
+    if (i === from) endOfOptions = false;
+    const inGroupRegion = groupRegion !== null && i >= groupRegion.start && i < groupRegion.end;
+    const activeRegion = inGroupRegion ? groupRegion.flags : i >= from ? valueFlags : null;
+    if (activeRegion !== null && !endOfOptions && arg === '--') {
+      endOfOptions = true;
+      continue;
+    }
+    if (activeRegion !== null && !endOfOptions && activeRegion.has(arg)) {
       const next = args[i + 1];
       if (next === undefined) {
         danglingFlag = arg;
-        if (arg === '--strategies' || arg === '-s') strategies = '';
-        else if (arg === '--output' || arg === '-o') output = '';
-        else if (arg === '--region' || arg === '-r') region = '';
+        if (i >= from) entries.push({ flag: arg, value: '' });
       } else {
-        if (/^-/.test(next)) consumedDashPrefixed.push({ flag: arg, value: next });
-        if (arg === '--strategies' || arg === '-s') strategies = next;
-        else if (arg === '--output' || arg === '-o') output = next;
-        else if (arg === '--region' || arg === '-r') region = next;
+        if (/^-/.test(next) && i >= from) consumedDashPrefixed.push({ flag: arg, value: next });
+        if (i >= from) entries.push({ flag: arg, value: next });
       }
       i += 1;
       continue;
     }
-    if (/^(--help|-h)$/i.test(arg)) {
-      genuineHelp = true;
+    if (!endOfOptions && /^(--help|-h)$/i.test(arg)) {
+      // First-wins (round 10): click's eager help fires at the FIRST
+      // option-position token; a later `--help` (deeper in the argv)
+      // never gets its own panel after an earlier eager one printed.
+      if (!genuineHelp) {
+        genuineHelp = true;
+        helpIndex = i;
+      }
       continue;
     }
-    if (i < from) continue;
-    if (arg.startsWith('--strategies=')) strategies = arg.slice(13);
-    else if (arg.startsWith('--output=')) output = arg.slice(9);
-    else if (arg.startsWith('--region=')) region = arg.slice(9);
-    else if (/^-s\S+$/.test(arg)) strategies = arg.slice(2);
-    else if (/^-o\S+$/.test(arg)) output = arg.slice(2);
-    else if (/^-r\S+$/.test(arg)) region = arg.slice(2);
+    if (activeRegion === null || endOfOptions || i < from) continue;
+    // Inline forms: `--flag=v` and (for one-letter shorts) `-fv`.
+    const inline = /^(--[a-z0-9-]+)=(.*)$/i.exec(arg) || /^(-[a-z0-9])(.+)$/i.exec(arg);
+    if (inline && valueFlags.has(inline[1])) entries.push({ flag: inline[1], value: inline[2] });
   }
-  return { strategies, output, region, genuineHelp, danglingFlag, consumedDashPrefixed };
+  return { entries, genuineHelp, helpIndex, danglingFlag, consumedDashPrefixed };
+}
+
+// Cross-spelling last-value pick (click last-wins semantics): entries are
+// chronological, so the LATEST recorded occurrence of any spelling wins.
+function pickLastValue(entries, spellings) {
+  let result = null;
+  for (const entry of entries) {
+    if (spellings.includes(entry.flag)) result = entry.value;
+  }
+  return result;
+}
+
+// Memory-family adapter over the generic walker: the plan's guards and
+// canonicalizer consume strategies/output/region in their click
+// last-wins forms ('' when the flag dangles, null when absent — only
+// meaningful on subcommands that take those flags).
+function scanMemoryArgs(args, valueFlags, from = 0, groupRegion = null) {
+  const scan = scanValueFlagArgs(args, valueFlags, from, groupRegion);
+  return {
+    strategies: pickLastValue(scan.entries, ['--strategies', '-s']),
+    output: pickLastValue(scan.entries, ['--output', '-o']),
+    region: pickLastValue(scan.entries, ['--region', '-r']),
+    genuineHelp: scan.genuineHelp,
+    danglingFlag: scan.danglingFlag,
+    consumedDashPrefixed: scan.consumedDashPrefixed,
+  };
 }
 
 // The classifier's help short-circuit is position-blind (safety-policy.mjs,
 // findings trap 26): a --help/-h token in a VALUE slot (`--strategies
-// --help`, `-d --help`) still collapses the classification to the bare
-// `memory` group — skipping the memory-create guards AND de-escalating an
+// --help`, `--name --help`) still collapses the classification to the
+// bare group — skipping the memory-create guards AND de-escalating an
 // approved cloud write to local (which the wrapper would then steer to
 // unapproved Bash execution). Re-derive the effective classification from
 // the clean shape whenever that happens; the executed args stay original.
 // Shared by the plan tool and the readonly runner so the two surfaces can
 // never return opposite verdicts on the same argv. Also returns the
-// memory-family scan (null for non-memory argv) so the plan's guards and
-// canonicalizer consume ONE scan instead of re-scanning.
+// generic value-slot scan (null only for unknown groups) and, for memory
+// argvs, the strategies/output/region adapter shape — the plan's memory
+// guards consume the adapter, everything else consumes the generic scan.
 function effectiveAgentartsClassification(rawArgs, options = {}) {
   const args = Array.isArray(rawArgs) ? rawArgs.map(String) : [];
   let classification = classifyAgentartsInvocation(args, options);
@@ -262,20 +586,88 @@ function effectiveAgentartsClassification(rawArgs, options = {}) {
   // classifier consumes (aliases included) — a policy alias mapping into
   // the memory family resolves identically here, and the mirror cannot
   // drift from the classifier it overrides.
-  const { groupIndex, group, sub } = resolveAgentartsGroupTokens(args, options.policy);
-  const valueFlags = group === 'memory' && sub !== undefined ? MEMORY_SUBCOMMAND_VALUE_FLAGS.get(sub) : undefined;
+  const { groupIndex, group, sub, subIndex } = resolveAgentartsGroupTokens(args, options.policy);
   // A leading --version/-v is a GENUINE root terminal flag (click prints
   // the version and exits — no cloud write, no subcommand parsing): the
   // classifier's local verdict stands, and the plan's dangling-flag guard
   // must not reject such argvs either. Only the help-in-value-slot
   // collapse is re-derived.
   const rootVersionPrefixed = args.slice(0, groupIndex).some((tok) => /^(--version|-v)$/i.test(tok));
-  if (valueFlags === undefined) return { classification, memoryScan: null, rootVersionPrefixed };
-  const memoryScan = scanMemoryArgs(args, valueFlags, groupIndex + 2);
-  if (classification.operation !== `memory ${sub}` && !memoryScan.genuineHelp && !rootVersionPrefixed) {
-    classification = classifyAgentartsInvocation(['memory', sub], options);
+  // Round 10: click's resolve_command RE-PARSES an option-like first
+  // leftover after a pre-group `--` back into the ROOT panel (measured:
+  // `-- --help memory list`, `-- --version`, `-- -h memory list` all
+  // print the root panel, exit 0 — no subcommand ever executes). Such
+  // argvs are root metadata regardless of the tokens that follow.
+  const rootSeparatorReparse = args
+    .slice(0, groupIndex)
+    .some((tok, idx, pre) => tok === '--' && /^-/.test(pre[idx + 1] ?? ''));
+  const valueFlags = resolveCommandValueFlags(group, sub);
+  if (valueFlags === undefined)
+    return {
+      classification,
+      commandScan: null,
+      memoryScan: null,
+      rootVersionPrefixed,
+      rootSeparatorReparse,
+      group,
+      sub,
+      groupIndex,
+    };
+  // Round 10: the subcommand token is located by the resolver's walk
+  // (group-level flag pairs or a `--` can sit between group and
+  // subcommand), so the scan context starts after the RESOLVED subIndex —
+  // groupIndex+2 assumed adjacency and mis-scanned `config --name --help
+  // get` (the group value --agent ate the subcommand's tokens).
+  // Round 11: the GROUP option region between groupIndex and subIndex is
+  // modeled in the scan itself (groupRegion) — without it, a help token
+  // swallowed as a group flag's VALUE (`config --name --help set-env K
+  // V`, a credential write on the real CLI) scanned as genuineHelp and
+  // executed credential-free through the help path.
+  const from = sub === undefined ? groupIndex + 1 : subIndex + 1;
+  const groupRegion =
+    sub === undefined
+      ? null
+      : {
+          start: groupIndex + 1,
+          end: subIndex,
+          flags: AGENTARTS_GROUP_LEVEL_VALUE_FLAGS.get(group) ?? EMPTY_VALUE_FLAGS,
+        };
+  const commandScan = scanValueFlagArgs(args, valueFlags, from, groupRegion);
+  const memoryScan =
+    group === 'memory' && sub !== undefined ? scanMemoryArgs(args, valueFlags, from, groupRegion) : null;
+  // Trap-26 collapse re-derivation, GENERALIZED from memory to every
+  // context with a value-flag table — the recorded trap-26a residue:
+  // `gateway create --name --help` and `launch --agent --help` classified
+  // local and steered to Bash EXECUTED the write with '--help' as a
+  // value. The classifier returns local for a group-bearing argv ONLY
+  // through its help/version short-circuit, so a scan that finds NO
+  // genuine help token (and no root version prefix, and no root
+  // separator re-parse — that argv prints the root panel, executes
+  // nothing) means the local verdict came from a help token sitting in a
+  // VALUE slot or a POSITIONAL slot after `--` (round 9: `memory create
+  // -- --help` smuggled a credentialed write through the help path): both
+  // re-derive from the clean shape. genuineHelp (option position) and
+  // root --version keep the local verdict — click really does print and
+  // exit.
+  if (
+    classification.tier === 'local' &&
+    group !== '' &&
+    !commandScan.genuineHelp &&
+    !rootVersionPrefixed &&
+    !rootSeparatorReparse
+  ) {
+    classification = classifyAgentartsInvocation(sub === undefined ? [group] : [group, sub], options);
   }
-  return { classification, memoryScan, rootVersionPrefixed };
+  return {
+    classification,
+    commandScan,
+    memoryScan,
+    rootVersionPrefixed,
+    rootSeparatorReparse,
+    group,
+    sub,
+    groupIndex,
+  };
 }
 
 // Canonicalize args into the exact form the wrapper would execute: append
@@ -340,7 +732,11 @@ function planningGuidance(classification, canonicalArgs, memoryScan) {
       `agentarts ${classification.operation || '(unknown)'} is not in the measured command registry (agentarts-sdk 0.1.7); classified fail-safe as cloud-write. Run \`agentarts ${classification.operation} --help\` first to verify the command shape.`,
     );
   }
-  if (classification.operation === 'config' || classification.group === 'config') {
+  // Round 9: gate on the collapsed classification's subcommand — a
+  // re-derived `config get --agent --help` plan (subcommand 'get') must
+  // not carry a "bare config is a wizard" warning; only genuinely
+  // subcommand-less config argvs (bare, group-level flags) are wizards.
+  if ((classification.operation === 'config' || classification.group === 'config') && !classification.subcommand) {
     notes.push('Bare `agentarts config` is an interactive wizard; a subcommand (set, get, list, …) is required.');
   }
   if (INTERACTIVE_BLOCKED_SUBCOMMANDS.has(classification.operation)) {
@@ -401,8 +797,38 @@ export function planAgentartsCommand(rawArgs, options = {}) {
     );
   }
 
-  const { classification, memoryScan, rootVersionPrefixed } = effectiveAgentartsClassification(providedArgs, options);
+  const { classification, commandScan, memoryScan, rootVersionPrefixed, rootSeparatorReparse, group, sub } =
+    effectiveAgentartsClassification(providedArgs, options);
   const executable = resolveAgentartsCommand();
+
+  // Root-terminal argvs (round 11) — genuine option-position help, an
+  // all-flag root context (group ''), a separator re-parse, or a leading
+  // --version — never reach subcommand parsing: click prints a panel or
+  // the version and exits. Every subcommand-scoped guard below (dangling,
+  // strategies, hard-stops, approval tokens) is moot for them, and
+  // WITHOUT this early return those branches issued verdicts OPPOSITE to
+  // the readonly runner's (round 3: `--version config` hard-stopped as
+  // an interactive wizard while the runner printed the version; 105
+  // plan/runner oppositions across the terminal shapes).
+  const rootTerminal = Boolean(commandScan?.genuineHelp || group === '' || rootSeparatorReparse || rootVersionPrefixed);
+  if (rootTerminal) {
+    return {
+      ok: true,
+      service: 'AgentArts',
+      executable,
+      args: scrubPositionalSecrets(redactSecrets(providedArgs), 'agentarts'),
+      command: [executable, ...scrubPositionalSecrets(redactSecrets(providedArgs), 'agentarts')]
+        .map((arg) => quoteShellArg(arg))
+        .join(' '),
+      tier: 'local',
+      labels: [],
+      operation: classification.operation,
+      warnings: [],
+      safeToRun: true,
+      executionBlock:
+        'Discovery metadata (genuine --help / version — prints and exits, no cloud call, no credentials needed). Run it through huaweicloud_agentarts_run_readonly_command, which resolves the CLI binary and accepts help at any command level.',
+    };
+  }
 
   // A dangling value flag on a memory-family argv is a click parse error
   // ("Option '--X' requires an argument." — nothing reaches the server),
@@ -457,8 +883,17 @@ export function planAgentartsCommand(rawArgs, options = {}) {
       );
     }
   }
+  // Round 9 (config-family plan/runner divergence): resolve from the
+  // TOKEN-level group/sub (the help-collapsed classification carries
+  // subcommand '' even when a subcommand token exists, which hard-stopped
+  // `config get --help` as an interactive wizard while the readonly runner
+  // executed it as help — opposite verdicts, the exact contract this
+  // module pins). A genuine-help argv is a print-and-exit panel, never a
+  // wizard run; a group-level value-slot help (`config --region --help`)
+  // keeps the wizard hard-stop (the re-derivation made it approved, and
+  // bareConfig still fires: sub is undefined there).
   const blocked = INTERACTIVE_BLOCKED_SUBCOMMANDS.has(classification.operation);
-  const bareConfig = classification.group === 'config' && !classification.subcommand;
+  const bareConfig = group === 'config' && sub === undefined && !commandScan?.genuineHelp;
   const missingTarget =
     (classification.operation === 'memory install' || classification.operation === 'memory uninstall') &&
     !providedArgs.some((a) => MEMORY_INSTALL_TARGETS.has(String(a).toLowerCase()));
@@ -570,6 +1005,10 @@ export function planAgentartsCommand(rawArgs, options = {}) {
   }
 
   if (classification.tier === 'local') {
+    // Root-terminal argvs (help / all-flag root context / separator
+    // re-parse / leading --version) returned EARLIER as discovery
+    // metadata; everything reaching this branch is a genuine local-tier
+    // command (init, dev) — Bash is the right path for them.
     plan.executionBlock =
       'Local-tier command: run via Bash directly (hook-covered). No approval needed; `agentarts dev` is a long-running server the agent manages (background start, poll ping, kill).';
     return plan;
@@ -605,6 +1044,13 @@ export function buildChildEnv(options = {}) {
     SSL_CERT_FILE: process.env.SSL_CERT_FILE,
     SSL_CERT_DIR: process.env.SSL_CERT_DIR,
     REQUESTS_CA_BUNDLE: process.env.REQUESTS_CA_BUNDLE,
+    // Trap 51 (measured 2026-10-29): rich reads COLUMNS for non-TTY
+    // width and wraps at 80 when it is absent — captured stdout then
+    // breaks URLs mid-string (`...huaweicloud-agenta\nrts.com/mcp`) and
+    // the safe path hands out unparseable data. 2000 is the measured
+    // clean width (G2 session: COLUMNS=2000 produced unbroken output).
+    // TTY runs are unaffected (rich prefers the terminal size).
+    COLUMNS: '2000',
   };
   if (process.platform === 'win32') {
     env.SystemRoot = process.env.SystemRoot;
@@ -1057,7 +1503,61 @@ export async function runAgentartsReadonlyCommand(rawArgs, options = {}) {
   // token in a value slot must not collapse an approved-tier write to
   // local here either — the two surfaces can never return opposite
   // verdicts on the same argv.
-  const { classification } = effectiveAgentartsClassification(providedArgs, options);
+  const { classification, commandScan, rootVersionPrefixed, rootSeparatorReparse, group, sub, groupIndex } =
+    effectiveAgentartsClassification(providedArgs, options);
+  // Genuine help is read-only discovery metadata on 0.1.7 — typer prints
+  // help and exits before any command logic. The runner accepts it
+  // (option-position tokens only, per the value-slot scan — a --help in a
+  // VALUE slot, in a GROUP-region value slot, or in a POSITIONAL slot
+  // after `--` keeps the re-derived write tier below) because it already
+  // knows where the binary lives (resolveAgentartsCommand); steering help
+  // to Bash forced the agent to find the venv binary first (G2 friction
+  // 4). Root metadata (group '' — an all-flag argv: --help prints the
+  // panel eagerly, --version fires its callback before command dispatch,
+  // --verbose prints the banner, and unknown flags fail honestly with a
+  // usage error — real-CLI measured, round 12), a root-separator
+  // re-parse (pre-group `--` + option-like token — the real CLI prints
+  // the ROOT panel or fails honestly with a usage error like "No such
+  // option: -h", exit 2; it never dispatches the subcommand), and a
+  // leading --version (no help token anywhere — the version callback
+  // fires before any subcommand parses) all likewise never reach a cloud
+  // call. No credential requirement: nothing reaches the cloud.
+  const rootMetadata = group === '' || rootSeparatorReparse;
+  // Round 12: NO tier gate on the metadata acceptance. Root-separator
+  // re-parse is the one terminal predicate that can coexist with a
+  // READONLY classification (genuineHelp/group-''/--version each force
+  // the classifier's local short-circuit) — gating on tier !== 'readonly'
+  // sent `-- -x memory list` to the credential gate while the plan's
+  // rootTerminal early return promised credential-free discovery (22
+  // plan/runner oppositions, round 4).
+  if (rootMetadata || rootVersionPrefixed || commandScan?.genuineHelp) {
+    // Label accuracy (rounds 9-12, REAL-CLI ground truth): --help is the
+    // only EAGER root option on the real 0.1.7 CLI (--version is a plain
+    // callback flag), so an unconsumed option-position help token wins
+    // over any version token — `--version --help`, `--help --version`,
+    // and `--version -- --help` all print the ROOT HELP panel (the
+    // round-11 "version wins" ordering was measured on an adversary stub
+    // whose root panel differed; the real binary corrects it). A
+    // --version with NO help token anywhere prints the version; a
+    // root-separator re-parse prints the root panel or fails honestly
+    // with a usage error (`-- -h memory list` → "No such option: -h",
+    // exit 2 — measured on the real CLI); a help token BEFORE the group
+    // token is root-level eager help printing the ROOT panel (`--help
+    // memory create`); anything else labels the resolved group/subcommand
+    // context.
+    const rootPositionedHelp =
+      commandScan?.genuineHelp && commandScan.helpIndex !== -1 && commandScan.helpIndex < groupIndex;
+    const helpOperation = commandScan?.genuineHelp
+      ? rootPositionedHelp || rootMetadata
+        ? 'agentarts --help'
+        : `${group}${sub !== undefined ? ` ${sub}` : ''} --help`
+      : rootVersionPrefixed && !rootSeparatorReparse
+        ? 'agentarts --version'
+        : 'agentarts --help';
+    const helpClassification = { ...classification, tier: 'readonly', operation: helpOperation };
+    const result = await runAgentarts(providedArgs, helpClassification, options);
+    return { service: 'AgentArts', operation: helpOperation, tier: 'readonly', help: true, ...result };
+  }
   if (classification.tier !== 'readonly') {
     return {
       ok: false,
@@ -1496,7 +1996,7 @@ export const AGENTARTS_TOOL_DEFINITIONS = [
   {
     name: 'huaweicloud_agentarts_plan_cli_command',
     description:
-      'Classify and plan an agentarts CLI command (agentarts-sdk, Huawei Cloud AgentArts) without executing it. Returns the tier (local/readonly/approved/blocked), canonical args (per-operation non-interactive flags included: destroy/memory install/uninstall append --yes, memory delete appends --force, memory create canonicalizes to --output json so its one-time api_key is printed), warnings, and an approvalToken for approved-tier cloud writes. Plan-time rejections carry their own remediation: memory create is validated for --strategies (required server-side — the rejection lists the legal values) and a json --output (the table branch loses the one-time key).',
+      "Classify and plan an agentarts CLI command (agentarts-sdk, Huawei Cloud AgentArts) without executing it. Returns the tier (local/readonly/approved/blocked), canonical args (per-operation non-interactive flags included: destroy/memory install/uninstall append --yes, memory delete appends --force, memory create canonicalizes to --output json so its one-time api_key is printed), warnings, and an approvalToken for approved-tier cloud writes. Plan-time rejections carry their own remediation: memory create is validated for --strategies (required server-side — the rejection lists the legal values) and a json --output (the table branch loses the one-time key). Genuine --help argvs (option-position help token), all-flag/root-metadata argvs, and a leading --version plan as discovery metadata pointing at the readonly runner; a --help in a VALUE slot or after a -- separator re-derives to the command's real tier and requires approval when that tier is a write.",
     inputSchema: {
       type: 'object',
       required: ['args'],
@@ -1513,7 +2013,7 @@ export const AGENTARTS_TOOL_DEFINITIONS = [
   {
     name: 'huaweicloud_agentarts_run_readonly_command',
     description:
-      'Run a read-only agentarts command (memory list/get/status, gateway get/list/get-target/list-targets) with runtime credential injection and output redaction. Exit codes are unreliable in agentarts 0.1.7 — success is decided from parsed output.',
+      "Run a read-only agentarts command (memory list/get/status, gateway get/list/get-target/list-targets) with runtime credential injection and output redaction. Also executes genuine --help discovery at any command level (option-position help tokens only — a help token in a value slot or after a -- separator is re-derived to the command's real tier: rejected when that tier is a write) and root metadata (all-flag argvs, a leading --version, a pre-group -- re-parse): no credentials needed, prints and exits. Exit codes are unreliable in agentarts 0.1.7 — success is decided from parsed output; child stdout/stderr are widened to COLUMNS=2000 so rich does not wrap URLs mid-string.",
     inputSchema: {
       type: 'object',
       required: ['args'],

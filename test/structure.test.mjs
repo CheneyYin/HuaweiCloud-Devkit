@@ -1549,9 +1549,103 @@ test('cli-workflows.md teaches gateway provisioning, session lifecycle, and the 
   assert.match(body, /60s/);
   assert.match(body, /120s/);
   assert.match(body, /3600/);
-  // The IAM-agency auto-create side effect is taught (SDK source, not yet cloud-measured).
+  // The IAM-agency auto-create side effect is taught (cloud-measured
+  // 2026-10-29; the not-reclaimed trap is pinned in the G1 test below).
   assert.match(body, /AgentArtsCoreGateway/);
   assert.doesNotMatch(body, /TODO/i);
+});
+
+test('gateway lifecycle traps from the G1 session are pinned across all skill surfaces (2026-10-29)', () => {
+  const skillDir = join(pluginRoot, 'skills', 'huawei-agentarts');
+  const body = readFileSync(join(skillDir, 'SKILL.md'), 'utf8');
+  const workflows = readFileSync(join(skillDir, 'references', 'cli-workflows.md'), 'utf8');
+  const creds = readFileSync(join(skillDir, 'references', 'credentials.md'), 'utf8');
+
+  // Trap 44 (A): 00000144 is a credential-source signal — taught in the
+  // trap table AND the auth-chain surface (credentials.md).
+  assert.match(body, /AgentArts\.00000144/);
+  assert.match(creds, /AgentArts\.00000144/);
+  assert.match(creds, /credential-SOURCE signal, not an\s+account-status signal/);
+  // Trap 45 (B): silent field drop → the readback-verification contract.
+  assert.match(body, /supported_versions/);
+  assert.match(workflows, /supported_versions/);
+  assert.match(workflows, /Success ≠ applied/);
+  assert.match(body, /success ≠ applied/);
+  // Trap 46 (C/K): the generic param error + help-invisible constraints.
+  assert.match(body, /AgentArts\.02000001/);
+  assert.match(workflows, /AgentArts\.02000001/);
+  // Trap 47 (E/F): sync absence + the undocumented state machine.
+  assert.match(workflows, /SyncCoreGatewayTargets/);
+  assert.match(workflows, /No such command/);
+  // G2 corrected the terminal-state teaching (the G1 "poll until active"
+  // pin was wrong — G2 measured terminal `ready`; the vocabulary itself
+  // is unstable, so the teaching is poll-until-STABLE with both
+  // observations dated). Pinned in the G2 test below.
+  assert.match(workflows, /poll until STABLE/);
+  // Trap 48 (H): gateway output shape.
+  assert.match(workflows, /√ SUCCESS/);
+  assert.match(workflows, /No such option: --output/);
+  assert.match(body, /No such option: --output/);
+  // Trap 49 (J): the agency auto-create is cloud-measured and NOT reclaimed.
+  assert.match(workflows, /reclaimed by gateway delete/);
+  assert.doesNotMatch(workflows, /not yet cloud-measured/);
+  // Trap 50 (G): the schema source is the API Explorer — the old
+  // "run the command's own --help" dead-end guidance must not return.
+  assert.doesNotMatch(workflows, /run the command's own --help or use the console/);
+  assert.match(workflows, /API Explorer/);
+  // The upstream asks doc carries the G1 rows.
+  const asks = readFileSync(join(root, 'docs', 'agentarts-upstream-asks.md'), 'utf8');
+  assert.match(asks, /SyncCoreGatewayTargets/);
+  assert.match(asks, /00000144/);
+});
+
+test('gateway G2 session facts are pinned across all skill surfaces (2026-10-29, second session)', () => {
+  const skillDir = join(pluginRoot, 'skills', 'huawei-agentarts');
+  const body = readFileSync(join(skillDir, 'SKILL.md'), 'utf8');
+  const workflows = readFileSync(join(skillDir, 'references', 'cli-workflows.md'), 'utf8');
+  const findings = readFileSync(join(root, 'docs', 'agentarts-pr0-findings.md'), 'utf8');
+  const asks = readFileSync(join(root, 'docs', 'agentarts-upstream-asks.md'), 'utf8');
+
+  // Trap 51: the rich 80-column wrap broke captured URLs; the wrapper
+  // fix (COLUMNS=2000 in buildChildEnv) is taught on BOTH surfaces, and
+  // the bare-shell escape (export COLUMNS=2000) with it.
+  assert.match(workflows, /COLUMNS=2000/);
+  assert.match(workflows, /export COLUMNS=2000/);
+  assert.match(workflows, /huaweicloud-agenta\\nrts\.com\/mcp/);
+  assert.match(body, /COLUMNS=2000/);
+  assert.match(findings, /trap 51|陷阱 51/);
+  // Trap 52: help discovery through the readonly runner (G2 friction 4)
+  // is taught in the tier map and the workflows reference.
+  assert.match(body, /no credentials needed/);
+  assert.match(workflows, /Help discovery \(G2 fix/);
+  // Trap 53: the unstable status vocabulary — both sessions' observations
+  // dated, terminal teaching is poll-until-STABLE, and the ~35s
+  // missing-status window is not an error.
+  assert.match(workflows, /`creating→ready`/);
+  assert.match(workflows, /`creating→active`/);
+  assert.match(workflows, /synchronizing\(90–130s\)→ready/);
+  assert.match(workflows, /NO status field/);
+  assert.match(body, /until the status is STABLE/);
+  assert.match(findings, /终态是 ready 不是 active/);
+  // Trap 54: the update-window status gap is recorded as a finding.
+  assert.match(findings, /~35s, get-target 返回体里没有 status 字段|~35s.*没有 status 字段/);
+  // Trap 55: the E2E recipe — the three undocumented facts, the
+  // argv-invisible key delivery, and the IAM side-gateway budget.
+  assert.match(workflows, /## Gateway E2E Verification/);
+  assert.match(workflows, /Authorization: Bearer <api_key>/);
+  assert.match(workflows, /X-Api-Key/);
+  assert.match(workflows, /mcp-session-id/);
+  assert.match(workflows, /curl -H @<file>/);
+  assert.match(workflows, /IAM-type gateways cannot be called with AK\/SK/);
+  assert.match(workflows, /tools\/list/);
+  assert.match(body, /api_key side-gateway/);
+  assert.match(body, /curl -H @file/);
+  // list-targets returns no target_configuration (N+1 audit cost).
+  assert.match(workflows, /returns NO target_configuration/);
+  // Upstream asks #26/#27/#28 carry the G2 evidence.
+  assert.match(asks, /ListCoreGatewayTargets/);
+  assert.match(asks, /token 铸造/);
+  assert.match(asks, /gateway verify/);
 });
 
 test('SKILL.md routes the console-only product modes (PR10)', () => {

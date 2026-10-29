@@ -15,6 +15,9 @@ import {
   agentartsVenvBin,
   listAgentartsAgents,
   MEMORY_SUBCOMMAND_VALUE_FLAGS,
+  SUBCOMMAND_VALUE_FLAGS,
+  ROOT_COMMAND_VALUE_FLAGS,
+  GROUP_LEVEL_VALUE_FLAGS,
   runPythonSnippet,
   childDeathVerdict,
 } from '../plugins/huaweicloud-core/src/agentarts-cli.mjs';
@@ -113,12 +116,33 @@ async function withIsolation(fn) {
         '  *" --stub-get-key "*)',
         '    echo \'{"id": "sp-verify-1", "api_key": "KEY_ONETIME_get555", "status": "ACTIVE", "api_key_id": "key-9"}\'',
         '    exit 0;;',
+        '  *" gateway --help "*)',
+        '    echo "GATEWAY_GROUP_HELP_PANEL"',
+        '    exit 0;;',
+        '  *" gateway create --help "*)',
+        '    echo "GATEWAY_CREATE_HELP_PANEL"',
+        '    exit 0;;',
+        '  *" gateway delete --help "*)',
+        '    echo "GATEWAY_DELETE_HELP_PANEL"',
+        '    exit 0;;',
+        '  *" --help "*)',
+        '    echo "ROOT_HELP_PANEL"',
+        '    exit 0;;',
+        '  *" --version --stub-echo-ok "*)',
+        '    echo "agentarts version: 0.1.7-stub"',
+        '    exit 0;;',
+        '  *" --stub-echo-columns "*)',
+        '    echo "COLUMNS=[${COLUMNS}]"',
+        '    exit 0;;',
         '  *" --stub-key "*)',
         '    echo "2026-10-21 INFO creating space"',
         '    echo \'{"id": "space-e2e-001", "api_key": "KEY_ONETIME_abc123", "name": "s"}\'',
         '    exit 0;;',
         '  *" memory create "*)',
         '    echo \'{"id": "space-e2e-002", "api_key": "KEY_ONETIME_xyz789", "name": "s"}\'',
+        '    exit 0;;',
+        '  *" memory -- create "*)',
+        '    echo \'{"id": "space-sep-001", "api_key": "KEY_ONETIME_sep777", "name": "s"}\'',
         '    exit 0;;',
         '  *)',
         '    echo \'{"items":[]}\'',
@@ -1640,6 +1664,506 @@ test('readonly runner agrees with the plan tool on help-in-value-slot argvs (tra
   });
 });
 
+test('readonly runner executes genuine help discovery and rejects help-in-value-slot writes (trap 26a closure, G2 friction 4)', async () => {
+  await withIsolation(async () => {
+    // No credentials are set anywhere in this test: genuine help is
+    // discovery metadata (typer prints and exits before any command
+    // logic) — the runner must NOT gate it on the env-or-fail contract,
+    // or help-seeking dead-ends before credentials even exist.
+    const groupHelp = await runAgentartsReadonlyCommand(['gateway', '--help']);
+    assert.equal(groupHelp.ok, true);
+    assert.equal(groupHelp.help, true);
+    assert.equal(groupHelp.tier, 'readonly');
+    assert.match(groupHelp.stdout, /GATEWAY_GROUP_HELP_PANEL/);
+
+    const subHelp = await runAgentartsReadonlyCommand(['gateway', 'create', '--help']);
+    assert.equal(subHelp.ok, true);
+    assert.equal(subHelp.help, true);
+    assert.match(subHelp.stdout, /GATEWAY_CREATE_HELP_PANEL/);
+
+    // delete help documents the no-skip-flag reality — accepted too.
+    const deleteHelp = await runAgentartsReadonlyCommand(['gateway', 'delete', '--help']);
+    assert.equal(deleteHelp.ok, true);
+    assert.match(deleteHelp.stdout, /GATEWAY_DELETE_HELP_PANEL/);
+
+    const rootHelp = await runAgentartsReadonlyCommand(['--help']);
+    assert.equal(rootHelp.ok, true);
+    assert.equal(rootHelp.help, true);
+    assert.match(rootHelp.stdout, /ROOT_HELP_PANEL/);
+
+    const version = await runAgentartsReadonlyCommand(['--version', '--stub-echo-ok']);
+    assert.equal(version.ok, true);
+    assert.equal(version.help, true);
+    assert.match(version.stdout, /0\.1\.7-stub/);
+
+    // A --help in a VALUE slot is the write it collapses to — never
+    // steered to Bash, never executed read-only. The gateway variant
+    // (G2) and the root-command variant (launch — the recorded trap-26a
+    // residue: `launch --agent --help` classified local and steered to
+    // Bash executed the deploy with agent='--help').
+    const gatewayWrite = await runAgentartsReadonlyCommand(['gateway', 'create', '--name', '--help']);
+    assert.equal(gatewayWrite.ok, false);
+    assert.match(gatewayWrite.error, /tier: approved/);
+    assert.match(gatewayWrite.error, /run_approved_command/);
+
+    const launchWrite = await runAgentartsReadonlyCommand(['launch', '--agent', '--help']);
+    assert.equal(launchWrite.ok, false);
+    assert.match(launchWrite.error, /tier: approved/);
+    assert.doesNotMatch(launchWrite.error, /Bash/);
+  });
+});
+
+test('plan steers genuine help to the readonly runner and gates help-in-value-slot writes', () => {
+  const helpPlan = planAgentartsCommand(['gateway', '--help']);
+  assert.equal(helpPlan.ok, true);
+  assert.equal(helpPlan.tier, 'local');
+  assert.equal(helpPlan.safeToRun, true);
+  assert.match(helpPlan.executionBlock, /run_readonly_command/);
+  assert.match(helpPlan.executionBlock, /no cloud call/i);
+  assert.equal(helpPlan.approvalToken, undefined);
+
+  // The collapsed writes carry approval tokens — the tier fix gates what
+  // Bash used to execute blind.
+  const launchPlan = planAgentartsCommand(['launch', '--agent', '--help']);
+  assert.equal(launchPlan.tier, 'approved');
+  assert.ok(launchPlan.approvalToken, 'the collapsed launch write must carry an approval token');
+
+  const gatewayPlan = planAgentartsCommand(['gateway', 'create', '--name', '--help']);
+  assert.equal(gatewayPlan.tier, 'approved');
+  assert.ok(gatewayPlan.approvalToken, 'the collapsed gateway create must carry an approval token');
+});
+
+test('child env widens rich to COLUMNS=2000 so captured URLs do not wrap (trap 51, G2)', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // Behavioral: the value must survive the real spawn path (rich reads
+    // COLUMNS in non-TTY children; absent, it wrapped endpoint URLs at
+    // 80 columns — `...huaweicloud-agenta\nrts.com/mcp`).
+    const result = await runAgentartsReadonlyCommand(['gateway', 'list', '--stub-echo-columns']);
+    assert.equal(result.ok, true);
+    assert.match(result.stdout, /COLUMNS=\[2000\]/);
+  });
+});
+
+test('a --help after the -- separator is the write it collapses to, never the help path (round 9)', async () => {
+  await withIsolation(async () => {
+    // Click ground truth (adversary-reproduced against click 8.1.6):
+    // after `--`, every token is a POSITIONAL — `memory create -- --help`
+    // executes the create with name='--help', `invoke -- --help` invokes
+    // with payload='--help'. The scan must model the separator so the
+    // re-derivation gates these as the writes they are.
+    const planWrite = planAgentartsCommand(['memory', 'delete', '--force', '--', '--help']);
+    assert.equal(planWrite.tier, 'approved');
+    assert.ok(planWrite.approvalToken, 'the smuggled delete must carry an approval token');
+
+    const invokePlan = planAgentartsCommand(['invoke', '--', '--help']);
+    assert.equal(invokePlan.tier, 'approved');
+    assert.ok(invokePlan.approvalToken, 'the smuggled invoke must carry an approval token');
+
+    // A strategies-less create after `--` hits the EARLIER guard: the
+    // plan rejects for the missing --strategies (click would execute the
+    // create name='--help' → server 400 + orphan key) — never the help
+    // path, never Bash-steered.
+    const createPlan = planAgentartsCommand(['memory', 'create', '--', '--help']);
+    assert.equal(createPlan.ok, false);
+    assert.match(createPlan.error, /requires --strategies/);
+
+    const runWrite = await runAgentartsReadonlyCommand(['memory', 'create', '--', '--help']);
+    assert.equal(runWrite.ok, false);
+    assert.match(runWrite.error, /tier: approved/);
+    assert.equal(runWrite.help, undefined);
+
+    const invokeWrite = await runAgentartsReadonlyCommand(['invoke', '--', '--help']);
+    assert.equal(invokeWrite.ok, false);
+    assert.match(invokeWrite.error, /tier: approved/);
+
+    const deleteWrite = await runAgentartsReadonlyCommand(['memory', 'delete', '--force', '--', '--help']);
+    assert.equal(deleteWrite.ok, false);
+    assert.match(deleteWrite.error, /tier: approved/);
+
+    // A strategies value BEFORE the separator still scans (the guard
+    // validates what click will really execute); the trailing --help is
+    // a positional and must not flip the verdict.
+    const mixed = planAgentartsCommand(['memory', 'create', '--strategies', 'semantic', '--', '--help']);
+    assert.equal(mixed.tier, 'approved');
+    assert.ok(mixed.approvalToken);
+    // The scan does not eat post-separator flags as values: strategies
+    // after `--` is a positional to click, so the plan must treat it as
+    // absent (the rejection lists the legal values).
+    const postSeparatorFlag = planAgentartsCommand(['memory', 'create', '--', '--strategies', 'semantic']);
+    assert.equal(postSeparatorFlag.ok, false);
+    assert.match(postSeparatorFlag.error, /requires --strategies/);
+  });
+});
+
+test('interleaved flag spellings keep chronological last-wins — the plan validates what click executes (round 9)', () => {
+  // Object-key insertion order picked the FIRST spelling's latest value,
+  // not the chronologically last occurrence: `-o json --output json -o
+  // table` planned as json while click executes table (one-time api_key
+  // lost); the strategies twin planned semantic while click executes
+  // -bogus (server 400 after the orphan key). Both must reject again.
+  const outputDrift = planAgentartsCommand([
+    'memory',
+    'create',
+    'x',
+    '-s',
+    'semantic',
+    '-o',
+    'json',
+    '--output',
+    'json',
+    '-o',
+    'table',
+  ]);
+  assert.equal(outputDrift.ok, false);
+  assert.match(outputDrift.error, /non-json --output/);
+
+  const strategiesDrift = planAgentartsCommand([
+    'memory',
+    'create',
+    'x',
+    '-s',
+    'semantic',
+    '--strategies',
+    'semantic',
+    '-s',
+    '-bogus',
+  ]);
+  assert.equal(strategiesDrift.ok, false);
+  assert.match(strategiesDrift.error, /requires --strategies/);
+
+  // The healthy interleaving still plans: the chronologically LAST
+  // occurrence is json.
+  const healthy = planAgentartsCommand(['memory', 'create', 'x', '-s', 'semantic', '-o', 'table', '--output', 'json']);
+  assert.equal(healthy.ok, true);
+  assert.equal(healthy.tier, 'approved');
+  assert.ok(healthy.approvalToken);
+});
+
+test('config-family help agrees across plan and runner; group-level value slots stay gated (round 9)', async () => {
+  await withIsolation(async () => {
+    // The bareConfig hard-stop used the help-collapsed subcommand ('' ),
+    // so every config help argv planned as an interactive wizard while
+    // the runner executed it — 9 opposite verdicts. All must agree now.
+    for (const argv of [
+      ['config', '--help'],
+      ['config', 'get', '--help'],
+      ['config', 'set', '--help'],
+      ['config', 'list-env', '--help'],
+    ]) {
+      const plan = planAgentartsCommand(argv);
+      assert.equal(plan.ok, true, JSON.stringify(argv));
+      assert.equal(plan.hardStop, undefined, `config help must not hard-stop: ${argv.join(' ')}`);
+      assert.equal(plan.safeToRun, true, `config help is runner-executable: ${argv.join(' ')}`);
+      assert.match(plan.executionBlock, /run_readonly_command/);
+      const run = await runAgentartsReadonlyCommand(argv);
+      assert.equal(run.ok, true, JSON.stringify(argv));
+      assert.equal(run.help, true);
+    }
+
+    // Value-slot help under a config subcommand re-derives to the write
+    // tier and must NOT carry the bare-config wizard warning.
+    const valueSlot = planAgentartsCommand(['config', 'get', '--agent', '--help']);
+    assert.equal(valueSlot.tier, 'approved');
+    assert.ok(valueSlot.approvalToken);
+    assert.deepEqual(
+      valueSlot.warnings.filter((w) => /interactive wizard/.test(w)),
+      [],
+      'a subcommand-bearing config plan must not carry the bare-config warning',
+    );
+    const valueSlotRun = await runAgentartsReadonlyCommand(['config', 'get', '--agent', '--help']);
+    assert.equal(valueSlotRun.ok, false);
+    assert.match(valueSlotRun.error, /tier: approved/);
+
+    // Group-level value-slot help (`config --region --help`: the wizard
+    // would run with region='--help') keeps the wizard hard-stop — this
+    // also pins the GROUP_LEVEL_VALUE_FLAGS consumption a table-only pin
+    // could not catch (dropping it in resolveCommandValueFlags left the
+    // whole suite green while the runner executed the wizard argv as
+    // help).
+    const wizard = planAgentartsCommand(['config', '--region', '--help']);
+    assert.equal(wizard.hardStop, true);
+    assert.match(wizard.executionBlock, /interactive wizard/);
+    const wizardRun = await runAgentartsReadonlyCommand(['config', '--region', '--help']);
+    assert.equal(wizardRun.ok, false);
+    assert.match(wizardRun.error, /tier: approved/);
+
+    // Bare config (no tokens after the group) still hard-stops.
+    const bare = planAgentartsCommand(['config']);
+    assert.equal(bare.hardStop, true);
+  });
+});
+
+test('root-positioned help labels the root panel, not the deepest group (round 9)', async () => {
+  await withIsolation(async () => {
+    // `--help memory create`: click's eager root help fires BEFORE the
+    // group is parsed — the ROOT panel prints. The operation label must
+    // say so.
+    const result = await runAgentartsReadonlyCommand(['--help', 'memory', 'create']);
+    assert.equal(result.ok, true);
+    assert.equal(result.help, true);
+    assert.equal(result.operation, 'agentarts --help');
+    assert.match(result.stdout, /ROOT_HELP_PANEL/);
+
+    // Group-positioned help keeps the group label.
+    const groupResult = await runAgentartsReadonlyCommand(['gateway', '--help']);
+    assert.equal(groupResult.operation, 'gateway --help');
+    const subResult = await runAgentartsReadonlyCommand(['gateway', 'create', '--help']);
+    assert.equal(subResult.operation, 'gateway create --help');
+  });
+});
+
+test('a -- or group value flag between group and subcommand hides nothing from the guards (round 10)', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // Click's group parser CONSUMES a group-level `--` and resolves the
+    // subcommand after it with a fresh parser (measured against click
+    // 8.1.6 and the real venv CLI: `memory -- create x` ≡ `memory create
+    // x`; `config --name x remove foo` executes remove). The resolver's
+    // walk now locates the subcommand past separator and group flag
+    // pairs, so every subcommand-scoped guard fires.
+    const noStrategies = planAgentartsCommand(['memory', '--', 'create', 'x']);
+    assert.equal(noStrategies.ok, false);
+    assert.match(noStrategies.error, /requires --strategies/);
+
+    const guarded = planAgentartsCommand(['memory', '--', 'create', 'x', '--strategies', 'semantic']);
+    assert.equal(guarded.ok, true);
+    assert.equal(guarded.tier, 'approved');
+    assert.equal(guarded.operation, 'memory create');
+    // The --output json canonicalization applies across the separator.
+    assert.deepEqual(guarded.args, ['memory', '--', 'create', 'x', '--strategies', 'semantic', '--output', 'json']);
+
+    // Reads are not demoted to the group's approved tier.
+    const read = await runAgentartsReadonlyCommand(['memory', '--', 'list']);
+    assert.equal(read.ok, true);
+    assert.equal(read.tier, 'readonly');
+
+    // Interactive hard-stops and canonical flags survive the separator.
+    const install = planAgentartsCommand(['memory', '--', 'install']);
+    assert.equal(install.hardStop, true);
+    const installTarget = planAgentartsCommand(['memory', '--', 'install', 'opencode']);
+    assert.deepEqual(installTarget.args, ['memory', '--', 'install', 'opencode', '--yes']);
+
+    // Irreversible labels survive too.
+    const del = planAgentartsCommand(['memory', '--', 'delete', 'sp1']);
+    assert.ok(del.labels.includes('irreversible'));
+
+    // Group value-flag pairs likewise hide the subcommand from a naive
+    // next-token read: click EXECUTES the subcommand.
+    const cfgWrite = planAgentartsCommand(['config', '--name', 'x', 'remove', 'foo']);
+    assert.equal(cfgWrite.hardStop, undefined, 'a subcommand-bearing config argv is not a wizard');
+    assert.equal(cfgWrite.warnings.filter((w) => /interactive wizard/.test(w)).length, 0);
+    // Round 11: a help token in a GROUP-region value slot is NOT genuine
+    // help — click swallows it as the flag's value and executes the
+    // subcommand behind it. The write twins are gated; the READ twin
+    // executes through the READONLY path (with credentials), never the
+    // credential-free help path.
+    for (const argv of [
+      ['config', '--name', '--help', 'set', 'k', 'v'],
+      ['config', '--name', '--help', 'set-env', 'K', 'V'],
+      ['config', '--name', '--help', 'remove', 'foo'],
+      ['config', '-n', '--help', 'set-default', 'a'],
+    ]) {
+      const plan = planAgentartsCommand(argv);
+      assert.equal(plan.tier, 'approved', JSON.stringify(argv));
+      assert.ok(plan.approvalToken, `the group-value-slot write must be gated: ${argv.join(' ')}`);
+      assert.equal(plan.safeToRun, false);
+      const run = await runAgentartsReadonlyCommand(argv);
+      assert.equal(run.ok, false, JSON.stringify(argv));
+      assert.match(run.error, /tier: approved/);
+      assert.equal(run.help, undefined);
+    }
+    const cfgReadPlan = planAgentartsCommand(['config', '--name', '--help', 'get']);
+    assert.equal(cfgReadPlan.tier, 'approved', 'config get is policy-approved (credential-bearing family)');
+    assert.ok(cfgReadPlan.approvalToken);
+    const cfgRead = await runAgentartsReadonlyCommand(['config', '--name', '--help', 'get']);
+    assert.equal(cfgRead.ok, false);
+    assert.match(cfgRead.error, /tier: approved/);
+    assert.equal(cfgRead.help, undefined, 'a group-value-slot help token never takes the help path');
+
+    // The one-time-key capture works across the separator end-to-end
+    // (operation resolves to memory create → extractMemoryApiKey fires).
+    const keyPlan = planAgentartsCommand(['memory', '--', 'create', 'x', '--strategies', 'semantic']);
+    const keyRun = await runAgentartsApprovedCommand({
+      args: keyPlan.args,
+      approvalToken: keyPlan.approvalToken,
+      approvedByUser: true,
+    });
+    assert.equal(keyRun.status, 'ok');
+    assert.equal(keyRun.ok, true);
+    assert.ok(keyRun.memoryApiKeyFile, 'the one-time key must be captured for a --separated create');
+    assert.equal(keyRun.spaceId, 'space-sep-001');
+    assert.equal(readFileSync(keyRun.memoryApiKeyFile, 'utf8').trim(), 'KEY_ONETIME_sep777');
+  });
+});
+
+test('root metadata shapes click answers with a panel or version all execute credential-free (round 10)', async () => {
+  await withIsolation(async () => {
+    // No credentials anywhere in this test.
+    // A leading --version prints the version and exits before any
+    // subcommand parsing — even with group tokens behind it. (The
+    // --stub-echo-ok marker rides the pre-group flag region so the stub
+    // answers with the version line; click's eager --version fires
+    // before the marker is ever parsed.)
+    const version = await runAgentartsReadonlyCommand(['--version', '--stub-echo-ok', 'memory', 'list']);
+    assert.equal(version.ok, true);
+    assert.equal(version.help, true);
+    assert.equal(version.operation, 'agentarts --version');
+    assert.match(version.stdout, /0\.1\.7-stub/);
+
+    // Real-CLI ground truth (round 12): --help is the only EAGER root
+    // option (--version is a plain callback flag), so BOTH orders print
+    // the ROOT HELP panel — the version never fires.
+    for (const argv of [
+      ['--version', '--help'],
+      ['--help', '--version'],
+    ]) {
+      const both = await runAgentartsReadonlyCommand(argv);
+      assert.equal(both.ok, true);
+      assert.equal(both.operation, 'agentarts --help', JSON.stringify(argv));
+    }
+
+    // A pre-group `--` followed by an option-like token makes click
+    // re-parse into the ROOT panel (measured: no subcommand executes) —
+    // accepted as help, never gated on credentials, never an approval
+    // prompt.
+    const reparse = await runAgentartsReadonlyCommand(['--', '--help', 'memory', 'list']);
+    assert.equal(reparse.ok, true);
+    assert.equal(reparse.help, true);
+    assert.equal(reparse.operation, 'agentarts --help');
+    assert.match(reparse.stdout, /ROOT_HELP_PANEL/);
+
+    // The same re-parse past a --version still prints the ROOT HELP panel
+    // (measured) — the label must not claim a version.
+    const reparseVersion = await runAgentartsReadonlyCommand(['--', '--version']);
+    assert.equal(reparseVersion.ok, true);
+    assert.equal(reparseVersion.operation, 'agentarts --help');
+
+    // All-flag argvs (group '') are root metadata: the runner ACCEPTS
+    // them (the stub answers exit 0 here; the real CLI prints the panel
+    // for eager flags, the version, or fails honestly with "Missing
+    // command." for the rest — metadata-class either way, never a write).
+    const allFlags = await runAgentartsReadonlyCommand(['--verbose']);
+    assert.equal(allFlags.ok, true);
+    assert.equal(allFlags.help, true);
+
+    // The plan agrees with the runner on every metadata shape above.
+    for (const argv of [
+      ['--version', '--stub-echo-ok', 'memory', 'list'],
+      ['--', '--help', 'memory', 'list'],
+      ['--verbose'],
+    ]) {
+      const plan = planAgentartsCommand(argv);
+      assert.equal(plan.safeToRun, true, JSON.stringify(argv));
+      assert.match(plan.executionBlock, /run_readonly_command/);
+    }
+
+    // Dual-help argvs: click's eager help is FIRST-wins — `--help config
+    // --help` prints the ROOT panel, and the label says so.
+    const dualHelp = await runAgentartsReadonlyCommand(['--help', 'config', '--help']);
+    assert.equal(dualHelp.ok, true);
+    assert.equal(dualHelp.operation, 'agentarts --help');
+  });
+});
+
+test('root-terminal argvs never hit subcommand guards — plan and runner agree (round 11)', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // Round 3 found 105 plan/runner oppositions: the plan's hard-stop /
+    // guard / token branches ran BEFORE the metadata acceptance, so
+    // `--version config` planned as an interactive-wizard hard-stop while
+    // the runner printed the version. All terminal shapes now return the
+    // discovery plan EARLY — no hard-stop, no token, no guard rejection.
+    for (const argv of [
+      ['--version', 'config'],
+      ['--version', 'config', '--name', 'x'],
+      ['--', '-x', 'config'],
+      ['--', '-x', 'memory', 'create'],
+      ['--', '-x', 'memory', 'install'],
+      ['--', '-x', 'memory', 'update'],
+      ['--', '-x', 'gateway', 'create'],
+      ['--', '-x', 'memory', 'create', '--strategies'],
+    ]) {
+      const plan = planAgentartsCommand(argv);
+      assert.equal(plan.ok, true, JSON.stringify(argv));
+      assert.equal(plan.hardStop, undefined, `terminal argv must not hard-stop: ${argv.join(' ')}`);
+      assert.equal(plan.approvalToken, undefined, `terminal argv must not carry a token: ${argv.join(' ')}`);
+      assert.equal(plan.safeToRun, true);
+      assert.match(plan.executionBlock, /run_readonly_command/);
+      const run = await runAgentartsReadonlyCommand(argv);
+      assert.equal(run.ok, true, JSON.stringify(argv));
+      assert.equal(run.help, true);
+    }
+
+    // A PLAIN pre-group `--` (next token NOT option-like) is NOT a
+    // re-parse: click resolves the command after it and EXECUTES — this
+    // is a readonly read through the normal readonly path, never the
+    // credential-free help path (mutation m6 pinned).
+    const plainSep = await runAgentartsReadonlyCommand(['--', 'memory', 'list']);
+    assert.equal(plainSep.ok, true);
+    assert.equal(plainSep.tier, 'readonly');
+    assert.equal(plainSep.help, undefined);
+    assert.equal(plainSep.operation, 'memory list');
+
+    // Round 12: reparse is the one terminal predicate that can coexist
+    // with a READONLY classification — the runner's acceptance must not
+    // tier-gate it, or these shapes hit the credential gate while the
+    // plan promised credential-free discovery (22 oppositions, round 4).
+    // No credentials from here to the end of this test.
+    clearRuntimeCredentials();
+    for (const argv of [
+      ['--', '-x', 'memory', 'list'],
+      ['--', '--limit', 'memory', 'list'],
+      ['--', '-x', 'gateway', 'get'],
+      ['--', '-9', 'gateway', 'list-targets'],
+    ]) {
+      const plan = planAgentartsCommand(argv);
+      assert.equal(plan.ok, true, JSON.stringify(argv));
+      assert.equal(plan.safeToRun, true);
+      const run = await runAgentartsReadonlyCommand(argv);
+      assert.equal(run.ok, true, JSON.stringify(argv));
+      assert.equal(run.help, true);
+      assert.equal(run.operation, 'agentarts --help', 'click prints the ROOT panel for the re-parse');
+    }
+
+    // Real-CLI ground truth (round 12): --help is the only eager root
+    // option, so `--version -- --help` prints the ROOT HELP panel too —
+    // the round-11 version-wins label was an adversary-stub artifact.
+    const versionBeforeSep = await runAgentartsReadonlyCommand(['--version', '--', '--help']);
+    assert.equal(versionBeforeSep.ok, true);
+    assert.equal(versionBeforeSep.operation, 'agentarts --help');
+  });
+});
+
+test('the group-level value-flag map is a single source shared with safety-policy (round 11)', async () => {
+  const { AGENTARTS_GROUP_LEVEL_VALUE_FLAGS, resolveAgentartsGroupTokens } =
+    await import('../plugins/huaweicloud-core/src/safety-policy.mjs');
+  // Reference equality: the wrapper's re-export IS the canonical map — a
+  // drifted local copy (mutation m10) must fail here.
+  assert.equal(GROUP_LEVEL_VALUE_FLAGS, AGENTARTS_GROUP_LEVEL_VALUE_FLAGS);
+  // The resolver walk consumes the same map (spot-check the shapes the
+  // adversarial rounds measured).
+  assert.deepEqual(resolveAgentartsGroupTokens(['memory', '--', 'create', 'x']), {
+    groupIndex: 0,
+    group: 'memory',
+    sub: 'create',
+    subIndex: 2,
+  });
+  assert.deepEqual(resolveAgentartsGroupTokens(['config', '--name', 'x', 'remove', 'foo']), {
+    groupIndex: 0,
+    group: 'config',
+    sub: 'remove',
+    subIndex: 3,
+  });
+  assert.deepEqual(resolveAgentartsGroupTokens(['config', '--name=x', 'get']), {
+    groupIndex: 0,
+    group: 'config',
+    sub: 'get',
+    subIndex: 2,
+  });
+  assert.equal(resolveAgentartsGroupTokens(['gateway', '--', 'list']).sub, 'list');
+});
+
 test('large-output side file never carries the one-time key (scrubbed before save)', async () => {
   await withIsolation(async () => {
     setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
@@ -1672,35 +2196,51 @@ test('large-output side file never carries the one-time key (scrubbed before sav
   });
 });
 
-test('MEMORY_SUBCOMMAND_VALUE_FLAGS is pinned to the 0.1.7 fixtures', () => {
-  // The value-flag table is the foundation of scanMemoryArgs and the
-  // trap-26 collapse fix: dropping an entry silently reopens the
-  // help-in-value-slot bypass for that subcommand. Rows in the fixtures'
-  // Options panel with a <int>/<str> type column are value-taking flags.
+test('value-flag tables are pinned to the 0.1.7 fixtures (all groups, group level, root commands)', () => {
+  // The value-flag tables are the foundation of the trap-26 collapse fix
+  // and the help-position scan: dropping an entry silently reopens the
+  // help-in-value-slot bypass for that command. Rows in the fixtures'
+  // Options panel with a type column (<str>/<int>/an enum like init's
+  // <basic|langgraph|langchain…>) are value-taking flags. Two display
+  // artifacts are repaired from the fixtures' own evidence: rich
+  // truncates long flag names with an ellipsis (the full spellings come
+  // from the sibling fixtures where the name fits), and required flags
+  // carry a leading * marker with extra column indent (gateway
+  // create-target --target-configuration — `^│\s+` absorbs both layouts).
+  // An unrepaired ellipsis FAILS the test — a new truncation must be
+  // reconciled before the table can drift.
   const fixturesDir = join(import.meta.dirname, 'fixtures', 'agentarts', 'help-tree');
-  const files = {
-    create: 'memory_create.txt',
-    update: 'memory_update.txt',
-    delete: 'memory_delete.txt',
-    get: 'memory_get.txt',
-    list: 'memory_list.txt',
-    status: 'memory_status.txt',
-    install: 'memory_install.txt',
-    uninstall: 'memory_uninstall.txt',
+  const truncationRepair = {
+    'outbound-network-configurat…': '--outbound-network-configuration',
+    'credential-provider-conf…': '--credential-provider-configuration',
+    'credential-provider-config…': '--credential-provider-configuration',
   };
-  for (const [sub, file] of Object.entries(files)) {
+  const extract = (file) => {
     const text = readFileSync(join(fixturesDir, file), 'utf8');
     const expected = new Set();
-    for (const m of text.matchAll(/^│ (--[a-z0-9-]+)(?:\s+(-[a-z0-9]+))?\s+<(?:int|str)>/gm)) {
-      expected.add(m[1]);
+    for (const m of text.matchAll(/^│\s+(?:\*\s*)?(--[a-z0-9-…]+)(?:\s+(-[a-z0-9]+))?\s+</gm)) {
+      const flag = truncationRepair[m[1].slice(2)] ?? m[1];
+      assert.ok(!flag.endsWith('…'), `${file}: unrepaired rich truncation: ${flag}`);
+      expected.add(flag);
       if (m[2]) expected.add(m[2]);
     }
+    return expected;
+  };
+  const compare = (label, actual, file) => {
     assert.deepEqual(
-      [...MEMORY_SUBCOMMAND_VALUE_FLAGS.get(sub)].sort((a, b) => a.localeCompare(b)),
-      [...expected].sort((a, b) => a.localeCompare(b)),
-      `value-flag table drifted from ${file} for memory ${sub}`,
+      [...actual].sort((a, b) => a.localeCompare(b)),
+      [...extract(file)].sort((a, b) => a.localeCompare(b)),
+      `value-flag table drifted from ${file} for ${label}`,
     );
+  };
+  for (const [group, table] of SUBCOMMAND_VALUE_FLAGS) {
+    for (const [sub, flags] of table) compare(`${group} ${sub}`, flags, `${group}_${sub}.txt`);
+    compare(`${group} (group level)`, GROUP_LEVEL_VALUE_FLAGS.get(group) ?? new Set(), `${group}.txt`);
   }
+  for (const [cmd, flags] of ROOT_COMMAND_VALUE_FLAGS) compare(cmd, flags, `${cmd}.txt`);
+  // Root metadata context (group '') scans with an empty set: every root
+  // option is a boolean (fixture-pinned), so any --help there is genuine.
+  compare('root metadata context', new Set(), '_root.txt');
 });
 
 test('key-file write failure surfaces an honest capture-failed note, never a phantom path', async () => {

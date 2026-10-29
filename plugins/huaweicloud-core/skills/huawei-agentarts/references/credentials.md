@@ -31,6 +31,15 @@ consequences:
   HUAWEICLOUD_SDK_CREDENTIALS_FILE=/dev/null as defense in depth).
 - A metadata 404 warning in output means env AND profile both failed — it is
   a failure signature, not noise.
+- A bare-shell (non-wrapper) run that answers `AgentArts.00000144 The
+current user status is unassigned` is a credential-SOURCE signal, not an
+  account-status signal (measured 2026-10-29: the CLI had fallen back to
+  the profile/metadata chain and that credential had no AgentArts access;
+  the same account succeeded immediately once credentials arrived via
+  `HUAWEICLOUD_SDK_AK/SK`). Diagnose the source, not the user — through
+  the devkit that means `huaweicloud_auth_init`; in the user's terminal,
+  their own explicit delivery, never an `export` of the SK (history +
+  transcript).
 
 ## Degraded paths (when the wrapper cannot run)
 

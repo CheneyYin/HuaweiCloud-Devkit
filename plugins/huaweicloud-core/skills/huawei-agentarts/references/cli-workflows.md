@@ -125,11 +125,13 @@ huaweicloud_agentarts_list_agents (SDK API — 0.1.7 has NO list CLI command)
 
 Use `--output json` on EVERY memory read (default is a rich table that
 TRUNCATES ids mid-string — `60a51c61-c5d8-491…` — a copied id is
-broken). The list-agents tool returns `agents[]` already parsed; omit
-`limit`/`offset` unless sweeping — the SDK defaults are the single
-source of truth. Through the BRIDGE, list_memories also defaults to
-limit 10 — pass limit 100 (the max) and paginate offset to sweep a
-space.
+broken). The GATEWAY group is the opposite: it has NO `--output` option
+(`No such option: --output`) and prefixes stdout with `√ SUCCESS:` —
+strip the prefix to parse (see Gateway Provisioning). The list-agents
+tool returns `agents[]` already parsed; omit `limit`/`offset` unless
+sweeping — the SDK defaults are the single source of truth. Through the
+BRIDGE, list_memories also defaults to limit 10 — pass limit 100 (the
+max) and paginate offset to sweep a space.
 
 Reading a space's CONFIG (ttl, strategies, access, vpc/public flags,
 memory_extract_enabled): `memory get -o json` is the source of truth —
@@ -149,16 +151,34 @@ fields you need instead of re-reading.
    (omit --name and the CLI generates gateway-<random8>;
     omit --agency-name and the SDK auto-creates the IAM agency
     "AgentArtsCoreGateway" — a 409 (already exists) is tolerated and the
-    create continues; SDK source, not yet cloud-measured)
+    create continues. Cloud-measured 2026-10-29: the agency is NOT
+    reclaimed by gateway delete — it persists across gateway lifecycles
+    as a shared one-time artifact; cleanup is manual, never delete's job)
 2. verify: readonly ["gateway","list"] / ["gateway","get","<gateway-id>"]
 3. plan ["gateway","create-target","<gateway-id>",
          "--target-configuration","<json>"]                  → approved
-   (--target-configuration is REQUIRED; its JSON shape is not documented
-    in help — do not invent it, run the command's own --help or use the
-    console)
+   (--target-configuration is REQUIRED and its JSON shape is NOT in help —
+    help says only "(JSON format)". The structure lives in the API
+    reference / API Explorer (CreateCoreGatewayTarget's
+    target_configuration field) — fetch it there, never invent it)
 4. verify: ["gateway","get-target","<gateway-id>","<target-id>"] /
    ["gateway","list-targets","<gateway-id>"]  (list pagination: --limit
-   default 50, --offset default 0)
+   default 50, --offset default 0; list returns NO target_configuration —
+   auditing N targets costs N get-target calls, G2 2026-10-29)
+   target status: poll until STABLE — that is the terminal signal. The
+   vocabulary is UNSTABLE across sessions (both 2026-10-29): G2 measured
+   `creating→ready` and `updating→synchronizing(90–130s)→ready` (terminal
+   `ready`, and `synchronizing` appears in NO help/schema); G1 measured
+   `creating→active`. There is no --wait flag, and during the ~35s window
+   after an update get-target returns NO status field at all — treat a
+   missing field as in-progress, never as an error to retry.
+5. after ANY update: re-read with get/get-target and COMPARE the field
+   you changed — update/update-target silently DROP schema-absent fields
+   and still report success (measured 2026-10-29, G1 + G2 independent
+   reproductions: supported_versions accepted with 2xx, value unchanged,
+   zero warning). Success ≠ applied.
+6. tool usability: NOT provable via the CLI (no sync subcommand, no
+   tools field on get-target) — the only proof is the E2E recipe below.
 ```
 
 Deletion: `gateway delete` / `delete-target` have NO skip flag
@@ -167,6 +187,72 @@ own terminal. `--outbound-network-configuration` (JSON) defaults to unset
 client-side; the server-side default for the unset case is not documented
 in help — treat the network posture as a real decision, not an assumed
 default.
+
+Gateway output parsing (measured 2026-10-29): the gateway group rejects
+`--output` and `--region` (`No such option: --output`) — `--output json`
+exists ONLY on the memory family — and prefixes stdout with `√ SUCCESS:`;
+strip the prefix before parsing. Column width: rich wraps non-TTY output
+at 80 columns when COLUMNS is absent — the wrapper's child env now carries
+`COLUMNS=2000` (G2 fix), so endpoint URLs arrive unbroken through any
+wrapper tool; in your OWN terminal `export COLUMNS=2000` before parsing,
+or URLs break mid-string (`...huaweicloud-agenta\nrts.com/mcp`, trap 51).
+API-level errors (resource not found, update with nothing to update) land
+on stdout with exit 0 — trap-23 behavior: parse output, never exit codes.
+
+Help discovery (G2 fix, 2026-10-29): the readonly runner executes genuine
+`--help` at ANY command level (group, subcommand — e.g.
+`["gateway","--help"]`, `["gateway","create-target","--help"]`) and root
+metadata (bare/`--help`/`--version`), no credentials needed — prefer it
+over Bash when the shell cannot find the CLI binary. A `--help` token
+sitting in a VALUE slot (`gateway create --name --help`) is rejected as
+the approved-tier write it collapses to under click's real semantics.
+
+Error diagnosis (measured 2026-10-29): `AgentArts.02000001 Incorrect
+request parameters` is generic — invalid gateway name, empty tag key,
+duplicate name, empty target configuration all share it, with no
+field/regex in the message. Charset constraints are help-invisible
+(devbridge descriptions reject hyphens: Chinese characters, digits,
+letters only). `AgentArts.00000144 The current user status is unassigned`
+on a bare-shell run is a credential-source signal — see
+references/credentials.md.
+
+## Gateway E2E Verification (the only tool-usability proof)
+
+The CLI cannot prove a target's tools work: no sync subcommand (a manual
+attempt answers `No such command`; the `SyncCoreGatewayTargets` API exists
+but is unwrapped), and get-target returns no tools list — a tools field
+will NEVER arrive; do not loop waiting for it. The only proof is calling
+the gateway endpoint itself. That path required three undocumented facts,
+all measured in the G2 session (2026-10-29) — they are now the recipe:
+
+1. **endpoint_url** — read it from `["gateway","get","<gateway-id>"]`
+   (through the wrapper it arrives unwrapped, see the COLUMNS note above).
+2. **Auth header** — ONLY `Authorization: Bearer <api_key>` works.
+   Measured by probing five forms: `X-Api-Key`, bare `Authorization`
+   (no Bearer scheme), and query-parameter variants all answer 401. Do
+   not spend retries rediscovering this.
+3. **mcp-session-id handshake** — the endpoint speaks MCP
+   streamable-HTTP: POST an `initialize` request first, take the
+   `mcp-session-id` response header, and send it on every subsequent
+   request; a tools/list without the session id is rejected.
+4. **Key handling — never in argv.** The api_key is viewable and
+   resettable in the console (user-confirmed). Deliver it the
+   argv-invisible way: write `Authorization: Bearer <key>` into a 0600
+   file the user controls and let curl read the header from the file —
+   `curl -H @<file>` (curl 7.55+; the `@file` form reads the header
+   from disk, keeping the key out of the process list and the
+   transcript). `curl -H "Authorization: Bearer <key>"` on the command
+   line is the same argv exposure the `--bearer-token` rejection exists
+   for. See references/credentials.md for the file-writing recipe.
+5. **IAM-type gateways cannot be called with AK/SK** (no token-mint
+   path, measured 2026-10-29). To E2E-verify one you must create an
+   api_key-authorized side gateway: budget the extra resource AND its
+   cleanup, and remember the shared `AgentArtsCoreGateway` agency is NOT
+   reclaimed by gateway delete (manual cleanup, trap 49).
+
+What success proves: a real tools/list through the endpoint is the ONLY
+evidence that the target's tools are usable — create-target success,
+target status, and every CLI read together do not add up to it.
 
 ## Runtime Sessions (data plane)
 

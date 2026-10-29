@@ -664,6 +664,31 @@ function isStdinFedSegment(segment) {
   return re.test(segment) || re.test(segment.replace(/['"]/g, ''));
 }
 
+// Group-level value-taking options (parsed by the GROUP's own callback
+// before any subcommand), fixture-pinned 0.1.7: only the config wizard
+// takes them (config.txt's Options panel); gateway/memory/runtime groups
+// offer --help only. CANONICAL single source — the approval wrapper's
+// GROUP_LEVEL_VALUE_FLAGS re-exports this map, and the subcommand
+// locator below consumes it, so the three cannot drift.
+export const AGENTARTS_GROUP_LEVEL_VALUE_FLAGS = new Map([
+  [
+    'config',
+    new Set([
+      '--name',
+      '-n',
+      '--entrypoint',
+      '-e',
+      '--region',
+      '-r',
+      '--dependency-file',
+      '-d',
+      '--swr-org',
+      '--swr-repo',
+    ]),
+  ],
+]);
+const GROUP_LEVEL_EMPTY_FLAGS = new Set();
+
 // Group/subcommand token resolution for an agentarts argv (WITHOUT the
 // executable token): skip leading dash tokens, lowercase, apply the
 // policy's aliases, and resolve the subcommand ONLY for groups with a
@@ -671,6 +696,18 @@ function isStdinFedSegment(segment) {
 // classification mirrors THIS resolution (aliases included) instead of
 // hand-copying it — a policy alias mapping into a command family must
 // resolve identically in both places.
+// Subcommand location walk (round 10): click parses the GROUP's own
+// option panel before the subcommand resolves, and a group-level `--`
+// separator is CONSUMED by the group parser while the subcommand parser
+// restarts fresh (click core.py: `ctx.protected_args, ctx.args =
+// rest[:1], rest[1:]`; measured: `memory -- create x` executes exactly
+// like `memory create x`, `config --name x remove foo` executes
+// remove). A naive next-token read saw no subcommand for both shapes —
+// every subcommand-scoped guard (strategies, --output json
+// canonicalization, one-time-key capture, install hard-stop, irreversible
+// labels) was skipped and reads like `memory -- list` demoted to the
+// group's approved tier. The walk skips group value-flag PAIRS and at
+// most ONE `--`, then the next non-dash token is the subcommand.
 export function resolveAgentartsGroupTokens(rawArgs, policy = DEFAULT_POLICY) {
   const commandPolicy = policy.agentartsCommandPolicy || {};
   const commands = commandPolicy.commands || {};
@@ -685,9 +722,32 @@ export function resolveAgentartsGroupTokens(rawArgs, policy = DEFAULT_POLICY) {
   // takes a required positional {payload}, and treating it as a subcommand
   // glued the payload into the operation (bogus "unregistered" warnings,
   // broken timeout selection, Node/Python reason drift).
-  const next = args[i + 1];
-  const sub = entry?.subcommands && next && !next.startsWith('-') ? next : undefined;
-  return { groupIndex: i, group: normalizedGroup, sub };
+  if (!entry?.subcommands) return { groupIndex: i, group: normalizedGroup, sub: undefined, subIndex: undefined };
+  const groupValueFlags = AGENTARTS_GROUP_LEVEL_VALUE_FLAGS.get(normalizedGroup) ?? GROUP_LEVEL_EMPTY_FLAGS;
+  let j = i + 1;
+  let sawSeparator = false;
+  while (j < args.length) {
+    const token = args[j];
+    if (token === '--' && !sawSeparator) {
+      sawSeparator = true;
+      j += 1;
+      continue;
+    }
+    if (groupValueFlags.has(token) && j + 1 < args.length) {
+      j += 2;
+      continue;
+    }
+    // Inline group-flag forms (`--name=x`, one-letter `-nx`) are
+    // self-contained — the subcommand can resolve right after them.
+    const inline = /^(--[a-z0-9-]+)=/.exec(token) || /^(-[a-z0-9])(.+)$/.exec(token);
+    if (inline && groupValueFlags.has(inline[1])) {
+      j += 1;
+      continue;
+    }
+    break;
+  }
+  const sub = j < args.length && !args[j].startsWith('-') ? args[j] : undefined;
+  return { groupIndex: i, group: normalizedGroup, sub, subIndex: sub === undefined ? undefined : j };
 }
 
 // Registry resolution shared by the hook decision path AND the agentarts
