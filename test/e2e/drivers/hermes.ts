@@ -93,6 +93,24 @@ function ownerInstallsKey(): string {
   return key[0]!;
 }
 
+// Rewrite every path VALUE inside a facts.json document from the owner
+// root to the borrower root. JSON-semantic on purpose: a raw text
+// replaceAll misses on Windows, where JSON serialization escapes every
+// backslash in the file while the in-memory roots carry single ones (the
+// hermes install's own machine shape) — parse, rewrite the string values
+// recursively, re-serialize, and both platform spellings rewrite.
+export function rewriteFactsPaths(factsText: string, fromRoot: string, toRoot: string): string {
+  const rewrite = (node: unknown): unknown => {
+    if (typeof node === 'string') return node.replaceAll(fromRoot, toRoot);
+    if (Array.isArray(node)) return node.map((item) => rewrite(item));
+    if (node && typeof node === 'object') {
+      return Object.fromEntries(Object.entries(node).map(([key, value]) => [key, rewrite(value)]));
+    }
+    return node;
+  };
+  return JSON.stringify(rewrite(JSON.parse(factsText)), null, 2);
+}
+
 // Template the borrowed-launch dependency state into a throwaway home:
 // copy the owner's committed installs/ tree minus lock files (a killed
 // prepare leaves stale uv locks otherwise; the owner's own locks are
@@ -114,8 +132,7 @@ function templateHermesInstalls(home: string): void {
   const factsPath = join(dst, 'facts.json');
   const ownerRoot = hermesOwnerRoot();
   const borrowerRoot = join(home, '.hermes');
-  const facts = readFileSync(factsPath, 'utf8').replaceAll(ownerRoot, borrowerRoot);
-  writeFileSync(factsPath, facts, 'utf8');
+  writeFileSync(factsPath, rewriteFactsPaths(readFileSync(factsPath, 'utf8'), ownerRoot, borrowerRoot), 'utf8');
 }
 
 // Fail-loud config surgery over the installer-written config.yaml. The

@@ -56,27 +56,36 @@ jobs:
       fail-fast: false
       matrix:
         # hermes is nightly/dispatch-only (staged rollout, accepted LLM
-        # cost): the push-to-v2 and run-e2e label lanes stay two-legged
-        # until a stable nightly cycle promotes it — the job-level if
-        # below is what excludes it there.
+        # cost): the push-to-v2 and run-e2e label lanes stay two-legged —
+        # the step-level gates below (matrix context IS allowed at step
+        # level) are what excludes it there; the leg's no-cost steps
+        # (checkout, toolchain, npm ci, drift guard) still run and the
+        # driver guard even exercises the hermes tests for free (the
+        # prepare-path one self-skips without the pinned install).
         agent: [opencode, codex, hermes]
     runs-on: ubuntu-24.04
-    # Nightly/dispatch gate for the hermes leg rides the job if (matrix
-    # context is available there); the PR/label logic is unchanged for the
-    # other legs. Job-level on purpose: a run whose `if` is false (any
-    # other label, an unlabeled synchronize) must never join the group —
-    # workflow-level cancel-in-progress would cancel the in-flight suite
-    # before the job `if` is evaluated. Trunk lanes (push/schedule/
-    # dispatch) serialize per agent leg, newest wins; each PR lane is
-    # independent per leg.
+    # Job-level on purpose (matrix-free — GitHub rejects the matrix
+    # context in a job-level if, which is what silently killed this whole
+    # workflow's loading from the hermes commit until the guard step move):
+    # a run whose `if` is false (any other label, an unlabeled synchronize)
+    # must never join the group — workflow-level cancel-in-progress would
+    # cancel the in-flight suite before the job `if` is evaluated. The
+    # hermes leg's nightly/dispatch-only staging rides the step-level
+    # E2E_STAGED gate expression instead (matrix IS allowed there). Trunk
+    # lanes (push/schedule/dispatch) serialize per agent leg, newest wins;
+    # each PR lane is independent per leg.
     if: >-
-      (matrix.agent != 'hermes' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
-      (github.event_name != 'pull_request' ||
+      github.event_name != 'pull_request' ||
       ((github.event.action == 'synchronize' || github.event.label.name == 'run-e2e') &&
       contains(github.event.pull_request.labels.*.name, 'run-e2e') &&
-      github.event.pull_request.head.repo.full_name == github.repository))
+      github.event.pull_request.head.repo.full_name == github.repository)
     concurrency:
-      group: ${{ github.event_name == 'pull_request' && format('e2e-pr-{0}-{1}', github.event.pull_request.number, matrix.agent) || format('e2e-trunk-{0}', matrix.agent) }}
+      # Event-discriminated trunk groups: a push-lane leg (the staged
+      # hermes one is a green idle job there) must never cancel an
+      # in-flight schedule/dispatch suite of the same agent — the idle
+      # leg would evict the only real budget venue and replace it with
+      # zero coverage. Same-event runs still serialize, newest wins.
+      group: ${{ github.event_name == 'pull_request' && format('e2e-pr-{0}-{1}', github.event.pull_request.number, matrix.agent) || format('e2e-trunk-{0}-{1}', github.event_name, matrix.agent) }}
       cancel-in-progress: true
     # Per leg: 33 cases for opencode, 31 cases plus 2 recorded skips for
     # codex (the installPacks channel has no codex write path), 33 cases
@@ -114,6 +123,9 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Preflight E2E configuration
+        # The staged gate (hermes: nightly/dispatch only) — preflight must
+        # not red an idle hermes leg on push lanes over a missing secret.
+        if: matrix.agent != 'hermes' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         env:
           E2E_APIKEY: ${{ secrets.E2E_TEST_MODEL_APIKEY }}
           E2E_PROVIDER_ID: ${{ vars.E2E_TEST_PROVIDER_ID || 'opengw' }}
@@ -126,6 +138,9 @@ jobs:
           fi
           echo "E2E configuration present (provider: $E2E_PROVIDER_ID, model: $E2E_MODEL)"
       - name: Install agent CLI (pinned)
+        # Staged gate: on push/PR lanes the hermes leg skips the install
+        # (no curl|bash, no venv) and stays an idle green job.
+        if: matrix.agent != 'hermes' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         # Per-leg install: a registry failure on one leg's package must not take
         # the other leg's report down with it. The opencode/codex pins are
         # shared with the real-agents job below — an upgrade is a two-place
@@ -153,6 +168,11 @@ jobs:
         if: matrix.agent == 'hermes'
         run: node --test test/e2e-driver-hermes.test.ts
       - name: Run agent-level E2E suite (${{ matrix.agent }})
+        # The staged gate's budget control point — the ONLY step that
+        # spends LLM budget, so this is the one if that must never be
+        # dropped when hermes is promoted (the pin in
+        # structure-adopted.test.ts names it).
+        if: matrix.agent != 'hermes' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         env:
           E2E_ENABLE: '1'
           E2E_AGENT: ${{ matrix.agent }}
@@ -172,7 +192,7 @@ jobs:
           npm run test:e2e 2>&1 | tee e2e-run.log
           grep -q "\[runner\] driver ${{ matrix.agent }}" e2e-run.log || { echo "::error::driver wiring miss — the ${{ matrix.agent }} leg did not run the ${{ matrix.agent }} driver"; exit 1; }
       - name: Upload E2E report (${{ matrix.agent }})
-        if: always()
+        if: always() && (matrix.agent != 'hermes' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: actions/upload-artifact@v4
         with:
           name: e2e-report-${{ matrix.agent }}

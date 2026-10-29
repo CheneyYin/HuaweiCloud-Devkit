@@ -251,12 +251,35 @@ test('agent CLI pins stay in lockstep across e2e-nightly.yml install sites', () 
     1,
     'e2e-nightly.yml must pin the hermes install to exactly one 40-hex commit — an upgrade is an explicit suite event',
   );
-  // And the nightly-only staging: the job-level if must keep the hermes
-  // leg off the push and PR lanes (accepted LLM cost, staged rollout).
+  // And the nightly-only staging: hermes must stay off the push and PR
+  // lanes (accepted LLM cost, staged rollout). The gate lives at STEP
+  // level — GitHub rejects the matrix context in a job-level if (the
+  // shape that silently failed this whole workflow's loading from the
+  // hermes commit until the move; actionlint and the 0-jobs runs pinned
+  // it), so the job-level if must stay matrix-free while the budget
+  // control point (the suite step) must carry the gate.
+  const e2eJob = nightly.split('  e2e:')[1]!.split('\n  real-agents:')[0];
+  const ifAt = e2eJob.indexOf('if: >-');
+  assert.ok(ifAt !== -1, 'the e2e job-level if must keep its folded form (an inline re-spelling escapes this pin)');
+  const jobIf = e2eJob.slice(ifAt, e2eJob.indexOf('concurrency:'));
+  assert.ok(
+    !jobIf.includes('matrix'),
+    'the e2e job-level if must stay matrix-free (GitHub rejects matrix there and the workflow fails to load)',
+  );
   assert.match(
-    nightly,
-    /matrix\.agent != 'hermes' \|\| github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'/,
-    'the hermes leg must stay nightly/dispatch-only until promoted',
+    e2eJob,
+    /name: Run agent-level E2E suite[^\n]*\n\s*# The staged gate's budget control point[^\n]*\n(?:\s*#[^\n]*\n)*\s*if: matrix\.agent != 'hermes' \|\| github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'/,
+    'the suite step must carry the hermes staging gate — it is the only step that spends LLM budget, so dropping its if re-opens the push-lane cost',
+  );
+  // Event-discriminated trunk groups: the push-lane hermes leg is a green
+  // idle job (the staging gate skips its budget steps), and it must never
+  // share a concurrency group with the schedule/dispatch suites — a push
+  // would evict the in-flight nightly hermes run and replace it with
+  // zero coverage.
+  assert.match(
+    e2eJob,
+    /format\('e2e-trunk-\{0\}-\{1\}', github\.event_name, matrix\.agent\)/,
+    'the e2e trunk concurrency group must carry the event name — a push-lane idle leg sharing the schedule/dispatch group cancels the only real hermes venue (cancel-in-progress)',
   );
 });
 

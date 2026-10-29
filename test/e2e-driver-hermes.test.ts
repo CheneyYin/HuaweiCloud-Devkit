@@ -4,7 +4,13 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { hermesDriver, hermesOwnerRoot, rewriteHermesMcpArgs, templateHermesInstalls } from './e2e/drivers/hermes.ts';
+import {
+  hermesDriver,
+  hermesOwnerRoot,
+  rewriteFactsPaths,
+  rewriteHermesMcpArgs,
+  templateHermesInstalls,
+} from './e2e/drivers/hermes.ts';
 import type { DriverContext } from './e2e/drivers/types.ts';
 import { fixtureDir } from './fixture-dir.ts';
 
@@ -233,6 +239,57 @@ test('hermes template copies the owner installs minus locks and rewrites facts p
   assert.ok(
     existsSync(join(borrower, '.hermes', 'installs', key, 'environments', 'abc', 'venv', 'pyvenv.cfg')),
     'the venv must template',
+  );
+});
+
+test('rewriteFactsPaths rewrites both platform path spellings', () => {
+  // The Windows CI catch: a raw text replaceAll over facts.json never
+  // matches there, because JSON serialization escapes every backslash in
+  // the file while the in-memory roots carry single ones. The rewrite is
+  // JSON-semantic, so both spellings must come out rewritten — pinned
+  // here on Linux because the pure function needs no platform to prove
+  // it.
+  const posixFacts = JSON.stringify(
+    { packages: { venv: { environment: '/owner/.hermes/installs/k/venv', stamp: 'deadbeef' } }, schema: 1 },
+    null,
+    2,
+  );
+  const posixOut = rewriteFactsPaths(posixFacts, '/owner/.hermes', '/borrower/.hermes');
+  assert.equal(
+    JSON.parse(posixOut).packages.venv.environment,
+    '/borrower/.hermes/installs/k/venv',
+    'posix-shaped paths must rewrite',
+  );
+  const winOwner = 'C:\\Users\\dev\\.hermes';
+  const winBorrower = 'D:\\run\\.hermes';
+  const winFacts = JSON.stringify(
+    {
+      packages: {
+        venv: {
+          environment: `${winOwner}\\installs\\k\\environments\\abc\\venv`,
+          resolved_lock: `${winOwner}\\installs\\k\\environments\\abc\\workspace\\uv.lock`,
+          extras: ['all'],
+        },
+      },
+      schema: 1,
+    },
+    null,
+    2,
+  );
+  const winOut = rewriteFactsPaths(winFacts, winOwner, winBorrower);
+  const parsed = JSON.parse(winOut) as { packages: { venv: { environment: string; resolved_lock: string } } };
+  assert.equal(
+    parsed.packages.venv.environment,
+    `${winBorrower}\\installs\\k\\environments\\abc\\venv`,
+    'backslash-shaped paths must rewrite through the JSON escaping (the Windows CI failure)',
+  );
+  assert.equal(
+    parsed.packages.venv.resolved_lock,
+    `${winBorrower}\\installs\\k\\environments\\abc\\workspace\\uv.lock`,
+  );
+  assert.ok(
+    !winOut.includes(winOwner),
+    'no owner root may survive (the exact predicate the template test pins on posix)',
   );
 });
 
