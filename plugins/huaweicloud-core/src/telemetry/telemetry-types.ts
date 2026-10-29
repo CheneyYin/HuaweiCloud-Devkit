@@ -30,6 +30,10 @@ export interface TelemetryEvent {
   agentVersion: string;
   os: string;
   osVersion: string;
+  // #1040: the install-position attribution as its own field — never
+  // concatenated into harness (the '|' dashboard pollution). Optional
+  // because a null segment (unresolvable layout) emits no field.
+  installSegment?: string;
   capability?: string;
   _retries?: number;
 }
@@ -53,6 +57,11 @@ export interface TelemetryState {
   userHash: string | null;
   agentHarness: string;
   agentVersion: string;
+  // #1040: the install-position segment (agent-registry's installSegment),
+  // derived ONCE by the face at module scope — layout-derived like the
+  // paths, so it lives here rather than in a sibling, and never mutates
+  // after load. buildEvent stamps it onto every event as its own field.
+  installSegment: string | null;
 }
 
 // Every stamp/spool/log path the family touches, derived once by the face

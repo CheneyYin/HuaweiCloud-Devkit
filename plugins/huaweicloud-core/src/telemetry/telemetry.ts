@@ -29,6 +29,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { asText } from '../lib/as-text.ts';
+import { installSegment } from './agent-registry.ts';
 import { enqueueTrackedEvent, flushEvents, isTelemetryEnabled, spoolEventsForExit } from './event-pipeline.ts';
 import {
   checkDauPing,
@@ -157,6 +158,9 @@ const state: TelemetryState = {
   userHash: null,
   agentHarness: 'unknown',
   agentVersion: '0.0.0',
+  // #1040: layout-derived once (never mutated) — the install-position
+  // attribution every event carries as its own field.
+  installSegment: installSegment(),
 };
 
 const FLUSH_INTERVAL_MS = 60_000;

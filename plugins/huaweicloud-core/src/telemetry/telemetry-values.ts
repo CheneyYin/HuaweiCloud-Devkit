@@ -51,6 +51,10 @@ export function buildEvent(ctx: TelemetryContext, raw: TelemetryEventInput): Tel
     os: osTypeStr,
     osVersion: osVersionStr,
   };
+  // #1040: the install-position attribution as its own sanitized field —
+  // set only when the face resolved a segment (a null layout emits none).
+  const seg = ctx.state.installSegment;
+  if (seg) event.installSegment = sanitizeValue(seg);
   const cap = raw.capability || capabilityFromKey(raw.key);
   if (cap) event.capability = cap;
   return event;
@@ -96,6 +100,11 @@ export function toTelemetryEvent(value: unknown): TelemetryEvent | null {
     osVersion: record.osVersion,
   };
   if (typeof record.capability === 'string') event.capability = record.capability;
+  // #1040: the exiting session's install-position field rides verbatim —
+  // a non-string drops the field, never the line.
+  if (typeof record.installSegment === 'string' && record.installSegment !== '') {
+    event.installSegment = record.installSegment;
+  }
   if (typeof record._retries === 'number' && Number.isSafeInteger(record._retries) && record._retries >= 0) {
     event._retries = record._retries;
   }
