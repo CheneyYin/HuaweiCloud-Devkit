@@ -87,7 +87,7 @@ export function expectationVerdict(exp: Expectation, recordings: Recordings): Ex
         (req) =>
           (exp.tool === undefined || req.tool === exp.tool) &&
           (!exp.method || req.method === exp.method) &&
-          (!exp.args || argsPartialMatch(exp.args, req.args)),
+          (!exp.args || argsPartialMatch(exp.args, req.args, exp.argsIgnoreCase)),
       );
       return {
         expectation: exp,

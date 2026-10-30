@@ -285,3 +285,52 @@ test('noToolCall stays an exact-string negative beside array toolCall names', ()
   );
   assert.equal(verdict.expectations[0]!.pass, false);
 });
+
+// The gateway args ignore-case set: product and api ids resolve
+// case-insensitively at the real gateway (measured), so a pin on those keys
+// folds; every unlisted key stays strictly compared.
+test('gateway args fold case for the named keys only', () => {
+  const exp = [
+    {
+      kind: 'gateway',
+      tool: 'execute_api',
+      args: { product: 'ECS', api: 'ListServersDetails' },
+      argsIgnoreCase: ['product', 'api'],
+    },
+  ] as const satisfies Expectation[];
+  const folded = caseWith(
+    [...exp],
+    recordings({
+      gateway: [{ method: 'tools/call', tool: 'execute_api', args: { product: 'ecs', api: 'listserversdetails' } }],
+    }),
+  );
+  assert.equal(folded.expectations[0]!.pass, true);
+
+  const strict = caseWith(
+    [...exp],
+    recordings({
+      gateway: [
+        {
+          method: 'tools/call',
+          tool: 'execute_api',
+          args: { product: 'ecs', api: 'ListServersDetails', region: 'CN-North-4' },
+        },
+      ],
+    }),
+  );
+  // region is not in the pin — irrelevant; but the same folded args with
+  // the flag REMOVED must miss (pins the strict default):
+  const noFlag = caseWith(
+    [{ kind: 'gateway', tool: 'execute_api', args: { product: 'ECS' } }],
+    recordings({ gateway: [{ method: 'tools/call', tool: 'execute_api', args: { product: 'ecs' } }] }),
+  );
+  assert.equal(noFlag.expectations[0]!.pass, false);
+});
+
+test('gateway args ignore-case applies to scalars only, never array prefix matching', () => {
+  const verdict = caseWith(
+    [{ kind: 'gateway', tool: 'manage_policy', args: { lines: ['ecs:*'] }, argsIgnoreCase: ['lines'] }],
+    recordings({ gateway: [{ method: 'tools/call', tool: 'manage_policy', args: { lines: ['ECS:*'] } }] }),
+  );
+  assert.equal(verdict.expectations[0]!.pass, false);
+});

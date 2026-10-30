@@ -39,8 +39,14 @@ export function matchHcloud(matcher: HcloudArgMatcher, calls: HcloudCall[]): str
 
 // Shallow partial match against a traced (redacted) args object. Arrays
 // match by element-wise prefix (the hcloud argv matcher precedent);
-// primitives match by strict equality.
-export function argsPartialMatch(expected: Record<string, unknown>, actual: unknown): boolean {
+// primitives match by strict equality, except keys named in ignoreCase
+// (scalars only, folded — the gateway resolves product/api ids
+// case-insensitively, measured).
+export function argsPartialMatch(
+  expected: Record<string, unknown>,
+  actual: unknown,
+  ignoreCase?: readonly string[],
+): boolean {
   if (!actual || typeof actual !== 'object' || Array.isArray(actual)) return false;
   for (const [key, value] of Object.entries(expected)) {
     const traced = (actual as Record<string, unknown>)[key];
@@ -49,6 +55,13 @@ export function argsPartialMatch(expected: Record<string, unknown>, actual: unkn
       for (let i = 0; i < value.length; i++) {
         if (value[i] !== traced[i]) return false;
       }
+    } else if (
+      ignoreCase?.includes(key) &&
+      typeof value === 'string' &&
+      typeof traced === 'string' &&
+      value.toLowerCase() === traced.toLowerCase()
+    ) {
+      continue;
     } else if (value !== traced) {
       return false;
     }
