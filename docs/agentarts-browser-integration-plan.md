@@ -29,16 +29,17 @@ SDK 钉版不升: 0.1.9 与 0.1.7 的 browser/code_interpreter 面字节级一�
 - [x] B1-4 计费 → unknown, 降级为 skill 前置告知（陷阱 70）
 - [x] 资源预算: 偏差已声明（2 browser 先后建均删 + 3 会话均 stop, 终态 total_count: 0）
 - [x] 回写 docs/agentarts-pr0-findings.md browser 节（陷阱 61-70）+ docs/agentarts-upstream-asks.md（诉求 #29-34）
-- [ ] 仓库门禁: `npm run lint` + `npm test` + `npm run validate` + `npm run format` + `npm run pack:verify`
+- [x] 仓库门禁: `npm run lint` + `npm test` + `npm run validate` + `npm run format` + `npm run pack:verify`（全绿, 提交 a13b0ae5）
 
-### B2 读桥（控制面）
+### B2 读桥（控制面）【实现完成, 单测 8 绿】
 
-- [ ] 创建 `plugins/huaweicloud-core/src/agentarts-browser.mjs` + `agentarts-browser-tools.mjs`（read 部分）
-- [ ] 工具 `huaweicloud_agentarts_browser_read`: list_browsers/get_browser/list_browser_profiles/get_browser_profile
-- [ ] AK/SK 注入子进程（`injectCredentials: true`——控制面需要, 与 memory 数据面不同）
-- [ ] region 请求 JSON 显式传递, 默认 cn-southwest-2, 边界拒错类型
-- [ ] 复用 `runOverPythonCandidates`/`buildChildEnv`/`saveLargeOutput`
-- [ ] 测试镜像 `test/agentarts-memory.test.mjs` 的 runCandidate 桩模式
+- [x] 创建 `plugins/huaweicloud-core/src/agentarts-browser.mjs` + `agentarts-browser-tools.mjs`（read 部分）
+- [x] 工具 `huaweicloud_agentarts_browser_read`: list_browsers/get_browser/list_browser_profiles/get_browser_profile
+- [x] AK/SK 注入子进程（`injectCredentials: true`——控制面需要, 与 memory 数据面不同; 测试钉注入与 /dev/null 中和两态）
+- [x] region 请求 JSON 显式传递, 默认 cn-southwest-2, 边界拒错类型
+- [x] 复用 `runOverPythonCandidates`/`buildChildEnv`/`saveLargeOutput`; snippet 异常捕获 `except BaseException`（ToolsAPIError 陷阱, 源码钉测试钉住）
+- [x] 测试镜像 memory 桩模式: `test/agentarts-browser.test.mjs` 8 测试（边界表、注入两态、stdin 传输、信封三形态、富集、dispatch stub python）; `test/structure.test.mjs` 注册钉
+- [x] 富集: API_KEY 型资源读面 advisory（trap 61 教学）; tag 过滤按 unknown-param 拒绝（未实测需求, 诚实边界）
 
 ### B3 写桥（资源生命周期）【B1 后设计修订】
 
