@@ -31,10 +31,11 @@ SDK 钉版不升: 0.1.9 与 0.1.7 的 browser/code_interpreter 面字节级一�
 - [x] 回写 docs/agentarts-pr0-findings.md browser 节（陷阱 61-70）+ docs/agentarts-upstream-asks.md（诉求 #29-34）
 - [x] 仓库门禁: `npm run lint` + `npm test` + `npm run validate` + `npm run format` + `npm run pack:verify`（全绿, 提交 a13b0ae5）
 
-### 对抗检视循环【R1 完成（陷阱 71, 9 修复）, R2 完成（陷阱 72, 6 修复含共享 approval-store 的跨进程锁与 fail-closed）; R2 复核 R1 全部成立】
+### 对抗检视循环【R1 完成（陷阱 71, 9 修复）; R2 完成（陷阱 72, 6 修复含共享 approval-store 锁与 fail-closed）; R3/R4 完成（陷阱 73, 锁协议重写: pid 活性 + rename 原子破锁 + 属主校验释放）; R2/R3 复核前轮全部成立】
 
 - [x] R1: 三评审（契约/安全/平价漂移）, 18 项发现 → 9 修复 3 记录不修, 提交 92fb8055
-- [x] R2: 双评审（验证+回归 / 全新角度）, 16 项发现 → 6 修复 2 记录不修, R1 九项逐一复核成立
+- [x] R2: 双评审（验证+回归 / 全新角度）, 16 项发现 → 6 修复 2 记录不修
+- [x] R3/R4: 单评审确认轮（R2 新机械）, 8 项发现 → 锁重写 + 测试层补钉（写层 fail-closed、死 pid 破锁、plan 面结构化拒绝、\b 边界）; R4 自身引入的不可读锁内容死循环被测试当场抓获并修复
 
 ### B2 读桥（控制面）【实现完成, 单测 8 绿】
 

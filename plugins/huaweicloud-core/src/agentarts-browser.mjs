@@ -42,7 +42,7 @@ import { redactSecrets } from './safety-policy.mjs';
 // Anthropic (sk-ant-), and URL-with-credentials shapes. Detection only —
 // nothing here redacts; the warning text carries the decision to the user.
 const BARE_TOKEN_PREFIX =
-  /(?:AKLT[A-Za-z0-9]{8,}|ghp_[A-Za-z0-9]{16,}|gho_[A-Za-z0-9]{16,}|sk-ant-[A-Za-z0-9-]{16,}|sk-[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/\s:@]+:[^/\s:@]+@)/;
+  /\b(?:AKLT[A-Za-z0-9]{8,}|ghp_[A-Za-z0-9]{16,}|gho_[A-Za-z0-9]{16,}|sk-ant-[A-Za-z0-9-]{16,}|sk-[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/\s:@]+:[^/\s:@]+@)/;
 
 // Browser list bounds: the SDK client applies NO limit/offset cap
 // (browser_client.py list methods pass them straight through), so the
@@ -596,7 +596,20 @@ export function planAgentartsBrowserWrite(params = {}) {
     };
   }
   const request = buildBrowserWriteRequest(params);
-  const approvalToken = createApprovalTokenStore(BROWSER_WRITE_TOKEN_CLI).create([JSON.stringify(request)]);
+  let approvalToken;
+  try {
+    approvalToken = createApprovalTokenStore(BROWSER_WRITE_TOKEN_CLI).create([JSON.stringify(request)]);
+  } catch (error) {
+    // Fail-closed store surfaced as a structured rejection (R3: the raw
+    // throw escaped to the MCP layer as a bare -32603 — the write twin
+    // already catches its consume).
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `browser ${params.operation} (SDK control plane)`,
+      error: `The approval-token store could not be written (${error.message}) — no token was minted and nothing was executed. Fix the store access (~/.config/huaweicloud/approvals.json) and re-plan.`,
+    };
+  }
   // Loud-storage warning (R1 review round, restored from the memory
   // bridge's pattern with browser wording): the tag {key, value} shape
   // puts a credential-shaped NAME and its VALUE in separate JSON keys,

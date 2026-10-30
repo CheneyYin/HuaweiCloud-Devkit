@@ -45,8 +45,16 @@ const APPROVAL_TTL_MS = 5 * 60_000;
 // creation: a slow approval whose plan aged past the TTL still replays as
 // already_processed instead of not_found's "re-plan" advice (R2).
 const TOMBSTONE_TTL_MS = 5 * 60_000;
+// Lock parameters (R3/R4): a lock whose holder pid is DEAD breaks at any
+// age (pid-liveness via process.kill(pid, 0)); mtime is only the backstop
+// for unreadable content or pid-recycling paranoia. A LIVE pid is never
+// broken — mutual exclusion beats availability (the R3 mtime-only break
+// could kill a slow-but-alive holder's critical section and resurrect the
+// exact lost-tombstone class the lock exists to prevent). The atomic break
+// is a RENAME: exactly one breaker's renameSync succeeds, so two waiters
+// cannot both claim a stale lock.
 const LOCK_STALE_MS = 10_000;
-const LOCK_WAIT_MS = 5_000;
+const LOCK_WAIT_MS = 15_000;
 
 function approvalFilePath() {
   return join(process.env.HUAWEICLOUD_HOME || homedir(), '.config', 'huaweicloud', 'approvals.json');
@@ -62,14 +70,65 @@ function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+function lockOwnerId() {
+  return `${process.pid}:${randomUUID()}`;
+}
+
+function readLockOwner(lockPath) {
+  try {
+    return readFileSync(lockPath, 'utf8').trim();
+  } catch {
+    return null;
+  }
+}
+
+function pidIsRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // ESRCH: no such process (dead). EPERM: exists but not ours (alive).
+    return error.code === 'EPERM';
+  }
+}
+
+// A lock is breakable ONLY when its holder cannot be vouched for: the
+// owner line is unparseable (torn write — fall back to mtime age), or the
+// recorded pid is dead (age-gated against pid recycling). A live pid is
+// never breakable, however old — the waiter times out instead.
+function lockIsBreakable(lockPath, owner) {
+  const match = owner && owner.match(/^(\d+):/);
+  if (!match) {
+    try {
+      return Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS;
+    } catch {
+      return false;
+    }
+  }
+  if (!pidIsRunning(Number(match[1]))) {
+    try {
+      return Date.now() - statSync(lockPath).mtimeMs > 1_000;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
 // Cross-process mutual exclusion around the read-modify-write mutations.
-// The lock is advisory-by-convention with a stale break (a holder that died
-// without releasing): mtime older than LOCK_STALE_MS gets unlinked.
+// Acquisition is O_EXCL with the holder identity (pid:uuid) written into
+// the lock; a stale lock is claimed ATOMICALLY by renaming it away
+// (renameSync succeeds for exactly ONE breaker — the loser's rename hits
+// ENOENT and rejoins the wait loop); release re-reads the lock and unlinks
+// ONLY if the content still matches this holder (a late finally-unlink
+// must never delete a replacement lock another process legitimately
+// acquired, R3).
 function withStoreLock(fn) {
   const lockPath = lockFilePath();
   // The store directory may not exist yet on the first-ever create — the
   // lock needs it before writeApprovals ever mkdirs.
   mkdirSync(dirname(lockPath), { recursive: true });
+  const owner = lockOwnerId();
   const deadline = Date.now() + LOCK_WAIT_MS;
   let fd;
   for (;;) {
@@ -78,15 +137,24 @@ function withStoreLock(fn) {
       break;
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
-      try {
-        const stats = statSync(lockPath);
-        if (Date.now() - stats.mtimeMs > LOCK_STALE_MS) {
-          unlinkSync(lockPath);
-          continue;
+      const current = readLockOwner(lockPath);
+      if (current !== null && lockIsBreakable(lockPath, current)) {
+        // Atomic claim: exactly one breaker wins the rename; a loser
+        // ENOENTs and falls through to the wait.
+        const claimed = `${lockPath}.breaking.${randomUUID()}`;
+        try {
+          renameSync(lockPath, claimed);
+          unlinkSync(claimed);
+        } catch {
+          // Lost the break race or the files moved — retry the loop.
         }
-      } catch {
-        // The lock vanished between open and stat — retry the create.
+        continue;
       }
+      // Unreadable lock content (vanished mid-read, torn write, or an
+      // unexpected shape like a directory at the lock path) and live
+      // holders take the SAME bounded wait — an unreadable-but-present
+      // lock must never spin unbounded (R4: the lock-path-is-a-directory
+      // shape hung the original loop).
       if (Date.now() > deadline) {
         throw new Error(`approval-token store lock could not be acquired (another process holds ${lockPath})`, {
           cause: error,
@@ -96,13 +164,17 @@ function withStoreLock(fn) {
     }
   }
   try {
+    writeFileSync(fd, owner, { encoding: 'utf8' });
     return fn();
   } finally {
     closeSync(fd);
-    try {
-      unlinkSync(lockPath);
-    } catch {
-      // Best effort — a stale break will reclaim it.
+    // Ownership-verified release: unlink only the lock we still own.
+    if (readLockOwner(lockPath) === owner) {
+      try {
+        unlinkSync(lockPath);
+      } catch {
+        // Best effort — the stale break will reclaim it.
+      }
     }
   }
 }
