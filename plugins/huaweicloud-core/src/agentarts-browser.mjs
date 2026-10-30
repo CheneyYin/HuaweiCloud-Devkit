@@ -24,6 +24,10 @@
 // kills the child with an uncaught traceback. This is the single
 // browser-specific deviation from the memory snippet.
 
+import { mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync as writeSessionFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+
 import {
   buildChildEnv,
   DEFAULT_APPROVED_TIMEOUT_MS,
@@ -32,7 +36,11 @@ import {
   runOverPythonCandidates,
   saveLargeOutput,
 } from './agentarts-cli.mjs';
-import { BROWSER_READ_OPERATIONS, BROWSER_WRITE_OPERATIONS } from './agentarts-browser-tools.mjs';
+import {
+  BROWSER_READ_OPERATIONS,
+  BROWSER_SESSION_OPERATIONS,
+  BROWSER_WRITE_OPERATIONS,
+} from './agentarts-browser-tools.mjs';
 import { createApprovalTokenStore, hashNamespacedArgs } from './approval-tokens.mjs';
 import { CREDENTIAL_KEY_TOKENS, redactCredentialShapes } from './redact-core.mjs';
 import { redactSecrets } from './safety-policy.mjs';
@@ -342,6 +350,7 @@ export async function callAgentartsBrowserTool(name, rawArgs = {}) {
   if (name === 'huaweicloud_agentarts_browser_read') return readAgentartsBrowser(rawArgs);
   if (name === 'huaweicloud_agentarts_browser_plan') return planAgentartsBrowserWrite(rawArgs);
   if (name === 'huaweicloud_agentarts_browser_write') return runAgentartsBrowserWrite(rawArgs);
+  if (name === 'huaweicloud_agentarts_browser_session') return runAgentartsBrowserSession(rawArgs);
   return { ok: false, error: `Unknown agentarts browser tool: ${name}` };
 }
 
@@ -369,6 +378,13 @@ const WRITE_OPERATION_META = {
   delete_browser: { labels: ['irreversible'] },
   create_browser_profile: { labels: [] },
   delete_browser_profile: { labels: ['irreversible'] },
+  start_session: {
+    labels: [],
+    approvalScope:
+      ' One approval starts the session AND its lease: the domain fence and timeout shown above are what the cloud session will enforce (fence hits are only detectable via current_url — trap 65).',
+  },
+  save_profile: { labels: [] },
+  update_stream: { labels: [] },
 };
 
 const BROWSER_NAME_PATTERN = /^[a-z][a-z0-9-]{0,38}[a-z0-9]$/;
@@ -382,6 +398,15 @@ const BROWSER_WRITE_PARAM_KEYS = [
   'description',
   'browser_id',
   'profile_id',
+  'session_id',
+  'browser_name',
+  'session_name',
+  'session_timeout',
+  'viewport',
+  'allowed_domains',
+  'blocked_domains',
+  'profile_configuration',
+  'stream_status',
   'tags',
   'region',
 ];
@@ -392,6 +417,17 @@ const BROWSER_WRITE_OP_APPLICABILITY = {
   delete_browser: ['browser_id'],
   create_browser_profile: ['name', 'description', 'tags'],
   delete_browser_profile: ['profile_id'],
+  start_session: [
+    'browser_name',
+    'session_name',
+    'session_timeout',
+    'viewport',
+    'allowed_domains',
+    'blocked_domains',
+    'profile_configuration',
+  ],
+  save_profile: ['session_id', 'profile_id'],
+  update_stream: ['session_id', 'stream_status'],
 };
 
 function rejectUnknownWriteParams(params, operation) {
@@ -529,6 +565,8 @@ function validateBrowserWrite(params) {
       return 'region must be a non-empty string when provided.';
     }
   }
+  const sessionError = validateBrowserWriteSessionExtension(params);
+  if (sessionError) return sessionError;
   return null;
 }
 
@@ -576,7 +614,7 @@ function buildBrowserWriteRequest(params) {
     if (tags) request.tags = tags;
   }
   if (params.operation === 'delete_browser_profile') request.profile_id = params.profile_id;
-  return request;
+  return buildBrowserWriteRequestSessionExtension(request, params);
 }
 
 // Token namespace — distinct from the agentarts CLI and memory namespaces
@@ -649,6 +687,7 @@ export function planAgentartsBrowserWrite(params = {}) {
   const meta = WRITE_OPERATION_META[params.operation];
   const labels = meta.labels;
   const labelSuffix = labels.length > 0 ? ` Labels: ${labels.join(', ')}.` : '';
+  const scopeText = typeof meta.approvalScope === 'function' ? meta.approvalScope(request) : meta.approvalScope;
   const authTypeNote =
     params.operation === 'create_browser'
       ? request.auth_type === 'IAM'
@@ -664,7 +703,7 @@ export function planAgentartsBrowserWrite(params = {}) {
     warnings,
     request,
     approvalToken,
-    approvalNote: `Present the request above to the user.${labelSuffix} On explicit approval, run huaweicloud_agentarts_browser_write with THIS approvalToken, the SAME parameters, and approvedByUser: true (the token binds them exactly); otherwise discard it.${authTypeNote}`,
+    approvalNote: `Present the request above to the user.${labelSuffix} On explicit approval, run huaweicloud_agentarts_browser_write with THIS approvalToken, the SAME parameters, and approvedByUser: true (the token binds them exactly); otherwise discard it.${scopeText ?? ''}${authTypeNote}`,
   };
 }
 
@@ -721,6 +760,38 @@ const BROWSER_WRITE_SNIPPET = [
   '    print("{}: {}".format(type(error).__name__, error), file=sys.stderr)',
   '    sys.exit(1)',
 ].join('\n');
+
+// Session-write post-processing: the start's session state capture (the
+// LEASE — parsed from raw stdout so truncation cannot lose it) and the
+// trap-61 api_key error mapping for API_KEY-typed browsers.
+function enrichBrowserSessionWrite(payload, params, request, rawResult) {
+  if (params.operation === 'start_session' && payload.ok) {
+    const state = captureSessionState(rawResult, request);
+    if (state) {
+      const saved = saveBrowserSession(state);
+      if (saved.ok) {
+        payload.notes = [
+          ...(payload.notes || []),
+          `Session lease recorded: session_id ${state.session_id}, lease expires at ${new Date(state.lease_expires_at).toISOString()} (${state.session_timeout}s). Drive it with huaweicloud_agentarts_browser_session (get_session / stop_session / take_control) by session_id; the state file is ${saved.path} (0600). live_view_endpoint (${state.live_view_endpoint || 'absent in response'}) is the human's live view.`,
+        ];
+      }
+    } else {
+      // The session is LIVE in the cloud but the local lease could not be
+      // captured (unexpected response shape) — disclose loudly: without
+      // the record, the session tool cannot address it.
+      payload.notes = [
+        ...(payload.notes || []),
+        'WARNING: the session state file could NOT be captured from the start response (unexpected shape) — the cloud session is live but this toolkit cannot drive or stop it by id. Capture the session details from the payload and stop the session via the console.',
+      ];
+    }
+  }
+  const apiKeyMissing =
+    /API Key is not provided/i.test(rawResult?.stderr || '') || /API Key is not provided/i.test(payload?.stderr || '');
+  if (!payload.ok && apiKeyMissing) {
+    payload.error = `${payload.error} The browser is API_KEY-typed: the data plane needs the console api_key exported as HUAWEICLOUD_SDK_BROWSER_API_KEY in the agent launcher's environment (the create response never returns the key value — trap 61). The token was consumed by this attempt — re-plan after exporting the key.`;
+  }
+  return payload;
+}
 
 // Replay (already_consumed) guidance, per-operation: what verify call
 // answers "did it land" for each write shape.
@@ -847,6 +918,41 @@ export async function runAgentartsBrowserWrite({ approvalToken, approvedByUser, 
         'approvalToken was minted for DIFFERENT parameters — the write binds the exact planned request. Re-plan with the changed parameters (the token stays valid for the original ones).',
     };
   }
+  // Session-op pre-consumption guards (the CLI runner's order: a
+  // guaranteed-no-op or policy-blocked write must not burn the approval):
+  // (a) start_session rechecks the orphan guard (state may have changed
+  // since plan); (b) save_profile/update_stream reload the session state
+  // file (it may have been stopped or expired away between plan and
+  // write).
+  const isSessionWrite = ['start_session', 'save_profile', 'update_stream'].includes(params.operation);
+  let sessionState = null;
+  if (isSessionWrite && params.operation === 'start_session') {
+    const guard = guardExistingSession(params.browser_name);
+    if (guard) {
+      return {
+        ok: false,
+        status: 'rejected',
+        code: 'SESSION_LEASE_CONFLICT',
+        service: 'AgentArts',
+        operation: `browser ${params.operation} (SDK control plane)`,
+        error: `${guard} The token was NOT consumed.`,
+      };
+    }
+  }
+  if (isSessionWrite && params.operation !== 'start_session') {
+    const load = loadBrowserSession(params.session_id);
+    if (!load.ok) {
+      return {
+        ok: false,
+        status: 'rejected',
+        code: 'SESSION_NOT_ON_RECORD',
+        service: 'AgentArts',
+        operation: `browser ${params.operation} (SDK data plane)`,
+        error: `${load.error} The token was NOT consumed.`,
+      };
+    }
+    sessionState = load.session;
+  }
   // Credentials BEFORE consumption (the CLI runner's order; the memory
   // bridge checks its key file here): the browser control plane needs
   // injectable AK/SK, and a missing-credential rejection must not burn
@@ -901,16 +1007,23 @@ export async function runAgentartsBrowserWrite({ approvalToken, approvedByUser, 
   }
   const childEnv = buildChildEnv({ injectCredentials: true });
   const timeoutMs = options.timeoutMs ?? DEFAULT_APPROVED_TIMEOUT_MS;
-  const args = ['-c', BROWSER_WRITE_SNIPPET];
+  // Session ops take the session snippet and the EXECUTION request (the
+  // canonical token-bound request plus the state-file context — see
+  // buildSessionWriteExecutionRequest); resource ops run the canonical
+  // request verbatim.
+  const args = ['-c', isSessionWrite ? BROWSER_SESSION_WRITE_SNIPPET : BROWSER_WRITE_SNIPPET];
+  const executionRequest = isSessionWrite ? buildSessionWriteExecutionRequest(request, sessionState) : request;
   const outcome = await runOverPythonCandidates({
     args,
     childEnv,
     timeoutMs,
-    stdinData: JSON.stringify(request),
+    stdinData: JSON.stringify(executionRequest),
     runCandidate: options.runCandidate,
     shapeResult: (result, candidate) => {
       const parsed = parseSnippetStdout(result);
-      return enrichBrowserWrite(shapeBrowserResult(result, candidate, params, timeoutMs, parsed), params);
+      const payload = enrichBrowserWrite(shapeBrowserResult(result, candidate, params, timeoutMs, parsed), params);
+      if (isSessionWrite) return enrichBrowserSessionWrite(payload, params, request, result);
+      return payload;
     },
   });
   // Fallthrough honesty (the memory bridge's round-1/2 rule): when NO
@@ -921,4 +1034,563 @@ export async function runAgentartsBrowserWrite({ approvalToken, approvedByUser, 
     outcome.error = `${outcome.error} The single-use approval token was already CONSUMED by this attempt and stays burned — after fixing the SDK install, re-plan (replaying this token returns already_processed without executing anything).`;
   }
   return outcome;
+}
+
+// ---------------------------------------------------------------------------
+// B4: session lifecycle. start_session/save_profile/update_stream extend the
+// WRITE pair (the session lease IS an approved boundary — it carries the
+// domain fence and the timeout the user consented to); get/stop/take_control
+// are the FREE session tool (reads, cleanup, human handoff — risk only
+// decreases). The lease's local carrier is the 0600 session state file,
+// written by the start write and deleted by stop.
+//
+// The state file carries NO credentials (IAM-typed browsers sign the data
+// plane with the injected AK/SK; API_KEY-typed ones need the console key in
+// HUAWEICLOUD_SDK_BROWSER_API_KEY, allowlisted through buildChildEnv — the
+// file stores only the session context: names, ids, endpoints, expiry).
+
+const SESSION_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,128}$/;
+const SESSION_TIMEOUT_RANGE = [60, 3600];
+
+function browserSessionFile(sessionId) {
+  if (!UUID_PATTERN.test(sessionId)) {
+    return { ok: false, error: 'session_id must be a valid UUID (the id start_session returned).' };
+  }
+  const root = process.env.HUAWEICLOUD_HOME || homedir();
+  return {
+    ok: true,
+    path: join(root, '.config', 'huaweicloud', `agentarts-browser-session-${sessionId}.json`),
+  };
+}
+
+function loadBrowserSession(sessionId) {
+  const file = browserSessionFile(sessionId);
+  if (!file.ok) return { ok: false, error: file.error };
+  let raw;
+  try {
+    raw = readFileSync(file.path, 'utf8');
+  } catch {
+    return {
+      ok: false,
+      error: `No session state file for session ${sessionId} (${file.path}). Sessions are recorded by the start_session write — if the session was started outside this toolkit, or its lease already ended and the file was removed, there is no local record to drive it from. Re-start the session through the browser write pair.`,
+    };
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || !parsed.session_id || !parsed.browser_name) {
+      return {
+        ok: false,
+        error: `The session state file ${file.path} is malformed — delete it and re-start the session.`,
+      };
+    }
+    return { ok: true, session: parsed };
+  } catch {
+    return {
+      ok: false,
+      error: `The session state file ${file.path} is not parseable JSON — delete it and re-start the session.`,
+    };
+  }
+}
+
+function saveBrowserSession(state) {
+  const file = browserSessionFile(state.session_id);
+  if (!file.ok) return file;
+  mkdirSync(dirname(file.path), { recursive: true });
+  writeSessionFileSync(file.path, JSON.stringify(state, null, 2), { encoding: 'utf8', mode: 0o600 });
+  return { ok: true, path: file.path };
+}
+
+function deleteBrowserSession(sessionId) {
+  const file = browserSessionFile(sessionId);
+  if (!file.ok) return;
+  try {
+    unlinkSync(file.path);
+  } catch {
+    // Already gone — the desired end state.
+  }
+}
+
+// The orphan guard (trap A3 / BC:904-905): a second start_session on the
+// same browser_name silently OVERWRITES the cloud session, orphaning it.
+// The bridge rejects the second start while an unexpired local lease for
+// the same browser exists, and opportunistically sweeps EXPIRED records
+// for that browser (stale leases describe nothing live).
+function scanBrowserSessions() {
+  const root = process.env.HUAWEICLOUD_HOME || homedir();
+  const dir = join(root, '.config', 'huaweicloud');
+  let entries;
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const sessions = [];
+  for (const entry of entries) {
+    if (!entry.startsWith('agentarts-browser-session-') || !entry.endsWith('.json')) continue;
+    try {
+      const parsed = JSON.parse(readFileSync(join(dir, entry), 'utf8'));
+      if (parsed && typeof parsed === 'object' && parsed.session_id && parsed.browser_name) sessions.push(parsed);
+    } catch {
+      // Malformed session records are not this scan's problem — load-time
+      // errors disclose them by session id.
+    }
+  }
+  return sessions;
+}
+
+function guardExistingSession(browserName) {
+  const now = Date.now();
+  const matches = [];
+  for (const session of scanBrowserSessions()) {
+    if (session.browser_name !== browserName) continue;
+    if (typeof session.lease_expires_at === 'number' && session.lease_expires_at > now) {
+      matches.push(session);
+    } else {
+      // Stale record (lease expired): the cloud session may or may not be
+      // gone, but the local lease describes nothing actionable — sweep it.
+      deleteBrowserSession(session.session_id);
+    }
+  }
+  if (matches.length > 0) {
+    const live = matches
+      .map((m) => `${m.session_id} (lease until ${new Date(m.lease_expires_at).toISOString()})`)
+      .join(', ');
+    return `An unexpired session lease already exists for browser "${browserName}": ${live}. A second start would silently ORPHAN the cloud session (the SDK overwrites without stopping — BC:904-905). Stop it first with huaweicloud_agentarts_browser_session (operation stop_session), or wait for the lease to expire.`;
+  }
+  return null;
+}
+
+// Deep-sort object keys (the memory bridge's canonicalization rule,
+// duplicated for this module's independence): semantically identical
+// objects produce the SAME canonical JSON so the token binds bytes.
+function deepSortKeys(value) {
+  if (Array.isArray(value)) return value.map((item) => deepSortKeys(item));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+        .map((key) => [key, deepSortKeys(value[key])]),
+    );
+  }
+  return value;
+}
+
+function validateSessionDomains(candidate, name) {
+  const domains = candidate[name];
+  if (domains === undefined || domains === null) return null;
+  if (!Array.isArray(domains) || domains.length === 0) {
+    return `${name} must be a non-empty array of domain pattern strings when provided.`;
+  }
+  for (const [index, domain] of domains.entries()) {
+    if (typeof domain !== 'string' || domain.length === 0) {
+      return `${name}[${index}] must be a non-empty string.`;
+    }
+  }
+  return null;
+}
+
+const needField = (candidate, field, message) =>
+  typeof candidate[field] !== 'string' || candidate[field].length === 0 ? message : null;
+
+// Session-lifecycle validation, composed INTO validateBrowserWrite at its
+// tail (the write pair's single front door stays one function).
+function validateBrowserWriteSessionExtension(candidate) {
+  if (candidate.operation === 'start_session') {
+    const err =
+      needField(
+        candidate,
+        'browser_name',
+        'browser_name is required for start_session (pattern ^[a-z][a-z0-9-]{0,38}[a-z0-9]$).',
+      ) ??
+      needField(
+        candidate,
+        'session_name',
+        'session_name is required for start_session (pattern ^[a-zA-Z0-9_-]{1,128}$).',
+      );
+    if (err) return err;
+    if (!BROWSER_NAME_PATTERN.test(candidate.browser_name)) {
+      return 'browser_name must match ^[a-z][a-z0-9-]{0,38}[a-z0-9]$ — the browser resource name (list_browsers carries it).';
+    }
+    if (!SESSION_NAME_PATTERN.test(candidate.session_name)) {
+      return 'session_name must match ^[a-zA-Z0-9_-]{1,128}$ (the SDK rejects anything else client-side).';
+    }
+    if (candidate.session_timeout !== undefined && candidate.session_timeout !== null) {
+      const t = candidate.session_timeout;
+      if (typeof t !== 'number' || !Number.isSafeInteger(t) || Object.is(t, -0)) {
+        return 'session_timeout must be an integer (seconds).';
+      }
+      if (t < SESSION_TIMEOUT_RANGE[0] || t > SESSION_TIMEOUT_RANGE[1]) {
+        return `session_timeout must be ${SESSION_TIMEOUT_RANGE[0]}-${SESSION_TIMEOUT_RANGE[1]} seconds (SDK default 900; a conservative bridge window — B1 measured 60 accepted).`;
+      }
+    }
+    if (candidate.viewport !== undefined && candidate.viewport !== null) {
+      const v = candidate.viewport;
+      if (!v || typeof v !== 'object' || Array.isArray(v)) return 'viewport must be an object {width, height}.';
+      const keys = Object.keys(v);
+      if (keys.length !== 2 || !keys.includes('width') || !keys.includes('height')) {
+        return 'viewport must have exactly the keys "width" and "height".';
+      }
+      for (const dim of ['width', 'height']) {
+        if (typeof v[dim] !== 'number' || !Number.isSafeInteger(v[dim]) || v[dim] <= 0) {
+          return `viewport.${dim} must be a positive integer.`;
+        }
+      }
+    }
+    if (Array.isArray(candidate.allowed_domains) && Array.isArray(candidate.blocked_domains)) {
+      return 'allowed_domains and blocked_domains are mutually exclusive (the SDK rejects both).';
+    }
+    const domainError =
+      validateSessionDomains(candidate, 'allowed_domains') ?? validateSessionDomains(candidate, 'blocked_domains');
+    if (domainError) return domainError;
+    if (candidate.profile_configuration !== undefined && candidate.profile_configuration !== null) {
+      if (typeof candidate.profile_configuration !== 'object' || Array.isArray(candidate.profile_configuration)) {
+        return 'profile_configuration must be an object (opaque, passed through as-is).';
+      }
+    }
+    // Orphan guard: plan-time local check (rechecked at write time).
+    const guard = guardExistingSession(candidate.browser_name);
+    if (guard) return guard;
+  }
+  if (candidate.operation === 'save_profile' || candidate.operation === 'update_stream') {
+    if (candidate.region !== undefined && candidate.region !== null) {
+      return `${candidate.operation} takes no region — the session's region/endpoint/auth type resolve from the session state file start_session recorded, never from tool args.`;
+    }
+  }
+  if (candidate.operation === 'save_profile') {
+    const err =
+      needField(candidate, 'session_id', 'session_id is required for save_profile (the id start_session returned).') ??
+      needField(candidate, 'profile_id', 'profile_id is required for save_profile.');
+    if (err) return err;
+    if (!UUID_PATTERN.test(candidate.session_id))
+      return 'session_id must be a valid UUID (the id start_session returned).';
+    if (!UUID_PATTERN.test(candidate.profile_id)) return 'profile_id must be a valid UUID.';
+    const load = loadBrowserSession(candidate.session_id);
+    if (!load.ok) return load.error;
+  }
+  if (candidate.operation === 'update_stream') {
+    const err =
+      needField(candidate, 'session_id', 'session_id is required for update_stream (the id start_session returned).') ??
+      needField(candidate, 'stream_status', 'stream_status is required for update_stream (disabled or enabled).');
+    if (err) return err;
+    if (!UUID_PATTERN.test(candidate.session_id))
+      return 'session_id must be a valid UUID (the id start_session returned).';
+    if (!['disabled', 'enabled'].includes(candidate.stream_status)) {
+      return 'stream_status must be "disabled" or "enabled".';
+    }
+    const load = loadBrowserSession(candidate.session_id);
+    if (!load.ok) return load.error;
+  }
+  return null;
+}
+
+// Canonical request extension for the session ops (the token binds bytes):
+// start_session carries the EFFECTIVE fence — domains SORTED (list order is
+// semantically irrelevant), viewport/profile_configuration deep-sorted,
+// session_timeout only when explicitly set (the SDK default 900 applies
+// when omitted on BOTH sides of the binding). save_profile/update_stream
+// bind only caller-visible fields — region/endpoint/auth come from the
+// session state file at execution, never from the approval surface.
+function buildBrowserWriteRequestSessionExtension(request, params) {
+  if (params.operation === 'start_session') {
+    request.browser_name = params.browser_name;
+    request.session_name = params.session_name;
+    if (params.session_timeout !== undefined && params.session_timeout !== null) {
+      request.session_timeout = params.session_timeout;
+    }
+    if (params.viewport !== undefined && params.viewport !== null) {
+      request.viewport = deepSortKeys(params.viewport);
+    }
+    if (params.profile_configuration !== undefined && params.profile_configuration !== null) {
+      request.profile_configuration = deepSortKeys(params.profile_configuration);
+    }
+    for (const field of ['allowed_domains', 'blocked_domains']) {
+      if (Array.isArray(params[field]) && params[field].length > 0) {
+        request[field] = [...params[field]].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      }
+    }
+  }
+  if (params.operation === 'save_profile') {
+    delete request.region;
+    request.session_id = params.session_id;
+    request.profile_id = params.profile_id;
+  }
+  if (params.operation === 'update_stream') {
+    delete request.region;
+    request.session_id = params.session_id;
+    request.stream_status = params.stream_status;
+  }
+  return request;
+}
+
+const BROWSER_SESSION_WRITE_SNIPPET = [
+  'import json, sys',
+  'try:',
+  '    from agentarts.sdk import Browser',
+  'except ModuleNotFoundError:',
+  '    print("AGENTARTS_SDK_MISSING", file=sys.stderr)',
+  '    sys.exit(3)',
+  'try:',
+  '    params = json.loads(sys.stdin.read())',
+  '    op = params["operation"]',
+  '    if op == "start_session":',
+  '        # Trap 62: the data-plane endpoint has no region default and the',
+  '        # missing-endpoint failure never mentions endpoints — resolve it',
+  '        # from the control plane FIRST (list_browsers by name carries',
+  '        # access_endpoint and auth_type directly).',
+  '        probe = Browser(region=params["region"])',
+  '        found = probe.list_browsers(name=params["browser_name"])',
+  '        items = found.get("items") or []',
+  '        if not items:',
+  '            print("ToolsAPIError: browser {} not found — list_browsers by name returned nothing (verify with huaweicloud_agentarts_browser_read)".format(params["browser_name"]), file=sys.stderr)',
+  '            sys.exit(1)',
+  '        info = items[0]',
+  '        endpoint = info.get("access_endpoint")',
+  '        if not endpoint:',
+  '            print("ToolsAPIError: browser {} carries no access_endpoint (unexpected shape)".format(params["browser_name"]), file=sys.stderr)',
+  '            sys.exit(1)',
+  '        if not endpoint.startswith("http"):',
+  '            endpoint = "https://" + endpoint',
+  '        auth = info.get("auth_type") or "IAM"',
+  '        client = Browser(region=params["region"], data_endpoint=endpoint, auth_type=auth)',
+  '        kwargs = {"browser_name": params["browser_name"], "session_name": params["session_name"]}',
+  '        if params.get("session_timeout") is not None: kwargs["session_timeout"] = params["session_timeout"]',
+  '        if params.get("viewport"): kwargs["viewport"] = params["viewport"]',
+  '        if params.get("profile_configuration"): kwargs["profile_configuration"] = params["profile_configuration"]',
+  '        if params.get("allowed_domains"): kwargs["allowed_domains"] = params["allowed_domains"]',
+  '        if params.get("blocked_domains"): kwargs["blocked_domains"] = params["blocked_domains"]',
+  '        session = client.start_session(**kwargs)',
+  '        # The bridge captures the session state file from THIS envelope:',
+  '        # the browser half (endpoint resolution context) plus the raw',
+  '        # start response (session_id, streams — B1-measured shape).',
+  '        result = {"browser": {"id": info.get("id"), "name": info.get("name"), "auth_type": auth, "access_endpoint": endpoint}, "session": session}',
+  '    elif op == "save_profile":',
+  '        client = Browser(region=params["region"], data_endpoint=params["data_endpoint"], auth_type=params["auth_type"])',
+  '        client.browser_name = params["browser_name"]',
+  '        client.session_id = params["session_id"]',
+  '        result = client.save_profile(profile_id=params["profile_id"])',
+  '        if result is None:',
+  '            result = {"saved": True, "profile_id": params["profile_id"]}',
+  '    elif op == "update_stream":',
+  '        client = Browser(region=params["region"], data_endpoint=params["data_endpoint"], auth_type=params["auth_type"])',
+  '        client.browser_name = params["browser_name"]',
+  '        client.session_id = params["session_id"]',
+  '        result = client.update_stream(stream_status=params["stream_status"])',
+  '        if result is None:',
+  '            result = {"stream_status": params["stream_status"], "session_id": params["session_id"]}',
+  '    else:',
+  '        print("AGENTARTS_BROWSER_BAD_OPERATION", file=sys.stderr)',
+  '        sys.exit(2)',
+  '    print(json.dumps(result, ensure_ascii=False, default=lambda o: getattr(o, "__dict__", str(o))))',
+  'except SystemExit:',
+  '    raise',
+  'except BaseException as error:',
+  '    print("{}: {}".format(type(error).__name__, error), file=sys.stderr)',
+  '    sys.exit(1)',
+].join('\n');
+
+// The session write's execution request is the CANONICAL (token-bound)
+// request PLUS the resolved session context (region/data_endpoint/auth_type/
+// browser_name for save/update come from the state file at execution time,
+// never from the approval surface). For start_session the context resolves
+// inside the snippet (control-plane probe).
+function buildSessionWriteExecutionRequest(canonicalRequest, session) {
+  const request = { ...canonicalRequest };
+  if (session) {
+    request.region = session.region;
+    request.data_endpoint = session.data_endpoint;
+    request.auth_type = session.auth_type;
+    request.browser_name = session.browser_name;
+    request.session_id = session.session_id;
+  }
+  return request;
+}
+
+// Post-execution session state capture for start_session: parsed from the
+// RAW stdout (not the envelope's possibly-truncated result) — the lease
+// record must exist even when the display payload truncated.
+function captureSessionState(rawResult, request) {
+  if (rawResult.timedOut || rawResult.exitCode !== 0) return null;
+  try {
+    const parsed = JSON.parse(rawResult.stdout);
+    const browser = parsed && parsed.browser;
+    const session = parsed && parsed.session;
+    if (!browser || !session || typeof session !== 'object') return null;
+    if (!session.session_id || !session.browser_name) return null;
+    const startedAt = Date.now();
+    const timeout = typeof request.session_timeout === 'number' ? request.session_timeout : 900;
+    return {
+      browser_id: browser.id,
+      browser_name: session.browser_name,
+      auth_type: browser.auth_type,
+      region: request.region,
+      data_endpoint: browser.access_endpoint,
+      session_id: session.session_id,
+      session_name: session.name || request.session_name,
+      session_timeout: timeout,
+      automation_endpoint: session.streams?.automation_stream?.stream_endpoint,
+      live_view_endpoint: session.streams?.live_view_stream?.stream_endpoint,
+      started_at: startedAt,
+      lease_expires_at: startedAt + timeout * 1000,
+    };
+  } catch {
+    return null;
+  }
+}
+
+const BROWSER_SESSION_TOOL_SNIPPET = [
+  'import json, sys',
+  'try:',
+  '    from agentarts.sdk import Browser',
+  'except ModuleNotFoundError:',
+  '    print("AGENTARTS_SDK_MISSING", file=sys.stderr)',
+  '    sys.exit(3)',
+  'try:',
+  '    params = json.loads(sys.stdin.read())',
+  '    client = Browser(region=params["region"], data_endpoint=params["data_endpoint"], auth_type=params["auth_type"])',
+  '    client.browser_name = params["browser_name"]',
+  '    client.session_id = params["session_id"]',
+  '    op = params["operation"]',
+  '    if op == "get_session":',
+  '        result = client.get_session()',
+  '        if result is None:',
+  '            result = {"session_state": "unknown (empty response)"}',
+  '    elif op == "stop_session":',
+  '        client.stop_session()',
+  '        result = {"stopped": True, "session_id": params["session_id"]}',
+  '    elif op == "take_control":',
+  '        result = client.update_stream(stream_status="disabled")',
+  '        if result is None:',
+  '            result = {"stream_status": "disabled", "session_id": params["session_id"]}',
+  '    else:',
+  '        print("AGENTARTS_BROWSER_BAD_OPERATION", file=sys.stderr)',
+  '        sys.exit(2)',
+  '    print(json.dumps(result, ensure_ascii=False, default=lambda o: getattr(o, "__dict__", str(o))))',
+  'except SystemExit:',
+  '    raise',
+  'except BaseException as error:',
+  '    print("{}: {}".format(type(error).__name__, error), file=sys.stderr)',
+  '    sys.exit(1)',
+].join('\n');
+
+// Free-tier session tool (no approval token): get/stop/take_control over a
+// recorded session lease.
+export async function runAgentartsBrowserSession(params = {}, options = {}) {
+  if (!BROWSER_SESSION_OPERATIONS.includes(params.operation)) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `browser session ${params.operation || '(unknown)'} (SDK data plane)`,
+      error: `operation must be one of: ${BROWSER_SESSION_OPERATIONS.join(', ')}.`,
+    };
+  }
+  for (const key of Object.keys(params)) {
+    if (key !== 'operation' && key !== 'session_id') {
+      return {
+        ok: false,
+        service: 'AgentArts',
+        operation: `browser session ${params.operation} (SDK data plane)`,
+        error: `Unknown parameter "${key}" — legal keys: operation, session_id. (Region/endpoint/auth type resolve from the session state file, never from tool args.)`,
+      };
+    }
+  }
+  if (typeof params.session_id !== 'string' || params.session_id.length === 0) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `browser session ${params.operation} (SDK data plane)`,
+      error: 'session_id is required — the id start_session returned.',
+    };
+  }
+  if (!UUID_PATTERN.test(params.session_id)) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `browser session ${params.operation} (SDK data plane)`,
+      error: 'session_id must be a valid UUID (the id start_session returned).',
+    };
+  }
+  if (hasInjectableCredentials() === false) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `browser session ${params.operation} (SDK data plane)`,
+      error:
+        'No devkit credentials available for agentarts (HUAWEICLOUD_SDK_AK/SK injection). Run huaweicloud_auth_init first, or execute the command in your own terminal — the wrapper never falls back to unmanaged profile files or the metadata chain.',
+    };
+  }
+  const load = loadBrowserSession(params.session_id);
+  if (!load.ok) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `browser session ${params.operation} (SDK data plane)`,
+      error: load.error,
+    };
+  }
+  const session = load.session;
+  const request = {
+    operation: params.operation,
+    region: session.region,
+    data_endpoint: session.data_endpoint,
+    auth_type: session.auth_type,
+    browser_name: session.browser_name,
+    session_id: session.session_id,
+  };
+  const childEnv = buildChildEnv({ injectCredentials: true });
+  const timeoutMs = options.timeoutMs ?? READONLY_TIMEOUT_MS;
+  const args = ['-c', BROWSER_SESSION_TOOL_SNIPPET];
+  const outcome = await runOverPythonCandidates({
+    args,
+    childEnv,
+    timeoutMs,
+    stdinData: JSON.stringify(request),
+    runCandidate: options.runCandidate,
+    shapeResult: (result, candidate) => {
+      const parsed = parseSnippetStdout(result);
+      const payload = shapeSessionToolResult(result, candidate, params, timeoutMs, parsed);
+      return enrichBrowserSession(payload, params, session, result);
+    },
+  });
+  return outcome;
+}
+
+// The session tool's envelope: same shape, data-plane operation label.
+function shapeSessionToolResult(result, candidate, params, timeoutMs, parsed = parseSnippetStdout(result)) {
+  const payload = shapeBrowserResult(result, candidate, params, timeoutMs, parsed);
+  payload.operation = `browser session ${params.operation} (SDK data plane; no CLI subcommand in 0.1.7)`;
+  return payload;
+}
+
+// Session-tool post-processing: lease staleness disclosure, stop's file
+// cleanup, take_control's handoff teaching, and the trap-61 api_key error
+// mapping (an API_KEY-typed session started without the console key fails
+// with a message that never says where the key goes).
+function enrichBrowserSession(payload, params, session, rawResult) {
+  const now = Date.now();
+  const expired = typeof session.lease_expires_at === 'number' && session.lease_expires_at <= now;
+  const apiKeyMissing =
+    /API Key is not provided/i.test(rawResult?.stderr || '') || /API Key is not provided/i.test(payload?.stderr || '');
+  if (payload.ok) {
+    const notes = [];
+    if (params.operation === 'stop_session') {
+      deleteBrowserSession(params.session_id);
+      notes.push(
+        `The local session lease record was removed (${browserSessionFile(params.session_id).path}). The SDK's stop is a no-op True on an already-gone session (trap 67) — success says the cleanup ran, not that the session was live.`,
+      );
+    }
+    if (params.operation === 'take_control') {
+      notes.push(
+        'Automation stream disabled — the human owns the session now (page state is PRESERVED through the disable/enable cycle, trap 66). Re-arming the agent is the approved write update_stream with stream_status=enabled.',
+      );
+    }
+    if (expired) {
+      notes.push(
+        `The local lease expired at ${new Date(session.lease_expires_at).toISOString()} — the cloud session dies independently at its own timeout and may already be gone.`,
+      );
+    }
+    if (notes.length > 0) payload.notes = notes;
+  } else if (apiKeyMissing) {
+    payload.error = `${payload.error} The session's browser is API_KEY-typed: the data plane needs the console api_key exported as HUAWEICLOUD_SDK_BROWSER_API_KEY in the agent launcher's environment (the create response never returns the key value — trap 61).`;
+  }
+  return payload;
 }

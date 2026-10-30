@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   mkdirSync,
   rmSync,
+  statSync,
   unlinkSync,
   utimesSync,
   writeFileSync,
@@ -19,6 +20,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   readAgentartsBrowser,
   planAgentartsBrowserWrite,
+  runAgentartsBrowserSession,
   runAgentartsBrowserWrite,
   callAgentartsBrowserTool,
 } from '../plugins/huaweicloud-core/src/agentarts-browser.mjs';
@@ -76,8 +78,8 @@ test('browser read validates the boundary before any spawn', async () => {
       assert.equal(out.ok, false, JSON.stringify(params));
       assert.match(out.error, pattern);
     };
-    await bad({ operation: 'start_session' }, /operation must be one of/);
-    await bad({ operation: 'delete_browser' }, /operation must be one of/);
+    await bad({ operation: 'navigate' }, /operation must be one of/);
+    await bad({ operation: 'release_control' }, /operation must be one of/);
     await bad({ operation: 'get_browser' }, /browser_id is required/);
     await bad({ operation: 'get_browser_profile' }, /profile_id is required/);
     // Tag filters exist on the SDK list methods but are not exposed —
@@ -375,7 +377,7 @@ test('browser write validates the boundary before any token is minted', async ()
       assert.equal(out.ok, false, JSON.stringify(params));
       assert.match(out.error, pattern);
     };
-    await bad({ operation: 'start_session' }, /operation must be one of/);
+    await bad({ operation: 'navigate' }, /operation must be one of/);
     await bad({ operation: 'create_browser' }, /name is required for create_browser/);
     await bad({ operation: 'create_browser', name: 'UPPER' }, /name must match/);
     await bad({ operation: 'create_browser', name: 'x' }, /name must match/);
@@ -1243,4 +1245,452 @@ test('browser plan surfaces a store failure as a structured rejection (not a raw
     assert.match(out.error, /approval-token store could not be written/);
     assert.match(out.error, /no token was minted and nothing was executed/);
   });
+});
+
+// ---------------------------------------------------------------------------
+// B4: session lifecycle — write-pair extension (start/save/update) and the
+// free session tool (get/stop/take_control), with the 0600 lease record.
+
+const SESSION_ID = '0857507a-f598-43b8-9bdd-00cb0d91e8cb';
+const PROFILE_ID = '31441256-3bcb-4a5f-9ae4-aa524c47f7f5';
+const BROWSER_ID = '61ed9760-3a79-47c3-838a-c77e38956a05';
+
+function writeSessionFile(home, overrides = {}) {
+  const dir = join(home, '.config', 'huaweicloud');
+  mkdirSync(dir, { recursive: true });
+  const state = {
+    browser_id: BROWSER_ID,
+    browser_name: 'team-browser',
+    auth_type: 'IAM',
+    region: 'cn-southwest-2',
+    data_endpoint: 'https://gw.example.com',
+    session_id: SESSION_ID,
+    session_name: 's1',
+    session_timeout: 900,
+    automation_endpoint: 'wss://gw.example.com/v1/browsers/team-browser/automation',
+    live_view_endpoint: 'wss://gw.example.com/v1/browsers/team-browser/livestream',
+    started_at: Date.now() - 1000,
+    lease_expires_at: Date.now() + 899_000,
+    ...overrides,
+  };
+  const path = join(dir, `agentarts-browser-session-${state.session_id}.json`);
+  writeFileSync(path, JSON.stringify(state, null, 2), { encoding: 'utf8', mode: 0o600 });
+  return { path, state };
+}
+
+test('session write validates the boundary before any token is minted', async () => {
+  await withIsolation(async () => {
+    const bad = async (params, pattern) => {
+      const out = planAgentartsBrowserWrite(params);
+      assert.equal(out.ok, false, JSON.stringify(params));
+      assert.match(out.error, pattern);
+    };
+    await bad({ operation: 'start_session' }, /browser_name is required for start_session/);
+    await bad({ operation: 'start_session', browser_name: 'UPPER', session_name: 's1' }, /browser_name must match/);
+    await bad({ operation: 'start_session', browser_name: 'ok-name' }, /session_name is required/);
+    await bad(
+      { operation: 'start_session', browser_name: 'ok-name', session_name: 'has spaces' },
+      /session_name must match/,
+    );
+    await bad(
+      { operation: 'start_session', browser_name: 'ok-name', session_name: 's1', session_timeout: 30 },
+      /session_timeout must be 60-3600 seconds/,
+    );
+    await bad(
+      { operation: 'start_session', browser_name: 'ok-name', session_name: 's1', session_timeout: 3601 },
+      /session_timeout must be 60-3600 seconds/,
+    );
+    await bad(
+      { operation: 'start_session', browser_name: 'ok-name', session_name: 's1', session_timeout: 10.5 },
+      /session_timeout must be an integer/,
+    );
+    await bad(
+      { operation: 'start_session', browser_name: 'ok-name', session_name: 's1', viewport: { width: 1280 } },
+      /viewport must have exactly the keys/,
+    );
+    await bad(
+      { operation: 'start_session', browser_name: 'ok-name', session_name: 's1', viewport: { width: -1, height: 720 } },
+      /viewport\.width must be a positive integer/,
+    );
+    await bad(
+      {
+        operation: 'start_session',
+        browser_name: 'ok-name',
+        session_name: 's1',
+        allowed_domains: ['a.com'],
+        blocked_domains: ['b.com'],
+      },
+      /mutually exclusive/,
+    );
+    await bad(
+      { operation: 'start_session', browser_name: 'ok-name', session_name: 's1', allowed_domains: [''] },
+      /allowed_domains\[0\] must be a non-empty string/,
+    );
+    await bad(
+      { operation: 'start_session', browser_name: 'ok-name', session_name: 's1', allowed_domains: 'a.com' },
+      /allowed_domains must be a non-empty array/,
+    );
+    await bad(
+      { operation: 'start_session', browser_name: 'ok-name', session_name: 's1', profile_configuration: 'nope' },
+      /profile_configuration must be an object/,
+    );
+    // save_profile / update_stream: session context required, region
+    // rejected (it resolves from the state file).
+    await bad({ operation: 'save_profile', profile_id: PROFILE_ID }, /session_id is required for save_profile/);
+    await bad(
+      { operation: 'save_profile', session_id: 'nope', profile_id: PROFILE_ID },
+      /session_id must be a valid UUID/,
+    );
+    await bad(
+      { operation: 'save_profile', session_id: SESSION_ID, profile_id: PROFILE_ID },
+      /No session state file for session/,
+    );
+    await bad({ operation: 'update_stream', session_id: SESSION_ID }, /stream_status is required for update_stream/);
+    await bad(
+      { operation: 'update_stream', session_id: SESSION_ID, stream_status: 'paused' },
+      /stream_status must be "disabled" or "enabled"/,
+    );
+    // A session file on record lets save/update pass validation.
+    await withSessionFile(async () => {
+      const plan = planAgentartsBrowserWrite({
+        operation: 'save_profile',
+        session_id: SESSION_ID,
+        profile_id: PROFILE_ID,
+      });
+      assert.equal(plan.ok, true, plan.error);
+    });
+    await bad(
+      { operation: 'update_stream', session_id: SESSION_ID, stream_status: 'enabled', region: 'cn-north-4' },
+      /takes no region/,
+    );
+    // Applicability: session fields on resource ops are rejected.
+    await bad(
+      { operation: 'delete_browser', browser_id: BROWSER_ID, session_id: SESSION_ID },
+      /"session_id" is not a parameter of delete_browser/,
+    );
+  });
+});
+
+async function withSessionFile(fn) {
+  // Shares withIsolation's scratch home via the current HUAWEICLOUD_HOME.
+  const home = process.env.HUAWEICLOUD_HOME;
+  const { state } = writeSessionFile(home);
+  try {
+    await fn(state);
+  } finally {
+    try {
+      unlinkSync(join(home, '.config', 'huaweicloud', `agentarts-browser-session-${state.session_id}.json`));
+    } catch {
+      // already removed
+    }
+  }
+}
+
+test('start_session plan canonicalizes the effective fence (sorted domains, deep-sorted profile)', async () => {
+  await withIsolation(async () => {
+    const plan = planAgentartsBrowserWrite({
+      operation: 'start_session',
+      browser_name: 'team-browser',
+      session_name: 's1',
+      session_timeout: 300,
+      viewport: { width: 1920, height: 1080 },
+      allowed_domains: ['z.example.com', 'a.example.com'],
+      profile_configuration: { b: 2, a: 1 },
+    });
+    assert.equal(plan.ok, true, plan.error);
+    // Domains sorted; profile deep-sorted; explicit timeout carried.
+    assert.deepEqual(plan.request.allowed_domains, ['a.example.com', 'z.example.com']);
+    assert.deepEqual(Object.keys(plan.request.profile_configuration), ['a', 'b']);
+    assert.equal(plan.request.session_timeout, 300);
+    assert.equal(plan.request.region, 'cn-southwest-2');
+    // The approval-scope sentence teaches the lease model.
+    assert.match(plan.approvalNote, /starts the session AND its lease/);
+    // Default timeout is NOT in the canonical request (both sides default).
+    const defaulted = planAgentartsBrowserWrite({
+      operation: 'start_session',
+      browser_name: 'team-browser',
+      session_name: 's1',
+    });
+    assert.equal(defaulted.request.session_timeout, undefined);
+  });
+});
+
+test('the orphan guard rejects a second start while a lease is live, and sweeps stale ones', async () => {
+  await withIsolation(async (home) => {
+    const dir = join(home, '.config', 'huaweicloud');
+    // Live lease for team-browser: the plan rejects with the conflict.
+    writeSessionFile(home, { browser_name: 'team-browser', lease_expires_at: Date.now() + 600_000 });
+    const plan = planAgentartsBrowserWrite({
+      operation: 'start_session',
+      browser_name: 'team-browser',
+      session_name: 's2',
+    });
+    assert.equal(plan.ok, false);
+    assert.match(plan.error, /unexpired session lease already exists/);
+    assert.match(plan.error, /ORPHAN the cloud session/);
+    // Remove the live lease (case 1 done) before the next cases.
+    unlinkSync(join(home, '.config', 'huaweicloud', `agentarts-browser-session-${SESSION_ID}.json`));
+    // A DIFFERENT browser's lease does not block.
+    writeSessionFile(home, {
+      browser_name: 'other-browser',
+      session_id: '11111111-2222-3333-4444-555555555555',
+    });
+    const other = planAgentartsBrowserWrite({
+      operation: 'start_session',
+      browser_name: 'free-browser',
+      session_name: 's',
+    });
+    assert.equal(other.ok, true, other.error);
+    // An EXPIRED lease for the same browser is swept, not blocking.
+    const expired = writeSessionFile(home, {
+      browser_name: 'team-browser',
+      lease_expires_at: Date.now() - 1000,
+      session_id: '99999999-8888-7777-6666-555555555555',
+    });
+    assert.ok(existsSync(expired.path));
+    const afterSweep = planAgentartsBrowserWrite({
+      operation: 'start_session',
+      browser_name: 'team-browser',
+      session_name: 's2',
+    });
+    assert.equal(afterSweep.ok, true, afterSweep.error);
+    assert.equal(existsSync(expired.path), false, 'the stale lease record must be swept');
+  });
+});
+
+test('start_session write captures the lease record from the response envelope', async () => {
+  await withIsolation(async (home) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const params = {
+      operation: 'start_session',
+      browser_name: 'team-browser',
+      session_name: 's1',
+      session_timeout: 120,
+      allowed_domains: ['a.example.com'],
+    };
+    const plan = planAgentartsBrowserWrite(params);
+    assert.equal(plan.ok, true, plan.error);
+    const stubResponse = pyDumps({
+      browser: {
+        id: BROWSER_ID,
+        name: 'team-browser',
+        auth_type: 'IAM',
+        access_endpoint: 'https://gw.example.com',
+      },
+      session: {
+        browser_name: 'team-browser',
+        session_id: SESSION_ID,
+        name: 's1',
+        session_timeout: 120,
+        streams: {
+          automation_stream: { stream_endpoint: 'wss://gw.example.com/automation', stream_status: 'enabled' },
+          live_view_stream: { stream_endpoint: 'wss://gw.example.com/livestream' },
+        },
+      },
+    });
+    let seenStdin = null;
+    const out = await runAgentartsBrowserWrite(
+      { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+      {
+        runCandidate: async (candidate, args, childEnv, stdinData) => {
+          seenStdin = stdinData;
+          return { exitCode: 0, stdout: stubResponse, stderr: '' };
+        },
+      },
+    );
+    assert.equal(out.ok, true, JSON.stringify(out));
+    // The execution request IS the canonical request for start (context
+    // resolves inside the snippet).
+    assert.deepEqual(JSON.parse(seenStdin), plan.request);
+    // The lease record landed: 0600 file with the session context.
+    const statePath = join(home, '.config', 'huaweicloud', `agentarts-browser-session-${SESSION_ID}.json`);
+    assert.ok(existsSync(statePath), 'the session state file must exist');
+    const state = JSON.parse(readFileSync(statePath, 'utf8'));
+    assert.equal(state.session_id, SESSION_ID);
+    assert.equal(state.browser_name, 'team-browser');
+    assert.equal(state.auth_type, 'IAM');
+    assert.equal(state.data_endpoint, 'https://gw.example.com');
+    assert.equal(state.session_timeout, 120);
+    assert.equal(state.automation_endpoint, 'wss://gw.example.com/automation');
+    const mode = statSync(statePath).mode & 0o777;
+    assert.equal(mode, 0o600, `state file must be 0600 (got ${mode.toString(8)})`);
+    // The note teaches the lease + the session tool pointer.
+    assert.match(out.notes.join(' '), /session_id/);
+    assert.match(out.notes.join(' '), /huaweicloud_agentarts_browser_session/);
+    assert.match(out.notes.join(' '), /lease expires at/);
+    // Second start on the same browser: the write-time guard blocks it
+    // WITHOUT burning a fresh token.
+    const plan2 = planAgentartsBrowserWrite({
+      operation: 'start_session',
+      browser_name: 'team-browser',
+      session_name: 's2',
+    });
+    assert.equal(plan2.ok, false, 'plan-time guard must fire');
+    const blocked = await runAgentartsBrowserWrite({
+      operation: 'start_session',
+      browser_name: 'team-browser',
+      session_name: 's2',
+      approvedByUser: true,
+      approvalToken: 'x',
+    });
+    // Blocked before token inspection (validation order): boundary error.
+    assert.equal(blocked.ok, false);
+    // Cleanup the lease for the next test.
+    unlinkSync(statePath);
+  });
+});
+
+test('save_profile/update_stream load the session context from the state file', async () => {
+  await withIsolation(async (home) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    writeSessionFile(home);
+    const params = { operation: 'update_stream', session_id: SESSION_ID, stream_status: 'enabled' };
+    const plan = planAgentartsBrowserWrite(params);
+    assert.equal(plan.ok, true, plan.error);
+    // The canonical request carries ONLY caller-visible fields (no
+    // region/endpoint — those resolve from the state file).
+    assert.deepEqual(plan.request, { operation: 'update_stream', session_id: SESSION_ID, stream_status: 'enabled' });
+    let seenStdin = null;
+    const out = await runAgentartsBrowserWrite(
+      { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+      {
+        runCandidate: async (candidate, args, childEnv, stdinData) => {
+          seenStdin = stdinData;
+          return { exitCode: 0, stdout: pyDumps({ stream_status: 'enabled' }), stderr: '' };
+        },
+      },
+    );
+    assert.equal(out.ok, true, JSON.stringify(out));
+    // The EXECUTION request merged the state-file context.
+    const request = JSON.parse(seenStdin);
+    assert.equal(request.region, 'cn-southwest-2');
+    assert.equal(request.data_endpoint, 'https://gw.example.com');
+    assert.equal(request.auth_type, 'IAM');
+    assert.equal(request.browser_name, 'team-browser');
+    assert.equal(request.session_id, SESSION_ID);
+    assert.equal(request.stream_status, 'enabled');
+  });
+});
+
+test('the free session tool: get/stop/take_control with lease staleness and cleanup', async () => {
+  await withIsolation(async (home) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // Boundary: operation enum, session_id required/UUID, unknown params.
+    const badOps = await runAgentartsBrowserSession({ operation: 'invoke' });
+    assert.match(badOps.error, /operation must be one of/);
+    const noId = await runAgentartsBrowserSession({ operation: 'get_session' });
+    assert.match(noId.error, /session_id is required/);
+    const badId = await runAgentartsBrowserSession({ operation: 'get_session', session_id: 'nope' });
+    assert.match(badId.error, /session_id must be a valid UUID/);
+    const unknownParam = await runAgentartsBrowserSession({
+      operation: 'get_session',
+      session_id: SESSION_ID,
+      region: 'cn-north-4',
+    });
+    assert.match(unknownParam.error, /Unknown parameter "region" — legal keys: operation, session_id/);
+    // No record: remediation names the start write.
+    const noRecord = await runAgentartsBrowserSession({ operation: 'get_session', session_id: SESSION_ID });
+    assert.equal(noRecord.ok, false);
+    assert.match(noRecord.error, /No session state file/);
+    assert.match(noRecord.error, /start_session write/);
+    // No credentials: the gate fires before the state lookup? (state
+    // exists first in this shape — set up both orders.)
+    clearRuntimeCredentials();
+    writeSessionFile(home);
+    const noCreds = await runAgentartsBrowserSession({ operation: 'get_session', session_id: SESSION_ID });
+    assert.equal(noCreds.ok, false);
+    assert.match(noCreds.error, /No devkit credentials available for agentarts/);
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+
+    // get_session: request carries the state-file context.
+    let seenStdin = null;
+    const get = await runAgentartsBrowserSession(
+      { operation: 'get_session', session_id: SESSION_ID },
+      {
+        runCandidate: async (candidate, args, childEnv, stdinData) => {
+          seenStdin = stdinData;
+          return { exitCode: 0, stdout: pyDumps({ status: 'Healthy' }), stderr: '' };
+        },
+      },
+    );
+    assert.equal(get.ok, true);
+    const request = JSON.parse(seenStdin);
+    assert.equal(request.operation, 'get_session');
+    assert.equal(request.data_endpoint, 'https://gw.example.com');
+    assert.equal(request.auth_type, 'IAM');
+
+    // take_control: the note teaches the handoff + the approved re-arm.
+    const take = await runAgentartsBrowserSession(
+      { operation: 'take_control', session_id: SESSION_ID },
+      {
+        runCandidate: async () => ({ exitCode: 0, stdout: pyDumps({ stream_status: 'disabled' }), stderr: '' }),
+      },
+    );
+    assert.equal(take.ok, true);
+    assert.match(take.notes.join(' '), /Automation stream disabled/);
+    assert.match(take.notes.join(' '), /update_stream with stream_status=enabled/);
+
+    // stop_session: the state file is removed on success.
+    const statePath = join(home, '.config', 'huaweicloud', `agentarts-browser-session-${SESSION_ID}.json`);
+    assert.ok(existsSync(statePath));
+    const stop = await runAgentartsBrowserSession(
+      { operation: 'stop_session', session_id: SESSION_ID },
+      {
+        runCandidate: async () => ({ exitCode: 0, stdout: pyDumps({ stopped: true }), stderr: '' }),
+      },
+    );
+    assert.equal(stop.ok, true);
+    assert.equal(existsSync(statePath), false, 'stop must delete the lease record');
+    assert.match(stop.notes.join(' '), /lease record was removed/);
+
+    // An EXPIRED lease still answers get (with the staleness note).
+    writeSessionFile(home, { lease_expires_at: Date.now() - 2000 });
+    const stale = await runAgentartsBrowserSession(
+      { operation: 'get_session', session_id: SESSION_ID },
+      {
+        runCandidate: async () => ({ exitCode: 0, stdout: pyDumps({ status: 'Healthy' }), stderr: '' }),
+      },
+    );
+    assert.equal(stale.ok, true);
+    assert.match(stale.notes.join(' '), /local lease expired/);
+
+    // API_KEY-typed failure maps to the trap-61 remediation.
+    writeSessionFile(home, { auth_type: 'API_KEY', data_endpoint: 'https://gw.example.com' });
+    const apiKeyOut = await runAgentartsBrowserSession(
+      { operation: 'get_session', session_id: SESSION_ID },
+      {
+        runCandidate: async () => ({
+          exitCode: 1,
+          stdout: '',
+          stderr: 'ValueError: API Key is not provided and not found in environment variable.',
+        }),
+      },
+    );
+    assert.equal(apiKeyOut.ok, false);
+    assert.match(apiKeyOut.error, /HUAWEICLOUD_SDK_BROWSER_API_KEY/);
+    assert.match(apiKeyOut.error, /trap 61/);
+  });
+});
+
+test('the session tool surface: one free tool, enum parity, dispatch through the shared switch', async () => {
+  const { AGENTARTS_BROWSER_SESSION_TOOL_DEFINITIONS, BROWSER_SESSION_OPERATIONS } =
+    await import('../plugins/huaweicloud-core/src/agentarts-browser-tools.mjs');
+  assert.equal(AGENTARTS_BROWSER_SESSION_TOOL_DEFINITIONS.length, 1);
+  const def = AGENTARTS_BROWSER_SESSION_TOOL_DEFINITIONS[0];
+  assert.equal(def.name, 'huaweicloud_agentarts_browser_session');
+  assert.deepEqual(
+    [...def.inputSchema.properties.operation.enum].sort((a, b) => a.localeCompare(b)),
+    [...BROWSER_SESSION_OPERATIONS].sort((a, b) => a.localeCompare(b)),
+  );
+  assert.deepEqual([...def.inputSchema.required], ['operation', 'session_id']);
+  for (const banned of ['api_key', 'apiKey', 'api-key', 'key', 'sk', 'ak']) {
+    assert.equal(banned in def.inputSchema.properties, false, `session tool must not accept a ${banned} parameter`);
+  }
+  assert.match(def.description, /no session subcommands/);
+  assert.match(def.description, /trap 66/);
+  assert.match(def.description, /trap 67/);
+  assert.match(def.description, /stream_status=enabled/);
+  // Registered in TOOL_DEFINITIONS.
+  const { TOOL_DEFINITIONS } = await import('../plugins/huaweicloud-core/src/tools.mjs');
+  assert.ok(TOOL_DEFINITIONS.some((t) => t.name === 'huaweicloud_agentarts_browser_session'));
 });

@@ -1847,7 +1847,16 @@ test('the agentarts browser WRITE bridge registers with its approval contract pi
   const { BROWSER_WRITE_OPERATIONS } = await import('../plugins/huaweicloud-core/src/agentarts-browser-tools.mjs');
   assert.deepEqual(
     [...BROWSER_WRITE_OPERATIONS].sort((a, b) => a.localeCompare(b)),
-    ['create_browser', 'create_browser_profile', 'delete_browser', 'delete_browser_profile', 'update_browser'],
+    [
+      'create_browser',
+      'create_browser_profile',
+      'delete_browser',
+      'delete_browser_profile',
+      'save_profile',
+      'start_session',
+      'update_browser',
+      'update_stream',
+    ],
   );
   // WRITE_OPERATION_META key parity (the memory bridge's round-3 rule):
   // the plan path looks the registry up WITHOUT a fallback — an enum
@@ -1856,7 +1865,7 @@ test('the agentarts browser WRITE bridge registers with its approval contract pi
     const source = readFileSync(join(pluginRoot, 'src', 'agentarts-browser.mjs'), 'utf8');
     const metaKeys = [
       ...source.matchAll(
-        /^ {2}(create_browser|update_browser|delete_browser|create_browser_profile|delete_browser_profile): \{/gm,
+        /^ {2}(create_browser|update_browser|delete_browser|create_browser_profile|delete_browser_profile|start_session|save_profile|update_stream): \{/gm,
       ),
     ].map((m) => m[1]);
     const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
