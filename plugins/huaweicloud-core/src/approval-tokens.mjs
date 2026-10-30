@@ -1,14 +1,25 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { redactSecrets } from './safety-policy.mjs';
 
 // Shared approval-token machinery, consumed by every CLI wrapper
-// (hcloud-cli.mjs, agentarts-cli.mjs). Extracted from hcloud-cli.mjs so the
-// cross-process persistence, TTL pruning, single-use tombstones, and atomic
-// writes (#578, #745) have exactly one implementation.
+// (hcloud-cli.mjs, agentarts-cli.mjs, and the SDK bridges' dedicated
+// namespaces). Extracted from hcloud-cli.mjs so the cross-process
+// persistence, TTL pruning, single-use tombstones, and atomic writes
+// (#578, #745) have exactly one implementation.
 //
 // Cross-CLI confusion guard: the CLI id is mixed into the args hash AND
 // stored on each entry, so a token minted by one wrapper can never approve
@@ -17,11 +28,83 @@ import { redactSecrets } from './safety-policy.mjs';
 //
 // Only the sha256 of the namespaced args plus the redacted form are stored —
 // never the raw args, which may carry secrets.
+//
+// Mutations are serialized cross-process by an O_EXCL lock file (R2 review
+// round, browser bridge): create and consume are read-modify-write cycles,
+// and two wrapper processes racing the cycle could both consume the SAME
+// token (tombstone lost to a last-rename-wins write — the single-use
+// guarantee broken, reviewer-reproduced 15/15 at store level). In-process
+// the synchronous ops are event-loop-atomic; the lock covers the
+// multi-process dimension (two MCP servers, or the CLI plus MCP).
+// writeApprovals FAILS CLOSED (throws) since the same round: a swallowed
+// write failure used to let consume() report success without persisting
+// the tombstone — a replay then re-executed an approved write.
 
 const APPROVAL_TTL_MS = 5 * 60_000;
+// Tombstones (consumedAt set) survive this long FROM CONSUMPTION, not from
+// creation: a slow approval whose plan aged past the TTL still replays as
+// already_processed instead of not_found's "re-plan" advice (R2).
+const TOMBSTONE_TTL_MS = 5 * 60_000;
+const LOCK_STALE_MS = 10_000;
+const LOCK_WAIT_MS = 5_000;
 
 function approvalFilePath() {
   return join(process.env.HUAWEICLOUD_HOME || homedir(), '.config', 'huaweicloud', 'approvals.json');
+}
+
+function lockFilePath() {
+  return `${approvalFilePath()}.lock`;
+}
+
+// Synchronous sleep (Atomics.wait blocks the main thread in Node) — the
+// store ops are already fully synchronous.
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// Cross-process mutual exclusion around the read-modify-write mutations.
+// The lock is advisory-by-convention with a stale break (a holder that died
+// without releasing): mtime older than LOCK_STALE_MS gets unlinked.
+function withStoreLock(fn) {
+  const lockPath = lockFilePath();
+  // The store directory may not exist yet on the first-ever create — the
+  // lock needs it before writeApprovals ever mkdirs.
+  mkdirSync(dirname(lockPath), { recursive: true });
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  let fd;
+  for (;;) {
+    try {
+      fd = openSync(lockPath, 'wx');
+      break;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      try {
+        const stats = statSync(lockPath);
+        if (Date.now() - stats.mtimeMs > LOCK_STALE_MS) {
+          unlinkSync(lockPath);
+          continue;
+        }
+      } catch {
+        // The lock vanished between open and stat — retry the create.
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`approval-token store lock could not be acquired (another process holds ${lockPath})`, {
+          cause: error,
+        });
+      }
+      sleepSync(25);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    closeSync(fd);
+    try {
+      unlinkSync(lockPath);
+    } catch {
+      // Best effort — a stale break will reclaim it.
+    }
+  }
 }
 
 function sha256Hex(data) {
@@ -187,22 +270,32 @@ function readApprovals() {
   }
 }
 
+// Fail CLOSED (R2 review round): a write failure must not let create or
+// consume report success without persistence — the old swallow let a
+// consume return the entry with the tombstone never written, and a replay
+// re-executed an approved write. Callers surface the fs error.
 function writeApprovals(map) {
-  try {
-    const path = approvalFilePath();
-    mkdirSync(dirname(path), { recursive: true });
-    const tmp = `${path}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify(map), { encoding: 'utf8', mode: 0o600 });
-    renameSync(tmp, path);
-  } catch {
-    // Best-effort: an in-file failure degrades cross-process persistence but a
-    // token created/consumed within one process still works.
-  }
+  const path = approvalFilePath();
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(map), { encoding: 'utf8', mode: 0o600 });
+  renameSync(tmp, path);
 }
 
 function pruneStale(map, now = Date.now()) {
   let changed = false;
   for (const [key, value] of Object.entries(map)) {
+    // Tombstones age from CONSUMPTION (R2): a consumed entry survives
+    // TOMBSTONE_TTL_MS past its consumedAt so slow approvals keep the
+    // already_processed replay semantics instead of degrading to
+    // not_found's re-plan advice.
+    if (value.consumedAt !== undefined) {
+      if (now - value.consumedAt > TOMBSTONE_TTL_MS) {
+        delete map[key];
+        changed = true;
+      }
+      continue;
+    }
     if (now - value.createdAt > APPROVAL_TTL_MS) {
       delete map[key];
       changed = true;
@@ -230,19 +323,20 @@ function entryBelongsToCli(entry, cli) {
 }
 
 export function createApprovalTokenStore(cli) {
-  const create = (rawArgs) => {
-    const token = randomUUID();
-    const map = readApprovals();
-    map[token] = {
-      cli,
-      argsHash: hashNamespacedArgs(cli, rawArgs),
-      argsRedacted: scrubPositionalSecrets(redactSecrets(rawArgs), cli),
-      createdAt: Date.now(),
-    };
-    pruneStale(map);
-    writeApprovals(map);
-    return token;
-  };
+  const create = (rawArgs) =>
+    withStoreLock(() => {
+      const token = randomUUID();
+      const map = readApprovals();
+      map[token] = {
+        cli,
+        argsHash: hashNamespacedArgs(cli, rawArgs),
+        argsRedacted: scrubPositionalSecrets(redactSecrets(rawArgs), cli),
+        createdAt: Date.now(),
+      };
+      pruneStale(map);
+      writeApprovals(map);
+      return token;
+    });
 
   const inspect = (token) => {
     const map = readApprovals();
@@ -253,20 +347,21 @@ export function createApprovalTokenStore(cli) {
     return { state: TOKEN_STATE_VALID, entry };
   };
 
-  const consume = (token) => {
-    const map = readApprovals();
-    const entry = map[token];
-    if (!entry || !entryBelongsToCli(entry, cli)) return null;
-    if (entry.consumedAt !== undefined) return null;
-    if (Date.now() - entry.createdAt > APPROVAL_TTL_MS) {
-      delete map[token];
+  const consume = (token) =>
+    withStoreLock(() => {
+      const map = readApprovals();
+      const entry = map[token];
+      if (!entry || !entryBelongsToCli(entry, cli)) return null;
+      if (entry.consumedAt !== undefined) return null;
+      if (Date.now() - entry.createdAt > APPROVAL_TTL_MS) {
+        delete map[token];
+        writeApprovals(map);
+        return null;
+      }
+      map[token] = { cli, consumedAt: Date.now(), createdAt: entry.createdAt };
       writeApprovals(map);
-      return null;
-    }
-    map[token] = { cli, consumedAt: Date.now(), createdAt: entry.createdAt };
-    writeApprovals(map);
-    return entry;
-  };
+      return entry;
+    });
 
   return {
     create,

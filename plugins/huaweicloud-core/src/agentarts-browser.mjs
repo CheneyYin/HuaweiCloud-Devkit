@@ -34,8 +34,15 @@ import {
 } from './agentarts-cli.mjs';
 import { BROWSER_READ_OPERATIONS, BROWSER_WRITE_OPERATIONS } from './agentarts-browser-tools.mjs';
 import { createApprovalTokenStore, hashNamespacedArgs } from './approval-tokens.mjs';
-import { redactCredentialShapes } from './redact-core.mjs';
+import { CREDENTIAL_KEY_TOKENS, redactCredentialShapes } from './redact-core.mjs';
 import { redactSecrets } from './safety-policy.mjs';
+
+// Bare-token prefixes for the plan-time loud-storage warning (R2): Huawei
+// AKs (AKLT...), GitHub (ghp_/gho_), OpenAI-style (sk-), Slack (xox),
+// Anthropic (sk-ant-), and URL-with-credentials shapes. Detection only —
+// nothing here redacts; the warning text carries the decision to the user.
+const BARE_TOKEN_PREFIX =
+  /(?:AKLT[A-Za-z0-9]{8,}|ghp_[A-Za-z0-9]{16,}|gho_[A-Za-z0-9]{16,}|sk-ant-[A-Za-z0-9-]{16,}|sk-[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/\s:@]+:[^/\s:@]+@)/;
 
 // Browser list bounds: the SDK client applies NO limit/offset cap
 // (browser_client.py list methods pass them straight through), so the
@@ -185,7 +192,7 @@ function validateBrowserRead(params) {
   for (const field of ['limit', 'offset']) {
     if (params[field] !== undefined && params[field] !== null) {
       const value = params[field];
-      if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
+      if (typeof value !== 'number' || !Number.isSafeInteger(value) || Object.is(value, -0)) {
         return `${field} must be an integer (got ${typeof value}) — mistyped values are rejected, not coerced.`;
       }
       if (field === 'limit' && (value < BROWSER_LIMIT_RANGE[0] || value > BROWSER_LIMIT_RANGE[1])) {
@@ -600,9 +607,15 @@ export function planAgentartsBrowserWrite(params = {}) {
   // token/api_key/… — the shape the at-rest redactor cannot see) and
   // credential-shaped free text in tag values or description.
   const warnings = [];
-  const credentialShaped = (text) => typeof text === 'string' && redactCredentialShapes(text) !== text;
-  const secretKeyName = /api[_-]?key|password|passwd|token|secret|credential/i;
-  const flagKeyName = (key) => secretKeyName.test(key);
+  // Bare-token prefixes (R2): a pasted AK or token as a bare tag VALUE under
+  // an innocuous key rides at rest unflagged — redactCredentialShapes only
+  // matches key[:=]-adjacent shapes, and the at-rest redactor has no
+  // bare-token pattern at all. Scoped to this warning deliberately: the
+  // global redactor over-redacting general text is a tradeoff this module
+  // does not make for the whole repo.
+  const credentialShaped = (text) =>
+    typeof text === 'string' && (redactCredentialShapes(text) !== text || BARE_TOKEN_PREFIX.test(text));
+  const secretKeyName = new RegExp(`(${CREDENTIAL_KEY_TOKENS.map((t) => t.replace(/_/g, '[_-]?')).join('|')})`, 'i');
   const descriptionFlagged = typeof params.description === 'string' && credentialShaped(params.description);
   const tagsFlagged =
     Array.isArray(params.tags) &&
@@ -610,7 +623,7 @@ export function planAgentartsBrowserWrite(params = {}) {
       (tag) =>
         tag &&
         typeof tag === 'object' &&
-        (flagKeyName(String(tag.key || '')) || credentialShaped(String(tag.value || ''))),
+        (secretKeyName.test(String(tag.key || '')) || credentialShaped(String(tag.value || ''))),
     );
   if (descriptionFlagged || tagsFlagged) {
     warnings.push(
@@ -663,6 +676,12 @@ const BROWSER_WRITE_SNIPPET = [
   '        result = client.create_browser(**kwargs)',
   '    elif op == "update_browser":',
   '        result = client.update_browser(params["browser_id"], tags=params["tags"])',
+  '        if result is None:',
+  '            # Empty-body 200 (R2): the SDK transport returns None when the',
+  '            # response has no content — a SUCCESS misread as pollution by',
+  '            # the envelope without this synthesis (the delete branches',
+  '            # already synthesize for the same reason).',
+  '            result = {"updated": True, "browser_id": params["browser_id"]}',
   '    elif op == "delete_browser":',
   '        client.delete_browser(params["browser_id"])',
   '        result = {"deleted": True, "browser_id": params["browser_id"]}',
@@ -798,7 +817,8 @@ export async function runAgentartsBrowserWrite({ approvalToken, approvedByUser, 
       code: 'CONFIRM_TOKEN_NOT_FOUND',
       service: 'AgentArts',
       operation: `browser ${params.operation} (SDK control plane)`,
-      error: 'approvalToken not found (never created, pruned, or minted in a different namespace) — re-plan.',
+      error:
+        'approvalToken not found (never created, pruned after the TTL, or minted in a different namespace) — a token consumed long ago may have had its tombstone pruned, in which case the write may already have executed: verify with huaweicloud_agentarts_browser_read BEFORE re-planning anything.',
     };
   }
   const request = buildBrowserWriteRequest(params);
@@ -826,13 +846,28 @@ export async function runAgentartsBrowserWrite({ approvalToken, approvedByUser, 
       service: 'AgentArts',
       operation: `browser ${params.operation} (SDK control plane)`,
       error:
-        'No injectable AK/SK credentials — set HUAWEICLOUD_SDK_AK/HUAWEICLOUD_SDK_SK (or run the devkit auth flow) before approving a browser write. The token was NOT consumed.',
+        'No devkit credentials available for agentarts (HUAWEICLOUD_SDK_AK/SK injection). Run huaweicloud_auth_init first, or execute the command in your own terminal — the wrapper never falls back to unmanaged profile files or the metadata chain. The token was NOT consumed.',
     };
   }
   // Binding + credentials verified — consume (single-use tombstone) before
-  // executing. A failed execution burns the token (concurrency safety);
-  // the failure payload says so.
-  if (!store.consume(approvalToken)) {
+  // executing. The store write FAILS CLOSED (R2): a store that cannot
+  // persist the tombstone must not let the write execute (a swallowed
+  // failure used to report consume-success without the tombstone, and a
+  // replay re-executed an approved write).
+  let stored;
+  try {
+    stored = store.consume(approvalToken);
+  } catch (error) {
+    return {
+      ok: false,
+      status: 'rejected',
+      code: 'TOKEN_STORE_UNWRITABLE',
+      service: 'AgentArts',
+      operation: `browser ${params.operation} (SDK control plane)`,
+      error: `The approval-token store could not be updated (${error.message}) — the token was NOT consumed and the write did NOT execute. Fix the store access (~/.config/huaweicloud/approvals.json), then retry with the SAME token.`,
+    };
+  }
+  if (!stored) {
     const recheck = store.inspect(approvalToken);
     if (recheck.state === 'already_consumed') {
       return {

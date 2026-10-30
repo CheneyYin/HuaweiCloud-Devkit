@@ -31,14 +31,19 @@ SDK 钉版不升: 0.1.9 与 0.1.7 的 browser/code_interpreter 面字节级一�
 - [x] 回写 docs/agentarts-pr0-findings.md browser 节（陷阱 61-70）+ docs/agentarts-upstream-asks.md（诉求 #29-34）
 - [x] 仓库门禁: `npm run lint` + `npm test` + `npm run validate` + `npm run format` + `npm run pack:verify`（全绿, 提交 a13b0ae5）
 
+### 对抗检视循环【R1 完成（陷阱 71, 9 修复）, R2 完成（陷阱 72, 6 修复含共享 approval-store 的跨进程锁与 fail-closed）; R2 复核 R1 全部成立】
+
+- [x] R1: 三评审（契约/安全/平价漂移）, 18 项发现 → 9 修复 3 记录不修, 提交 92fb8055
+- [x] R2: 双评审（验证+回归 / 全新角度）, 16 项发现 → 6 修复 2 记录不修, R1 九项逐一复核成立
+
 ### B2 读桥（控制面）【实现完成, 单测 8 绿】
 
 - [x] 创建 `plugins/huaweicloud-core/src/agentarts-browser.mjs` + `agentarts-browser-tools.mjs`（read 部分）
 - [x] 工具 `huaweicloud_agentarts_browser_read`: list_browsers/get_browser/list_browser_profiles/get_browser_profile
-- [x] AK/SK 注入子进程（`injectCredentials: true`——控制面需要, 与 memory 数据面不同; 测试钉注入与 /dev/null 中和两态）
+- [x] AK/SK 注入子进程（`injectCredentials: true`——控制面需要, 与 memory 数据面不同; 测试钉注入与 /dev/null 中和两态）【R1 增凭证前置门, R2 复核成立】
 - [x] region 请求 JSON 显式传递, 默认 cn-southwest-2, 边界拒错类型
-- [x] 复用 `runOverPythonCandidates`/`buildChildEnv`/`saveLargeOutput`; snippet 异常捕获 `except BaseException`（ToolsAPIError 陷阱, 源码钉测试钉住）
-- [x] 测试镜像 memory 桩模式: `test/agentarts-browser.test.mjs` 8 测试（边界表、注入两态、stdin 传输、信封三形态、富集、dispatch stub python）; `test/structure.test.mjs` 注册钉
+- [x] 复用 `runOverPythonCandidates`/`buildChildEnv`/`saveLargeOutput`; snippet 异常捕获 `except BaseException`（ToolsAPIError 陷阱, 源码钉测试钉住）【R1 增 SystemExit 重抛保退出码契约】
+- [x] 测试镜像 memory 桩模式: `test/agentarts-browser.test.mjs`（边界表、注入两态、stdin 传输、信封三形态、富集、dispatch stub python）; `test/structure.test.mjs` 注册钉
 - [x] 富集: API_KEY 型资源读面 advisory（trap 61 教学）; tag 过滤按 unknown-param 拒绝（未实测需求, 诚实边界）
 
 ### B3 写桥（资源生命周期）【B1 后设计修订; 实现完成, R1 对抗轮修复在档（陷阱 71）】

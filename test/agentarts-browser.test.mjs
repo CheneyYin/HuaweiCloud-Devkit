@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { spawnSync, execFileSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
   readAgentartsBrowser,
@@ -896,3 +897,229 @@ test('the shipped snippets re-raise SystemExit before the BaseException catch (e
     );
   }
 });
+
+// ---------------------------------------------------------------------------
+// R2 adversarial-review round: single-use guarantee (cross-process lock +
+// fail-closed store writes), warning-detector coverage (single-source key
+// names + bare-token values), the update empty-body synthesis, -0.
+
+test('browser write plan warning covers single-source key names AND bare token values', async () => {
+  await withIsolation(async () => {
+    // Secret-shaped tag KEYS from redact-core's CREDENTIAL_KEY_TOKENS
+    // single source (R1's hand-rolled subset missed access_key).
+    for (const key of ['access_key', 'admin_pass', 'authorization', 'api_key', 'token']) {
+      const plan = planAgentartsBrowserWrite({
+        operation: 'create_browser',
+        name: 'team-browser',
+        tags: [{ key, value: 'x' }],
+      });
+      assert.ok(plan.warnings.length >= 1, `key "${key}" must fire the warning`);
+    }
+    // Bare token VALUES under innocuous keys (R2: the at-rest redactor has
+    // no bare-token pattern — the warning is the only surface).
+    for (const value of [
+      'AKLT2e2423ab',
+      'ghp_1234567890abcdefghij',
+      'postgres://u:secretpw@host/db',
+    ]) {
+      const plan = planAgentartsBrowserWrite({
+        operation: 'create_browser',
+        name: 'team-browser',
+        tags: [{ key: 'backup-auth', value }],
+      });
+      assert.ok(plan.warnings.length >= 1, `bare value "${value.slice(0, 8)}…" must fire the warning`);
+    }
+    // Ordinary content stays silent.
+    const clean = planAgentartsBrowserWrite({
+      operation: 'create_browser',
+      name: 'team-browser',
+      description: 'geese migrate south',
+      tags: [
+        { key: 'env', value: 'prod' },
+        { key: 'team', value: 'web' },
+      ],
+    });
+    assert.deepEqual(clean.warnings, []);
+  });
+});
+
+test('browser write rejects offset -0 and the write gate names the auth flow', async () => {
+  await withIsolation(async () => {
+    clearRuntimeCredentials();
+    // -0 is a safe integer that passes < 0 as false — the documented
+    // "rejected, never coerced" contract covers it explicitly (R2).
+    const negZero = await readAgentartsBrowser({ operation: 'list_browsers', offset: -0 });
+    assert.equal(negZero.ok, false);
+    assert.match(negZero.error, /offset must be an integer/);
+    // The write gate's remediation must name a path that actually works:
+    // the devkit resolver never reads HUAWEICLOUD_SDK_* env vars (R2 —
+    // the old message dead-ended the user).
+    const params = { operation: 'delete_browser', browser_id: '61ed9760-3a79-47c3-838a-c77e38956a05' };
+    const plan = planAgentartsBrowserWrite(params);
+    const out = await runAgentartsBrowserWrite({ ...params, approvedByUser: true, approvalToken: plan.approvalToken });
+    assert.equal(out.code, 'NO_DEVKIT_CREDENTIALS');
+    assert.match(out.error, /huaweicloud_auth_init/);
+    assert.match(out.error, /token was NOT consumed/);
+  });
+});
+
+test('browser write not_found carries verify-first wording (pruned tombstones)', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const out = await runAgentartsBrowserWrite({
+      operation: 'delete_browser',
+      browser_id: '61ed9760-3a79-47c3-838a-c77e38956a05',
+      approvedByUser: true,
+      approvalToken: 'never-issued-token',
+    });
+    assert.equal(out.code, 'CONFIRM_TOKEN_NOT_FOUND');
+    assert.match(out.error, /verify with huaweicloud_agentarts_browser_read BEFORE re-planning/);
+  });
+});
+
+test(
+  'the update_browser snippet synthesizes a result when the SDK returns None (empty-body 200)',
+  { skip: process.platform === 'win32' },
+  async () => {
+    await withIsolation(async () => {
+      // Extract the shipped snippet and run it with a fake agentarts SDK
+      // whose update_browser returns None — the empty-body-200 transport
+      // shape (R2). Without the synthesis, stdout "null" on exit 0 is
+      // misread as output pollution and a SUCCESSFUL write is reported
+      // failed with re-plan advice.
+      const source = readFileSync(join(rootDir, 'plugins/huaweicloud-core/src/agentarts-browser.mjs'), 'utf8');
+      const match = source.match(/const BROWSER_WRITE_SNIPPET = \[([\s\S]*?)\]\.join\('\\n'\);/);
+      assert.ok(match, 'snippet extraction failed');
+      const snippetLines = eval(`[${match[1]}]`); // repo-owned source, test-only eval
+      const snippet = snippetLines.join('\n');
+      const dir = mkdtempSync(join(tmpdir(), 'browser-snippet-'));
+      const snippetPath = join(dir, 'snippet.py');
+      writeFileSync(snippetPath, snippet);
+      const driver = join(dir, 'driver.py');
+      writeFileSync(
+        driver,
+        [
+          'import sys, types',
+          "fake = types.ModuleType('agentarts')",
+          "sdk = types.ModuleType('agentarts.sdk')",
+          'class Browser:',
+          '    def __init__(self, region=None, data_endpoint=None, auth_type="API_KEY"):',
+          '        pass',
+          '    def update_browser(self, browser_id, observability=None, tags=None):',
+          '        return None  # empty-body 200 transport shape',
+          'sdk.Browser = Browser',
+          'fake.sdk = sdk',
+          "sys.modules['agentarts'] = fake",
+          "sys.modules['agentarts.sdk'] = sdk",
+          "exec(compile(open(sys.argv[1]).read(), 'snippet', 'exec'))",
+          '',
+        ].join('\n'),
+      );
+      const request = pyDumps({
+        operation: 'update_browser',
+        region: 'cn-southwest-2',
+        browser_id: '61ed9760-3a79-47c3-838a-c77e38956a05',
+        tags: [{ key: 'env', value: 'prod' }],
+      });
+      const out = spawnSync('python3', [driver, snippetPath], { input: request, encoding: 'utf8', timeout: 15_000 });
+      assert.equal(out.status, 0, `snippet must exit 0 (stderr: ${out.stderr})`);
+      const parsed = JSON.parse(out.stdout);
+      assert.deepEqual(parsed, {
+        updated: true,
+        browser_id: '61ed9760-3a79-47c3-838a-c77e38956a05',
+      });
+      rmSync(dir, { recursive: true, force: true });
+    });
+  },
+);
+
+test(
+  'the approval store is single-use across processes (lock-serialized consume)',
+  { skip: process.platform === 'win32' },
+  async () => {
+    await withIsolation(async () => {
+      const { createApprovalTokenStore } = await import('../plugins/huaweicloud-core/src/approval-tokens.mjs');
+      const store = createApprovalTokenStore('agentarts-browser-sdk');
+      const token = store.create(['["x"]']);
+      // Two child processes race the consume: the O_EXCL lock serializes
+      // the read-modify-write, so exactly ONE wins and the tombstone
+      // survives (R2 reviewer reproduced tombstone loss 15/15 without it).
+      const modulePath = pathToFileURL(join(rootDir, 'plugins/huaweicloud-core/src/approval-tokens.mjs')).href;
+      const childScript = `
+      const { createApprovalTokenStore } = await import('${modulePath}');
+      const s = createApprovalTokenStore('agentarts-browser-sdk');
+      let consumed = false;
+      try { consumed = Boolean(s.consume(process.env.TEST_TOKEN)); } catch (e) { consumed = 'threw: ' + e.message; }
+      console.log(JSON.stringify({ consumed }));
+    `;
+      const children = [0, 1].map(() =>
+        execFileSync('node', ['--input-type=module', '-e', childScript], {
+          env: { ...process.env, TEST_TOKEN: token },
+          encoding: 'utf8',
+          timeout: 20_000,
+        }),
+      );
+      const results = children.map((out) => JSON.parse(out.trim().split('\n').pop()));
+      const wins = results.filter((r) => r.consumed === true).length;
+      assert.equal(wins, 1, `exactly one consume must win (got ${JSON.stringify(results)})`);
+      // The tombstone survived: in-process replay reads already_consumed.
+      assert.equal(store.consume(token), null);
+      assert.equal(store.inspect(token).state, 'already_consumed');
+    });
+  },
+);
+
+test(
+  'the approval store fails CLOSED when the tombstone cannot persist',
+  { skip: process.platform === 'win32' },
+  async () => {
+    await withIsolation(async (home) => {
+      const { createApprovalTokenStore } = await import('../plugins/huaweicloud-core/src/approval-tokens.mjs');
+      const storeDir = join(home, '.config', 'huaweicloud');
+      mkdirSync(storeDir, { recursive: true });
+      const store = createApprovalTokenStore('agentarts-browser-sdk');
+      const token = store.create(['["x"]']);
+      const storePath = join(storeDir, 'approvals.json');
+      assert.ok(existsSync(storePath), 'create must persist (fail-closed applies to failures, not successes)');
+      // Read-only store dir: the tombstone write fails — consume must THROW
+      // (the old swallow reported success without persisting, and a replay
+      // re-executed an approved write; R2).
+      chmodSync(storeDir, 0o555);
+      try {
+        assert.throws(() => store.consume(token), /ENOENT|EACCES|EPERM/);
+      } finally {
+        chmodSync(storeDir, 0o755);
+      }
+      // The token was NOT consumed by the failed attempt: it still inspects
+      // valid and a retry with the store writable consumes it exactly once.
+      assert.equal(store.inspect(token).state, 'valid');
+      assert.ok(store.consume(token));
+      assert.equal(store.inspect(token).state, 'already_consumed');
+
+      // End-to-end through the write bridge: the unwritable store surfaces
+      // as TOKEN_STORE_UNWRITABLE with the not-consumed disclosure.
+      setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+      const params = { operation: 'delete_browser', browser_id: '61ed9760-3a79-47c3-838a-c77e38956a05' };
+      const plan = planAgentartsBrowserWrite(params);
+      chmodSync(storeDir, 0o555);
+      let blocked;
+      try {
+        blocked = await runAgentartsBrowserWrite(
+          { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+          { runCandidate: async () => ({ exitCode: 0, stdout: '{"deleted": true}', stderr: '' }) },
+        );
+      } finally {
+        chmodSync(storeDir, 0o755);
+      }
+      assert.equal(blocked.ok, false);
+      assert.equal(blocked.code, 'TOKEN_STORE_UNWRITABLE');
+      assert.match(blocked.error, /NOT consumed and the write did NOT execute/);
+      // Store writable again: the SAME token still executes.
+      const retry = await runAgentartsBrowserWrite(
+        { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+        { runCandidate: async () => ({ exitCode: 0, stdout: '{"deleted": true}', stderr: '' }) },
+      );
+      assert.equal(retry.ok, true);
+    });
+  },
+);
