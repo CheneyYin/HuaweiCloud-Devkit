@@ -46,12 +46,19 @@ export const AGENTARTS_BROWSER_TOOL_DEFINITIONS = [
         },
         browser_id: {
           type: 'string',
+          pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
           description: 'Browser resource ID (UUID). get_browser only.',
         },
-        profile_id: { type: 'string', description: 'Browser profile ID (UUID). get_browser_profile only.' },
+        profile_id: {
+          type: 'string',
+          pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+          description: 'Browser profile ID (UUID). get_browser_profile only.',
+        },
         name: {
           type: 'string',
-          description: 'list_browsers/list_browser_profiles: name filter.',
+          minLength: 2,
+          maxLength: 40,
+          description: 'list_browsers/list_browser_profiles: name filter (2-40 chars, the SDK client-side rule).',
         },
         limit: {
           type: 'integer',
@@ -60,7 +67,11 @@ export const AGENTARTS_BROWSER_TOOL_DEFINITIONS = [
           description: 'List page size (SDK default 10).',
         },
         offset: { type: 'integer', minimum: 0, description: '0-based list offset.' },
-        sort_key: { type: 'string', description: 'List sort key (SDK default created_at).' },
+        sort_key: {
+          type: 'string',
+          enum: ['created_at', 'updated_at'],
+          description: 'List sort key — created_at or updated_at only (the SDK client-side rule).',
+        },
         sort_dir: { type: 'string', enum: ['asc', 'desc'], description: 'List sort direction (SDK default desc).' },
         region: { type: 'string', description: 'Defaults to cn-southwest-2.' },
       },
@@ -105,8 +116,18 @@ export const AGENTARTS_BROWSER_WRITE_TOOL_DEFINITIONS = [
           type: 'string',
           description: 'create_browser/create_browser_profile: description (profile max 4096 chars).',
         },
-        browser_id: { type: 'string', description: 'update_browser/delete_browser: browser resource ID (UUID).' },
-        profile_id: { type: 'string', description: 'delete_browser_profile: profile ID (UUID).' },
+        browser_id: {
+          type: 'string',
+          pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+          description:
+            'update_browser/delete_browser: browser resource ID (UUID — the SDK validates the format client-side BEFORE any network call; a malformed id would consume the approval token on a guaranteed no-op).',
+        },
+        profile_id: {
+          type: 'string',
+          pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+          description:
+            'delete_browser_profile: profile ID (UUID — the SDK validates the format client-side BEFORE any network call).',
+        },
         tags: {
           type: 'array',
           items: { type: 'object' },

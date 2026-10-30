@@ -41,13 +41,13 @@ SDK 钉版不升: 0.1.9 与 0.1.7 的 browser/code_interpreter 面字节级一�
 - [x] 测试镜像 memory 桩模式: `test/agentarts-browser.test.mjs` 8 测试（边界表、注入两态、stdin 传输、信封三形态、富集、dispatch stub python）; `test/structure.test.mjs` 注册钉
 - [x] 富集: API_KEY 型资源读面 advisory（trap 61 教学）; tag 过滤按 unknown-param 拒绝（未实测需求, 诚实边界）
 
-### B3 写桥（资源生命周期）【B1 后设计修订】
+### B3 写桥（资源生命周期）【B1 后设计修订; 实现完成, R1 对抗轮修复在档（陷阱 71）】
 
-- [ ] plan/write 对, namespace `agentarts-browser-sdk`, 单次消费 token 契约逐字复用
-- [ ] **默认 IAM 型**（B1 裁决, 陷阱 61）: create canonicalizes `auth_type=IAM`; 数据面 AK/SK 签名, 全程序化。**密钥文件机械整体出局**——无 0600 key 捕获、无 policy.json `credentialFilePatterns` 新条目、无 hook 拒读测试
-- [ ] API_KEY 型（用户控制台自建）支持: buildChildEnv 白名单加 `HUAWEICLOUD_SDK_BROWSER_API_KEY`（SDK 原生读取, BC:893）, skill 教导该 env 的设置与适用面
-- [ ] create/get 响应解析 `access_endpoint`（补 https://）存入资源档案, 供 B4 会话与 B5 动作接数据面端点（陷阱 62）
-- [ ] 删 browser 清理对应会话状态文件; skill 教 delete 后 list 秒级残留窗口需轮询确认（陷阱 63）
+- [x] plan/write 对, namespace `agentarts-browser-sdk`, 单次消费 token 契约逐字复用
+- [x] **默认 IAM 型**（B1 裁决, 陷阱 61）: create canonicalizes `auth_type=IAM`; 数据面 AK/SK 签名, 全程序化。**密钥文件机械整体出局**——无 0600 key 捕获、无 policy.json `credentialFilePatterns` 新条目、无 hook 拒读测试
+- [x] API_KEY 型（用户控制台自建）支持: buildChildEnv 白名单加 `HUAWEICLOUD_SDK_BROWSER_API_KEY`（SDK 原生读取, BC:893）, skill 教导该 env 的设置与适用面【R1: 透传已实现, 含 STS securityToken 注入】
+- [x] create/get 响应解析 `access_endpoint`（补 https://）存入资源档案, 供 B4 会话与 B5 动作接数据面端点（陷阱 62）【R1 修订: 无独立资源档案文件——B4 起 start 时经 get_browser 云端解析入会话状态文件, create 响应在结果面携带】
+- [x] 删 browser 清理对应会话状态文件; skill 教 delete 后 list 秒级残留窗口需轮询确认（陷阱 63）【会话状态文件归 B4; 残留窗口教学已在富集 note】
 
 ### B4 会话生命周期
 

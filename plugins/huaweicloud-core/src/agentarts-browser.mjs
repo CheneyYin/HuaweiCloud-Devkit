@@ -34,6 +34,7 @@ import {
 } from './agentarts-cli.mjs';
 import { BROWSER_READ_OPERATIONS, BROWSER_WRITE_OPERATIONS } from './agentarts-browser-tools.mjs';
 import { createApprovalTokenStore, hashNamespacedArgs } from './approval-tokens.mjs';
+import { redactCredentialShapes } from './redact-core.mjs';
 import { redactSecrets } from './safety-policy.mjs';
 
 // Browser list bounds: the SDK client applies NO limit/offset cap
@@ -71,6 +72,14 @@ const BROWSER_READ_SNIPPET = [
   '        print("AGENTARTS_BROWSER_BAD_OPERATION", file=sys.stderr)',
   '        sys.exit(2)',
   '    print(json.dumps(result, ensure_ascii=False, default=lambda o: getattr(o, "__dict__", str(o))))',
+  // SystemExit must propagate (R1 review round): the bad-operation
+  // sys.exit(2) inside the try raises SystemExit, which extends
+  // BaseException — an unqualified BaseException handler converts our
+  // own exit-2 contract into "SystemExit: 2" on stderr with exit 1.
+  // Re-raising SystemExit first preserves BOTH the ToolsAPIError catch
+  // and the exit-code contract.
+  'except SystemExit:',
+  '    raise',
   // ToolsAPIError extends BaseException (tools_http.py:10) — an
   // `except Exception` handler cannot catch it and the child dies with
   // an uncaught traceback instead of our exit-1 contract.
@@ -122,6 +131,15 @@ function rejectUnknownParams(params, legalKeys, operation) {
 // arrives). Returns an error string or null. Strict typing throughout:
 // mistyped values are rejected, never coerced (the memory bridge's
 // interrogate-round-1/2/3 policy).
+// The SDK's own client-side validators, enforced at THIS boundary so a
+// deterministic child failure cannot waste a spawn (or burn a write
+// token — the R1 review round's boundary-burn class): sort_key is
+// created_at|updated_at (browser_client.py:370-372), the list name
+// filter is 2-40 chars (:378-380), and ids are UUIDs (:460-463).
+const BROWSER_SORT_KEYS = ['created_at', 'updated_at'];
+const BROWSER_NAME_FILTER_RANGE = [2, 40];
+const UUID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
 function validateBrowserRead(params) {
   if (!BROWSER_READ_OPERATIONS.includes(params.operation)) {
     return `operation must be one of: ${BROWSER_READ_OPERATIONS.join(', ')}.`;
@@ -135,10 +153,16 @@ function validateBrowserRead(params) {
   if (params.operation === 'get_browser') {
     const err = need('browser_id', 'browser_id is required for get_browser.');
     if (err) return err;
+    if (!UUID_PATTERN.test(params.browser_id)) {
+      return 'browser_id must be a valid UUID (the SDK validates the format client-side and rejects anything else — pass the id exactly as list_browsers returned it).';
+    }
   }
   if (params.operation === 'get_browser_profile') {
     const err = need('profile_id', 'profile_id is required for get_browser_profile.');
     if (err) return err;
+    if (!UUID_PATTERN.test(params.profile_id)) {
+      return 'profile_id must be a valid UUID (the SDK validates the format client-side — pass the id exactly as list_browser_profiles returned it).';
+    }
   }
   for (const field of ['name', 'sort_key']) {
     if (params[field] !== undefined && params[field] !== null) {
@@ -146,6 +170,14 @@ function validateBrowserRead(params) {
         return `${field} must be a non-empty string when provided — mistyped values are rejected, not coerced.`;
       }
     }
+  }
+  if (params.name !== undefined && params.name !== null) {
+    if (params.name.length < BROWSER_NAME_FILTER_RANGE[0] || params.name.length > BROWSER_NAME_FILTER_RANGE[1]) {
+      return `name must be ${BROWSER_NAME_FILTER_RANGE[0]}-${BROWSER_NAME_FILTER_RANGE[1]} characters (the SDK's own client-side filter rule).`;
+    }
+  }
+  if (params.sort_key !== undefined && params.sort_key !== null && !BROWSER_SORT_KEYS.includes(params.sort_key)) {
+    return `sort_key must be one of: ${BROWSER_SORT_KEYS.join(', ')} (the SDK's own client-side rule).`;
   }
   if (params.sort_dir !== undefined && params.sort_dir !== null && !['asc', 'desc'].includes(params.sort_dir)) {
     return 'sort_dir must be "asc" or "desc".';
@@ -248,6 +280,22 @@ export async function readAgentartsBrowser(params = {}, options = {}) {
       error: invalid,
     };
   }
+  // Credential pre-gate (R1 review round, unanimous three-reviewer
+  // finding): without injectable AK/SK the child falls through the
+  // profile/metadata chain — the SDK's metadata provider
+  // (http://169.254.169.254) is a live third link on runtime hosts, so
+  // an unmanaged ambient identity can silently authenticate the read.
+  // list_agents and the CLI readonly runner gate the same way; the
+  // write twin gates before token consumption.
+  if (hasInjectableCredentials() === false) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `browser ${params.operation} (SDK control plane)`,
+      error:
+        'No devkit credentials available for agentarts (HUAWEICLOUD_SDK_AK/SK injection). Run huaweicloud_auth_init first, or execute the command in your own terminal — the wrapper never falls back to unmanaged profile files or the metadata chain.',
+    };
+  }
 
   // The request carries ONLY non-secret parameters; AK/SK ride the child
   // env (injectCredentials on — the control plane is AK/SK-signed, the
@@ -296,12 +344,13 @@ export async function callAgentartsBrowserTool(name, rawArgs = {}) {
 // carries ONLY non-secret parameters (names, ids, tags, region); AK/SK
 // ride the child env exactly as the read bridge does.
 //
-// No plan-time credential-shape warning (a deliberate deviation from the
-// memory write bridge): memory content is a RETRIEVAL store (every
-// actor-scoped query can fetch it back), while browser descriptions and
-// tags are display metadata on cloud resources — not a loud-storage
-// hazard class. The plan payload still shows them verbatim (informed
-// approval), just without the warning.
+// Plan-time credential-shape warning over description and tag values
+// (the memory bridge's loud-storage pattern, browser-worded — R1 review
+// round): browser descriptions/tags are display metadata, not a
+// retrieval store like memory content, BUT the tag {key, value} JSON
+// shape defeats the at-rest redactor's key[:=] adjacency, so a
+// secret-shaped value riding tags lands UNMASKED in approvals.json
+// (0600, 5-minute TTL). The warning is the only surface that flags it.
 
 // Per-operation WRITE metadata (the memory bridge's registry pattern):
 // labels on the plan/approval surface, replay guidance per op. A new
@@ -405,6 +454,15 @@ function validateBrowserWrite(params) {
     ) {
       return 'description must be a non-empty string when provided.';
     }
+    // 4096 on BOTH create ops (R1 review round): the SDK docstring
+    // documents the limit for browsers (browser_client.py:198-199) and
+    // enforces it client-side for profiles (:614-617). The browser-side
+    // server behavior is unmeasured, but the cost asymmetry favors the
+    // boundary: a false rejection is a clear retry-with-shorter-text,
+    // while a real server 400 burns a minted approval token.
+    if (params.operation === 'create_browser' && params.description && params.description.length > 4096) {
+      return 'description must be at most 4096 characters (the SDK documents this limit for browsers and enforces it client-side for profiles).';
+    }
     if (params.operation === 'create_browser_profile' && params.description && params.description.length > 4096) {
       return 'description must be at most 4096 characters (SDK limit for profiles).';
     }
@@ -433,6 +491,9 @@ function validateBrowserWrite(params) {
   if (params.operation === 'update_browser') {
     const err = need('browser_id', 'browser_id is required for update_browser.');
     if (err) return err;
+    if (!UUID_PATTERN.test(params.browser_id)) {
+      return 'browser_id must be a valid UUID (the SDK validates the format client-side BEFORE any network call — a malformed id would consume the approval token on a guaranteed no-op).';
+    }
     if (!Array.isArray(params.tags) || params.tags.length === 0) {
       return 'update_browser requires a non-empty tags array — tags are the only updatable field this bridge exposes (the SDK also updates observability, an opaque dict not exposed here). An update with nothing to update is rejected.';
     }
@@ -440,10 +501,16 @@ function validateBrowserWrite(params) {
   if (params.operation === 'delete_browser') {
     const err = need('browser_id', 'browser_id is required for delete_browser.');
     if (err) return err;
+    if (!UUID_PATTERN.test(params.browser_id)) {
+      return 'browser_id must be a valid UUID (the SDK validates the format client-side BEFORE any network call — a malformed id would consume the approval token on a guaranteed no-op).';
+    }
   }
   if (params.operation === 'delete_browser_profile') {
     const err = need('profile_id', 'profile_id is required for delete_browser_profile.');
     if (err) return err;
+    if (!UUID_PATTERN.test(params.profile_id)) {
+      return 'profile_id must be a valid UUID (the SDK validates the format client-side BEFORE any network call — a malformed id would consume the approval token on a guaranteed no-op).';
+    }
   }
   if (params.tags !== undefined && params.tags !== null) {
     if (!Array.isArray(params.tags)) return 'tags must be an array of {key, value} objects.';
@@ -523,6 +590,33 @@ export function planAgentartsBrowserWrite(params = {}) {
   }
   const request = buildBrowserWriteRequest(params);
   const approvalToken = createApprovalTokenStore(BROWSER_WRITE_TOKEN_CLI).create([JSON.stringify(request)]);
+  // Loud-storage warning (R1 review round, restored from the memory
+  // bridge's pattern with browser wording): the tag {key, value} shape
+  // puts a credential-shaped NAME and its VALUE in separate JSON keys,
+  // so neither redactSecrets' key[:=]-adjacency nor the approvals-store
+  // scrub can mask them at rest — the warning is the only surface that
+  // flags a secret riding tags or description into approvals.json.
+  // Detection covers BOTH halves: a secret-shaped tag KEY (password/
+  // token/api_key/… — the shape the at-rest redactor cannot see) and
+  // credential-shaped free text in tag values or description.
+  const warnings = [];
+  const credentialShaped = (text) => typeof text === 'string' && redactCredentialShapes(text) !== text;
+  const secretKeyName = /api[_-]?key|password|passwd|token|secret|credential/i;
+  const flagKeyName = (key) => secretKeyName.test(key);
+  const descriptionFlagged = typeof params.description === 'string' && credentialShaped(params.description);
+  const tagsFlagged =
+    Array.isArray(params.tags) &&
+    params.tags.some(
+      (tag) =>
+        tag &&
+        typeof tag === 'object' &&
+        (flagKeyName(String(tag.key || '')) || credentialShaped(String(tag.value || ''))),
+    );
+  if (descriptionFlagged || tagsFlagged) {
+    warnings.push(
+      'Some request content (description or tag key/value pairs) matches credential shapes (api_key/password/token patterns — the check is over-inclusive on ordinary key:value phrasing). The request persists in the approval store (0600, 5-minute TTL) with tag values UNMASKABLE by the at-rest redactor (the {key, value} JSON shape defeats key[:=] adjacency), and tags are visible on every future list/get of the resource — confirm the user intends THIS content on a cloud resource before presenting the request for approval.',
+    );
+  }
   // No ?? fallback (the memory bridge's round-3 rule): a write operation
   // added to the enum without a meta entry must FAIL LOUDLY here. Key
   // parity with BROWSER_WRITE_OPERATIONS is pinned in structure.test.mjs.
@@ -541,7 +635,7 @@ export function planAgentartsBrowserWrite(params = {}) {
     tier: 'approved',
     operation: `browser ${params.operation} (SDK control plane; no CLI subcommand in 0.1.7)`,
     labels,
-    warnings: [],
+    warnings,
     request,
     approvalToken,
     approvalNote: `Present the request above to the user.${labelSuffix} On explicit approval, run huaweicloud_agentarts_browser_write with THIS approvalToken, the SAME parameters, and approvedByUser: true (the token binds them exactly); otherwise discard it.${authTypeNote}`,
@@ -584,6 +678,11 @@ const BROWSER_WRITE_SNIPPET = [
   '        print("AGENTARTS_BROWSER_BAD_OPERATION", file=sys.stderr)',
   '        sys.exit(2)',
   '    print(json.dumps(result, ensure_ascii=False, default=lambda o: getattr(o, "__dict__", str(o))))',
+  // SystemExit re-raise + BaseException catch: same as the read snippet
+  // (SystemExit must not become "SystemExit: 2" with exit 1; the
+  // bad-operation exit-2 path lives inside this try).
+  'except SystemExit:',
+  '    raise',
   // ToolsAPIError extends BaseException (tools_http.py:10) — same
   // deviation as the read snippet, same reason.
   'except BaseException as error:',
@@ -598,10 +697,10 @@ function replayGuidanceNote(operation, concurrency) {
     ? 'This token was consumed by a concurrent call — the write may already have executed.'
     : 'This token was already used — the write may already have executed.';
   const verify =
-    operation === 'create_browser' || operation === 'delete_browser'
+    operation === 'create_browser'
       ? 'huaweicloud_agentarts_browser_read (list_browsers by name)'
-      : operation === 'update_browser'
-        ? 'huaweicloud_agentarts_browser_read (get_browser — the update-family rule is success ≠ applied)'
+      : operation === 'update_browser' || operation === 'delete_browser'
+        ? 'huaweicloud_agentarts_browser_read (get_browser per id — not-found on a delete means deleted; the update-family rule is success ≠ applied)'
         : 'huaweicloud_agentarts_browser_read (list_browser_profiles)';
   return `${prefix} Verify with ${verify} BEFORE re-planning anything.`;
 }
@@ -609,8 +708,11 @@ function replayGuidanceNote(operation, concurrency) {
 // Write-side post-processing, composed around the envelope at the write
 // call site (the memory bridge's symmetric extension point). Success
 // notes teach the measured traps at the result surface; failure carries
-// the burn disclosure.
-function enrichBrowserWrite(payload, params, parsed) {
+// the burn disclosure. Notes describe the REQUEST semantics, not the
+// response's field presence (R1 review round: an unconditional "in the
+// result" claim breaks on SDK shape drift — the memory family gates its
+// equivalents on parsed shape).
+function enrichBrowserWrite(payload, params) {
   if (!payload.ok) {
     payload.error = `${payload.error || 'Execution failed.'} The single-use token was consumed by this attempt — re-plan for a retry.`;
     return payload;
@@ -624,7 +726,7 @@ function enrichBrowserWrite(payload, params, parsed) {
       );
     }
     notes.push(
-      'The create auto-attaches the tenant-shared default gateway (agent_gateway_id in the result, persists across deletes — trap 63 family) and access_endpoint in the result IS the data-plane base URL once https:// is prepended (trap 62).',
+      'The create attaches the tenant-shared default gateway (persists across deletes — trap 63 family) and the response access_endpoint IS the data-plane base URL once https:// is prepended (trap 62).',
     );
   }
   if (params.operation === 'update_browser') {
@@ -760,7 +862,7 @@ export async function runAgentartsBrowserWrite({ approvalToken, approvedByUser, 
     runCandidate: options.runCandidate,
     shapeResult: (result, candidate) => {
       const parsed = parseSnippetStdout(result);
-      return enrichBrowserWrite(shapeBrowserResult(result, candidate, params, timeoutMs, parsed), params, parsed);
+      return enrichBrowserWrite(shapeBrowserResult(result, candidate, params, timeoutMs, parsed), params);
     },
   });
   // Fallthrough honesty (the memory bridge's round-1/2 rule): when NO

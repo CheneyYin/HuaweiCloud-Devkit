@@ -18,9 +18,28 @@ import {
   BROWSER_WRITE_OPERATIONS,
 } from '../plugins/huaweicloud-core/src/agentarts-browser-tools.mjs';
 import { clearRuntimeCredentials, setRuntimeCredentials } from '../plugins/huaweicloud-core/src/auth/credentials.mjs';
+import { buildChildEnv } from '../plugins/huaweicloud-core/src/agentarts-cli.mjs';
 import { callTool } from '../plugins/huaweicloud-core/src/tools.mjs';
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+// Python json.dumps formatting for stdout mocks (the trap-36 class: the
+// real snippet always emits ", " / ": " separators; JS-compact mocks
+// would let a formatting-sensitive consumer pass while reality differs).
+function pyDumps(value) {
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (Array.isArray(value)) return '[' + value.map((item) => pyDumps(item)).join(', ') + ']';
+  if (value && typeof value === 'object') {
+    return (
+      '{' +
+      Object.entries(value)
+        .map(([k, v]) => `${JSON.stringify(k)}: ${pyDumps(v)}`)
+        .join(', ') +
+      '}'
+    );
+  }
+  return JSON.stringify(value);
+}
 
 // Isolation: HUAWEICLOUD_HOME at a scratch dir (the agentarts test
 // pattern) plus runtime-credential cleanup so the AK/SK injection tests
@@ -60,6 +79,19 @@ test('browser read validates the boundary before any spawn', async () => {
     await bad({ operation: 'list_browsers', limit: 0 }, /limit must be 1-100/);
     await bad({ operation: 'list_browsers', limit: 101 }, /limit must be 1-100/);
     await bad({ operation: 'list_browser_profiles', offset: -1 }, /offset must be >= 0/);
+    // UUID format enforced at the boundary (the SDK validates client-side
+    // before any network call — R1 boundary-burn class).
+    await bad({ operation: 'get_browser', browser_id: 'not-a-uuid' }, /browser_id must be a valid UUID/);
+    await bad({ operation: 'get_browser', browser_id: 'b1' }, /browser_id must be a valid UUID/);
+    await bad(
+      { operation: 'get_browser_profile', profile_id: '61ed9760-3a79-47c3-838a' },
+      /profile_id must be a valid UUID/,
+    );
+    // sort_key: the SDK's own client-side enum (created_at|updated_at).
+    await bad({ operation: 'list_browsers', sort_key: 'name' }, /sort_key must be one of/);
+    // List name filter: 2-40 chars (the SDK's own client-side rule).
+    await bad({ operation: 'list_browsers', name: 'x' }, /name must be 2-40 characters/);
+    await bad({ operation: 'list_browser_profiles', name: 'x'.repeat(41) }, /name must be 2-40 characters/);
     // Mistyped values are rejected, never coerced. (null = unset, the
     // memory bridge's convention — legal, dropped from the request.)
     await bad({ operation: 'list_browsers', limit: true }, /limit must be an integer \(got boolean\)/);
@@ -103,26 +135,28 @@ test('browser read injects AK/SK into the child env; the request rides stdin, ne
   });
 });
 
-test('browser read without credentials neutralizes the profile chain (env-or-fail posture)', async () => {
+test('browser read without credentials rejects at the boundary (metadata-chain pre-gate)', async () => {
   await withIsolation(async () => {
     clearRuntimeCredentials();
-    let childEnv = null;
+    let spawned = false;
     const out = await readAgentartsBrowser(
       { operation: 'list_browsers' },
       {
         runCandidate: async (candidate, args, env) => {
-          childEnv = env;
+          spawned = true;
           return { exitCode: 1, stdout: '', stderr: 'ToolsAPIError: authentication failed' };
         },
       },
     );
     assert.equal(out.ok, false);
-    // No AK/SK reached the child and the profile fallback is pinned to
-    // /dev/null — the child can never silently authenticate from an
-    // unmanaged profile (the wrapper contract).
-    assert.equal(childEnv.HUAWEICLOUD_SDK_AK, undefined);
-    assert.equal(childEnv.HUAWEICLOUD_SDK_SK, undefined);
-    assert.equal(childEnv.HUAWEICLOUD_SDK_CREDENTIALS_FILE, '/dev/null');
+    // The gate fires BEFORE any spawn: without injectable AK/SK the child
+    // would fall through the profile/metadata chain — and the metadata
+    // provider (http://169.254.169.254) is a live third link on runtime
+    // hosts (R1 review round, three-reviewer unanimous).
+    assert.equal(spawned, false, 'the credential gate must reject before spawning');
+    assert.match(out.error, /No devkit credentials available for agentarts/);
+    assert.match(out.error, /huaweicloud_auth_init/);
+    assert.match(out.error, /never falls back to unmanaged profile files or the metadata chain/);
   });
 });
 
@@ -164,7 +198,7 @@ test('browser read envelope: failure, pollution, and the operation label', async
   await withIsolation(async () => {
     setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
     const failure = await readAgentartsBrowser(
-      { operation: 'get_browser', browser_id: 'b1' },
+      { operation: 'get_browser', browser_id: '61ed9760-3a79-47c3-838a-c77e38956a05' },
       {
         runCandidate: async () => ({ exitCode: 1, stdout: '', stderr: 'ToolsAPIError: Session not found' }),
       },
@@ -206,7 +240,7 @@ test('browser read enrichment: API_KEY-typed browsers get the console-key adviso
     const out = await readAgentartsBrowser(
       { operation: 'list_browsers' },
       {
-        runCandidate: async () => ({ exitCode: 0, stdout: JSON.stringify(iamOnly), stderr: '' }),
+        runCandidate: async () => ({ exitCode: 0, stdout: pyDumps(iamOnly), stderr: '' }),
       },
     );
     assert.equal(out.ok, true);
@@ -222,7 +256,7 @@ test('browser read enrichment: API_KEY-typed browsers get the console-key adviso
     const advised = await readAgentartsBrowser(
       { operation: 'list_browsers' },
       {
-        runCandidate: async () => ({ exitCode: 0, stdout: JSON.stringify(apiKeyTyped), stderr: '' }),
+        runCandidate: async () => ({ exitCode: 0, stdout: pyDumps(apiKeyTyped), stderr: '' }),
       },
     );
     assert.equal(advised.ok, true);
@@ -232,11 +266,11 @@ test('browser read enrichment: API_KEY-typed browsers get the console-key adviso
 
     // get_browser shape (single dict, not an items array).
     const got = await readAgentartsBrowser(
-      { operation: 'get_browser', browser_id: 'b2' },
+      { operation: 'get_browser', browser_id: '61ed9760-3a79-47c3-838a-c77e38956a05' },
       {
         runCandidate: async () => ({
           exitCode: 0,
-          stdout: JSON.stringify({ id: 'b2', name: 'br-2', auth_type: 'API_KEY' }),
+          stdout: pyDumps({ id: 'b2', name: 'br-2', auth_type: 'API_KEY' }),
           stderr: '',
         }),
       },
@@ -362,7 +396,10 @@ test('browser write validates the boundary before any token is minted', async ()
       /description must be at most 4096 characters/,
     );
     // update_browser REQUIRES tags (the only updatable field exposed).
-    await bad({ operation: 'update_browser', browser_id: 'b1' }, /update_browser requires a non-empty tags array/);
+    await bad(
+      { operation: 'update_browser', browser_id: '61ed9760-3a79-47c3-838a-c77e38956a05' },
+      /update_browser requires a non-empty tags array/,
+    );
     await bad({ operation: 'update_browser' }, /browser_id is required for update_browser/);
     await bad({ operation: 'delete_browser' }, /browser_id is required for delete_browser/);
     await bad({ operation: 'delete_browser_profile' }, /profile_id is required for delete_browser_profile/);
@@ -407,6 +444,24 @@ test('browser write validates the boundary before any token is minted', async ()
       /Unknown parameter "observability"/,
     );
     await bad({ operation: 'create_browser', name: 'ok-name', region: 42 }, /region must be a non-empty string/);
+    // Write ids: UUID format at the boundary — a malformed id is a
+    // deterministic SDK client-side failure, and on the write path it
+    // would BURN a minted approval token on a guaranteed no-op (R1).
+    await bad(
+      { operation: 'delete_browser', browser_id: 'not-a-uuid' },
+      /browser_id must be a valid UUID.*consume the approval token/,
+    );
+    await bad(
+      { operation: 'update_browser', browser_id: 'zzz', tags: [{ key: 'env', value: 'prod' }] },
+      /browser_id must be a valid UUID/,
+    );
+    await bad({ operation: 'delete_browser_profile', profile_id: 'nope' }, /profile_id must be a valid UUID/);
+    // Browser description: the SDK documents 4096 for browsers too —
+    // the boundary rejects rather than burn a token on a possible 400.
+    await bad(
+      { operation: 'create_browser', name: 'ok-name', description: 'x'.repeat(4097) },
+      /description must be at most 4096 characters/,
+    );
   });
 });
 
@@ -453,13 +508,20 @@ test('browser write plan canonicalizes IAM, sorts tags, and teaches the auth spl
     assert.match(apiKeyPlan.approvalNote, /trap 61/);
 
     // Deletes carry the irreversible label.
-    const del = planAgentartsBrowserWrite({ operation: 'delete_browser', browser_id: 'b1' });
+    const del = planAgentartsBrowserWrite({
+      operation: 'delete_browser',
+      browser_id: '61ed9760-3a79-47c3-838a-c77e38956a05',
+    });
     assert.deepEqual(del.labels, ['irreversible']);
     assert.match(del.approvalNote, /Labels: irreversible/);
 
     // Region default in the canonical request.
     assert.equal(plan.request.region, 'cn-southwest-2');
-    const regional = planAgentartsBrowserWrite({ operation: 'delete_browser', browser_id: 'b1', region: 'cn-north-4' });
+    const regional = planAgentartsBrowserWrite({
+      operation: 'delete_browser',
+      browser_id: '61ed9760-3a79-47c3-838a-c77e38956a05',
+      region: 'cn-north-4',
+    });
     assert.equal(regional.request.region, 'cn-north-4');
   });
 });
@@ -522,7 +584,7 @@ test('browser write enforces the token lifecycle and exact-parameter binding', a
 test('browser write rejects without burning the token when no AK/SK is injectable', async () => {
   await withIsolation(async () => {
     clearRuntimeCredentials();
-    const params = { operation: 'delete_browser', browser_id: 'b1' };
+    const params = { operation: 'delete_browser', browser_id: '61ed9760-3a79-47c3-838a-c77e38956a05' };
     const plan = planAgentartsBrowserWrite(params);
     assert.equal(plan.ok, true);
     const out = await runAgentartsBrowserWrite({ ...params, approvedByUser: true, approvalToken: plan.approvalToken });
@@ -555,7 +617,7 @@ test('browser write executes with AK/SK injected, request on stdin, and the crea
           seen.push({ args, childEnv, stdinData });
           return {
             exitCode: 0,
-            stdout: JSON.stringify({
+            stdout: pyDumps({
               id: 'b-1',
               name: 'team-browser',
               auth_type: 'IAM',
@@ -582,7 +644,7 @@ test('browser write executes with AK/SK injected, request on stdin, and the crea
     assert.match(out.notes.join(' '), /trap 63/);
 
     // Delete success carries the staleness-window note.
-    const delParams = { operation: 'delete_browser', browser_id: 'b-1' };
+    const delParams = { operation: 'delete_browser', browser_id: '61ed9760-3a79-47c3-838a-c77e38956a05' };
     const delPlan = planAgentartsBrowserWrite(delParams);
     const delOut = await runAgentartsBrowserWrite(
       { ...delParams, approvedByUser: true, approvalToken: delPlan.approvalToken },
@@ -594,7 +656,11 @@ test('browser write executes with AK/SK injected, request on stdin, and the crea
     assert.match(delOut.notes.join(' '), /staleness window/);
 
     // Update success carries the success ≠ applied verify rule.
-    const updParams = { operation: 'update_browser', browser_id: 'b-1', tags: [{ key: 'env', value: 'prod' }] };
+    const updParams = {
+      operation: 'update_browser',
+      browser_id: '61ed9760-3a79-47c3-838a-c77e38956a05',
+      tags: [{ key: 'env', value: 'prod' }],
+    };
     const updPlan = planAgentartsBrowserWrite(updParams);
     const updOut = await runAgentartsBrowserWrite(
       { ...updParams, approvedByUser: true, approvalToken: updPlan.approvalToken },
@@ -665,4 +731,168 @@ test('browser write tool surface: plan/write pair, enum parity, irreversible lab
   assert.match(writeDef.description, /success ≠ applied/);
   assert.match(writeDef.description, /seconds-scale/);
   assert.deepEqual(writeDef.inputSchema.required, ['approvalToken', 'approvedByUser', 'operation']);
+});
+
+// ---------------------------------------------------------------------------
+// R1 adversarial-review round: mutation-killing pins for the branches the
+// initial suite left silent (dispatch wiring for the write pair, the
+// timedOut and truncation envelope branches), the buildChildEnv additions
+// (STS security token, browser data-plane key), and the credential-shape
+// warning.
+
+test(
+  'callTool dispatches the browser PLAN and WRITE tools through the shared switch (stub python)',
+  { skip: process.platform === 'win32' },
+  async () => {
+    await withIsolation(async (home) => {
+      setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+      // Same hermetic shape as the read dispatch test: AGENTARTS_BIN plus
+      // a stub sibling python answers the write spawn.
+      const stubBin = join(home, 'bin');
+      mkdirSync(stubBin, { recursive: true });
+      const stubPython = join(stubBin, 'python');
+      writeFileSync(
+        stubPython,
+        ['#!/bin/bash', 'cat > /dev/null', 'printf \'{"deleted": true, "browser_id": "x"}\'', 'exit 0', ''].join('\n'),
+        { encoding: 'utf8', mode: 0o755 },
+      );
+      const stubCli = join(stubBin, 'agentarts');
+      writeFileSync(stubCli, ['#!/bin/bash', 'exit 0', ''].join('\n'), { encoding: 'utf8', mode: 0o755 });
+      const previousBin = process.env.AGENTARTS_BIN;
+      process.env.AGENTARTS_BIN = stubCli;
+      try {
+        const UUID = '61ed9760-3a79-47c3-838a-c77e38956a05';
+        // PLAN through the shared switch (pure — no spawn).
+        const plan = await callTool('huaweicloud_agentarts_browser_plan', {
+          operation: 'delete_browser',
+          browser_id: UUID,
+        });
+        assert.equal(plan.ok, true);
+        assert.equal(plan.tier, 'approved');
+        assert.equal(typeof plan.approvalToken, 'string');
+        // WRITE through the shared switch: token + attestation + stub spawn.
+        const out = await callTool('huaweicloud_agentarts_browser_write', {
+          operation: 'delete_browser',
+          browser_id: UUID,
+          approvalToken: plan.approvalToken,
+          approvedByUser: true,
+        });
+        assert.equal(out.ok, true);
+        assert.match(out.operation, /browser delete_browser/);
+        assert.equal(out.result.deleted, true);
+      } finally {
+        process.env.AGENTARTS_BIN = previousBin;
+      }
+    });
+  },
+);
+
+test('browser envelope: the timedOut branch and the truncation side file both fire', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const UUID = '61ed9760-3a79-47c3-838a-c77e38956a05';
+    // timedOut: exit-0 stdout is IGNORED (the timeout verdict wins) and
+    // the error names the timeout.
+    const timedOut = await readAgentartsBrowser(
+      { operation: 'get_browser', browser_id: UUID },
+      {
+        runCandidate: async () => ({ exitCode: null, stdout: '{"id": "x"}', stderr: '', timedOut: true }),
+      },
+    );
+    assert.equal(timedOut.ok, false);
+    assert.equal(timedOut.timedOut, true);
+    assert.match(timedOut.error, /timed out after/);
+    assert.equal('result' in timedOut, false, 'a timed-out call carries no result');
+    // Truncation: >50KB stdout fires the side file — the payload keeps a
+    // 2000-char prefix + pointer, and `result` is DROPPED (the untruncated
+    // object must not sit next to a truncated stdout).
+    const big = { items: [{ id: UUID, name: 'br-1', pad: 'x'.repeat(60_000) }], total_count: 1 };
+    const truncated = await readAgentartsBrowser(
+      { operation: 'list_browsers' },
+      {
+        runCandidate: async () => ({ exitCode: 0, stdout: pyDumps(big), stderr: '' }),
+      },
+    );
+    assert.equal(truncated.ok, true);
+    assert.match(truncated.stdout, /truncated, full output saved to/);
+    assert.equal('result' in truncated, false, 'result must be dropped when the side file fires');
+  });
+});
+
+test('buildChildEnv injects the STS security token and passes the browser data-plane key', async () => {
+  await withIsolation(async () => {
+    // STS temporary credentials: the SDK core reads
+    // HUAWEICLOUD_SDK_SECURITY_TOKEN (provider.py:53) — without the
+    // injection every pre-spawn gate passes while the child signs
+    // WITHOUT X-Security-Token and fails auth (R1, reviewer-reproduced).
+    setRuntimeCredentials('AKSTS123', 'SKSTS456', 'STS-TOKEN-XYZ');
+    process.env.HUAWEICLOUD_SDK_BROWSER_API_KEY = 'BROWSER-KEY-1';
+    try {
+      const env = buildChildEnv({ injectCredentials: true });
+      assert.equal(env.HUAWEICLOUD_SDK_AK, 'AKSTS123');
+      assert.equal(env.HUAWEICLOUD_SDK_SK, 'SKSTS456');
+      assert.equal(env.HUAWEICLOUD_SDK_SECURITY_TOKEN, 'STS-TOKEN-XYZ');
+      assert.equal(env.HUAWEICLOUD_SDK_BROWSER_API_KEY, 'BROWSER-KEY-1');
+      // The memory bridges' injectCredentials: false surface never sees
+      // either addition (narrower data-plane credential posture).
+      const memoryEnv = buildChildEnv({ injectCredentials: false });
+      assert.equal(memoryEnv.HUAWEICLOUD_SDK_SECURITY_TOKEN, undefined);
+      assert.equal(memoryEnv.HUAWEICLOUD_SDK_BROWSER_API_KEY, undefined);
+    } finally {
+      delete process.env.HUAWEICLOUD_SDK_BROWSER_API_KEY;
+    }
+    // Without a security token the env stays absent (plain AK/SK shape).
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const plain = buildChildEnv({ injectCredentials: true });
+    assert.equal(plain.HUAWEICLOUD_SDK_SECURITY_TOKEN, undefined);
+  });
+});
+
+test('browser write plan warns when tag values or description match credential shapes', async () => {
+  await withIsolation(async () => {
+    // The {key, value} tag shape defeats at-rest key[:=] redaction — the
+    // warning is the only surface flagging a secret riding tags into
+    // approvals.json (R1, reviewer-reproduced).
+    const plan = planAgentartsBrowserWrite({
+      operation: 'create_browser',
+      name: 'team-browser',
+      tags: [
+        { key: 'password', value: 'hunter2' },
+        { key: 'env', value: 'prod' },
+      ],
+    });
+    assert.equal(plan.ok, true);
+    assert.ok(plan.warnings.length >= 1);
+    assert.match(plan.warnings[0], /credential shapes/);
+    assert.match(plan.warnings[0], /UNMASKABLE/);
+
+    // Clean content plans carry no warning.
+    const clean = planAgentartsBrowserWrite({
+      operation: 'create_browser',
+      name: 'team-browser',
+      description: 'ordinary description',
+      tags: [{ key: 'env', value: 'prod' }],
+    });
+    assert.deepEqual(clean.warnings, []);
+  });
+});
+
+test('the shipped snippets re-raise SystemExit before the BaseException catch (exit-code contract)', async () => {
+  // Source pin (the BaseException deviation's own contract): the
+  // bad-operation sys.exit(2) lives INSIDE the try, and SystemExit
+  // extends BaseException — without the re-raise, our exit-2 becomes
+  // "SystemExit: 2" on stderr with exit 1 (R1, reviewer-reproduced).
+  const source = readFileSync(join(rootDir, 'plugins/huaweicloud-core/src/agentarts-browser.mjs'), 'utf8');
+  const reRaises = source.match(/'except SystemExit:',\s*\n\s*'\s{4}raise',/g) || [];
+  const baseCatches = source.match(/'except BaseException as error:',/g) || [];
+  assert.ok(reRaises.length >= 2, `both snippets must re-raise SystemExit (found ${reRaises.length})`);
+  assert.ok(baseCatches.length >= 2, `both snippets must catch BaseException (found ${baseCatches.length})`);
+  for (const catchMatch of source.matchAll(/'except BaseException as error:',/g)) {
+    const before = source.slice(Math.max(0, catchMatch.index - 400), catchMatch.index);
+    assert.match(
+      before,
+      /'\s{4}raise',/,
+      'every BaseException catch must be preceded (within its handler block) by the SystemExit re-raise',
+    );
+  }
 });
