@@ -39,11 +39,15 @@ export interface AgentSaysMatcher {
   any: string[];
 }
 
-// Trace toolCall matcher: name is exact; args is a shallow partial — every
-// key must deep-equal (scalar) or array-prefix-match the traced (redacted)
-// args. ok narrows by outcome when present.
+// Trace toolCall matcher: name is exact (a string) or any-of (an array —
+// legitimate alternative surfaces for one behavior, e.g. the three
+// skill-inventory disclosure faces; every member must be a real tool,
+// enforced by the roster guard in e2e-cases-roster.test.ts); args is a
+// shallow partial — every key must deep-equal (scalar) or
+// array-prefix-match the traced (redacted) args. ok narrows by outcome
+// when present.
 export interface ToolCallMatcher {
-  name: string;
+  name: string | string[];
   args?: Record<string, unknown>;
   ok?: boolean;
   times?: Range;

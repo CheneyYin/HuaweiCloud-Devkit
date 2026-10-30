@@ -34,12 +34,13 @@ export function expectationVerdict(exp: Expectation, recordings: Recordings): Ex
     }
     case 'toolCall': {
       const hits = matchToolCall(exp, recordings.toolCalls);
+      const wanted = Array.isArray(exp.name) ? `one of [${exp.name.join(', ')}]` : exp.name;
       return {
         expectation: exp,
         pass: inRange(hits.length, exp.times),
         evidence: hits.length
           ? `${hits.length} matching call(s)`
-          : `0 matching call(s), expected ${describeRange(exp.times)}. Traced calls: ${
+          : `0 matching call(s) for ${wanted}, expected ${describeRange(exp.times)}. Traced calls: ${
               recordings.toolCalls
                 .map((c) => `${c.name}(ok=${c.ok})`)
                 .slice(0, 10)

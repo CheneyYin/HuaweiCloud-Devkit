@@ -57,9 +57,10 @@ export function argsPartialMatch(expected: Record<string, unknown>, actual: unkn
 }
 
 export function matchToolCall(matcher: ToolCallMatcher, calls: TraceToolCall[]): TraceToolCall[] {
+  const names = new Set(Array.isArray(matcher.name) ? matcher.name : [matcher.name]);
   return calls.filter(
     (call) =>
-      call.name === matcher.name &&
+      names.has(call.name) &&
       (matcher.ok === undefined || call.ok === matcher.ok) &&
       (!matcher.args || argsPartialMatch(matcher.args, call.args)),
   );

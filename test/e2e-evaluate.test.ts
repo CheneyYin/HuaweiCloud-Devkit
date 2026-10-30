@@ -244,3 +244,44 @@ test('noToolCall fails with the offending args as evidence when the forbidden ca
   assert.equal(verdict.expectations[0]!.pass, false);
   assert.match(verdict.expectations[0]!.evidence, /forbidden call happened/);
 });
+
+// The any-of toolCall name (legitimate alternative surfaces for one
+// behavior, e.g. the three skill-inventory faces): any member satisfies the
+// pin, no member reds with the candidates named, and the union must not leak
+// permissiveness into noToolCall's exact-string negative.
+test('an any-of toolCall name matches when any member surface was used', () => {
+  const verdict = caseWith(
+    [{ kind: 'toolCall', name: ['huaweicloud_list_skills', 'huaweicloud_list_packs', 'huaweicloud_pack_info'] }],
+    recordings({ toolCalls: [{ name: 'huaweicloud_list_packs', args: {}, ok: true }] }),
+  );
+  assert.equal(verdict.expectations[0]!.pass, true);
+  assert.equal(verdict.liveness, true);
+});
+
+test('an any-of toolCall name reds when no member was used and the evidence names the candidates', () => {
+  const verdict = caseWith(
+    [{ kind: 'toolCall', name: ['huaweicloud_list_skills', 'huaweicloud_list_packs'] }],
+    recordings({ toolCalls: [{ name: 'huaweicloud_voucher_status', args: {}, ok: true }] }),
+  );
+  assert.equal(verdict.expectations[0]!.pass, false);
+  assert.match(
+    verdict.expectations[0]!.evidence,
+    /0 matching call\(s\) for one of \[huaweicloud_list_skills, huaweicloud_list_packs\]/,
+  );
+});
+
+test('an any-of toolCall name still applies the ok and args narrowing per member', () => {
+  const verdict = caseWith(
+    [{ kind: 'toolCall', name: ['huaweicloud_list_skills', 'huaweicloud_list_packs'], ok: true }],
+    recordings({ toolCalls: [{ name: 'huaweicloud_list_packs', args: {}, ok: false }] }),
+  );
+  assert.equal(verdict.expectations[0]!.pass, false);
+});
+
+test('noToolCall stays an exact-string negative beside array toolCall names', () => {
+  const verdict = caseWith(
+    [{ kind: 'noToolCall', name: 'huaweicloud_packs_configure' }],
+    recordings({ toolCalls: [{ name: 'huaweicloud_packs_configure', args: {}, ok: true }] }),
+  );
+  assert.equal(verdict.expectations[0]!.pass, false);
+});
