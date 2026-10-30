@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync, execFileSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -1044,32 +1044,54 @@ test(
 );
 
 test(
-  'the approval store is single-use across processes (lock-serialized consume)',
+  'the approval store is single-use across processes (lock-serialized consume, truly concurrent)',
   { skip: process.platform === 'win32' },
   async () => {
-    await withIsolation(async () => {
+    await withIsolation(async (home) => {
       const { createApprovalTokenStore } = await import('../plugins/huaweicloud-core/src/approval-tokens.mjs');
       const store = createApprovalTokenStore('agentarts-browser-sdk');
       const token = store.create(['["x"]']);
-      // Two child processes race the consume: the O_EXCL lock serializes
-      // the read-modify-write, so exactly ONE wins and the tombstone
-      // survives (R2 reviewer reproduced tombstone loss 15/15 without it).
+      // GENUINELY concurrent children (R5: the previous execFileSync-in-map
+      // form ran sequentially — the second child always read the completed
+      // tombstone and no race was ever exercised). A start barrier makes
+      // both children hit the store in the same instant; the O_EXCL lock
+      // serializes the read-modify-write, so exactly ONE wins and the
+      // tombstone survives (R2 reviewer reproduced tombstone loss 15/15
+      // without the lock).
       const modulePath = pathToFileURL(join(rootDir, 'plugins/huaweicloud-core/src/approval-tokens.mjs')).href;
+      const barrier = join(home, 'barrier.flag');
       const childScript = `
-      const { createApprovalTokenStore } = await import('${modulePath}');
+      import { existsSync } from 'node:fs';
+      import { createApprovalTokenStore } from '${modulePath}';
+      while (!existsSync(process.env.TEST_BARRIER)) {}
       const s = createApprovalTokenStore('agentarts-browser-sdk');
       let consumed = false;
       try { consumed = Boolean(s.consume(process.env.TEST_TOKEN)); } catch (e) { consumed = 'threw: ' + e.message; }
       console.log(JSON.stringify({ consumed }));
     `;
       const children = [0, 1].map(() =>
-        execFileSync('node', ['--input-type=module', '-e', childScript], {
-          env: { ...process.env, TEST_TOKEN: token },
-          encoding: 'utf8',
-          timeout: 20_000,
+        spawn('node', ['--input-type=module', '-e', childScript], {
+          env: { ...process.env, TEST_TOKEN: token, TEST_BARRIER: barrier },
+          stdio: ['ignore', 'pipe', 'pipe'],
         }),
       );
-      const results = children.map((out) => JSON.parse(out.trim().split('\n').pop()));
+      writeFileSync(barrier, 'go');
+      const results = await Promise.all(
+        children.map(
+          (child) =>
+            new Promise((resolve, reject) => {
+              let stdout = '';
+              child.stdout.on('data', (chunk) => {
+                stdout += chunk;
+              });
+              child.on('error', reject);
+              child.on('close', (code) => {
+                if (code !== 0) reject(new Error(`child exit ${code}`));
+                else resolve(JSON.parse(stdout.trim().split('\n').pop()));
+              });
+            }),
+        ),
+      );
       const wins = results.filter((r) => r.consumed === true).length;
       assert.equal(wins, 1, `exactly one consume must win (got ${JSON.stringify(results)})`);
       // The tombstone survived: in-process replay reads already_consumed.

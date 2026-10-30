@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   closeSync,
   existsSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -139,28 +140,47 @@ function withStoreLock(fn) {
       if (error.code !== 'EEXIST') throw error;
       const current = readLockOwner(lockPath);
       if (current !== null && lockIsBreakable(lockPath, current)) {
-        // Atomic claim: exactly one breaker wins the rename; a loser
-        // ENOENTs and falls through to the wait.
+        // Atomic claim (R4): exactly one breaker wins the rename; a loser
+        // ENOENTs. Post-rename CONTENT VERIFICATION (R5/R6): the rename is
+        // content-blind — a preempted break decision can steal a lock a
+        // second breaker already claimed and re-acquired with a LIVE
+        // owner. Verify the claimed file still carries the dead owner we
+        // judged; on mismatch, restore it atomically (linkSync fails
+        // EEXIST if a third party already re-acquired the path — then the
+        // claim is simply dropped) and rejoin the wait.
         const claimed = `${lockPath}.breaking.${randomUUID()}`;
         try {
           renameSync(lockPath, claimed);
+        } catch {
+          continue; // lost the break race — retry the loop
+        }
+        if (readLockOwner(claimed) !== current) {
+          try {
+            linkSync(claimed, lockPath);
+          } catch {
+            // The path was re-acquired in the gap — drop the claim.
+          }
+        }
+        try {
           unlinkSync(claimed);
         } catch {
-          // Lost the break race or the files moved — retry the loop.
+          // Best effort.
         }
-        continue;
+        // No sleep — retry immediately after freeing a stale lock; the
+        // deadline check below bounds the pathological loop.
+      } else {
+        // Unreadable lock content (vanished mid-read, torn write, or an
+        // unexpected shape like a directory at the lock path) and live
+        // holders take the SAME bounded wait — an unreadable-but-present
+        // lock must never spin unbounded (R4: the lock-path-is-a-directory
+        // shape hung the original loop).
+        sleepSync(25);
       }
-      // Unreadable lock content (vanished mid-read, torn write, or an
-      // unexpected shape like a directory at the lock path) and live
-      // holders take the SAME bounded wait — an unreadable-but-present
-      // lock must never spin unbounded (R4: the lock-path-is-a-directory
-      // shape hung the original loop).
       if (Date.now() > deadline) {
         throw new Error(`approval-token store lock could not be acquired (another process holds ${lockPath})`, {
           cause: error,
         });
       }
-      sleepSync(25);
     }
   }
   try {
@@ -168,8 +188,14 @@ function withStoreLock(fn) {
     return fn();
   } finally {
     closeSync(fd);
-    // Ownership-verified release: unlink only the lock we still own.
-    if (readLockOwner(lockPath) === owner) {
+    // Ownership-verified release: unlink only the lock we still own, or
+    // the EMPTY lock a failed owner write left behind (R5: a fresh
+    // unparseable lock waits out the full 10s mtime backstop before any
+    // breaker can claim it — releasing it here keeps one transient write
+    // failure from stalling every store mutation; no one can hold a
+    // legitimate claim on microseconds-old empty content).
+    const finalOwner = readLockOwner(lockPath);
+    if (finalOwner === owner || finalOwner === '') {
       try {
         unlinkSync(lockPath);
       } catch {
