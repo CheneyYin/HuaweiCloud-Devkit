@@ -1838,6 +1838,57 @@ test('the agentarts browser read bridge registers with its safety contract pinne
   assert.doesNotMatch(def.description, /agentarts browser /);
 });
 
+test('the agentarts browser WRITE bridge registers with its approval contract pinned (B3)', async () => {
+  const { TOOL_DEFINITIONS } = await import('../plugins/huaweicloud-core/src/tools.mjs');
+  const plan = TOOL_DEFINITIONS.find((t) => t.name === 'huaweicloud_agentarts_browser_plan');
+  const write = TOOL_DEFINITIONS.find((t) => t.name === 'huaweicloud_agentarts_browser_write');
+  assert.ok(plan, 'tools.mjs missing huaweicloud_agentarts_browser_plan');
+  assert.ok(write, 'tools.mjs missing huaweicloud_agentarts_browser_write');
+  const { BROWSER_WRITE_OPERATIONS } = await import('../plugins/huaweicloud-core/src/agentarts-browser-tools.mjs');
+  assert.deepEqual(
+    [...BROWSER_WRITE_OPERATIONS].sort((a, b) => a.localeCompare(b)),
+    ['create_browser', 'create_browser_profile', 'delete_browser', 'delete_browser_profile', 'update_browser'],
+  );
+  // WRITE_OPERATION_META key parity (the memory bridge's round-3 rule):
+  // the plan path looks the registry up WITHOUT a fallback — an enum
+  // entry without a meta entry must fail loudly.
+  {
+    const source = readFileSync(join(pluginRoot, 'src', 'agentarts-browser.mjs'), 'utf8');
+    const metaKeys = [
+      ...source.matchAll(
+        /^ {2}(create_browser|update_browser|delete_browser|create_browser_profile|delete_browser_profile): \{/gm,
+      ),
+    ].map((m) => m[1]);
+    const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+    assert.deepEqual(
+      [...metaKeys].sort(byCodeUnit),
+      [...BROWSER_WRITE_OPERATIONS].sort(byCodeUnit),
+      'WRITE_OPERATION_META must cover every BROWSER_WRITE_OPERATIONS entry exactly',
+    );
+    assert.doesNotMatch(
+      source,
+      /WRITE_OPERATION_META\[params\.operation\] \?\?/,
+      'the meta lookup must have no ?? fallback',
+    );
+    // Both snippets catch BaseException (ToolsAPIError extends it).
+    const handlerCount = (source.match(/except BaseException as error/g) || []).length;
+    assert.ok(handlerCount >= 2, `both snippets must catch BaseException (found ${handlerCount})`);
+    assert.doesNotMatch(source, /except Exception as error/);
+  }
+  // Irreversible labels are taught on both delete surfaces.
+  assert.match(plan.description, /delete_browser \(irreversible\)/);
+  assert.match(plan.description, /delete_browser_profile \(irreversible\)/);
+  assert.match(write.description, /irreversible/);
+  // The approval contract vocabulary.
+  assert.deepEqual(
+    [...write.inputSchema.required].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    ['approvalToken', 'approvedByUser', 'operation'],
+  );
+  assert.match(plan.description, /auth_type to IAM/);
+  assert.match(plan.description, /trap 61/);
+  assert.match(write.description, /success ≠ applied/);
+});
+
 test('huawei-agentarts SKILL.md routes the memory data-plane bridge (U2/U3)', () => {
   const body = readFileSync(join(pluginRoot, 'skills', 'huawei-agentarts', 'SKILL.md'), 'utf8');
   // The routing floor: all three memory tools are taught (the read bridge

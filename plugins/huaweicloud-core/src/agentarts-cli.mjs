@@ -1485,7 +1485,7 @@ function missingCredentialError() {
   };
 }
 
-function hasInjectableCredentials() {
+export function hasInjectableCredentials() {
   try {
     const creds = resolveCredentialsWithRuntime({ allowMissing: true });
     return Boolean(creds?.ak && creds?.sk);

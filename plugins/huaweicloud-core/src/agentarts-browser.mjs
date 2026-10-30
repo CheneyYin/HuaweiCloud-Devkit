@@ -24,8 +24,16 @@
 // kills the child with an uncaught traceback. This is the single
 // browser-specific deviation from the memory snippet.
 
-import { buildChildEnv, READONLY_TIMEOUT_MS, runOverPythonCandidates, saveLargeOutput } from './agentarts-cli.mjs';
-import { BROWSER_READ_OPERATIONS } from './agentarts-browser-tools.mjs';
+import {
+  buildChildEnv,
+  DEFAULT_APPROVED_TIMEOUT_MS,
+  hasInjectableCredentials,
+  READONLY_TIMEOUT_MS,
+  runOverPythonCandidates,
+  saveLargeOutput,
+} from './agentarts-cli.mjs';
+import { BROWSER_READ_OPERATIONS, BROWSER_WRITE_OPERATIONS } from './agentarts-browser-tools.mjs';
+import { createApprovalTokenStore, hashNamespacedArgs } from './approval-tokens.mjs';
 import { redactSecrets } from './safety-policy.mjs';
 
 // Browser list bounds: the SDK client applies NO limit/offset cap
@@ -277,5 +285,490 @@ export async function readAgentartsBrowser(params = {}, options = {}) {
 // Tool dispatch (definitions live in agentarts-browser-tools.mjs).
 export async function callAgentartsBrowserTool(name, rawArgs = {}) {
   if (name === 'huaweicloud_agentarts_browser_read') return readAgentartsBrowser(rawArgs);
+  if (name === 'huaweicloud_agentarts_browser_plan') return planAgentartsBrowserWrite(rawArgs);
+  if (name === 'huaweicloud_agentarts_browser_write') return runAgentartsBrowserWrite(rawArgs);
   return { ok: false, error: `Unknown agentarts browser tool: ${name}` };
+}
+
+// ---------------------------------------------------------------------------
+// WRITE bridge (B3): browser + profile resource lifecycle, token-gated
+// like every approved cloud write in this repo. The canonical request
+// carries ONLY non-secret parameters (names, ids, tags, region); AK/SK
+// ride the child env exactly as the read bridge does.
+//
+// No plan-time credential-shape warning (a deliberate deviation from the
+// memory write bridge): memory content is a RETRIEVAL store (every
+// actor-scoped query can fetch it back), while browser descriptions and
+// tags are display metadata on cloud resources — not a loud-storage
+// hazard class. The plan payload still shows them verbatim (informed
+// approval), just without the warning.
+
+// Per-operation WRITE metadata (the memory bridge's registry pattern):
+// labels on the plan/approval surface, replay guidance per op. A new
+// write operation without an entry fails LOUDLY here — key parity with
+// BROWSER_WRITE_OPERATIONS is pinned in structure.test.mjs.
+const WRITE_OPERATION_META = {
+  create_browser: { labels: [] },
+  update_browser: { labels: [] },
+  delete_browser: { labels: ['irreversible'] },
+  create_browser_profile: { labels: [] },
+  delete_browser_profile: { labels: ['irreversible'] },
+};
+
+const BROWSER_NAME_PATTERN = /^[a-z][a-z0-9-]{0,38}[a-z0-9]$/;
+const API_KEY_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+
+const BROWSER_WRITE_PARAM_KEYS = [
+  'operation',
+  'name',
+  'auth_type',
+  'api_key_name',
+  'description',
+  'browser_id',
+  'profile_id',
+  'tags',
+  'region',
+];
+
+const BROWSER_WRITE_OP_APPLICABILITY = {
+  create_browser: ['name', 'auth_type', 'api_key_name', 'description', 'tags'],
+  update_browser: ['browser_id', 'tags'],
+  delete_browser: ['browser_id'],
+  create_browser_profile: ['name', 'description', 'tags'],
+  delete_browser_profile: ['profile_id'],
+};
+
+function rejectUnknownWriteParams(params, operation) {
+  const applicable = BROWSER_WRITE_OP_APPLICABILITY[operation] ?? [];
+  for (const key of Object.keys(params)) {
+    if (!BROWSER_WRITE_PARAM_KEYS.includes(key)) {
+      return `Unknown parameter "${key}" — legal keys: ${BROWSER_WRITE_PARAM_KEYS.join(', ')}.`;
+    }
+    if (!['operation', 'region'].includes(key) && !applicable.includes(key)) {
+      return `"${key}" is not a parameter of ${operation} — it would be silently ignored. Applicable keys for ${operation}: ${applicable.join(', ') || '(none beyond operation/region)'}.`;
+    }
+  }
+  return null;
+}
+
+// Tags: max 20, unique keys, {key, value} string pairs (the SDK's own
+// rules, BC:282-292). A malformed tag must fail at THIS boundary, not as
+// a server 400 after the token is minted (or burned).
+function validateTags(tags) {
+  if (tags.length > 20) return 'tags must contain at most 20 items.';
+  const seen = new Set();
+  for (const [index, tag] of tags.entries()) {
+    if (!tag || typeof tag !== 'object' || Array.isArray(tag)) {
+      return `tags[${index}] must be an object {key, value}.`;
+    }
+    const keys = Object.keys(tag);
+    if (keys.length !== 2 || !keys.includes('key') || !keys.includes('value')) {
+      return `tags[${index}] must have exactly the keys "key" and "value" — got {${keys.join(', ')}}.`;
+    }
+    if (
+      typeof tag.key !== 'string' ||
+      tag.key.length === 0 ||
+      typeof tag.value !== 'string' ||
+      tag.value.length === 0
+    ) {
+      return `tags[${index}].key and .value must be non-empty strings.`;
+    }
+    if (seen.has(tag.key)) return `tags[${index}] duplicates key "${tag.key}" — tag keys must be unique.`;
+    seen.add(tag.key);
+  }
+  return null;
+}
+
+function validateBrowserWrite(params) {
+  if (!BROWSER_WRITE_OPERATIONS.includes(params.operation)) {
+    return `operation must be one of: ${BROWSER_WRITE_OPERATIONS.join(', ')}.`;
+  }
+  const unknown = rejectUnknownWriteParams(params, params.operation);
+  if (unknown) return unknown;
+  const need = (field, message) => {
+    if (typeof params[field] !== 'string' || params[field].length === 0) return message;
+    return null;
+  };
+  if (params.operation === 'create_browser' || params.operation === 'create_browser_profile') {
+    const err = need(
+      'name',
+      `name is required for ${params.operation} (pattern ^[a-z][a-z0-9-]{0,38}[a-z0-9]$, 2-40 chars).`,
+    );
+    if (err) return err;
+    if (!BROWSER_NAME_PATTERN.test(params.name)) {
+      return `name must match ^[a-z][a-z0-9-]{0,38}[a-z0-9]$ — 2-40 chars, lowercase letters/digits/hyphens, start lowercase letter, end lowercase letter or digit.`;
+    }
+    if (
+      params.description !== undefined &&
+      params.description !== null &&
+      (typeof params.description !== 'string' || params.description.length === 0)
+    ) {
+      return 'description must be a non-empty string when provided.';
+    }
+    if (params.operation === 'create_browser_profile' && params.description && params.description.length > 4096) {
+      return 'description must be at most 4096 characters (SDK limit for profiles).';
+    }
+  }
+  if (params.operation === 'create_browser') {
+    if (params.auth_type !== undefined && params.auth_type !== null && !['IAM', 'API_KEY'].includes(params.auth_type)) {
+      return 'auth_type must be "IAM" or "API_KEY".';
+    }
+    const effectiveAuth = params.auth_type || 'IAM';
+    if (effectiveAuth === 'API_KEY') {
+      const err = need(
+        'api_key_name',
+        'api_key_name is required when auth_type=API_KEY (the SDK rejects the create without it).',
+      );
+      if (err) return err;
+    }
+    if (params.api_key_name !== undefined && params.api_key_name !== null) {
+      if (effectiveAuth === 'IAM') {
+        return 'api_key_name only applies to auth_type=API_KEY — with IAM the data plane signs with AK/SK and no key is ever issued (passing a name would name a key nothing uses).';
+      }
+      if (typeof params.api_key_name !== 'string' || !API_KEY_NAME_PATTERN.test(params.api_key_name)) {
+        return 'api_key_name must match ^[a-zA-Z0-9_-]{1,64}$.';
+      }
+    }
+  }
+  if (params.operation === 'update_browser') {
+    const err = need('browser_id', 'browser_id is required for update_browser.');
+    if (err) return err;
+    if (!Array.isArray(params.tags) || params.tags.length === 0) {
+      return 'update_browser requires a non-empty tags array — tags are the only updatable field this bridge exposes (the SDK also updates observability, an opaque dict not exposed here). An update with nothing to update is rejected.';
+    }
+  }
+  if (params.operation === 'delete_browser') {
+    const err = need('browser_id', 'browser_id is required for delete_browser.');
+    if (err) return err;
+  }
+  if (params.operation === 'delete_browser_profile') {
+    const err = need('profile_id', 'profile_id is required for delete_browser_profile.');
+    if (err) return err;
+  }
+  if (params.tags !== undefined && params.tags !== null) {
+    if (!Array.isArray(params.tags)) return 'tags must be an array of {key, value} objects.';
+    const tagError = validateTags(params.tags);
+    if (tagError) return tagError;
+  }
+  if (params.region !== undefined && params.region !== null) {
+    if (typeof params.region !== 'string' || params.region.length === 0) {
+      return 'region must be a non-empty string when provided.';
+    }
+  }
+  return null;
+}
+
+// The canonical request: plan and write build it from params the SAME
+// way, so the approval token binds byte-identical JSON. create_browser
+// canonicalizes auth_type=IAM when absent (the B1 verdict — the approval
+// shows the EFFECTIVE request). Tags SORT by key (code-unit, not
+// localeCompare — the token binds bytes and plan/write may run in
+// different processes or locales); tag ORDER is semantically irrelevant,
+// unlike memory's message order. An empty tags array is dropped (the
+// SDK's `if tags:` treats [] as unset — the approval must show what
+// executes).
+function buildBrowserWriteRequest(params) {
+  const request = {
+    operation: params.operation,
+    region: typeof params.region === 'string' && params.region ? params.region : 'cn-southwest-2',
+  };
+  const canonicalTags = (tags) => {
+    if (!Array.isArray(tags) || tags.length === 0) return undefined;
+    return [...tags]
+      .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+      .map((tag) => ({
+        key: tag.key,
+        value: tag.value,
+      }));
+  };
+  if (params.operation === 'create_browser') {
+    request.name = params.name;
+    request.auth_type = params.auth_type === 'API_KEY' ? 'API_KEY' : 'IAM';
+    if (request.auth_type === 'API_KEY') request.api_key_name = params.api_key_name;
+    if (typeof params.description === 'string' && params.description) request.description = params.description;
+    const tags = canonicalTags(params.tags);
+    if (tags) request.tags = tags;
+  }
+  if (params.operation === 'update_browser') {
+    request.browser_id = params.browser_id;
+    const tags = canonicalTags(params.tags);
+    if (tags) request.tags = tags;
+  }
+  if (params.operation === 'delete_browser') request.browser_id = params.browser_id;
+  if (params.operation === 'create_browser_profile') {
+    request.name = params.name;
+    if (typeof params.description === 'string' && params.description) request.description = params.description;
+    const tags = canonicalTags(params.tags);
+    if (tags) request.tags = tags;
+  }
+  if (params.operation === 'delete_browser_profile') request.profile_id = params.profile_id;
+  return request;
+}
+
+// Token namespace — distinct from the agentarts CLI and memory namespaces
+// so a CLI or memory token can never authorize a browser write (and vice
+// versa). The request JSON carries no secrets; hash-exact binding is the
+// whole check.
+const BROWSER_WRITE_TOKEN_CLI = 'agentarts-browser-sdk';
+
+export function planAgentartsBrowserWrite(params = {}) {
+  const invalid = validateBrowserWrite(params);
+  if (invalid) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `browser ${params.operation || '(unknown)'} (SDK control plane)`,
+      error: invalid,
+    };
+  }
+  const request = buildBrowserWriteRequest(params);
+  const approvalToken = createApprovalTokenStore(BROWSER_WRITE_TOKEN_CLI).create([JSON.stringify(request)]);
+  // No ?? fallback (the memory bridge's round-3 rule): a write operation
+  // added to the enum without a meta entry must FAIL LOUDLY here. Key
+  // parity with BROWSER_WRITE_OPERATIONS is pinned in structure.test.mjs.
+  const meta = WRITE_OPERATION_META[params.operation];
+  const labels = meta.labels;
+  const labelSuffix = labels.length > 0 ? ` Labels: ${labels.join(', ')}.` : '';
+  const authTypeNote =
+    params.operation === 'create_browser'
+      ? request.auth_type === 'IAM'
+        ? ' auth_type defaults to IAM (canonicalized): the data plane signs with the same AK/SK this toolkit injects — no further setup needed for sessions and actions.'
+        : ' auth_type=API_KEY: the data plane will need the console api_key (HUAWEICLOUD_SDK_BROWSER_API_KEY) — the create response never returns the key value (trap 61).'
+      : '';
+  return {
+    ok: true,
+    service: 'AgentArts',
+    tier: 'approved',
+    operation: `browser ${params.operation} (SDK control plane; no CLI subcommand in 0.1.7)`,
+    labels,
+    warnings: [],
+    request,
+    approvalToken,
+    approvalNote: `Present the request above to the user.${labelSuffix} On explicit approval, run huaweicloud_agentarts_browser_write with THIS approvalToken, the SAME parameters, and approvedByUser: true (the token binds them exactly); otherwise discard it.${authTypeNote}`,
+  };
+}
+
+const BROWSER_WRITE_SNIPPET = [
+  'import json, sys',
+  'try:',
+  '    from agentarts.sdk import Browser',
+  'except ModuleNotFoundError:',
+  '    print("AGENTARTS_SDK_MISSING", file=sys.stderr)',
+  '    sys.exit(3)',
+  'try:',
+  '    # The request rides STDIN (the repo-wide rule): argv is process-list',
+  '    # visible and a long description would hit the kernel argv limit.',
+  '    params = json.loads(sys.stdin.read())',
+  '    client = Browser(region=params["region"])',
+  '    op = params["operation"]',
+  '    if op == "create_browser":',
+  '        kwargs = {"name": params["name"], "auth_type": params["auth_type"]}',
+  '        if params.get("api_key_name"): kwargs["api_key_name"] = params["api_key_name"]',
+  '        if params.get("description"): kwargs["description"] = params["description"]',
+  '        if params.get("tags"): kwargs["tags"] = params["tags"]',
+  '        result = client.create_browser(**kwargs)',
+  '    elif op == "update_browser":',
+  '        result = client.update_browser(params["browser_id"], tags=params["tags"])',
+  '    elif op == "delete_browser":',
+  '        client.delete_browser(params["browser_id"])',
+  '        result = {"deleted": True, "browser_id": params["browser_id"]}',
+  '    elif op == "create_browser_profile":',
+  '        kwargs = {"name": params["name"]}',
+  '        if params.get("description"): kwargs["description"] = params["description"]',
+  '        if params.get("tags"): kwargs["tags"] = params["tags"]',
+  '        result = client.create_browser_profile(**kwargs)',
+  '    elif op == "delete_browser_profile":',
+  '        client.delete_browser_profile(params["profile_id"])',
+  '        result = {"deleted": True, "profile_id": params["profile_id"]}',
+  '    else:',
+  '        print("AGENTARTS_BROWSER_BAD_OPERATION", file=sys.stderr)',
+  '        sys.exit(2)',
+  '    print(json.dumps(result, ensure_ascii=False, default=lambda o: getattr(o, "__dict__", str(o))))',
+  // ToolsAPIError extends BaseException (tools_http.py:10) — same
+  // deviation as the read snippet, same reason.
+  'except BaseException as error:',
+  '    print("{}: {}".format(type(error).__name__, error), file=sys.stderr)',
+  '    sys.exit(1)',
+].join('\n');
+
+// Replay (already_consumed) guidance, per-operation: what verify call
+// answers "did it land" for each write shape.
+function replayGuidanceNote(operation, concurrency) {
+  const prefix = concurrency
+    ? 'This token was consumed by a concurrent call — the write may already have executed.'
+    : 'This token was already used — the write may already have executed.';
+  const verify =
+    operation === 'create_browser' || operation === 'delete_browser'
+      ? 'huaweicloud_agentarts_browser_read (list_browsers by name)'
+      : operation === 'update_browser'
+        ? 'huaweicloud_agentarts_browser_read (get_browser — the update-family rule is success ≠ applied)'
+        : 'huaweicloud_agentarts_browser_read (list_browser_profiles)';
+  return `${prefix} Verify with ${verify} BEFORE re-planning anything.`;
+}
+
+// Write-side post-processing, composed around the envelope at the write
+// call site (the memory bridge's symmetric extension point). Success
+// notes teach the measured traps at the result surface; failure carries
+// the burn disclosure.
+function enrichBrowserWrite(payload, params, parsed) {
+  if (!payload.ok) {
+    payload.error = `${payload.error || 'Execution failed.'} The single-use token was consumed by this attempt — re-plan for a retry.`;
+    return payload;
+  }
+  const notes = [];
+  if (params.operation === 'create_browser') {
+    const authType = params.auth_type === 'API_KEY' ? 'API_KEY' : 'IAM';
+    if (authType === 'API_KEY') {
+      notes.push(
+        'API_KEY-typed browser created: the data plane needs the console api_key (HUAWEICLOUD_SDK_BROWSER_API_KEY) — the create response never returns the key value (trap 61). Sessions and actions on this browser require that env var.',
+      );
+    }
+    notes.push(
+      'The create auto-attaches the tenant-shared default gateway (agent_gateway_id in the result, persists across deletes — trap 63 family) and access_endpoint in the result IS the data-plane base URL once https:// is prepended (trap 62).',
+    );
+  }
+  if (params.operation === 'update_browser') {
+    notes.push(
+      'Verify with huaweicloud_agentarts_browser_read (get_browser): the update-family rule is success ≠ applied (measured on the sibling gateway family, trap 45) — the server may accept and silently drop fields.',
+    );
+  }
+  if (params.operation === 'delete_browser' || params.operation === 'delete_browser_profile') {
+    notes.push(
+      'The delete returned before the list converged — a seconds-scale staleness window may still show the resource (trap 63). Poll list_browsers/list_browser_profiles to confirm deletion.',
+    );
+  }
+  if (notes.length > 0) payload.notes = notes;
+  return payload;
+}
+
+export async function runAgentartsBrowserWrite({ approvalToken, approvedByUser, ...params } = {}, options = {}) {
+  const invalid = validateBrowserWrite(params);
+  if (invalid) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `browser ${params.operation || '(unknown)'} (SDK control plane)`,
+      error: invalid,
+    };
+  }
+  // The repo's three-element approval contract: token + exact parameters +
+  // the explicit attestation. Param validation runs FIRST (a pure data
+  // error needs no attestation), the attestation throw second — the
+  // memory bridge's deliberate ordering.
+  if (approvedByUser !== true) {
+    throw new Error(
+      'approvedByUser must be true after explicit user approval of the plan request — run huaweicloud_agentarts_browser_plan, present the request to the user, and only then execute with the token.',
+    );
+  }
+  if (typeof approvalToken !== 'string' || !approvalToken) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `browser ${params.operation} (SDK control plane)`,
+      error:
+        'approvalToken is required — run huaweicloud_agentarts_browser_plan first, present the request to the user, and pass the token plus the SAME parameters here on explicit approval.',
+    };
+  }
+  const store = createApprovalTokenStore(BROWSER_WRITE_TOKEN_CLI);
+  const inspection = store.inspect(approvalToken);
+  if (inspection.state === 'already_consumed') {
+    return {
+      ok: true,
+      status: 'ok',
+      outcome: 'already_processed',
+      note: replayGuidanceNote(params.operation, false),
+    };
+  }
+  if (inspection.state === 'expired') {
+    return {
+      ok: false,
+      status: 'rejected',
+      code: 'CONFIRM_TOKEN_EXPIRED',
+      service: 'AgentArts',
+      operation: `browser ${params.operation} (SDK control plane)`,
+      error: 'approvalToken expired — re-plan with huaweicloud_agentarts_browser_plan and get a fresh approval.',
+    };
+  }
+  if (inspection.state === 'not_found') {
+    return {
+      ok: false,
+      status: 'rejected',
+      code: 'CONFIRM_TOKEN_NOT_FOUND',
+      service: 'AgentArts',
+      operation: `browser ${params.operation} (SDK control plane)`,
+      error: 'approvalToken not found (never created, pruned, or minted in a different namespace) — re-plan.',
+    };
+  }
+  const request = buildBrowserWriteRequest(params);
+  const requestHash = hashNamespacedArgs(BROWSER_WRITE_TOKEN_CLI, [JSON.stringify(request)]);
+  if (requestHash !== inspection.entry.argsHash) {
+    return {
+      ok: false,
+      status: 'rejected',
+      code: 'CONFIRM_TOKEN_MISMATCH',
+      service: 'AgentArts',
+      operation: `browser ${params.operation} (SDK control plane)`,
+      error:
+        'approvalToken was minted for DIFFERENT parameters — the write binds the exact planned request. Re-plan with the changed parameters (the token stays valid for the original ones).',
+    };
+  }
+  // Credentials BEFORE consumption (the CLI runner's order; the memory
+  // bridge checks its key file here): the browser control plane needs
+  // injectable AK/SK, and a missing-credential rejection must not burn
+  // the approval on a guaranteed no-op spawn.
+  if (hasInjectableCredentials() === false) {
+    return {
+      ok: false,
+      status: 'rejected',
+      code: 'NO_DEVKIT_CREDENTIALS',
+      service: 'AgentArts',
+      operation: `browser ${params.operation} (SDK control plane)`,
+      error:
+        'No injectable AK/SK credentials — set HUAWEICLOUD_SDK_AK/HUAWEICLOUD_SDK_SK (or run the devkit auth flow) before approving a browser write. The token was NOT consumed.',
+    };
+  }
+  // Binding + credentials verified — consume (single-use tombstone) before
+  // executing. A failed execution burns the token (concurrency safety);
+  // the failure payload says so.
+  if (!store.consume(approvalToken)) {
+    const recheck = store.inspect(approvalToken);
+    if (recheck.state === 'already_consumed') {
+      return {
+        ok: true,
+        status: 'ok',
+        outcome: 'already_processed',
+        note: replayGuidanceNote(params.operation, true),
+      };
+    }
+    return {
+      ok: false,
+      status: 'rejected',
+      code: recheck.state === 'expired' ? 'CONFIRM_TOKEN_EXPIRED' : 'CONFIRM_TOKEN_NOT_FOUND',
+      service: 'AgentArts',
+      operation: `browser ${params.operation} (SDK control plane)`,
+      error: 'approvalToken could not be consumed (raced and pruned?) — re-plan.',
+    };
+  }
+  const childEnv = buildChildEnv({ injectCredentials: true });
+  const timeoutMs = options.timeoutMs ?? DEFAULT_APPROVED_TIMEOUT_MS;
+  const args = ['-c', BROWSER_WRITE_SNIPPET];
+  const outcome = await runOverPythonCandidates({
+    args,
+    childEnv,
+    timeoutMs,
+    stdinData: JSON.stringify(request),
+    runCandidate: options.runCandidate,
+    shapeResult: (result, candidate) => {
+      const parsed = parseSnippetStdout(result);
+      return enrichBrowserWrite(shapeBrowserResult(result, candidate, params, timeoutMs, parsed), params, parsed);
+    },
+  });
+  // Fallthrough honesty (the memory bridge's round-1/2 rule): when NO
+  // python candidate could run the SDK, the generic install remediation
+  // comes back marked unshaped: true — shapeResult never ran, so the
+  // consumed-token disclosure must come from here.
+  if (!outcome.ok && outcome.unshaped === true) {
+    outcome.error = `${outcome.error} The single-use approval token was already CONSUMED by this attempt and stays burned — after fixing the SDK install, re-plan (replaying this token returns already_processed without executing anything).`;
+  }
+  return outcome;
 }

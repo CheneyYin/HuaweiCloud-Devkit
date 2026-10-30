@@ -5,10 +5,17 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { readAgentartsBrowser, callAgentartsBrowserTool } from '../plugins/huaweicloud-core/src/agentarts-browser.mjs';
+import {
+  readAgentartsBrowser,
+  planAgentartsBrowserWrite,
+  runAgentartsBrowserWrite,
+  callAgentartsBrowserTool,
+} from '../plugins/huaweicloud-core/src/agentarts-browser.mjs';
 import {
   AGENTARTS_BROWSER_TOOL_DEFINITIONS,
+  AGENTARTS_BROWSER_WRITE_TOOL_DEFINITIONS,
   BROWSER_READ_OPERATIONS,
+  BROWSER_WRITE_OPERATIONS,
 } from '../plugins/huaweicloud-core/src/agentarts-browser-tools.mjs';
 import { clearRuntimeCredentials, setRuntimeCredentials } from '../plugins/huaweicloud-core/src/auth/credentials.mjs';
 import { callTool } from '../plugins/huaweicloud-core/src/tools.mjs';
@@ -310,3 +317,352 @@ test(
     });
   },
 );
+
+// ---------------------------------------------------------------------------
+// B3: write bridge (resource lifecycle) — token-gated like every approved
+// cloud write. These import lazily so the read-only import surface above
+// stays honest about what the read tests exercise.
+
+test('browser write validates the boundary before any token is minted', async () => {
+  await withIsolation(async () => {
+    const bad = async (params, pattern) => {
+      const out = planAgentartsBrowserWrite(params);
+      assert.equal(out.ok, false, JSON.stringify(params));
+      assert.match(out.error, pattern);
+    };
+    await bad({ operation: 'start_session' }, /operation must be one of/);
+    await bad({ operation: 'create_browser' }, /name is required for create_browser/);
+    await bad({ operation: 'create_browser', name: 'UPPER' }, /name must match/);
+    await bad({ operation: 'create_browser', name: 'x' }, /name must match/);
+    await bad({ operation: 'create_browser', name: '-starts-dash' }, /name must match/);
+    await bad(
+      { operation: 'create_browser', name: 'ok-name', auth_type: 'OAUTH' },
+      /auth_type must be "IAM" or "API_KEY"/,
+    );
+    // api_key_name: required with API_KEY, rejected with IAM (naming a key
+    // the IAM data plane never uses), pattern-checked.
+    await bad(
+      { operation: 'create_browser', name: 'ok-name', auth_type: 'API_KEY' },
+      /api_key_name is required when auth_type=API_KEY/,
+    );
+    await bad(
+      { operation: 'create_browser', name: 'ok-name', auth_type: 'IAM', api_key_name: 'some-key' },
+      /api_key_name only applies to auth_type=API_KEY/,
+    );
+    await bad(
+      { operation: 'create_browser', name: 'ok-name', auth_type: 'API_KEY', api_key_name: 'has spaces' },
+      /api_key_name must match/,
+    );
+    await bad(
+      { operation: 'create_browser', name: 'ok-name', description: '' },
+      /description must be a non-empty string/,
+    );
+    await bad(
+      { operation: 'create_browser_profile', name: 'ok-name', description: 'x'.repeat(4097) },
+      /description must be at most 4096 characters/,
+    );
+    // update_browser REQUIRES tags (the only updatable field exposed).
+    await bad({ operation: 'update_browser', browser_id: 'b1' }, /update_browser requires a non-empty tags array/);
+    await bad({ operation: 'update_browser' }, /browser_id is required for update_browser/);
+    await bad({ operation: 'delete_browser' }, /browser_id is required for delete_browser/);
+    await bad({ operation: 'delete_browser_profile' }, /profile_id is required for delete_browser_profile/);
+    // Tags shape: the SDK's own rules enforced at THIS boundary, before
+    // any token is minted (a server 400 after minting wastes the plan).
+    await bad({ operation: 'create_browser', name: 'ok-name', tags: 'nope' }, /tags must be an array/);
+    await bad(
+      { operation: 'create_browser', name: 'ok-name', tags: [{ key: 'a', value: '1', extra: 'x' }] },
+      /tags\[0\] must have exactly the keys "key" and "value"/,
+    );
+    await bad({ operation: 'create_browser', name: 'ok-name', tags: [{ key: 'a' }] }, /tags\[0\] must have exactly/);
+    await bad(
+      { operation: 'create_browser', name: 'ok-name', tags: [{ key: 'a', value: '' }] },
+      /tags\[0\]\.key and \.value must be non-empty strings/,
+    );
+    await bad(
+      {
+        operation: 'create_browser',
+        name: 'ok-name',
+        tags: [
+          { key: 'a', value: '1' },
+          { key: 'a', value: '2' },
+        ],
+      },
+      /duplicates key "a"/,
+    );
+    await bad(
+      {
+        operation: 'create_browser',
+        name: 'ok-name',
+        tags: Array.from({ length: 21 }, (_, i) => ({ key: `k${i}`, value: 'v' })),
+      },
+      /at most 20 items/,
+    );
+    // Applicability: a legal key in the wrong operation.
+    await bad(
+      { operation: 'delete_browser', browser_id: 'b1', name: 'sneaky' },
+      /"name" is not a parameter of delete_browser/,
+    );
+    await bad(
+      { operation: 'create_browser', name: 'ok-name', observability: { logs: {} } },
+      /Unknown parameter "observability"/,
+    );
+    await bad({ operation: 'create_browser', name: 'ok-name', region: 42 }, /region must be a non-empty string/);
+  });
+});
+
+test('browser write plan canonicalizes IAM, sorts tags, and teaches the auth split', async () => {
+  await withIsolation(async () => {
+    // Default auth_type → IAM, canonicalized into the approved request.
+    const plan = planAgentartsBrowserWrite({
+      operation: 'create_browser',
+      name: 'team-browser',
+      description: 'demo',
+      tags: [
+        { key: 'env', value: 'prod' },
+        { key: 'app', value: 'web' },
+      ],
+    });
+    assert.equal(plan.ok, true);
+    assert.equal(plan.tier, 'approved');
+    assert.equal(plan.request.auth_type, 'IAM');
+    assert.equal(plan.request.api_key_name, undefined);
+    // Tags SORT by key in the canonical request (byte-stable binding).
+    assert.deepEqual(plan.request.tags, [
+      { key: 'app', value: 'web' },
+      { key: 'env', value: 'prod' },
+    ]);
+    assert.match(plan.approvalNote, /auth_type defaults to IAM/);
+    assert.equal(typeof plan.approvalToken, 'string');
+    assert.ok(plan.approvalToken.length > 0);
+
+    // Empty tags array is DROPPED (the SDK treats [] as unset — the
+    // approval shows what executes).
+    const emptyTags = planAgentartsBrowserWrite({ operation: 'create_browser', name: 't2', tags: [] });
+    assert.equal(emptyTags.request.tags, undefined);
+
+    // Explicit API_KEY: key name required, the trap-61 teaching fires.
+    const apiKeyPlan = planAgentartsBrowserWrite({
+      operation: 'create_browser',
+      name: 'legacy-browser',
+      auth_type: 'API_KEY',
+      api_key_name: 'legacy-key',
+    });
+    assert.equal(apiKeyPlan.request.auth_type, 'API_KEY');
+    assert.equal(apiKeyPlan.request.api_key_name, 'legacy-key');
+    assert.match(apiKeyPlan.approvalNote, /console api_key/);
+    assert.match(apiKeyPlan.approvalNote, /trap 61/);
+
+    // Deletes carry the irreversible label.
+    const del = planAgentartsBrowserWrite({ operation: 'delete_browser', browser_id: 'b1' });
+    assert.deepEqual(del.labels, ['irreversible']);
+    assert.match(del.approvalNote, /Labels: irreversible/);
+
+    // Region default in the canonical request.
+    assert.equal(plan.request.region, 'cn-southwest-2');
+    const regional = planAgentartsBrowserWrite({ operation: 'delete_browser', browser_id: 'b1', region: 'cn-north-4' });
+    assert.equal(regional.request.region, 'cn-north-4');
+  });
+});
+
+test('browser write enforces the token lifecycle and exact-parameter binding', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const params = {
+      operation: 'create_browser',
+      name: 'team-browser',
+      tags: [
+        { key: 'env', value: 'prod' },
+        { key: 'app', value: 'web' },
+      ],
+    };
+    const plan = planAgentartsBrowserWrite(params);
+    assert.equal(plan.ok, true);
+
+    // No attestation → the repo's three-element contract throws.
+    await assert.rejects(
+      () => runAgentartsBrowserWrite({ ...params, approvalToken: plan.approvalToken }),
+      /approvedByUser must be true/,
+    );
+
+    // No token → remediation points at the plan tool.
+    const noToken = await runAgentartsBrowserWrite({ ...params, approvedByUser: true });
+    assert.equal(noToken.ok, false);
+    assert.match(noToken.error, /approvalToken is required/);
+
+    // Different parameters → binding mismatch, token NOT consumed. The
+    // changed name stays pattern-valid (a boundary rejection is a
+    // different failure than a binding mismatch).
+    const changed = await runAgentartsBrowserWrite(
+      { ...params, approvedByUser: true, approvalToken: plan.approvalToken, name: 'changed-browser' },
+      { runCandidate: async () => ({ exitCode: 0, stdout: '{}', stderr: '' }) },
+    );
+    assert.equal(changed.ok, false);
+    assert.equal(changed.code, 'CONFIRM_TOKEN_MISMATCH');
+    assert.match(changed.error, /DIFFERENT parameters/);
+    const recheck = await runAgentartsBrowserWrite(
+      { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+      {
+        runCandidate: async () => ({ exitCode: 0, stdout: '{"total_count": 0}', stderr: '' }),
+      },
+    );
+    assert.equal(recheck.ok, true, 'token must stay valid for the original parameters after a mismatch rejection');
+
+    // Replay after a successful execution → idempotent already_processed.
+    const replay = await runAgentartsBrowserWrite({
+      ...params,
+      approvedByUser: true,
+      approvalToken: plan.approvalToken,
+    });
+    assert.equal(replay.ok, true);
+    assert.equal(replay.outcome, 'already_processed');
+    assert.match(replay.note, /Verify with huaweicloud_agentarts_browser_read/);
+  });
+});
+
+test('browser write rejects without burning the token when no AK/SK is injectable', async () => {
+  await withIsolation(async () => {
+    clearRuntimeCredentials();
+    const params = { operation: 'delete_browser', browser_id: 'b1' };
+    const plan = planAgentartsBrowserWrite(params);
+    assert.equal(plan.ok, true);
+    const out = await runAgentartsBrowserWrite({ ...params, approvedByUser: true, approvalToken: plan.approvalToken });
+    assert.equal(out.ok, false);
+    assert.equal(out.code, 'NO_DEVKIT_CREDENTIALS');
+    assert.match(out.error, /token was NOT consumed/);
+    // After credentials appear, the SAME token still executes (the
+    // pre-consumption rejection protected it).
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const retry = await runAgentartsBrowserWrite(
+      { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+      {
+        runCandidate: async () => ({ exitCode: 0, stdout: '{"deleted": true}', stderr: '' }),
+      },
+    );
+    assert.equal(retry.ok, true);
+  });
+});
+
+test('browser write executes with AK/SK injected, request on stdin, and the create notes teaching', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const params = { operation: 'create_browser', name: 'team-browser', description: 'demo' };
+    const plan = planAgentartsBrowserWrite(params);
+    const seen = [];
+    const out = await runAgentartsBrowserWrite(
+      { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+      {
+        runCandidate: async (candidate, args, childEnv, stdinData) => {
+          seen.push({ args, childEnv, stdinData });
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              id: 'b-1',
+              name: 'team-browser',
+              auth_type: 'IAM',
+              status: 'RUNNING',
+              access_endpoint: 'gw.example.com',
+            }),
+            stderr: '',
+          };
+        },
+      },
+    );
+    assert.equal(out.ok, true);
+    assert.equal(seen.length, 1);
+    const { args, childEnv, stdinData } = seen[0];
+    assert.equal(childEnv.HUAWEICLOUD_SDK_AK, 'AKVALUE123');
+    assert.equal(args.length, 2);
+    assert.equal(args[0], '-c');
+    assert.deepEqual(JSON.parse(stdinData), plan.request);
+    // Write-side enrichment: the create notes teach traps 62 + 63 (the
+    // shared defaultgw + access_endpoint semantics).
+    assert.ok(out.notes.length >= 1);
+    assert.match(out.notes.join(' '), /access_endpoint/);
+    assert.match(out.notes.join(' '), /trap 62/);
+    assert.match(out.notes.join(' '), /trap 63/);
+
+    // Delete success carries the staleness-window note.
+    const delParams = { operation: 'delete_browser', browser_id: 'b-1' };
+    const delPlan = planAgentartsBrowserWrite(delParams);
+    const delOut = await runAgentartsBrowserWrite(
+      { ...delParams, approvedByUser: true, approvalToken: delPlan.approvalToken },
+      {
+        runCandidate: async () => ({ exitCode: 0, stdout: '{"deleted": true}', stderr: '' }),
+      },
+    );
+    assert.equal(delOut.ok, true);
+    assert.match(delOut.notes.join(' '), /staleness window/);
+
+    // Update success carries the success ≠ applied verify rule.
+    const updParams = { operation: 'update_browser', browser_id: 'b-1', tags: [{ key: 'env', value: 'prod' }] };
+    const updPlan = planAgentartsBrowserWrite(updParams);
+    const updOut = await runAgentartsBrowserWrite(
+      { ...updParams, approvedByUser: true, approvalToken: updPlan.approvalToken },
+      {
+        runCandidate: async () => ({ exitCode: 0, stdout: '{"id": "b-1", "tags": []}', stderr: '' }),
+      },
+    );
+    assert.equal(updOut.ok, true);
+    assert.match(updOut.notes.join(' '), /success ≠ applied/);
+  });
+});
+
+test('browser write failure burns the token and says so; the unshaped fallthrough discloses too', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const params = { operation: 'create_browser', name: 'team-browser' };
+    const plan = planAgentartsBrowserWrite(params);
+    const failed = await runAgentartsBrowserWrite(
+      { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+      {
+        runCandidate: async () => ({
+          exitCode: 1,
+          stdout: '',
+          stderr: 'ToolsAPIError: AgentArts.02000001 Incorrect request parameters',
+        }),
+      },
+    );
+    assert.equal(failed.ok, false);
+    assert.match(failed.error, /token was consumed by this attempt/);
+
+    // Every candidate fails to spawn: the generic install remediation
+    // comes back unshaped (shapeResult never ran) — the consumed-token
+    // disclosure must come from the wrapper.
+    const plan2 = planAgentartsBrowserWrite({ operation: 'create_browser', name: 'team-browser-2' });
+    const out = await runAgentartsBrowserWrite(
+      { operation: 'create_browser', name: 'team-browser-2', approvedByUser: true, approvalToken: plan2.approvalToken },
+      {
+        runCandidate: async () => ({ exitCode: null, stdout: '', stderr: '', spawnError: new Error('gone') }),
+      },
+    );
+    assert.equal(out.ok, false);
+    assert.match(out.error, /already CONSUMED by this attempt and stays burned/);
+    assert.match(out.error, /replaying this token returns already_processed/);
+  });
+});
+
+test('browser write tool surface: plan/write pair, enum parity, irreversible labels pinned', async () => {
+  assert.equal(AGENTARTS_BROWSER_WRITE_TOOL_DEFINITIONS.length, 2);
+  const [planDef, writeDef] = AGENTARTS_BROWSER_WRITE_TOOL_DEFINITIONS;
+  assert.equal(planDef.name, 'huaweicloud_agentarts_browser_plan');
+  assert.equal(writeDef.name, 'huaweicloud_agentarts_browser_write');
+  assert.deepEqual(
+    [...planDef.inputSchema.properties.operation.enum].sort((a, b) => a.localeCompare(b)),
+    [...BROWSER_WRITE_OPERATIONS].sort((a, b) => a.localeCompare(b)),
+  );
+  assert.deepEqual(
+    [...writeDef.inputSchema.properties.operation.enum].sort((a, b) => a.localeCompare(b)),
+    [...BROWSER_WRITE_OPERATIONS].sort((a, b) => a.localeCompare(b)),
+  );
+  for (const def of [planDef, writeDef]) {
+    for (const banned of ['api_key', 'apiKey', 'api-key', 'key', 'sk', 'ak']) {
+      assert.equal(banned in def.inputSchema.properties, false, `${def.name} must not accept a ${banned} parameter`);
+    }
+  }
+  assert.match(planDef.description, /auth_type to IAM/);
+  assert.match(planDef.description, /trap 61/);
+  assert.match(writeDef.description, /irreversible/);
+  assert.match(writeDef.description, /success ≠ applied/);
+  assert.match(writeDef.description, /seconds-scale/);
+  assert.deepEqual(writeDef.inputSchema.required, ['approvalToken', 'approvedByUser', 'operation']);
+});
