@@ -31,12 +31,13 @@ SDK 钉版不升: 0.1.9 与 0.1.7 的 browser/code_interpreter 面字节级一�
 - [x] 回写 docs/agentarts-pr0-findings.md browser 节（陷阱 61-70）+ docs/agentarts-upstream-asks.md（诉求 #29-34）
 - [x] 仓库门禁: `npm run lint` + `npm test` + `npm run validate` + `npm run format` + `npm run pack:verify`（全绿, 提交 a13b0ae5）
 
-### 对抗检视循环【R1-R6 六轮完成, 无已知未修缺陷（陷阱 71-74）】
+### 对抗检视循环【R1-R7 七轮完成（陷阱 71-75）; R1-R6 无已知未修缺陷, R7 修复 B4 的八项】
 
 - [x] R1: 三评审（契约/安全/平价漂移）, 18 项发现 → 9 修复 3 记录不修, 提交 92fb8055
 - [x] R2: 双评审（验证+回归 / 全新角度）, 16 项发现 → 6 修复 2 记录不修（跨进程锁 + fail-closed store）
 - [x] R3/R4: 确认轮（R2 新机械）→ 锁协议重写（pid 活性 + rename 原子破锁 + 属主校验释放）; R4 的不可读锁内容死循环被自家测试当场抓获修复
-- [x] R5/R6: 终确认轮（R4 锁）→ 破锁 TOCTOU 修复（rename 后内容校验 + linkSync 原子放回）、空锁即释、真并发竞态测试（5 连跑稳定）; R5 验证 R4 其余不变量全部成立; 第六轮后无已知未修缺陷
+- [x] R5/R6: 终确认轮（R4 锁）→ 破锁 TOCTOU 修复（rename 后内容校验 + linkSync 原子放回）、空锁即释、真并发竞态测试（5 连跑稳定）; R5 验证 R4 其余不变量全部成立
+- [x] R7: B4 轮（单评审）→ 八项修复（陷阱 75: dispatch 钉、精确名探测、租约保存披露、竞态披露、replay 指引、可达的写时守卫、描述更新、snippet 执行钉）; 9-11 记 Noted
 
 ### B2 读桥（控制面）【实现完成, 单测 8 绿】
 
@@ -56,13 +57,13 @@ SDK 钉版不升: 0.1.9 与 0.1.7 的 browser/code_interpreter 面字节级一�
 - [x] create/get 响应解析 `access_endpoint`（补 https://）存入资源档案, 供 B4 会话与 B5 动作接数据面端点（陷阱 62）【R1 修订: 无独立资源档案文件——B4 起 start 时经 get_browser 云端解析入会话状态文件, create 响应在结果面携带】
 - [x] 删 browser 清理对应会话状态文件; skill 教 delete 后 list 秒级残留窗口需轮询确认（陷阱 63）【会话状态文件归 B4; 残留窗口教学已在富集 note】
 
-### B4 会话生命周期
+### B4 会话生命周期【实现完成, R7 对抗轮修复在档（陷阱 75）】
 
-- [ ] start/stop/get_session/save_profile/update_stream 走 approved 写契约
-- [ ] start 捕获会话状态文件 `agentarts-browser-session-<session_id>.json`（0600, 非凭证但同惯例）: browser_name、session_id、automation/live_view stream 端点（B1 实测 start 响应含完整 wss:// URL, 陷阱 68——endpoint getter-only 不可重建, 必须在 start 时存档）、租约到期（start 时刻 + session_timeout）
-- [ ] start 前查既有会话文件（二次 start 静默覆盖会孤儿化云侧会话, BC:904-905）
-- [ ] stop_session 免审批（清理动作放行, 风险只减不增）; take_control 免审批（人类接管, 风险只减不增, 陷阱 66）; release_control 归位交互类
-- [ ] 会话用 browser name 寻址; 数据面端点从资源档案的 access_endpoint 解析（IAM 型构造参数 auth_type 传数据面分支）
+- [x] start/stop/get_session/save_profile/update_stream: start/save/update 走 approved 写契约; get/stop/take_control 走新免审批工具 `huaweicloud_agentarts_browser_session`
+- [x] start 捕获会话状态文件 `agentarts-browser-session-<session_id>.json`（0600, 无凭证）: browser/session 上下文、automation/live_view stream 端点（陷阱 68 的 getter-only 补偿）、租约到期（start + session_timeout）
+- [x] start 前查既有会话文件（plan 时 + 写时 coded 重查, 二次 start 静默覆盖会孤儿化云侧会话, BC:904-905）; 陈旧记录自动清扫; mint 后并发租约披露（check-then-act 残余, 陷阱 75d）
+- [x] stop_session 免审批（清理放行）; take_control 免审批（人类接管, 陷阱 66）; release_control = update_stream enabled 走写对（重武装方向受门控）
+- [x] 会话用 browser name 寻址; 数据面端点从 start 写的控制面探测解析（access_endpoint + 精确名断言, 陷阱 62/75b）; save/update 的 region/端点/auth 从状态文件解析（不进审批面）
 
 ### B5 动作工具
 
