@@ -781,6 +781,26 @@ function enrichBrowserSessionWrite(payload, params, request, rawResult) {
   if (params.operation === 'start_session' && payload.ok) {
     const state = captureSessionState(rawResult, request);
     if (state) {
+      // R7/R8 post-mint conflict disclosure: the guard is check-then-act
+      // across the async spawn gap — a concurrent start on the same browser
+      // can have minted another lease. Disclose instead of pretending
+      // atomicity. R8: the filter applies the guard's OWN liveness
+      // predicate (an already-expired concurrent lease is not "live" and
+      // not an orphan hazard), and the scan runs in the save-failure
+      // branch too (a foreign lease is disclosable even when our own
+      // lease record could not be written).
+      const concurrentNote = (browserName, ownId) => {
+        const live = scanBrowserSessions().filter(
+          (other) =>
+            other.browser_name === browserName &&
+            other.session_id !== ownId &&
+            typeof other.lease_expires_at === 'number' &&
+            other.lease_expires_at > Date.now(),
+        );
+        return live.length > 0
+          ? ` CONCURRENT-START WARNING: ${live.length} other live lease(s) exist for browser "${browserName}" (${live.map((c) => c.session_id).join(', ')}) — the earlier cloud session is likely ORPHANED (the guard is check-then-act across the spawn; the SDK's own second start overwrites silently, BC:904-905). Stop the orphaned one via the console or wait for its timeout.`
+          : '';
+      };
       let saved = null;
       try {
         saved = saveBrowserSession(state);
@@ -790,21 +810,11 @@ function enrichBrowserSessionWrite(payload, params, request, rawResult) {
         // consumed-token disclosure (R7).
         payload.notes = [
           ...(payload.notes || []),
-          `WARNING: the session state file could NOT be written (${error.message}) — the cloud session is live as session_id ${state.session_id} but this toolkit cannot drive or stop it. Stop the session via the console before it times out (${state.session_timeout}s).`,
+          `WARNING: the session state file could NOT be written (${error.message}) — the cloud session is live as session_id ${state.session_id} but this toolkit cannot drive or stop it. Stop the session via the console before it times out (${state.session_timeout}s).${concurrentNote(state.browser_name, state.session_id)}`,
         ];
       }
       if (saved && saved.ok) {
-        // R7 post-mint conflict disclosure: the guard is check-then-act
-        // across the async spawn gap — a concurrent start on the same
-        // browser can have minted another lease. Disclose instead of
-        // pretending atomicity.
-        const concurrent = scanBrowserSessions().filter(
-          (other) => other.browser_name === state.browser_name && other.session_id !== state.session_id,
-        );
-        const conflictNote =
-          concurrent.length > 0
-            ? ` CONCURRENT-START WARNING: ${concurrent.length} other live lease(s) exist for browser "${state.browser_name}" (${concurrent.map((c) => c.session_id).join(', ')}) — the earlier cloud session is likely ORPHANED (the guard is check-then-act across the spawn; the SDK's own second start overwrites silently, BC:904-905). Stop the orphaned one via the console or wait for its timeout.`
-            : '';
+        const conflictNote = concurrentNote(state.browser_name, state.session_id);
         payload.notes = [
           ...(payload.notes || []),
           `Session lease recorded: session_id ${state.session_id}, lease expires at ${new Date(state.lease_expires_at).toISOString()} (${state.session_timeout}s). Drive it with huaweicloud_agentarts_browser_session (get_session / stop_session / take_control) by session_id; the state file is ${saved.path} (0600). live_view_endpoint (${state.live_view_endpoint || 'absent in response'}) is the human's live view.${conflictNote}`,
@@ -812,7 +822,7 @@ function enrichBrowserSessionWrite(payload, params, request, rawResult) {
       } else if (saved && !saved.ok) {
         payload.notes = [
           ...(payload.notes || []),
-          `WARNING: the session state file could not be recorded (${saved.error}) — the cloud session is live as session_id ${state.session_id} but this toolkit cannot drive it. Stop it via the console before it times out.`,
+          `WARNING: the session state file could not be recorded (${saved.error}) — the cloud session is live as session_id ${state.session_id} but this toolkit cannot drive it. Stop it via the console before it times out.${concurrentNote(state.browser_name, state.session_id)}`,
         ];
       }
     } else {

@@ -1750,28 +1750,90 @@ test('the write-time orphan-guard recheck blocks a lease that appeared after pla
     assert.equal(blocked.code, 'SESSION_LEASE_CONFLICT');
     assert.match(blocked.error, /unexpired session lease already exists/);
     assert.match(blocked.error, /token was NOT consumed/);
-    // The lease goes away: the SAME token executes (the pre-consume
-    // rejection protected it).
+    // The lease goes away: the SAME token EXECUTES (the pre-consume
+    // rejection protected it). R8: distinguish a real execution from an
+    // already_processed replay — assert no outcome field, the lease file
+    // landed, and exactly one spawn (a burned-then-replayed token would
+    // answer ok:true with outcome already_processed and spawn nothing).
     unlinkSync(join(home, '.config', 'huaweicloud', `agentarts-browser-session-${SESSION_ID}.json`));
+    let spawns = 0;
     const out = await runAgentartsBrowserWrite(
       { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
       {
-        runCandidate: async () => ({
-          exitCode: 0,
-          stdout: pyDumps({
-            browser: {
-              id: BROWSER_ID,
-              name: 'team-browser',
-              auth_type: 'IAM',
-              access_endpoint: 'https://gw.example.com',
-            },
-            session: { browser_name: 'team-browser', session_id: SESSION_ID, name: 's1' },
-          }),
-          stderr: '',
-        }),
+        runCandidate: async () => {
+          spawns += 1;
+          return {
+            exitCode: 0,
+            stdout: pyDumps({
+              browser: {
+                id: BROWSER_ID,
+                name: 'team-browser',
+                auth_type: 'IAM',
+                access_endpoint: 'https://gw.example.com',
+              },
+              session: { browser_name: 'team-browser', session_id: SESSION_ID, name: 's1' },
+            }),
+            stderr: '',
+          };
+        },
       },
     );
     assert.equal(out.ok, true, JSON.stringify(out));
+    assert.equal(out.outcome, undefined, 'a real execution carries no outcome field (already_processed would)');
+    assert.equal(spawns, 1, 'exactly one execution spawn');
+    assert.ok(
+      existsSync(join(home, '.config', 'huaweicloud', `agentarts-browser-session-${SESSION_ID}.json`)),
+      'the lease record landed',
+    );
+    unlinkSync(join(home, '.config', 'huaweicloud', `agentarts-browser-session-${SESSION_ID}.json`));
+  });
+});
+
+test('the concurrent-lease scan only counts LIVE foreign leases (R8 expiry filter)', async () => {
+  await withIsolation(async (home) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const params = { operation: 'start_session', browser_name: 'team-browser', session_name: 's1' };
+    const plan = planAgentartsBrowserWrite(params);
+    const out = await runAgentartsBrowserWrite(
+      { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+      {
+        runCandidate: async () => {
+          // A foreign lease for the same browser that is ALREADY EXPIRED:
+          // not live, not an orphan hazard — must not fire the warning.
+          writeSessionFile(home, {
+            browser_name: 'team-browser',
+            session_id: '11111111-2222-3333-4444-555555555555',
+            lease_expires_at: Date.now() - 5_000,
+          });
+          return {
+            exitCode: 0,
+            stdout: pyDumps({
+              browser: {
+                id: BROWSER_ID,
+                name: 'team-browser',
+                auth_type: 'IAM',
+                access_endpoint: 'https://gw.example.com',
+              },
+              session: { browser_name: 'team-browser', session_id: SESSION_ID, name: 's1', streams: {} },
+            }),
+            stderr: '',
+          };
+        },
+      },
+    );
+    assert.equal(out.ok, true, JSON.stringify(out));
+    assert.equal(
+      out.notes.join(' ').includes('CONCURRENT-START WARNING'),
+      false,
+      'an expired foreign lease must not warn',
+    );
+    for (const id of [SESSION_ID, '11111111-2222-3333-4444-555555555555']) {
+      try {
+        unlinkSync(join(home, '.config', 'huaweicloud', `agentarts-browser-session-${id}.json`));
+      } catch {
+        // gone
+      }
+    }
   });
 });
 
