@@ -1694,3 +1694,331 @@ test('the session tool surface: one free tool, enum parity, dispatch through the
   const { TOOL_DEFINITIONS } = await import('../plugins/huaweicloud-core/src/tools.mjs');
   assert.ok(TOOL_DEFINITIONS.some((t) => t.name === 'huaweicloud_agentarts_browser_session'));
 });
+
+// ---------------------------------------------------------------------------
+// R7 fix round: the mutation survivors (session-tool dispatch case, the
+// write-time orphan-guard recheck) and the never-executed B4 snippets.
+
+test(
+  'callTool dispatches the session tool through the shared switch (stub python)',
+  { skip: process.platform === 'win32' },
+  async () => {
+    await withIsolation(async (home) => {
+      setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+      writeSessionFile(home);
+      const stubBin = join(home, 'bin');
+      mkdirSync(stubBin, { recursive: true });
+      const stubPython = join(stubBin, 'python');
+      writeFileSync(
+        stubPython,
+        ['#!/bin/bash', 'cat > /dev/null', 'printf \'{"status": "Healthy"}\'', 'exit 0', ''].join('\n'),
+        { encoding: 'utf8', mode: 0o755 },
+      );
+      const stubCli = join(stubBin, 'agentarts');
+      writeFileSync(stubCli, ['#!/bin/bash', 'exit 0', ''].join('\n'), { encoding: 'utf8', mode: 0o755 });
+      const previousBin = process.env.AGENTARTS_BIN;
+      process.env.AGENTARTS_BIN = stubCli;
+      try {
+        const out = await callTool('huaweicloud_agentarts_browser_session', {
+          operation: 'get_session',
+          session_id: SESSION_ID,
+        });
+        assert.equal(out.ok, true, JSON.stringify(out));
+        assert.match(out.operation, /browser session get_session/);
+        assert.deepEqual(out.result, { status: 'Healthy' });
+      } finally {
+        process.env.AGENTARTS_BIN = previousBin;
+      }
+    });
+  },
+);
+
+test('the write-time orphan-guard recheck blocks a lease that appeared after plan (token survives)', async () => {
+  await withIsolation(async (home) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // Plan with NO lease on record.
+    const params = { operation: 'start_session', browser_name: 'team-browser', session_name: 's1' };
+    const plan = planAgentartsBrowserWrite(params);
+    assert.equal(plan.ok, true, plan.error);
+    // The lease appears externally (another process's start completed).
+    writeSessionFile(home, { browser_name: 'team-browser', session_name: 'external-s' });
+    const blocked = await runAgentartsBrowserWrite(
+      { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+      { runCandidate: async () => ({ exitCode: 0, stdout: '{}', stderr: '' }) },
+    );
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.code, 'SESSION_LEASE_CONFLICT');
+    assert.match(blocked.error, /unexpired session lease already exists/);
+    assert.match(blocked.error, /token was NOT consumed/);
+    // The lease goes away: the SAME token executes (the pre-consume
+    // rejection protected it).
+    unlinkSync(join(home, '.config', 'huaweicloud', `agentarts-browser-session-${SESSION_ID}.json`));
+    const out = await runAgentartsBrowserWrite(
+      { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+      {
+        runCandidate: async () => ({
+          exitCode: 0,
+          stdout: pyDumps({
+            browser: {
+              id: BROWSER_ID,
+              name: 'team-browser',
+              auth_type: 'IAM',
+              access_endpoint: 'https://gw.example.com',
+            },
+            session: { browser_name: 'team-browser', session_id: SESSION_ID, name: 's1' },
+          }),
+          stderr: '',
+        }),
+      },
+    );
+    assert.equal(out.ok, true, JSON.stringify(out));
+  });
+});
+
+test(
+  'the session write snippet runs against a fake SDK: exact-name probe and happy path',
+  { skip: process.platform === 'win32' },
+  async () => {
+    await withIsolation(async () => {
+      const source = readFileSync(join(rootDir, 'plugins/huaweicloud-core/src/agentarts-browser.mjs'), 'utf8');
+      const match = source.match(/const BROWSER_SESSION_WRITE_SNIPPET = \[([\s\S]*?)\]\.join\('\\n'\);/);
+      assert.ok(match, 'snippet extraction failed');
+      const snippet = eval(`[${match[1]}]`).join('\n');
+      const dir = mkdtempSync(join(tmpdir(), 'browser-sess-snippet-'));
+      const snippetPath = join(dir, 'snippet.py');
+      writeFileSync(snippetPath, snippet);
+      const makeDriver = (listedName) => {
+        const path = join(dir, `driver-${listedName}.py`);
+        const lines = [
+          'import sys, types',
+          "fake = types.ModuleType('agentarts')",
+          "sdk = types.ModuleType('agentarts.sdk')",
+          'class Browser:',
+          '    def __init__(self, region=None, data_endpoint=None, auth_type="API_KEY"):',
+          '        pass',
+          '    def list_browsers(self, name=None, **kw):',
+          `        return {"items": [{"id": "id-1", "name": "${listedName}", "auth_type": "IAM", "access_endpoint": "gw.example.com"}], "total_count": 1}`,
+          '    def start_session(self, browser_name, session_name, **kw):',
+          '        return {"browser_name": browser_name, "session_id": "0857507a-f598-43b8-9bdd-00cb0d91e8cb", "name": session_name, "streams": {}}',
+          'sdk.Browser = Browser',
+          'fake.sdk = sdk',
+          "sys.modules['agentarts'] = fake",
+          "sys.modules['agentarts.sdk'] = sdk",
+          "exec(compile(open(sys.argv[1]).read(), 'snippet', 'exec'))",
+          '',
+        ];
+        writeFileSync(path, lines.join('\n'));
+        return path;
+      };
+      const request = pyDumps({
+        operation: 'start_session',
+        region: 'cn-southwest-2',
+        browser_name: 'team-browser',
+        session_name: 's1',
+      });
+      // Exact match: the envelope prints and exit 0.
+      const okRun = spawnSync('python3', [makeDriver('team-browser'), snippetPath], {
+        input: request,
+        encoding: 'utf8',
+        timeout: 15_000,
+      });
+      assert.equal(okRun.status, 0, `stderr: ${okRun.stderr}`);
+      const parsed = JSON.parse(okRun.stdout);
+      assert.equal(parsed.browser.name, 'team-browser');
+      assert.equal(parsed.session.session_id, '0857507a-f598-43b8-9bdd-00cb0d91e8cb');
+      // Fuzzy match: the probe REFUSES to start the wrong browser (R7).
+      const fuzzy = spawnSync('python3', [makeDriver('team-browser-2'), snippetPath], {
+        input: request,
+        encoding: 'utf8',
+        timeout: 15_000,
+      });
+      assert.equal(fuzzy.status, 1, 'the exact-name mismatch must exit 1');
+      assert.match(fuzzy.stderr, /did not match exactly/);
+      rmSync(dir, { recursive: true, force: true });
+    });
+  },
+);
+
+test(
+  'the session tool snippet runs against a fake SDK (get/stop/take)',
+  { skip: process.platform === 'win32' },
+  async () => {
+    await withIsolation(async () => {
+      const source = readFileSync(join(rootDir, 'plugins/huaweicloud-core/src/agentarts-browser.mjs'), 'utf8');
+      const match = source.match(/const BROWSER_SESSION_TOOL_SNIPPET = \[([\s\S]*?)\]\.join\('\\n'\);/);
+      assert.ok(match, 'snippet extraction failed');
+      const snippet = eval(`[${match[1]}]`).join('\n');
+      const dir = mkdtempSync(join(tmpdir(), 'browser-sess-tool-'));
+      const snippetPath = join(dir, 'snippet.py');
+      writeFileSync(snippetPath, snippet);
+      const driver = join(dir, 'driver.py');
+      writeFileSync(
+        driver,
+        [
+          'import sys, types',
+          "fake = types.ModuleType('agentarts')",
+          "sdk = types.ModuleType('agentarts.sdk')",
+          'calls = []',
+          'class Browser:',
+          '    def __init__(self, region=None, data_endpoint=None, auth_type="API_KEY"):',
+          '        pass',
+          '    @property',
+          '    def browser_name(self): return self._bn',
+          '    @browser_name.setter',
+          '    def browser_name(self, v): self._bn = v; calls.append(("browser_name", v))',
+          '    @property',
+          '    def session_id(self): return self._sid',
+          '    @session_id.setter',
+          '    def session_id(self, v): self._sid = v; calls.append(("session_id", v))',
+          '    def get_session(self): return {"status": "Healthy", "calls": len(calls)}',
+          '    def stop_session(self): calls.append(("stop", True)); return True',
+          '    def update_stream(self, stream_status, client_token=None): return {"stream_status": stream_status}',
+          'sdk.Browser = Browser',
+          'fake.sdk = sdk',
+          "sys.modules['agentarts'] = fake",
+          "sys.modules['agentarts.sdk'] = sdk",
+          "exec(compile(open(sys.argv[1]).read(), 'snippet', 'exec'))",
+          '',
+        ].join('\n'),
+      );
+      const base = {
+        region: 'cn-southwest-2',
+        data_endpoint: 'https://gw.example.com',
+        auth_type: 'IAM',
+        browser_name: 'team-browser',
+        session_id: SESSION_ID,
+      };
+      for (const op of ['get_session', 'stop_session', 'take_control']) {
+        const out = spawnSync('python3', [driver, snippetPath], {
+          input: pyDumps({ operation: op, ...base }),
+          encoding: 'utf8',
+          timeout: 15_000,
+        });
+        assert.equal(out.status, 0, `${op} stderr: ${out.stderr}`);
+        const parsed = JSON.parse(out.stdout);
+        if (op === 'get_session') assert.equal(parsed.status, 'Healthy');
+        if (op === 'stop_session') assert.equal(parsed.stopped, true);
+        if (op === 'take_control') assert.equal(parsed.stream_status, 'disabled');
+      }
+      rmSync(dir, { recursive: true, force: true });
+    });
+  },
+);
+
+test('a concurrent-lease conflict after mint is disclosed in the start notes (check-then-act residual)', async () => {
+  await withIsolation(async (home) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const params = { operation: 'start_session', browser_name: 'team-browser', session_name: 's1' };
+    const plan = planAgentartsBrowserWrite(params);
+    const out = await runAgentartsBrowserWrite(
+      { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+      {
+        // The foreign live lease for the SAME browser appears DURING the
+        // async spawn gap (the check-then-act residual the post-mint
+        // disclosure covers).
+        runCandidate: async () => {
+          writeSessionFile(home, {
+            browser_name: 'team-browser',
+            session_id: '11111111-2222-3333-4444-555555555555',
+          });
+          return {
+            exitCode: 0,
+            stdout: pyDumps({
+              browser: {
+                id: BROWSER_ID,
+                name: 'team-browser',
+                auth_type: 'IAM',
+                access_endpoint: 'https://gw.example.com',
+              },
+              session: { browser_name: 'team-browser', session_id: SESSION_ID, name: 's1', streams: {} },
+            }),
+            stderr: '',
+          };
+        },
+      },
+    );
+    assert.equal(out.ok, true, JSON.stringify(out));
+    assert.match(out.notes.join(' '), /CONCURRENT-START WARNING/);
+    assert.match(out.notes.join(' '), /11111111-2222-3333-4444-555555555555/);
+    // Cleanup both leases.
+    for (const id of [SESSION_ID, '11111111-2222-3333-4444-555555555555']) {
+      try {
+        unlinkSync(join(home, '.config', 'huaweicloud', `agentarts-browser-session-${id}.json`));
+      } catch {
+        // gone
+      }
+    }
+  });
+});
+
+test('a capture failure on a live start discloses the undriveable session (non-UUID id and unwritable store)', async () => {
+  await withIsolation(async (home) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // Non-UUID session_id in the response: capture fails, the WARNING
+    // branch fires (R7 — previously silent).
+    const params = { operation: 'start_session', browser_name: 'team-browser', session_name: 's1' };
+    const plan = planAgentartsBrowserWrite(params);
+    const out = await runAgentartsBrowserWrite(
+      { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+      {
+        runCandidate: async () => ({
+          exitCode: 0,
+          stdout: pyDumps({
+            browser: {
+              id: BROWSER_ID,
+              name: 'team-browser',
+              auth_type: 'IAM',
+              access_endpoint: 'https://gw.example.com',
+            },
+            session: { browser_name: 'team-browser', session_id: 'not-a-uuid', name: 's1', streams: {} },
+          }),
+          stderr: '',
+        }),
+      },
+    );
+    assert.equal(out.ok, true, JSON.stringify(out));
+    assert.match(out.notes.join(' '), /could NOT be captured/);
+    assert.match(out.notes.join(' '), /not-a-uuid/);
+    // The LEASE path is unwritable while the approval store stays
+    // writable: the session state file's path is a DIRECTORY — the save
+    // throws inside the enrichment and the WARNING discloses instead of a
+    // raw throw (R7).
+    const dir = join(home, '.config', 'huaweicloud');
+    mkdirSync(dir, { recursive: true });
+    const plan2 = planAgentartsBrowserWrite({
+      operation: 'start_session',
+      browser_name: 'team-browser',
+      session_name: 's2',
+    });
+    const leasePath = join(dir, `agentarts-browser-session-${SESSION_ID}.json`);
+    mkdirSync(leasePath, { recursive: true });
+    const out2 = await runAgentartsBrowserWrite(
+      {
+        operation: 'start_session',
+        browser_name: 'team-browser',
+        session_name: 's2',
+        approvedByUser: true,
+        approvalToken: plan2.approvalToken,
+      },
+      {
+        runCandidate: async () => ({
+          exitCode: 0,
+          stdout: pyDumps({
+            browser: {
+              id: BROWSER_ID,
+              name: 'team-browser',
+              auth_type: 'IAM',
+              access_endpoint: 'https://gw.example.com',
+            },
+            session: { browser_name: 'team-browser', session_id: SESSION_ID, name: 's2', streams: {} },
+          }),
+          stderr: '',
+        }),
+      },
+    );
+    rmSync(leasePath, { recursive: true, force: true });
+    assert.equal(out2.ok, true, JSON.stringify(out2));
+    assert.match(out2.notes.join(' '), /could NOT be written/);
+    assert.match(out2.notes.join(' '), /Stop the session via the console/);
+  });
+});

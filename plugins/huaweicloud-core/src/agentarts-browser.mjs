@@ -633,6 +633,19 @@ export function planAgentartsBrowserWrite(params = {}) {
       error: invalid,
     };
   }
+  // Orphan guard (plan-time local check; the write rechecks pre-consume
+  // with a coded rejection).
+  if (params.operation === 'start_session') {
+    const guard = guardExistingSession(params.browser_name);
+    if (guard) {
+      return {
+        ok: false,
+        service: 'AgentArts',
+        operation: `browser ${params.operation} (SDK control plane)`,
+        error: guard,
+      };
+    }
+  }
   const request = buildBrowserWriteRequest(params);
   let approvalToken;
   try {
@@ -768,20 +781,55 @@ function enrichBrowserSessionWrite(payload, params, request, rawResult) {
   if (params.operation === 'start_session' && payload.ok) {
     const state = captureSessionState(rawResult, request);
     if (state) {
-      const saved = saveBrowserSession(state);
-      if (saved.ok) {
+      let saved = null;
+      try {
+        saved = saveBrowserSession(state);
+      } catch (error) {
+        // The lease carrier itself failed (disk/permissions) — the cloud
+        // session is LIVE: disclose loudly instead of throwing past the
+        // consumed-token disclosure (R7).
         payload.notes = [
           ...(payload.notes || []),
-          `Session lease recorded: session_id ${state.session_id}, lease expires at ${new Date(state.lease_expires_at).toISOString()} (${state.session_timeout}s). Drive it with huaweicloud_agentarts_browser_session (get_session / stop_session / take_control) by session_id; the state file is ${saved.path} (0600). live_view_endpoint (${state.live_view_endpoint || 'absent in response'}) is the human's live view.`,
+          `WARNING: the session state file could NOT be written (${error.message}) — the cloud session is live as session_id ${state.session_id} but this toolkit cannot drive or stop it. Stop the session via the console before it times out (${state.session_timeout}s).`,
+        ];
+      }
+      if (saved && saved.ok) {
+        // R7 post-mint conflict disclosure: the guard is check-then-act
+        // across the async spawn gap — a concurrent start on the same
+        // browser can have minted another lease. Disclose instead of
+        // pretending atomicity.
+        const concurrent = scanBrowserSessions().filter(
+          (other) => other.browser_name === state.browser_name && other.session_id !== state.session_id,
+        );
+        const conflictNote =
+          concurrent.length > 0
+            ? ` CONCURRENT-START WARNING: ${concurrent.length} other live lease(s) exist for browser "${state.browser_name}" (${concurrent.map((c) => c.session_id).join(', ')}) — the earlier cloud session is likely ORPHANED (the guard is check-then-act across the spawn; the SDK's own second start overwrites silently, BC:904-905). Stop the orphaned one via the console or wait for its timeout.`
+            : '';
+        payload.notes = [
+          ...(payload.notes || []),
+          `Session lease recorded: session_id ${state.session_id}, lease expires at ${new Date(state.lease_expires_at).toISOString()} (${state.session_timeout}s). Drive it with huaweicloud_agentarts_browser_session (get_session / stop_session / take_control) by session_id; the state file is ${saved.path} (0600). live_view_endpoint (${state.live_view_endpoint || 'absent in response'}) is the human's live view.${conflictNote}`,
+        ];
+      } else if (saved && !saved.ok) {
+        payload.notes = [
+          ...(payload.notes || []),
+          `WARNING: the session state file could not be recorded (${saved.error}) — the cloud session is live as session_id ${state.session_id} but this toolkit cannot drive it. Stop it via the console before it times out.`,
         ];
       }
     } else {
       // The session is LIVE in the cloud but the local lease could not be
-      // captured (unexpected response shape) — disclose loudly: without
-      // the record, the session tool cannot address it.
+      // captured (unexpected shape / non-UUID session id) — disclose
+      // loudly: without the record, the session tool cannot address it.
+      // Best-effort: surface whatever session id the raw response carried.
+      let rawId = '(unreadable)';
+      try {
+        const raw = JSON.parse(rawResult.stdout);
+        if (raw && raw.session && typeof raw.session.session_id === 'string') rawId = raw.session.session_id;
+      } catch {
+        // leave unreadable
+      }
       payload.notes = [
         ...(payload.notes || []),
-        'WARNING: the session state file could NOT be captured from the start response (unexpected shape) — the cloud session is live but this toolkit cannot drive or stop it by id. Capture the session details from the payload and stop the session via the console.',
+        `WARNING: the session state file could NOT be captured from the start response (unexpected shape) — the cloud session is live as session_id ${rawId} but this toolkit cannot drive or stop it by id. Stop the session via the console before it times out.`,
       ];
     }
   }
@@ -802,9 +850,13 @@ function replayGuidanceNote(operation, concurrency) {
   const verify =
     operation === 'create_browser'
       ? 'huaweicloud_agentarts_browser_read (list_browsers by name)'
-      : operation === 'update_browser' || operation === 'delete_browser'
-        ? 'huaweicloud_agentarts_browser_read (get_browser per id — not-found on a delete means deleted; the update-family rule is success ≠ applied)'
-        : 'huaweicloud_agentarts_browser_read (list_browser_profiles)';
+      : operation === 'start_session' || operation === 'update_stream'
+        ? 'huaweicloud_agentarts_browser_session (get_session by the session id from the original result) or the local session state file'
+        : operation === 'save_profile'
+          ? 'huaweicloud_agentarts_browser_read (get_browser_profile per id)'
+          : operation === 'update_browser' || operation === 'delete_browser'
+            ? 'huaweicloud_agentarts_browser_read (get_browser per id — not-found on a delete means deleted; the update-family rule is success ≠ applied)'
+            : 'huaweicloud_agentarts_browser_read (list_browser_profiles)';
   return `${prefix} Verify with ${verify} BEFORE re-planning anything.`;
 }
 
@@ -1247,9 +1299,6 @@ function validateBrowserWriteSessionExtension(candidate) {
         return 'profile_configuration must be an object (opaque, passed through as-is).';
       }
     }
-    // Orphan guard: plan-time local check (rechecked at write time).
-    const guard = guardExistingSession(candidate.browser_name);
-    if (guard) return guard;
   }
   if (candidate.operation === 'save_profile' || candidate.operation === 'update_stream') {
     if (candidate.region !== undefined && candidate.region !== null) {
@@ -1344,6 +1393,12 @@ const BROWSER_SESSION_WRITE_SNIPPET = [
   '            print("ToolsAPIError: browser {} not found — list_browsers by name returned nothing (verify with huaweicloud_agentarts_browser_read)".format(params["browser_name"]), file=sys.stderr)',
   '            sys.exit(1)',
   '        info = items[0]',
+  '        # R7: the server-side name filter is EXACTNESS-UNMEASURED — a',
+  '        # fuzzy or reordered match must not silently start the wrong',
+  '        # browser (the approval bound this exact name).',
+  '        if info.get("name") != params["browser_name"]:',
+  '            print("ToolsAPIError: list_browsers returned {} for name {} — the name filter did not match exactly; refusing to start the wrong browser".format(info.get("name"), params["browser_name"]), file=sys.stderr)',
+  '            sys.exit(1)',
   '        endpoint = info.get("access_endpoint")',
   '        if not endpoint:',
   '            print("ToolsAPIError: browser {} carries no access_endpoint (unexpected shape)".format(params["browser_name"]), file=sys.stderr)',
@@ -1416,6 +1471,10 @@ function captureSessionState(rawResult, request) {
     const session = parsed && parsed.session;
     if (!browser || !session || typeof session !== 'object') return null;
     if (!session.session_id || !session.browser_name) return null;
+    // A non-UUID session_id cannot address the 0600 state file — treat as
+    // capture failure (the WARNING branch discloses the undriveable live
+    // session, R7).
+    if (!UUID_PATTERN.test(String(session.session_id))) return null;
     const startedAt = Date.now();
     const timeout = typeof request.session_timeout === 'number' ? request.session_timeout : 900;
     return {
