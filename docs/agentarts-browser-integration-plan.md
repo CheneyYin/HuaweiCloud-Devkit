@@ -38,7 +38,8 @@ SDK 钉版不升: 0.1.9 与 0.1.7 的 browser/code_interpreter 面字节级一�
 - [x] R3/R4: 确认轮（R2 新机械）→ 锁协议重写（pid 活性 + rename 原子破锁 + 属主校验释放）; R4 的不可读锁内容死循环被自家测试当场抓获修复
 - [x] R5/R6: 终确认轮（R4 锁）→ 破锁 TOCTOU 修复（rename 后内容校验 + linkSync 原子放回）、空锁即释、真并发竞态测试（5 连跑稳定）; R5 验证 R4 其余不变量全部成立
 - [x] R7: B4 轮（单评审）→ 八项修复（陷阱 75: dispatch 钉、精确名探测、租约保存披露、竞态披露、replay 指引、可达的写时守卫、描述更新、snippet 执行钉）; 9-11 记 Noted
-- [x] R8/R9: 确认轮（R7 修复全验证, 七变异全杀）→ 手术轮三处（陷阱 76: token-存活真钉、扫描活性谓词、失败路径共享披露）; B4 九轮收敛, 无已知未修缺陷
+- [x] R8/R9: 确认轮（R7 修复全验证, 七变异全杀）→ 手术轮三处（陷阱 76: token-存活真钉、扫描活性谓词、失败路径共享披露）; B4 九轮收敛
+- [x] R10/R11: B5 轮（单评审）→ 八项修复（陷阱 77: 信封 error 不变量消灭 undefined 前缀、mouse_drag 缺省、无租约记录拒绝、截断下围栏检测、锚定映射、snippet 硬化）
 
 ### B2 读桥（控制面）【实现完成, 单测 8 绿】
 
@@ -66,15 +67,15 @@ SDK 钉版不升: 0.1.9 与 0.1.7 的 browser/code_interpreter 面字节级一�
 - [x] stop_session 免审批（清理放行）; take_control 免审批（人类接管, 陷阱 66）; release_control = update_stream enabled 走写对（重武装方向受门控）
 - [x] 会话用 browser name 寻址; 数据面端点从 start 写的控制面探测解析（access_endpoint + 精确名断言, 陷阱 62/75b）; save/update 的 region/端点/auth 从状态文件解析（不进审批面）
 
-### B5 动作工具
+### B5 动作工具【实现完成, R10/R11 对抗轮修复在档（陷阱 77）】
 
-- [ ] `huaweicloud_agentarts_browser_invoke`, 18 类 action 枚举
-- [ ] 逐操作参数校验在桥内重实现: presses 1-100、keys 1-5、wait 0.1-30s、quality 1-100、format png/jpeg
-- [ ] 操作前检查会话文件存在且未过期（本地到期前 30s 警告）; 服务端 "Session not found" 映射为过期指引、 "Stream is disabled" 映射为人类接管指引（陷阱 66）
-- [ ] **is_error + current_url 双检测**: 信封 is_error 是错误位, 但围栏拦截只改 current_url 为 chrome-error:// 不置位（陷阱 65）——富集层补围栏检测 note
-- [ ] Python 片段异常捕获必须 `except BaseException`（ToolsAPIError 继承 BaseException, TH:10——本计划最大单点陷阱）
-- [ ] screenshot 大载荷: 原生 MCP image content 块透传或落 side file 返路径（B1 实测 72KB/页, 陷阱 64; B5 实现时按 mcp-protocol 的 content 形状能力裁决）
-- [ ] get_page_info 的 text 双重编码 JSON 在富集层解析（陷阱 64）
+- [x] `huaweicloud_agentarts_browser_invoke`, 18 类 action 枚举（SDK ACTION_TYPES 逐字, 结构钉 18 条）
+- [x] 逐操作参数校验在桥内重实现: presses 1-100、keys 1-5、wait 0.1-30s、quality 1-100、format png/jpeg + 逐动作必填/适用性 + 严格类型; 动作字典显式缺省（click_count 1/button left/jpeg 80/full_page false——R11 补 mouse_drag button）
+- [x] 租约门: 无记录→start 指引; 过期→SESSION_LEASE_EXPIRED coded 拒绝（陷阱 66）; 30s 窗警告; 无租约字段的损坏记录拒绝（R11, 陷阱 77c）; "Session not found"/"Stream is disabled" 锚定映射（R11 收紧）
+- [x] **is_error + current_url 双检测**: 围栏 note（陷阱 65, R11 起截断下从原始 stdout 旁路推导）
+- [x] snippet `except BaseException` + SystemExit 重抛 + 逐块容错（坏 base64 降级 decode_error 存根）+ 同毫秒计数防碰撞（R11）
+- [x] screenshot: mcp-protocol 只支持 text 块（全工具单 JSON 文本信封）→ 裁决为 **snippet 侧解码落 0600 文件返路径/mime/尺寸**, base64 不上 stdout（陷阱 64; 假 SDK 执行测试钉 PNG 魔数/0600/零泄漏）
+- [x] get_page_info 双重编码 text 富集层解析（陷阱 64）
 
 ### B6 skill 与文档
 
