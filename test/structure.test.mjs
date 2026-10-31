@@ -1898,6 +1898,60 @@ test('the agentarts browser WRITE bridge registers with its approval contract pi
   assert.match(write.description, /success ≠ applied/);
 });
 
+test('the agentarts browser SESSION tool registers with its free-tier contract pinned (B4)', async () => {
+  const { TOOL_DEFINITIONS } = await import('../plugins/huaweicloud-core/src/tools.mjs');
+  const def = TOOL_DEFINITIONS.find((t) => t.name === 'huaweicloud_agentarts_browser_session');
+  assert.ok(def, 'tools.mjs missing huaweicloud_agentarts_browser_session');
+  const { BROWSER_SESSION_OPERATIONS } = await import('../plugins/huaweicloud-core/src/agentarts-browser-tools.mjs');
+  assert.deepEqual(
+    [...BROWSER_SESSION_OPERATIONS].sort((a, b) => a.localeCompare(b)),
+    ['get_session', 'stop_session', 'take_control'],
+  );
+  assert.deepEqual(
+    [...def.inputSchema.properties.operation.enum].sort((a, b) => a.localeCompare(b)),
+    [...BROWSER_SESSION_OPERATIONS].sort((a, b) => a.localeCompare(b)),
+  );
+  // The session tool must never accept a key parameter or a region (the
+  // session context resolves from the 0600 state file).
+  for (const banned of ['api_key', 'apiKey', 'api-key', 'key', 'sk', 'ak', 'region']) {
+    assert.equal(banned in def.inputSchema.properties, false, `session tool must not accept a ${banned} parameter`);
+  }
+  // The measured contracts are taught in the tool text itself.
+  assert.match(def.description, /no session subcommands/);
+  assert.match(def.description, /trap 66/);
+  assert.match(def.description, /trap 67/);
+  assert.match(def.description, /stream_status=enabled/);
+});
+
+test('the agentarts browser INVOKE tool registers with its lease-gated contract pinned (B5)', async () => {
+  const { TOOL_DEFINITIONS } = await import('../plugins/huaweicloud-core/src/tools.mjs');
+  const def = TOOL_DEFINITIONS.find((t) => t.name === 'huaweicloud_agentarts_browser_invoke');
+  assert.ok(def, 'tools.mjs missing huaweicloud_agentarts_browser_invoke');
+  const { BROWSER_INVOKE_ACTIONS } = await import('../plugins/huaweicloud-core/src/agentarts-browser-tools.mjs');
+  // Exactly the SDK's ACTION_TYPES tuple (18 entries, browser_client.py:40-59).
+  assert.equal(BROWSER_INVOKE_ACTIONS.length, 18);
+  assert.deepEqual(
+    [...BROWSER_INVOKE_ACTIONS].sort((a, b) => a.localeCompare(b)),
+    [...def.inputSchema.properties.action.enum].sort((a, b) => a.localeCompare(b)),
+  );
+  // The lease is the gate — the tool must never accept a key parameter,
+  // a region, or an approval token.
+  for (const banned of ['api_key', 'apiKey', 'api-key', 'sk', 'ak', 'region', 'approvalToken']) {
+    assert.equal(banned in def.inputSchema.properties, false, `invoke tool must not accept a ${banned} parameter`);
+  }
+  // The measured contracts are taught in the tool text itself.
+  assert.match(def.description, /chrome-error:\/\//);
+  assert.match(def.description, /trap 65/);
+  assert.match(def.description, /trap 66/);
+  assert.match(def.description, /trap 61/);
+  assert.match(def.description, /Lease-gated, not token-gated/);
+  // Source pin: the snippet strips image blocks to files (the base64
+  // never crosses stdout) and writes them 0600.
+  const source = readFileSync(join(pluginRoot, 'src', 'agentarts-browser.mjs'), 'utf8');
+  assert.match(source, /agentarts-browser-screenshot-/);
+  assert.match(source, /os\.chmod\(path, 0o600\)/);
+});
+
 test('huawei-agentarts SKILL.md routes the memory data-plane bridge (U2/U3)', () => {
   const body = readFileSync(join(pluginRoot, 'skills', 'huawei-agentarts', 'SKILL.md'), 'utf8');
   // The routing floor: all three memory tools are taught (the read bridge

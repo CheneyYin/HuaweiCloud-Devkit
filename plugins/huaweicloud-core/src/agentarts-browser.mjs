@@ -32,11 +32,13 @@ import {
   buildChildEnv,
   DEFAULT_APPROVED_TIMEOUT_MS,
   hasInjectableCredentials,
+  OUTPUT_DIR,
   READONLY_TIMEOUT_MS,
   runOverPythonCandidates,
   saveLargeOutput,
 } from './agentarts-cli.mjs';
 import {
+  BROWSER_INVOKE_ACTIONS,
   BROWSER_READ_OPERATIONS,
   BROWSER_SESSION_OPERATIONS,
   BROWSER_WRITE_OPERATIONS,
@@ -351,6 +353,7 @@ export async function callAgentartsBrowserTool(name, rawArgs = {}) {
   if (name === 'huaweicloud_agentarts_browser_plan') return planAgentartsBrowserWrite(rawArgs);
   if (name === 'huaweicloud_agentarts_browser_write') return runAgentartsBrowserWrite(rawArgs);
   if (name === 'huaweicloud_agentarts_browser_session') return runAgentartsBrowserSession(rawArgs);
+  if (name === 'huaweicloud_agentarts_browser_invoke') return runAgentartsBrowserInvoke(rawArgs);
   return { ok: false, error: `Unknown agentarts browser tool: ${name}` };
 }
 
@@ -1662,4 +1665,377 @@ function enrichBrowserSession(payload, params, session, rawResult) {
     payload.error = `${payload.error} The session's browser is API_KEY-typed: the data plane needs the console api_key exported as HUAWEICLOUD_SDK_BROWSER_API_KEY in the agent launcher's environment (the create response never returns the key value — trap 61).`;
   }
   return payload;
+}
+
+// ---------------------------------------------------------------------------
+// B5: the lease-gated action tool. One invoke surface for all 18 action
+// types; the lease recorded by start_session IS the approval boundary.
+// Boundary validation reimplements the SDK wrappers' own rules
+// (presses 1-100, keys 1-5, wait 0.1-30, quality 1-100, format png/jpeg —
+// browser_client.py:1476-1641) so a deterministic client-side rejection
+// cannot waste a spawn; the action dict is built HERE and the snippet makes
+// ONE generic invoke call (no per-type Python branching).
+
+const INVOKE_PARAM_KEYS = [
+  'action',
+  'session_id',
+  'x',
+  'y',
+  'button',
+  'click_count',
+  'start_x',
+  'start_y',
+  'end_x',
+  'end_y',
+  'delta_x',
+  'delta_y',
+  'key',
+  'presses',
+  'keys',
+  'text',
+  'url',
+  'format',
+  'quality',
+  'full_page',
+  'duration',
+  'tab_id',
+];
+
+const INVOKE_ACTION_PARAMS = {
+  mouse_click: ['x', 'y', 'button', 'click_count'],
+  mouse_move: ['x', 'y'],
+  mouse_drag: ['start_x', 'start_y', 'end_x', 'end_y', 'button'],
+  mouse_scroll: ['x', 'y', 'delta_x', 'delta_y'],
+  key_press: ['key', 'presses'],
+  key_type: ['text'],
+  key_shortcut: ['keys'],
+  navigate: ['url'],
+  go_back: [],
+  go_forward: [],
+  refresh: [],
+  get_page_info: [],
+  screenshot: ['format', 'quality', 'full_page'],
+  wait: ['duration'],
+  list_tabs: [],
+  switch_tab: ['tab_id'],
+  close_tab: ['tab_id'],
+  new_tab: ['url'],
+};
+
+// Defaults the SDK wrappers would fill (BC:1259-1720): applied here so the
+// built action dict is explicit and identical between validation and
+// execution.
+const INVOKE_ACTION_DEFAULTS = {
+  mouse_click: { button: 'left', click_count: 1 },
+  screenshot: { format: 'jpeg', quality: 80, full_page: false },
+  key_press: { presses: 1 },
+};
+
+function validateBrowserInvoke(params) {
+  if (!BROWSER_INVOKE_ACTIONS.includes(params.action)) {
+    return `action must be one of: ${BROWSER_INVOKE_ACTIONS.join(', ')}.`;
+  }
+  if (typeof params.session_id !== 'string' || params.session_id.length === 0) {
+    return 'session_id is required — the id start_session returned.';
+  }
+  if (!UUID_PATTERN.test(params.session_id)) {
+    return 'session_id must be a valid UUID (the id start_session returned).';
+  }
+  // Unknown top-level keys: the typo'd-field rule (a legal key in the
+  // wrong action is the silent-no-op class).
+  const applicable = INVOKE_ACTION_PARAMS[params.action] ?? [];
+  for (const key of Object.keys(params)) {
+    if (!INVOKE_PARAM_KEYS.includes(key)) {
+      return `Unknown parameter "${key}" — legal keys: ${INVOKE_PARAM_KEYS.join(', ')}.`;
+    }
+    if (!['action', 'session_id'].includes(key) && !applicable.includes(key)) {
+      return `"${key}" is not a parameter of ${params.action} — it would be silently ignored. Applicable keys for ${params.action}: ${applicable.join(', ') || '(none beyond action/session_id)'}.`;
+    }
+  }
+  // Per-field typing (the SDK wrappers' own rules, enforced BEFORE the
+  // spawn so a deterministic child failure cannot waste it).
+  const integerFields = [
+    'x',
+    'y',
+    'click_count',
+    'start_x',
+    'start_y',
+    'end_x',
+    'end_y',
+    'delta_x',
+    'delta_y',
+    'presses',
+    'quality',
+  ];
+  for (const field of integerFields) {
+    if (params[field] !== undefined && params[field] !== null) {
+      const value = params[field];
+      if (typeof value !== 'number' || !Number.isSafeInteger(value) || Object.is(value, -0)) {
+        return `${field} must be an integer (got ${typeof value}) — mistyped values are rejected, not coerced.`;
+      }
+    }
+  }
+  if (params.x !== undefined && params.x !== null && params.x < 0) return 'x must be >= 0.';
+  if (params.y !== undefined && params.y !== null && params.y < 0) return 'y must be >= 0.';
+  if (
+    params.click_count !== undefined &&
+    params.click_count !== null &&
+    (params.click_count < 1 || params.click_count > 100)
+  ) {
+    return 'click_count must be 1-100.';
+  }
+  if (params.presses !== undefined && params.presses !== null && (params.presses < 1 || params.presses > 100)) {
+    return 'presses must be 1-100 (the SDK rejects anything else client-side).';
+  }
+  if (params.quality !== undefined && params.quality !== null && (params.quality < 1 || params.quality > 100)) {
+    return 'quality must be 1-100 (the SDK rejects anything else client-side).';
+  }
+  if (params.button !== undefined && params.button !== null && !['left', 'right', 'middle'].includes(params.button)) {
+    return 'button must be "left", "right", or "middle".';
+  }
+  if (params.format !== undefined && params.format !== null && !['png', 'jpeg'].includes(params.format)) {
+    return 'format must be "png" or "jpeg" (the SDK rejects anything else client-side).';
+  }
+  if (params.full_page !== undefined && params.full_page !== null && typeof params.full_page !== 'boolean') {
+    return 'full_page must be a boolean.';
+  }
+  if (params.duration !== undefined && params.duration !== null) {
+    if (typeof params.duration !== 'number' || !Number.isFinite(params.duration)) {
+      return 'duration must be a number (seconds).';
+    }
+    if (params.duration < 0.1 || params.duration > 30) {
+      return 'duration must be 0.1-30 seconds (the SDK rejects anything else client-side).';
+    }
+  }
+  for (const field of ['key', 'text', 'url', 'tab_id']) {
+    if (
+      params[field] !== undefined &&
+      params[field] !== null &&
+      (typeof params[field] !== 'string' || params[field].length === 0)
+    ) {
+      return `${field} must be a non-empty string when provided.`;
+    }
+  }
+  if (params.keys !== undefined && params.keys !== null) {
+    if (!Array.isArray(params.keys) || params.keys.length < 1 || params.keys.length > 5) {
+      return 'keys must be an array of 1-5 key names (the SDK rejects anything else client-side).';
+    }
+    for (const [index, key] of params.keys.entries()) {
+      if (typeof key !== 'string' || key.length === 0) {
+        return `keys[${index}] must be a non-empty string.`;
+      }
+    }
+  }
+  // Required params per action.
+  if (params.action === 'mouse_click' || params.action === 'mouse_move' || params.action === 'mouse_scroll') {
+    if (params.x === undefined || params.x === null) return 'x is required for this action.';
+    if (params.y === undefined || params.y === null) return 'y is required for this action.';
+  }
+  if (params.action === 'mouse_drag') {
+    for (const field of ['start_x', 'start_y', 'end_x', 'end_y']) {
+      if (params[field] === undefined || params[field] === null) return `${field} is required for mouse_drag.`;
+    }
+  }
+  if (params.action === 'key_press' && (params.key === undefined || params.key === null)) {
+    return 'key is required for key_press.';
+  }
+  if (params.action === 'key_type' && (params.text === undefined || params.text === null)) {
+    return 'text is required for key_type.';
+  }
+  if (params.action === 'key_shortcut' && (params.keys === undefined || params.keys === null)) {
+    return 'keys is required for key_shortcut.';
+  }
+  if (params.action === 'navigate' && (params.url === undefined || params.url === null)) {
+    return 'url is required for navigate.';
+  }
+  if (params.action === 'wait' && (params.duration === undefined || params.duration === null)) {
+    return 'duration is required for wait.';
+  }
+  if (params.action === 'switch_tab' && (params.tab_id === undefined || params.tab_id === null)) {
+    return 'tab_id is required for switch_tab.';
+  }
+  return null;
+}
+
+// Build the SDK action dict from validated params (defaults explicit).
+function buildInvokeActionParams(params) {
+  const applicable = INVOKE_ACTION_PARAMS[params.action] ?? [];
+  const defaults = INVOKE_ACTION_DEFAULTS[params.action] || {};
+  const action = {};
+  for (const field of applicable) {
+    if (params[field] !== undefined && params[field] !== null) {
+      action[field] = params[field];
+    } else if (defaults[field] !== undefined) {
+      action[field] = defaults[field];
+    }
+  }
+  return action;
+}
+
+const BROWSER_INVOKE_SNIPPET = [
+  'import base64, json, os, sys, time',
+  'try:',
+  '    from agentarts.sdk import Browser',
+  'except ModuleNotFoundError:',
+  '    print("AGENTARTS_SDK_MISSING", file=sys.stderr)',
+  '    sys.exit(3)',
+  'try:',
+  '    params = json.loads(sys.stdin.read())',
+  '    client = Browser(region=params["region"], data_endpoint=params["data_endpoint"], auth_type=params["auth_type"])',
+  '    client.browser_name = params["browser_name"]',
+  '    client.session_id = params["session_id"]',
+  '    result = client.invoke(type=params["action"], action=params["action_params"])',
+  '    # Screenshots arrive as native MCP image blocks (base64 in content[]).',
+  '    # Decode them to 0600 files BEFORE printing: the base64 never crosses',
+  '    # stdout, so the payload stays small and parseable (trap 64: a trivial',
+  '    # page is ~72KB base64, over the envelope truncation threshold).',
+  '    def strip_images(node):',
+  '        if isinstance(node, dict):',
+  '            if node.get("type") == "image" and isinstance(node.get("data"), str):',
+  '                out_dir = params["screenshot_dir"]',
+  '                os.makedirs(out_dir, exist_ok=True)',
+  '                ext = (node.get("mime_type") or "image/jpeg").split("/")[-1]',
+  '                path = os.path.join(out_dir, "agentarts-browser-screenshot-{}-{}.{}".format(params["session_id"], int(time.time() * 1000), ext))',
+  '                with open(path, "wb") as fh:',
+  '                    fh.write(base64.b64decode(node["data"]))',
+  '                os.chmod(path, 0o600)',
+  '                return {"type": "image", "saved_to": path, "mime_type": node.get("mime_type"), "base64_chars": len(node["data"])}',
+  '            return {k: strip_images(v) for k, v in node.items()}',
+  '        if isinstance(node, list):',
+  '            return [strip_images(x) for x in node]',
+  '        return node',
+  '    result = strip_images(result)',
+  '    print(json.dumps(result, ensure_ascii=False, default=lambda o: getattr(o, "__dict__", str(o))))',
+  'except SystemExit:',
+  '    raise',
+  'except BaseException as error:',
+  '    # ToolsAPIError extends BaseException (tools_http.py:10) — the',
+  '    # browser-specific deviation, same as every browser snippet.',
+  '    print("{}: {}".format(type(error).__name__, error), file=sys.stderr)',
+  '    sys.exit(1)',
+].join('\n');
+
+// Invoke-tool post-processing: the three measured detection mappings
+// (fence via current_url, trap 65; session death and stream-disabled,
+// trap 66; API_KEY-missing, trap 61), the lease-expiry warning window,
+// and the get_page_info doubly-encoded text parse (trap 64).
+function enrichBrowserInvoke(payload, params, session, rawResult) {
+  const notes = [];
+  const now = Date.now();
+  if (payload.ok) {
+    // Lease warning window (the plan's 30s pre-expiry warning).
+    if (typeof session.lease_expires_at === 'number') {
+      const remaining = session.lease_expires_at - now;
+      if (remaining < 30_000) {
+        notes.push(
+          `The local lease expires in ${Math.max(0, Math.round(remaining / 1000))}s — finish the interaction or restart the session; after expiry the cloud session answers "Session not found".`,
+        );
+      }
+    }
+    // Fence detection (trap 65): the envelope's is_error stays FALSE on a
+    // fenced navigate — current_url is the only signal.
+    const structured = payload.result?.result?.structured_content || payload.result?.structured_content;
+    const currentUrl = structured?.current_url;
+    if (typeof currentUrl === 'string' && currentUrl.startsWith('chrome-error://')) {
+      notes.push(
+        `DOMAIN FENCE HIT: current_url is ${currentUrl} — the navigate was blocked at page-load by the session's domain fence and is_error stays false (trap 65; detection is current_url, never the error bit).`,
+      );
+    }
+    // get_page_info's content[0].text is a doubly-encoded JSON string
+    // (trap 64): parse it into an object for the display surface.
+    const content = payload.result?.result?.content || payload.result?.content;
+    if (Array.isArray(content)) {
+      for (const item of content) {
+        if (item && typeof item === 'object' && item.type === 'text' && typeof item.text === 'string') {
+          try {
+            const parsed = JSON.parse(item.text);
+            if (parsed && typeof parsed === 'object') item.text = parsed;
+          } catch {
+            // Plain text — leave it.
+          }
+        }
+      }
+    }
+    if (notes.length > 0) payload.notes = [...(payload.notes || []), ...notes];
+    return payload;
+  }
+  // Error mappings (traps 61/66).
+  const text = `${payload.stderr || ''} ${payload.error || ''}`;
+  if (/Session not found/i.test(text)) {
+    payload.error = `${payload.error} The cloud session is gone (expired at its own timeout, stopped, or orphaned — trap 66). Restart it via huaweicloud_agentarts_browser_plan (operation start_session) if you still need the browser.`;
+  } else if (/Stream is disabled/i.test(text)) {
+    payload.error = `${payload.error} A human holds control of this session (take_control was used — trap 66; page state is preserved). Release it back to the agent via the approved write huaweicloud_agentarts_browser_plan operation update_stream with stream_status=enabled.`;
+  } else if (/API Key is not provided/i.test(`${rawResult?.stderr || ''} ${payload.stderr || ''}`)) {
+    payload.error = `${payload.error} The session's browser is API_KEY-typed: the data plane needs the console api_key exported as HUAWEICLOUD_SDK_BROWSER_API_KEY in the agent launcher's environment (trap 61).`;
+  }
+  return payload;
+}
+
+export async function runAgentartsBrowserInvoke(params = {}, options = {}) {
+  const invalid = validateBrowserInvoke(params);
+  if (invalid) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `browser invoke ${params.action || '(unknown)'} (SDK data plane)`,
+      error: invalid,
+    };
+  }
+  if (hasInjectableCredentials() === false) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `browser invoke ${params.action} (SDK data plane)`,
+      error:
+        'No devkit credentials available for agentarts (HUAWEICLOUD_SDK_AK/SK injection). Run huaweicloud_auth_init first, or execute the command in your own terminal — the wrapper never falls back to unmanaged profile files or the metadata chain.',
+    };
+  }
+  const load = loadBrowserSession(params.session_id);
+  if (!load.ok) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `browser invoke ${params.action} (SDK data plane)`,
+      error: load.error,
+    };
+  }
+  const session = load.session;
+  // The lease gate (B5's core): an expired lease is rejected with restart
+  // guidance — the cloud session dies independently and would answer
+  // "Session not found" anyway (trap 66).
+  if (typeof session.lease_expires_at === 'number' && session.lease_expires_at <= Date.now()) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `browser invoke ${params.action} (SDK data plane)`,
+      code: 'SESSION_LEASE_EXPIRED',
+      error: `The local lease for session ${params.session_id} expired at ${new Date(session.lease_expires_at).toISOString()} — the cloud session dies independently at its own timeout and would answer "Session not found" (trap 66). Restart via huaweicloud_agentarts_browser_plan (operation start_session) if you still need the browser.`,
+    };
+  }
+  const request = {
+    action: params.action,
+    action_params: buildInvokeActionParams(params),
+    region: session.region,
+    data_endpoint: session.data_endpoint,
+    auth_type: session.auth_type,
+    browser_name: session.browser_name,
+    session_id: session.session_id,
+    screenshot_dir: OUTPUT_DIR,
+  };
+  const childEnv = buildChildEnv({ injectCredentials: true });
+  const timeoutMs = options.timeoutMs ?? READONLY_TIMEOUT_MS;
+  const args = ['-c', BROWSER_INVOKE_SNIPPET];
+  return runOverPythonCandidates({
+    args,
+    childEnv,
+    timeoutMs,
+    stdinData: JSON.stringify(request),
+    runCandidate: options.runCandidate,
+    shapeResult: (result, candidate) => {
+      const parsed = parseSnippetStdout(result);
+      const payload = shapeBrowserResult(result, candidate, params, timeoutMs, parsed);
+      payload.operation = `browser invoke ${params.action} (SDK data plane; no CLI subcommand in 0.1.7)`;
+      return enrichBrowserInvoke(payload, params, session, result);
+    },
+  });
 }

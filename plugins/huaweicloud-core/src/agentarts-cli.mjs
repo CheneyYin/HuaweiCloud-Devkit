@@ -47,7 +47,7 @@ export const DEFAULT_APPROVED_TIMEOUT_MS = 120_000;
 // own deadline.
 const STREAM_DRAIN_GRACE_MS = 5_000;
 const LARGE_OUTPUT_THRESHOLD = 50_000;
-const OUTPUT_DIR = join('/tmp', 'huaweicloud-devkit');
+export const OUTPUT_DIR = join('/tmp', 'huaweicloud-devkit');
 
 // The pinned agentarts-sdk version. Primary source: safety/policy.json
 // (agentartsSdkVersion) — that file ships with src/ in EVERY install layout

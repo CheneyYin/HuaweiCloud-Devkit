@@ -20,6 +20,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   readAgentartsBrowser,
   planAgentartsBrowserWrite,
+  runAgentartsBrowserInvoke,
   runAgentartsBrowserSession,
   runAgentartsBrowserWrite,
   callAgentartsBrowserTool,
@@ -2083,4 +2084,353 @@ test('a capture failure on a live start discloses the undriveable session (non-U
     assert.match(out2.notes.join(' '), /could NOT be written/);
     assert.match(out2.notes.join(' '), /Stop the session via the console/);
   });
+});
+
+// ---------------------------------------------------------------------------
+// B5: the lease-gated action tool.
+
+test('browser invoke validates the boundary (18-action enum, per-action params, SDK rules)', async () => {
+  await withIsolation(async () => {
+    const bad = async (params, pattern) => {
+      const out = await runAgentartsBrowserInvoke(params);
+      assert.equal(out.ok, false, JSON.stringify(params));
+      assert.match(out.error, pattern);
+    };
+    await bad({ action: 'invoke' }, /action must be one of/);
+    await bad({ action: 'left_mouse_click' }, /action must be one of/);
+    await bad({ action: 'navigate' }, /session_id is required/);
+    await bad({ action: 'navigate', session_id: 'nope' }, /session_id must be a valid UUID/);
+    // Per-action applicability (silent-no-op class).
+    await bad({ action: 'navigate', session_id: SESSION_ID, x: 10 }, /"x" is not a parameter of navigate/);
+    await bad(
+      { action: 'list_tabs', session_id: SESSION_ID, url: 'https://x' },
+      /"url" is not a parameter of list_tabs/,
+    );
+    // Required params per action.
+    await bad({ action: 'navigate', session_id: SESSION_ID }, /url is required for navigate/);
+    await bad({ action: 'mouse_click', session_id: SESSION_ID, x: 1 }, /y is required/);
+    await bad({ action: 'mouse_click', session_id: SESSION_ID, y: 1 }, /x is required/);
+    await bad({ action: 'key_press', session_id: SESSION_ID }, /key is required for key_press/);
+    await bad({ action: 'key_type', session_id: SESSION_ID }, /text is required for key_type/);
+    await bad({ action: 'key_shortcut', session_id: SESSION_ID }, /keys is required for key_shortcut/);
+    await bad({ action: 'wait', session_id: SESSION_ID }, /duration is required for wait/);
+    await bad(
+      { action: 'mouse_drag', session_id: SESSION_ID, start_x: 0, start_y: 0 },
+      /end_x is required for mouse_drag/,
+    );
+    await bad({ action: 'switch_tab', session_id: SESSION_ID }, /tab_id is required for switch_tab/);
+    // SDK wrapper rules enforced at the boundary.
+    await bad({ action: 'key_press', session_id: SESSION_ID, key: 'Enter', presses: 0 }, /presses must be 1-100/);
+    await bad(
+      { action: 'key_shortcut', session_id: SESSION_ID, keys: ['a', 'b', 'c', 'd', 'e', 'f'] },
+      /keys must be an array of 1-5/,
+    );
+    await bad({ action: 'wait', session_id: SESSION_ID, duration: 0.01 }, /duration must be 0.1-30 seconds/);
+    await bad({ action: 'wait', session_id: SESSION_ID, duration: 31 }, /duration must be 0.1-30 seconds/);
+    await bad({ action: 'screenshot', session_id: SESSION_ID, format: 'webp' }, /format must be "png" or "jpeg"/);
+    await bad({ action: 'screenshot', session_id: SESSION_ID, quality: 0 }, /quality must be 1-100/);
+    await bad(
+      { action: 'mouse_click', session_id: SESSION_ID, x: 1, y: 1, button: 'side' },
+      /button must be "left", "right", or "middle"/,
+    );
+    // Strict typing: no coercion.
+    await bad({ action: 'mouse_click', session_id: SESSION_ID, x: 1.5, y: 1 }, /x must be an integer \(got number\)/);
+    await bad({ action: 'mouse_click', session_id: SESSION_ID, x: true, y: 1 }, /x must be an integer \(got boolean\)/);
+  });
+});
+
+test('browser invoke lease gate: no record, expired, and the 30s warning window', async () => {
+  await withIsolation(async (home) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // No record: remediation names start_session.
+    const noRecord = await runAgentartsBrowserInvoke({ action: 'get_page_info', session_id: SESSION_ID });
+    assert.equal(noRecord.ok, false);
+    assert.match(noRecord.error, /No session state file/);
+    // Expired lease: coded rejection with restart guidance (trap 66).
+    writeSessionFile(home, { lease_expires_at: Date.now() - 1_000 });
+    const expired = await runAgentartsBrowserInvoke({ action: 'get_page_info', session_id: SESSION_ID });
+    assert.equal(expired.ok, false);
+    assert.equal(expired.code, 'SESSION_LEASE_EXPIRED');
+    assert.match(expired.error, /would answer "Session not found"/);
+    assert.match(expired.error, /start_session/);
+    // No credentials: the gate fires before the lease lookup.
+    clearRuntimeCredentials();
+    writeSessionFile(home, { lease_expires_at: Date.now() + 600_000 });
+    const noCreds = await runAgentartsBrowserInvoke({ action: 'get_page_info', session_id: SESSION_ID });
+    assert.match(noCreds.error, /No devkit credentials available for agentarts/);
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // Warning window: <30s remaining proceeds WITH the note.
+    writeSessionFile(home, { lease_expires_at: Date.now() + 10_000 });
+    let seenStdin = null;
+    const warn = await runAgentartsBrowserInvoke(
+      { action: 'get_page_info', session_id: SESSION_ID },
+      {
+        runCandidate: async (candidate, args, childEnv, stdinData) => {
+          seenStdin = stdinData;
+          return {
+            exitCode: 0,
+            stdout: pyDumps({ result: { content: [], is_error: false, structured_content: {} } }),
+            stderr: '',
+          };
+        },
+      },
+    );
+    assert.equal(warn.ok, true);
+    assert.match(warn.notes.join(' '), /expires in \d+s/);
+    // The request carries the built action dict + session context.
+    const request = JSON.parse(seenStdin);
+    assert.equal(request.action, 'get_page_info');
+    assert.deepEqual(request.action_params, {});
+    assert.equal(request.data_endpoint, 'https://gw.example.com');
+    assert.equal(request.screenshot_dir, '/tmp/huaweicloud-devkit');
+  });
+});
+
+test('browser invoke builds action dicts with explicit defaults and carries stdin context', async () => {
+  await withIsolation(async (home) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    writeSessionFile(home, { lease_expires_at: Date.now() + 600_000 });
+    const cases = [
+      { action: 'mouse_click', x: 312, y: 482, expected: { x: 312, y: 482, button: 'left', click_count: 1 } },
+      { action: 'screenshot', expected: { format: 'jpeg', quality: 80, full_page: false } },
+      { action: 'navigate', url: 'https://example.com', expected: { url: 'https://example.com' } },
+      { action: 'key_shortcut', keys: ['Control', 'c'], expected: { keys: ['Control', 'c'] } },
+    ];
+    for (const { action, expected, ...rest } of cases) {
+      let seenStdin = null;
+      const out = await runAgentartsBrowserInvoke(
+        { action, session_id: SESSION_ID, ...rest },
+        {
+          runCandidate: async (candidate, args, childEnv, stdinData) => {
+            seenStdin = stdinData;
+            return {
+              exitCode: 0,
+              stdout: pyDumps({ result: { content: [], is_error: false, structured_content: {} } }),
+              stderr: '',
+            };
+          },
+        },
+      );
+      assert.equal(out.ok, true, JSON.stringify(out));
+      assert.deepEqual(JSON.parse(seenStdin).action_params, expected, action);
+    }
+  });
+});
+
+test('browser invoke enrichment: fence detection, error mappings, and the get_page_info text parse', async () => {
+  await withIsolation(async (home) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    writeSessionFile(home, { lease_expires_at: Date.now() + 600_000 });
+    // Fence: current_url chrome-error:// with is_error FALSE still warns.
+    const fenced = await runAgentartsBrowserInvoke(
+      { action: 'navigate', session_id: SESSION_ID, url: 'https://example.com' },
+      {
+        runCandidate: async () => ({
+          exitCode: 0,
+          stdout: pyDumps({
+            result: {
+              content: [{ type: 'text', text: 'Navigated to chrome-error://chromewebdata/ (frameId=X)' }],
+              is_error: false,
+              structured_content: { current_url: 'chrome-error://chromewebdata/', action_id: 'a1' },
+            },
+          }),
+          stderr: '',
+        }),
+      },
+    );
+    assert.equal(fenced.ok, true);
+    assert.match(fenced.notes.join(' '), /DOMAIN FENCE HIT/);
+    assert.match(fenced.notes.join(' '), /trap 65/);
+    // get_page_info: the doubly-encoded text is parsed into an object.
+    const pageInfo = await runAgentartsBrowserInvoke(
+      { action: 'get_page_info', session_id: SESSION_ID },
+      {
+        runCandidate: async () => ({
+          exitCode: 0,
+          stdout: pyDumps({
+            result: {
+              content: [{ type: 'text', text: '{"url": "https://example.com/", "title": "Example Domain"}' }],
+              is_error: false,
+              structured_content: { current_url: 'https://example.com/', page_title: 'Example Domain' },
+            },
+          }),
+          stderr: '',
+        }),
+      },
+    );
+    assert.equal(pageInfo.ok, true);
+    const textItem = pageInfo.result.result.content[0];
+    assert.deepEqual(textItem.text, { url: 'https://example.com/', title: 'Example Domain' });
+    // Error mappings: Session not found → restart guidance.
+    const dead = await runAgentartsBrowserInvoke(
+      { action: 'get_page_info', session_id: SESSION_ID },
+      {
+        runCandidate: async () => ({ exitCode: 1, stdout: '', stderr: 'ToolsAPIError: Session not found' }),
+      },
+    );
+    assert.equal(dead.ok, false);
+    assert.match(dead.error, /cloud session is gone/);
+    assert.match(dead.error, /start_session/);
+    // Stream is disabled → human handoff guidance.
+    const held = await runAgentartsBrowserInvoke(
+      { action: 'navigate', session_id: SESSION_ID, url: 'https://example.com' },
+      {
+        runCandidate: async () => ({
+          exitCode: 1,
+          stdout: '',
+          stderr: 'ToolsAPIError: Stream is disabled for this session',
+        }),
+      },
+    );
+    assert.equal(held.ok, false);
+    assert.match(held.error, /human holds control/);
+    assert.match(held.error, /stream_status=enabled/);
+    // API key missing → trap 61 remediation.
+    const apiKey = await runAgentartsBrowserInvoke(
+      { action: 'get_page_info', session_id: SESSION_ID },
+      {
+        runCandidate: async () => ({
+          exitCode: 1,
+          stdout: '',
+          stderr: 'ValueError: API Key is not provided and not found in environment variable.',
+        }),
+      },
+    );
+    assert.equal(apiKey.ok, false);
+    assert.match(apiKey.error, /HUAWEICLOUD_SDK_BROWSER_API_KEY/);
+    assert.match(apiKey.error, /trap 61/);
+  });
+});
+
+test(
+  'the invoke snippet decodes screenshot image blocks to 0600 files (fake SDK)',
+  { skip: process.platform === 'win32' },
+  async () => {
+    await withIsolation(async () => {
+      const source = readFileSync(join(rootDir, 'plugins/huaweicloud-core/src/agentarts-browser.mjs'), 'utf8');
+      const match = source.match(/const BROWSER_INVOKE_SNIPPET = \[([\s\S]*?)\]\.join\('\\n'\);/);
+      assert.ok(match, 'snippet extraction failed');
+      const snippet = eval(`[${match[1]}]`).join('\n');
+      const dir = mkdtempSync(join(tmpdir(), 'browser-invoke-snippet-'));
+      const snippetPath = join(dir, 'snippet.py');
+      writeFileSync(snippetPath, snippet);
+      const shotDir = join(dir, 'shots');
+      // A real 8x8 PNG's base64 (starts iVBOR — magic verified downstream).
+      const pngBase64 =
+        'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIAQMAAAD+wSzIAAAABlBMVEX///+/v7+jQ3Y5AAAADklEQVQI12P4AIX8EAgALgAD/aN8btAAAAABJRU5ErkJggg==';
+      const driver = join(dir, 'driver.py');
+      writeFileSync(
+        driver,
+        [
+          'import sys, types',
+          "fake = types.ModuleType('agentarts')",
+          "sdk = types.ModuleType('agentarts.sdk')",
+          'class Browser:',
+          '    def __init__(self, region=None, data_endpoint=None, auth_type="API_KEY"):',
+          '        pass',
+          '    def invoke(self, type=None, action=None):',
+          '        if type == "screenshot":',
+          '            return {"content": [{"type": "image", "data": sys.argv[2], "mime_type": "image/png"}], "is_error": False, "structured_content": {"action_id": "a"}}',
+          '        return {"content": [], "is_error": False, "structured_content": {}}',
+          'sdk.Browser = Browser',
+          'fake.sdk = sdk',
+          "sys.modules['agentarts'] = fake",
+          "sys.modules['agentarts.sdk'] = sdk",
+          "exec(compile(open(sys.argv[1]).read(), 'snippet', 'exec'))",
+          '',
+        ].join('\n'),
+      );
+      const request = pyDumps({
+        action: 'screenshot',
+        action_params: { format: 'png', quality: 80, full_page: false },
+        region: 'cn-southwest-2',
+        data_endpoint: 'https://gw.example.com',
+        auth_type: 'IAM',
+        browser_name: 'team-browser',
+        session_id: SESSION_ID,
+        screenshot_dir: shotDir,
+      });
+      const out = spawnSync('python3', [driver, snippetPath, pngBase64], {
+        input: request,
+        encoding: 'utf8',
+        timeout: 15_000,
+      });
+      assert.equal(out.status, 0, `stderr: ${out.stderr}`);
+      const parsed = JSON.parse(out.stdout);
+      const saved = parsed.content[0];
+      assert.equal(saved.type, 'image');
+      assert.equal(saved.mime_type, 'image/png');
+      assert.equal(saved.base64_chars, pngBase64.length);
+      assert.ok(saved.saved_to.startsWith(shotDir), 'the image must land in the shot dir');
+      const written = readFileSync(saved.saved_to);
+      assert.equal(written.slice(0, 8).toString('hex'), '89504e470d0a1a0a', 'a real PNG header');
+      const mode = statSync(saved.saved_to).mode & 0o777;
+      assert.equal(mode, 0o600, `the screenshot file must be 0600 (got ${mode.toString(8)})`);
+      assert.equal(out.stdout.includes(pngBase64), false, 'the base64 must never cross stdout');
+      rmSync(dir, { recursive: true, force: true });
+    });
+  },
+);
+
+test(
+  'callTool dispatches the invoke tool through the shared switch (stub python)',
+  { skip: process.platform === 'win32' },
+  async () => {
+    await withIsolation(async (home) => {
+      setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+      writeSessionFile(home, { lease_expires_at: Date.now() + 600_000 });
+      const stubBin = join(home, 'bin');
+      mkdirSync(stubBin, { recursive: true });
+      const stubPython = join(stubBin, 'python');
+      writeFileSync(
+        stubPython,
+        [
+          '#!/bin/bash',
+          'cat > /dev/null',
+          'printf \'{"result": {"content": [], "is_error": false, "structured_content": {}}}\'',
+          'exit 0',
+          '',
+        ].join('\n'),
+        { encoding: 'utf8', mode: 0o755 },
+      );
+      const stubCli = join(stubBin, 'agentarts');
+      writeFileSync(stubCli, ['#!/bin/bash', 'exit 0', ''].join('\n'), { encoding: 'utf8', mode: 0o755 });
+      const previousBin = process.env.AGENTARTS_BIN;
+      process.env.AGENTARTS_BIN = stubCli;
+      try {
+        const out = await callTool('huaweicloud_agentarts_browser_invoke', {
+          action: 'get_page_info',
+          session_id: SESSION_ID,
+        });
+        assert.equal(out.ok, true, JSON.stringify(out));
+        assert.match(out.operation, /browser invoke get_page_info/);
+      } finally {
+        process.env.AGENTARTS_BIN = previousBin;
+      }
+    });
+  },
+);
+
+test('the invoke tool surface: one lease-gated tool, enum parity, no key/region params', async () => {
+  const { AGENTARTS_BROWSER_INVOKE_TOOL_DEFINITIONS, BROWSER_INVOKE_ACTIONS } =
+    await import('../plugins/huaweicloud-core/src/agentarts-browser-tools.mjs');
+  assert.equal(AGENTARTS_BROWSER_INVOKE_TOOL_DEFINITIONS.length, 1);
+  const def = AGENTARTS_BROWSER_INVOKE_TOOL_DEFINITIONS[0];
+  assert.equal(def.name, 'huaweicloud_agentarts_browser_invoke');
+  assert.deepEqual(
+    [...def.inputSchema.properties.action.enum].sort((a, b) => a.localeCompare(b)),
+    [...BROWSER_INVOKE_ACTIONS].sort((a, b) => a.localeCompare(b)),
+  );
+  assert.equal(def.inputSchema.properties.action.enum.length, 18);
+  for (const banned of ['api_key', 'apiKey', 'api-key', 'key'.replace('key', 'sk'), 'region']) {
+    assert.equal(banned in def.inputSchema.properties, false, `invoke tool must not accept a ${banned} parameter`);
+  }
+  assert.match(def.description, /chrome-error:\/\//);
+  assert.match(def.description, /trap 65/);
+  assert.match(def.description, /trap 66/);
+  assert.match(def.description, /trap 61/);
+  assert.match(def.description, /Lease-gated, not token-gated/);
+  // Registered in TOOL_DEFINITIONS.
+  const { TOOL_DEFINITIONS } = await import('../plugins/huaweicloud-core/src/tools.mjs');
+  assert.ok(TOOL_DEFINITIONS.some((t) => t.name === 'huaweicloud_agentarts_browser_invoke'));
 });

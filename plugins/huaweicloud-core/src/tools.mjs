@@ -18,6 +18,7 @@ import {
 } from './agentarts-memory-tools.mjs';
 import { callAgentartsMemoryTool } from './agentarts-memory.mjs';
 import {
+  AGENTARTS_BROWSER_INVOKE_TOOL_DEFINITIONS,
   AGENTARTS_BROWSER_SESSION_TOOL_DEFINITIONS,
   AGENTARTS_BROWSER_TOOL_DEFINITIONS,
   AGENTARTS_BROWSER_WRITE_TOOL_DEFINITIONS,
@@ -1083,6 +1084,7 @@ export const TOOL_DEFINITIONS = [
   ...AGENTARTS_BROWSER_TOOL_DEFINITIONS,
   ...AGENTARTS_BROWSER_WRITE_TOOL_DEFINITIONS,
   ...AGENTARTS_BROWSER_SESSION_TOOL_DEFINITIONS,
+  ...AGENTARTS_BROWSER_INVOKE_TOOL_DEFINITIONS,
 ];
 
 function toolInvokeValue(name, args) {
@@ -1338,6 +1340,7 @@ export async function callTool(name, rawArgs = {}, opts = {}) {
     case 'huaweicloud_agentarts_browser_plan':
     case 'huaweicloud_agentarts_browser_write':
     case 'huaweicloud_agentarts_browser_session':
+    case 'huaweicloud_agentarts_browser_invoke':
       return callAgentartsBrowserTool(name, args);
     case 'huaweicloud_show_profile_redacted':
       return showProfileRedacted(args.profile);

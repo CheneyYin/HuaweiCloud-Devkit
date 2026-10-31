@@ -297,3 +297,108 @@ export const AGENTARTS_BROWSER_SESSION_TOOL_DEFINITIONS = [
     },
   },
 ];
+
+// The 18 invoke action types (the SDK's ACTION_TYPES tuple,
+// browser_client.py:40-59 — the client rejects anything else BEFORE the
+// network, so the enum is the whole dispatch surface).
+export const BROWSER_INVOKE_ACTIONS = [
+  'mouse_click',
+  'mouse_move',
+  'mouse_drag',
+  'mouse_scroll',
+  'key_press',
+  'key_type',
+  'key_shortcut',
+  'navigate',
+  'go_back',
+  'go_forward',
+  'refresh',
+  'get_page_info',
+  'screenshot',
+  'wait',
+  'list_tabs',
+  'switch_tab',
+  'close_tab',
+  'new_tab',
+];
+
+// Lease-gated action tool (B5): one invoke surface for all 18 types. The
+// lease recorded by start_session IS the approval boundary — actions ride
+// free within it (fence + timeout were consented at start).
+export const AGENTARTS_BROWSER_INVOKE_TOOL_DEFINITIONS = [
+  {
+    name: 'huaweicloud_agentarts_browser_invoke',
+    description:
+      "Invoke a browser action on a LIVE session (SDK data plane — the 0.1.7 CLI has no invoke subcommands). The 18 action types: navigation (navigate/go_back/go_forward/refresh/new_tab), input (mouse_click/mouse_move/mouse_drag/mouse_scroll/key_press/key_type/key_shortcut), observation (get_page_info/screenshot/list_tabs — reads through the same invoke endpoint), and control (wait/switch_tab/close_tab). Lease-gated, not token-gated: the session's recorded lease IS the approval (its domain fence and timeout were consented at start) — a missing/expired lease is rejected with restart guidance. Two detection rules the envelope cannot do for you (trap 65): the domain fence blocks at PAGE-LOAD, so a fenced navigate still answers is_error false with current_url becoming chrome-error://chromewebdata/ — watch current_url in structured_content, and the invoke envelope's own is_error bit (the server is honest about action failures). Screenshots arrive as native MCP image blocks; this bridge decodes the image to a 0600 file under /tmp/huaweicloud-devkit/ and returns the path + mime + size in the result (the base64 never rides the tool payload). get_page_info's content[0].text is a doubly-encoded JSON string — the bridge parses it into a text object. Session-death errors are mapped: 'Session not found' → the cloud session expired/was stopped (restart via start_session, trap 66); 'Stream is disabled' → a human holds control (take_control was used; release via the approved update_stream enabled, trap 66); 'API Key is not provided' → the browser is API_KEY-typed and HUAWEICLOUD_SDK_BROWSER_API_KEY is not exported (trap 61).",
+    inputSchema: {
+      type: 'object',
+      required: ['action', 'session_id'],
+      properties: {
+        action: {
+          type: 'string',
+          enum: BROWSER_INVOKE_ACTIONS,
+          description:
+            'The action type (the SDK validates membership client-side and rejects unknown types before the network).',
+        },
+        session_id: {
+          type: 'string',
+          pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+          description: 'The session id start_session returned (the 0600 lease record is looked up by it).',
+        },
+        x: { type: 'integer', minimum: 0, description: 'mouse_click/mouse_move/mouse_scroll: X coordinate.' },
+        y: { type: 'integer', minimum: 0, description: 'mouse_click/mouse_move/mouse_scroll: Y coordinate.' },
+        button: {
+          type: 'string',
+          enum: ['left', 'right', 'middle'],
+          description: 'mouse_click/mouse_drag: mouse button (default left).',
+        },
+        click_count: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 100,
+          description: 'mouse_click: number of clicks (default 1).',
+        },
+        start_x: { type: 'integer', minimum: 0, description: 'mouse_drag: start X.' },
+        start_y: { type: 'integer', minimum: 0, description: 'mouse_drag: start Y.' },
+        end_x: { type: 'integer', minimum: 0, description: 'mouse_drag: end X.' },
+        end_y: { type: 'integer', minimum: 0, description: 'mouse_drag: end Y.' },
+        delta_x: { type: 'integer', description: 'mouse_scroll: horizontal scroll delta.' },
+        delta_y: { type: 'integer', description: 'mouse_scroll: vertical scroll delta.' },
+        key: { type: 'string', description: 'key_press: key name.' },
+        presses: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 100,
+          description: 'key_press: repetitions (default 1, SDK rule).',
+        },
+        keys: {
+          type: 'array',
+          items: { type: 'string' },
+          minItems: 1,
+          maxItems: 5,
+          description: 'key_shortcut: 1-5 simultaneous key names (SDK rule).',
+        },
+        text: { type: 'string', description: 'key_type: the text to type.' },
+        url: { type: 'string', description: 'navigate/new_tab: target URL.' },
+        format: { type: 'string', enum: ['png', 'jpeg'], description: 'screenshot: image format (default jpeg).' },
+        quality: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 100,
+          description: 'screenshot: jpeg quality (default 80, SDK rule).',
+        },
+        full_page: { type: 'boolean', description: 'screenshot: capture the full page (default false).' },
+        duration: {
+          type: 'number',
+          minimum: 0.1,
+          maximum: 30,
+          description: 'wait: seconds (0.1-30, SDK rule — the SDK HTTP timeout is 30s, so a max-length wait races it).',
+        },
+        tab_id: {
+          type: 'string',
+          description: 'switch_tab (required)/close_tab (optional): target tab id (from list_tabs).',
+        },
+      },
+    },
+  },
+];
