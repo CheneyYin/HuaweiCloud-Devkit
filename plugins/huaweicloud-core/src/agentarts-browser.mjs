@@ -265,9 +265,6 @@ function shapeBrowserResult(result, candidate, params, timeoutMs, parsed = parse
     // R10: an ok:false payload ALWAYS carries an error — a plain exit-1
     // failure previously carried none, and every downstream `${payload.error}`
     // mapping then prefixed its guidance with the literal "undefined".
-    // R10: an ok:false payload ALWAYS carries an error — a plain exit-1
-    // failure previously carried none, and every downstream `${payload.error}`
-    // mapping then prefixed its guidance with the literal "undefined".
     ...(failed && !result.timedOut && !parsePolluted
       ? { error: 'Execution failed (see stderr for the SDK error).' }
       : {}),
@@ -1212,7 +1209,12 @@ function scanBrowserSessions() {
     if (!entry.startsWith('agentarts-browser-session-') || !entry.endsWith('.json')) continue;
     try {
       const parsed = JSON.parse(readFileSync(join(dir, entry), 'utf8'));
-      if (parsed && typeof parsed === 'object' && parsed.session_id && parsed.browser_name) sessions.push(parsed);
+      if (parsed && typeof parsed === 'object' && parsed.session_id && parsed.browser_name) {
+        // Carry the FILE PATH: a non-UUID inner id cannot address the file
+        // through browserSessionFile's UUID gate, and the sweep must
+        // unlink malformed records regardless (R13).
+        sessions.push({ ...parsed, __path: join(dir, entry) });
+      }
     } catch {
       // Malformed session records are not this scan's problem — load-time
       // errors disclose them by session id.
@@ -1226,12 +1228,23 @@ function guardExistingSession(browserName) {
   const matches = [];
   for (const session of scanBrowserSessions()) {
     if (session.browser_name !== browserName) continue;
-    if (typeof session.lease_expires_at === 'number' && session.lease_expires_at > now) {
+    // R13: a record failing the session shape (no numeric lease / non-UUID
+    // inner id) is undriveable AND unstoppable by every tool — holding the
+    // guard hostage until expiry would dead-end the guard's own
+    // remediation. Sweep it like an expired record (the cloud session, if
+    // any, dies at its own timeout or via the console).
+    const shapeOk = typeof session.lease_expires_at === 'number' && UUID_PATTERN.test(String(session.session_id));
+    if (shapeOk && session.lease_expires_at > now) {
       matches.push(session);
     } else {
-      // Stale record (lease expired): the cloud session may or may not be
-      // gone, but the local lease describes nothing actionable — sweep it.
-      deleteBrowserSession(session.session_id);
+      // Stale or malformed record: the local lease describes nothing
+      // actionable — sweep it BY PATH (a non-UUID inner id cannot go
+      // through the UUID-gated delete helper).
+      try {
+        unlinkSync(session.__path);
+      } catch {
+        // Already gone.
+      }
     }
   }
   if (matches.length > 0) {
@@ -1918,16 +1931,23 @@ const BROWSER_INVOKE_SNIPPET = [
   '                # action; the counter keeps same-millisecond siblings',
   '                # from overwriting each other.',
   '                try:',
+  '                    decoded = base64.b64decode(node["data"])',
   '                    out_dir = params["screenshot_dir"]',
   '                    os.makedirs(out_dir, exist_ok=True)',
   '                    ext = (node.get("mime_type") or "image/jpeg").split("/")[-1]',
   '                    image_counter[0] += 1',
   '                    path = os.path.join(out_dir, "agentarts-browser-screenshot-{}-{}-{}.{}".format(params["session_id"], int(time.time() * 1000), image_counter[0], ext))',
+  '                    # R13: decode BEFORE open — a failed decode used to',
+  '                    # leave a 0-byte non-0600 orphan behind.',
   '                    with open(path, "wb") as fh:',
-  '                        fh.write(base64.b64decode(node["data"]))',
+  '                        fh.write(decoded)',
   '                    os.chmod(path, 0o600)',
   '                    return {"type": "image", "saved_to": path, "mime_type": node.get("mime_type"), "base64_chars": len(node["data"])}',
   '                except Exception as decode_error:',
+  '                    try:',
+  '                        os.unlink(path)',
+  '                    except Exception:',
+  '                        pass',
   '                    return {"type": "image", "decode_error": str(decode_error), "base64_chars": len(node["data"])}',
   '            return {k: strip_images(v) for k, v in node.items()}',
   '        if isinstance(node, list):',

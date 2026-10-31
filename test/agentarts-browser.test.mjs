@@ -12,6 +12,7 @@ import {
   utimesSync,
   writeFileSync,
   readFileSync,
+  readdirSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -2589,6 +2590,93 @@ test(
       const parsed = JSON.parse(out.stdout);
       assert.equal(parsed.content[0].type, 'image');
       assert.ok(parsed.content[0].decode_error, 'the corrupt block must degrade to a decode_error stub');
+      rmSync(dir, { recursive: true, force: true });
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// R13: the guard's malformed-record sweep and the snippet's
+// decode-before-open ordering.
+
+test('the orphan guard sweeps malformed (undriveable) records instead of dead-ending its own remediation', async () => {
+  await withIsolation(async (home) => {
+    // A live lease with a non-UUID inner session id: pre-R13 the guard
+    // blocked the start while pointing at a stop_session that would
+    // reject the same record as malformed — an impossible remediation.
+    const dir = join(home, '.config', 'huaweicloud');
+    mkdirSync(dir, { recursive: true });
+    const malformedPath = join(dir, 'agentarts-browser-session-bad-record.json');
+    writeFileSync(
+      malformedPath,
+      JSON.stringify({
+        browser_name: 'team-browser',
+        session_id: 'not-a-uuid',
+        lease_expires_at: Date.now() + 600_000,
+      }),
+    );
+    const plan = planAgentartsBrowserWrite({
+      operation: 'start_session',
+      browser_name: 'team-browser',
+      session_name: 's1',
+    });
+    assert.equal(plan.ok, true, 'the malformed record must be swept, not block the start');
+    assert.equal(existsSync(malformedPath), false, 'the undriveable record is swept');
+  });
+});
+
+test(
+  'a failed screenshot decode leaves no orphan file behind (decode-before-open)',
+  { skip: process.platform === 'win32' },
+  async () => {
+    await withIsolation(async () => {
+      const source = readFileSync(join(rootDir, 'plugins/huaweicloud-core/src/agentarts-browser.mjs'), 'utf8');
+      const match = source.match(/const BROWSER_INVOKE_SNIPPET = \[([\s\S]*?)\]\.join\('\\n'\);/);
+      assert.ok(match, 'snippet extraction failed');
+      const snippet = eval(`[${match[1]}]`).join('\n');
+      const dir = mkdtempSync(join(tmpdir(), 'browser-decode-order-'));
+      const snippetPath = join(dir, 'snippet.py');
+      writeFileSync(snippetPath, snippet);
+      const shotDir = join(dir, 'shots');
+      const driver = join(dir, 'driver.py');
+      writeFileSync(
+        driver,
+        [
+          'import sys, types',
+          "fake = types.ModuleType('agentarts')",
+          "sdk = types.ModuleType('agentarts.sdk')",
+          'class Browser:',
+          '    def __init__(self, region=None, data_endpoint=None, auth_type="API_KEY"):',
+          '        pass',
+          '    def invoke(self, type=None, action=None):',
+          '        return {"content": [{"type": "image", "data": "!!!not-base64!!!", "mime_type": "image/png"}], "is_error": False, "structured_content": {}}',
+          'sdk.Browser = Browser',
+          'fake.sdk = sdk',
+          "sys.modules['agentarts'] = fake",
+          "sys.modules['agentarts.sdk'] = sdk",
+          "exec(compile(open(sys.argv[1]).read(), 'snippet', 'exec'))",
+          '',
+        ].join('\n'),
+      );
+      const request = pyDumps({
+        action: 'screenshot',
+        action_params: {},
+        region: 'cn-southwest-2',
+        data_endpoint: 'https://gw.example.com',
+        auth_type: 'IAM',
+        browser_name: 'team-browser',
+        session_id: SESSION_ID,
+        screenshot_dir: shotDir,
+      });
+      const out = spawnSync('python3', [driver, snippetPath], { input: request, encoding: 'utf8', timeout: 15_000 });
+      assert.equal(out.status, 0, `stderr: ${out.stderr}`);
+      const parsed = JSON.parse(out.stdout);
+      assert.ok(parsed.content[0].decode_error, 'the corrupt block degrades to a stub');
+      // The decode fires BEFORE makedirs — a failed decode may leave no
+      // directory at all (also fine: zero orphans either way).
+      if (existsSync(shotDir)) {
+        assert.deepEqual(readdirSync(shotDir), [], 'no orphan file may survive a failed decode');
+      }
       rmSync(dir, { recursive: true, force: true });
     });
   },
