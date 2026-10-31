@@ -1968,7 +1968,10 @@ test('huawei-agentarts SKILL.md routes the memory data-plane bridge (U2/U3)', ()
 
 test('huawei-agentarts SKILL.md routes the browser bridge (B2-B5)', () => {
   const body = readFileSync(join(pluginRoot, 'skills', 'huawei-agentarts', 'SKILL.md'), 'utf8');
-  // The routing floor: all four browser tools are taught.
+  // The routing floor: all five browser tools are taught (read + the
+  // plan/write pair + session + invoke). R14: a name appearing ONCE (tier
+  // row only, or bullet only) means half the teaching can vanish silently —
+  // each tool must appear at least TWICE (tier row + MCP bullet).
   for (const tool of [
     'huaweicloud_agentarts_browser_read',
     'huaweicloud_agentarts_browser_plan',
@@ -1976,11 +1979,19 @@ test('huawei-agentarts SKILL.md routes the browser bridge (B2-B5)', () => {
     'huaweicloud_agentarts_browser_session',
     'huaweicloud_agentarts_browser_invoke',
   ]) {
-    assert.ok(body.includes(tool), `SKILL.md must teach ${tool}`);
+    const mentions = body.split(tool).length - 1;
+    assert.ok(
+      mentions >= 2,
+      `SKILL.md must teach ${tool} in both the tier map and the MCP tools list (${mentions} mention(s))`,
+    );
   }
+  // Distinctive teaching content anchored (R14: the trap rows and the
+  // lease model are the load-bearing prose — each needs its own pin).
+  assert.match(body, /Session not found/);
+  assert.match(body, /orphan guard/);
   // Tier map rows for the browser model.
   assert.match(body, /readonly \(SDK control plane\)/);
-  assert.match(body, /approved \(SDK control plane\)/);
+  assert.match(body, /approved \(SDK control \+ data plane\)/);
   assert.match(body, /lease-gated \(SDK data plane\)/);
   // The lease-is-the-approval model and the auth_type split are taught.
   assert.match(body, /auth_type=IAM/);
