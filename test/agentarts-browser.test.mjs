@@ -2434,3 +2434,162 @@ test('the invoke tool surface: one lease-gated tool, enum parity, no key/region 
   const { TOOL_DEFINITIONS } = await import('../plugins/huaweicloud-core/src/tools.mjs');
   assert.ok(TOOL_DEFINITIONS.some((t) => t.name === 'huaweicloud_agentarts_browser_invoke'));
 });
+
+// ---------------------------------------------------------------------------
+// R10 fix round: the error-mapping base (no "undefined" prefixes), the
+// mouse_drag default, the malformed-lease rejection, the
+// truncation-surviving fence detection, and the corrupt-image degradation.
+
+test('error mappings never prefix "undefined" — every failure carries a base error', async () => {
+  await withIsolation(async (home) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    writeSessionFile(home, { lease_expires_at: Date.now() + 600_000 });
+    for (const stderr of [
+      'ToolsAPIError: Session not found',
+      'ToolsAPIError: Stream is disabled for this session',
+      'ValueError: API Key is not provided and not found in environment variable.',
+    ]) {
+      const out = await runAgentartsBrowserInvoke(
+        { action: 'get_page_info', session_id: SESSION_ID },
+        { runCandidate: async () => ({ exitCode: 1, stdout: '', stderr }) },
+      );
+      assert.equal(out.ok, false);
+      assert.ok(out.error, 'a failure must always carry an error');
+      assert.doesNotMatch(out.error, /^undefined/, `"${stderr}" → "${out.error}"`);
+      assert.match(out.error, /^Execution failed/);
+    }
+    // The unrelated-substring shapes no longer map (anchored regexes).
+    const unrelated = await runAgentartsBrowserInvoke(
+      { action: 'get_page_info', session_id: SESSION_ID },
+      {
+        runCandidate: async () => ({
+          exitCode: 1,
+          stdout: '',
+          stderr: 'ToolsAPIError: cache key Session not found in registry (unrelated service)',
+        }),
+      },
+    );
+    assert.equal(unrelated.ok, false);
+    assert.doesNotMatch(unrelated.error, /cloud session is gone/);
+  });
+});
+
+test('mouse_drag carries the SDK button default and a malformed lease is rejected', async () => {
+  await withIsolation(async (home) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    writeSessionFile(home, { lease_expires_at: Date.now() + 600_000 });
+    let seenStdin = null;
+    const out = await runAgentartsBrowserInvoke(
+      { action: 'mouse_drag', session_id: SESSION_ID, start_x: 0, start_y: 0, end_x: 100, end_y: 100 },
+      {
+        runCandidate: async (candidate, args, childEnv, stdinData) => {
+          seenStdin = stdinData;
+          return {
+            exitCode: 0,
+            stdout: pyDumps({ result: { content: [], is_error: false, structured_content: {} } }),
+            stderr: '',
+          };
+        },
+      },
+    );
+    assert.equal(out.ok, true);
+    assert.deepEqual(JSON.parse(seenStdin).action_params, {
+      start_x: 0,
+      start_y: 0,
+      end_x: 100,
+      end_y: 100,
+      button: 'left',
+    });
+    // A state file WITHOUT a lease field is malformed, not ungated (the
+    // lease IS the approval boundary).
+    const dir = join(home, '.config', 'huaweicloud');
+    const statePath = join(dir, `agentarts-browser-session-${SESSION_ID}.json`);
+    const raw = JSON.parse(readFileSync(statePath, 'utf8'));
+    delete raw.lease_expires_at;
+    writeFileSync(statePath, JSON.stringify(raw));
+    const ungated = await runAgentartsBrowserInvoke(
+      { action: 'get_page_info', session_id: SESSION_ID },
+      { runCandidate: async () => ({ exitCode: 0, stdout: '{}', stderr: '' }) },
+    );
+    assert.equal(ungated.ok, false);
+    assert.match(ungated.error, /malformed \(missing lease or bad session id\)/);
+  });
+});
+
+test('the fence note survives output truncation (raw-stdout derivation)', async () => {
+  await withIsolation(async (home) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    writeSessionFile(home, { lease_expires_at: Date.now() + 600_000 });
+    // A >50KB get_page_info whose structured_content carries the fence
+    // URL: the envelope drops `result` to the side file, but the note must
+    // still fire (get_page_info IS the documented fence check).
+    const big = pyDumps({
+      result: {
+        content: [{ type: 'text', text: 'x'.repeat(60_000) }],
+        is_error: false,
+        structured_content: { current_url: 'chrome-error://chromewebdata/', pad: 'y'.repeat(100) },
+      },
+    });
+    const out = await runAgentartsBrowserInvoke(
+      { action: 'get_page_info', session_id: SESSION_ID },
+      { runCandidate: async () => ({ exitCode: 0, stdout: big, stderr: '' }) },
+    );
+    assert.equal(out.ok, true);
+    assert.match(out.stdout, /truncated, full output saved to/);
+    assert.equal('result' in out, false, 'the envelope truncated the result');
+    assert.match(out.notes.join(' '), /DOMAIN FENCE HIT/, 'the fence note must survive truncation');
+  });
+});
+
+test(
+  'a corrupt image block degrades to a decode_error stub, not a failed action (snippet)',
+  { skip: process.platform === 'win32' },
+  async () => {
+    await withIsolation(async () => {
+      const source = readFileSync(join(rootDir, 'plugins/huaweicloud-core/src/agentarts-browser.mjs'), 'utf8');
+      const match = source.match(/const BROWSER_INVOKE_SNIPPET = \[([\s\S]*?)\]\.join\('\\n'\);/);
+      assert.ok(match, 'snippet extraction failed');
+      const snippet = eval(`[${match[1]}]`).join('\n');
+      const dir = mkdtempSync(join(tmpdir(), 'browser-invoke-corrupt-'));
+      const snippetPath = join(dir, 'snippet.py');
+      writeFileSync(snippetPath, snippet);
+      const driver = join(dir, 'driver.py');
+      writeFileSync(
+        driver,
+        [
+          'import sys, types',
+          "fake = types.ModuleType('agentarts')",
+          "sdk = types.ModuleType('agentarts.sdk')",
+          'class Browser:',
+          '    def __init__(self, region=None, data_endpoint=None, auth_type="API_KEY"):',
+          '        pass',
+          '    def invoke(self, type=None, action=None):',
+          '        return {"content": [{"type": "image", "data": "!!!not-base64!!!", "mime_type": "image/png"}], "is_error": False, "structured_content": {}}',
+          'sdk.Browser = Browser',
+          'fake.sdk = sdk',
+          "sys.modules['agentarts'] = fake",
+          "sys.modules['agentarts.sdk'] = sdk",
+          "exec(compile(open(sys.argv[1]).read(), 'snippet', 'exec'))",
+          '',
+        ].join('\n'),
+      );
+      const request = pyDumps({
+        action: 'screenshot',
+        action_params: {},
+        region: 'cn-southwest-2',
+        data_endpoint: 'https://gw.example.com',
+        auth_type: 'IAM',
+        browser_name: 'team-browser',
+        session_id: SESSION_ID,
+        screenshot_dir: join(dir, 'shots'),
+      });
+      const out = spawnSync('python3', [driver, snippetPath], { input: request, encoding: 'utf8', timeout: 15_000 });
+      // The action SUCCEEDED server-side: exit 0 with a decode_error stub.
+      assert.equal(out.status, 0, `stderr: ${out.stderr}`);
+      const parsed = JSON.parse(out.stdout);
+      assert.equal(parsed.content[0].type, 'image');
+      assert.ok(parsed.content[0].decode_error, 'the corrupt block must degrade to a decode_error stub');
+      rmSync(dir, { recursive: true, force: true });
+    });
+  },
+);

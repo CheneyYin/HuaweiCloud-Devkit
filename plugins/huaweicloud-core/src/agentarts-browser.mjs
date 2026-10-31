@@ -262,6 +262,15 @@ function shapeBrowserResult(result, candidate, params, timeoutMs, parsed = parse
             'exit 0 but stdout was not parseable JSON — output pollution suspected (the snippet prints clean JSON on success).',
         }
       : {}),
+    // R10: an ok:false payload ALWAYS carries an error — a plain exit-1
+    // failure previously carried none, and every downstream `${payload.error}`
+    // mapping then prefixed its guidance with the literal "undefined".
+    // R10: an ok:false payload ALWAYS carries an error — a plain exit-1
+    // failure previously carried none, and every downstream `${payload.error}`
+    // mapping then prefixed its guidance with the literal "undefined".
+    ...(failed && !result.timedOut && !parsePolluted
+      ? { error: 'Execution failed (see stderr for the SDK error).' }
+      : {}),
   };
 }
 
@@ -849,7 +858,7 @@ function enrichBrowserSessionWrite(payload, params, request, rawResult) {
   const apiKeyMissing =
     /API Key is not provided/i.test(rawResult?.stderr || '') || /API Key is not provided/i.test(payload?.stderr || '');
   if (!payload.ok && apiKeyMissing) {
-    payload.error = `${payload.error} The browser is API_KEY-typed: the data plane needs the console api_key exported as HUAWEICLOUD_SDK_BROWSER_API_KEY in the agent launcher's environment (the create response never returns the key value — trap 61). The token was consumed by this attempt — re-plan after exporting the key.`;
+    payload.error = `${payload.error || 'Execution failed.'} The browser is API_KEY-typed: the data plane needs the console api_key exported as HUAWEICLOUD_SDK_BROWSER_API_KEY in the agent launcher's environment (the create response never returns the key value — trap 61). The token was consumed by this attempt — re-plan after exporting the key.`;
   }
   return payload;
 }
@@ -1146,6 +1155,15 @@ function loadBrowserSession(sessionId) {
       return {
         ok: false,
         error: `The session state file ${file.path} is malformed — delete it and re-start the session.`,
+      };
+    }
+    // R10: the lease IS the approval boundary — a record without a numeric
+    // lease_expires_at (or with a non-UUID inner session id that would ride
+    // the wire and the screenshot filename) is malformed, not ungated.
+    if (typeof parsed.lease_expires_at !== 'number' || !UUID_PATTERN.test(String(parsed.session_id))) {
+      return {
+        ok: false,
+        error: `The session state file ${file.path} is malformed (missing lease or bad session id) — delete it and re-start the session.`,
       };
     }
     return { ok: true, session: parsed };
@@ -1662,7 +1680,7 @@ function enrichBrowserSession(payload, params, session, rawResult) {
     }
     if (notes.length > 0) payload.notes = notes;
   } else if (apiKeyMissing) {
-    payload.error = `${payload.error} The session's browser is API_KEY-typed: the data plane needs the console api_key exported as HUAWEICLOUD_SDK_BROWSER_API_KEY in the agent launcher's environment (the create response never returns the key value — trap 61).`;
+    payload.error = `${payload.error || 'Execution failed.'} The session's browser is API_KEY-typed: the data plane needs the console api_key exported as HUAWEICLOUD_SDK_BROWSER_API_KEY in the agent launcher's environment (the create response never returns the key value — trap 61).`;
   }
   return payload;
 }
@@ -1727,6 +1745,7 @@ const INVOKE_ACTION_PARAMS = {
 // execution.
 const INVOKE_ACTION_DEFAULTS = {
   mouse_click: { button: 'left', click_count: 1 },
+  mouse_drag: { button: 'left' },
   screenshot: { format: 'jpeg', quality: 80, full_page: false },
   key_press: { presses: 1 },
 };
@@ -1889,17 +1908,27 @@ const BROWSER_INVOKE_SNIPPET = [
   '    # Decode them to 0600 files BEFORE printing: the base64 never crosses',
   '    # stdout, so the payload stays small and parseable (trap 64: a trivial',
   '    # page is ~72KB base64, over the envelope truncation threshold).',
+  '    image_counter = [0]',
   '    def strip_images(node):',
   '        if isinstance(node, dict):',
   '            if node.get("type") == "image" and isinstance(node.get("data"), str):',
-  '                out_dir = params["screenshot_dir"]',
-  '                os.makedirs(out_dir, exist_ok=True)',
-  '                ext = (node.get("mime_type") or "image/jpeg").split("/")[-1]',
-  '                path = os.path.join(out_dir, "agentarts-browser-screenshot-{}-{}.{}".format(params["session_id"], int(time.time() * 1000), ext))',
-  '                with open(path, "wb") as fh:',
-  '                    fh.write(base64.b64decode(node["data"]))',
-  '                os.chmod(path, 0o600)',
-  '                return {"type": "image", "saved_to": path, "mime_type": node.get("mime_type"), "base64_chars": len(node["data"])}',
+  '                # R10: per-block fault isolation — a corrupt base64 or an',
+  '                # unwritable path degrades THIS block to a decode_error',
+  '                # stub instead of failing the whole (already-executed)',
+  '                # action; the counter keeps same-millisecond siblings',
+  '                # from overwriting each other.',
+  '                try:',
+  '                    out_dir = params["screenshot_dir"]',
+  '                    os.makedirs(out_dir, exist_ok=True)',
+  '                    ext = (node.get("mime_type") or "image/jpeg").split("/")[-1]',
+  '                    image_counter[0] += 1',
+  '                    path = os.path.join(out_dir, "agentarts-browser-screenshot-{}-{}-{}.{}".format(params["session_id"], int(time.time() * 1000), image_counter[0], ext))',
+  '                    with open(path, "wb") as fh:',
+  '                        fh.write(base64.b64decode(node["data"]))',
+  '                    os.chmod(path, 0o600)',
+  '                    return {"type": "image", "saved_to": path, "mime_type": node.get("mime_type"), "base64_chars": len(node["data"])}',
+  '                except Exception as decode_error:',
+  '                    return {"type": "image", "decode_error": str(decode_error), "base64_chars": len(node["data"])}',
   '            return {k: strip_images(v) for k, v in node.items()}',
   '        if isinstance(node, list):',
   '            return [strip_images(x) for x in node]',
@@ -1933,8 +1962,19 @@ function enrichBrowserInvoke(payload, params, session, rawResult) {
       }
     }
     // Fence detection (trap 65): the envelope's is_error stays FALSE on a
-    // fenced navigate — current_url is the only signal.
-    const structured = payload.result?.result?.structured_content || payload.result?.structured_content;
+    // fenced navigate — current_url is the only signal. Derived from the
+    // RAW stdout when the envelope's result was truncated away (the
+    // captureSessionState precedent — a >50KB page is get_page_info's
+    // NORMAL case, and the fence check is its documented purpose).
+    let structured = payload.result?.result?.structured_content || payload.result?.structured_content;
+    if (!structured && !('result' in payload) && rawResult && !rawResult.timedOut && rawResult.exitCode === 0) {
+      try {
+        const raw = JSON.parse(rawResult.stdout);
+        structured = raw?.result?.structured_content || raw?.structured_content;
+      } catch {
+        // Unparseable raw stdout — the envelope already says so.
+      }
+    }
     const currentUrl = structured?.current_url;
     if (typeof currentUrl === 'string' && currentUrl.startsWith('chrome-error://')) {
       notes.push(
@@ -1961,12 +2001,12 @@ function enrichBrowserInvoke(payload, params, session, rawResult) {
   }
   // Error mappings (traps 61/66).
   const text = `${payload.stderr || ''} ${payload.error || ''}`;
-  if (/Session not found/i.test(text)) {
+  if (/ToolsAPIError: Session not found/i.test(text)) {
     payload.error = `${payload.error} The cloud session is gone (expired at its own timeout, stopped, or orphaned — trap 66). Restart it via huaweicloud_agentarts_browser_plan (operation start_session) if you still need the browser.`;
-  } else if (/Stream is disabled/i.test(text)) {
+  } else if (/ToolsAPIError: Stream is disabled/i.test(text)) {
     payload.error = `${payload.error} A human holds control of this session (take_control was used — trap 66; page state is preserved). Release it back to the agent via the approved write huaweicloud_agentarts_browser_plan operation update_stream with stream_status=enabled.`;
   } else if (/API Key is not provided/i.test(`${rawResult?.stderr || ''} ${payload.stderr || ''}`)) {
-    payload.error = `${payload.error} The session's browser is API_KEY-typed: the data plane needs the console api_key exported as HUAWEICLOUD_SDK_BROWSER_API_KEY in the agent launcher's environment (trap 61).`;
+    payload.error = `${payload.error || 'Execution failed.'} The session's browser is API_KEY-typed: the data plane needs the console api_key exported as HUAWEICLOUD_SDK_BROWSER_API_KEY in the agent launcher's environment (trap 61).`;
   }
   return payload;
 }
