@@ -78,12 +78,12 @@ SDK 钉版不升: 0.1.9 与 0.1.7 的 browser/code_interpreter 面字节级一�
 - [x] screenshot: mcp-protocol 只支持 text 块（全工具单 JSON 文本信封）→ 裁决为 **snippet 侧解码落 0600 文件返路径/mime/尺寸**, base64 不上 stdout（陷阱 64; 假 SDK 执行测试钉 PNG 魔数/0600/零泄漏）
 - [x] get_page_info 双重编码 text 富集层解析（陷阱 64）
 
-### B6 skill 与文档
+### B6 skill 与文档【实现完成】
 
-- [ ] SKILL.md: 场景路由 S4 行改指本工具族、tier map 增 browser 三行、MCP Tools 增条目
-- [ ] `references/cli-workflows.md` 增 browser 节, `references/credentials.md` 增 key 与会话文件
-- [ ] `test/structure.test.mjs` 增注册 pins（镜像 1688-1801 模式）
-- [ ] `docs/CHANGELOG.md` 落条目; 陷阱只写 B1/B7 实测
+- [x] SKILL.md: 场景路由增 browser 行（触发词含 云浏览器/browser automation）、tier map 增 browser 三行（readonly/approved SDK control plane + lease-gated SDK data plane）、MCP Tools 增四条目、Measured Traps 增六行（全部 B1 实测）
+- [x] `references/cli-workflows.md` 增 Browser Sessions and Actions 节（四工具、租约模型、七步 golden path、陷阱明细）; `references/credentials.md` 增 Browser credential model 节
+- [x] `test/structure.test.mjs` 增 skill 路由钉（五工具名、三 tier 行、auth_type、围栏 URL、场景行、两 references 节——死路规则执行）
+- [x] `docs/CHANGELOG.md` 落条目; 陷阱只写 B1 实测
 
 ### B7 真机 e2e 与对抗加固
 

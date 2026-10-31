@@ -1966,6 +1966,41 @@ test('huawei-agentarts SKILL.md routes the memory data-plane bridge (U2/U3)', ()
   assert.match(body, /extraction is async|not immediately searchable/);
 });
 
+test('huawei-agentarts SKILL.md routes the browser bridge (B2-B5)', () => {
+  const body = readFileSync(join(pluginRoot, 'skills', 'huawei-agentarts', 'SKILL.md'), 'utf8');
+  // The routing floor: all four browser tools are taught.
+  for (const tool of [
+    'huaweicloud_agentarts_browser_read',
+    'huaweicloud_agentarts_browser_plan',
+    'huaweicloud_agentarts_browser_write',
+    'huaweicloud_agentarts_browser_session',
+    'huaweicloud_agentarts_browser_invoke',
+  ]) {
+    assert.ok(body.includes(tool), `SKILL.md must teach ${tool}`);
+  }
+  // Tier map rows for the browser model.
+  assert.match(body, /readonly \(SDK control plane\)/);
+  assert.match(body, /approved \(SDK control plane\)/);
+  assert.match(body, /lease-gated \(SDK data plane\)/);
+  // The lease-is-the-approval model and the auth_type split are taught.
+  assert.match(body, /auth_type=IAM/);
+  assert.match(body, /HUAWEICLOUD_SDK_BROWSER_API_KEY/);
+  assert.match(body, /chrome-error:\/\/chromewebdata\//);
+  // Scenario routing row for browser workloads.
+  assert.match(body, /Drive a cloud browser/);
+  // The reference files carry the detail layers.
+  const workflows = readFileSync(
+    join(pluginRoot, 'skills', 'huawei-agentarts', 'references', 'cli-workflows.md'),
+    'utf8',
+  );
+  assert.match(workflows, /## Browser Sessions and Actions/);
+  assert.match(workflows, /LEASE is the approval boundary/);
+  assert.match(workflows, /Session not found/);
+  const creds = readFileSync(join(pluginRoot, 'skills', 'huawei-agentarts', 'references', 'credentials.md'), 'utf8');
+  assert.match(creds, /## Browser credential model/);
+  assert.match(creds, /canonicalizes auth_type=IAM/);
+});
+
 test('memory data-plane retention traps and dual-path decision are taught (U4)', () => {
   const workflows = readFileSync(
     join(pluginRoot, 'skills', 'huawei-agentarts', 'references', 'cli-workflows.md'),
