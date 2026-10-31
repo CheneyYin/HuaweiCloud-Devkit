@@ -2021,9 +2021,16 @@ function enrichBrowserInvoke(payload, params, session, rawResult) {
   }
   // Error mappings (traps 61/66).
   const text = `${payload.stderr || ''} ${payload.error || ''}`;
-  if (/ToolsAPIError: Session not found/i.test(text)) {
+  // B7 real-machine shapes (trap 80): the snippet formats the exception as
+  // "{class}: {message}" and ToolsAPIError's own str() prefixes "Tools API
+  // Error: " — the real stderr reads "ToolsAPIError: Tools API Error:
+  // Session not found". The server's session-death WORDING is also
+  // unstable across same-shaped runs (measured 2026-10-31: "Session not
+  // found" and "No active session" on two identical expiry probes — the
+  // gateway-family trap-54 class): both are mapped.
+  if (/ToolsAPIError: (?:Tools API Error: )?(Session not found|No active session)/i.test(text)) {
     payload.error = `${payload.error} The cloud session is gone (expired at its own timeout, stopped, or orphaned — trap 66). Restart it via huaweicloud_agentarts_browser_plan (operation start_session) if you still need the browser.`;
-  } else if (/ToolsAPIError: Stream is disabled/i.test(text)) {
+  } else if (/ToolsAPIError: (?:Tools API Error: )?Stream is disabled/i.test(text)) {
     payload.error = `${payload.error} A human holds control of this session (take_control was used — trap 66; page state is preserved). Release it back to the agent via the approved write huaweicloud_agentarts_browser_plan operation update_stream with stream_status=enabled.`;
   } else if (/API Key is not provided/i.test(`${rawResult?.stderr || ''} ${payload.stderr || ''}`)) {
     payload.error = `${payload.error || 'Execution failed.'} The session's browser is API_KEY-typed: the data plane needs the console api_key exported as HUAWEICLOUD_SDK_BROWSER_API_KEY in the agent launcher's environment (trap 61).`;

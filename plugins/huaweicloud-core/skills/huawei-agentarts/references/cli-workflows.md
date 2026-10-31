@@ -486,13 +486,17 @@ the token unconsumed.
   derived from raw stdout); get_page_info is the documented check.
   allowed_domains syntax is unvalidated and unmeasured — treat patterns
   as opaque.
-- **Session death vs human handoff** (trap 66): expired/stopped sessions
-  answer `ToolsAPIError: Session not found` (the invoke tool maps it to
-  restart guidance; a locally-expired lease is rejected up front with
-  SESSION_LEASE_EXPIRED); a human holding control answers
-  `Stream is disabled for this session` (mapped to the approved re-arm:
-  update_stream enabled). take_control (free) disables the automation
-  stream with page state PRESERVED; get_session still reports Healthy.
+- **Session death vs human handoff** (traps 66+80): expired/stopped
+  sessions answer `ToolsAPIError: Tools API Error: Session not found` or
+  `ToolsAPIError: Tools API Error: No active session` — the WORDING is
+  unstable across same-shaped runs (the gateway-family trap-54 class;
+  B1 measured the first, B7 the second, both on the real cloud) — the
+  invoke tool maps both to restart guidance, and a locally-expired lease
+  is rejected up front with SESSION_LEASE_EXPIRED. A human holding
+  control answers `Tools API Error: Stream is disabled for this session`
+  (mapped to the approved re-arm: update_stream enabled). take_control
+  (free) disables the automation stream with page state PRESERVED;
+  get_session still reports Healthy.
 - **stop_session is a no-op True on a gone session** (trap 67): success
   says the cleanup ran, not that the session was live. The session file
   is deleted on success either way.

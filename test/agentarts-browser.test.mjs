@@ -2262,24 +2262,32 @@ test('browser invoke enrichment: fence detection, error mappings, and the get_pa
     assert.equal(pageInfo.ok, true);
     const textItem = pageInfo.result.result.content[0];
     assert.deepEqual(textItem.text, { url: 'https://example.com/', title: 'Example Domain' });
-    // Error mappings: Session not found → restart guidance.
-    const dead = await runAgentartsBrowserInvoke(
-      { action: 'get_page_info', session_id: SESSION_ID },
-      {
-        runCandidate: async () => ({ exitCode: 1, stdout: '', stderr: 'ToolsAPIError: Session not found' }),
-      },
-    );
-    assert.equal(dead.ok, false);
-    assert.match(dead.error, /cloud session is gone/);
-    assert.match(dead.error, /start_session/);
-    // Stream is disabled → human handoff guidance.
+    // Error mappings: Session not found → restart guidance. REAL shape
+    // (trap 80): the snippet prints "{class}: {msg}" and ToolsAPIError's
+    // str() carries its own "Tools API Error: " prefix; the alternate
+    // wording ("No active session") must map identically.
+    for (const stderr of [
+      'ToolsAPIError: Tools API Error: Session not found',
+      'ToolsAPIError: Tools API Error: No active session',
+    ]) {
+      const dead = await runAgentartsBrowserInvoke(
+        { action: 'get_page_info', session_id: SESSION_ID },
+        {
+          runCandidate: async () => ({ exitCode: 1, stdout: '', stderr }),
+        },
+      );
+      assert.equal(dead.ok, false, stderr);
+      assert.match(dead.error, /cloud session is gone/);
+      assert.match(dead.error, /start_session/);
+    }
+    // Stream is disabled → human handoff guidance (real shape).
     const held = await runAgentartsBrowserInvoke(
       { action: 'navigate', session_id: SESSION_ID, url: 'https://example.com' },
       {
         runCandidate: async () => ({
           exitCode: 1,
           stdout: '',
-          stderr: 'ToolsAPIError: Stream is disabled for this session',
+          stderr: 'ToolsAPIError: Tools API Error: Stream is disabled for this session',
         }),
       },
     );
@@ -2445,10 +2453,19 @@ test('error mappings never prefix "undefined" — every failure carries a base e
   await withIsolation(async (home) => {
     setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
     writeSessionFile(home, { lease_expires_at: Date.now() + 600_000 });
+    // B7 real-machine shapes (trap 80): the snippet formats "{class}: {msg}"
+    // and ToolsAPIError's str() carries its own "Tools API Error: " prefix;
+    // the session-death WORDING is unstable across same-shaped runs (both
+    // "Session not found" and "No active session" measured on the cloud).
     for (const stderr of [
-      'ToolsAPIError: Session not found',
-      'ToolsAPIError: Stream is disabled for this session',
+      'ToolsAPIError: Tools API Error: Session not found',
+      'ToolsAPIError: Tools API Error: No active session',
+      'ToolsAPIError: Tools API Error: Stream is disabled for this session',
       'ValueError: API Key is not provided and not found in environment variable.',
+      // Tolerance: the bare shape (no double prefix) also maps.
+      'ToolsAPIError: Session not found',
+      'ToolsAPIError: No active session',
+      'ToolsAPIError: Stream is disabled for this session',
     ]) {
       const out = await runAgentartsBrowserInvoke(
         { action: 'get_page_info', session_id: SESSION_ID },

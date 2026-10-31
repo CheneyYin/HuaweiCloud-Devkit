@@ -42,6 +42,7 @@ SDK 钉版不升: 0.1.9 与 0.1.7 的 browser/code_interpreter 面字节级一�
 - [x] R10/R11: B5 轮（单评审）→ 八项修复（陷阱 77: 信封 error 不变量消灭 undefined 前缀、mouse_drag 缺省、无租约记录拒绝、截断下围栏检测、锚定映射、snippet 硬化）
 - [x] R12/R13: 确认轮（R10/R11 全验证）→ 手术轮四处（陷阱 78: 守卫按路径清扫不可驱动记录、解码先于开文件、memory 信封同化不变量、重复注释）
 - [x] R14/R15: B6 文档轮（单评审）→ 六项修复（陷阱 79: 五工具计数、core 路由 browser 词表、双计+锚定钉、枚举实名、tier 标签）; 桥行为零事实错误
+- [x] B7: 真机终验 18/18 → trap-80 修复（锚定正则双前缀形状 + 死亡措辞双形覆盖）; 十五轮对抗 + 真机闭环, 无已知未修缺陷
 
 ### B2 读桥（控制面）【实现完成, 单测 8 绿】
 
@@ -86,11 +87,11 @@ SDK 钉版不升: 0.1.9 与 0.1.7 的 browser/code_interpreter 面字节级一�
 - [x] `test/structure.test.mjs` 增 skill 路由钉（五工具名、三 tier 行、auth_type、围栏 URL、场景行、两 references 节——死路规则执行）
 - [x] `docs/CHANGELOG.md` 落条目; 陷阱只写 B1 实测
 
-### B7 真机 e2e 与对抗加固
+### B7 真机 e2e 与对抗加固【完成: 终验 18/18, 陷阱 80】
 
-- [ ] 全工具面真机驱动一轮（U 系列先例）
-- [ ] 对抗评审循环修摩擦, 回写终版陷阱
-- [ ] 桥 spawn 延迟实测一次, 对直连 SDK 设预算写进 skill
+- [x] 全工具面真机驱动（已交付工具函数, 非探测脚本）: read list/get → plan/write create → plan/write start → invoke navigate/get_page_info/screenshot → take_control → held 映射（真实验证）→ update_stream 重武装 → invoke after release → get_session → stop → plan/write delete → 按名过滤收敛
+- [x] 真机抓获 R11 锚定正则从未生效（双前缀真实形状 + 服务端死亡措辞跨运行不稳定——Session not found / No active session 双形, gateway trap-54 类）; 修复 + 桩改真实形状 + 措辞双形入档（陷阱 80）
+- [x] 运维发现入档: 探测脚本未校验清理结果致孤儿资源; 共享租户收敛判据须按名过滤
 
 ## 验证规则
 
