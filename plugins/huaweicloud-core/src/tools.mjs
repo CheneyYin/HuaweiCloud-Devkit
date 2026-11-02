@@ -24,6 +24,8 @@ import {
   AGENTARTS_BROWSER_WRITE_TOOL_DEFINITIONS,
 } from './agentarts-browser-tools.mjs';
 import { callAgentartsBrowserTool } from './agentarts-browser.mjs';
+import { AGENTARTS_INTERPRETER_TOOL_DEFINITIONS } from './agentarts-interpreter-tools.mjs';
+import { callAgentartsInterpreterTool } from './agentarts-interpreter.mjs';
 import { searchMarketplace } from './search-market.mjs';
 import { getServiceIcon } from './icon-library.mjs';
 import { detectFramework } from './detect-framework.mjs';
@@ -1085,6 +1087,7 @@ export const TOOL_DEFINITIONS = [
   ...AGENTARTS_BROWSER_WRITE_TOOL_DEFINITIONS,
   ...AGENTARTS_BROWSER_SESSION_TOOL_DEFINITIONS,
   ...AGENTARTS_BROWSER_INVOKE_TOOL_DEFINITIONS,
+  ...AGENTARTS_INTERPRETER_TOOL_DEFINITIONS,
 ];
 
 function toolInvokeValue(name, args) {
@@ -1342,6 +1345,8 @@ export async function callTool(name, rawArgs = {}, opts = {}) {
     case 'huaweicloud_agentarts_browser_session':
     case 'huaweicloud_agentarts_browser_invoke':
       return callAgentartsBrowserTool(name, args);
+    case 'huaweicloud_agentarts_interpreter_read':
+      return callAgentartsInterpreterTool(name, args);
     case 'huaweicloud_show_profile_redacted':
       return showProfileRedacted(args.profile);
     case 'huaweicloud_hook_check_command':

@@ -1952,6 +1952,45 @@ test('the agentarts browser INVOKE tool registers with its lease-gated contract 
   assert.match(source, /os\.chmod\(path, 0o600\)/);
 });
 
+test('the agentarts interpreter read bridge registers with its safety contract pinned (CI2)', async () => {
+  const { TOOL_DEFINITIONS } = await import('../plugins/huaweicloud-core/src/tools.mjs');
+  const def = TOOL_DEFINITIONS.find((t) => t.name === 'huaweicloud_agentarts_interpreter_read');
+  assert.ok(def, 'tools.mjs missing huaweicloud_agentarts_interpreter_read');
+  const { INTERPRETER_READ_OPERATIONS } =
+    await import('../plugins/huaweicloud-core/src/agentarts-interpreter-tools.mjs');
+  // Exactly the 2 control-plane read operations — the data plane
+  // (sessions, execute/install/upload/download) is a separate unit; the
+  // enum must not grow silently.
+  assert.deepEqual(
+    [...INTERPRETER_READ_OPERATIONS].sort((a, b) => a.localeCompare(b)),
+    ['get_code_interpreter', 'list_code_interpreters'],
+  );
+  assert.deepEqual(
+    [...def.inputSchema.properties.operation.enum].sort((a, b) => a.localeCompare(b)),
+    [...INTERPRETER_READ_OPERATIONS].sort((a, b) => a.localeCompare(b)),
+  );
+  // The credential channel is the injected AK/SK — the tool must never
+  // accept a key parameter of any spelling.
+  for (const banned of ['api_key', 'apiKey', 'api-key', 'key', 'sk', 'ak']) {
+    assert.equal(banned in def.inputSchema.properties, false, `tool must not accept a ${banned} parameter`);
+  }
+  // The measured contracts are taught in the tool text itself.
+  assert.match(def.description, /NO code-interpreter subcommands/);
+  assert.match(def.description, /cn-southwest-2/);
+  assert.match(def.description, /access_endpoint/);
+  assert.match(def.description, /trap 81/);
+  assert.match(def.description, /trap 89/);
+  // Source pin: the snippet's exception handler catches BaseException —
+  // the SDK's ToolsAPIError extends BaseException (tools_http.py:10),
+  // so `except Exception` leaks it as an uncaught traceback.
+  const source = readFileSync(join(pluginRoot, 'src', 'agentarts-interpreter.mjs'), 'utf8');
+  assert.match(source, /except BaseException as error/);
+  assert.doesNotMatch(source, /except Exception as error/);
+  // No CLI-family drift: the interpreter bridge is SDK-only, so the tool
+  // must not fabricate CLI subcommands either.
+  assert.doesNotMatch(def.description, /agentarts interpreter /);
+});
+
 test('huawei-agentarts SKILL.md routes the memory data-plane bridge (U2/U3)', () => {
   const body = readFileSync(join(pluginRoot, 'skills', 'huawei-agentarts', 'SKILL.md'), 'utf8');
   // The routing floor: all three memory tools are taught (the read bridge

@@ -931,11 +931,7 @@ test('browser write plan warning covers single-source key names AND bare token v
     }
     // Bare token VALUES under innocuous keys (R2: the at-rest redactor has
     // no bare-token pattern — the warning is the only surface).
-    for (const value of [
-      'AKLT2e2423ab',
-      'ghp_1234567890abcdefghij',
-      'postgres://u:secretpw@host/db',
-    ]) {
+    for (const value of ['AKLT2e2423ab', 'ghp_1234567890abcdefghij', 'postgres://u:secretpw@host/db']) {
       const plan = planAgentartsBrowserWrite({
         operation: 'create_browser',
         name: 'team-browser',
