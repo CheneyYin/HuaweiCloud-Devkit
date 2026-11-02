@@ -2127,11 +2127,12 @@ test('the agentarts interpreter WRITE bridge registers with its approval contrac
   assert.ok(write, 'tools.mjs missing huaweicloud_agentarts_interpreter_write');
   const { INTERPRETER_WRITE_OPERATIONS } =
     await import('../plugins/huaweicloud-core/src/agentarts-interpreter-tools.mjs');
-  // Exactly the 3 resource-lifecycle writes — session start lands in CI4,
-  // and the enum must not grow silently.
+  // Exactly the 4 write operations — the 3 resource-lifecycle writes
+  // plus the data-plane session start (CI4); the enum must not grow
+  // silently.
   assert.deepEqual(
     [...INTERPRETER_WRITE_OPERATIONS].sort((a, b) => a.localeCompare(b)),
-    ['create_code_interpreter', 'delete_code_interpreter', 'update_code_interpreter'],
+    ['create_code_interpreter', 'delete_code_interpreter', 'start_session', 'update_code_interpreter'],
   );
   assert.deepEqual(
     [...plan.inputSchema.properties.operation.enum].sort((a, b) => a.localeCompare(b)),
@@ -2180,4 +2181,55 @@ test('the agentarts interpreter WRITE bridge registers with its approval contrac
   assert.ok(writeSnippet, 'INTERPRETER_WRITE_SNIPPET not found');
   assert.match(writeSnippet[1], /'except SystemExit:',\s*\n\s*'\s{4}raise',/);
   assert.match(writeSnippet[1], /'except BaseException as error:',/);
+});
+
+test('the agentarts interpreter SESSION tool registers with its free-tier contract pinned (CI4)', async () => {
+  const { TOOL_DEFINITIONS } = await import('../plugins/huaweicloud-core/src/tools.mjs');
+  const def = TOOL_DEFINITIONS.find((t) => t.name === 'huaweicloud_agentarts_interpreter_session');
+  assert.ok(def, 'tools.mjs missing huaweicloud_agentarts_interpreter_session');
+  const { INTERPRETER_SESSION_OPERATIONS } =
+    await import('../plugins/huaweicloud-core/src/agentarts-interpreter-tools.mjs');
+  assert.deepEqual(
+    [...INTERPRETER_SESSION_OPERATIONS].sort((a, b) => a.localeCompare(b)),
+    ['get_session', 'stop_session'],
+  );
+  assert.deepEqual(
+    [...def.inputSchema.properties.operation.enum].sort((a, b) => a.localeCompare(b)),
+    [...INTERPRETER_SESSION_OPERATIONS].sort((a, b) => a.localeCompare(b)),
+  );
+  // Free-tier: no approval token, and the only args are operation + session_id
+  // (the addressing pair and endpoint resolve from the lease record).
+  assert.deepEqual(
+    [...def.inputSchema.required].sort((a, b) => a.localeCompare(b)),
+    ['operation', 'session_id'],
+  );
+  for (const banned of ['approvalToken', 'region', 'api_key', 'apiKey', 'data_endpoint', 'auth_type']) {
+    assert.equal(banned in def.inputSchema.properties, false, `session tool must not accept ${banned}`);
+  }
+  // The measured contracts are taught in the tool text: the trap-85
+  // cloud-lifetime caveat (stop stays reachable past the local lease),
+  // the no-op stop (trap 87), and both death signatures (trap 86).
+  assert.match(def.description, /trap 85/);
+  assert.match(def.description, /trap 87/);
+  assert.match(def.description, /No matching policy found/);
+  assert.match(def.description, /REACHABLE past the local lease expiry/);
+  // Source pins: the lease record is 0600, the scan prefix matches the
+  // file naming, and the lease model (start writes, stop deletes).
+  const impl = readFileSync(join(pluginRoot, 'src', 'agentarts-interpreter.mjs'), 'utf8');
+  assert.match(impl, /agentarts-interpreter-session-\$\{sessionId\}\.json/);
+  assert.match(impl, /mode: 0o600/);
+  assert.match(impl, /startsWith\('agentarts-interpreter-session-'\)/);
+  // The start snippet resolves auth_type via the get-by-id probe (list
+  // items carry no auth_type — trap 89) and exact-name-checks the probe
+  // (the R7 anti-wrong-resource pattern).
+  const sessionSnippet = impl.match(/const INTERPRETER_SESSION_WRITE_SNIPPET = \[([\s\S]*?)\]\.join\('\\n'\);/);
+  assert.ok(sessionSnippet, 'INTERPRETER_SESSION_WRITE_SNIPPET not found');
+  assert.match(sessionSnippet[1], /detail = probe\.get_code_interpreter\(info\.get\("id"\)\)/);
+  assert.match(sessionSnippet[1], /info\.get\("name"\) != params\["code_interpreter_name"\]/);
+  // The session tool snippet sets the addressing PAIR before any call
+  // (the SDK's get/stop need both — trap 87's cross-process continuity).
+  const sessionToolSnippet = impl.match(/const INTERPRETER_SESSION_TOOL_SNIPPET = \[([\s\S]*?)\]\.join\('\\n'\);/);
+  assert.ok(sessionToolSnippet, 'INTERPRETER_SESSION_TOOL_SNIPPET not found');
+  assert.match(sessionToolSnippet[1], /client\.code_interpreter_name = params\["code_interpreter_name"\]/);
+  assert.match(sessionToolSnippet[1], /client\.session_id = params\["session_id"\]/);
 });

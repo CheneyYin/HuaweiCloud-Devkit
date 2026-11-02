@@ -1,7 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -63,7 +73,7 @@ test('interpreter read validates the boundary before any spawn', async () => {
       assert.equal(out.ok, false, JSON.stringify(params));
       assert.match(out.error, pattern);
     };
-    await bad({ operation: 'start_session' }, /operation must be one of/);
+    await bad({ operation: 'stop_session' }, /operation must be one of/);
     await bad({ operation: 'execute_code' }, /operation must be one of/);
     await bad({ operation: 'get_code_interpreter' }, /code_interpreter_id is required/);
     // Tag filters exist on the SDK list method but are not exposed —
@@ -550,7 +560,7 @@ test('interpreter write validates the boundary before any token is minted', asyn
       assert.match(out.error, pattern);
       assert.equal(out.approvalToken, undefined, 'a rejected plan must mint no token');
     };
-    await bad({ operation: 'start_session' }, /operation must be one of/);
+    await bad({ operation: 'stop_session' }, /operation must be one of/);
     await bad({ operation: 'create_code_interpreter' }, /name is required/);
     await bad({ operation: 'create_code_interpreter', name: 'Bad_Name' }, /name must match/);
     await bad({ operation: 'create_code_interpreter', name: 'x' }, /name must match/);
@@ -991,5 +1001,397 @@ test('interpreter write tags bind order-insensitively; plan and write dispatch t
     });
     assert.equal(writeDispatched.ok, false);
     assert.equal(writeDispatched.code, 'CONFIRM_TOKEN_NOT_FOUND');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CI4: session lifecycle (start_session write extension + the free
+// session tool).
+
+const SESSION_UUID = 'd103eff1-5b12-4601-8528-398b5cb303d6';
+
+function writeSessionFile(home, state) {
+  mkdirSync(join(home, '.config', 'huaweicloud'), { recursive: true });
+  const path = join(home, '.config', 'huaweicloud', `agentarts-interpreter-session-${state.session_id}.json`);
+  writeFileSync(path, JSON.stringify(state, null, 2), { encoding: 'utf8', mode: 0o600 });
+  return { path };
+}
+
+function fullSessionState(overrides = {}) {
+  return {
+    code_interpreter_id: UUID,
+    code_interpreter_name: 'team-interpreter',
+    auth_type: 'IAM',
+    region: 'cn-southwest-2',
+    data_endpoint: 'defaultgw-x.example.com',
+    session_id: SESSION_UUID,
+    session_name: 'work',
+    session_timeout: 900,
+    started_at: Date.now() - 1000,
+    lease_expires_at: Date.now() + 899_000,
+    ...overrides,
+  };
+}
+
+test('start_session validates the boundary: names, timeout range, applicability', async () => {
+  await withIsolation(async () => {
+    const bad = async (params, pattern) => {
+      const out = planAgentartsInterpreterWrite({ operation: 'start_session', ...params });
+      assert.equal(out.ok, false, JSON.stringify(params));
+      assert.match(out.error, pattern);
+      assert.equal(out.approvalToken, undefined, 'a rejected plan must mint no token');
+    };
+    await bad({}, /code_interpreter_name is required/);
+    await bad({ code_interpreter_name: 'Bad_Name', session_name: 's1' }, /code_interpreter_name must match/);
+    await bad({ code_interpreter_name: 'ci-1' }, /session_name is required/);
+    await bad({ code_interpreter_name: 'ci-1', session_name: 'has space!' }, /session_name must match/);
+    await bad(
+      { code_interpreter_name: 'ci-1', session_name: 's1', session_timeout: 59 },
+      /session_timeout must be 60-86400/,
+    );
+    await bad(
+      { code_interpreter_name: 'ci-1', session_name: 's1', session_timeout: 86401 },
+      /session_timeout must be 60-86400/,
+    );
+    await bad(
+      { code_interpreter_name: 'ci-1', session_name: 's1', session_timeout: true },
+      /session_timeout must be an integer/,
+    );
+    await bad(
+      { code_interpreter_name: 'ci-1', session_name: 's1', session_timeout: 900.5 },
+      /session_timeout must be an integer/,
+    );
+    // Applicability: create-only fields are silent no-ops on start.
+    await bad(
+      { code_interpreter_name: 'ci-1', session_name: 's1', tags: [{ key: 'a', value: 'b' }] },
+      /"tags" is not a parameter of start_session/,
+    );
+    await bad({ code_interpreter_name: 'ci-1', session_name: 's1', region: 'bad region' }, /region must match/);
+  });
+});
+
+test('start_session plan: orphan guard rejects a live lease and sweeps stale/malformed records', async () => {
+  await withIsolation(async (home) => {
+    // Live lease → rejected at plan time, no token minted.
+    writeSessionFile(home, fullSessionState());
+    const blocked = planAgentartsInterpreterWrite({
+      operation: 'start_session',
+      code_interpreter_name: 'team-interpreter',
+      session_name: 'second',
+    });
+    assert.equal(blocked.ok, false);
+    assert.match(blocked.error, /unexpired session lease already exists/);
+    assert.match(blocked.error, /stop_session/);
+    assert.equal(blocked.approvalToken, undefined);
+
+    // Different interpreter name → no conflict.
+    const other = planAgentartsInterpreterWrite({
+      operation: 'start_session',
+      code_interpreter_name: 'other-interpreter',
+      session_name: 's1',
+    });
+    assert.equal(other.ok, true);
+    assert.ok(other.approvalToken);
+
+    // Expired lease → swept (the stale record is unlinked).
+    writeSessionFile(home, fullSessionState({ lease_expires_at: Date.now() - 1000 }));
+    const sweep = planAgentartsInterpreterWrite({
+      operation: 'start_session',
+      code_interpreter_name: 'team-interpreter',
+      session_name: 'second',
+    });
+    assert.equal(sweep.ok, true, 'an expired lease must be swept, not a conflict');
+    const stalePath = join(home, '.config', 'huaweicloud', `agentarts-interpreter-session-${SESSION_UUID}.json`);
+    assert.equal(existsSync(stalePath), false, 'the stale lease record must be swept');
+  });
+});
+
+test('start_session plan canonical request binds the lease scope; timeout only when set', async () => {
+  await withIsolation(async () => {
+    const plan = planAgentartsInterpreterWrite({
+      operation: 'start_session',
+      code_interpreter_name: 'team-interpreter',
+      session_name: 'work',
+    });
+    assert.deepEqual(plan.request, {
+      operation: 'start_session',
+      region: 'cn-southwest-2',
+      code_interpreter_name: 'team-interpreter',
+      session_name: 'work',
+    });
+    assert.match(plan.approvalNote, /starts the session AND its lease/);
+    assert.match(plan.approvalNote, /trap 85/);
+    const withTimeout = planAgentartsInterpreterWrite({
+      operation: 'start_session',
+      code_interpreter_name: 'team-interpreter',
+      session_name: 'work',
+      session_timeout: 3600,
+    });
+    assert.equal(withTimeout.request.session_timeout, 3600);
+  });
+});
+
+test('start_session write: pre-consume guard recheck, session snippet routing, lease capture + notes', async () => {
+  await withIsolation(async (home) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const params = {
+      operation: 'start_session',
+      code_interpreter_name: 'team-interpreter',
+      session_name: 'work',
+    };
+    const plan = planAgentartsInterpreterWrite(params);
+    // Pre-consume recheck: a live lease appeared between plan and write —
+    // rejected with the token NOT consumed.
+    writeSessionFile(home, fullSessionState());
+    const conflict = await runAgentartsInterpreterWrite(
+      { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+      { runCandidate: async () => ({ exitCode: 0, stdout: '{}', stderr: '' }) },
+    );
+    assert.equal(conflict.ok, false);
+    assert.equal(conflict.code, 'SESSION_LEASE_CONFLICT');
+    assert.match(conflict.error, /token was NOT consumed/);
+    const { createApprovalTokenStore } = await import('../plugins/huaweicloud-core/src/approval-tokens.mjs');
+    assert.equal(createApprovalTokenStore('agentarts-interpreter-sdk').inspect(plan.approvalToken).state, 'valid');
+
+    // Clear the lease and run the real write: the session snippet (NOT the
+    // resource snippet) executes, the lease file is captured from the raw
+    // stdout, and the notes carry the trap-85 teaching.
+    const leasePath = join(home, '.config', 'huaweicloud', `agentarts-interpreter-session-${SESSION_UUID}.json`);
+    unlinkSync(leasePath);
+    let snippetSeen = null;
+    let requestSeen = null;
+    const out = await runAgentartsInterpreterWrite(
+      { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+      {
+        runCandidate: async (candidate, args, childEnv, stdinData) => {
+          snippetSeen = args[1];
+          requestSeen = JSON.parse(stdinData);
+          return {
+            exitCode: 0,
+            stdout: pyDumps({
+              interpreter: {
+                id: UUID,
+                name: 'team-interpreter',
+                auth_type: 'IAM',
+                access_endpoint: 'defaultgw-x.example.com',
+              },
+              session_id: SESSION_UUID,
+            }),
+            stderr: '',
+          };
+        },
+      },
+    );
+    assert.equal(out.ok, true);
+    assert.match(snippetSeen, /"start_session"/);
+    assert.doesNotMatch(snippetSeen, /create_code_interpreter/);
+    assert.deepEqual(requestSeen, plan.request);
+    // The lease file exists, 0600, with the full addressing pair.
+    assert.ok(existsSync(leasePath), 'the lease record must be written');
+    assert.equal(statSync(leasePath).mode & 0o777, 0o600);
+    const lease = JSON.parse(readFileSync(leasePath, 'utf8'));
+    assert.equal(lease.code_interpreter_name, 'team-interpreter');
+    assert.equal(lease.session_id, SESSION_UUID);
+    assert.equal(lease.data_endpoint, 'defaultgw-x.example.com');
+    assert.equal(lease.auth_type, 'IAM');
+    assert.equal(lease.session_timeout, 900);
+    assert.ok(typeof lease.lease_expires_at === 'number');
+    assert.match(out.notes.join(' '), /Session lease recorded/);
+    assert.match(out.notes.join(' '), /trap 85/);
+    assert.match(out.notes.join(' '), /0600/);
+  });
+});
+
+test('start_session write: API_KEY-missing error mapping and unshapable-capture WARNING branch', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const params = {
+      operation: 'start_session',
+      code_interpreter_name: 'team-interpreter',
+      session_name: 'work',
+    };
+    // Failure with the API_KEY shape carries the console-key guidance.
+    const plan = planAgentartsInterpreterWrite(params);
+    const apiKeyMissing = await runAgentartsInterpreterWrite(
+      { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+      {
+        runCandidate: async () => ({
+          exitCode: 1,
+          stdout: '',
+          stderr: 'ValueError: API Key is not provided and not found in environment variable.',
+        }),
+      },
+    );
+    assert.equal(apiKeyMissing.ok, false);
+    assert.match(apiKeyMissing.error, /HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY/);
+    assert.match(apiKeyMissing.error, /token was consumed/);
+
+    // A success whose stdout shape is not the capture shape: the lease
+    // record cannot be written — the WARNING branch discloses the live
+    // session id.
+    const plan2 = planAgentartsInterpreterWrite(params);
+    const unshapable = await runAgentartsInterpreterWrite(
+      { ...params, approvedByUser: true, approvalToken: plan2.approvalToken },
+      { runCandidate: async () => ({ exitCode: 0, stdout: pyDumps({ odd: 'shape' }), stderr: '' }) },
+    );
+    assert.equal(unshapable.ok, true);
+    assert.match(unshapable.notes.join(' '), /WARNING: the session state file could NOT be captured/);
+    assert.match(unshapable.notes.join(' '), /\(unreadable\)/);
+  });
+});
+
+test('the interpreter session tool: free ops, file addressing, expiry-reachable stop, mappings', async () => {
+  await withIsolation(async (home) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const { runAgentartsInterpreterSession } =
+      await import('../plugins/huaweicloud-core/src/agentarts-interpreter.mjs');
+    // Boundary: op enum, unknown params, session_id shape.
+    assert.equal(
+      (await runAgentartsInterpreterSession({ operation: 'execute_code', session_id: SESSION_UUID })).ok,
+      false,
+    );
+    assert.match((await runAgentartsInterpreterSession({ operation: 'get_session' })).error, /session_id is required/);
+    assert.match(
+      (await runAgentartsInterpreterSession({ operation: 'get_session', session_id: 'nope' })).error,
+      /must be a valid UUID/,
+    );
+    assert.match(
+      (
+        await runAgentartsInterpreterSession({
+          operation: 'stop_session',
+          session_id: SESSION_UUID,
+          region: 'cn-southwest-2',
+        })
+      ).error,
+      /Unknown parameter "region"/,
+    );
+    // No file → start guidance.
+    const noFile = await runAgentartsInterpreterSession({ operation: 'get_session', session_id: SESSION_UUID });
+    assert.equal(noFile.ok, false);
+    assert.match(noFile.error, /No session state file/);
+    // Malformed file (missing lease) → rejected as malformed.
+    writeSessionFile(home, { session_id: SESSION_UUID, code_interpreter_name: 'ci-1' });
+    assert.match(
+      (await runAgentartsInterpreterSession({ operation: 'get_session', session_id: SESSION_UUID })).error,
+      /malformed/,
+    );
+    unlinkSync(join(home, '.config', 'huaweicloud', `agentarts-interpreter-session-${SESSION_UUID}.json`));
+
+    // get_session: the request carries the full addressing pair from the
+    // file, and both name + session_id reach the wire.
+    writeSessionFile(home, fullSessionState());
+    let request = null;
+    const got = await runAgentartsInterpreterSession(
+      { operation: 'get_session', session_id: SESSION_UUID },
+      {
+        runCandidate: async (candidate, args, childEnv, stdinData) => {
+          request = JSON.parse(stdinData);
+          return {
+            exitCode: 0,
+            stdout: pyDumps({
+              code_interpreter_name: 'team-interpreter',
+              session_id: SESSION_UUID,
+              name: 'work',
+              created_at: 't',
+              session_timeout: 900,
+            }),
+            stderr: '',
+          };
+        },
+      },
+    );
+    assert.equal(got.ok, true);
+    assert.deepEqual(request, {
+      operation: 'get_session',
+      region: 'cn-southwest-2',
+      data_endpoint: 'defaultgw-x.example.com',
+      auth_type: 'IAM',
+      code_interpreter_name: 'team-interpreter',
+      session_id: SESSION_UUID,
+    });
+
+    // stop_session: deletes the lease file, teaches the trap-87 no-op.
+    const stopped = await runAgentartsInterpreterSession(
+      { operation: 'stop_session', session_id: SESSION_UUID },
+      {
+        runCandidate: async () => ({
+          exitCode: 0,
+          stdout: pyDumps({ stopped: true, session_id: SESSION_UUID }),
+          stderr: '',
+        }),
+      },
+    );
+    assert.equal(stopped.ok, true);
+    assert.match(stopped.notes.join(' '), /lease record was removed/);
+    assert.match(stopped.notes.join(' '), /trap 87/);
+    assert.equal(
+      existsSync(join(home, '.config', 'huaweicloud', `agentarts-interpreter-session-${SESSION_UUID}.json`)),
+      false,
+    );
+
+    // EXPIRED lease: stop stays reachable (trap 85 — the only
+    // deterministic cleanup) and the staleness is disclosed.
+    writeSessionFile(home, fullSessionState({ lease_expires_at: Date.now() - 60_000 }));
+    const expiredStop = await runAgentartsInterpreterSession(
+      { operation: 'stop_session', session_id: SESSION_UUID },
+      {
+        runCandidate: async () => ({
+          exitCode: 0,
+          stdout: pyDumps({ stopped: true, session_id: SESSION_UUID }),
+          stderr: '',
+        }),
+      },
+    );
+    assert.equal(expiredStop.ok, true, 'stop must not hard-gate on the local lease clock');
+    assert.match(expiredStop.notes.join(' '), /local lease expired/);
+    assert.match(expiredStop.notes.join(' '), /trap 85/);
+
+    // Error mappings: session death vs interpreter deletion vs API key.
+    writeSessionFile(home, fullSessionState());
+    const sessionDead = await runAgentartsInterpreterSession(
+      { operation: 'get_session', session_id: SESSION_UUID },
+      {
+        runCandidate: async () => ({
+          exitCode: 1,
+          stdout: '',
+          stderr: 'ToolsAPIError: Tools API Error: Session not found',
+        }),
+      },
+    );
+    assert.match(sessionDead.error, /cloud session is gone/);
+    const interpreterDead = await runAgentartsInterpreterSession(
+      { operation: 'get_session', session_id: SESSION_UUID },
+      {
+        runCandidate: async () => ({
+          exitCode: 1,
+          stdout: '',
+          stderr: 'ToolsAPIError: Tools API Error: No matching policy found',
+        }),
+      },
+    );
+    assert.match(interpreterDead.error, /INTERPRETER itself is gone/);
+    assert.match(interpreterDead.error, /trap 86/);
+    const apiKey = await runAgentartsInterpreterSession(
+      { operation: 'get_session', session_id: SESSION_UUID },
+      {
+        runCandidate: async () => ({
+          exitCode: 1,
+          stdout: '',
+          stderr: 'ValueError: API Key is not provided and not found in environment variable.',
+        }),
+      },
+    );
+    assert.match(apiKey.error, /HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY/);
+  });
+});
+
+test('the interpreter session tool dispatches through tools.mjs', async () => {
+  await withIsolation(async () => {
+    const out = await callTool('huaweicloud_agentarts_interpreter_session', {
+      operation: 'get_session',
+      session_id: 'not-a-uuid',
+    });
+    assert.equal(out.ok, false);
+    assert.match(out.error, /must be a valid UUID/);
   });
 });

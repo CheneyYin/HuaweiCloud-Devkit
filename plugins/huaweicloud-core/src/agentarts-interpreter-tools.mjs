@@ -74,6 +74,7 @@ export const INTERPRETER_WRITE_OPERATIONS = [
   'create_code_interpreter',
   'update_code_interpreter',
   'delete_code_interpreter',
+  'start_session',
 ];
 
 // Write-bridge tool definitions (token-gated like every approved cloud
@@ -85,7 +86,7 @@ export const AGENTARTS_INTERPRETER_WRITE_TOOL_DEFINITIONS = [
   {
     name: 'huaweicloud_agentarts_interpreter_plan',
     description:
-      'Plan an AgentArts code interpreter WRITE (SDK CodeInterpreter class — the 0.1.7 CLI has no code-interpreter subcommands): resource lifecycle — create_code_interpreter, update_code_interpreter (tags only — the SDK updates observability and tags, this bridge exposes tags; an update without tags is rejected), delete_code_interpreter (irreversible). create_code_interpreter defaults auth_type to IAM (canonicalized into the request you approve): IAM-typed interpreters sign the data plane with the same AK/SK this toolkit injects, so sessions and actions work with no further setup; an EXPLICIT auth_type=API_KEY creates an interpreter whose data plane needs the console api_key (HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY) — the response is not known to return the key value (browser family measured this for browsers, trap 61; CI-side unmeasured). The create response carries access_endpoint (the bare data-plane base URL — the SDK constructor auto-prepends https://, trap 82) and attaches the tenant-shared default gateway, which persists across deletes (trap 63 family). Resource/tag name rules: names ^[a-z][a-z0-9-]{0,38}[a-z0-9]$ (2-40, lowercase); tags max 20 items, unique keys, {key, value} strings. After a delete, the list converges in 2-10 seconds (trap 89) and the delete CASCADES to the interpreter sessions (trap 86 — a live session starts answering "No matching policy found"). Validates the request, reads nothing from the cloud, and returns the exact request plus an approvalToken. Present the request to the user; on explicit approval run huaweicloud_agentarts_interpreter_write with the token and the SAME parameters.',
+      'Plan an AgentArts code interpreter WRITE (SDK CodeInterpreter class — the 0.1.7 CLI has no code-interpreter subcommands): resource lifecycle — create_code_interpreter, update_code_interpreter (tags only — the SDK updates observability and tags, this bridge exposes tags; an update without tags is rejected), delete_code_interpreter (irreversible) — plus the DATA-PLANE session start: start_session (one approval starts the session AND its lease: the session_timeout shown is what the local 0600 lease record enforces as the consent boundary, while the cloud session dies independently — measured not a wall clock at 60s, trap 85 — so stop is the only deterministic cleanup; the write resolves the interpreter access_endpoint and auth_type from the control plane and records the lease). create_code_interpreter defaults auth_type to IAM (canonicalized into the request you approve): IAM-typed interpreters sign the data plane with the same AK/SK this toolkit injects, so sessions and actions work with no further setup; an EXPLICIT auth_type=API_KEY creates an interpreter whose data plane needs the console api_key (HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY) — the response is not known to return the key value (browser family measured this for browsers, trap 61; CI-side unmeasured). The create response carries access_endpoint (the bare data-plane base URL — the SDK constructor auto-prepends https://, trap 82) and attaches the tenant-shared default gateway, which persists across deletes (trap 63 family). Resource/tag name rules: names ^[a-z][a-z0-9-]{0,38}[a-z0-9]$ (2-40, lowercase); tags max 20 items, unique keys, {key, value} strings. After a delete, the list converges in 2-10 seconds (trap 89) and the delete CASCADES to the interpreter sessions (trap 86 — a live session starts answering "No matching policy found"). Validates the request, reads nothing from the cloud, and returns the exact request plus an approvalToken. Present the request to the user; on explicit approval run huaweicloud_agentarts_interpreter_write with the token and the SAME parameters.',
     inputSchema: {
       type: 'object',
       required: ['operation'],
@@ -118,6 +119,25 @@ export const AGENTARTS_INTERPRETER_WRITE_TOOL_DEFINITIONS = [
           pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
           description:
             'update_code_interpreter/delete_code_interpreter: resource ID (UUID — a bridge-side gate; pass the id exactly as list_code_interpreters returned it).',
+        },
+        code_interpreter_name: {
+          type: 'string',
+          pattern: '^[a-z][a-z0-9-]{0,38}[a-z0-9]$',
+          description:
+            'start_session: the interpreter resource to start a session on (the write resolves its access_endpoint and auth_type from the control plane at execution time and records the 0600 session state file — the lease).',
+        },
+        session_name: {
+          type: 'string',
+          pattern: '^[a-zA-Z0-9_-]{1,128}$',
+          description:
+            'start_session: client-chosen session name (1-128 chars; a conservative bridge window — the SDK applies no rule of its own).',
+        },
+        session_timeout: {
+          type: 'integer',
+          minimum: 60,
+          maximum: 86400,
+          description:
+            'start_session: lease seconds (SDK default 900; docstring range 60-86400 with both bounds measured accepted). The LOCAL lease expires at start + timeout — the consent boundary — while the cloud session dies independently and is measured NOT a wall clock at 60s (trap 85): stop is the only deterministic cleanup.',
         },
         tags: {
           type: 'array',
@@ -157,12 +177,51 @@ export const AGENTARTS_INTERPRETER_WRITE_TOOL_DEFINITIONS = [
           type: 'string',
           description: 'Same code_interpreter_id the plan bound (update/delete).',
         },
+        code_interpreter_name: {
+          type: 'string',
+          description: 'Same code_interpreter_name the plan bound (start_session).',
+        },
+        session_name: { type: 'string', description: 'Same session_name the plan bound (start_session).' },
+        session_timeout: {
+          type: 'integer',
+          description: 'Same session_timeout the plan bound (start_session; omitted = the SDK default 900).',
+        },
         tags: {
           type: 'array',
           items: { type: 'object' },
           description: 'The EXACT tags from the plan (any order — the binding sorts by key).',
         },
         region: { type: 'string', description: 'Defaults to cn-southwest-2 (bound by the plan).' },
+      },
+    },
+  },
+];
+
+export const INTERPRETER_SESSION_OPERATIONS = ['get_session', 'stop_session'];
+
+// Free-tier session tool (CI4): the two risk-reducing/read session ops
+// that never need an approval token. Session context (the addressing
+// PAIR — code_interpreter_name + session_id — plus endpoint/auth/region)
+// comes from the 0600 state file the start_session write recorded.
+export const AGENTARTS_INTERPRETER_SESSION_TOOL_DEFINITIONS = [
+  {
+    name: 'huaweicloud_agentarts_interpreter_session',
+    description:
+      "Operate a LIVE AgentArts code interpreter session the start_session write recorded (SDK data plane — the 0.1.7 CLI has no session subcommands). Free-tier by design: get_session (read the session details — code_interpreter_id, session_id, name, created_at, session_timeout), stop_session (cleanup — risk only decreases; the SDK's stop returns no-op True on a session it cannot address (trap 87), so success says the cleanup ran, not that the session was live; the local lease record is deleted on success). Both ops take session_id — the id start_session returned and printed in its result/notes; the addressing pair and the data-plane endpoint/auth resolve from the 0600 session state file, never from tool args. Both ops stay REACHABLE past the local lease expiry — the cloud session outlives the nominal timeout (measured, trap 85), so stop is the only deterministic cleanup and must not gate on the local clock. Error shapes are mapped: 'Session not found' → the session died on the interpreter (expired at its own leisure or otherwise); 'No matching policy found' → the INTERPRETER itself was deleted (trap 86 — delete cascades to sessions); 'API Key is not provided' → the interpreter is API_KEY-typed and HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY is not exported. An expired lease is disclosed in notes, never a hard rejection.",
+    inputSchema: {
+      type: 'object',
+      required: ['operation', 'session_id'],
+      properties: {
+        operation: {
+          type: 'string',
+          enum: INTERPRETER_SESSION_OPERATIONS,
+          description: 'get_session (read) or stop_session (cleanup + delete the local lease record).',
+        },
+        session_id: {
+          type: 'string',
+          pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+          description: 'The session id start_session returned (the 0600 session state file is looked up by it).',
+        },
       },
     },
   },

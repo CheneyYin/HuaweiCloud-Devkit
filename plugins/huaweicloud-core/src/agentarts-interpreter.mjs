@@ -22,6 +22,10 @@
 // the error past the handler and kills the child with an uncaught
 // traceback (the browser bridge's single deviation, inherited here).
 
+import { mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync as writeSessionFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+
 import {
   buildChildEnv,
   DEFAULT_APPROVED_TIMEOUT_MS,
@@ -348,6 +352,7 @@ export async function callAgentartsInterpreterTool(name, rawArgs = {}) {
   if (name === 'huaweicloud_agentarts_interpreter_read') return readAgentartsInterpreter(rawArgs);
   if (name === 'huaweicloud_agentarts_interpreter_plan') return planAgentartsInterpreterWrite(rawArgs);
   if (name === 'huaweicloud_agentarts_interpreter_write') return runAgentartsInterpreterWrite(rawArgs);
+  if (name === 'huaweicloud_agentarts_interpreter_session') return runAgentartsInterpreterSession(rawArgs);
   return { ok: false, error: `Unknown agentarts interpreter tool: ${redactSecrets(String(name))}` };
 }
 
@@ -372,6 +377,11 @@ const WRITE_OPERATION_META = {
   create_code_interpreter: { labels: [] },
   update_code_interpreter: { labels: [] },
   delete_code_interpreter: { labels: ['irreversible'] },
+  start_session: {
+    labels: [],
+    approvalScope:
+      ' One approval starts the session AND its lease: the session_timeout shown is what the LOCAL lease record enforces as the consent boundary, while the cloud session dies independently and is measured NOT a wall clock at 60s (trap 85) — stop is the only deterministic cleanup.',
+  },
 };
 
 const INTERPRETER_NAME_PATTERN = /^[a-z][a-z0-9-]{0,38}[a-z0-9]$/;
@@ -391,6 +401,9 @@ const INTERPRETER_WRITE_PARAM_KEYS = [
   'api_key_name',
   'description',
   'code_interpreter_id',
+  'code_interpreter_name',
+  'session_name',
+  'session_timeout',
   'tags',
   'region',
 ];
@@ -399,6 +412,7 @@ const INTERPRETER_WRITE_OP_APPLICABILITY = {
   create_code_interpreter: ['name', 'auth_type', 'api_key_name', 'description', 'tags'],
   update_code_interpreter: ['code_interpreter_id', 'tags'],
   delete_code_interpreter: ['code_interpreter_id'],
+  start_session: ['code_interpreter_name', 'session_name', 'session_timeout'],
 };
 
 function rejectUnknownWriteParams(params, operation) {
@@ -517,6 +531,8 @@ function validateInterpreterWrite(params) {
       return 'region must match ^[a-z0-9-]{1,64}$ — it steers the hostname of the AK/SK-signed request, so free-text regions are rejected (use a region id like cn-southwest-2).';
     }
   }
+  const sessionError = validateInterpreterWriteSessionExtension(params);
+  if (sessionError) return sessionError;
   return null;
 }
 
@@ -556,7 +572,7 @@ function buildInterpreterWriteRequest(params) {
     if (tags) request.tags = tags;
   }
   if (params.operation === 'delete_code_interpreter') request.code_interpreter_id = params.code_interpreter_id;
-  return request;
+  return buildInterpreterWriteRequestSessionExtension(request, params);
 }
 
 // Token namespace — distinct from the agentarts CLI, memory, and browser
@@ -576,6 +592,20 @@ export function planAgentartsInterpreterWrite(params = {}) {
     };
   }
   const request = buildInterpreterWriteRequest(params);
+  // Orphan guard (plan-time local check; the write rechecks pre-consume
+  // with a coded rejection): a second start_session on the same
+  // interpreter while a live lease exists would orphan the cloud session.
+  if (params.operation === 'start_session') {
+    const guard = guardExistingSession(params.code_interpreter_name);
+    if (guard) {
+      return {
+        ok: false,
+        service: 'AgentArts',
+        operation: operationLabel(params.operation),
+        error: guard,
+      };
+    }
+  }
   let approvalToken;
   try {
     approvalToken = createApprovalTokenStore(INTERPRETER_WRITE_TOKEN_CLI).create([JSON.stringify(request)]);
@@ -622,6 +652,7 @@ export function planAgentartsInterpreterWrite(params = {}) {
   const meta = WRITE_OPERATION_META[params.operation];
   const labels = meta.labels;
   const labelSuffix = labels.length > 0 ? ` Labels: ${labels.join(', ')}.` : '';
+  const scopeText = typeof meta.approvalScope === 'function' ? meta.approvalScope(request) : meta.approvalScope;
   const authTypeNote =
     params.operation === 'create_code_interpreter'
       ? request.auth_type === 'IAM'
@@ -637,7 +668,7 @@ export function planAgentartsInterpreterWrite(params = {}) {
     warnings,
     request,
     approvalToken,
-    approvalNote: `Present the request above to the user.${labelSuffix} On explicit approval, run huaweicloud_agentarts_interpreter_write with THIS approvalToken, the SAME parameters, and approvedByUser: true (the token binds them exactly); otherwise discard it.${authTypeNote}`,
+    approvalNote: `Present the request above to the user.${labelSuffix} On explicit approval, run huaweicloud_agentarts_interpreter_write with THIS approvalToken, the SAME parameters, and approvedByUser: true (the token binds them exactly); otherwise discard it.${scopeText ?? ''}${authTypeNote}`,
   };
 }
 
@@ -696,7 +727,9 @@ function replayGuidanceNote(operation, concurrency) {
   const verify =
     operation === 'create_code_interpreter'
       ? 'huaweicloud_agentarts_interpreter_read (list_code_interpreters by name)'
-      : 'huaweicloud_agentarts_interpreter_read (get_code_interpreter by id — not-found on a delete means deleted; the update-family rule is success ≠ applied)';
+      : operation === 'start_session'
+        ? 'huaweicloud_agentarts_interpreter_session (get_session by the session id from the original result) or the local session state file'
+        : 'huaweicloud_agentarts_interpreter_read (get_code_interpreter by id — not-found on a delete means deleted; the update-family rule is success ≠ applied)';
   return `${prefix} Verify with ${verify} BEFORE re-planning anything.`;
 }
 
@@ -807,6 +840,22 @@ export async function runAgentartsInterpreterWrite({ approvalToken, approvedByUs
         'approvalToken was minted for DIFFERENT parameters — the write binds the exact planned request. Re-plan with the changed parameters (the token stays valid for the original ones).',
     };
   }
+  // Session-op pre-consumption guard (the family's order): the orphan
+  // guard rechecks at write time (state may have changed since plan) —
+  // a policy-blocked write must not burn the approval.
+  if (params.operation === 'start_session') {
+    const guard = guardExistingSession(params.code_interpreter_name);
+    if (guard) {
+      return {
+        ok: false,
+        status: 'rejected',
+        code: 'SESSION_LEASE_CONFLICT',
+        service: 'AgentArts',
+        operation: operationLabel(params.operation),
+        error: `${guard} The token was NOT consumed.`,
+      };
+    }
+  }
   // Credentials BEFORE consumption (the family's order): the control
   // plane needs injectable AK/SK, and a missing-credential rejection must
   // not burn the approval on a guaranteed no-op spawn.
@@ -860,7 +909,11 @@ export async function runAgentartsInterpreterWrite({ approvalToken, approvedByUs
   }
   const childEnv = buildChildEnv({ injectCredentials: true });
   const timeoutMs = options.timeoutMs ?? DEFAULT_APPROVED_TIMEOUT_MS;
-  const args = ['-c', INTERPRETER_WRITE_SNIPPET];
+  // Session ops take the session snippet (endpoint/auth resolve inside
+  // the snippet via the control-plane probe); resource ops run the
+  // canonical request verbatim.
+  const isSessionWrite = params.operation === 'start_session';
+  const args = ['-c', isSessionWrite ? INTERPRETER_SESSION_WRITE_SNIPPET : INTERPRETER_WRITE_SNIPPET];
   const outcome = await runOverPythonCandidates({
     args,
     childEnv,
@@ -869,7 +922,12 @@ export async function runAgentartsInterpreterWrite({ approvalToken, approvedByUs
     runCandidate: options.runCandidate,
     shapeResult: (result, candidate) => {
       const parsed = parseSnippetStdout(result);
-      return enrichInterpreterWrite(shapeInterpreterResult(result, candidate, params, timeoutMs, parsed), params);
+      const payload = enrichInterpreterWrite(
+        shapeInterpreterResult(result, candidate, params, timeoutMs, parsed),
+        params,
+      );
+      if (isSessionWrite) return enrichInterpreterSessionWrite(payload, params, request, result);
+      return payload;
     },
   });
   // Fallthrough honesty (the family's round-1/2 rule): when NO python
@@ -880,4 +938,532 @@ export async function runAgentartsInterpreterWrite({ approvalToken, approvedByUs
     outcome.error = `${outcome.error} The single-use approval token was already CONSUMED by this attempt and stays burned — after fixing the SDK install, re-plan (replaying this token returns already_processed without executing anything).`;
   }
   return outcome;
+}
+
+// ---------------------------------------------------------------------------
+// CI4: session lifecycle. start_session extends the WRITE pair (the
+// session lease IS an approved boundary — it carries the timeout the user
+// consented to); get/stop are the FREE session tool (reads + cleanup —
+// risk only decreases). The lease's local carrier is the 0600 session
+// state file, written by the start write and deleted by stop.
+//
+// The state file carries NO credentials (IAM-typed interpreters sign the
+// data plane with the injected AK/SK; API_KEY-typed ones need the console
+// key in HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY, allowlisted through
+// buildChildEnv) — the file stores only the session context: the
+// addressing pair (code_interpreter_name + session_id), the data-plane
+// endpoint, auth posture, region, and the lease expiry.
+//
+// CI addressing differs from the browser family: the SDK's get_session
+// takes the (code_interpreter_name, session_id) PAIR and stop_session
+// addresses the client's OWN state — every snippet sets both fields
+// first (the cross-process continuity model, trap 87).
+//
+// Lease semantics differ too (trap 85, measured): the cloud session
+// OUTLIVES the nominal timeout (60s session answered 65s later), so the
+// local lease is the CONSENT boundary (expiry = re-approval needed for
+// NEW work via invoke) while get/stop stay reachable past it — stop is
+// the only deterministic cleanup and must never gate on the local clock.
+
+const SESSION_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,128}$/;
+const SESSION_TIMEOUT_RANGE = [60, 86400];
+
+function interpreterSessionFile(sessionId) {
+  if (!UUID_PATTERN.test(sessionId)) {
+    return { ok: false, error: 'session_id must be a valid UUID (the id start_session returned).' };
+  }
+  const root = process.env.HUAWEICLOUD_HOME || homedir();
+  return {
+    ok: true,
+    path: join(root, '.config', 'huaweicloud', `agentarts-interpreter-session-${sessionId}.json`),
+  };
+}
+
+function loadInterpreterSession(sessionId) {
+  const file = interpreterSessionFile(sessionId);
+  if (!file.ok) return { ok: false, error: file.error };
+  let raw;
+  try {
+    raw = readFileSync(file.path, 'utf8');
+  } catch {
+    return {
+      ok: false,
+      error: `No session state file for session ${sessionId} (${file.path}). Sessions are recorded by the start_session write — if the session was started outside this toolkit, or its lease already ended and the file was removed, there is no local record to drive it from. Re-start the session through the interpreter write pair.`,
+    };
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || !parsed.session_id || !parsed.code_interpreter_name) {
+      return {
+        ok: false,
+        error: `The session state file ${file.path} is malformed — delete it and re-start the session.`,
+      };
+    }
+    // The lease record must carry the full addressing context: a missing
+    // numeric lease, a non-UUID session id, or a missing endpoint/auth
+    // field leaves the session undriveable — malformed, not ungated.
+    if (
+      typeof parsed.lease_expires_at !== 'number' ||
+      !UUID_PATTERN.test(String(parsed.session_id)) ||
+      typeof parsed.data_endpoint !== 'string' ||
+      !parsed.data_endpoint ||
+      typeof parsed.auth_type !== 'string' ||
+      !parsed.auth_type ||
+      typeof parsed.region !== 'string' ||
+      !parsed.region
+    ) {
+      return {
+        ok: false,
+        error: `The session state file ${file.path} is malformed (missing lease, endpoint, auth, or region) — delete it and re-start the session.`,
+      };
+    }
+    return { ok: true, session: parsed };
+  } catch {
+    return {
+      ok: false,
+      error: `The session state file ${file.path} is not parseable JSON — delete it and re-start the session.`,
+    };
+  }
+}
+
+function saveInterpreterSession(state) {
+  const file = interpreterSessionFile(state.session_id);
+  if (!file.ok) return file;
+  mkdirSync(dirname(file.path), { recursive: true });
+  writeSessionFileSync(file.path, JSON.stringify(state, null, 2), { encoding: 'utf8', mode: 0o600 });
+  return { ok: true, path: file.path };
+}
+
+function deleteInterpreterSession(sessionId) {
+  const file = interpreterSessionFile(sessionId);
+  if (!file.ok) return;
+  try {
+    unlinkSync(file.path);
+  } catch {
+    // Already gone — the desired end state.
+  }
+}
+
+// Session-file scan for the orphan guard: every record carries its FILE
+// PATH (a non-UUID inner id cannot address the file through the
+// UUID-gated helpers, and the sweep must unlink malformed records
+// regardless).
+function scanInterpreterSessions() {
+  const root = process.env.HUAWEICLOUD_HOME || homedir();
+  const dir = join(root, '.config', 'huaweicloud');
+  let entries;
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const sessions = [];
+  for (const entry of entries) {
+    if (!entry.startsWith('agentarts-interpreter-session-') || !entry.endsWith('.json')) continue;
+    try {
+      const parsed = JSON.parse(readFileSync(join(dir, entry), 'utf8'));
+      if (parsed && typeof parsed === 'object' && parsed.session_id && parsed.code_interpreter_name) {
+        sessions.push({ ...parsed, __path: join(dir, entry) });
+      }
+    } catch {
+      // Malformed session records are not this scan's problem —
+      // load-time errors disclose them by session id.
+    }
+  }
+  return sessions;
+}
+
+// The orphan guard: a second start_session on the same
+// code_interpreter_name while an unexpired local lease exists would
+// orphan the cloud session (the SDK's second start just overwrites its
+// own state; the first cloud session keeps running — trap 85's cloud
+// lifetime). Reject the second start, and opportunistically sweep
+// EXPIRED or malformed records for that interpreter (stale leases
+// describe nothing consented-to).
+function guardExistingSession(codeInterpreterName) {
+  const now = Date.now();
+  const matches = [];
+  for (const session of scanInterpreterSessions()) {
+    if (session.code_interpreter_name !== codeInterpreterName) continue;
+    const shapeOk =
+      typeof session.lease_expires_at === 'number' &&
+      UUID_PATTERN.test(String(session.session_id)) &&
+      typeof session.data_endpoint === 'string' &&
+      session.data_endpoint &&
+      typeof session.auth_type === 'string' &&
+      session.auth_type &&
+      typeof session.region === 'string' &&
+      session.region;
+    if (shapeOk && session.lease_expires_at > now) {
+      matches.push(session);
+    } else {
+      // Stale or malformed record: sweep it BY PATH (the UUID-gated
+      // delete helper cannot address a non-UUID inner id).
+      try {
+        unlinkSync(session.__path);
+      } catch {
+        // Already gone.
+      }
+    }
+  }
+  if (matches.length > 0) {
+    const live = matches
+      .map((m) => `${m.session_id} (lease until ${new Date(m.lease_expires_at).toISOString()})`)
+      .join(', ');
+    return `An unexpired session lease already exists for interpreter "${codeInterpreterName}": ${live}. A second start would orphan the cloud session (the SDK's own state just overwrites; the cloud session outlives the nominal timeout — trap 85). Stop it first with huaweicloud_agentarts_interpreter_session (operation stop_session), or wait for the lease to expire.`;
+  }
+  return null;
+}
+
+// Session-lifecycle validation, composed INTO validateInterpreterWrite
+// at its tail (the write pair's single front door stays one function).
+function validateInterpreterWriteSessionExtension(candidate) {
+  if (candidate.operation === 'start_session') {
+    const need = (field, message) => {
+      if (typeof candidate[field] !== 'string' || candidate[field].length === 0) return message;
+      return null;
+    };
+    const err =
+      need(
+        'code_interpreter_name',
+        'code_interpreter_name is required for start_session (pattern ^[a-z][a-z0-9-]{0,38}[a-z0-9]$).',
+      ) ?? need('session_name', 'session_name is required for start_session.');
+    if (err) return err;
+    if (!INTERPRETER_NAME_PATTERN.test(candidate.code_interpreter_name)) {
+      return 'code_interpreter_name must match ^[a-z][a-z0-9-]{0,38}[a-z0-9]$ — the interpreter resource name (list_code_interpreters carries it).';
+    }
+    if (!SESSION_NAME_PATTERN.test(candidate.session_name)) {
+      return 'session_name must match ^[a-zA-Z0-9_-]{1,128}$ (a conservative bridge window — the SDK applies no rule of its own).';
+    }
+    if (candidate.session_timeout !== undefined && candidate.session_timeout !== null) {
+      const t = candidate.session_timeout;
+      if (typeof t !== 'number' || !Number.isSafeInteger(t) || Object.is(t, -0)) {
+        return 'session_timeout must be an integer (seconds).';
+      }
+      if (t < SESSION_TIMEOUT_RANGE[0] || t > SESSION_TIMEOUT_RANGE[1]) {
+        return `session_timeout must be ${SESSION_TIMEOUT_RANGE[0]}-${SESSION_TIMEOUT_RANGE[1]} seconds (SDK default 900; docstring range with both bounds measured accepted, trap 85).`;
+      }
+    }
+  }
+  return null;
+}
+
+// Canonical request extension for start_session: the token binds
+// code_interpreter_name + session_name, and session_timeout ONLY when
+// explicitly set (the SDK default 900 applies when omitted on BOTH sides
+// of the binding).
+function buildInterpreterWriteRequestSessionExtension(request, params) {
+  if (params.operation === 'start_session') {
+    request.code_interpreter_name = params.code_interpreter_name;
+    request.session_name = params.session_name;
+    if (params.session_timeout !== undefined && params.session_timeout !== null) {
+      request.session_timeout = params.session_timeout;
+    }
+  }
+  return request;
+}
+
+const INTERPRETER_SESSION_WRITE_SNIPPET = [
+  'import json, sys',
+  'try:',
+  '    from agentarts.sdk import CodeInterpreter',
+  'except ModuleNotFoundError:',
+  '    print("AGENTARTS_SDK_MISSING", file=sys.stderr)',
+  '    sys.exit(3)',
+  'try:',
+  '    params = json.loads(sys.stdin.read())',
+  '    op = params["operation"]',
+  '    if op == "start_session":',
+  '        # The data-plane endpoint and auth_type resolve from the control',
+  '        # plane FIRST: list_code_interpreters by name carries id/name/',
+  '        # access_endpoint but NOT auth_type (trap 89) — the get by id is',
+  '        # the only read that proves the auth posture.',
+  '        probe = CodeInterpreter(region=params["region"], auth_type="IAM")',
+  '        found = probe.list_code_interpreters(name=params["code_interpreter_name"])',
+  '        items = found.get("items") or []',
+  '        if not items:',
+  '            print("ToolsAPIError: interpreter {} not found — list_code_interpreters by name returned nothing (verify with huaweicloud_agentarts_interpreter_read)".format(params["code_interpreter_name"]), file=sys.stderr)',
+  '            sys.exit(1)',
+  '        info = items[0]',
+  '        # The server-side name filter is EXACTNESS-UNMEASURED — a fuzzy or',
+  '        # reordered match must not silently start the wrong interpreter',
+  '        # (the approval bound this exact name).',
+  '        if info.get("name") != params["code_interpreter_name"]:',
+  '            print("ToolsAPIError: list_code_interpreters returned {} for name {} — the name filter did not match exactly; refusing to start the wrong interpreter".format(info.get("name"), params["code_interpreter_name"]), file=sys.stderr)',
+  '            sys.exit(1)',
+  '        endpoint = info.get("access_endpoint")',
+  '        if not endpoint:',
+  '            print("ToolsAPIError: interpreter {} carries no access_endpoint (unexpected shape)".format(params["code_interpreter_name"]), file=sys.stderr)',
+  '            sys.exit(1)',
+  '        # The constructor data_endpoint auto-prepends the scheme (trap 82)',
+  '        # — the bare defaultgw domain passes through as-is.',
+  '        detail = probe.get_code_interpreter(info.get("id"))',
+  '        auth = detail.get("auth_type") or "IAM"',
+  '        client = CodeInterpreter(region=params["region"], data_endpoint=endpoint, auth_type=auth)',
+  '        kwargs = {"code_interpreter_name": params["code_interpreter_name"], "session_name": params["session_name"]}',
+  '        if params.get("session_timeout") is not None: kwargs["session_timeout"] = params["session_timeout"]',
+  '        session_id = client.start_session(**kwargs)',
+  '        # The bridge captures the lease record from THIS envelope: the',
+  '        # interpreter half (endpoint/auth resolution context) plus the',
+  '        # bare session id the SDK returns.',
+  '        result = {"interpreter": {"id": info.get("id"), "name": info.get("name"), "auth_type": auth, "access_endpoint": endpoint}, "session_id": session_id}',
+  '    else:',
+  '        print("AGENTARTS_INTERPRETER_BAD_OPERATION", file=sys.stderr)',
+  '        sys.exit(2)',
+  '    print(json.dumps(result, ensure_ascii=False, default=lambda o: getattr(o, "__dict__", str(o))))',
+  // SystemExit re-raise + BaseException catch: same contract as every
+  // interpreter snippet (the bad-operation exit-2 path lives inside this
+  // try; ToolsAPIError extends BaseException).
+  'except SystemExit:',
+  '    raise',
+  'except BaseException as error:',
+  '    print("{}: {}".format(type(error).__name__, error), file=sys.stderr)',
+  '    sys.exit(1)',
+].join('\n');
+
+// Post-execution lease capture for start_session: parsed from the RAW
+// stdout (not the envelope's possibly-truncated result) — the lease
+// record must exist even when the display payload truncated.
+function captureInterpreterSessionState(rawResult, request) {
+  if (rawResult.timedOut || rawResult.exitCode !== 0) return null;
+  try {
+    const parsed = JSON.parse(rawResult.stdout);
+    const interpreter = parsed && parsed.interpreter;
+    const sessionId = parsed && parsed.session_id;
+    if (!interpreter || typeof interpreter !== 'object' || typeof sessionId !== 'string') return null;
+    if (!UUID_PATTERN.test(sessionId)) return null;
+    const startedAt = Date.now();
+    const timeout = typeof request.session_timeout === 'number' ? request.session_timeout : 900;
+    return {
+      code_interpreter_id: interpreter.id,
+      code_interpreter_name: request.code_interpreter_name,
+      auth_type: interpreter.auth_type,
+      region: request.region,
+      data_endpoint: interpreter.access_endpoint,
+      session_id: sessionId,
+      session_name: request.session_name,
+      session_timeout: timeout,
+      started_at: startedAt,
+      lease_expires_at: startedAt + timeout * 1000,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Session-write post-processing: the start's lease capture, the
+// concurrent-lease disclosure (check-then-act across the async spawn),
+// and the API_KEY-missing error mapping.
+function enrichInterpreterSessionWrite(payload, params, request, rawResult) {
+  if (params.operation === 'start_session' && payload.ok) {
+    const state = captureInterpreterSessionState(rawResult, request);
+    if (state) {
+      const concurrentNote = (name, ownId) => {
+        const live = scanInterpreterSessions().filter(
+          (other) =>
+            other.code_interpreter_name === name &&
+            other.session_id !== ownId &&
+            typeof other.lease_expires_at === 'number' &&
+            other.lease_expires_at > Date.now(),
+        );
+        return live.length > 0
+          ? ` CONCURRENT-START WARNING: ${live.length} other live lease(s) exist for interpreter "${name}" (${live.map((c) => c.session_id).join(', ')}) — the earlier cloud session is likely ORPHANED (the guard is check-then-act across the spawn; the SDK's own second start overwrites its state silently). Stop the orphaned one via the console or wait for its timeout.`
+          : '';
+      };
+      let saved = null;
+      try {
+        saved = saveInterpreterSession(state);
+      } catch (error) {
+        // The lease carrier itself failed — the cloud session is LIVE:
+        // disclose loudly instead of throwing past the consumed-token
+        // disclosure.
+        payload.notes = [
+          ...(payload.notes || []),
+          `WARNING: the session state file could NOT be written (${error.message}) — the cloud session is live as session_id ${state.session_id} but this toolkit cannot drive or stop it. Stop the session via the console before it times out (${state.session_timeout}s).${concurrentNote(state.code_interpreter_name, state.session_id)}`,
+        ];
+      }
+      if (saved && saved.ok) {
+        payload.notes = [
+          ...(payload.notes || []),
+          `Session lease recorded: session_id ${state.session_id}, lease expires at ${new Date(state.lease_expires_at).toISOString()} (${state.session_timeout}s). Drive it with huaweicloud_agentarts_interpreter_session (get_session / stop_session) by session_id; the state file is ${saved.path} (0600). The local lease is the consent boundary — the cloud session dies independently and is measured NOT a wall clock (trap 85), so stop is the only deterministic cleanup.${concurrentNote(state.code_interpreter_name, state.session_id)}`,
+        ];
+      } else if (saved && !saved.ok) {
+        payload.notes = [
+          ...(payload.notes || []),
+          `WARNING: the session state file could not be recorded (${saved.error}) — the cloud session is live as session_id ${state.session_id} but this toolkit cannot drive it. Stop it via the console before it times out.${concurrentNote(state.code_interpreter_name, state.session_id)}`,
+        ];
+      }
+    } else {
+      // The session is LIVE in the cloud but the local lease could not be
+      // captured (unexpected shape) — disclose loudly.
+      let rawId = '(unreadable)';
+      try {
+        const raw = JSON.parse(rawResult.stdout);
+        if (raw && typeof raw.session_id === 'string') rawId = raw.session_id;
+      } catch {
+        // leave unreadable
+      }
+      payload.notes = [
+        ...(payload.notes || []),
+        `WARNING: the session state file could NOT be captured from the start response (unexpected shape) — the cloud session is live as session_id ${rawId} but this toolkit cannot drive or stop it by id. Stop the session via the console before it times out.`,
+      ];
+    }
+  }
+  const apiKeyMissing =
+    /API Key is not provided/i.test(rawResult?.stderr || '') || /API Key is not provided/i.test(payload?.stderr || '');
+  if (!payload.ok && apiKeyMissing) {
+    payload.error = `${payload.error || 'Execution failed.'} The interpreter is API_KEY-typed: the data plane needs the console api_key exported as HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY in the agent launcher's environment (the response is not known to return the key value — browser-family measurement, trap 61; CI-side unmeasured). The token was consumed by this attempt — re-plan after exporting the key.`;
+  }
+  return payload;
+}
+
+const INTERPRETER_SESSION_TOOL_SNIPPET = [
+  'import json, sys',
+  'try:',
+  '    from agentarts.sdk import CodeInterpreter',
+  'except ModuleNotFoundError:',
+  '    print("AGENTARTS_SDK_MISSING", file=sys.stderr)',
+  '    sys.exit(3)',
+  'try:',
+  '    params = json.loads(sys.stdin.read())',
+  '    client = CodeInterpreter(region=params["region"], data_endpoint=params["data_endpoint"], auth_type=params["auth_type"])',
+  '    client.code_interpreter_name = params["code_interpreter_name"]',
+  '    client.session_id = params["session_id"]',
+  '    op = params["operation"]',
+  '    if op == "get_session":',
+  '        result = client.get_session(code_interpreter_name=params["code_interpreter_name"], session_id=params["session_id"])',
+  '        if result is None:',
+  '            result = {"session_state": "unknown (empty response)"}',
+  '    elif op == "stop_session":',
+  '        client.stop_session()',
+  '        result = {"stopped": True, "session_id": params["session_id"]}',
+  '    else:',
+  '        print("AGENTARTS_INTERPRETER_BAD_OPERATION", file=sys.stderr)',
+  '        sys.exit(2)',
+  '    print(json.dumps(result, ensure_ascii=False, default=lambda o: getattr(o, "__dict__", str(o))))',
+  'except SystemExit:',
+  '    raise',
+  'except BaseException as error:',
+  '    print("{}: {}".format(type(error).__name__, error), file=sys.stderr)',
+  '    sys.exit(1)',
+].join('\n');
+
+// Free-tier session tool (no approval token): get/stop over a recorded
+// session lease. Both ops stay reachable past the local lease expiry
+// (trap 85: the cloud session outlives the nominal timeout — stop is
+// the only deterministic cleanup).
+export async function runAgentartsInterpreterSession(params = {}, options = {}) {
+  if (!['get_session', 'stop_session'].includes(params.operation)) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `interpreter session ${params.operation || '(unknown)'} (SDK data plane)`,
+      error: 'operation must be one of: get_session, stop_session.',
+    };
+  }
+  for (const key of Object.keys(params)) {
+    if (key !== 'operation' && key !== 'session_id') {
+      return {
+        ok: false,
+        service: 'AgentArts',
+        operation: `interpreter session ${params.operation} (SDK data plane)`,
+        error: `Unknown parameter "${redactSecrets(key)}" — legal keys: operation, session_id. (Region/endpoint/auth type resolve from the session state file, never from tool args.)`,
+      };
+    }
+  }
+  if (typeof params.session_id !== 'string' || params.session_id.length === 0) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `interpreter session ${params.operation} (SDK data plane)`,
+      error: 'session_id is required — the id start_session returned.',
+    };
+  }
+  if (!UUID_PATTERN.test(params.session_id)) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `interpreter session ${params.operation} (SDK data plane)`,
+      error: 'session_id must be a valid UUID (the id start_session returned).',
+    };
+  }
+  if (hasInjectableCredentials() === false) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `interpreter session ${params.operation} (SDK data plane)`,
+      error:
+        'No devkit credentials available for agentarts (HUAWEICLOUD_SDK_AK/SK injection). Run huaweicloud_auth_init first, or execute the command in your own terminal — the wrapper never falls back to unmanaged profile files or the metadata chain.',
+    };
+  }
+  const load = loadInterpreterSession(params.session_id);
+  if (!load.ok) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `interpreter session ${params.operation} (SDK data plane)`,
+      error: load.error,
+    };
+  }
+  const session = load.session;
+  const request = {
+    operation: params.operation,
+    region: session.region,
+    data_endpoint: session.data_endpoint,
+    auth_type: session.auth_type,
+    code_interpreter_name: session.code_interpreter_name,
+    session_id: session.session_id,
+  };
+  const childEnv = buildChildEnv({ injectCredentials: true });
+  const timeoutMs = options.timeoutMs ?? READONLY_TIMEOUT_MS;
+  const args = ['-c', INTERPRETER_SESSION_TOOL_SNIPPET];
+  const outcome = await runOverPythonCandidates({
+    args,
+    childEnv,
+    timeoutMs,
+    stdinData: JSON.stringify(request),
+    runCandidate: options.runCandidate,
+    shapeResult: (result, candidate) => {
+      const parsed = parseSnippetStdout(result);
+      const payload = shapeInterpreterResult(result, candidate, params, timeoutMs, parsed);
+      payload.operation = `interpreter session ${params.operation} (SDK data plane; no CLI subcommand in 0.1.7)`;
+      return enrichInterpreterSession(payload, params, session, result);
+    },
+  });
+  return outcome;
+}
+
+// Session-tool post-processing: lease staleness disclosure (never a hard
+// gate — trap 85), stop's file cleanup, and the three measured error
+// mappings (trap 86a/86b + the API_KEY-missing shape).
+function enrichInterpreterSession(payload, params, session, rawResult) {
+  const now = Date.now();
+  const expired = typeof session.lease_expires_at === 'number' && session.lease_expires_at <= now;
+  if (payload.ok) {
+    const notes = [];
+    if (params.operation === 'stop_session') {
+      deleteInterpreterSession(params.session_id);
+      notes.push(
+        `The local session lease record was removed (${interpreterSessionFile(params.session_id).path}). The SDK's stop returns no-op True on a session it cannot address (trap 87) — success says the cleanup ran, not that the session was live.`,
+      );
+    }
+    if (expired) {
+      notes.push(
+        `The local lease expired at ${new Date(session.lease_expires_at).toISOString()} — the cloud session dies independently and is measured NOT a wall clock (trap 85): it may still be live, and this stop was the deterministic cleanup.`,
+      );
+    }
+    if (notes.length > 0) payload.notes = notes;
+    return payload;
+  }
+  // Error mappings (the CI2-R1 double-prefix lesson applies: the real
+  // stderr reads "ToolsAPIError: Tools API Error: Session not found").
+  const text = `${payload.stderr || ''} ${payload.error || ''}`;
+  if (/ToolsAPIError: (?:Tools API Error: )?(Session not found|No active session)/i.test(text)) {
+    payload.error = `${payload.error} The cloud session is gone (died at its own leisure, stopped, or never existed — trap 86). Re-start it via huaweicloud_agentarts_interpreter_plan (operation start_session) if you still need the interpreter.`;
+  } else if (/ToolsAPIError: (?:Tools API Error: )?No matching policy found/i.test(text)) {
+    payload.error = `${payload.error} The INTERPRETER itself is gone (deleted — the delete cascades to its sessions, trap 86). The session cannot be restarted on this interpreter; create a new one if you still need code execution.`;
+  } else if (/API Key is not provided/i.test(`${rawResult?.stderr || ''} ${payload.stderr || ''}`)) {
+    payload.error = `${payload.error || 'Execution failed.'} The interpreter is API_KEY-typed: the data plane needs the console api_key exported as HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY in the agent launcher's environment.`;
+  }
+  return payload;
 }
