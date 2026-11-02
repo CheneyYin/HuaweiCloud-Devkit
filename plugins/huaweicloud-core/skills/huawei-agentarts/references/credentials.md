@@ -153,3 +153,35 @@ The browser family is deliberately key-free by default:
   lease expiry. It is not a secret, but treat it as internal state: it
   is what the free session/invoke tools resolve the session context
   from.
+
+## Code interpreter credential model (IAM-typed default, CI1-measured 2026-11-02)
+
+The interpreter family mirrors the browser posture, with one naming
+difference:
+
+- **The create write canonicalizes auth_type=IAM** — the data plane signs
+  with the same injected `HUAWEICLOUD_SDK_AK/SK` (plus the STS token
+  when present). Fully programmatic, no key, no console round-trip.
+- **API_KEY-typed interpreters** (console-created): the key value exists
+  ONLY in the console — the create/get response is not known to return
+  it (the browser family MEASURED this for browsers, trap 61; CI-side
+  unmeasured — the spike only created IAM-typed resources). Export the
+  console key as `HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY` in the agent
+  LAUNCHER's environment (the bridge's allowlist passes it through; the
+  SDK reads it natively on every data-plane call). Never put it in argv
+  or the transcript.
+- **The session state file** (`agentarts-interpreter-session-<session_id>.json`,
+  0600, honors HUAWEICLOUD_HOME) carries NO credentials — only the
+  addressing pair, the data-plane endpoint, the auth posture, and the
+  lease expiry.
+- **Endpoint env names stay OUT of the child env allowlist**: the SDK
+  resolves AGENTARTS_CODEINTERPRETER_DATA_ENDPOINT > constructor param >
+  AGENTARTS_RUNTIME_DATA_ENDPOINT — the bridge always passes the
+  constructor param (resolved from the resource's access_endpoint at
+  start time), so an ambient env can never steer the data plane.
+- **e2e creds naming trap** (trap 81): the devkit e2e creds file defines
+  `AK`/`SK` while the SDK reads `HUAWEICLOUD_SDK_AK/SK` — map the names
+  before any SDK probe, or the SDK falls to the profile/metadata chain
+  and answers 00000144-family errors ("token is restricted" / "user is
+  unassigned") that misdiagnose the credential SOURCE as the account
+  (the trap-44 class).

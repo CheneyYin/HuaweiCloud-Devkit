@@ -2283,3 +2283,59 @@ test('the agentarts interpreter INVOKE tool registers with its lease-gated contr
   assert.match(invokeSnippet[1], /agentarts-interpreter-download-/);
   assert.match(invokeSnippet[1], /os\.chmod\(path, 0o600\)/);
 });
+
+test('huawei-agentarts SKILL.md routes the code interpreter bridge (CI2-CI5)', () => {
+  const body = readFileSync(join(pluginRoot, 'skills', 'huawei-agentarts', 'SKILL.md'), 'utf8');
+  // The routing floor: all five interpreter tools are taught in BOTH the
+  // tier map and the MCP tools list (the R14 doubled-pin rule — a single
+  // mention means half the teaching can vanish silently).
+  for (const tool of [
+    'huaweicloud_agentarts_interpreter_read',
+    'huaweicloud_agentarts_interpreter_plan',
+    'huaweicloud_agentarts_interpreter_write',
+    'huaweicloud_agentarts_interpreter_session',
+    'huaweicloud_agentarts_interpreter_invoke',
+  ]) {
+    const mentions = body.split(tool).length - 1;
+    assert.ok(
+      mentions >= 2,
+      `SKILL.md must teach ${tool} in both the tier map and the MCP tools list (${mentions} mention(s))`,
+    );
+  }
+  // The NOT-for list no longer excludes the code interpreter (CI6
+  // removes the "not yet bridged" dead end) and the description carries
+  // the interpreter triggers.
+  assert.doesNotMatch(body, /not yet bridged/);
+  assert.match(body, /cloud code interpreter/);
+  assert.match(body, /云代码解释器|代码解释器/);
+  // Scenario routing row for sandboxed code execution.
+  assert.match(body, /Run python \/ install packages \/ process files in an isolated cloud sandbox/);
+  // Tier map rows for the interpreter model (readonly control, approved
+  // control+data, lease-gated data — distinct from the browser rows by
+  // the FIVE-action wording).
+  assert.match(body, /interpreter list\/get — NO CLI subcommands exist in 0\.1\.7/);
+  assert.match(body, /interpreter lifecycle writes \(create\/update\/delete — control plane\) AND session start/);
+  assert.match(
+    body,
+    /the FIVE invoke actions \(execute_code, install_packages, upload_files, download_file, clear_context\)/,
+  );
+  // The load-bearing measured traps are taught (trap 84 injection, trap
+  // 85 lease semantics, trap 86 death signatures, trap 89 read-model).
+  assert.match(body, /install_packages BYPASSES the execute_command allowlist/);
+  assert.match(body, /session_timeout is NOT a wall clock/);
+  assert.match(body, /three death signatures/);
+  assert.match(body, /list\/get\/create read models DIFFER/);
+  // The reference files carry the detail layers.
+  const workflows = readFileSync(
+    join(pluginRoot, 'skills', 'huawei-agentarts', 'references', 'cli-workflows.md'),
+    'utf8',
+  );
+  assert.match(workflows, /## Code Interpreter Sessions and Actions/);
+  assert.match(workflows, /traps? 85/);
+  assert.match(workflows, /ADDRESSING PAIR/);
+  assert.match(workflows, /Golden path \(sandboxed python work\)/);
+  const creds = readFileSync(join(pluginRoot, 'skills', 'huawei-agentarts', 'references', 'credentials.md'), 'utf8');
+  assert.match(creds, /## Code interpreter credential model/);
+  assert.match(creds, /HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY/);
+  assert.match(creds, /AGENTARTS_CODEINTERPRETER_DATA_ENDPOINT/);
+});

@@ -512,6 +512,87 @@ the token unconsumed.
   silently drops schema-absent fields — verify with get_browser after
   any update (the tool's notes remind you).
 
+## Code Interpreter Sessions and Actions (CI1-CI7, SDK bridge)
+
+The 0.1.7 CLI has ZERO code-interpreter subcommands (43-fixture tree) —
+the only path is the SDK `CodeInterpreter` class, bridged as five MCP
+tools (CI1 spike 2026-11-02, traps 81-95).
+
+The LEASE is the approval boundary — with CI-specific semantics (trap 85,
+measured): the cloud session OUTLIVES the nominal timeout (a 60s session
+answered 65s later; 86400 accepted without warning). So the model splits:
+
+- **invoke hard-rejects on local lease expiry** (SESSION_LEASE_EXPIRED) —
+  new work needs a new approved start_session (the consent boundary).
+- **get/stop stay reachable past expiry** — stop is the ONLY
+  deterministic cleanup, and it must never gate on the local clock.
+- **a confirmed death signature clears the record** — the cloud saying
+  "Session not found" (or "No matching policy found" for a deleted
+  interpreter) removes the 0600 lease record on the failure path too, so
+  a dead session never guard-blocks its own re-start (the CI4-R1 lockout
+  fix: stop errors, the record only cleared on success, the re-start
+  plan pointed back at stop — a deadlock up to 86400s).
+
+The lease file is `agentarts-interpreter-session-<session_id>.json`
+(0600, honors HUAWEICLOUD_HOME, NO credentials inside) and carries the
+ADDRESSING PAIR — code_interpreter_name + session_id (the SDK's
+get/stop need BOTH; every snippet sets the pair first) — plus the
+data-plane endpoint, auth posture, region, and lease expiry.
+
+### Golden path (sandboxed python work)
+
+```text
+1. interpreter_read (list_code_interpreters)     → items carry NO auth_type
+2. interpreter_read (get_code_interpreter)       → proves the auth posture
+3. interpreter_plan/write (start_session)        → present the lease scope → approve
+4. interpreter_invoke (execute_code)             → variables persist across calls
+   interpreter_invoke (upload_files / download_file / install_packages)
+   interpreter_invoke (clear_context)            → resets the kernel namespace
+5. interpreter_session (get_session)             → session details
+6. interpreter_session (stop_session)            → ends the lease, deletes the record
+7. interpreter_plan/write (delete_code_interpreter) → cascades to sessions; poll list 2-10s
+```
+
+### Traps (CI1-measured; the skill's trap table carries the summary)
+
+- **The sandbox is an IPython kernel** (trap 83): execute_code returns
+  `{result: {content: [...ordered text blocks...]}}` with NO
+  structured_content — a remote exception sets `is_error: true` and
+  carries the traceback; `sys.exit(N)` does NOT propagate the exit code.
+  execute_command-shaped results (install) carry content PLUS
+  `structured_content {exit_code, stderr, stdout}`. The invoke tool
+  flags is_error with a note that survives output truncation.
+- **install_packages runs through a SHELL** (trap 84): the SDK's own
+  allowlist is bypassed (it builds `pip install <names>` directly) —
+  `six>=1.0` silently becomes a redirect (stdout swallowed, exit_code
+  0), and a NEWLINE in a package name executes a second command
+  (measured: pip error + `true` runs, exit_code 0). The invoke tool's
+  whitelist kills both at the boundary: `[A-Za-z0-9._-]` names, `==`
+  version specs ONLY, no whitespace, no metacharacters. Never install
+  through your own shell call — the bridge is the safe path.
+- **Upload shapes** (trap 88): text or `{base64}` blobs — the bridge
+  REJECTS corrupt base64 (Python's b64decode silently discards invalid
+  characters, measured); paths under /home/user only; the SDK reads
+  path+content ONLY (a description field is a no-op end-to-end,
+  measured — the tool does not accept it). Downloads: UTF-8-decodable
+  content returns as text, binary decodes to a 0600 file under
+  /tmp/huaweicloud-devkit (the base64 never rides the payload).
+- **Three death signatures** (trap 86): `ToolsAPIError: Tools API Error:
+Session not found` (session died — record cleared, re-start
+  unblocked), `... No active session` (same meaning, unstable wording),
+  `... No matching policy found` (the INTERPRETER was deleted — delete
+  cascades to sessions; record cleared). The local "No Code Interpreter
+  exists" ValueError is unreachable through the bridge.
+- **Read-model split** (trap 89): list items carry NO auth_type and no
+  network_config; get carries both; create carries auth_type+status but
+  not network_config. After delete, poll the by-name list 2-10s for
+  convergence; the shared defaultgw survives deletes (the trap-63
+  family). Billing: zero signals in every response — console only.
+- **Timing baselines** (trap 88): start_session COLD 8-9s / warm
+  1.5-2s; execute_code 50-250ms; install 1.6-8.7s; delete 0.8s. The
+  invoke budget is the approved-write timeout (120s), not the readonly
+  one — arbitrary code execution is unbounded.
+
 ## Wrapper Rules (why some commands hard-stop)
 
 | Shape                              | Wrapper behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |

@@ -62,9 +62,9 @@ SDK 钉版不升: 0.1.9 与 0.1.7 的 browser/code_interpreter 面字节级一�
 - [ ] 大输出走 saveLargeOutput; binary 下载解码落 0600 文件返路径/mime/尺寸（browser screenshot 先例, base64 不上 stdout）
 - [ ] 错误映射: 会话死亡错误形状按 CI1 实测锚定（「Session not found」双措辞风险, browser 陷阱 80 同族）
 
-### CI6 skill 与文档
+### CI6 skill 与文档【实现完成 2026-11-02】
 
-- [ ] SKILL.md: 移除 NOT-for 里 "code interpreter (not yet bridged)", 场景路由增 interpreter 行, tier map 增行, MCP Tools 增条目, Measured Traps 增行（全部 CI1 实测）
+- [x] SKILL.md: 移除 NOT-for 里 "code interpreter (not yet bridged)", 场景路由增 interpreter 行, tier map 增行, MCP Tools 增条目, Measured Traps 增行（全部 CI1 实测）
 - [ ] `references/cli-workflows.md` 增 Code Interpreter Sessions and Actions 节; `references/credentials.md` 增 CI credential model 节
 - [ ] `test/structure.test.mjs` 增 skill 路由钉（工具名、tier 行、场景行、references 节——死路规则执行）
 - [ ] `docs/CHANGELOG.md` 落条目

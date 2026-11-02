@@ -1897,3 +1897,7 @@
 - fix(tools): skip stale skills dirs in SKILLS_ROOT fallback, support symlinked skills
 
 Release notes are generated from GitHub Releases. See https://github.com/huaweicloud/HuaweiCloud-Devkit/releases
+
+## 2026-11-02
+
+- **agentarts**: code interpreter bridge (CI1-CI7) — five SDK-bridge MCP tools (`huaweicloud_agentarts_interpreter_{read,plan,write,session,invoke}`) for the AgentArts cloud code interpreter: control-plane resource lifecycle with IAM canonicalization, the session lease model encoding the measured not-a-wall-clock cloud lifetime (trap 85), the five-action minimal surface with a shell-injection-proof package whitelist (trap 84), binary-safe file transfer, and the three death-signature mappings that never lock out a re-start. Program ledger: docs/agentarts-code-interpreter-integration-plan.md; measured traps 81-95 in docs/agentarts-pr0-findings.md.
