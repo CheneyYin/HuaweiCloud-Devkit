@@ -2002,9 +2002,25 @@ test('the agentarts interpreter read bridge registers with its safety contract p
     /'except SystemExit:',\s*\n\s*'\s{4}raise',/,
     'the snippet must re-raise SystemExit before the BaseException catch',
   );
+  // CI2-R2 hardening: a loose window check accepts a DECOY raise from any
+  // other handler. Walk back from every BaseException catch: the raise
+  // must be the SystemExit handler's OWN, with only comment lines between
+  // it and the catch, and no other handler in between.
   for (const catchMatch of source.matchAll(/'except BaseException as error:',/g)) {
-    const before = source.slice(Math.max(0, catchMatch.index - 400), catchMatch.index);
-    assert.match(before, /'\s{4}raise',/, 'every BaseException catch must be preceded by the SystemExit re-raise');
+    const before = source.slice(0, catchMatch.index);
+    const lastRaise = before.lastIndexOf("'    raise',");
+    assert.ok(lastRaise !== -1, 'every BaseException catch must be preceded by a re-raise');
+    const between = source.slice(lastRaise + "'    raise',".length, catchMatch.index);
+    assert.doesNotMatch(
+      between,
+      /'except /,
+      'only comment lines may sit between the re-raise and the BaseException catch',
+    );
+    assert.match(
+      source.slice(Math.max(0, lastRaise - 200), lastRaise),
+      /'except SystemExit:',\s*$/,
+      "the re-raise must be the SystemExit handler's own raise, not a decoy from another handler",
+    );
   }
   // No CLI-family drift: the interpreter bridge is SDK-only, so the tool
   // must not fabricate CLI subcommands either.
