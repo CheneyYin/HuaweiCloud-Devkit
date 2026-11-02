@@ -69,10 +69,10 @@ SDK 钉版不升: 0.1.9 与 0.1.7 的 browser/code_interpreter 面字节级一�
 - [ ] `test/structure.test.mjs` 增 skill 路由钉（工具名、tier 行、场景行、references 节——死路规则执行）
 - [ ] `docs/CHANGELOG.md` 落条目
 
-### CI7 真机 e2e 与对抗加固
+### CI7 真机 e2e 与对抗加固【完成 2026-11-02: 终验 23/23, 陷阱 96】
 
-- [ ] 全工具面真机驱动（已交付工具函数, 非探测脚本）: read list/get → plan/write create → plan/write start → invoke execute_code/upload/download/install_packages/clear_context → get_session → stop → plan/write delete → 按名过滤收敛
-- [ ] interrogate 对抗轮次循环（执行 → 检视 → 修复 → 再检视）直至零未修缺陷; 陷阱只写 CI1/CI7 实测
+- [x] 全工具面真机驱动（已交付工具函数, 非探测脚本）: read list/get → plan/write create → plan/write start → invoke execute_code/upload/download/install_packages/clear_context → get_session → stop → plan/write delete → 按名过滤收敛
+- [x] interrogate 对抗轮次循环（执行 → 检视 → 修复 → 再检视）: CI2 R1/R2、CI3 自查矩阵 12/12、CI4 R1（9/9 变异 + 修复后复验）、CI5 双评审 R1（14 变异 + 注入面 39 串对抗）、CI6 文档轮、CI7 e2e——全部发现修复并验证; 家族级残留（trap 91/94 记录）留独立 PR; 陷阱只写 CI1/CI7 实测
 
 ## 验证规则
 
