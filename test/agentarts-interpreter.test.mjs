@@ -1323,7 +1323,7 @@ test('the interpreter session tool: free ops, file addressing, expiry-reachable 
     );
     assert.equal(stopped.ok, true);
     assert.match(stopped.notes.join(' '), /lease record was removed/);
-    assert.match(stopped.notes.join(' '), /trap 87/);
+    assert.match(stopped.notes.join(' '), /trap 87/i);
     assert.equal(
       existsSync(join(home, '.config', 'huaweicloud', `agentarts-interpreter-session-${SESSION_UUID}.json`)),
       false,
@@ -1347,6 +1347,10 @@ test('the interpreter session tool: free ops, file addressing, expiry-reachable 
     assert.match(expiredStop.notes.join(' '), /trap 85/);
 
     // Error mappings: session death vs interpreter deletion vs API key.
+    // A CONFIRMED death signature clears the lease record (the D2
+    // lockout fix — a dead session's record must not guard-block the
+    // re-start), so each case re-writes its own record first.
+    const leasePath = () => join(home, '.config', 'huaweicloud', `agentarts-interpreter-session-${SESSION_UUID}.json`);
     writeSessionFile(home, fullSessionState());
     const sessionDead = await runAgentartsInterpreterSession(
       { operation: 'get_session', session_id: SESSION_UUID },
@@ -1359,8 +1363,13 @@ test('the interpreter session tool: free ops, file addressing, expiry-reachable 
       },
     );
     assert.match(sessionDead.error, /cloud session is gone/);
+    assert.match(sessionDead.error, /lease record was removed/);
+    assert.match(sessionDead.error, /no longer guard-blocked/);
+    assert.equal(existsSync(leasePath()), false, 'a confirmed death signature must clear the record');
+
+    writeSessionFile(home, fullSessionState());
     const interpreterDead = await runAgentartsInterpreterSession(
-      { operation: 'get_session', session_id: SESSION_UUID },
+      { operation: 'stop_session', session_id: SESSION_UUID },
       {
         runCandidate: async () => ({
           exitCode: 1,
@@ -1371,6 +1380,20 @@ test('the interpreter session tool: free ops, file addressing, expiry-reachable 
     );
     assert.match(interpreterDead.error, /INTERPRETER itself is gone/);
     assert.match(interpreterDead.error, /trap 86/);
+    assert.equal(existsSync(leasePath()), false, 'the interpreter-deleted signature must clear the record too');
+
+    // The lockout is gone: with the record cleared by the death
+    // signature, a re-start plan is no longer guard-blocked.
+    const restart = planAgentartsInterpreterWrite({
+      operation: 'start_session',
+      code_interpreter_name: 'team-interpreter',
+      session_name: 'retry',
+    });
+    assert.equal(restart.ok, true, 'a cleared record must unblock the re-start plan');
+
+    // A NON-death failure (API key missing) keeps the record — the
+    // session may still be live.
+    writeSessionFile(home, fullSessionState());
     const apiKey = await runAgentartsInterpreterSession(
       { operation: 'get_session', session_id: SESSION_UUID },
       {
@@ -1382,6 +1405,81 @@ test('the interpreter session tool: free ops, file addressing, expiry-reachable 
       },
     );
     assert.match(apiKey.error, /HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY/);
+    assert.equal(existsSync(leasePath()), true, 'a non-death failure must keep the record');
+
+    // D1: the expired-lease note is operation-specific — get never
+    // claims a stop ran.
+    writeSessionFile(home, fullSessionState({ lease_expires_at: Date.now() - 60_000 }));
+    const expiredGet = await runAgentartsInterpreterSession(
+      { operation: 'get_session', session_id: SESSION_UUID },
+      {
+        runCandidate: async () => ({
+          exitCode: 0,
+          stdout: pyDumps({
+            code_interpreter_name: 'team-interpreter',
+            session_id: SESSION_UUID,
+            name: 'work',
+            created_at: 't',
+            session_timeout: 900,
+          }),
+          stderr: '',
+        }),
+      },
+    );
+    assert.equal(expiredGet.ok, true);
+    assert.match(expiredGet.notes.join(' '), /local lease expired/);
+    assert.doesNotMatch(expiredGet.notes.join(' '), /this stop was the deterministic cleanup/);
+    assert.match(expiredGet.notes.join(' '), /new approved start_session/);
+
+    // D4: a credential-shaped operation rides the reject echo redacted.
+    const echoed = await runAgentartsInterpreterSession({ operation: 'sk=LEAKEDSKVALUE456' });
+    assert.equal(echoed.ok, false);
+    assert.doesNotMatch(echoed.operation, /LEAKEDSKVALUE/);
+  });
+});
+
+test('start_session discloses a post-mint concurrent lease (the check-then-act window)', async () => {
+  await withIsolation(async (home) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const params = {
+      operation: 'start_session',
+      code_interpreter_name: 'team-interpreter',
+      session_name: 'work',
+    };
+    const plan = planAgentartsInterpreterWrite(params);
+    // A FOREIGN live lease appears DURING the spawn (the write-time guard
+    // ran clean before consume; anything minted after that is the
+    // check-then-act window — disclosed in notes, not rejected).
+    const foreignId = '1b85a120-b34c-4eb0-8b82-5c50470d4618';
+    const out = await runAgentartsInterpreterWrite(
+      { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+      {
+        runCandidate: async () => {
+          writeSessionFile(home, fullSessionState({ session_id: foreignId }));
+          return {
+            exitCode: 0,
+            stdout: pyDumps({
+              interpreter: {
+                id: UUID,
+                name: 'team-interpreter',
+                auth_type: 'IAM',
+                access_endpoint: 'defaultgw-x.example.com',
+              },
+              session_id: SESSION_UUID,
+            }),
+            stderr: '',
+          };
+        },
+      },
+    );
+    assert.equal(out.ok, true);
+    assert.match(out.notes.join(' '), /CONCURRENT-START WARNING/);
+    assert.match(out.notes.join(' '), /1 other live lease/);
+    assert.match(out.notes.join(' '), new RegExp(foreignId));
+    // Both records exist now (the foreign one and our own) — the
+    // disclosure names the orphan risk.
+    assert.ok(existsSync(join(home, '.config', 'huaweicloud', `agentarts-interpreter-session-${SESSION_UUID}.json`)));
+    assert.ok(existsSync(join(home, '.config', 'huaweicloud', `agentarts-interpreter-session-${foreignId}.json`)));
   });
 });
 

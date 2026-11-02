@@ -47,9 +47,9 @@ SDK 钉版不升: 0.1.9 与 0.1.7 的 browser/code_interpreter 面字节级一�
 - [x] create/get 响应解析 access_endpoint 在结果面携带 + defaultgw/trap 82 教学; update 教学 success ≠ applied（trap 45 家族归因）; delete 教学级联杀会话（trap 86）+ 2-10s 残留窗口（trap 89）
 - [x] region 引导门（CI2-R1）绑定写对; 请求构建器逐操作分支 + tags 键排序规范化绑定 + 空 tags 剔除; 逐操作 META 键平价 structure 钉; 测试 26 项（写边界/规范化/警告/token 生命周期/烧毁披露/空体合成/桩驱动）
 
-### CI4 会话生命周期
+### CI4 会话生命周期【实现完成 2026-11-02, 995ee4a1; R1 对抗轮修复在档（陷阱 94）】
 
-- [ ] start_session 走 approved 写契约; 捕获会话状态文件 `agentarts-interpreter-session-<session_id>.json`（0600, 无凭证）: code_interpreter_name + session_id + 数据面端点 + auth 姿态 + 租约到期（start + session_timeout）
+- [x] start_session 走 approved 写契约; 捕获会话状态文件 `agentarts-interpreter-session-<session_id>.json`（0600, 无凭证）: code_interpreter_name + session_id + 数据面端点 + auth 姿态 + 租约到期（start + session_timeout）
 - [ ] start 前查既有会话文件（二次 start 静默覆盖会孤儿化云侧会话）; 陈旧记录自动清扫; mint 后并发租约披露（browser 陷阱 75d 同族）
 - [ ] get_session/stop_session 走免审批工具 `huaweicloud_agentarts_interpreter_session`（读 + 清理放行）; stop 删除本地租约记录; 二元组寻址从状态文件解析, 不进审批面
 

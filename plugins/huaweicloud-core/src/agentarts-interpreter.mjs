@@ -1348,6 +1348,14 @@ const INTERPRETER_SESSION_TOOL_SNIPPET = [
   '    sys.exit(1)',
 ].join('\n');
 
+// Operation label for the session tool's rejection payloads (the
+// CI2-R1 echo rule: a secret pasted into the caller-controlled operation
+// must not ride a reject response verbatim).
+function sessionOperationLabel(operation) {
+  const raw = typeof operation === 'string' && operation ? operation : '(unknown)';
+  return `interpreter session ${redactSecrets(raw)} (SDK data plane)`;
+}
+
 // Free-tier session tool (no approval token): get/stop over a recorded
 // session lease. Both ops stay reachable past the local lease expiry
 // (trap 85: the cloud session outlives the nominal timeout — stop is
@@ -1357,7 +1365,7 @@ export async function runAgentartsInterpreterSession(params = {}, options = {}) 
     return {
       ok: false,
       service: 'AgentArts',
-      operation: `interpreter session ${params.operation || '(unknown)'} (SDK data plane)`,
+      operation: sessionOperationLabel(params.operation),
       error: 'operation must be one of: get_session, stop_session.',
     };
   }
@@ -1366,7 +1374,7 @@ export async function runAgentartsInterpreterSession(params = {}, options = {}) 
       return {
         ok: false,
         service: 'AgentArts',
-        operation: `interpreter session ${params.operation} (SDK data plane)`,
+        operation: sessionOperationLabel(params.operation),
         error: `Unknown parameter "${redactSecrets(key)}" — legal keys: operation, session_id. (Region/endpoint/auth type resolve from the session state file, never from tool args.)`,
       };
     }
@@ -1375,7 +1383,7 @@ export async function runAgentartsInterpreterSession(params = {}, options = {}) 
     return {
       ok: false,
       service: 'AgentArts',
-      operation: `interpreter session ${params.operation} (SDK data plane)`,
+      operation: sessionOperationLabel(params.operation),
       error: 'session_id is required — the id start_session returned.',
     };
   }
@@ -1383,7 +1391,7 @@ export async function runAgentartsInterpreterSession(params = {}, options = {}) 
     return {
       ok: false,
       service: 'AgentArts',
-      operation: `interpreter session ${params.operation} (SDK data plane)`,
+      operation: sessionOperationLabel(params.operation),
       error: 'session_id must be a valid UUID (the id start_session returned).',
     };
   }
@@ -1391,7 +1399,7 @@ export async function runAgentartsInterpreterSession(params = {}, options = {}) 
     return {
       ok: false,
       service: 'AgentArts',
-      operation: `interpreter session ${params.operation} (SDK data plane)`,
+      operation: sessionOperationLabel(params.operation),
       error:
         'No devkit credentials available for agentarts (HUAWEICLOUD_SDK_AK/SK injection). Run huaweicloud_auth_init first, or execute the command in your own terminal — the wrapper never falls back to unmanaged profile files or the metadata chain.',
     };
@@ -1401,7 +1409,7 @@ export async function runAgentartsInterpreterSession(params = {}, options = {}) 
     return {
       ok: false,
       service: 'AgentArts',
-      operation: `interpreter session ${params.operation} (SDK data plane)`,
+      operation: sessionOperationLabel(params.operation),
       error: load.error,
     };
   }
@@ -1435,7 +1443,11 @@ export async function runAgentartsInterpreterSession(params = {}, options = {}) 
 
 // Session-tool post-processing: lease staleness disclosure (never a hard
 // gate — trap 85), stop's file cleanup, and the three measured error
-// mappings (trap 86a/86b + the API_KEY-missing shape).
+// mappings (trap 86a/86b + the API_KEY-missing shape). A CONFIRMED death
+// signature (either 86a shape or 86b) clears the lease record on the
+// failure path too: the record describes nothing live, and keeping it
+// guard-blocks the re-start with guidance that can never succeed (stop
+// on the dead session errors; the D2 lockout class).
 function enrichInterpreterSession(payload, params, session, rawResult) {
   const now = Date.now();
   const expired = typeof session.lease_expires_at === 'number' && session.lease_expires_at <= now;
@@ -1444,12 +1456,14 @@ function enrichInterpreterSession(payload, params, session, rawResult) {
     if (params.operation === 'stop_session') {
       deleteInterpreterSession(params.session_id);
       notes.push(
-        `The local session lease record was removed (${interpreterSessionFile(params.session_id).path}). The SDK's stop returns no-op True on a session it cannot address (trap 87) — success says the cleanup ran, not that the session was live.`,
+        `The local session lease record was removed (${interpreterSessionFile(params.session_id).path}). Trap 87's no-op True needs an empty SDK client state — this tool always addresses the recorded session, so a dead session surfaces as an error with its own mapping instead (both paths clear the record).`,
       );
     }
     if (expired) {
       notes.push(
-        `The local lease expired at ${new Date(session.lease_expires_at).toISOString()} — the cloud session dies independently and is measured NOT a wall clock (trap 85): it may still be live, and this stop was the deterministic cleanup.`,
+        params.operation === 'stop_session'
+          ? `The local lease expired at ${new Date(session.lease_expires_at).toISOString()} — the cloud session dies independently and is measured NOT a wall clock (trap 85): it may still be live, and this stop was the deterministic cleanup.`
+          : `The local lease expired at ${new Date(session.lease_expires_at).toISOString()} — the cloud session dies independently and is measured NOT a wall clock (trap 85): it may still be live (new work needs a new approved start_session; this record still addresses the session for stop).`,
       );
     }
     if (notes.length > 0) payload.notes = notes;
@@ -1459,9 +1473,13 @@ function enrichInterpreterSession(payload, params, session, rawResult) {
   // stderr reads "ToolsAPIError: Tools API Error: Session not found").
   const text = `${payload.stderr || ''} ${payload.error || ''}`;
   if (/ToolsAPIError: (?:Tools API Error: )?(Session not found|No active session)/i.test(text)) {
-    payload.error = `${payload.error} The cloud session is gone (died at its own leisure, stopped, or never existed — trap 86). Re-start it via huaweicloud_agentarts_interpreter_plan (operation start_session) if you still need the interpreter.`;
+    // The server CONFIRMED the session is dead: the record describes
+    // nothing live — clear it so the re-start is not guard-blocked.
+    deleteInterpreterSession(params.session_id);
+    payload.error = `${payload.error} The cloud session is gone (died at its own leisure, stopped, or never existed — trap 86). The local lease record was removed (it described nothing live), so a re-start is no longer guard-blocked: run huaweicloud_agentarts_interpreter_plan (operation start_session) if you still need the interpreter.`;
   } else if (/ToolsAPIError: (?:Tools API Error: )?No matching policy found/i.test(text)) {
-    payload.error = `${payload.error} The INTERPRETER itself is gone (deleted — the delete cascades to its sessions, trap 86). The session cannot be restarted on this interpreter; create a new one if you still need code execution.`;
+    deleteInterpreterSession(params.session_id);
+    payload.error = `${payload.error} The INTERPRETER itself is gone (deleted — the delete cascades to its sessions, trap 86). The local lease record was removed; create a new interpreter via huaweicloud_agentarts_interpreter_plan (operation create_code_interpreter) if you still need code execution.`;
   } else if (/API Key is not provided/i.test(`${rawResult?.stderr || ''} ${payload.stderr || ''}`)) {
     payload.error = `${payload.error || 'Execution failed.'} The interpreter is API_KEY-typed: the data plane needs the console api_key exported as HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY in the agent launcher's environment.`;
   }
