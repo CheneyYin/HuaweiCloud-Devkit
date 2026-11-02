@@ -39,12 +39,13 @@ SDK 钉版不升: 0.1.9 与 0.1.7 的 browser/code_interpreter 面字节级一�
 - [x] 复用 runOverPythonCandidates/buildChildEnv/saveLargeOutput; snippet 异常捕获 except BaseException + SystemExit 重抛（browser R1 契约, R1 轮补源码钉）
 - [x] 测试镜像 browser 桩模式: `test/agentarts-interpreter.test.mjs`（16 测含 R1 移植钉）; `test/structure.test.mjs` 注册钉
 
-### CI3 写桥（资源生命周期）
+### CI3 写桥（资源生命周期）【实现完成 2026-11-02, 待对抗轮】
 
-- [ ] plan/write 对, namespace `agentarts-interpreter-sdk`, 单次消费 token 契约逐字复用
-- [ ] create canonicalizes auth_type=IAM（CI1 复核后定）; update 只暴露 tags（镜像 browser, SDK update 吃 observability + tags 但 observability 形状未实测）; delete 不可逆
-- [ ] API_KEY 型支持: buildChildEnv 白名单加 HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY（SDK 原生读取, CI:442）
-- [ ] create/get 响应解析 access_endpoint 在结果面携带; 删 interpreter 清理对应会话状态文件; 秒级残留窗口教学（browser 陷阱 63 同族）
+- [x] plan/write 对, namespace `agentarts-interpreter-sdk`, 单次消费 token 契约逐字复用（含 store fail-closed、burn 披露、unshaped fallthrough 诚实披露）
+- [x] create canonicalizes auth_type=IAM（CI1 陷阱 81 裁决）; update 只暴露 tags（镜像 browser, SDK update 吃 observability + tags 但 observability 形状未实测）; delete 不可逆
+- [x] API_KEY 型支持: buildChildEnv 白名单加 HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY（SDK 原生读取, 凭证块内透传, 测试钉透传与 injectCredentials:false 两态）
+- [x] create/get 响应解析 access_endpoint 在结果面携带 + defaultgw/trap 82 教学; update 教学 success ≠ applied（trap 45 家族归因）; delete 教学级联杀会话（trap 86）+ 2-10s 残留窗口（trap 89）
+- [x] region 引导门（CI2-R1）绑定写对; 请求构建器逐操作分支 + tags 键排序规范化绑定 + 空 tags 剔除; 逐操作 META 键平价 structure 钉; 测试 26 项（写边界/规范化/警告/token 生命周期/烧毁披露/空体合成/桩驱动）
 
 ### CI4 会话生命周期
 

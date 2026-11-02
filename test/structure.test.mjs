@@ -1990,8 +1990,7 @@ test('the agentarts interpreter read bridge registers with its safety contract p
   // so `except Exception` leaks it as an uncaught traceback.
   const source = readFileSync(join(pluginRoot, 'src', 'agentarts-interpreter.mjs'), 'utf8');
   assert.match(source, /except BaseException as error/);
-  assert.doesNotMatch(source, /except Exception as error/);
-  // Source pin (CI2-R1): the SystemExit re-raise before the
+  assert.doesNotMatch(source, /except Exception as error/); // Source pin (CI2-R1): the SystemExit re-raise before the
   // BaseException catch — the bad-operation sys.exit(2) lives INSIDE the
   // try, and without the re-raise our exit-2 contract becomes
   // "SystemExit: 2" on stderr with exit 1 (trap 71a's regression class;
@@ -2118,4 +2117,67 @@ test('memory data-plane retention traps and dual-path decision are taught (U4)',
   assert.match(asks, /数据面子命令族/);
   assert.match(asks, /memory update.*四旗标/);
   assert.match(asks, /S0 待真机裁决/);
+});
+
+test('the agentarts interpreter WRITE bridge registers with its approval contract pinned (CI3)', async () => {
+  const { TOOL_DEFINITIONS } = await import('../plugins/huaweicloud-core/src/tools.mjs');
+  const plan = TOOL_DEFINITIONS.find((t) => t.name === 'huaweicloud_agentarts_interpreter_plan');
+  const write = TOOL_DEFINITIONS.find((t) => t.name === 'huaweicloud_agentarts_interpreter_write');
+  assert.ok(plan, 'tools.mjs missing huaweicloud_agentarts_interpreter_plan');
+  assert.ok(write, 'tools.mjs missing huaweicloud_agentarts_interpreter_write');
+  const { INTERPRETER_WRITE_OPERATIONS } =
+    await import('../plugins/huaweicloud-core/src/agentarts-interpreter-tools.mjs');
+  // Exactly the 3 resource-lifecycle writes — session start lands in CI4,
+  // and the enum must not grow silently.
+  assert.deepEqual(
+    [...INTERPRETER_WRITE_OPERATIONS].sort((a, b) => a.localeCompare(b)),
+    ['create_code_interpreter', 'delete_code_interpreter', 'update_code_interpreter'],
+  );
+  assert.deepEqual(
+    [...plan.inputSchema.properties.operation.enum].sort((a, b) => a.localeCompare(b)),
+    [...INTERPRETER_WRITE_OPERATIONS].sort((a, b) => a.localeCompare(b)),
+  );
+  assert.deepEqual(
+    [...write.inputSchema.properties.operation.enum].sort((a, b) => a.localeCompare(b)),
+    [...INTERPRETER_WRITE_OPERATIONS].sort((a, b) => a.localeCompare(b)),
+  );
+  // Both halves of the pair are registered — a plan without its write (or
+  // vice versa) is a dead end.
+  assert.equal(write.inputSchema.required.includes('approvalToken'), true);
+  assert.equal(write.inputSchema.required.includes('approvedByUser'), true);
+  // The token binds the exact request: the plan description names the
+  // binding, the write description names the burn and the irreversibility.
+  assert.match(plan.description, /canonicalized/);
+  assert.match(plan.description, /irreversible/);
+  assert.match(plan.description, /trap 61/);
+  assert.match(write.description, /Single-use/);
+  assert.match(write.description, /already_processed/);
+  assert.match(write.description, /success ≠ applied/);
+  assert.match(write.description, /trap 86/);
+  // WRITE_OPERATION_META key parity — a write op added to the enum
+  // without a meta entry must fail loudly at plan time (no ?? fallback).
+  const impl = readFileSync(join(pluginRoot, 'src', 'agentarts-interpreter.mjs'), 'utf8');
+  const metaMatch = impl.match(/const WRITE_OPERATION_META = \{([\s\S]*?)\n\};/);
+  assert.ok(metaMatch, 'WRITE_OPERATION_META not found');
+  for (const op of INTERPRETER_WRITE_OPERATIONS) {
+    assert.match(metaMatch[1], new RegExp(`^  ${op}: \\{`, 'm'), `WRITE_OPERATION_META missing ${op}`);
+  }
+  // The token namespace is interpreter-only (a browser/memory/CLI token
+  // can never authorize an interpreter write).
+  assert.match(impl, /'agentarts-interpreter-sdk'/);
+  // The canonical request builder has a branch per write operation (a
+  // missing branch means the op silently sends a bare operation).
+  for (const op of INTERPRETER_WRITE_OPERATIONS) {
+    assert.match(
+      impl,
+      new RegExp(`if \\(params\\.operation === '${op}'\\)`),
+      `buildInterpreterWriteRequest missing the ${op} branch`,
+    );
+  }
+  // The write snippet carries the same BaseException + SystemExit
+  // contract as the read snippet.
+  const writeSnippet = impl.match(/const INTERPRETER_WRITE_SNIPPET = \[([\s\S]*?)\]\.join\('\\n'\);/);
+  assert.ok(writeSnippet, 'INTERPRETER_WRITE_SNIPPET not found');
+  assert.match(writeSnippet[1], /'except SystemExit:',\s*\n\s*'\s{4}raise',/);
+  assert.match(writeSnippet[1], /'except BaseException as error:',/);
 });

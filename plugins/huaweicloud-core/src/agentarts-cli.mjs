@@ -1088,6 +1088,15 @@ export function buildChildEnv(options = {}) {
       if (process.env.HUAWEICLOUD_SDK_BROWSER_API_KEY) {
         env.HUAWEICLOUD_SDK_BROWSER_API_KEY = process.env.HUAWEICLOUD_SDK_BROWSER_API_KEY;
       }
+      // Code-interpreter data-plane key for API_KEY-typed interpreters
+      // (CI1 spike): the SDK reads HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY
+      // on every data-plane call when open_ak_sk is false
+      // (code_interpreter_client.py — the start/invoke/get/stop api_key
+      // fallbacks). The bridge's default is IAM (no key); this env only
+      // serves interpreters the console created API_KEY-typed.
+      if (process.env.HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY) {
+        env.HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY = process.env.HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY;
+      }
     } else {
       // The measured auth chain is env → ~/.huaweicloud/credentials profile
       // → metadata: without injected env vars the CLI silently authenticates

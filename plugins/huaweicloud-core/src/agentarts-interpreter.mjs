@@ -24,12 +24,15 @@
 
 import {
   buildChildEnv,
+  DEFAULT_APPROVED_TIMEOUT_MS,
   hasInjectableCredentials,
   READONLY_TIMEOUT_MS,
   runOverPythonCandidates,
   saveLargeOutput,
 } from './agentarts-cli.mjs';
-import { INTERPRETER_READ_OPERATIONS } from './agentarts-interpreter-tools.mjs';
+import { INTERPRETER_READ_OPERATIONS, INTERPRETER_WRITE_OPERATIONS } from './agentarts-interpreter-tools.mjs';
+import { createApprovalTokenStore, hashNamespacedArgs } from './approval-tokens.mjs';
+import { CREDENTIAL_KEY_TOKENS, redactCredentialShapes } from './redact-core.mjs';
 import { redactSecrets } from './safety-policy.mjs';
 
 const INTERPRETER_READ_SNIPPET = [
@@ -343,5 +346,538 @@ export async function readAgentartsInterpreter(params = {}, options = {}) {
 // Tool dispatch (definitions live in agentarts-interpreter-tools.mjs).
 export async function callAgentartsInterpreterTool(name, rawArgs = {}) {
   if (name === 'huaweicloud_agentarts_interpreter_read') return readAgentartsInterpreter(rawArgs);
+  if (name === 'huaweicloud_agentarts_interpreter_plan') return planAgentartsInterpreterWrite(rawArgs);
+  if (name === 'huaweicloud_agentarts_interpreter_write') return runAgentartsInterpreterWrite(rawArgs);
   return { ok: false, error: `Unknown agentarts interpreter tool: ${redactSecrets(String(name))}` };
+}
+
+// ---------------------------------------------------------------------------
+// WRITE bridge (CI3): interpreter resource lifecycle, token-gated like
+// every approved cloud write in this repo. The canonical request carries
+// ONLY non-secret parameters (name, ids, tags, region); AK/SK ride the
+// child env exactly as the read bridge does.
+//
+// Plan-time credential-shape warning over description and tag values
+// (the browser bridge's loud-storage pattern, interpreter-worded): the
+// tag {key, value} JSON shape defeats the at-rest redactor's key[:=]
+// adjacency, so a secret-shaped value riding tags lands UNMASKED in
+// approvals.json (0600, 5-minute TTL). The warning is the only surface
+// that flags it.
+
+// Per-operation WRITE metadata (the family registry pattern): labels on
+// the plan/approval surface, replay guidance per op. A new write
+// operation without an entry fails LOUDLY here — key parity with
+// INTERPRETER_WRITE_OPERATIONS is pinned in structure.test.mjs.
+const WRITE_OPERATION_META = {
+  create_code_interpreter: { labels: [] },
+  update_code_interpreter: { labels: [] },
+  delete_code_interpreter: { labels: ['irreversible'] },
+};
+
+const INTERPRETER_NAME_PATTERN = /^[a-z][a-z0-9-]{0,38}[a-z0-9]$/;
+const API_KEY_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+
+// Bare-token prefixes for the plan-time loud-storage warning: Huawei AKs
+// (AKLT...), GitHub (ghp_/gho_), OpenAI-style (sk-), Slack (xox),
+// Anthropic (sk-ant-), and URL-with-credentials shapes. Detection only —
+// nothing here redacts; the warning text carries the decision to the user.
+const BARE_TOKEN_PREFIX =
+  /\b(?:AKLT[A-Za-z0-9]{8,}|ghp_[A-Za-z0-9]{16,}|gho_[A-Za-z0-9]{16,}|sk-ant-[A-Za-z0-9-]{16,}|sk-[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/\s:@]+:[^/\s:@]+@)/;
+
+const INTERPRETER_WRITE_PARAM_KEYS = [
+  'operation',
+  'name',
+  'auth_type',
+  'api_key_name',
+  'description',
+  'code_interpreter_id',
+  'tags',
+  'region',
+];
+
+const INTERPRETER_WRITE_OP_APPLICABILITY = {
+  create_code_interpreter: ['name', 'auth_type', 'api_key_name', 'description', 'tags'],
+  update_code_interpreter: ['code_interpreter_id', 'tags'],
+  delete_code_interpreter: ['code_interpreter_id'],
+};
+
+function rejectUnknownWriteParams(params, operation) {
+  const applicable = INTERPRETER_WRITE_OP_APPLICABILITY[operation] ?? [];
+  for (const key of Object.keys(params)) {
+    if (!INTERPRETER_WRITE_PARAM_KEYS.includes(key)) {
+      return `Unknown parameter "${redactSecrets(key)}" — legal keys: ${INTERPRETER_WRITE_PARAM_KEYS.join(', ')}.`;
+    }
+    if (!['operation', 'region'].includes(key) && !applicable.includes(key)) {
+      return `"${redactSecrets(key)}" is not a parameter of ${operation} — it would be silently ignored. Applicable keys for ${operation}: ${applicable.join(', ') || '(none beyond operation/region)'}.`;
+    }
+  }
+  return null;
+}
+
+// Tags: max 20, unique keys, {key, value} string pairs (the SDK's own
+// create-side rules). A malformed tag must fail at THIS boundary, not as
+// a server 400 after the token is minted (or burned).
+function validateTags(tags) {
+  if (tags.length > 20) return 'tags must contain at most 20 items.';
+  const seen = new Set();
+  for (const [index, tag] of tags.entries()) {
+    if (!tag || typeof tag !== 'object' || Array.isArray(tag)) {
+      return `tags[${index}] must be an object {key, value}.`;
+    }
+    const keys = Object.keys(tag);
+    if (keys.length !== 2 || !keys.includes('key') || !keys.includes('value')) {
+      return `tags[${index}] must have exactly the keys "key" and "value" — got {${keys.join(', ')}}.`;
+    }
+    if (
+      typeof tag.key !== 'string' ||
+      tag.key.length === 0 ||
+      typeof tag.value !== 'string' ||
+      tag.value.length === 0
+    ) {
+      return `tags[${index}].key and .value must be non-empty strings.`;
+    }
+    if (seen.has(tag.key)) return `tags[${index}] duplicates key "${tag.key}" — tag keys must be unique.`;
+    seen.add(tag.key);
+  }
+  return null;
+}
+
+function validateInterpreterWrite(params) {
+  if (!INTERPRETER_WRITE_OPERATIONS.includes(params.operation)) {
+    return `operation must be one of: ${INTERPRETER_WRITE_OPERATIONS.join(', ')}.`;
+  }
+  const unknown = rejectUnknownWriteParams(params, params.operation);
+  if (unknown) return unknown;
+  const need = (field, message) => {
+    if (typeof params[field] !== 'string' || params[field].length === 0) return message;
+    return null;
+  };
+  if (params.operation === 'create_code_interpreter') {
+    const err = need(
+      'name',
+      'name is required for create_code_interpreter (pattern ^[a-z][a-z0-9-]{0,38}[a-z0-9]$, 2-40 chars).',
+    );
+    if (err) return err;
+    if (!INTERPRETER_NAME_PATTERN.test(params.name)) {
+      return 'name must match ^[a-z][a-z0-9-]{0,38}[a-z0-9]$ — 2-40 chars, lowercase letters/digits/hyphens, start lowercase letter, end lowercase letter or digit.';
+    }
+    if (params.description !== undefined && params.description !== null) {
+      if (typeof params.description !== 'string' || params.description.length === 0) {
+        return 'description must be a non-empty string when provided.';
+      }
+    }
+    if (params.auth_type !== undefined && params.auth_type !== null && !['IAM', 'API_KEY'].includes(params.auth_type)) {
+      return 'auth_type must be "IAM" or "API_KEY".';
+    }
+    const effectiveAuth = params.auth_type || 'IAM';
+    if (effectiveAuth === 'API_KEY') {
+      const err = need(
+        'api_key_name',
+        'api_key_name is required when auth_type=API_KEY (the SDK rejects the create without it).',
+      );
+      if (err) return err;
+    }
+    if (params.api_key_name !== undefined && params.api_key_name !== null) {
+      if (effectiveAuth === 'IAM') {
+        return 'api_key_name only applies to auth_type=API_KEY — with IAM the data plane signs with AK/SK and no key is ever issued (passing a name would name a key nothing uses).';
+      }
+      if (typeof params.api_key_name !== 'string' || !API_KEY_NAME_PATTERN.test(params.api_key_name)) {
+        return 'api_key_name must match ^[a-zA-Z0-9_-]{1,64}$.';
+      }
+    }
+  }
+  if (params.operation === 'update_code_interpreter') {
+    const err = need('code_interpreter_id', 'code_interpreter_id is required for update_code_interpreter.');
+    if (err) return err;
+    if (!UUID_PATTERN.test(params.code_interpreter_id)) {
+      return 'code_interpreter_id must be a valid UUID (a bridge-side gate — pass the id exactly as list_code_interpreters returned it).';
+    }
+    if (!Array.isArray(params.tags) || params.tags.length === 0) {
+      return 'update_code_interpreter requires a non-empty tags array — tags are the only updatable field this bridge exposes (the SDK also updates observability, an opaque dict not exposed here). An update with nothing to update is rejected.';
+    }
+  }
+  if (params.operation === 'delete_code_interpreter') {
+    const err = need('code_interpreter_id', 'code_interpreter_id is required for delete_code_interpreter.');
+    if (err) return err;
+    if (!UUID_PATTERN.test(params.code_interpreter_id)) {
+      return 'code_interpreter_id must be a valid UUID (a bridge-side gate — pass the id exactly as list_code_interpreters returned it).';
+    }
+  }
+  if (params.tags !== undefined && params.tags !== null) {
+    if (!Array.isArray(params.tags)) return 'tags must be an array of {key, value} objects.';
+    const tagError = validateTags(params.tags);
+    if (tagError) return tagError;
+  }
+  // The region steering gate (CI2-R1) binds the write pair too.
+  if (params.region !== undefined && params.region !== null) {
+    if (typeof params.region !== 'string' || params.region.length === 0) {
+      return 'region must be a non-empty string when provided.';
+    }
+    if (!REGION_ID_PATTERN.test(params.region)) {
+      return 'region must match ^[a-z0-9-]{1,64}$ — it steers the hostname of the AK/SK-signed request, so free-text regions are rejected (use a region id like cn-southwest-2).';
+    }
+  }
+  return null;
+}
+
+// The canonical request: plan and write build it from params the SAME
+// way, so the approval token binds byte-identical JSON. create
+// canonicalizes auth_type=IAM when absent (the CI1 verdict — the approval
+// shows the EFFECTIVE request). Tags SORT by key (code-unit, not
+// localeCompare — the token binds bytes and plan/write may run in
+// different processes or locales); tag ORDER is semantically irrelevant.
+// An empty tags array is dropped (the SDK's `if tags:` treats [] as
+// unset — the approval must show what executes).
+function buildInterpreterWriteRequest(params) {
+  const request = {
+    operation: params.operation,
+    region: typeof params.region === 'string' && params.region ? params.region : 'cn-southwest-2',
+  };
+  const canonicalTags = (tags) => {
+    if (!Array.isArray(tags) || tags.length === 0) return undefined;
+    return [...tags]
+      .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+      .map((tag) => ({
+        key: tag.key,
+        value: tag.value,
+      }));
+  };
+  if (params.operation === 'create_code_interpreter') {
+    request.name = params.name;
+    request.auth_type = params.auth_type === 'API_KEY' ? 'API_KEY' : 'IAM';
+    if (request.auth_type === 'API_KEY') request.api_key_name = params.api_key_name;
+    if (typeof params.description === 'string' && params.description) request.description = params.description;
+    const tags = canonicalTags(params.tags);
+    if (tags) request.tags = tags;
+  }
+  if (params.operation === 'update_code_interpreter') {
+    request.code_interpreter_id = params.code_interpreter_id;
+    const tags = canonicalTags(params.tags);
+    if (tags) request.tags = tags;
+  }
+  if (params.operation === 'delete_code_interpreter') request.code_interpreter_id = params.code_interpreter_id;
+  return request;
+}
+
+// Token namespace — distinct from the agentarts CLI, memory, and browser
+// namespaces so a CLI/memory/browser token can never authorize an
+// interpreter write (and vice versa). The request JSON carries no
+// secrets; hash-exact binding is the whole check.
+const INTERPRETER_WRITE_TOKEN_CLI = 'agentarts-interpreter-sdk';
+
+export function planAgentartsInterpreterWrite(params = {}) {
+  const invalid = validateInterpreterWrite(params);
+  if (invalid) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: operationLabel(params.operation),
+      error: invalid,
+    };
+  }
+  const request = buildInterpreterWriteRequest(params);
+  let approvalToken;
+  try {
+    approvalToken = createApprovalTokenStore(INTERPRETER_WRITE_TOKEN_CLI).create([JSON.stringify(request)]);
+  } catch (error) {
+    // Fail-closed store surfaced as a structured rejection (the browser
+    // bridge's R3 rule: the raw throw escaped to the MCP layer as a bare
+    // -32603).
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: operationLabel(params.operation),
+      error: `The approval-token store could not be written (${error.message}) — no token was minted and nothing was executed. Fix the store access (~/.config/huaweicloud/approvals.json) and re-plan.`,
+    };
+  }
+  // Loud-storage warning (the browser bridge's R1/R2 pattern,
+  // interpreter-worded): the tag {key, value} shape puts a
+  // credential-shaped NAME and its VALUE in separate JSON keys, so
+  // neither redactSecrets' key[:=]-adjacency nor the approvals-store
+  // scrub can mask them at rest — the warning is the only surface that
+  // flags a secret riding tags or description into approvals.json.
+  // Detection covers BOTH halves: a secret-shaped tag KEY and
+  // credential-shaped free text in tag values or description.
+  const warnings = [];
+  const credentialShaped = (text) =>
+    typeof text === 'string' && (redactCredentialShapes(text) !== text || BARE_TOKEN_PREFIX.test(text));
+  const secretKeyName = new RegExp(`(${CREDENTIAL_KEY_TOKENS.map((t) => t.replace(/_/g, '[_-]?')).join('|')})`, 'i');
+  const descriptionFlagged = typeof params.description === 'string' && credentialShaped(params.description);
+  const tagsFlagged =
+    Array.isArray(params.tags) &&
+    params.tags.some(
+      (tag) =>
+        tag &&
+        typeof tag === 'object' &&
+        (secretKeyName.test(String(tag.key || '')) || credentialShaped(String(tag.value || ''))),
+    );
+  if (descriptionFlagged || tagsFlagged) {
+    warnings.push(
+      'Some request content (description or tag key/value pairs) matches credential shapes (api_key/password/token patterns — the check is over-inclusive on ordinary key:value phrasing). The request persists in the approval store (0600, 5-minute TTL) with tag values UNMASKABLE by the at-rest redactor (the {key, value} JSON shape defeats key[:=] adjacency), and tags are visible on every future list/get of the resource — confirm the user intends THIS content on a cloud resource before presenting the request for approval.',
+    );
+  }
+  // No ?? fallback (the family round-3 rule): a write operation added to
+  // the enum without a meta entry must FAIL LOUDLY here. Key parity with
+  // INTERPRETER_WRITE_OPERATIONS is pinned in structure.test.mjs.
+  const meta = WRITE_OPERATION_META[params.operation];
+  const labels = meta.labels;
+  const labelSuffix = labels.length > 0 ? ` Labels: ${labels.join(', ')}.` : '';
+  const authTypeNote =
+    params.operation === 'create_code_interpreter'
+      ? request.auth_type === 'IAM'
+        ? ' auth_type defaults to IAM (canonicalized): the data plane signs with the same AK/SK this toolkit injects — no further setup needed for sessions and actions.'
+        : ' auth_type=API_KEY: the data plane will need the console api_key (HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY) — the response is not known to return the key value (browser family measured this for browsers, trap 61; CI-side unmeasured).'
+      : '';
+  return {
+    ok: true,
+    service: 'AgentArts',
+    tier: 'approved',
+    operation: `interpreter ${params.operation} (SDK control plane; no CLI subcommand in 0.1.7)`,
+    labels,
+    warnings,
+    request,
+    approvalToken,
+    approvalNote: `Present the request above to the user.${labelSuffix} On explicit approval, run huaweicloud_agentarts_interpreter_write with THIS approvalToken, the SAME parameters, and approvedByUser: true (the token binds them exactly); otherwise discard it.${authTypeNote}`,
+  };
+}
+
+const INTERPRETER_WRITE_SNIPPET = [
+  'import json, sys',
+  'try:',
+  '    from agentarts.sdk import CodeInterpreter',
+  'except ModuleNotFoundError:',
+  '    print("AGENTARTS_SDK_MISSING", file=sys.stderr)',
+  '    sys.exit(3)',
+  'try:',
+  '    # The request rides STDIN (the repo-wide rule): argv is process-list',
+  '    # visible and a long description would hit the kernel argv limit.',
+  '    params = json.loads(sys.stdin.read())',
+  '    client = CodeInterpreter(region=params["region"], auth_type="IAM")',
+  '    op = params["operation"]',
+  '    if op == "create_code_interpreter":',
+  '        kwargs = {"name": params["name"], "auth_type": params["auth_type"]}',
+  '        if params.get("api_key_name"): kwargs["api_key_name"] = params["api_key_name"]',
+  '        if params.get("description"): kwargs["description"] = params["description"]',
+  '        if params.get("tags"): kwargs["tags"] = params["tags"]',
+  '        result = client.create_code_interpreter(**kwargs)',
+  '    elif op == "update_code_interpreter":',
+  '        result = client.update_code_interpreter(params["code_interpreter_id"], tags=params["tags"])',
+  '        if result is None:',
+  "            # Empty-body 200 (the browser bridge's R2 rule): the SDK",
+  '            # transport returns None when the response has no content — a',
+  '            # SUCCESS misread as pollution by the envelope without this',
+  '            # synthesis (the delete branch synthesizes for the same',
+  '            # reason).',
+  '            result = {"updated": True, "code_interpreter_id": params["code_interpreter_id"]}',
+  '    elif op == "delete_code_interpreter":',
+  '        client.delete_code_interpreter(params["code_interpreter_id"])',
+  '        result = {"deleted": True, "code_interpreter_id": params["code_interpreter_id"]}',
+  '    else:',
+  '        print("AGENTARTS_INTERPRETER_BAD_OPERATION", file=sys.stderr)',
+  '        sys.exit(2)',
+  '    print(json.dumps(result, ensure_ascii=False, default=lambda o: getattr(o, "__dict__", str(o))))',
+  // SystemExit re-raise + BaseException catch: same as the read snippet
+  // (SystemExit must not become "SystemExit: 2" with exit 1; the
+  // bad-operation exit-2 path lives inside this try). ToolsAPIError
+  // extends BaseException (tools_http.py:10).
+  'except SystemExit:',
+  '    raise',
+  'except BaseException as error:',
+  '    print("{}: {}".format(type(error).__name__, error), file=sys.stderr)',
+  '    sys.exit(1)',
+].join('\n');
+
+// Replay (already_consumed) guidance, per-operation: what verify call
+// answers "did it land" for each write shape.
+function replayGuidanceNote(operation, concurrency) {
+  const prefix = concurrency
+    ? 'This token was consumed by a concurrent call — the write may already have executed.'
+    : 'This token was already used — the write may already have executed.';
+  const verify =
+    operation === 'create_code_interpreter'
+      ? 'huaweicloud_agentarts_interpreter_read (list_code_interpreters by name)'
+      : 'huaweicloud_agentarts_interpreter_read (get_code_interpreter by id — not-found on a delete means deleted; the update-family rule is success ≠ applied)';
+  return `${prefix} Verify with ${verify} BEFORE re-planning anything.`;
+}
+
+// Write-side post-processing, composed around the envelope at the write
+// call site (the family's symmetric extension point). Success notes
+// teach the measured traps at the result surface; failure carries the
+// burn disclosure.
+function enrichInterpreterWrite(payload, params) {
+  if (!payload.ok) {
+    payload.error = `${payload.error || 'Execution failed.'} The single-use token was consumed by this attempt — re-plan for a retry.`;
+    return payload;
+  }
+  const notes = [];
+  if (params.operation === 'create_code_interpreter') {
+    const authType = params.auth_type === 'API_KEY' ? 'API_KEY' : 'IAM';
+    if (authType === 'API_KEY') {
+      notes.push(
+        'API_KEY-typed interpreter created: the data plane needs the console api_key (HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY) — the response is not known to return the key value (browser family measured this for browsers, trap 61; CI-side unmeasured). Sessions and actions on this interpreter require that env var.',
+      );
+    }
+    notes.push(
+      'The create attaches the tenant-shared default gateway (persists across deletes — trap 63 family) and the response access_endpoint is the bare data-plane base URL — the SDK constructor auto-prepends https:// (trap 82).',
+    );
+  }
+  if (params.operation === 'update_code_interpreter') {
+    notes.push(
+      'Verify with huaweicloud_agentarts_interpreter_read (get_code_interpreter): the update-family rule is success ≠ applied (measured on the sibling gateway family, trap 45) — the server may accept and silently drop fields.',
+    );
+  }
+  if (params.operation === 'delete_code_interpreter') {
+    notes.push(
+      'The delete cascades to the interpreter\'s live sessions (trap 86 — they start answering "No matching policy found") and returned before the list converged — a 2-10 seconds staleness window may still show the resource (trap 89). Poll list_code_interpreters to confirm deletion.',
+    );
+  }
+  if (notes.length > 0) payload.notes = notes;
+  return payload;
+}
+
+export async function runAgentartsInterpreterWrite({ approvalToken, approvedByUser, ...params } = {}, options = {}) {
+  const invalid = validateInterpreterWrite(params);
+  if (invalid) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: operationLabel(params.operation),
+      error: invalid,
+    };
+  }
+  // The repo's three-element approval contract: token + exact parameters +
+  // the explicit attestation. Param validation runs FIRST (a pure data
+  // error needs no attestation), the attestation throw second — the
+  // family's deliberate ordering.
+  if (approvedByUser !== true) {
+    throw new Error(
+      'approvedByUser must be true after explicit user approval of the plan request — run huaweicloud_agentarts_interpreter_plan, present the request to the user, and only then execute with the token.',
+    );
+  }
+  if (typeof approvalToken !== 'string' || !approvalToken) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: operationLabel(params.operation),
+      error:
+        'approvalToken is required — run huaweicloud_agentarts_interpreter_plan first, present the request to the user, and pass the token plus the SAME parameters here on explicit approval.',
+    };
+  }
+  const store = createApprovalTokenStore(INTERPRETER_WRITE_TOKEN_CLI);
+  const inspection = store.inspect(approvalToken);
+  if (inspection.state === 'already_consumed') {
+    return {
+      ok: true,
+      status: 'ok',
+      outcome: 'already_processed',
+      note: replayGuidanceNote(params.operation, false),
+    };
+  }
+  if (inspection.state === 'expired') {
+    return {
+      ok: false,
+      status: 'rejected',
+      code: 'CONFIRM_TOKEN_EXPIRED',
+      service: 'AgentArts',
+      operation: operationLabel(params.operation),
+      error: 'approvalToken expired — re-plan with huaweicloud_agentarts_interpreter_plan and get a fresh approval.',
+    };
+  }
+  if (inspection.state === 'not_found') {
+    return {
+      ok: false,
+      status: 'rejected',
+      code: 'CONFIRM_TOKEN_NOT_FOUND',
+      service: 'AgentArts',
+      operation: operationLabel(params.operation),
+      error:
+        'approvalToken not found (never created, pruned after the TTL, or minted in a different namespace) — a token consumed long ago may have had its tombstone pruned, in which case the write may already have executed: verify with huaweicloud_agentarts_interpreter_read BEFORE re-planning anything.',
+    };
+  }
+  const request = buildInterpreterWriteRequest(params);
+  const requestHash = hashNamespacedArgs(INTERPRETER_WRITE_TOKEN_CLI, [JSON.stringify(request)]);
+  if (requestHash !== inspection.entry.argsHash) {
+    return {
+      ok: false,
+      status: 'rejected',
+      code: 'CONFIRM_TOKEN_MISMATCH',
+      service: 'AgentArts',
+      operation: operationLabel(params.operation),
+      error:
+        'approvalToken was minted for DIFFERENT parameters — the write binds the exact planned request. Re-plan with the changed parameters (the token stays valid for the original ones).',
+    };
+  }
+  // Credentials BEFORE consumption (the family's order): the control
+  // plane needs injectable AK/SK, and a missing-credential rejection must
+  // not burn the approval on a guaranteed no-op spawn.
+  if (hasInjectableCredentials() === false) {
+    return {
+      ok: false,
+      status: 'rejected',
+      code: 'NO_DEVKIT_CREDENTIALS',
+      service: 'AgentArts',
+      operation: operationLabel(params.operation),
+      error:
+        'No devkit credentials available for agentarts (HUAWEICLOUD_SDK_AK/SK injection). Run huaweicloud_auth_init first, or execute the command in your own terminal — the wrapper never falls back to unmanaged profile files or the metadata chain. The token was NOT consumed.',
+    };
+  }
+  // Binding + credentials verified — consume (single-use tombstone) before
+  // executing. The store write FAILS CLOSED (the family's R2 rule): a
+  // store that cannot persist the tombstone must not let the write
+  // execute (a swallowed failure used to report consume-success without
+  // the tombstone, and a replay re-executed an approved write).
+  let stored;
+  try {
+    stored = store.consume(approvalToken);
+  } catch (error) {
+    return {
+      ok: false,
+      status: 'rejected',
+      code: 'TOKEN_STORE_UNWRITABLE',
+      service: 'AgentArts',
+      operation: operationLabel(params.operation),
+      error: `The approval-token store could not be updated (${error.message}) — the token was NOT consumed and the write did NOT execute. Fix the store access (~/.config/huaweicloud/approvals.json), then retry with the SAME token.`,
+    };
+  }
+  if (!stored) {
+    const recheck = store.inspect(approvalToken);
+    if (recheck.state === 'already_consumed') {
+      return {
+        ok: true,
+        status: 'ok',
+        outcome: 'already_processed',
+        note: replayGuidanceNote(params.operation, true),
+      };
+    }
+    return {
+      ok: false,
+      status: 'rejected',
+      code: recheck.state === 'expired' ? 'CONFIRM_TOKEN_EXPIRED' : 'CONFIRM_TOKEN_NOT_FOUND',
+      service: 'AgentArts',
+      operation: operationLabel(params.operation),
+      error: 'approvalToken could not be consumed (raced and pruned?) — re-plan.',
+    };
+  }
+  const childEnv = buildChildEnv({ injectCredentials: true });
+  const timeoutMs = options.timeoutMs ?? DEFAULT_APPROVED_TIMEOUT_MS;
+  const args = ['-c', INTERPRETER_WRITE_SNIPPET];
+  const outcome = await runOverPythonCandidates({
+    args,
+    childEnv,
+    timeoutMs,
+    stdinData: JSON.stringify(request),
+    runCandidate: options.runCandidate,
+    shapeResult: (result, candidate) => {
+      const parsed = parseSnippetStdout(result);
+      return enrichInterpreterWrite(shapeInterpreterResult(result, candidate, params, timeoutMs, parsed), params);
+    },
+  });
+  // Fallthrough honesty (the family's round-1/2 rule): when NO python
+  // candidate could run the SDK, the generic install remediation comes
+  // back marked unshaped: true — shapeResult never ran, so the
+  // consumed-token disclosure must come from here.
+  if (!outcome.ok && outcome.unshaped === true) {
+    outcome.error = `${outcome.error} The single-use approval token was already CONSUMED by this attempt and stays burned — after fixing the SDK install, re-plan (replaying this token returns already_processed without executing anything).`;
+  }
+  return outcome;
 }

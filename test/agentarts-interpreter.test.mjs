@@ -1,12 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  readAgentartsInterpreter,
   callAgentartsInterpreterTool,
+  planAgentartsInterpreterWrite,
+  readAgentartsInterpreter,
+  runAgentartsInterpreterWrite,
 } from '../plugins/huaweicloud-core/src/agentarts-interpreter.mjs';
 import {
   AGENTARTS_INTERPRETER_TOOL_DEFINITIONS,
@@ -309,7 +312,7 @@ test('interpreter read success carries the parsed result; the dispatch surfaces 
     assert.equal(dispatched.ok, false);
     assert.match(dispatched.error, /limit must be an integer/);
 
-    const unknownTool = await callAgentartsInterpreterTool('huaweicloud_agentarts_interpreter_write', {});
+    const unknownTool = await callAgentartsInterpreterTool('huaweicloud_agentarts_interpreter_nonexistent', {});
     assert.equal(unknownTool.ok, false);
     assert.match(unknownTool.error, /Unknown agentarts interpreter tool/);
   });
@@ -331,14 +334,31 @@ test('the interpreter read tool definition pins its operation enum and credentia
   for (const banned of ['api_key', 'apiKey', 'api-key', 'key', 'sk', 'ak']) {
     assert.equal(banned in def.inputSchema.properties, false, `tool must not accept a ${banned} parameter`);
   }
-  // buildChildEnv with injectCredentials keeps the interpreter data-plane
+  // buildChildEnv with injectCredentials keeps the interpreter ENDPOINT
   // env names OUT of the whitelist: the SDK resolves CI env > ctor param >
-  // runtime env (trap 82), so an ambient env must never override the
-  // bridge's constructor parameter.
+  // runtime env (trap 82), so an ambient endpoint env must never override
+  // the bridge's constructor parameter. The API-KEY env IS whitelisted
+  // (CI3, mirroring the browser key posture): the SDK reads
+  // HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY on every data-plane call for
+  // API_KEY-typed interpreters — riding the allowlist is harmless for
+  // IAM-typed work (open_ak_sk ignores it) and the memory bridges pass
+  // injectCredentials: false and never see it.
   const env = buildChildEnv({ injectCredentials: true });
   assert.equal('AGENTARTS_CODEINTERPRETER_DATA_ENDPOINT' in env, false);
   assert.equal('AGENTARTS_RUNTIME_DATA_ENDPOINT' in env, false);
-  assert.equal('HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY' in env, false);
+  // The API-KEY passthrough rides the credential block (a child with no
+  // injectable AK/SK is the /dev/null path — no data-plane key either).
+  setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+  process.env.HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY = 'CI-KEY-1';
+  try {
+    const withKey = buildChildEnv({ injectCredentials: true });
+    assert.equal(withKey.HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY, 'CI-KEY-1');
+    const memoryEnv = buildChildEnv({ injectCredentials: false });
+    assert.equal(memoryEnv.HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY, undefined);
+  } finally {
+    delete process.env.HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY;
+    clearRuntimeCredentials();
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -516,5 +536,460 @@ test('interpreter rejection payloads redact the echoed caller-controlled strings
     const dispatch = await callAgentartsInterpreterTool('tool sk=DISPATCHLEAK', {});
     assert.equal(dispatch.ok, false);
     assert.doesNotMatch(dispatch.error, /DISPATCHLEAK/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CI3: the write bridge (resource lifecycle plan/write pair).
+
+test('interpreter write validates the boundary before any token is minted', async () => {
+  await withIsolation(async () => {
+    const bad = async (params, pattern) => {
+      const out = planAgentartsInterpreterWrite(params);
+      assert.equal(out.ok, false, JSON.stringify(params));
+      assert.match(out.error, pattern);
+      assert.equal(out.approvalToken, undefined, 'a rejected plan must mint no token');
+    };
+    await bad({ operation: 'start_session' }, /operation must be one of/);
+    await bad({ operation: 'create_code_interpreter' }, /name is required/);
+    await bad({ operation: 'create_code_interpreter', name: 'Bad_Name' }, /name must match/);
+    await bad({ operation: 'create_code_interpreter', name: 'x' }, /name must match/);
+    await bad(
+      { operation: 'create_code_interpreter', name: 'ci-1', description: '' },
+      /description must be a non-empty string/,
+    );
+    await bad(
+      { operation: 'create_code_interpreter', name: 'ci-1', description: 42 },
+      /description must be a non-empty string/,
+    );
+    await bad(
+      { operation: 'create_code_interpreter', name: 'ci-1', auth_type: 'BOTH' },
+      /auth_type must be "IAM" or "API_KEY"/,
+    );
+    await bad(
+      { operation: 'create_code_interpreter', name: 'ci-1', auth_type: 'API_KEY' },
+      /api_key_name is required when auth_type=API_KEY/,
+    );
+    await bad(
+      { operation: 'create_code_interpreter', name: 'ci-1', api_key_name: 'k1' },
+      /api_key_name only applies to auth_type=API_KEY/,
+    );
+    await bad(
+      { operation: 'create_code_interpreter', name: 'ci-1', auth_type: 'API_KEY', api_key_name: 'bad key!' },
+      /api_key_name must match/,
+    );
+    await bad({ operation: 'update_code_interpreter' }, /code_interpreter_id is required/);
+    await bad({ operation: 'update_code_interpreter', code_interpreter_id: 'nope' }, /must be a valid UUID/);
+    await bad({ operation: 'update_code_interpreter', code_interpreter_id: UUID }, /requires a non-empty tags array/);
+    await bad({ operation: 'delete_code_interpreter' }, /code_interpreter_id is required/);
+    // Unknown params + applicability (the silent-no-op class).
+    await bad(
+      { operation: 'create_code_interpreter', name: 'ci-1', network_config: {} },
+      /Unknown parameter "network_config"/,
+    );
+    await bad(
+      { operation: 'delete_code_interpreter', code_interpreter_id: UUID, tags: [{ key: 'a', value: 'b' }] },
+      /"tags" is not a parameter of delete_code_interpreter/,
+    );
+    // Tags shape rules (the SDK create-side rules, enforced pre-mint).
+    await bad({ operation: 'create_code_interpreter', name: 'ci-1', tags: 'nope' }, /tags must be an array/);
+    await bad(
+      {
+        operation: 'create_code_interpreter',
+        name: 'ci-1',
+        tags: [
+          { key: 'a', value: 'b' },
+          { key: 'a', value: 'c' },
+        ],
+      },
+      /duplicates key "a"/,
+    );
+    await bad(
+      { operation: 'create_code_interpreter', name: 'ci-1', tags: [{ key: 'a' }] },
+      /must have exactly the keys "key" and "value"/,
+    );
+    await bad(
+      { operation: 'create_code_interpreter', name: 'ci-1', tags: [{ key: '', value: 'b' }] },
+      /\.key and \.value must be non-empty strings/,
+    );
+    // Region steering gate binds the write pair too.
+    await bad({ operation: 'create_code_interpreter', name: 'ci-1', region: 'attacker.invalid#' }, /region must match/);
+  });
+});
+
+test('interpreter write plan canonicalizes the request and mints a token', async () => {
+  await withIsolation(async () => {
+    const plan = planAgentartsInterpreterWrite({
+      operation: 'create_code_interpreter',
+      name: 'team-interpreter',
+      description: 'for the spike',
+      tags: [
+        { key: 'zeta', value: '1' },
+        { key: 'alpha', value: '2' },
+      ],
+    });
+    assert.equal(plan.ok, true);
+    assert.ok(plan.approvalToken);
+    // auth_type canonicalized to IAM (the CI1 verdict); tags SORTED by key;
+    // approval note teaches the IAM posture.
+    assert.deepEqual(plan.request, {
+      operation: 'create_code_interpreter',
+      region: 'cn-southwest-2',
+      name: 'team-interpreter',
+      auth_type: 'IAM',
+      description: 'for the spike',
+      tags: [
+        { key: 'alpha', value: '2' },
+        { key: 'zeta', value: '1' },
+      ],
+    });
+    assert.match(plan.approvalNote, /auth_type defaults to IAM/);
+
+    const apiKeyPlan = planAgentartsInterpreterWrite({
+      operation: 'create_code_interpreter',
+      name: 'team-interpreter',
+      auth_type: 'API_KEY',
+      api_key_name: 'team-key',
+    });
+    assert.equal(apiKeyPlan.request.auth_type, 'API_KEY');
+    assert.equal(apiKeyPlan.request.api_key_name, 'team-key');
+    assert.match(apiKeyPlan.approvalNote, /console api_key/);
+
+    // update binds only id + tags; delete binds only id (with the
+    // irreversible label).
+    const update = planAgentartsInterpreterWrite({
+      operation: 'update_code_interpreter',
+      code_interpreter_id: UUID,
+      tags: [{ key: 'env', value: 'prod' }],
+    });
+    assert.deepEqual(update.request, {
+      operation: 'update_code_interpreter',
+      region: 'cn-southwest-2',
+      code_interpreter_id: UUID,
+      tags: [{ key: 'env', value: 'prod' }],
+    });
+    const del = planAgentartsInterpreterWrite({ operation: 'delete_code_interpreter', code_interpreter_id: UUID });
+    assert.deepEqual(del.labels, ['irreversible']);
+    assert.match(del.approvalNote, /Labels: irreversible/);
+    // Empty tags are dropped (unset), not [].
+    const noTags = planAgentartsInterpreterWrite({ operation: 'create_code_interpreter', name: 'ci-1', tags: [] });
+    assert.equal('tags' in noTags.request, false);
+  });
+});
+
+test('interpreter write plan warns on credential-shaped description and tag content', async () => {
+  await withIsolation(async () => {
+    for (const key of ['access_key', 'admin_pass', 'authorization', 'api_key', 'token']) {
+      const plan = planAgentartsInterpreterWrite({
+        operation: 'create_code_interpreter',
+        name: 'team-interpreter',
+        tags: [{ key, value: 'x' }],
+      });
+      assert.ok(plan.warnings.length >= 1, `key "${key}" must fire the warning`);
+    }
+    for (const value of ['AKLT2e2423ab', 'ghp_1234567890abcdefghij', 'postgres://u:secretpw@host/db']) {
+      const plan = planAgentartsInterpreterWrite({
+        operation: 'create_code_interpreter',
+        name: 'team-interpreter',
+        tags: [{ key: 'note', value }],
+      });
+      assert.ok(plan.warnings.length >= 1, `value "${value.slice(0, 6)}…" must fire the warning`);
+    }
+    const desc = planAgentartsInterpreterWrite({
+      operation: 'create_code_interpreter',
+      name: 'team-interpreter',
+      description: 'password=hunter2 for the demo',
+    });
+    assert.ok(desc.warnings.length >= 1, 'credential-shaped description must fire the warning');
+    const clean = planAgentartsInterpreterWrite({
+      operation: 'create_code_interpreter',
+      name: 'team-interpreter',
+      tags: [{ key: 'env', value: 'prod' }],
+    });
+    assert.deepEqual(clean.warnings, []);
+  });
+});
+
+test('interpreter write binds the exact planned request; a mismatch rejects without consuming', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const { createApprovalTokenStore } = await import('../plugins/huaweicloud-core/src/approval-tokens.mjs');
+    const params = { operation: 'delete_code_interpreter', code_interpreter_id: UUID };
+    const plan = planAgentartsInterpreterWrite(params);
+    // Changed parameters → CONFIRM_TOKEN_MISMATCH, token NOT consumed.
+    const mismatch = await runAgentartsInterpreterWrite(
+      {
+        ...params,
+        code_interpreter_id: '00000000-0000-0000-0000-000000000000',
+        approvedByUser: true,
+        approvalToken: plan.approvalToken,
+      },
+      { runCandidate: async () => ({ exitCode: 0, stdout: '{"deleted": true}', stderr: '' }) },
+    );
+    assert.equal(mismatch.ok, false);
+    assert.equal(mismatch.code, 'CONFIRM_TOKEN_MISMATCH');
+    const store = createApprovalTokenStore('agentarts-interpreter-sdk');
+    assert.equal(store.inspect(plan.approvalToken).state, 'valid');
+    // Exact parameters → executes once; the request the child received is
+    // the canonical one; a replay answers already_processed.
+    let seen = null;
+    const out = await runAgentartsInterpreterWrite(
+      { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+      {
+        runCandidate: async (candidate, args, childEnv, stdinData) => {
+          seen = JSON.parse(stdinData);
+          return { exitCode: 0, stdout: '{"deleted": true}', stderr: '' };
+        },
+      },
+    );
+    assert.equal(out.ok, true);
+    assert.deepEqual(seen, plan.request);
+    assert.match(out.notes.join(' '), /cascades to the interpreter/);
+    assert.equal(store.inspect(plan.approvalToken).state, 'already_consumed');
+    const replay = await runAgentartsInterpreterWrite(
+      { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+      { runCandidate: async () => ({ exitCode: 0, stdout: '{}', stderr: '' }) },
+    );
+    assert.equal(replay.outcome, 'already_processed');
+    assert.match(replay.note, /huaweicloud_agentarts_interpreter_read/);
+  });
+});
+
+test('interpreter write gates: attestation, token presence, not-found wording, credential pre-consumption', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const params = { operation: 'delete_code_interpreter', code_interpreter_id: UUID };
+    await assert.rejects(
+      () => runAgentartsInterpreterWrite({ ...params, approvalToken: 'x' }),
+      /approvedByUser must be true/,
+    );
+    const noToken = await runAgentartsInterpreterWrite({ ...params, approvedByUser: true });
+    assert.equal(noToken.ok, false);
+    assert.match(noToken.error, /approvalToken is required/);
+    const notFound = await runAgentartsInterpreterWrite({
+      ...params,
+      approvedByUser: true,
+      approvalToken: 'never-issued-token',
+    });
+    assert.equal(notFound.code, 'CONFIRM_TOKEN_NOT_FOUND');
+    assert.match(notFound.error, /verify with huaweicloud_agentarts_interpreter_read BEFORE re-planning/);
+    // Missing credentials reject BEFORE consumption (token stays valid).
+    const { createApprovalTokenStore } = await import('../plugins/huaweicloud-core/src/approval-tokens.mjs');
+    const plan = planAgentartsInterpreterWrite(params);
+    clearRuntimeCredentials();
+    const noCreds = await runAgentartsInterpreterWrite(
+      { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+      { runCandidate: async () => ({ exitCode: 0, stdout: '{}', stderr: '' }) },
+    );
+    assert.equal(noCreds.ok, false);
+    assert.equal(noCreds.code, 'NO_DEVKIT_CREDENTIALS');
+    assert.match(noCreds.error, /token was NOT consumed/);
+    assert.equal(createApprovalTokenStore('agentarts-interpreter-sdk').inspect(plan.approvalToken).state, 'valid');
+  });
+});
+
+test('interpreter write failure burns the token with a disclosure; SDK-missing fallthrough stays honest', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const params = { operation: 'delete_code_interpreter', code_interpreter_id: UUID };
+    const plan = planAgentartsInterpreterWrite(params);
+    const failed = await runAgentartsInterpreterWrite(
+      { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+      { runCandidate: async () => ({ exitCode: 1, stdout: '', stderr: 'ToolsAPIError: Tools API Error: boom' }) },
+    );
+    assert.equal(failed.ok, false);
+    assert.match(failed.error, /single-use token was consumed by this attempt — re-plan/);
+
+    const plan2 = planAgentartsInterpreterWrite(params);
+    const unshaped = await runAgentartsInterpreterWrite(
+      { ...params, approvedByUser: true, approvalToken: plan2.approvalToken },
+      { runCandidate: async () => ({ exitCode: 3, stdout: '', stderr: 'AGENTARTS_SDK_MISSING' }) },
+    );
+    assert.equal(unshaped.ok, false);
+    assert.equal(unshaped.unshaped, true);
+    assert.match(unshaped.error, /token was already CONSUMED by this attempt and stays burned/);
+  });
+});
+
+test('interpreter write success notes teach the measured traps per operation', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const run = async (params, stdout) => {
+      const plan = planAgentartsInterpreterWrite(params);
+      return runAgentartsInterpreterWrite(
+        { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+        { runCandidate: async () => ({ exitCode: 0, stdout, stderr: '' }) },
+      );
+    };
+    const created = await run(
+      { operation: 'create_code_interpreter', name: 'team-interpreter' },
+      pyDumps({
+        id: UUID,
+        name: 'team-interpreter',
+        auth_type: 'IAM',
+        access_endpoint: 'defaultgw-x.example.com',
+        status: 'RUNNING',
+      }),
+    );
+    assert.equal(created.ok, true);
+    assert.match(created.notes.join(' '), /access_endpoint/);
+    assert.match(created.notes.join(' '), /trap 82/);
+    assert.match(created.notes.join(' '), /trap 63 family/);
+
+    const updated = await run(
+      { operation: 'update_code_interpreter', code_interpreter_id: UUID, tags: [{ key: 'env', value: 'prod' }] },
+      pyDumps({ id: UUID, tags: [{ key: 'env', value: 'prod' }] }),
+    );
+    assert.match(updated.notes.join(' '), /success ≠ applied/);
+    assert.match(updated.notes.join(' '), /trap 45/);
+
+    const deleted = await run({ operation: 'delete_code_interpreter', code_interpreter_id: UUID }, '{"deleted": true}');
+    assert.match(deleted.notes.join(' '), /cascades to the interpreter/);
+    assert.match(deleted.notes.join(' '), /2-10 seconds/);
+    assert.match(deleted.notes.join(' '), /trap 89/);
+  });
+});
+
+test(
+  'the interpreter write snippet synthesizes a result when the SDK returns None (empty-body 200)',
+  { skip: process.platform === 'win32' },
+  async () => {
+    await withIsolation(async () => {
+      const source = readFileSync('plugins/huaweicloud-core/src/agentarts-interpreter.mjs', 'utf8');
+      const match = source.match(/const INTERPRETER_WRITE_SNIPPET = \[([\s\S]*?)\]\.join\('\\n'\);/);
+      assert.ok(match, 'snippet extraction failed');
+      const snippetLines = eval(`[${match[1]}]`); // repo-owned source, test-only eval
+      const snippet = snippetLines.join('\n');
+      const dir = mkdtempSync(join(tmpdir(), 'interpreter-snippet-'));
+      const snippetPath = join(dir, 'snippet.py');
+      writeFileSync(snippetPath, snippet);
+      const driver = join(dir, 'driver.py');
+      writeFileSync(
+        driver,
+        [
+          'import sys, types',
+          "fake = types.ModuleType('agentarts')",
+          "sdk = types.ModuleType('agentarts.sdk')",
+          'class CodeInterpreter:',
+          '    def __init__(self, region=None, data_endpoint=None, auth_type="API_KEY", verify_ssl=True):',
+          '        pass',
+          '    def update_code_interpreter(self, code_interpreter_id, observability=None, tags=None):',
+          '        return None  # empty-body 200 transport shape',
+          '    def delete_code_interpreter(self, code_interpreter_id):',
+          '        return None',
+          'sdk.CodeInterpreter = CodeInterpreter',
+          'fake.sdk = sdk',
+          "sys.modules['agentarts'] = fake",
+          "sys.modules['agentarts.sdk'] = sdk",
+          "exec(compile(open(sys.argv[1]).read(), 'snippet', 'exec'))",
+          '',
+        ].join('\n'),
+      );
+      const request = pyDumps({
+        operation: 'update_code_interpreter',
+        region: 'cn-southwest-2',
+        code_interpreter_id: UUID,
+        tags: [{ key: 'env', value: 'prod' }],
+      });
+      const out = spawnSync('python3', [driver, snippetPath], { input: request, encoding: 'utf8', timeout: 15_000 });
+      assert.equal(out.status, 0, `snippet must exit 0 (stderr: ${out.stderr})`);
+      const parsed = JSON.parse(out.stdout);
+      assert.deepEqual(parsed, { updated: true, code_interpreter_id: UUID });
+      rmSync(dir, { recursive: true, force: true });
+    });
+  },
+);
+
+test(
+  'the interpreter approval store fails CLOSED when the tombstone cannot persist',
+  { skip: process.platform === 'win32' },
+  async () => {
+    await withIsolation(async (home) => {
+      const { createApprovalTokenStore } = await import('../plugins/huaweicloud-core/src/approval-tokens.mjs');
+      const storeDir = join(home, '.config', 'huaweicloud');
+      mkdirSync(storeDir, { recursive: true });
+      const store = createApprovalTokenStore('agentarts-interpreter-sdk');
+      const token = store.create(['["x"]']);
+      const storePath = join(storeDir, 'approvals.json');
+      assert.ok(existsSync(storePath), 'create must persist');
+      chmodSync(storeDir, 0o555);
+      try {
+        assert.throws(() => store.consume(token), /ENOENT|EACCES|EPERM/);
+      } finally {
+        chmodSync(storeDir, 0o755);
+      }
+      assert.equal(store.inspect(token).state, 'valid');
+      assert.ok(store.consume(token));
+      assert.equal(store.inspect(token).state, 'already_consumed');
+
+      // End-to-end: the unwritable store surfaces as
+      // TOKEN_STORE_UNWRITABLE with the not-consumed disclosure, and the
+      // SAME token still executes once writable again.
+      setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+      const params = { operation: 'delete_code_interpreter', code_interpreter_id: UUID };
+      const plan = planAgentartsInterpreterWrite(params);
+      chmodSync(storeDir, 0o555);
+      let blocked;
+      try {
+        blocked = await runAgentartsInterpreterWrite(
+          { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+          { runCandidate: async () => ({ exitCode: 0, stdout: '{"deleted": true}', stderr: '' }) },
+        );
+      } finally {
+        chmodSync(storeDir, 0o755);
+      }
+      assert.equal(blocked.ok, false);
+      assert.equal(blocked.code, 'TOKEN_STORE_UNWRITABLE');
+      assert.match(blocked.error, /NOT consumed and the write did NOT execute/);
+      const retry = await runAgentartsInterpreterWrite(
+        { ...params, approvedByUser: true, approvalToken: plan.approvalToken },
+        { runCandidate: async () => ({ exitCode: 0, stdout: '{"deleted": true}', stderr: '' }) },
+      );
+      assert.equal(retry.ok, true);
+    });
+  },
+);
+
+test('interpreter write tags bind order-insensitively; plan and write dispatch through tools.mjs', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // The write may receive the tags in ANY order — the binding sorts.
+    const params = {
+      operation: 'update_code_interpreter',
+      code_interpreter_id: UUID,
+      tags: [
+        { key: 'z', value: '1' },
+        { key: 'a', value: '2' },
+      ],
+    };
+    const plan = planAgentartsInterpreterWrite(params);
+    const out = await runAgentartsInterpreterWrite(
+      {
+        ...params,
+        tags: [
+          { key: 'a', value: '2' },
+          { key: 'z', value: '1' },
+        ],
+        approvedByUser: true,
+        approvalToken: plan.approvalToken,
+      },
+      { runCandidate: async () => ({ exitCode: 0, stdout: '{"updated": true}', stderr: '' }) },
+    );
+    assert.equal(out.ok, true);
+
+    // tools.mjs dispatch wiring for the write pair.
+    const planDispatched = await callTool('huaweicloud_agentarts_interpreter_plan', {
+      operation: 'create_code_interpreter',
+    });
+    assert.equal(planDispatched.ok, false);
+    assert.match(planDispatched.error, /name is required/);
+    const writeDispatched = await callTool('huaweicloud_agentarts_interpreter_write', {
+      operation: 'delete_code_interpreter',
+      code_interpreter_id: UUID,
+      approvedByUser: true,
+      approvalToken: 'never-issued',
+    });
+    assert.equal(writeDispatched.ok, false);
+    assert.equal(writeDispatched.code, 'CONFIRM_TOKEN_NOT_FOUND');
   });
 });
