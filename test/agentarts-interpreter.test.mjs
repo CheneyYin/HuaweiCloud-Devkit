@@ -19,6 +19,8 @@ import {
   callAgentartsInterpreterTool,
   planAgentartsInterpreterWrite,
   readAgentartsInterpreter,
+  runAgentartsInterpreterInvoke,
+  runAgentartsInterpreterSession,
   runAgentartsInterpreterWrite,
 } from '../plugins/huaweicloud-core/src/agentarts-interpreter.mjs';
 import {
@@ -1243,8 +1245,6 @@ test('start_session write: API_KEY-missing error mapping and unshapable-capture 
 test('the interpreter session tool: free ops, file addressing, expiry-reachable stop, mappings', async () => {
   await withIsolation(async (home) => {
     setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
-    const { runAgentartsInterpreterSession } =
-      await import('../plugins/huaweicloud-core/src/agentarts-interpreter.mjs');
     // Boundary: op enum, unknown params, session_id shape.
     assert.equal(
       (await runAgentartsInterpreterSession({ operation: 'execute_code', session_id: SESSION_UUID })).ok,
@@ -1491,5 +1491,329 @@ test('the interpreter session tool dispatches through tools.mjs', async () => {
     });
     assert.equal(out.ok, false);
     assert.match(out.error, /must be a valid UUID/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CI5: the lease-gated action tool (minimal action surface).
+
+test('interpreter invoke validates the boundary: the injection vector is closed', async () => {
+  await withIsolation(async () => {
+    const bad = async (params, pattern) => {
+      const out = await runAgentartsInterpreterInvoke(params);
+      assert.equal(out.ok, false, JSON.stringify(params));
+      assert.match(out.error, pattern);
+    };
+    await bad({ action: 'execute_command' }, /action must be one of/);
+    await bad({ action: 'execute_code' }, /session_id is required/);
+    await bad({ action: 'execute_code', session_id: 'nope' }, /must be a valid UUID/);
+    // The trap-84 injection vector: whitespace (newline) and shell
+    // metacharacters in package names are rejected BEFORE any spawn.
+    await bad(
+      { action: 'install_packages', session_id: SESSION_UUID, packages: ['definitely-not-a-real-pkg-xyz\ntrue'] },
+      /must match name or name==version/,
+    );
+    await bad({ action: 'install_packages', session_id: SESSION_UUID, packages: ['six>=1.0'] }, /trap 84/);
+    await bad(
+      { action: 'install_packages', session_id: SESSION_UUID, packages: ['six; rm -rf /'] },
+      /must match name or name==version/,
+    );
+    await bad(
+      { action: 'install_packages', session_id: SESSION_UUID, packages: ['$(whoami)'] },
+      /must match name or name==version/,
+    );
+    await bad({ action: 'install_packages', session_id: SESSION_UUID, packages: [] }, /non-empty array/);
+    await bad({ action: 'install_packages', session_id: SESSION_UUID, packages: 'six' }, /non-empty array/);
+    await bad(
+      { action: 'install_packages', session_id: SESSION_UUID, packages: Array(21).fill('six') },
+      /at most 20 items/,
+    );
+    await bad(
+      { action: 'install_packages', session_id: SESSION_UUID, packages: ['six'], upgrade: 'yes' },
+      /upgrade must be a boolean/,
+    );
+    // execute_code: code required, clear_context boolean.
+    await bad({ action: 'execute_code', session_id: SESSION_UUID }, /code is required/);
+    await bad({ action: 'execute_code', session_id: SESSION_UUID, code: '' }, /code is required/);
+    await bad(
+      { action: 'execute_code', session_id: SESSION_UUID, code: 'print(1)', clear_context: 'yes' },
+      /clear_context must be a boolean/,
+    );
+    // Applicability: a legal key in the wrong action is a silent no-op.
+    await bad(
+      { action: 'clear_context', session_id: SESSION_UUID, code: 'print(1)' },
+      /"code" is not a parameter of clear_context/,
+    );
+    await bad(
+      { action: 'download_file', session_id: SESSION_UUID, packages: ['six'] },
+      /"packages" is not a parameter of download_file/,
+    );
+    // upload_files: the shape rules.
+    await bad({ action: 'upload_files', session_id: SESSION_UUID, files: [] }, /non-empty array/);
+    await bad({ action: 'upload_files', session_id: SESSION_UUID, files: 'x' }, /non-empty array/);
+    await bad(
+      { action: 'upload_files', session_id: SESSION_UUID, files: [{ path: '/home/user/a', content: 'x', extra: 1 }] },
+      /unknown key "extra"/,
+    );
+    await bad(
+      { action: 'upload_files', session_id: SESSION_UUID, files: [{ path: '/tmp/a', content: 'x' }] },
+      /absolute path under \/home\/user/,
+    );
+    await bad(
+      { action: 'upload_files', session_id: SESSION_UUID, files: [{ path: '/home/user/a', content: 42 }] },
+      /content must be a string \(text\) or \{base64: string\}/,
+    );
+    await bad(
+      { action: 'upload_files', session_id: SESSION_UUID, files: [{ path: '/home/user/a', content: '' }] },
+      /content must be non-empty/,
+    );
+    await bad(
+      { action: 'upload_files', session_id: SESSION_UUID, files: [{ path: '/home/user/a', content: { base64: '' } }] },
+      /content must be a string \(text\) or/,
+    );
+    await bad(
+      {
+        action: 'upload_files',
+        session_id: SESSION_UUID,
+        files: [{ path: '/home/user/a', content: 'x', description: 7 }],
+      },
+      /description must be a string/,
+    );
+    // download_file: the path rules.
+    await bad({ action: 'download_file', session_id: SESSION_UUID }, /path is required/);
+    await bad(
+      { action: 'download_file', session_id: SESSION_UUID, path: '/etc/passwd' },
+      /absolute path under \/home\/user/,
+    );
+    // Unknown top-level keys.
+    await bad(
+      { action: 'execute_code', session_id: SESSION_UUID, code: 'print(1)', region: 'cn-southwest-2' },
+      /Unknown parameter "region"/,
+    );
+  });
+});
+
+test('interpreter invoke gates on the lease: no record, expired lease, live lease', async () => {
+  await withIsolation(async (home) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // No record → start guidance.
+    const noRecord = await runAgentartsInterpreterInvoke({
+      action: 'execute_code',
+      session_id: SESSION_UUID,
+      code: 'print(1)',
+    });
+    assert.equal(noRecord.ok, false);
+    assert.match(noRecord.error, /No session state file/);
+    // Expired lease → SESSION_LEASE_EXPIRED with the trap-85 teaching
+    // (stop stays reachable; a new start needs new approval).
+    writeSessionFile(home, fullSessionState({ lease_expires_at: Date.now() - 1000 }));
+    const expired = await runAgentartsInterpreterInvoke({
+      action: 'execute_code',
+      session_id: SESSION_UUID,
+      code: 'print(1)',
+    });
+    assert.equal(expired.ok, false);
+    assert.equal(expired.code, 'SESSION_LEASE_EXPIRED');
+    assert.match(expired.error, /consent boundary/);
+    assert.match(expired.error, /trap 85/);
+    assert.match(expired.error, /stop stays reachable/);
+    // Live lease → executes; the request carries the addressing pair from
+    // the lease record plus the action payload.
+    writeSessionFile(home, fullSessionState());
+    let request = null;
+    const out = await runAgentartsInterpreterInvoke(
+      { action: 'execute_code', session_id: SESSION_UUID, code: 'print("x")', clear_context: false },
+      {
+        runCandidate: async (candidate, args, childEnv, stdinData) => {
+          request = JSON.parse(stdinData);
+          return {
+            exitCode: 0,
+            stdout: pyDumps({ result: { content: [{ type: 'text', text: 'x\n' }] } }),
+            stderr: '',
+          };
+        },
+      },
+    );
+    assert.equal(out.ok, true);
+    assert.deepEqual(request, {
+      action: 'execute_code',
+      region: 'cn-southwest-2',
+      data_endpoint: 'defaultgw-x.example.com',
+      auth_type: 'IAM',
+      code_interpreter_name: 'team-interpreter',
+      session_id: SESSION_UUID,
+      download_dir: '/tmp/huaweicloud-devkit',
+      code: 'print("x")',
+      clear_context: false,
+    });
+    // upload_files carries the text and blob shapes verbatim.
+    const upload = await runAgentartsInterpreterInvoke(
+      {
+        action: 'upload_files',
+        session_id: SESSION_UUID,
+        files: [
+          { path: '/home/user/a.csv', content: 'a,b\n1,2\n', description: 'csv' },
+          { path: '/home/user/b.bin', content: { base64: 'AAEC' } },
+        ],
+      },
+      {
+        runCandidate: async (candidate, args, childEnv, stdinData) => {
+          request = JSON.parse(stdinData);
+          return {
+            exitCode: 0,
+            stdout: pyDumps({
+              result: {
+                content: [
+                  { type: 'resource_link', mime_type: 'text/csv', name: 'a.csv', uri: 'file:///home/user/a.csv' },
+                ],
+              },
+            }),
+            stderr: '',
+          };
+        },
+      },
+    );
+    assert.equal(upload.ok, true);
+    assert.deepEqual(request.files, [
+      { path: '/home/user/a.csv', content: 'a,b\n1,2\n', description: 'csv' },
+      { path: '/home/user/b.bin', content: { base64: 'AAEC' } },
+    ]);
+  });
+});
+
+test('interpreter invoke enrichment: remote exception, install teaching, lease warning, death mappings', async () => {
+  await withIsolation(async (home) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    writeSessionFile(home, fullSessionState());
+    // execute_code with is_error → the remote-exception teaching.
+    const raised = await runAgentartsInterpreterInvoke(
+      { action: 'execute_code', session_id: SESSION_UUID, code: '1/0' },
+      {
+        runCandidate: async () => ({
+          exitCode: 0,
+          stdout: pyDumps({ result: { content: [{ type: 'text', text: 'ZeroDivisionError: ...' }], is_error: true } }),
+          stderr: '',
+        }),
+      },
+    );
+    assert.equal(raised.ok, true);
+    assert.match(raised.notes.join(' '), /REMOTE python raised/);
+    assert.match(raised.notes.join(' '), /trap 83/);
+    // install_packages → the `==` teaching.
+    const install = await runAgentartsInterpreterInvoke(
+      { action: 'install_packages', session_id: SESSION_UUID, packages: ['six'] },
+      {
+        runCandidate: async () => ({
+          exitCode: 0,
+          stdout: pyDumps({
+            result: {
+              content: [{ type: 'text', text: 'Requirement already satisfied: six\n' }],
+              structured_content: { exit_code: 0, stdout: 'Requirement already satisfied: six\n', stderr: '' },
+            },
+          }),
+          stderr: '',
+        }),
+      },
+    );
+    assert.equal(install.ok, true);
+    assert.match(install.notes.join(' '), /`==` only/);
+    assert.match(install.notes.join(' '), /trap 84/);
+    // Lease warning window (<30s remaining).
+    writeSessionFile(home, fullSessionState({ lease_expires_at: Date.now() + 10_000 }));
+    const warning = await runAgentartsInterpreterInvoke(
+      { action: 'clear_context', session_id: SESSION_UUID },
+      { runCandidate: async () => ({ exitCode: 0, stdout: pyDumps({ result: { content: [] } }), stderr: '' }) },
+    );
+    assert.equal(warning.ok, true);
+    assert.match(warning.notes.join(' '), /lease expires in/);
+    // Death signatures clear the record (the D2 lockout fix applies to
+    // invoke too) and unblock the re-start.
+    writeSessionFile(home, fullSessionState());
+    const dead = await runAgentartsInterpreterInvoke(
+      { action: 'execute_code', session_id: SESSION_UUID, code: 'print(1)' },
+      {
+        runCandidate: async () => ({
+          exitCode: 1,
+          stdout: '',
+          stderr: 'ToolsAPIError: Tools API Error: Session not found',
+        }),
+      },
+    );
+    assert.match(dead.error, /cloud session is gone/);
+    assert.equal(
+      existsSync(join(home, '.config', 'huaweicloud', `agentarts-interpreter-session-${SESSION_UUID}.json`)),
+      false,
+    );
+    const restart = planAgentartsInterpreterWrite({
+      operation: 'start_session',
+      code_interpreter_name: 'team-interpreter',
+      session_name: 'retry',
+    });
+    assert.equal(restart.ok, true);
+    // API key missing keeps the record (non-death failure).
+    writeSessionFile(home, fullSessionState());
+    const apiKey = await runAgentartsInterpreterInvoke(
+      { action: 'execute_code', session_id: SESSION_UUID, code: 'print(1)' },
+      {
+        runCandidate: async () => ({
+          exitCode: 1,
+          stdout: '',
+          stderr: 'ValueError: API Key is not provided and not found in environment variable.',
+        }),
+      },
+    );
+    assert.match(apiKey.error, /HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY/);
+    assert.equal(
+      existsSync(join(home, '.config', 'huaweicloud', `agentarts-interpreter-session-${SESSION_UUID}.json`)),
+      true,
+    );
+  });
+});
+
+test('interpreter invoke dispatches through tools.mjs; download binary rides a 0600 file, never base64', async () => {
+  await withIsolation(async (home) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    writeSessionFile(home, fullSessionState());
+    const dispatched = await callTool('huaweicloud_agentarts_interpreter_invoke', {
+      action: 'install_packages',
+      session_id: SESSION_UUID,
+      packages: ['evil\ntrue'],
+    });
+    assert.equal(dispatched.ok, false);
+    assert.match(dispatched.error, /must match name or name==version/);
+
+    // Binary download: the snippet synthesizes the saved_to envelope —
+    // assert the passthrough (the file write itself is snippet-side).
+    const download = await runAgentartsInterpreterInvoke(
+      { action: 'download_file', session_id: SESSION_UUID, path: '/home/user/out.bin' },
+      {
+        runCandidate: async () => ({
+          exitCode: 0,
+          stdout: pyDumps({
+            action: 'download_file',
+            path: '/home/user/out.bin',
+            saved_to: '/tmp/huaweicloud-devkit/agentarts-interpreter-download-x.bin',
+            bytes: 4,
+          }),
+          stderr: '',
+        }),
+      },
+    );
+    assert.equal(download.ok, true);
+    assert.equal(download.result.saved_to, '/tmp/huaweicloud-devkit/agentarts-interpreter-download-x.bin');
+    assert.equal(download.result.bytes, 4);
+    // Text download rides the payload as text.
+    const text = await runAgentartsInterpreterInvoke(
+      { action: 'download_file', session_id: SESSION_UUID, path: '/home/user/data.csv' },
+      {
+        runCandidate: async () => ({
+          exitCode: 0,
+          stdout: pyDumps({ action: 'download_file', path: '/home/user/data.csv', text: 'a,b\n1,2\n' }),
+          stderr: '',
+        }),
+      },
+    );
+    assert.equal(text.ok, true);
+    assert.equal(text.result.text, 'a,b\n1,2\n');
   });
 });

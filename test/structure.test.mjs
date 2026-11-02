@@ -2233,3 +2233,53 @@ test('the agentarts interpreter SESSION tool registers with its free-tier contra
   assert.match(sessionToolSnippet[1], /client\.code_interpreter_name = params\["code_interpreter_name"\]/);
   assert.match(sessionToolSnippet[1], /client\.session_id = params\["session_id"\]/);
 });
+
+test('the agentarts interpreter INVOKE tool registers with its lease-gated contract pinned (CI5)', async () => {
+  const { TOOL_DEFINITIONS } = await import('../plugins/huaweicloud-core/src/tools.mjs');
+  const def = TOOL_DEFINITIONS.find((t) => t.name === 'huaweicloud_agentarts_interpreter_invoke');
+  assert.ok(def, 'tools.mjs missing huaweicloud_agentarts_interpreter_invoke');
+  const { INTERPRETER_INVOKE_ACTIONS } =
+    await import('../plugins/huaweicloud-core/src/agentarts-interpreter-tools.mjs');
+  // Exactly the 5 action types of the minimal-surface ruling — execute_command
+  // is NOT among them (the operator ruling: the sandbox shell makes
+  // client-side interception hygiene, not a boundary).
+  assert.deepEqual(
+    [...INTERPRETER_INVOKE_ACTIONS].sort((a, b) => a.localeCompare(b)),
+    ['clear_context', 'download_file', 'execute_code', 'install_packages', 'upload_files'],
+  );
+  assert.equal(INTERPRETER_INVOKE_ACTIONS.includes('execute_command'), false);
+  assert.deepEqual(
+    [...def.inputSchema.properties.action.enum].sort((a, b) => a.localeCompare(b)),
+    [...INTERPRETER_INVOKE_ACTIONS].sort((a, b) => a.localeCompare(b)),
+  );
+  // Lease-gated, not token-gated: no approval token, and the args are
+  // action + session_id + per-action payloads only.
+  for (const banned of ['approvalToken', 'region', 'api_key', 'apiKey', 'data_endpoint', 'auth_type', 'operation']) {
+    assert.equal(banned in def.inputSchema.properties, false, `invoke tool must not accept ${banned}`);
+  }
+  // The measured contracts are taught in the tool text.
+  assert.match(def.description, /Lease-gated, not token-gated/);
+  assert.match(def.description, /SESSION_LEASE_EXPIRED/);
+  assert.match(def.description, /trap 83/);
+  assert.match(def.description, /trap 84/);
+  assert.match(def.description, /trap 85/);
+  assert.match(def.description, /trap 86/);
+  assert.match(def.description, /0600 file under \/tmp\/huaweicloud-devkit/);
+  // Source pins: the package whitelist (the trap-84 injection closure),
+  // the /home/user path rule, the lease hard gate with its coded
+  // rejection, and the addressing-pair set in the snippet.
+  const impl = readFileSync(join(pluginRoot, 'src', 'agentarts-interpreter.mjs'), 'utf8');
+  assert.ok(
+    impl.includes('const PACKAGE_SPEC_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:==[A-Za-z0-9][A-Za-z0-9._-]*)?$/'),
+    'the package whitelist (no whitespace, no shell metacharacters, == specs only) must stay verbatim',
+  );
+  assert.match(impl, /code: 'SESSION_LEASE_EXPIRED'/);
+  const invokeSnippet = impl.match(/const INTERPRETER_INVOKE_SNIPPET = \[([\s\S]*?)\]\.join\('\\n'\);/);
+  assert.ok(invokeSnippet, 'INTERPRETER_INVOKE_SNIPPET not found');
+  assert.match(invokeSnippet[1], /client\.code_interpreter_name = params\["code_interpreter_name"\]/);
+  assert.match(invokeSnippet[1], /client\.session_id = params\["session_id"\]/);
+  // Binary downloads decode snippet-side (0600) — the base64 never
+  // rides stdout.
+  assert.match(invokeSnippet[1], /agentarts-interpreter-download-/);
+  assert.match(invokeSnippet[1], /os\.chmod\(path, 0o600\)/);
+});

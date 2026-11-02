@@ -30,6 +30,7 @@ import {
   buildChildEnv,
   DEFAULT_APPROVED_TIMEOUT_MS,
   hasInjectableCredentials,
+  OUTPUT_DIR,
   READONLY_TIMEOUT_MS,
   runOverPythonCandidates,
   saveLargeOutput,
@@ -353,6 +354,7 @@ export async function callAgentartsInterpreterTool(name, rawArgs = {}) {
   if (name === 'huaweicloud_agentarts_interpreter_plan') return planAgentartsInterpreterWrite(rawArgs);
   if (name === 'huaweicloud_agentarts_interpreter_write') return runAgentartsInterpreterWrite(rawArgs);
   if (name === 'huaweicloud_agentarts_interpreter_session') return runAgentartsInterpreterSession(rawArgs);
+  if (name === 'huaweicloud_agentarts_interpreter_invoke') return runAgentartsInterpreterInvoke(rawArgs);
   return { ok: false, error: `Unknown agentarts interpreter tool: ${redactSecrets(String(name))}` };
 }
 
@@ -1484,4 +1486,344 @@ function enrichInterpreterSession(payload, params, session, rawResult) {
     payload.error = `${payload.error || 'Execution failed.'} The interpreter is API_KEY-typed: the data plane needs the console api_key exported as HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY in the agent launcher's environment.`;
   }
   return payload;
+}
+
+// ---------------------------------------------------------------------------
+// CI5: the lease-gated action tool. One invoke surface for the five
+// action types of the minimal surface ruling; the lease recorded by
+// start_session IS the approval boundary. Boundary validation
+// reimplements or TIGHTENS the SDK wrappers' own rules so a deterministic
+// client-side rejection cannot waste a spawn: the package whitelist
+// (no whitespace, no shell metacharacters, `==` version specs only) is
+// STRICTER than the SDK's five-character check because the SDK builds a
+// shell command from the names and the sandbox runs it through a shell
+// (trap 84: newline injection and silent `>` redirection both measured
+// with exit_code 0); paths must be absolute under /home/user (the SDK's
+// DEFAULT_PATH rule).
+
+const INTERPRETER_INVOKE_PARAM_KEYS = [
+  'action',
+  'session_id',
+  'code',
+  'clear_context',
+  'packages',
+  'upgrade',
+  'files',
+  'path',
+];
+
+const INTERPRETER_INVOKE_ACTION_PARAMS = {
+  execute_code: ['code', 'clear_context'],
+  install_packages: ['packages', 'upgrade'],
+  upload_files: ['files'],
+  download_file: ['path'],
+  clear_context: [],
+};
+
+// The package whitelist: name characters are alnum . _ - only, an
+// optional `==` version spec of the same class. Every shell
+// metacharacter and every whitespace form (including \n — the SDK's own
+// check misses it, trap 84) fails this class.
+const PACKAGE_SPEC_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:==[A-Za-z0-9][A-Za-z0-9._-]*)?$/;
+const DEFAULT_PATH_PREFIX = '/home/user';
+const INVOKE_BATCH_RANGE = [1, 20];
+
+function validateInterpreterInvoke(params) {
+  if (!INTERPRETER_INVOKE_ACTION_PARAMS[params.action]) {
+    return `action must be one of: ${Object.keys(INTERPRETER_INVOKE_ACTION_PARAMS).join(', ')}.`;
+  }
+  if (typeof params.session_id !== 'string' || params.session_id.length === 0) {
+    return 'session_id is required — the id start_session returned.';
+  }
+  if (!UUID_PATTERN.test(params.session_id)) {
+    return 'session_id must be a valid UUID (the id start_session returned).';
+  }
+  // Unknown top-level keys: the typo'd-field rule (a legal key in the
+  // wrong action is the silent-no-op class).
+  const applicable = INTERPRETER_INVOKE_ACTION_PARAMS[params.action];
+  for (const key of Object.keys(params)) {
+    if (!INTERPRETER_INVOKE_PARAM_KEYS.includes(key)) {
+      return `Unknown parameter "${redactSecrets(key)}" — legal keys: ${INTERPRETER_INVOKE_PARAM_KEYS.join(', ')}.`;
+    }
+    if (!['action', 'session_id'].includes(key) && !applicable.includes(key)) {
+      return `"${redactSecrets(key)}" is not a parameter of ${params.action} — it would be silently ignored. Applicable keys for ${params.action}: ${applicable.join(', ') || '(none beyond action/session_id)'}.`;
+    }
+  }
+  if (params.action === 'execute_code') {
+    if (typeof params.code !== 'string' || params.code.length === 0) {
+      return 'code is required for execute_code (the sandbox is an IPython kernel — code runs as-is).';
+    }
+    if (
+      params.clear_context !== undefined &&
+      params.clear_context !== null &&
+      typeof params.clear_context !== 'boolean'
+    ) {
+      return 'clear_context must be a boolean.';
+    }
+  }
+  if (params.action === 'install_packages') {
+    if (!Array.isArray(params.packages) || params.packages.length === 0) {
+      return 'packages is required for install_packages (a non-empty array).';
+    }
+    if (params.packages.length > INVOKE_BATCH_RANGE[1]) {
+      return `packages must contain at most ${INVOKE_BATCH_RANGE[1]} items (a conservative bridge window; the SDK applies no cap).`;
+    }
+    for (const [index, pkg] of params.packages.entries()) {
+      if (typeof pkg !== 'string' || pkg.length === 0) {
+        return `packages[${index}] must be a non-empty string.`;
+      }
+      if (!PACKAGE_SPEC_PATTERN.test(pkg)) {
+        return `packages[${index}] ("${redactSecrets(pkg)}") must match name or name==version with characters [A-Za-z0-9._-] only — the SDK builds a pip shell command from these names and the sandbox runs it through a shell: whitespace (including newlines) injects a second command with exit_code 0, and > < >= forms silently become redirection (trap 84, both measured).`;
+      }
+    }
+    if (params.upgrade !== undefined && params.upgrade !== null && typeof params.upgrade !== 'boolean') {
+      return 'upgrade must be a boolean.';
+    }
+  }
+  if (params.action === 'upload_files') {
+    if (!Array.isArray(params.files) || params.files.length === 0) {
+      return 'files is required for upload_files (a non-empty array — the batch is ATOMIC, all files or none).';
+    }
+    if (params.files.length > INVOKE_BATCH_RANGE[1]) {
+      return `files must contain at most ${INVOKE_BATCH_RANGE[1]} items (a conservative bridge window).`;
+    }
+    for (const [index, file] of params.files.entries()) {
+      if (!file || typeof file !== 'object' || Array.isArray(file)) {
+        return `files[${index}] must be an object {path, content, description?}.`;
+      }
+      const keys = Object.keys(file);
+      if (!keys.includes('path') || !keys.includes('content')) {
+        return `files[${index}] must carry "path" and "content" — got {${keys.join(', ')}}.`;
+      }
+      for (const extra of keys) {
+        if (!['path', 'content', 'description'].includes(extra)) {
+          return `files[${index}] has an unknown key "${redactSecrets(extra)}" — legal keys: path, content, description.`;
+        }
+      }
+      if (typeof file.path !== 'string' || !file.path.startsWith(DEFAULT_PATH_PREFIX)) {
+        return `files[${index}].path must be an absolute path under ${DEFAULT_PATH_PREFIX} (the SDK's own rule — relative paths are joined there anyway).`;
+      }
+      const content = file.content;
+      const contentIsText = typeof content === 'string';
+      const contentIsBlob =
+        content &&
+        typeof content === 'object' &&
+        !Array.isArray(content) &&
+        typeof content.base64 === 'string' &&
+        content.base64.length > 0;
+      if (!contentIsText && !contentIsBlob) {
+        return `files[${index}].content must be a string (text) or {base64: string} (binary).`;
+      }
+      if (contentIsText && content.length === 0) {
+        return `files[${index}].content must be non-empty (use {base64: ""} semantics? No — an empty upload is a no-op; omit the file).`;
+      }
+      if (file.description !== undefined && file.description !== null && typeof file.description !== 'string') {
+        return `files[${index}].description must be a string when provided.`;
+      }
+    }
+  }
+  if (params.action === 'download_file') {
+    if (typeof params.path !== 'string' || params.path.length === 0) {
+      return 'path is required for download_file.';
+    }
+    if (!params.path.startsWith(DEFAULT_PATH_PREFIX)) {
+      return `path must be an absolute path under ${DEFAULT_PATH_PREFIX} (the SDK's own rule).`;
+    }
+  }
+  return null;
+}
+
+const INTERPRETER_INVOKE_SNIPPET = [
+  'import base64, json, os, sys, time',
+  'try:',
+  '    from agentarts.sdk import CodeInterpreter',
+  'except ModuleNotFoundError:',
+  '    print("AGENTARTS_SDK_MISSING", file=sys.stderr)',
+  '    sys.exit(3)',
+  'try:',
+  '    params = json.loads(sys.stdin.read())',
+  '    client = CodeInterpreter(region=params["region"], data_endpoint=params["data_endpoint"], auth_type=params["auth_type"])',
+  '    # The addressing PAIR is set before any call (the SDK get/stop/invoke',
+  '    # need both — trap 87 cross-process continuity).',
+  '    client.code_interpreter_name = params["code_interpreter_name"]',
+  '    client.session_id = params["session_id"]',
+  '    action = params["action"]',
+  '    if action == "execute_code":',
+  '        kwargs = {"code": params["code"]}',
+  '        if params.get("clear_context") is not None: kwargs["clear_context"] = params["clear_context"]',
+  '        result = client.execute_code(**kwargs)',
+  '    elif action == "install_packages":',
+  '        result = client.install_packages(params["packages"], upgrade=params.get("upgrade", False))',
+  '    elif action == "upload_files":',
+  '        files = []',
+  '        for f in params["files"]:',
+  '            content = f["content"]',
+  '            if isinstance(content, dict) and "base64" in content:',
+  '                content = base64.b64decode(content["base64"])',
+  '            entry = {"path": f["path"], "content": content}',
+  '            if f.get("description"): entry["description"] = f["description"]',
+  '            files.append(entry)',
+  '        result = client.upload_files(files)',
+  '    elif action == "download_file":',
+  '        content = client.download_file(params["path"])',
+  '        if isinstance(content, bytes):',
+  '            # Binary content never crosses stdout as base64 (the browser',
+  '            # screenshot precedent): decode to a 0600 file and return the',
+  '            # path + size (trap 88).',
+  '            out_dir = params["download_dir"]',
+  '            os.makedirs(out_dir, exist_ok=True)',
+  '            name = os.path.basename(params["path"]) or "download.bin"',
+  '            path = os.path.join(out_dir, "agentarts-interpreter-download-{}-{}.{}".format(params["session_id"], int(time.time() * 1000), name))',
+  '            with open(path, "wb") as fh:',
+  '                fh.write(content)',
+  '            os.chmod(path, 0o600)',
+  '            result = {"action": "download_file", "path": params["path"], "saved_to": path, "bytes": len(content)}',
+  '        else:',
+  '            result = {"action": "download_file", "path": params["path"], "text": content}',
+  '    elif action == "clear_context":',
+  '        result = client.clear_context()',
+  '    else:',
+  '        print("AGENTARTS_INTERPRETER_BAD_ACTION", file=sys.stderr)',
+  '        sys.exit(2)',
+  '    print(json.dumps(result, ensure_ascii=False, default=lambda o: getattr(o, "__dict__", str(o))))',
+  'except SystemExit:',
+  '    raise',
+  'except BaseException as error:',
+  '    print("{}: {}".format(type(error).__name__, error), file=sys.stderr)',
+  '    sys.exit(1)',
+].join('\n');
+
+// Invoke-tool post-processing: the lease warning window, the
+// execute_code remote-exception teaching, the install `==` teaching, and
+// the three error mappings (death signatures clear the record — the
+// CI4-R1 D2 lockout fix applies here too: a dead session's record must
+// not block the re-start).
+function enrichInterpreterInvoke(payload, params, session, rawResult) {
+  const now = Date.now();
+  const notes = [];
+  if (payload.ok) {
+    if (typeof session.lease_expires_at === 'number') {
+      const remaining = session.lease_expires_at - now;
+      if (remaining < 30_000) {
+        notes.push(
+          `The local lease expires in ${Math.max(0, Math.round(remaining / 1000))}s — finish the interaction or re-start the session (a new start needs a new approval); after expiry the invoke hard-rejects while stop in the session tool stays reachable (trap 85).`,
+        );
+      }
+    }
+    // execute_code: a remote exception sets is_error true and carries the
+    // IPython traceback in the content block (trap 83) — teach the shape
+    // at the surface so the agent does not misread it as a bridge
+    // failure.
+    if (params.action === 'execute_code' && payload.result?.result?.is_error === true) {
+      notes.push(
+        'The REMOTE python raised (is_error true): the content block carries the IPython traceback — this is the sandbox execution result, not a bridge failure. sys.exit(N) surfaces the same way (the exit code does not propagate, trap 83).',
+      );
+    }
+    if (params.action === 'install_packages') {
+      notes.push(
+        "Version specs accepted here are `==` only — `>` `<` `>=` forms are rejected at the boundary because the sandbox shell turns them into silent redirection with exit_code 0 (trap 84). The result's structured_content carries pip's exit_code/stdout/stderr.",
+      );
+    }
+    if (notes.length > 0) payload.notes = [...(payload.notes || []), ...notes];
+    return payload;
+  }
+  const text = `${payload.stderr || ''} ${payload.error || ''}`;
+  if (/ToolsAPIError: (?:Tools API Error: )?(Session not found|No active session)/i.test(text)) {
+    deleteInterpreterSession(params.session_id);
+    payload.error = `${payload.error} The cloud session is gone (died at its own leisure, stopped, or never existed — trap 86). The local lease record was removed, so a re-start is no longer guard-blocked: run huaweicloud_agentarts_interpreter_plan (operation start_session) if you still need the interpreter.`;
+  } else if (/ToolsAPIError: (?:Tools API Error: )?No matching policy found/i.test(text)) {
+    deleteInterpreterSession(params.session_id);
+    payload.error = `${payload.error} The INTERPRETER itself is gone (deleted — the delete cascades to its sessions, trap 86). The local lease record was removed; create a new interpreter via huaweicloud_agentarts_interpreter_plan (operation create_code_interpreter) if you still need code execution.`;
+  } else if (/API Key is not provided/i.test(`${rawResult?.stderr || ''} ${payload.stderr || ''}`)) {
+    payload.error = `${payload.error || 'Execution failed.'} The interpreter is API_KEY-typed: the data plane needs the console api_key exported as HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY in the agent launcher's environment (trap 81).`;
+  }
+  return payload;
+}
+
+export async function runAgentartsInterpreterInvoke(params = {}, options = {}) {
+  const invalid = validateInterpreterInvoke(params);
+  if (invalid) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `interpreter invoke ${redactSecrets(typeof params.action === 'string' && params.action ? params.action : '(unknown)')} (SDK data plane)`,
+      error: invalid,
+    };
+  }
+  if (hasInjectableCredentials() === false) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `interpreter invoke ${params.action} (SDK data plane)`,
+      error:
+        'No devkit credentials available for agentarts (HUAWEICLOUD_SDK_AK/SK injection). Run huaweicloud_auth_init first, or execute the command in your own terminal — the wrapper never falls back to unmanaged profile files or the metadata chain.',
+    };
+  }
+  const load = loadInterpreterSession(params.session_id);
+  if (!load.ok) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `interpreter invoke ${params.action} (SDK data plane)`,
+      error: load.error,
+    };
+  }
+  const session = load.session;
+  // The lease gate (CI5's core): an expired lease hard-rejects NEW work —
+  // the consent boundary expired and a new start needs a new approval.
+  // The cloud session may still be live (trap 85): stop stays reachable
+  // in the session tool, and the death-signature mappings clear the
+  // record when the cloud says the session is gone.
+  if (typeof session.lease_expires_at === 'number' && session.lease_expires_at <= Date.now()) {
+    return {
+      ok: false,
+      service: 'AgentArts',
+      operation: `interpreter invoke ${params.action} (SDK data plane)`,
+      code: 'SESSION_LEASE_EXPIRED',
+      error: `The local lease for session ${params.session_id} expired at ${new Date(session.lease_expires_at).toISOString()} — the consent boundary for new work has passed, and a new start_session needs a new approval. The cloud session dies independently and is measured NOT a wall clock (trap 85): it may still be live (stop it via huaweicloud_agentarts_interpreter_session if you are done — stop stays reachable past the local lease).`,
+    };
+  }
+  const request = {
+    action: params.action,
+    region: session.region,
+    data_endpoint: session.data_endpoint,
+    auth_type: session.auth_type,
+    code_interpreter_name: session.code_interpreter_name,
+    session_id: session.session_id,
+    download_dir: OUTPUT_DIR,
+  };
+  if (params.action === 'execute_code') {
+    request.code = params.code;
+    if (params.clear_context !== undefined && params.clear_context !== null)
+      request.clear_context = params.clear_context;
+  }
+  if (params.action === 'install_packages') {
+    request.packages = params.packages;
+    if (params.upgrade !== undefined && params.upgrade !== null) request.upgrade = params.upgrade;
+  }
+  if (params.action === 'upload_files') {
+    request.files = params.files;
+  }
+  if (params.action === 'download_file') {
+    request.path = params.path;
+  }
+  const childEnv = buildChildEnv({ injectCredentials: true });
+  // Actions can be heavier than reads (measured: install up to 8.7s,
+  // cold start 8.9s; arbitrary code execution is unbounded) — the
+  // approved-write budget, not the readonly one.
+  const timeoutMs = options.timeoutMs ?? DEFAULT_APPROVED_TIMEOUT_MS;
+  const args = ['-c', INTERPRETER_INVOKE_SNIPPET];
+  return runOverPythonCandidates({
+    args,
+    childEnv,
+    timeoutMs,
+    stdinData: JSON.stringify(request),
+    runCandidate: options.runCandidate,
+    shapeResult: (result, candidate) => {
+      const parsed = parseSnippetStdout(result);
+      const payload = shapeInterpreterResult(result, candidate, params, timeoutMs, parsed);
+      payload.operation = `interpreter invoke ${params.action} (SDK data plane; no CLI subcommand in 0.1.7)`;
+      return enrichInterpreterInvoke(payload, params, session, result);
+    },
+  });
 }

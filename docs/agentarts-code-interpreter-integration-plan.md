@@ -53,9 +53,9 @@ SDK 钉版不升: 0.1.9 与 0.1.7 的 browser/code_interpreter 面字节级一�
 - [ ] start 前查既有会话文件（二次 start 静默覆盖会孤儿化云侧会话）; 陈旧记录自动清扫; mint 后并发租约披露（browser 陷阱 75d 同族）
 - [ ] get_session/stop_session 走免审批工具 `huaweicloud_agentarts_interpreter_session`（读 + 清理放行）; stop 删除本地租约记录; 二元组寻址从状态文件解析, 不进审批面
 
-### CI5 租约门动作工具（最小动作面）
+### CI5 租约门动作工具（最小动作面）【实现完成 2026-11-02, 待对抗轮】
 
-- [ ] `huaweicloud_agentarts_interpreter_invoke`, action 枚举: execute_code / install_packages / upload_files / download_file / clear_context
+- [x] `huaweicloud_agentarts_interpreter_invoke`, action 枚举: execute_code / install_packages / upload_files / download_file / clear_context
 - [ ] 桥侧逐动作校验: install_packages 包名正则（禁空白与全部 Shell 元字符——封 newline 注入, SDK 五字符检查的洞）; upload/download 路径限定 /home/user（SDK DEFAULT_PATH）; execute_code 非空 + language 仅 python（SDK 只支持 python, 白名单镜像）
 - [ ] 每次调用 snippet 先设 client.code_interpreter_name + client.session_id（跨进程连续性, browser 陷阱 68 同款）
 - [ ] 租约门: 无记录 → start 指引; 过期 → SESSION_LEASE_EXPIRED coded 拒绝

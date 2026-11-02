@@ -226,3 +226,78 @@ export const AGENTARTS_INTERPRETER_SESSION_TOOL_DEFINITIONS = [
     },
   },
 ];
+
+// The five invoke action types (the minimal action surface, operator
+// ruling 2026-11-02: execute_code / install_packages / upload_files /
+// download_file / clear_context — NO raw execute_command; the sandbox
+// shell makes `>=`-style specs silent redirects and newline package
+// names second commands, both with exit_code 0, trap 84).
+export const INTERPRETER_INVOKE_ACTIONS = [
+  'execute_code',
+  'install_packages',
+  'upload_files',
+  'download_file',
+  'clear_context',
+];
+
+// Lease-gated action tool (CI5): one invoke surface for all five action
+// types. The lease recorded by start_session IS the approval boundary —
+// actions ride free within it (the timeout was consented at start); an
+// expired lease hard-rejects NEW work (re-approval) while the session
+// tool's stop stays reachable past it (trap 85's cloud-lifetime caveat).
+export const AGENTARTS_INTERPRETER_INVOKE_TOOL_DEFINITIONS = [
+  {
+    name: 'huaweicloud_agentarts_interpreter_invoke',
+    description:
+      "Invoke a code-interpreter action on a LIVE session (SDK data plane — the 0.1.7 CLI has no invoke subcommands). The five action types: execute_code (python in the sandbox's IPython kernel — stdout/stderr arrive as ordered text content blocks, a remote exception sets is_error true and carries the IPython traceback, sys.exit(N) does NOT propagate as an exit code, trap 83; variables persist across calls, clear_context resets them), install_packages (pip in the sandbox, pypi egress measured working, trap 88), upload_files (batch, ATOMIC — all files or none, paths under /home/user only; content is text or {base64} for binary), download_file (a path under /home/user; UTF-8-decodable content returns as text, binary content is decoded to a 0600 file under /tmp/huaweicloud-devkit and the result carries the path — the base64 never rides the payload, trap 88), and clear_context (reset the kernel namespace). Lease-gated, not token-gated: the session's recorded lease IS the approval (its timeout was consented at start) — a missing lease record is rejected with start guidance, and an EXPIRED lease hard-rejects new work with SESSION_LEASE_EXPIRED (re-approval via a new start_session; the cloud session may still be live — measured not a wall clock, trap 85 — and stop in the session tool stays reachable for cleanup). Package version specs accept `==` ONLY: `>` `<` `>=` forms are rejected at the boundary because the sandbox shell interprets them as redirection with exit_code 0 (trap 84), and whitespace or shell metacharacters in package names are the injection vector the SDK's own check misses. Session-death errors are mapped and clear the lease record: 'Session not found' → the session died (re-start via the write pair), 'No matching policy found' → the interpreter was deleted (trap 86), 'API Key is not provided' → the interpreter is API_KEY-typed and HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY is not exported (trap 81).",
+    inputSchema: {
+      type: 'object',
+      required: ['action', 'session_id'],
+      properties: {
+        action: {
+          type: 'string',
+          enum: INTERPRETER_INVOKE_ACTIONS,
+          description: 'The action type.',
+        },
+        session_id: {
+          type: 'string',
+          pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+          description: 'The session id start_session returned (the 0600 lease record is looked up by it).',
+        },
+        code: {
+          type: 'string',
+          description:
+            'execute_code: the python code to execute (the sandbox is an IPython kernel — variables persist across calls).',
+        },
+        clear_context: {
+          type: 'boolean',
+          description: 'execute_code: clear the kernel namespace BEFORE this execution (default false).',
+        },
+        packages: {
+          type: 'array',
+          items: { type: 'string' },
+          minItems: 1,
+          maxItems: 20,
+          description:
+            'install_packages: package names, optionally with an `==` version spec (six or six==1.16.0). Whitespace and shell metacharacters are rejected — the SDK builds a shell command from these names and the sandbox runs it through a shell (trap 84: a newline in a name injects a second command with exit_code 0).',
+        },
+        upgrade: {
+          type: 'boolean',
+          description: 'install_packages: pass pip --upgrade (default false).',
+        },
+        files: {
+          type: 'array',
+          items: { type: 'object' },
+          minItems: 1,
+          maxItems: 20,
+          description:
+            'upload_files: batch (ATOMIC — all files or none). Each item {path, content, description?}: path under /home/user (absolute), content a string (text) or {base64: string} (binary), description an optional LLM-facing note.',
+        },
+        path: {
+          type: 'string',
+          description: 'download_file: the file path under /home/user (absolute).',
+        },
+      },
+    },
+  },
+];
