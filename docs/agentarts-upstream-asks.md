@@ -65,3 +65,16 @@
 | 34  | 会话/资源错误码细分: "Session not found"（过期与不存在同码）、"Stream is disabled"（人类接管）无 code 无文档  | 【实测】B1 全错误形状均为裸文案 ToolsAPIError（陷阱 66）                                                                                                                    |
 
 browser CLI 化诉求并入既有 #9。0.1.9 的 browser 面与 0.1.7 字节级一致（wheel diff 实测）, 钉版不受影响。
+
+## Code Interpreter 面诉求（CI1 spike 实测, 2026-11-02, 陷阱 81-90）
+
+| #   | 诉求                                                                                                                             | 证据                                                                                                               |
+| --- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| 35  | `install_packages` 走 execute_command 白名单 + 版本规格规范化（`>=` 触发 shell 重定向、换行穿透注入; 或改经非 shell 执行）       | 【实测】陷阱 84: `six>=1.0` stdout 被吞进文件 `=1.0`、exit 0; 包名含 `\n` 时服务端按两行执行且末命令退出码掩盖失败 |
+| 36  | execute_command/install 的 `structured_content.exit_code` 语义与 shell 行为文档化（末命令退出码; 重定向/管道/换行按 shell 解析） | 【实测】陷阱 84: 两枚暗雷均在 exit_code 0 下静默; 无文档提示服务端经 shell 执行                                    |
+| 37  | `session_timeout` 执行语义文档化或修复（60s 会话 65s 后仍活; 86400 接受无警告; browser 面同参数即死）                            | 【实测】陷阱 85: timeout 不是墙钟, 语义不可发现; 与 browser 同参数行为相反                                         |
+| 38  | 会话/资源死亡错误码细分（"Session not found" vs "No matching policy found" 裸文案无 code）                                       | 【实测】陷阱 86: 两种死亡层级靠文案区分且措辞跨运行不稳定（browser 陷阱 80 同族）                                  |
+| 39  | list/get/create 响应形状统一（auth_type 只在 get/create 有、network_config 只在 get 有、status 只在 create/list 有）             | 【实测】陷阱 89: 判断 auth 姿态必须 get; list 项不可自证可用性                                                     |
+| 40  | CI 资源计费/quota 面（响应零计费字段）                                                                                           | 【实测】陷阱 89: create/get/list 全扫无 pricing/quota 键（browser 诉求 #32 同族）                                  |
+
+CI CLI 化诉求并入既有 #9。0.1.9 与 0.1.7 的 code_interpreter 面字节级一致（wheel diff 实测 2026-10-30）, 钉版不受影响。
