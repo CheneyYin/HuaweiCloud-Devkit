@@ -291,7 +291,7 @@ export const AGENTARTS_INTERPRETER_INVOKE_TOOL_DEFINITIONS = [
           minItems: 1,
           maxItems: 20,
           description:
-            'upload_files: batch (ATOMIC — all files or none). Each item {path, content, description?}: path under /home/user (absolute), content a string (text) or {base64: string} (binary), description an optional LLM-facing note.',
+            'upload_files: batch (ATOMIC — all files or none). Each item {path, content}: path under /home/user (absolute), content a non-empty string (text) or {base64: string} with strict base64 charset — corrupt base64 is rejected, never silently decoded (Python b64decode discards invalid characters, measured). A description field is NOT accepted: the SDK upload reads path and content only (measured, silent no-op end-to-end).',
         },
         path: {
           type: 'string',

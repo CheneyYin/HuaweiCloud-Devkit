@@ -35,7 +35,11 @@ import {
   runOverPythonCandidates,
   saveLargeOutput,
 } from './agentarts-cli.mjs';
-import { INTERPRETER_READ_OPERATIONS, INTERPRETER_WRITE_OPERATIONS } from './agentarts-interpreter-tools.mjs';
+import {
+  INTERPRETER_INVOKE_ACTIONS,
+  INTERPRETER_READ_OPERATIONS,
+  INTERPRETER_WRITE_OPERATIONS,
+} from './agentarts-interpreter-tools.mjs';
 import { createApprovalTokenStore, hashNamespacedArgs } from './approval-tokens.mjs';
 import { CREDENTIAL_KEY_TOKENS, redactCredentialShapes } from './redact-core.mjs';
 import { redactSecrets } from './safety-policy.mjs';
@@ -442,7 +446,7 @@ function validateTags(tags) {
     }
     const keys = Object.keys(tag);
     if (keys.length !== 2 || !keys.includes('key') || !keys.includes('value')) {
-      return `tags[${index}] must have exactly the keys "key" and "value" — got {${keys.join(', ')}}.`;
+      return `tags[${index}] must have exactly the keys "key" and "value" — got {${keys.map((k) => redactSecrets(k)).join(', ')}}.`;
     }
     if (
       typeof tag.key !== 'string' ||
@@ -1529,8 +1533,13 @@ const DEFAULT_PATH_PREFIX = '/home/user';
 const INVOKE_BATCH_RANGE = [1, 20];
 
 function validateInterpreterInvoke(params) {
-  if (!INTERPRETER_INVOKE_ACTION_PARAMS[params.action]) {
-    return `action must be one of: ${Object.keys(INTERPRETER_INVOKE_ACTION_PARAMS).join(', ')}.`;
+  // Array-includes gate (the browser invoke's rule, NOT an object lookup:
+  // a plain-object lookup lets inherited names like "toString" or
+  // "constructor" through the prototype chain — a wasted spawn at best
+  // and a raw TypeError at worst — and a JSON array action coerces via
+  // toString into a real key, skipping every action-specific check).
+  if (typeof params.action !== 'string' || !INTERPRETER_INVOKE_ACTIONS.includes(params.action)) {
+    return `action must be one of: ${INTERPRETER_INVOKE_ACTIONS.join(', ')}.`;
   }
   if (typeof params.session_id !== 'string' || params.session_id.length === 0) {
     return 'session_id is required — the id start_session returned.';
@@ -1593,11 +1602,11 @@ function validateInterpreterInvoke(params) {
       }
       const keys = Object.keys(file);
       if (!keys.includes('path') || !keys.includes('content')) {
-        return `files[${index}] must carry "path" and "content" — got {${keys.join(', ')}}.`;
+        return `files[${index}] must carry "path" and "content" — got {${keys.map((k) => redactSecrets(k)).join(', ')}}.`;
       }
       for (const extra of keys) {
-        if (!['path', 'content', 'description'].includes(extra)) {
-          return `files[${index}] has an unknown key "${redactSecrets(extra)}" — legal keys: path, content, description.`;
+        if (!['path', 'content'].includes(extra)) {
+          return `files[${index}] has an unknown key "${redactSecrets(extra)}" — legal keys: path, content (the SDK's upload reads path and content ONLY; a description field is a silent no-op end-to-end, measured, so it is not accepted).`;
         }
       }
       if (typeof file.path !== 'string' || !file.path.startsWith(DEFAULT_PATH_PREFIX)) {
@@ -1605,20 +1614,22 @@ function validateInterpreterInvoke(params) {
       }
       const content = file.content;
       const contentIsText = typeof content === 'string';
+      // Python's b64decode with validate=False DISCARDS invalid characters
+      // (measured: "AAEC!!!" decodes to b'\x00\x01\x02') — a charset gate
+      // at the boundary makes corrupt input a deterministic reject instead
+      // of silently-uploaded wrong bytes.
+      const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
       const contentIsBlob =
         content &&
         typeof content === 'object' &&
         !Array.isArray(content) &&
         typeof content.base64 === 'string' &&
-        content.base64.length > 0;
+        BASE64_PATTERN.test(content.base64);
       if (!contentIsText && !contentIsBlob) {
-        return `files[${index}].content must be a string (text) or {base64: string} (binary).`;
+        return `files[${index}].content must be a non-empty string (text) or {base64} with strict base64 charset [A-Za-z0-9+/=] — corrupt base64 is REJECTED, not silently decoded to wrong bytes (Python's b64decode discards invalid characters by default, measured).`;
       }
       if (contentIsText && content.length === 0) {
         return `files[${index}].content must be non-empty (use {base64: ""} semantics? No — an empty upload is a no-op; omit the file).`;
-      }
-      if (file.description !== undefined && file.description !== null && typeof file.description !== 'string') {
-        return `files[${index}].description must be a string when provided.`;
       }
     }
   }
@@ -1661,7 +1672,6 @@ const INTERPRETER_INVOKE_SNIPPET = [
   '            if isinstance(content, dict) and "base64" in content:',
   '                content = base64.b64decode(content["base64"])',
   '            entry = {"path": f["path"], "content": content}',
-  '            if f.get("description"): entry["description"] = f["description"]',
   '            files.append(entry)',
   '        result = client.upload_files(files)',
   '    elif action == "download_file":',
@@ -1713,11 +1723,25 @@ function enrichInterpreterInvoke(payload, params, session, rawResult) {
     // execute_code: a remote exception sets is_error true and carries the
     // IPython traceback in the content block (trap 83) — teach the shape
     // at the surface so the agent does not misread it as a bridge
-    // failure.
-    if (params.action === 'execute_code' && payload.result?.result?.is_error === true) {
-      notes.push(
-        'The REMOTE python raised (is_error true): the content block carries the IPython traceback — this is the sandbox execution result, not a bridge failure. sys.exit(N) surfaces the same way (the exit code does not propagate, trap 83).',
-      );
+    // failure. The check reads the RAW stdout when the envelope dropped
+    // the result to a >50KB side file (big output is execute_code's
+    // NORMAL case, and a remote exception with large output is when the
+    // teaching matters — the B5 R10d truncation-survival class).
+    if (params.action === 'execute_code') {
+      let isError = payload.result?.result?.is_error === true;
+      if (!isError && !('result' in payload) && rawResult && !rawResult.timedOut && rawResult.exitCode === 0) {
+        try {
+          const raw = JSON.parse(rawResult.stdout);
+          isError = raw?.result?.is_error === true;
+        } catch {
+          // Unparseable raw stdout — the envelope already says so.
+        }
+      }
+      if (isError) {
+        notes.push(
+          'The REMOTE python raised (is_error true): the content block carries the IPython traceback — this is the sandbox execution result, not a bridge failure. sys.exit(N) surfaces the same way (the exit code does not propagate, trap 83).',
+        );
+      }
     }
     if (params.action === 'install_packages') {
       notes.push(
@@ -1821,7 +1845,17 @@ export async function runAgentartsInterpreterInvoke(params = {}, options = {}) {
     runCandidate: options.runCandidate,
     shapeResult: (result, candidate) => {
       const parsed = parseSnippetStdout(result);
-      const payload = shapeInterpreterResult(result, candidate, params, timeoutMs, parsed);
+      // The invoke params carry action, not operation — the shim keeps the
+      // SHARED envelope's timeout error honest ("interpreter invoke <action>
+      // timed out", never "interpreter undefined timed out" — the trap-77a
+      // class).
+      const payload = shapeInterpreterResult(
+        result,
+        candidate,
+        { ...params, operation: `invoke ${params.action}` },
+        timeoutMs,
+        parsed,
+      );
       payload.operation = `interpreter invoke ${params.action} (SDK data plane; no CLI subcommand in 0.1.7)`;
       return enrichInterpreterInvoke(payload, params, session, result);
     },

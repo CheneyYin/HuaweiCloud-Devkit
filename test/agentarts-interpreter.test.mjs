@@ -1561,7 +1561,7 @@ test('interpreter invoke validates the boundary: the injection vector is closed'
     );
     await bad(
       { action: 'upload_files', session_id: SESSION_UUID, files: [{ path: '/home/user/a', content: 42 }] },
-      /content must be a string \(text\) or \{base64: string\}/,
+      /content must be a non-empty string \(text\) or \{base64\}/,
     );
     await bad(
       { action: 'upload_files', session_id: SESSION_UUID, files: [{ path: '/home/user/a', content: '' }] },
@@ -1569,15 +1569,35 @@ test('interpreter invoke validates the boundary: the injection vector is closed'
     );
     await bad(
       { action: 'upload_files', session_id: SESSION_UUID, files: [{ path: '/home/user/a', content: { base64: '' } }] },
-      /content must be a string \(text\) or/,
+      /content must be a non-empty string \(text\) or/,
+    );
+    // Corrupt base64 is rejected, not silently decoded to wrong bytes
+    // (Python's b64decode discards invalid characters, measured).
+    await bad(
+      {
+        action: 'upload_files',
+        session_id: SESSION_UUID,
+        files: [{ path: '/home/user/a', content: { base64: 'AAEC!!!' } }],
+      },
+      /corrupt base64 is REJECTED/,
     );
     await bad(
       {
         action: 'upload_files',
         session_id: SESSION_UUID,
-        files: [{ path: '/home/user/a', content: 'x', description: 7 }],
+        files: [{ path: '/home/user/a', content: { base64: 'AA EC' } }],
       },
-      /description must be a string/,
+      /corrupt base64 is REJECTED/,
+    );
+    // description is a silent no-op END-TO-END (the SDK's upload reads
+    // path and content only, measured) — rejected as an unknown key.
+    await bad(
+      {
+        action: 'upload_files',
+        session_id: SESSION_UUID,
+        files: [{ path: '/home/user/a', content: 'x', description: 'note' }],
+      },
+      /unknown key "description"/,
     );
     // download_file: the path rules.
     await bad({ action: 'download_file', session_id: SESSION_UUID }, /path is required/);
@@ -1652,7 +1672,7 @@ test('interpreter invoke gates on the lease: no record, expired lease, live leas
         action: 'upload_files',
         session_id: SESSION_UUID,
         files: [
-          { path: '/home/user/a.csv', content: 'a,b\n1,2\n', description: 'csv' },
+          { path: '/home/user/a.csv', content: 'a,b\n1,2\n' },
           { path: '/home/user/b.bin', content: { base64: 'AAEC' } },
         ],
       },
@@ -1675,7 +1695,7 @@ test('interpreter invoke gates on the lease: no record, expired lease, live leas
     );
     assert.equal(upload.ok, true);
     assert.deepEqual(request.files, [
-      { path: '/home/user/a.csv', content: 'a,b\n1,2\n', description: 'csv' },
+      { path: '/home/user/a.csv', content: 'a,b\n1,2\n' },
       { path: '/home/user/b.bin', content: { base64: 'AAEC' } },
     ]);
   });
@@ -1817,3 +1837,199 @@ test('interpreter invoke dispatches through tools.mjs; download binary rides a 0
     assert.equal(text.result.text, 'a,b\n1,2\n');
   });
 });
+
+// ---------------------------------------------------------------------------
+// CI5-R1 adversarial round: prototype-chain action gate, echo redaction,
+// truncation survival, timeout wording, wire-request pins, prefix anchor.
+
+test('the invoke action gate rejects prototype-chain names, arrays, and non-strings', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const bad = async (params, pattern) => {
+      const out = await runAgentartsInterpreterInvoke(params);
+      assert.equal(out.ok, false, JSON.stringify(params));
+      assert.match(out.error, pattern);
+    };
+    // Inherited names pass a plain-object lookup ("toString" is truthy
+    // through the prototype chain) — must die at the boundary, not as a
+    // wasted spawn (AGENTARTS_INTERPRETER_BAD_ACTION) or a raw TypeError
+    // ("constructor" + applicable.includes).
+    await bad({ action: 'toString', session_id: SESSION_UUID }, /action must be one of/);
+    await bad({ action: 'constructor', session_id: SESSION_UUID, code: 'x' }, /action must be one of/);
+    await bad({ action: '__proto__', session_id: SESSION_UUID }, /action must be one of/);
+    // A JSON array action coerces through toString into a real key — must
+    // be rejected as a non-string, never skipping the per-action checks.
+    await bad({ action: ['execute_code'], session_id: SESSION_UUID, code: 'print(1)' }, /action must be one of/);
+    await bad({ action: ['upload_files'], session_id: SESSION_UUID, path: '/etc/evil' }, /action must be one of/);
+    await bad({ action: 42, session_id: SESSION_UUID }, /action must be one of/);
+    // The action echo in the reject label is redacted (the CI4-R1 D4
+    // pattern — CI5 lacked the pin, M9).
+    const leaked = await runAgentartsInterpreterInvoke({ action: 'sk=LEAKEDSKVALUE1', session_id: SESSION_UUID });
+    assert.equal(leaked.ok, false);
+    assert.doesNotMatch(leaked.operation, /LEAKEDSKVALUE/);
+    // The files key echo is redacted (A-1).
+    const keyLeak = await runAgentartsInterpreterInvoke({
+      action: 'upload_files',
+      session_id: SESSION_UUID,
+      files: [{ 'sk=LEAKEDSKVALUE2': 1, path: '/home/user/a', content: 'x' }],
+    });
+    assert.equal(keyLeak.ok, false);
+    assert.doesNotMatch(keyLeak.error, /LEAKEDSKVALUE2/);
+  });
+});
+
+test('the invoke timeout error names the action, never "undefined" (trap-77a class)', async () => {
+  await withIsolation(async (home) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    writeSessionFile(home, fullSessionState());
+    const out = await runAgentartsInterpreterInvoke(
+      { action: 'execute_code', session_id: SESSION_UUID, code: 'print(1)' },
+      { runCandidate: async () => ({ exitCode: null, stdout: '', stderr: '', timedOut: true }) },
+    );
+    assert.equal(out.ok, false);
+    assert.equal(out.timedOut, true);
+    assert.match(out.error, /interpreter invoke execute_code timed out/);
+    assert.doesNotMatch(out.error, /undefined/);
+  });
+});
+
+test('the is_error note survives output truncation (re-parsed from raw stdout)', async () => {
+  await withIsolation(async (home) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    writeSessionFile(home, fullSessionState());
+    // >50KB stdout fires the side file and drops `result` from the
+    // envelope — the is_error teaching must survive (the B5 R10d class).
+    const bigTraceback = 'ZeroDivisionError: ' + 'x'.repeat(60_000);
+    const out = await runAgentartsInterpreterInvoke(
+      { action: 'execute_code', session_id: SESSION_UUID, code: '1/0' },
+      {
+        runCandidate: async () => ({
+          exitCode: 0,
+          stdout: pyDumps({ result: { content: [{ type: 'text', text: bigTraceback }], is_error: true } }),
+          stderr: '',
+        }),
+      },
+    );
+    assert.equal(out.ok, true);
+    assert.equal('result' in out, false, 'the envelope must have dropped the truncated result');
+    assert.match(out.stdout, /truncated, full output saved to/);
+    assert.match(out.notes.join(' '), /REMOTE python raised/);
+  });
+});
+
+test('the invoke wire request pins install and download payloads (the M10-M12 silent-no-op class)', async () => {
+  await withIsolation(async (home) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    writeSessionFile(home, fullSessionState());
+    let request = null;
+    const run = async (params, stdout) =>
+      runAgentartsInterpreterInvoke(params, {
+        runCandidate: async (candidate, args, childEnv, stdinData) => {
+          request = JSON.parse(stdinData);
+          return { exitCode: 0, stdout, stderr: '' };
+        },
+      });
+    const install = await run(
+      { action: 'install_packages', session_id: SESSION_UUID, packages: ['six', 'six==1.16.0'], upgrade: true },
+      pyDumps({ result: { content: [], structured_content: { exit_code: 0, stdout: '', stderr: '' } } }),
+    );
+    assert.equal(install.ok, true);
+    assert.equal(request.action, 'install_packages');
+    assert.deepEqual(request.packages, ['six', 'six==1.16.0']);
+    assert.equal(request.upgrade, true);
+    const download = await run(
+      { action: 'download_file', session_id: SESSION_UUID, path: '/home/user/data.csv' },
+      pyDumps({ action: 'download_file', path: '/home/user/data.csv', text: 'a,b\n' }),
+    );
+    assert.equal(download.ok, true);
+    assert.equal(request.action, 'download_file');
+    assert.equal(request.path, '/home/user/data.csv');
+    // upgrade omitted → the key is absent (the SDK default false applies).
+    const noUpgrade = await run(
+      { action: 'install_packages', session_id: SESSION_UUID, packages: ['six'] },
+      pyDumps({ result: { content: [], structured_content: { exit_code: 0, stdout: '', stderr: '' } } }),
+    );
+    assert.equal(noUpgrade.ok, true);
+    assert.equal('upgrade' in request, false);
+  });
+});
+
+test('the death mappings require the ToolsAPIError anchor — a bare "Session not found" substring never clears a record (M13)', async () => {
+  await withIsolation(async (home) => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    writeSessionFile(home, fullSessionState());
+    // The B5 R10e class: an unrelated error whose text CONTAINS the
+    // death wording must not fire the mapping (record kept).
+    const decoy = await runAgentartsInterpreterInvoke(
+      { action: 'execute_code', session_id: SESSION_UUID, code: 'print(1)' },
+      {
+        runCandidate: async () => ({
+          exitCode: 1,
+          stdout: '',
+          stderr: 'ToolsAPIError: Tools API Error: cache key Session not found in registry — unrelated error',
+        }),
+      },
+    );
+    assert.equal(decoy.ok, false);
+    assert.doesNotMatch(decoy.error, /cloud session is gone/);
+    assert.ok(existsSync(join(home, '.config', 'huaweicloud', `agentarts-interpreter-session-${SESSION_UUID}.json`)));
+  });
+});
+
+test(
+  'the download snippet branch decodes binary to a 0600 file and text rides as text (fake-SDK driver, M7)',
+  { skip: process.platform === 'win32' },
+  async () => {
+    await withIsolation(async (home) => {
+      setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+      writeSessionFile(home, fullSessionState());
+      const source = readFileSync('plugins/huaweicloud-core/src/agentarts-interpreter.mjs', 'utf8');
+      const match = source.match(/const INTERPRETER_INVOKE_SNIPPET = \[([\s\S]*?)\]\.join\('\\n'\);/);
+      assert.ok(match, 'snippet extraction failed');
+      const snippetLines = eval(`[${match[1]}]`); // repo-owned source, test-only eval
+      const dir = mkdtempSync(join(tmpdir(), 'interpreter-invoke-'));
+      const snippetPath = join(dir, 'snippet.py');
+      writeFileSync(snippetPath, snippetLines.join('\n'));
+      const driver = join(dir, 'driver.py');
+      writeFileSync(
+        driver,
+        [
+          'import sys, types, os',
+          "fake = types.ModuleType('agentarts')",
+          "sdk = types.ModuleType('agentarts.sdk')",
+          'class CodeInterpreter:',
+          '    def __init__(self, region=None, data_endpoint=None, auth_type="API_KEY", verify_ssl=True):',
+          '        pass',
+          '    def download_file(self, path):',
+          '        return b"\\x00\\x01\\x02\\xff"  # binary content',
+          'sdk.CodeInterpreter = CodeInterpreter',
+          'fake.sdk = sdk',
+          "sys.modules['agentarts'] = fake",
+          "sys.modules['agentarts.sdk'] = sdk",
+          "exec(compile(open(sys.argv[1]).read(), 'snippet', 'exec'))",
+          '',
+        ].join('\n'),
+      );
+      const request = pyDumps({
+        action: 'download_file',
+        region: 'cn-southwest-2',
+        data_endpoint: 'defaultgw-x.example.com',
+        auth_type: 'IAM',
+        code_interpreter_name: 'team-interpreter',
+        session_id: SESSION_UUID,
+        download_dir: dir,
+        path: '/home/user/out.bin',
+      });
+      const out = spawnSync('python3', [driver, snippetPath], { input: request, encoding: 'utf8', timeout: 15_000 });
+      assert.equal(out.status, 0, `snippet must exit 0 (stderr: ${out.stderr})`);
+      const parsed = JSON.parse(out.stdout);
+      assert.equal(parsed.action, 'download_file');
+      assert.equal(parsed.bytes, 4);
+      assert.ok(parsed.saved_to.startsWith(dir));
+      const saved = readFileSync(parsed.saved_to);
+      assert.deepEqual([...saved], [0, 1, 2, 255]);
+      assert.equal(statSync(parsed.saved_to).mode & 0o777, 0o600);
+      rmSync(dir, { recursive: true, force: true });
+    });
+  },
+);
