@@ -98,10 +98,10 @@ function rejectUnknownParams(params, operation) {
   const applicable = READ_OP_APPLICABILITY[operation] ?? [];
   for (const key of Object.keys(params)) {
     if (!INTERPRETER_READ_PARAM_KEYS.includes(key)) {
-      return `Unknown parameter "${key}" — legal keys: ${INTERPRETER_READ_PARAM_KEYS.join(', ')}.`;
+      return `Unknown parameter "${redactSecrets(key)}" — legal keys: ${INTERPRETER_READ_PARAM_KEYS.join(', ')}.`;
     }
     if (!['operation', 'region'].includes(key) && !applicable.includes(key)) {
-      return `"${key}" is not a parameter of ${operation} — it would be silently ignored. Applicable keys for ${operation}: ${applicable.join(', ') || '(none beyond operation/region)'}.`;
+      return `"${redactSecrets(key)}" is not a parameter of ${operation} — it would be silently ignored. Applicable keys for ${operation}: ${applicable.join(', ') || '(none beyond operation/region)'}.`;
     }
   }
   return null;
@@ -113,10 +113,15 @@ function rejectUnknownParams(params, operation) {
 // client-side validators are enforced at THIS boundary so a deterministic
 // child failure cannot waste a spawn: sort_key is created_at|updated_at
 // and the list name filter is 2-40 chars (code_interpreter_client.py
-// list validation), and ids are UUIDs.
+// list validation). UUID ids and the region charset are BRIDGE gates,
+// not SDK rules: the CI SDK performs no client-side id validation (the
+// server answers not-found for a malformed id, CI1-R1 measured) and the
+// region steers the hostname of the AK/SK-signed request, so a
+// non-region-shaped string must never ride it.
 const INTERPRETER_SORT_KEYS = ['created_at', 'updated_at'];
 const INTERPRETER_NAME_FILTER_RANGE = [2, 40];
 const UUID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const REGION_ID_PATTERN = /^[a-z0-9-]{1,64}$/;
 
 // The SDK applies no limit/offset cap on the list call, so the bridge
 // holds the conservative 1-100 window (the family posture).
@@ -133,7 +138,7 @@ function validateInterpreterRead(params) {
       return 'code_interpreter_id is required for get_code_interpreter.';
     }
     if (!UUID_PATTERN.test(params.code_interpreter_id)) {
-      return 'code_interpreter_id must be a valid UUID (the SDK validates the format client-side — pass the id exactly as list_code_interpreters returned it).';
+      return 'code_interpreter_id must be a valid UUID (a bridge-side gate — the CI SDK performs no client-side id validation and the server answers not-found for a malformed id; pass the id exactly as list_code_interpreters returned it).';
     }
   }
   for (const field of ['name', 'sort_key']) {
@@ -170,10 +175,18 @@ function validateInterpreterRead(params) {
     }
   }
   // region: a mistyped region silently became the cn-southwest-2 default
-  // in the memory bridge once — rejected at the boundary here too.
+  // in the memory bridge once — rejected at the boundary here too. The
+  // charset gate is the CI2-R1 review's steering fix: the region
+  // interpolates into the hostname of the AK/SK-signed control-plane
+  // request (https://agentarts.<region>.myhuaweicloud.com), and a
+  // non-region-shaped string would aim the signed request at a host of
+  // the caller's choosing. Region ids are lowercase alnum+hyphen.
   if (params.region !== undefined && params.region !== null) {
     if (typeof params.region !== 'string' || params.region.length === 0) {
       return 'region must be a non-empty string when provided.';
+    }
+    if (!REGION_ID_PATTERN.test(params.region)) {
+      return 'region must match ^[a-z0-9-]{1,64}$ — it steers the hostname of the AK/SK-signed request, so free-text regions are rejected (use a region id like cn-southwest-2).';
     }
   }
   return null;
@@ -242,7 +255,7 @@ function enrichInterpreterRead(payload, params, parsed) {
     parsed && typeof parsed === 'object' && typeof parsed.auth_type === 'string' ? parsed.auth_type : null;
   if (params.operation === 'get_code_interpreter' && authType === 'API_KEY') {
     notes.push(
-      'API_KEY-typed interpreter: the data plane needs the console api_key (HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY env) — create/get responses never return the key value (trap 81). Prefer an IAM-typed interpreter (or create one through the interpreter create tool), which signs the data plane with the same AK/SK this toolkit injects.',
+      'API_KEY-typed interpreter: the data plane needs the console api_key (HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY env) — the response is not known to return the key value (browser family measured this for browsers, trap 61; CI-side unmeasured). Prefer an IAM-typed interpreter (or create one through the interpreter create tool), which signs the data plane with the same AK/SK this toolkit injects.',
     );
   }
   if (params.operation === 'list_code_interpreters' && Array.isArray(parsed?.items) && parsed.items.length > 0) {
@@ -254,13 +267,24 @@ function enrichInterpreterRead(payload, params, parsed) {
   return payload;
 }
 
+// Operation label for rejection payloads. The echoed operation is
+// CALLER-CONTROLLED text (validation failed, so nothing about it is
+// trusted): a secret pasted into it must not ride the reject response
+// verbatim (the CI2-R1 review's echo finding — the CLI wrapper's reject()
+// redacts its args for exactly this reason, agentarts-cli.mjs).
+function operationLabel(operation) {
+  const raw = typeof operation === 'string' && operation ? operation : '(unknown)';
+  const safe = redactSecrets(raw);
+  return `interpreter ${safe} (SDK control plane)`;
+}
+
 export async function readAgentartsInterpreter(params = {}, options = {}) {
   const invalid = validateInterpreterRead(params);
   if (invalid) {
     return {
       ok: false,
       service: 'AgentArts',
-      operation: `interpreter ${params.operation || '(unknown)'} (SDK control plane)`,
+      operation: operationLabel(params.operation),
       error: invalid,
     };
   }
@@ -319,5 +343,5 @@ export async function readAgentartsInterpreter(params = {}, options = {}) {
 // Tool dispatch (definitions live in agentarts-interpreter-tools.mjs).
 export async function callAgentartsInterpreterTool(name, rawArgs = {}) {
   if (name === 'huaweicloud_agentarts_interpreter_read') return readAgentartsInterpreter(rawArgs);
-  return { ok: false, error: `Unknown agentarts interpreter tool: ${name}` };
+  return { ok: false, error: `Unknown agentarts interpreter tool: ${redactSecrets(String(name))}` };
 }

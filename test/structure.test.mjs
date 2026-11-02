@@ -1974,11 +1974,16 @@ test('the agentarts interpreter read bridge registers with its safety contract p
   for (const banned of ['api_key', 'apiKey', 'api-key', 'key', 'sk', 'ak']) {
     assert.equal(banned in def.inputSchema.properties, false, `tool must not accept a ${banned} parameter`);
   }
-  // The measured contracts are taught in the tool text itself.
+  // The measured contracts are taught in the tool text itself. trap 61
+  // is the browser-family measurement the api_key claim honestly cites
+  // (CI-side unmeasured — the CI2-R1 review's misattribution fix);
+  // trap 89 (list lacks auth_type) and trap 82 (endpoint auto-scheme)
+  // are CI-measured.
   assert.match(def.description, /NO code-interpreter subcommands/);
   assert.match(def.description, /cn-southwest-2/);
   assert.match(def.description, /access_endpoint/);
-  assert.match(def.description, /trap 81/);
+  assert.match(def.description, /trap 61/);
+  assert.match(def.description, /CI-side unmeasured/);
   assert.match(def.description, /trap 89/);
   // Source pin: the snippet's exception handler catches BaseException —
   // the SDK's ToolsAPIError extends BaseException (tools_http.py:10),
@@ -1986,6 +1991,21 @@ test('the agentarts interpreter read bridge registers with its safety contract p
   const source = readFileSync(join(pluginRoot, 'src', 'agentarts-interpreter.mjs'), 'utf8');
   assert.match(source, /except BaseException as error/);
   assert.doesNotMatch(source, /except Exception as error/);
+  // Source pin (CI2-R1): the SystemExit re-raise before the
+  // BaseException catch — the bad-operation sys.exit(2) lives INSIDE the
+  // try, and without the re-raise our exit-2 contract becomes
+  // "SystemExit: 2" on stderr with exit 1 (trap 71a's regression class;
+  // pinned in source because no unit test can run the real snippet
+  // hermetically).
+  assert.match(
+    source,
+    /'except SystemExit:',\s*\n\s*'\s{4}raise',/,
+    'the snippet must re-raise SystemExit before the BaseException catch',
+  );
+  for (const catchMatch of source.matchAll(/'except BaseException as error:',/g)) {
+    const before = source.slice(Math.max(0, catchMatch.index - 400), catchMatch.index);
+    assert.match(before, /'\s{4}raise',/, 'every BaseException catch must be preceded by the SystemExit re-raise');
+  }
   // No CLI-family drift: the interpreter bridge is SDK-only, so the tool
   // must not fabricate CLI subcommands either.
   assert.doesNotMatch(def.description, /agentarts interpreter /);

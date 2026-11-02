@@ -31,13 +31,13 @@ SDK 钉版不升: 0.1.9 与 0.1.7 的 browser/code_interpreter 面字节级一�
 - [x] 回写 docs/agentarts-pr0-findings.md（陷阱 81-90）+ docs/agentarts-upstream-asks.md（诉求 35-40）
 - [ ] 仓库门禁: `npm run lint` + `npm test` + `npm run validate` + `npm run format` + `npm run pack:verify`
 
-### CI2 读桥（控制面）
+### CI2 读桥（控制面）【实现完成 2026-11-02, ae6f8b45; R1 对抗轮修复在档（陷阱 91）】
 
-- [ ] 创建 `plugins/huaweicloud-core/src/agentarts-interpreter-tools.mjs` + `agentarts-interpreter.mjs`（read 部分）
-- [ ] 工具 `huaweicloud_agentarts_interpreter_read`: list_code_interpreters/get_code_interpreter
-- [ ] AK/SK 注入子进程（控制面, list_agents 同姿态）, region 请求 JSON 显式传递, 默认 cn-southwest-2, 边界拒错型
-- [ ] 复用 runOverPythonCandidates/buildChildEnv/saveLargeOutput; snippet 异常捕获 except BaseException + SystemExit 重抛（browser R1 契约）
-- [ ] 测试镜像 browser 桩模式: `test/agentarts-interpreter.test.mjs`; `test/structure.test.mjs` 注册钉
+- [x] 创建 `plugins/huaweicloud-core/src/agentarts-interpreter-tools.mjs` + `agentarts-interpreter.mjs`（read 部分）
+- [x] 工具 `huaweicloud_agentarts_interpreter_read`: list_code_interpreters/get_code_interpreter
+- [x] AK/SK 注入子进程（控制面, list_agents 同姿态）, region 请求 JSON 显式传递, 默认 cn-southwest-2, 边界拒错型 + region `^[a-z0-9-]{1,64}$` 引导门（R1）
+- [x] 复用 runOverPythonCandidates/buildChildEnv/saveLargeOutput; snippet 异常捕获 except BaseException + SystemExit 重抛（browser R1 契约, R1 轮补源码钉）
+- [x] 测试镜像 browser 桩模式: `test/agentarts-interpreter.test.mjs`（16 测含 R1 移植钉）; `test/structure.test.mjs` 注册钉
 
 ### CI3 写桥（资源生命周期）
 

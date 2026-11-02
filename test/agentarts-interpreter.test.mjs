@@ -79,8 +79,9 @@ test('interpreter read validates the boundary before any spawn', async () => {
     await bad({ operation: 'list_code_interpreters', limit: 0 }, /limit must be 1-100/);
     await bad({ operation: 'list_code_interpreters', limit: 101 }, /limit must be 1-100/);
     await bad({ operation: 'list_code_interpreters', offset: -1 }, /offset must be >= 0/);
-    // UUID format enforced at the boundary (the SDK validates client-side
-    // before any network call).
+    // UUID format enforced at the boundary (a BRIDGE gate — the CI SDK
+    // performs no client-side id validation, CI2-R1 measured; the server
+    // answers not-found for a malformed id).
     await bad({ operation: 'get_code_interpreter', code_interpreter_id: 'not-a-uuid' }, /must be a valid UUID/);
     await bad({ operation: 'get_code_interpreter', code_interpreter_id: 'b1' }, /must be a valid UUID/);
     // sort_key: the SDK's own client-side enum (created_at|updated_at).
@@ -233,7 +234,8 @@ test('interpreter read enrichment: API_KEY-typed get result carries the console-
     );
     assert.equal(apiKeyTyped.ok, true);
     assert.match(apiKeyTyped.notes.join(' '), /HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY/);
-    assert.match(apiKeyTyped.notes.join(' '), /trap 81/);
+    assert.match(apiKeyTyped.notes.join(' '), /trap 61/);
+    assert.match(apiKeyTyped.notes.join(' '), /CI-side unmeasured/);
 
     const iamTyped = await readAgentartsInterpreter(
       { operation: 'get_code_interpreter', code_interpreter_id: UUID },
@@ -337,4 +339,182 @@ test('the interpreter read tool definition pins its operation enum and credentia
   assert.equal('AGENTARTS_CODEINTERPRETER_DATA_ENDPOINT' in env, false);
   assert.equal('AGENTARTS_RUNTIME_DATA_ENDPOINT' in env, false);
   assert.equal('HUAWEICLOUD_SDK_CODE_INTERPRETER_API_KEY' in env, false);
+});
+
+// ---------------------------------------------------------------------------
+// CI2-R1 adversarial-review round: request passthrough (the silent-no-op
+// class), the SystemExit contract, the truncation/timedOut envelope
+// branches, redaction of every surface, -0, region steering, and the
+// rejection-echo redaction.
+
+test('interpreter read request carries every validated field; region param wins over the default', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    let request = null;
+    const out = await readAgentartsInterpreter(
+      {
+        operation: 'list_code_interpreters',
+        name: 'team-interpreter',
+        limit: 50,
+        offset: 10,
+        sort_dir: 'asc',
+        region: 'cn-north-4',
+      },
+      {
+        runCandidate: async (candidate, args, childEnv, stdinData) => {
+          request = JSON.parse(stdinData);
+          return { exitCode: 0, stdout: '{"items": [], "total_count": 0}', stderr: '' };
+        },
+      },
+    );
+    assert.equal(out.ok, true);
+    // Full passthrough: dropping ANY of these fields is the silent-no-op
+    // class (the request builder mutation M1/M2 survival class, CI2-R1).
+    assert.deepEqual(request, {
+      operation: 'list_code_interpreters',
+      region: 'cn-north-4',
+      name: 'team-interpreter',
+      limit: 50,
+      offset: 10,
+      sort_dir: 'asc',
+    });
+    // sort_key omitted → the SDK default applies server-side.
+    assert.equal(request.sort_key, undefined);
+
+    let getRequest = null;
+    const got = await readAgentartsInterpreter(
+      { operation: 'get_code_interpreter', code_interpreter_id: UUID, region: 'cn-north-4' },
+      {
+        runCandidate: async (candidate, args, childEnv, stdinData) => {
+          getRequest = JSON.parse(stdinData);
+          return { exitCode: 0, stdout: pyDumps({ id: UUID, name: 'ci-1' }), stderr: '' };
+        },
+      },
+    );
+    assert.equal(got.ok, true);
+    assert.deepEqual(getRequest, {
+      operation: 'get_code_interpreter',
+      region: 'cn-north-4',
+      code_interpreter_id: UUID,
+    });
+  });
+});
+
+test('interpreter read rejects -0 integers and non-region-shaped region strings (steering gate)', async () => {
+  await withIsolation(async () => {
+    const bad = async (params, pattern) => {
+      const out = await readAgentartsInterpreter(params);
+      assert.equal(out.ok, false, JSON.stringify(params));
+      assert.match(out.error, pattern);
+    };
+    await bad({ operation: 'list_code_interpreters', limit: -0 }, /limit must be an integer/);
+    await bad({ operation: 'list_code_interpreters', offset: -0 }, /offset must be an integer/);
+    // The region interpolates into the hostname of the AK/SK-signed
+    // request — host metacharacters and dotted suffixes must not ride it
+    // (CI2-R1: 'attacker.invalid#' and 'cn-southwest-2.evil.example' both
+    // reached the wire before this gate).
+    await bad({ operation: 'list_code_interpreters', region: 'attacker.invalid#' }, /region must match/);
+    await bad({ operation: 'list_code_interpreters', region: 'cn-southwest-2.evil.example' }, /region must match/);
+    await bad({ operation: 'list_code_interpreters', region: 'CN SOUTH' }, /region must match/);
+    // Legal region ids still pass.
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    const ok = await readAgentartsInterpreter(
+      { operation: 'list_code_interpreters', region: 'cn-north-4' },
+      {
+        runCandidate: async (candidate, args, childEnv, stdinData) => {
+          assert.equal(JSON.parse(stdinData).region, 'cn-north-4');
+          return { exitCode: 0, stdout: '{"total_count": 0}', stderr: '' };
+        },
+      },
+    );
+    assert.equal(ok.ok, true);
+  });
+});
+
+test('interpreter envelope: the timedOut branch and the truncation side file both fire', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // timedOut: exit-0 stdout is IGNORED (the timeout verdict wins) and
+    // the error names the timeout.
+    const timedOut = await readAgentartsInterpreter(
+      { operation: 'get_code_interpreter', code_interpreter_id: UUID },
+      {
+        runCandidate: async () => ({ exitCode: null, stdout: '{"id": "x"}', stderr: '', timedOut: true }),
+      },
+    );
+    assert.equal(timedOut.ok, false);
+    assert.equal(timedOut.timedOut, true);
+    assert.match(timedOut.error, /timed out after/);
+    assert.equal('result' in timedOut, false, 'a timed-out call carries no result');
+    // Truncation: >50KB stdout fires the side file — the payload keeps a
+    // 2000-char prefix + pointer, and `result` is DROPPED (the
+    // untruncated object must not sit next to a truncated stdout).
+    const big = { items: [{ id: UUID, name: 'ci-1', pad: 'x'.repeat(60_000) }], total_count: 1 };
+    const truncated = await readAgentartsInterpreter(
+      { operation: 'list_code_interpreters' },
+      {
+        runCandidate: async () => ({ exitCode: 0, stdout: pyDumps(big), stderr: '' }),
+      },
+    );
+    assert.equal(truncated.ok, true);
+    assert.match(truncated.stdout, /truncated, full output saved to/);
+    assert.equal('result' in truncated, false, 'result must be dropped when the side file fires');
+  });
+});
+
+test('interpreter envelope redacts secrets on every surface (result and raw stdout)', async () => {
+  await withIsolation(async () => {
+    setRuntimeCredentials('AKVALUE123', 'SKVALUE456');
+    // result surface: a secret riding the parsed JSON payload.
+    const secretInResult = await readAgentartsInterpreter(
+      { operation: 'get_code_interpreter', code_interpreter_id: UUID },
+      {
+        runCandidate: async () => ({
+          exitCode: 0,
+          stdout: pyDumps({ id: UUID, api_key: 'AKLTSECRETAK12345678', name: 'ci-1' }),
+          stderr: '',
+        }),
+      },
+    );
+    assert.equal(secretInResult.ok, true);
+    assert.doesNotMatch(JSON.stringify(secretInResult.result), /AKLTSECRETAK/);
+    assert.match(JSON.stringify(secretInResult.result), /<redacted>/);
+    // raw stdout surface: a secret in unparseable output.
+    const secretInStdout = await readAgentartsInterpreter(
+      { operation: 'list_code_interpreters' },
+      {
+        runCandidate: async () => ({
+          exitCode: 1,
+          stdout: 'error: sk=SKLEAKEDVALUE happened',
+          stderr: 'api_key: AKLTLEAKEDVALUE',
+        }),
+      },
+    );
+    assert.equal(secretInStdout.ok, false);
+    assert.doesNotMatch(secretInStdout.stdout, /SKLEAKEDVALUE/);
+    assert.doesNotMatch(secretInStdout.stderr, /AKLTLEAKEDVALUE/);
+  });
+});
+
+test('interpreter rejection payloads redact the echoed caller-controlled strings', async () => {
+  await withIsolation(async () => {
+    // A secret pasted into the operation rides the reject response's
+    // operation label — redacted, never verbatim (CI2-R1 echo finding;
+    // the CLI wrapper's reject() redacts its args for the same reason).
+    const out = await readAgentartsInterpreter({ operation: 'sk=LEAKEDSKVALUE456 xyz' });
+    assert.equal(out.ok, false);
+    assert.doesNotMatch(out.operation, /LEAKEDSKVALUE/);
+    assert.match(out.operation, /interpreter/);
+    // Same class for an unknown-param KEY.
+    const unknown = await readAgentartsInterpreter({
+      operation: 'list_code_interpreters',
+      'ak=AKLEAKEDKEY': 'x',
+    });
+    assert.equal(unknown.ok, false);
+    assert.doesNotMatch(unknown.error, /AKLEAKEDKEY/);
+    // And the dispatch's unknown-tool name.
+    const dispatch = await callAgentartsInterpreterTool('tool sk=DISPATCHLEAK', {});
+    assert.equal(dispatch.ok, false);
+    assert.doesNotMatch(dispatch.error, /DISPATCHLEAK/);
+  });
 });
