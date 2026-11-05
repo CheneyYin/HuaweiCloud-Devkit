@@ -1269,9 +1269,10 @@ test('huawei-agentarts skill ships with routing floor and core registry wiring',
   }
   // Pinned SDK version is stated (D17) and hook-enforced tiers are documented.
   // The literal derives from the package.json pin so a bump cannot leave this
-  // guard red or silently matching a stale version.
+  // guard red or silently matching a stale version; the (?!\d) boundary stops
+  // a longer stale literal (0.1.100) from prefix-matching the pin.
   const pinnedSdk = readJson(join(root, 'package.json')).agentartsSdkVersion;
-  assert.match(body, new RegExp(`agentarts-sdk==${pinnedSdk.replaceAll('.', '\\.')}`));
+  assert.match(body, new RegExp(`agentarts-sdk==${pinnedSdk.replaceAll('.', '\\.')}(?!\\d)`));
   // The taught install command carries the Huawei Cloud PyPI mirror (PR5).
   assert.match(body, /mirrors\.huaweicloud\.com\/repository\/pypi\/simple/);
   // The SDK-API list tool is taught as the only runtime-listing path (PR7).

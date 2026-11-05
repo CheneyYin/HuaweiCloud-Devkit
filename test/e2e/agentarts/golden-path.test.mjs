@@ -27,7 +27,7 @@ import test from 'node:test';
 //   - the E2E account fingerprint equals the machine's configured devkit
 //     account → hard abort (the isolation invariant, via the toolkit's own
 //     redacted fingerprint machinery);
-//   - pre-existing e2e-aa-* memory-space OR agent leftovers → abort (adopt-or-abort; the agent sweep runs through the PR7 list-agents SDK tool — 0.1.7 has no list CLI command).
+//   - pre-existing e2e-aa-* memory-space OR agent leftovers → abort (adopt-or-abort; the agent sweep runs through the PR7 list-agents SDK tool — 0.1.10 has no list CLI command).
 // Convergence: a failure anywhere after deploy triggers a FINALLY-DESTROY
 // (best-effort, recorded in the report), and the 0600 report is ALWAYS
 // written — success or failure. The PR4 blind spot (no agent listing, so

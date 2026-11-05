@@ -343,7 +343,7 @@ test('readonly run executes the stub, parses output, and redacts credential-shap
     const failure = await runAgentartsReadonlyCommand(['memory', 'list', '--stub-traceback']);
     assert.equal(failure.ok, false);
     assert.equal(failure.failureDetected, true);
-    // Exit code lies in 0.1.7 — success is decided by output parsing only.
+    // Exit code lies in 0.1.10 — success is decided by output parsing only.
     assert.equal(failure.exitCode, 0);
   });
 });
@@ -2220,7 +2220,7 @@ test('large-output side file never carries the one-time key (scrubbed before sav
   });
 });
 
-test('value-flag tables are pinned to the 0.1.7 fixtures (all groups, group level, root commands)', () => {
+test('value-flag tables are pinned to the 0.1.10 fixtures (all groups, group level, root commands)', () => {
   // The value-flag tables are the foundation of the trap-26 collapse fix
   // and the help-position scan: dropping an entry silently reopens the
   // help-in-value-slot bypass for that command. Rows in the fixtures'
