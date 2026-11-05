@@ -445,8 +445,12 @@ variables from env and every call dies on arrival (measured
 allowlist strips them, the plan auto-appends `--yes`, and the approval
 surface's warnings list is empty), so the banner proves nothing. The
 installer also bakes the exported values into the deployed config in
-PLAINTEXT (world-readable 0644; project scope puts that file inside
-$PWD, committable) — prefer `--global` and treat the file as a secret.
+PLAINTEXT (default-umask modes 0644/0664 — group- or world-readable;
+only umask 077 yields 0600), and it REWRITES an existing
+settings.json/config.toml unconditionally — a pre-existing 0600 file
+is reset to those modes, contents preserved (measured 2026-11-05);
+project scope puts the file inside $PWD, committable — prefer
+`--global` and treat the file as a secret.
 Verify AFTER restarting the host agent: call one of the plugin's own
 `agentarts_memory` MCP tools and read the PAYLOAD — the server starts
 clean and answers `is_error:false` with the error inside the JSON
