@@ -429,20 +429,35 @@ HTTP server that does not exist). On 0.1.10 the installer pre-checks
 into the running interpreter via pip (the devkit venv already ships
 mcp 2.3.0); in a locked-down network without pip/uv egress the install
 aborts with a clear error and a manual `pip install "mcp>=2.0.0"` hint
-(wheel diff 2026-11-05). The install scope follows the CURRENT directory,
-not who runs it: the default deploys into $PWD (`.opencode/` for
-opencode; measured 2026-11-05) — use `--global` (user-level config) or
-run from a directory outside the repo; a retry inside a working repo
-mutates that repo. Credentials are an install PREREQUISITE, not an
-option: export `AGENTARTS_MEMORY_SPACE_ID` and
+(wheel diff 2026-11-05). The install scope follows the deploy target, not
+who runs it: the default is the CURRENT directory for claude/codex/
+opencode (`.opencode/` for opencode; measured 2026-11-05) but GLOBAL
+(user-level) for hermes, and `openclaw` is an exit-0 no-op ("not yet
+implemented", upstream ask #13) — use `--global` or run from a
+directory outside the repo for the three project-scope targets; a retry
+inside a working repo mutates that repo. Credentials are an install
+PREREQUISITE, not an option: export `AGENTARTS_MEMORY_SPACE_ID` and
 `HUAWEICLOUD_SDK_MEMORY_API_KEY` in that terminal first. With `--yes`
 and no credentials the installer WARNS mid-run, deploys anyway, and
 exits 0 "Install complete" — a plugin whose MCP server reads both
 variables from env and every call dies on arrival (measured
 2026-11-05); the wrapper route cannot carry them (its child-env
 allowlist strips them, the plan auto-appends `--yes`, and the approval
-surface's warnings list is empty), so the banner proves nothing —
-verify with one plugin call. For cross-session memory on a
+surface's warnings list is empty), so the banner proves nothing. The
+installer also bakes the exported values into the deployed config in
+PLAINTEXT (world-readable 0644; project scope puts that file inside
+$PWD, committable) — prefer `--global` and treat the file as a secret.
+Verify AFTER restarting the host agent: call one of the plugin's own
+`agentarts_memory` MCP tools and read the PAYLOAD — the server starts
+clean and answers `is_error:false` with the error inside the JSON
+(形似空成功, upstream ask #12), or round-trip a known memory. The
+bridge tools use a different credential channel (the wrapper-captured
+0600 key file) and prove nothing about the plugin. Uninstall is
+first-match too: `memory uninstall <target> --yes` acts on the FIRST
+manifest record for the target regardless of your current directory —
+with a stale record it reports success against that other directory
+while your live deploy stays wired; check the deployed path in the
+output before approving. For cross-session memory on a
 supported host: install the plugin (user's terminal), then use the
 bridge tools for governed search/ops. For every other host or purpose:
 the bridge alone.
