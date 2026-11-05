@@ -446,9 +446,11 @@ allowlist strips them, the plan auto-appends `--yes`, and the approval
 surface's warnings list is empty), so the banner proves nothing. The
 installer also bakes the exported values into the deployed config in
 PLAINTEXT (default-umask modes 0644/0664 — group- or world-readable;
-only umask 077 yields 0600), and it REWRITES an existing
-settings.json/config.toml unconditionally — a pre-existing 0600 file
-is reset to those modes, contents preserved (measured 2026-11-05);
+only a hardened umask like 077 keeps 0600), and its ATOMIC-JSON writes
+(claude settings.json, opencode opencode.json, codex hooks.json)
+REPLACE the inode — a pre-existing 0600 file there is reset to those
+modes, contents preserved, while codex config.toml is rewritten in
+place and KEEPS its mode (measured 2026-11-05);
 project scope puts the file inside $PWD, committable — prefer
 `--global` and treat the file as a secret.
 Verify AFTER restarting the host agent: call one of the plugin's own
@@ -460,8 +462,8 @@ bridge tools use a different credential channel (the wrapper-captured
 first-match too: `memory uninstall <target> --yes` acts on the FIRST
 manifest record for the target regardless of your current directory —
 with a stale record it reports success against that other directory
-while your live deploy stays wired; check the deployed path in the
-output before approving. For cross-session memory on a
+while your live deploy stays wired; the `--yes` output prints no path —
+check `~/.agentarts/installed.json` before approving. For cross-session memory on a
 supported host: install the plugin (user's terminal), then use the
 bridge tools for governed search/ops. For every other host or purpose:
 the bridge alone.
