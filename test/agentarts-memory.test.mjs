@@ -104,7 +104,7 @@ test('memory read validates the boundary before any spawn', async () => {
     await bad({ operation: 'list_sessions', space_id: 'sp1', region: '' }, /region must be a non-empty string/);
     await bad({ operation: 'list_memories', space_id: 'sp1', filters: ['nope'] }, /filters must be an object/);
     // list_messages requires session_id: the SDK's space-wide form builds a
-    // broken /sessions/None path in 0.1.7 (memory_service.py).
+    // broken /sessions/None path in 0.1.10 (memory_service.py).
     await bad({ operation: 'list_messages', space_id: 'sp1' }, /session_id is required/);
     // Filter keys are allowlisted: a credential-shaped key in filters would
     // ride the argv JSON onto the process list.
@@ -122,7 +122,7 @@ test('memory read validates the boundary before any spawn', async () => {
       { operation: 'search_memories', space_id: 'sp1', actor_id: 'u1', filters: { query: 'q', actor_id: 'u2' } },
       /filters\.actor_id is managed by the required top-level actor_id parameter/,
     );
-    // sort_by/sort_order: the dataclass accepts them, the 0.1.7 HTTP layer
+    // sort_by/sort_order: the dataclass accepts them, the 0.1.10 HTTP layer
     // never sends them — the silent-no-op class, rejected at the boundary.
     await bad(
       { operation: 'list_memories', space_id: 'sp1', filters: { sort_by: 'updated_at' } },

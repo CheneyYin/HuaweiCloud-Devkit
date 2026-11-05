@@ -429,7 +429,10 @@ HTTP server that does not exist). On 0.1.10 the installer pre-checks
 into the running interpreter via pip (the devkit venv already ships
 mcp 2.3.0); in a locked-down network without pip/uv egress the install
 aborts with a clear error and a manual `pip install "mcp>=2.0.0"` hint
-(wheel diff 2026-11-05). For cross-session memory on a
+(wheel diff 2026-11-05). Run install/retry in the USER's terminal only —
+the default scope deploys into the CURRENT directory (`.opencode/` for
+opencode; measured 2026-11-05), so a retry inside a working repo
+mutates that repo. For cross-session memory on a
 supported host: install the plugin (user's terminal), then use the
 bridge tools for governed search/ops. For every other host or purpose:
 the bridge alone.
