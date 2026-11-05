@@ -2,6 +2,8 @@
 
 日期: 2026-10-21。裁决基于 agentarts-sdk 0.1.7 钉版源码与仓库 43 个 CLI fixture 的分析, 细节与引证见 `docs/agentarts-pr0-findings.md`; 未经真机验证的结论均已注明。
 
+补记 2026-11-05: 钉版 0.1.7 → 0.1.10（wheel diff 裁决全文见 `docs/agentarts-upstream-asks.md` "0.1.10 钉版升级裁决"节）。CLI 树/browser/CI/gateway 面字节不变, 本规划的 CLI 面裁决随钉版整体成立; 变更全部为增量, 影响面与 S0 复核项见该节及 S0 台账新增三行。
+
 ## S1 宿主 agent 云记忆
 
 S1 今天即可用, 只有 /recall /remember 指令层是坏的。

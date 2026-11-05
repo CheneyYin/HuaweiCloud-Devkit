@@ -52,6 +52,9 @@
 - bridge 工具族真机 e2e（12 方法信封/分页/序列化实测）。【部分裁决 2026-10-27: 8 读 + 4 写全族已在真实 space 上使用（U2-U6 会话），信封/分页/检索/抽取扇出行为实测——剩余: top_k 显式调大时的截断行为; U7 批量 delete_memories 整批 e2e（组合已单测, 待用户批准一次真实批量删除裁决）】
 - 检索阈值三分叉（0.3 hook / 0.7 插件 MCP / 0.5 SDK 默认）的召回行为差异。【裁决 2026-10-27: 桥路径（MemorySearchFilter）默认**无过滤**——min_score None 被序列化丢弃（陷阱 29）; **显式 min_score=0.01 实测仍全量返回——服务端过滤整体不生效**（陷阱 31, U6）, 0.5 未单独测但同一代码路径推断相同; 0.3/0.7 常量在实测分数量级（0.000016-0.14）上会滤空一切, 不可移植】
 - `add_messages` 抽取管道延迟量级（多快可检索）。
+- 【0.1.10 钉版升级新增, 2026-11-05】search 线形状默认值漂移的服务端语义: 0.1.10 的 `MemorySearchFilter` 序列化现在对**每次** search 发送 `rerank:true, only_actived:false`（0.1.7 两者皆不发, wheel diff 实测客户端增量）——排序/召回是否因此改变、`only_actived=true` 与 `rerank=false` 的真实效果, S0 会话以同一 space 对比 0.1.7/0.1.10 实测; 若行为变化, 复核桥客户端 min_score 过滤的 score band 教学是否跨版本成立。
+- 【0.1.10 钉版升级新增, 2026-11-05】服务端实测声明跨版本复核（wheel diff 盲区, 判据: 客户端可证 → 已随钉版换 stamp; 服务端行为 → 留本行）: trap 31 显式 min_score 服务端不生效、trap 29 整空间返回、抽取扇出 1→N、死亡签名文案（trap 86 跨运行不稳定）——在 0.1.10 真云会话中各复测一次, 结果回填对应陷阱行。
+- 【0.1.10 钉版升级新增, 2026-11-05】真云 `agentarts --version` 横幅与 doctor `[PASS] AgentArts CLI 0.1.10 (pinned 0.1.10)` 的 S0 复核（本地已验: venv banner、doctor probe versionMatches true、运行时 importlib 0.1.10==pin）。
 
 ## Browser 面诉求（B1 spike 实测, 2026-10-30, 陷阱 61-70）
 
@@ -78,3 +81,7 @@ browser CLI 化诉求并入既有 #9。0.1.9 的 browser 面与 0.1.7 字节级�
 | 40  | CI 资源计费/quota 面（响应零计费字段）                                                                                           | 【实测】陷阱 89: create/get/list 全扫无 pricing/quota 键（browser 诉求 #32 同族）                                  |
 
 CI CLI 化诉求并入既有 #9。0.1.9 与 0.1.7 的 code_interpreter 面字节级一致（wheel diff 实测 2026-10-30）, 钉版不受影响。
+
+## 0.1.10 钉版升级裁决（wheel diff 实测, 2026-11-05）
+
+方法: `pip download agentarts-sdk=={0.1.7,0.1.8,0.1.9,0.1.10} --no-deps`（华为云镜像, 纯 `py3-none-any.whl`）→ unzip → `diff -rq` 全树; 命令与中间产物留存于评审会话 trail。结论: **toolkit/cli/ 树字节级不变**（43 fixture 除 `_version` 横幅外零漂移, 经真实 0.1.10 二进制重捕确证）; browser / code_interpreter / gateway / ToolsAPIError(tools_http) / memory_service 全部不变; `RuntimeClient.get_agents` 签名不变。变更全部为增量: `MemorySearchFilter` 增 `only_actived`/`rerank`（to_dict 序列化默认值 → 每次 search 现在发送 `rerank:true, only_actived:false`, 0.1.7 两者皆不发——服务端排序/召回语义未实测, 见 S0 新行）; `RuntimeClient` create/update 增可选 `lifecycle_config`（默认 None 不上线）; memory installer 增 `deps.py` mcp>=2.0.0 前置检查（claude/codex/opencode 目标, 缺失时经 pip 自动安装, 无 pip/uv 则明确报错; devkit venv 实测已含 mcp 2.3.0）; `runtime init` 模板增 lifecycle_config 段（`environment_variables` 渲染不变, 陷阱 3 在 0.1.10 仍成立）; docker 模板 chmod 修复（wrapper 无此路径）。钉版 0.1.7 → 0.1.10, 无桥 snippet 变更。
