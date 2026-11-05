@@ -464,9 +464,13 @@ bridge tools use a different credential channel (the wrapper-captured
 first-match too: `memory uninstall <target> --yes` acts on the FIRST
 manifest record for the target regardless of your current directory —
 with a stale record it reports success against that other directory
-while your live deploy stays wired; for a LIVE deploy the output names
-every stripped path — SILENCE is the stale-record signature, so check
-`~/.agentarts/installed.json` before approving. For cross-session memory on a
+while your live deploy stays wired; the paths-vs-silence diagnostic holds ONLY for claude/codex/opencode
+(every status line is exists-gated): paths = live record, SILENCE =
+stale record. HERMES diverges — its status lines print unconditionally
+and the paths derive from the CURRENT HERMES_HOME, not the record: a
+stale first record makes uninstall strip your LIVE `~/.hermes` deploy
+while the manifest keeps it. Check `~/.agentarts/installed.json`
+BEFORE approving either way. For cross-session memory on a
 supported host: install the plugin (user's terminal), then use the
 bridge tools for governed search/ops. For every other host or purpose:
 the bridge alone.
