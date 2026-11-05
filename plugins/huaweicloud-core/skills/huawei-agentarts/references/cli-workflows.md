@@ -470,7 +470,12 @@ stale record. HERMES diverges — its status lines print unconditionally
 and the paths derive from the CURRENT HERMES_HOME, not the record: a
 stale first record makes uninstall strip your LIVE `~/.hermes` deploy
 while the manifest keeps it. Check `~/.agentarts/installed.json`
-BEFORE approving either way. For cross-session memory on a
+BEFORE approving either way. Remediation is per-target: for claude/
+codex/opencode the uninstall acts on the RECORD's paths — the first run
+removes the stale record (silent), a second run removes the live
+deploy; for HERMES point HERMES_HOME at the STALE home before
+uninstalling so the env-derived paths act there, never on the live
+deploy (or hand-edit `~/.agentarts/installed.json`). For cross-session memory on a
 supported host: install the plugin (user's terminal), then use the
 bridge tools for governed search/ops. For every other host or purpose:
 the bridge alone.
