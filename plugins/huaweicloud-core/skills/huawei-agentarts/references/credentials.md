@@ -1,4 +1,4 @@
-# AgentArts Credentials (agentarts-sdk 0.1.7)
+# AgentArts Credentials (agentarts-sdk 0.1.10)
 
 ## How credentials reach the CLI
 
@@ -45,7 +45,7 @@ current user status is unassigned` is a credential-SOURCE signal, not an
 
 - The user runs the command in their own terminal with their own credentials.
 - `npx huaweicloud-devkit doctor` reports the agentarts environment
-  (CLI presence, pinned version 0.1.7, Python 3.10+, Docker for launch).
+  (CLI presence, pinned version 0.1.10, Python 3.10+, Docker for launch).
 - NEVER teach `export HUAWEICLOUD_SDK_AK=…` in a shell — that puts the SK
   into shell history and the agent transcript (see
   `huaweicloud-cli-and-auth`).
@@ -63,7 +63,7 @@ project-local yaml, and `launch` ships that yaml (including
   put there what the deployed agent genuinely needs, and say so to the user.
 - Reading `.agentarts_config.yaml` via Bash is hook-blocked
   (credentialFilePatterns); the config subcommands are the supported path.
-- 0.1.7 trap: `config set-env`/`remove-env` CRASH on basic-template projects
+- 0.1.10 trap: `config set-env`/`remove-env` CRASH on basic-template projects
   (null env list) — edit the yaml directly in that case.
 
 ## Injecting a secret without putting it in argv

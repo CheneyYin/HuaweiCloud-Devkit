@@ -665,7 +665,7 @@ function isStdinFedSegment(segment) {
 }
 
 // Group-level value-taking options (parsed by the GROUP's own callback
-// before any subcommand), fixture-pinned 0.1.7: only the config wizard
+// before any subcommand), fixture-pinned 0.1.10: only the config wizard
 // takes them (config.txt's Options panel); gateway/memory/runtime groups
 // offer --help only. CANONICAL single source — the approval wrapper's
 // GROUP_LEVEL_VALUE_FLAGS re-exports this map, and the subcommand

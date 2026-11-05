@@ -1,4 +1,4 @@
-// AgentArts memory DATA-PLANE bridge (U2 read + U3 write). The 0.1.7 CLI
+// AgentArts memory DATA-PLANE bridge (U2 read + U3 write). The 0.1.10 CLI
 // stops at space management — the SDK's MemoryClient exposes 12 data-plane
 // methods with zero CLI subcommands (fixtures + client.py, findings trap
 // 1), so an agent that created a space through the wrapper hit a dead end.
@@ -126,7 +126,7 @@ const MEMORY_READ_SNIPPET = [
 // - search: actor_id is managed by the REQUIRED top-level param (the
 //   bridge injects it into filters) — passing it inside filters is
 //   rejected to avoid two sources for one isolation-critical field.
-// - list: sort_by/sort_order exist on the dataclass but the 0.1.7 HTTP
+// - list: sort_by/sort_order exist on the dataclass but the 0.1.10 HTTP
 //   layer never sends them (memory_service.py filter_mappings maps 7
 //   keys) — rejected as the silent-no-op class.
 const SEARCH_FILTER_FIELDS = [
@@ -158,7 +158,7 @@ function validateFilterKeys(operation, filters) {
       return 'filters.actor_id is managed by the required top-level actor_id parameter — pass it there, not inside filters.';
     }
     if ((key === 'sort_by' || key === 'sort_order') && operation === 'list_memories') {
-      return `filters.${key} exists on the MemoryListFilter dataclass but the 0.1.7 HTTP layer never sends it (memory_service.py filter_mappings) — a silent no-op. Sorting is server-default only.`;
+      return `filters.${key} exists on the MemoryListFilter dataclass but the 0.1.10 HTTP layer never sends it (memory_service.py filter_mappings) — a silent no-op. Sorting is server-default only.`;
     }
     if (!legal.includes(key)) {
       return `Unknown filters key "${key}" — legal keys for ${operation}: ${legal.join(', ')}.`;
@@ -280,7 +280,7 @@ function validateMemoryRead(params) {
     return null;
   };
   // list_messages: the SDK docstring claims session_id is optional ("query
-  // all messages under Space"), but the 0.1.7 HTTP layer builds
+  // all messages under Space"), but the 0.1.10 HTTP layer builds
   // /sessions/{session_id}/messages unconditionally — None stringifies
   // into the path (memory_service.py list_messages). Required here until
   // an S0 run proves the space-wide form works.
@@ -562,7 +562,7 @@ function shapeMemoryResult(result, candidate, params, timeoutMs, parsed = parseS
   return {
     ok: !failed,
     service: 'AgentArts',
-    operation: `memory ${params.operation} (SDK data plane; no CLI subcommand in 0.1.7)`,
+    operation: `memory ${params.operation} (SDK data plane; no CLI subcommand in 0.1.10)`,
     executable: candidate,
     exitCode: result.exitCode,
     failureDetected: failed,
@@ -691,7 +691,7 @@ function enrichMemoryRead(payload, params, parsed) {
 // - delete_memory(space_id, memory_id) — the SDK docstring says
 //   "this operation is irreversible": carries the irreversible label.
 // - delete_memories(space_id, memory_ids[]) — a BRIDGE composition (U7;
-//   the 0.1.7 SDK has no batch method, upstream ask #15): the snippet
+//   the 0.1.10 SDK has no batch method, upstream ask #15): the snippet
 //   loops client.delete_memory per id, emitting one JSON progress line
 //   per id to STDERR (flushed — a mid-batch timeout still leaves a
 //   machine-readable trail). ONE approval covers the whole id batch;
@@ -1004,7 +1004,7 @@ export function planAgentartsMemoryWrite(params = {}) {
     ok: true,
     service: 'AgentArts',
     tier: 'approved',
-    operation: `memory ${params.operation} (SDK data plane; no CLI subcommand in 0.1.7)`,
+    operation: `memory ${params.operation} (SDK data plane; no CLI subcommand in 0.1.10)`,
     labels,
     warnings,
     request,

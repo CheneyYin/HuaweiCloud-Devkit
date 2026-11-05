@@ -1268,7 +1268,10 @@ test('huawei-agentarts skill ships with routing floor and core registry wiring',
     );
   }
   // Pinned SDK version is stated (D17) and hook-enforced tiers are documented.
-  assert.match(body, /agentarts-sdk==0\.1\.7/);
+  // The literal derives from the package.json pin so a bump cannot leave this
+  // guard red or silently matching a stale version.
+  const pinnedSdk = readJson(join(root, 'package.json')).agentartsSdkVersion;
+  assert.match(body, new RegExp(`agentarts-sdk==${pinnedSdk.replaceAll('.', '\\.')}`));
   // The taught install command carries the Huawei Cloud PyPI mirror (PR5).
   assert.match(body, /mirrors\.huaweicloud\.com\/repository\/pypi\/simple/);
   // The SDK-API list tool is taught as the only runtime-listing path (PR7).
@@ -2110,7 +2113,7 @@ test('memory data-plane retention traps and dual-path decision are taught (U4)',
   // The dual-path decision (governed bridge vs host-trust plugin install).
   assert.match(workflows, /dual-path decision/);
   assert.match(workflows, /host-trust/);
-  assert.match(workflows, /\/recall \/remember commands are broken in 0\.1\.7/);
+  assert.match(workflows, /\/recall \/remember commands are broken in 0\.1\.10/);
   // The upstream asks document exists and carries the evidence ladder.
   const asks = readFileSync(join(root, 'docs', 'agentarts-upstream-asks.md'), 'utf8');
   assert.match(asks, /Tier 1/);
@@ -2313,7 +2316,7 @@ test('huawei-agentarts SKILL.md routes the code interpreter bridge (CI2-CI5)', (
   // Tier map rows for the interpreter model (readonly control, approved
   // control+data, lease-gated data — distinct from the browser rows by
   // the FIVE-action wording).
-  assert.match(body, /interpreter list\/get — NO CLI subcommands exist in 0\.1\.7/);
+  assert.match(body, /interpreter list\/get — NO CLI subcommands exist in 0\.1\.10/);
   assert.match(body, /interpreter lifecycle writes \(create\/update\/delete — control plane\) AND session start/);
   assert.match(
     body,

@@ -1,4 +1,4 @@
-// AgentArts browser CONTROL-PLANE read bridge (B2). The 0.1.7 CLI has
+// AgentArts browser CONTROL-PLANE read bridge (B2). The 0.1.10 CLI has
 // zero browser subcommands (toolkit tree grep — findings trap 61 context),
 // so the SDK Browser class is the only path. This module mirrors the
 // memory read bridge (agentarts-memory.mjs): inline python snippet over
@@ -246,7 +246,7 @@ function shapeBrowserResult(result, candidate, params, timeoutMs, parsed = parse
   return {
     ok: !failed,
     service: 'AgentArts',
-    operation: `browser ${params.operation} (SDK control plane; no CLI subcommand in 0.1.7)`,
+    operation: `browser ${params.operation} (SDK control plane; no CLI subcommand in 0.1.10)`,
     executable: candidate,
     exitCode: result.exitCode,
     failureDetected: failed,
@@ -720,7 +720,7 @@ export function planAgentartsBrowserWrite(params = {}) {
     ok: true,
     service: 'AgentArts',
     tier: 'approved',
-    operation: `browser ${params.operation} (SDK control plane; no CLI subcommand in 0.1.7)`,
+    operation: `browser ${params.operation} (SDK control plane; no CLI subcommand in 0.1.10)`,
     labels,
     warnings,
     request,
@@ -1660,7 +1660,7 @@ export async function runAgentartsBrowserSession(params = {}, options = {}) {
 // The session tool's envelope: same shape, data-plane operation label.
 function shapeSessionToolResult(result, candidate, params, timeoutMs, parsed = parseSnippetStdout(result)) {
   const payload = shapeBrowserResult(result, candidate, params, timeoutMs, parsed);
-  payload.operation = `browser session ${params.operation} (SDK data plane; no CLI subcommand in 0.1.7)`;
+  payload.operation = `browser session ${params.operation} (SDK data plane; no CLI subcommand in 0.1.10)`;
   return payload;
 }
 
@@ -2101,7 +2101,7 @@ export async function runAgentartsBrowserInvoke(params = {}, options = {}) {
     shapeResult: (result, candidate) => {
       const parsed = parseSnippetStdout(result);
       const payload = shapeBrowserResult(result, candidate, params, timeoutMs, parsed);
-      payload.operation = `browser invoke ${params.action} (SDK data plane; no CLI subcommand in 0.1.7)`;
+      payload.operation = `browser invoke ${params.action} (SDK data plane; no CLI subcommand in 0.1.10)`;
       return enrichBrowserInvoke(payload, params, session, result);
     },
   });

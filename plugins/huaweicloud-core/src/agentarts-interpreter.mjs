@@ -1,4 +1,4 @@
-// AgentArts code interpreter CONTROL-PLANE read bridge (CI2). The 0.1.7
+// AgentArts code interpreter CONTROL-PLANE read bridge (CI2). The 0.1.10
 // CLI has zero code-interpreter subcommands (43-fixture tree grep —
 // findings trap 81 context), so the SDK CodeInterpreter class is the only
 // path. This module mirrors the browser read bridge
@@ -229,7 +229,7 @@ function shapeInterpreterResult(result, candidate, params, timeoutMs, parsed = p
   return {
     ok: !failed,
     service: 'AgentArts',
-    operation: `interpreter ${params.operation} (SDK control plane; no CLI subcommand in 0.1.7)`,
+    operation: `interpreter ${params.operation} (SDK control plane; no CLI subcommand in 0.1.10)`,
     executable: candidate,
     exitCode: result.exitCode,
     failureDetected: failed,
@@ -669,7 +669,7 @@ export function planAgentartsInterpreterWrite(params = {}) {
     ok: true,
     service: 'AgentArts',
     tier: 'approved',
-    operation: `interpreter ${params.operation} (SDK control plane; no CLI subcommand in 0.1.7)`,
+    operation: `interpreter ${params.operation} (SDK control plane; no CLI subcommand in 0.1.10)`,
     labels,
     warnings,
     request,
@@ -1440,7 +1440,7 @@ export async function runAgentartsInterpreterSession(params = {}, options = {}) 
     shapeResult: (result, candidate) => {
       const parsed = parseSnippetStdout(result);
       const payload = shapeInterpreterResult(result, candidate, params, timeoutMs, parsed);
-      payload.operation = `interpreter session ${params.operation} (SDK data plane; no CLI subcommand in 0.1.7)`;
+      payload.operation = `interpreter session ${params.operation} (SDK data plane; no CLI subcommand in 0.1.10)`;
       return enrichInterpreterSession(payload, params, session, result);
     },
   });
@@ -1856,7 +1856,7 @@ export async function runAgentartsInterpreterInvoke(params = {}, options = {}) {
         timeoutMs,
         parsed,
       );
-      payload.operation = `interpreter invoke ${params.action} (SDK data plane; no CLI subcommand in 0.1.7)`;
+      payload.operation = `interpreter invoke ${params.action} (SDK data plane; no CLI subcommand in 0.1.10)`;
       return enrichInterpreterInvoke(payload, params, session, result);
     },
   });

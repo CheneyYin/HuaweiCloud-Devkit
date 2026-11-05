@@ -507,15 +507,19 @@ test('agentarts doctor probes CLI version, Python, and Docker (advisory)', async
     // installed, never throws.
     assert.equal(probe.reason, 'version-unreadable');
 
-    // A stub that prints the measured version banner reports the pinned match.
+    // A stub that prints the pinned version banner reports the pinned match.
+    // The banner text derives from the live pin (pinnedSdkVersion reads
+    // policy.json first) so a pin bump cannot strand this assertion.
     // force: bypasses the process-level probe cache (the stub was swapped).
+    const { pinnedSdkVersion } = await import('../plugins/huaweicloud-core/src/agentarts-cli.mjs');
+    const pin = pinnedSdkVersion();
     const versioned = join(stubPath, '..', 'agentarts-versioned.sh');
-    writeFileSync(versioned, '#!/bin/bash\necho "agentarts version: 0.1.7"\n', { mode: 0o755 });
+    writeFileSync(versioned, `#!/bin/bash\necho "agentarts version: ${pin}"\n`, { mode: 0o755 });
     chmodSync(versioned, 0o755);
     process.env.AGENTARTS_BIN = versioned;
     const ok = probeAgentarts({ force: true });
-    assert.equal(ok.version, '0.1.7');
-    assert.equal(ok.pinned, '0.1.7');
+    assert.equal(ok.version, pin);
+    assert.equal(ok.pinned, pin);
     assert.equal(ok.versionMatches, true);
 
     const full = checkAgentarts();
@@ -2162,6 +2166,26 @@ test('the group-level value-flag map is a single source shared with safety-polic
     subIndex: 2,
   });
   assert.equal(resolveAgentartsGroupTokens(['gateway', '--', 'list']).sub, 'list');
+});
+
+test('python hook group_value_flags stays in parity with the JS canonical map', () => {
+  // The PreToolUse hook hardcodes the group-level value-flag set with only a
+  // sync comment — no validate walk covers hooks/ and no other test reads the
+  // .py. This parity pin fails when either copy drifts (round-2 finding N1).
+  const hookSource = readFileSync(
+    join(import.meta.dirname, '..', 'plugins', 'huaweicloud-core', 'hooks', 'huaweicloud-safety.py'),
+    'utf8',
+  );
+  const block = /group_value_flags = \{([^}]*)\}/.exec(hookSource);
+  assert.ok(block, 'hook group_value_flags set literal not found');
+  const pyFlags = [...block[1].matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1]);
+  const jsFlags = [...GROUP_LEVEL_VALUE_FLAGS.values()].flatMap((set) => [...set]);
+  assert.ok(pyFlags.length > 0, 'hook group_value_flags parsed empty');
+  assert.deepEqual(
+    [...pyFlags].sort((a, b) => a.localeCompare(b)),
+    [...jsFlags].sort((a, b) => a.localeCompare(b)),
+    'python hook group_value_flags drifted from AGENTARTS_GROUP_LEVEL_VALUE_FLAGS',
+  );
 });
 
 test('large-output side file never carries the one-time key (scrubbed before save)', async () => {

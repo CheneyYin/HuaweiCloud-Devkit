@@ -123,7 +123,7 @@ const MEMORY_INSTALL_TARGETS = new Set(['hermes', 'claude', 'codex', 'opencode',
 // the StrategyType enum in agentarts/sdk/memory/inner/config.py (the pinned
 // SDK cannot be patched from this repo, so the set is mirrored here).
 // MEASURED are e2e-measured server-accepted; `event` is enum-evidenced only
-// (it gets a provenance warning, not silence). The 0.1.7 CLI help neither
+// (it gets a provenance warning, not silence). The 0.1.10 CLI help neither
 // marks the flag required nor lists the values ("Built-in memory strategies
 // (comma-separated)"), while the server rejects a strategy-less create with
 // HTTP 400 [AgentArts.01010400] — after the CLI has already created an
@@ -156,7 +156,7 @@ export function resolveAgentartsCommand() {
 // defaultTier (fail-safe).
 const classifyAgentartsInvocation = resolveAgentartsTier;
 
-// Value-taking flags per memory subcommand, transcribed from the 0.1.7
+// Value-taking flags per memory subcommand, transcribed from the 0.1.10
 // fixtures (test/fixtures/agentarts/help-tree/memory_*.txt). A token
 // immediately following one of these is its VALUE (click consumes
 // dash-prefixed tokens as values), never an option — the foundation for
@@ -729,7 +729,7 @@ function planningGuidance(classification, canonicalArgs, memoryScan) {
   const notes = [];
   if (classification.unregistered) {
     notes.push(
-      `agentarts ${classification.operation || '(unknown)'} is not in the measured command registry (agentarts-sdk 0.1.7); classified fail-safe as cloud-write. Run \`agentarts ${classification.operation} --help\` first to verify the command shape.`,
+      `agentarts ${classification.operation || '(unknown)'} is not in the measured command registry (agentarts-sdk 0.1.10); classified fail-safe as cloud-write. Run \`agentarts ${classification.operation} --help\` first to verify the command shape.`,
     );
   }
   // Round 9: gate on the collapsed classification's subcommand — a
@@ -986,7 +986,7 @@ export function planAgentartsCommand(rawArgs, options = {}) {
     labels: classification.labels,
     operation: classification.operation,
     warnings: notes,
-    // Exit codes cannot be trusted (0.1.7 fails with exit 0); the run layer
+    // Exit codes cannot be trusted (0.1.10 fails with exit 0); the run layer
     // parses output for failure signatures instead.
     safeToRun: classification.tier === 'readonly',
   };
@@ -1531,7 +1531,7 @@ export async function runAgentartsReadonlyCommand(rawArgs, options = {}) {
   // verdicts on the same argv.
   const { classification, commandScan, rootVersionPrefixed, rootSeparatorReparse, group, sub, groupIndex } =
     effectiveAgentartsClassification(providedArgs, options);
-  // Genuine help is read-only discovery metadata on 0.1.7 — typer prints
+  // Genuine help is read-only discovery metadata on 0.1.10 — typer prints
   // help and exits before any command logic. The runner accepts it
   // (option-position tokens only, per the value-slot scan — a --help in a
   // VALUE slot, in a GROUP-region value slot, or in a POSITIONAL slot
@@ -1558,7 +1558,7 @@ export async function runAgentartsReadonlyCommand(rawArgs, options = {}) {
   // plan/runner oppositions, round 4).
   if (rootMetadata || rootVersionPrefixed || commandScan?.genuineHelp) {
     // Label accuracy (rounds 9-12, REAL-CLI ground truth): --help is the
-    // only EAGER root option on the real 0.1.7 CLI (--version is a plain
+    // only EAGER root option on the real 0.1.10 CLI (--version is a plain
     // callback flag), so an unconsumed option-position help token wins
     // over any version token — `--version --help`, `--help --version`,
     // and `--version -- --help` all print the ROOT HELP panel (the
@@ -1674,7 +1674,7 @@ export async function runAgentartsApprovedCommand(args = {}) {
   };
 }
 
-// List agent runtimes: an SDK-only capability. The 0.1.7 CLI has NO list
+// List agent runtimes: an SDK-only capability. The 0.1.10 CLI has NO list
 // command (the 43 help fixtures prove it), so this runs an inline snippet
 // through the python that owns the resolved agentarts CLI. Two contracts
 // differ from the CLI runners, both deliberate:
@@ -2001,7 +2001,7 @@ export async function listAgentartsAgents(params = {}, options = {}) {
       return {
         ok: !failed,
         service: 'AgentArts',
-        operation: 'list-agents (SDK API; no CLI command in 0.1.7)',
+        operation: 'list-agents (SDK API; no CLI command in 0.1.10)',
         executable: candidate,
         exitCode: result.exitCode,
         failureDetected: failed,
@@ -2039,7 +2039,7 @@ export const AGENTARTS_TOOL_DEFINITIONS = [
   {
     name: 'huaweicloud_agentarts_run_readonly_command',
     description:
-      "Run a read-only agentarts command (memory list/get/status, gateway get/list/get-target/list-targets) with runtime credential injection and output redaction. Also executes genuine --help discovery at any command level (option-position help tokens only — a help token in a value slot or after a -- separator is re-derived to the command's real tier: rejected when that tier is a write) and root metadata (all-flag argvs, a leading --version, a pre-group -- re-parse): no credentials needed, prints and exits. Exit codes are unreliable in agentarts 0.1.7 — success is decided from parsed output; child stdout/stderr are widened to COLUMNS=2000 so rich does not wrap URLs mid-string.",
+      "Run a read-only agentarts command (memory list/get/status, gateway get/list/get-target/list-targets) with runtime credential injection and output redaction. Also executes genuine --help discovery at any command level (option-position help tokens only — a help token in a value slot or after a -- separator is re-derived to the command's real tier: rejected when that tier is a write) and root metadata (all-flag argvs, a leading --version, a pre-group -- re-parse): no credentials needed, prints and exits. Exit codes are unreliable in agentarts 0.1.10 — success is decided from parsed output; child stdout/stderr are widened to COLUMNS=2000 so rich does not wrap URLs mid-string.",
     inputSchema: {
       type: 'object',
       required: ['args'],
@@ -2087,7 +2087,7 @@ export const AGENTARTS_TOOL_DEFINITIONS = [
   {
     name: 'huaweicloud_agentarts_list_agents',
     description:
-      'List AgentArts agent runtimes (read-only, no approval needed) via the pinned agentarts-sdk Python API — agentarts 0.1.7 has NO list CLI command, so this is the only in-toolkit path (degraded path: the console). Returns agents[] parsed from the SDK response. Params: region (default cn-southwest-2, the only control-plane region), agent_name (fuzzy filter), limit/offset (pagination — omit to keep the SDK defaults, the single source of truth).',
+      'List AgentArts agent runtimes (read-only, no approval needed) via the pinned agentarts-sdk Python API — agentarts 0.1.10 has NO list CLI command, so this is the only in-toolkit path (degraded path: the console). Returns agents[] parsed from the SDK response. Params: region (default cn-southwest-2, the only control-plane region), agent_name (fuzzy filter), limit/offset (pagination — omit to keep the SDK defaults, the single source of truth).',
     inputSchema: {
       type: 'object',
       properties: {

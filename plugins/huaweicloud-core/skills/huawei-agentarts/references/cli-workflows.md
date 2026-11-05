@@ -1,14 +1,14 @@
-# AgentArts CLI Workflows (agentarts-sdk 0.1.7)
+# AgentArts CLI Workflows (agentarts-sdk 0.1.10)
 
-Every command shape here is fixture-verified against agentarts-sdk 0.1.7
+Every command shape here is fixture-verified against agentarts-sdk 0.1.10
 (`test/fixtures/agentarts/help-tree/`); every trap is measured
 (`docs/agentarts-pr0-findings.md`). Do not invent flags — run
 `agentarts <group> --help` for anything not listed.
 
 ## Prerequisites
 
-- `pip install agentarts-sdk==0.1.7 -i https://mirrors.huaweicloud.com/repository/pypi/simple`
-  (verify: `agentarts --version` prints "agentarts version: 0.1.7"). The
+- `pip install agentarts-sdk==0.1.10 -i https://mirrors.huaweicloud.com/repository/pypi/simple`
+  (verify: `agentarts --version` prints "agentarts version: 0.1.10"). The
   Huawei Cloud PyPI mirror is the default; if it lags a newly pinned
   version, drop `-i` and install from official PyPI. Or run
   `npx huaweicloud-devkit install-agentarts` (devkit-owned venv,
@@ -117,7 +117,7 @@ huaweicloud_agentarts_run_readonly_command
   ["gateway","list"]
   ["gateway","get-target","<gateway-id>","<target-id>"]
 
-huaweicloud_agentarts_list_agents (SDK API — 0.1.7 has NO list CLI command)
+huaweicloud_agentarts_list_agents (SDK API — 0.1.10 has NO list CLI command)
   {}                                  → all agents, SDK default pagination
   { "agent_name": "demo" }            → fuzzy name filter
   { "limit": 100 }                    → explicit page size when sweeping
@@ -279,7 +279,7 @@ Session lifecycle: `start-session --agent <name>` returns the session id;
 pass `--session` to exec-command/invoke/upload/download; stop with
 `stop-session` even on failure paths.
 
-## Memory Data Plane (SDK bridge — no CLI subcommands in 0.1.7)
+## Memory Data Plane (SDK bridge — no CLI subcommands in 0.1.10)
 
 The CLI stops at space management. All 12 data-plane methods run through
 the SDK bridge tools; the one-time data-plane api_key is read from the
@@ -337,7 +337,7 @@ recovery.
 
 Batch deletion (`delete_memories`): pass `memory_ids[]` and ONE approval
 covers the whole array — the bridge loops the SDK's single-record delete
-internally (0.1.7 has no server-side batch; upstream ask #15). The
+internally (0.1.10 has no server-side batch; upstream ask #15). The
 canonical request sorts the ids by CODE UNIT (locale-independent — the
 token binding must not depend on the process locale), so a plan/write
 id-order difference still binds; duplicates are rejected at plan time (a
@@ -391,7 +391,15 @@ Three retention/recall traps worth knowing before you lean on the data:
   relative gap inside one response is the hit signal. Calibrate any
   threshold on the observed band and transplant no threshold from
   another surface: the hook path's 0.3 and the plugin MCP path's 0.7
-  constants would filter out EVERYTHING on this scale.
+  constants would filter out EVERYTHING on this scale. 0.1.10 adds two
+  `MemorySearchFilter` fields the bridge does NOT expose —
+  `only_actived` and `rerank` — and its serializer now sends their
+  defaults (`rerank:true, only_actived:false`) on EVERY search where
+  0.1.7 sent neither (wheel diff 2026-11-05). Passing either key is
+  rejected as an unknown filter (fail-closed); whether the new defaults
+  shift server-side ordering or recall is UNMEASURED — re-judge the
+  observed score band after the S0 session before trusting
+  cross-version comparisons.
 - **Extraction is fan-out, not 1:1 — and the extractor editorializes.**
   One `add_messages` message can extract into several memories at once
   (measured: one message → four — semantic, user_preference, summary,
@@ -405,7 +413,7 @@ Three retention/recall traps worth knowing before you lean on the data:
   search_memories); deletion is irreversible with no undo — batch the
   ids through `delete_memories` (one approval per array, see the
   failure/retry section above); and there is NO
-  message-level delete in 0.1.7 (only `delete_session` soft delete).
+  message-level delete in 0.1.10 (only `delete_session` soft delete).
   Control what gets inferred by controlling the session context you
   write into.
 
@@ -415,15 +423,20 @@ Which path to use (the dual-path decision): the WRAPPER bridge
 automatically. The official PLUGIN (`memory install`, user terminal
 only — host-trust: it writes the api_key into the host agent's config)
 auto-captures conversations into a space but only covers five platforms
-and its /recall /remember commands are broken in 0.1.7 (they curl an
-HTTP server that does not exist). For cross-session memory on a
+and its /recall /remember commands are broken in 0.1.10 (they curl an
+HTTP server that does not exist). On 0.1.10 the installer pre-checks
+`mcp>=2.0.0` for the claude/codex/opencode targets and auto-installs it
+into the running interpreter via pip (the devkit venv already ships
+mcp 2.3.0); in a locked-down network without pip/uv egress the install
+aborts with a clear error and a manual `pip install "mcp>=2.0.0"` hint
+(wheel diff 2026-11-05). For cross-session memory on a
 supported host: install the plugin (user's terminal), then use the
 bridge tools for governed search/ops. For every other host or purpose:
 the bridge alone.
 
-## Browser Sessions and Actions (SDK bridge — no CLI subcommands in 0.1.7)
+## Browser Sessions and Actions (SDK bridge — no CLI subcommands in 0.1.10)
 
-The 0.1.7 CLI has ZERO browser subcommands (toolkit tree grep). All four
+The 0.1.10 CLI has ZERO browser subcommands (toolkit tree grep). All four
 tools below are SDK bridges, B1-measured against the real cloud
 (2026-10-30, findings traps 61-70; the adversarial hardening is traps
 71-78). Region: cn-southwest-2 (the only e2e-measured region).
@@ -514,7 +527,7 @@ the token unconsumed.
 
 ## Code Interpreter Sessions and Actions (CI1-CI7, SDK bridge)
 
-The 0.1.7 CLI has ZERO code-interpreter subcommands (43-fixture tree) —
+The 0.1.10 CLI has ZERO code-interpreter subcommands (43-fixture tree) —
 the only path is the SDK `CodeInterpreter` class, bridged as five MCP
 tools (CI1 spike 2026-11-02, traps 81-95).
 
@@ -614,7 +627,7 @@ agentarts memory create my-space --strategies semantic,episodic --region cn-sout
 
 ## Exit Codes Lie
 
-agentarts 0.1.7 prints a full traceback and STILL exits 0 on failure. The
+agentarts 0.1.10 prints a full traceback and STILL exits 0 on failure. The
 wrapper decides success by parsing output — measured signatures: Python
 tracebacks, `- ERROR -` log lines, `Failed to …` operation errors,
 `Aborted.` (EOF-aborted prompts), `× ERROR:` (the CLI's operation-error
@@ -670,7 +683,7 @@ via a scratch HOME.
 - `config set` rewrites the yaml destructively: comments stripped, keys
   reordered, defaults materialized.
 - `config set-env` / `config remove-env` CRASH on basic-template projects in
-  0.1.7 (`TypeError` on a null env list; pre-write, nothing persisted). Edit
+  0.1.10 (`TypeError` on a null env list; pre-write, nothing persisted). Edit
   the yaml directly instead — or use a template that ships env entries.
 - `config set-env` is the documented way to persist
   `HUAWEICLOUD_SDK_AK`-style credentials into the yaml: treat the whole

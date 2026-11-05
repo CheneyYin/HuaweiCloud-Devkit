@@ -10,7 +10,7 @@ Any OpenAI-compatible endpoint works the same way.
 
 ## 0. Prereqs
 
-- `agentarts --version` → `0.1.7` (install: `npx huaweicloud-devkit install-agentarts`).
+- `agentarts --version` → `0.1.10` (install: `npx huaweicloud-devkit install-agentarts`).
 - Docker available locally; a MaaS endpoint + API key.
 - Devkit runtime credentials present (`huaweicloud_auth_status`); the wrapper
   injects AK/SK — never `export` them.
