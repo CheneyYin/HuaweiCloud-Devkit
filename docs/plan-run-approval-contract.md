@@ -30,7 +30,7 @@ If all checks pass, the stored args are used to execute `runHcloud`.
 
 ## Ask Mode (DEVKIT_APPROVAL_MODE=ask)
 
-The token contract above is the default. `DEVKIT_APPROVAL_MODE=ask` moves the confirmation onto the harness client's own permission prompt — the operator opts in (the OpenCode installer at or above 2.0 writes the client's top-level `permissions` ask rule on the `huaweicloud-devkit_huaweicloud_run_approved_command` action and the server env together, so the halves cannot drift; other harnesses set the env themselves).
+The token contract above is the default. `DEVKIT_APPROVAL_MODE=ask` moves the confirmation onto the harness client's own permission prompt — the operator opts in (the OpenCode installer at or above 1.19.0 writes the client's ask rule — a top-level `permissions` array entry on 2.0+, a `permission`-object key on 1.19–1.x, both naming the `huaweicloud-devkit_huaweicloud_run_approved_command` action — and the server env together, so the halves cannot drift; other harnesses set the env themselves).
 
 - Plan: `planHcloudCommand` mints NO token (nothing lands in the approvals store) and `userConfirmation` carries `{ needed: true, mode: 'ask', note }` instead of the approve `command` line.
 - Run: `runApprovedCommand` requires only `approvedByUser: true` plus the same `args` — no `approvalToken` (the tool schema keeps it optional and documents it as token-mode-only). The harness client's prompt on the call is the user's confirmation.

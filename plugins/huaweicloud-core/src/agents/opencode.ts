@@ -35,7 +35,7 @@ import {
   openCodeSeamGlobs,
   openCodeAskGate,
 } from './opencode-config.ts';
-import { inspectAskPermissionRule } from '../lib/opencode-ask-rule.ts';
+import { inspectAskPermissionRule, inspectAskPermissionRuleV1 } from '../lib/opencode-ask-rule.ts';
 import type { DoctorReporter } from '../doctor-report.ts';
 import { asRecord } from '../lib/as-record.ts';
 
@@ -54,20 +54,22 @@ export function opencodeDoctorMcpConfigured(): string | null {
 }
 
 // Doctor: the ASK approval posture check — OpenCode installs only. The
-// posture is a PAIR: the client half (the permissions ask rule that makes
-// opencode itself prompt on huaweicloud_run_approved_command) and the
-// server half (DEVKIT_APPROVAL_MODE=ask in the mcp entry's env). A
-// gate-off opencode is a SKIP — token mode is that install's legitimate
-// posture — and so are configs the installer itself refuses to touch.
-// Every mixed state is a FAIL because each lies in a known direction:
-// the rule without the env double-gates (the client prompts AND the
-// server still demands a token), the env without the rule fail-opens
-// (the server trusts a prompt nobody shows), and an allow/deny rule
-// destroys the ask contract outright ("always allow" stops prompting;
+// posture is a PAIR: the client half (the ask rule that makes opencode
+// itself prompt on huaweicloud_run_approved_command — a `permissions`
+// array entry on 2.0+, a `permission` object key on 1.19–1.x, both naming
+// the same action) and the server half (DEVKIT_APPROVAL_MODE=ask in the
+// mcp entry's env). A gate-off opencode is a SKIP — token mode is that
+// install's legitimate posture — and so are configs the installer itself
+// refuses to touch. Every mixed state is a FAIL because each lies in a
+// known direction: the rule without the env double-gates (the client
+// prompts AND the server still demands a token), the env without the rule
+// fail-opens (the server trusts a prompt nobody shows), and an allow/deny
+// rule destroys the ask contract outright ("always allow" stops prompting;
 // deny bricks the write tool entirely).
 export function opencodeDoctorAskRule(ctx: DoctorReporter): void {
-  if (openCodeAskGate() === 'off') {
-    ctx.skip('ASK approval posture (opencode not verifiably at or above 2.0)');
+  const gate = openCodeAskGate();
+  if (gate === 'off') {
+    ctx.skip('ASK approval posture (opencode not verifiably at or above 1.19.0)');
     return;
   }
   let cfg: Record<string, unknown> | null;
@@ -76,10 +78,13 @@ export function opencodeDoctorAskRule(ctx: DoctorReporter): void {
   } catch {
     cfg = null;
   }
-  const posture = cfg !== null ? inspectAskPermissionRule(cfg) : null;
+  const posture =
+    cfg === null ? null : gate === 'v1-object' ? inspectAskPermissionRuleV1(cfg) : inspectAskPermissionRule(cfg);
   if (cfg === null || posture === 'foreign') {
     ctx.skip(
-      'ASK approval posture: opencode config unreadable or permissions not array-shaped — the installer keeps it untouched; add the ask rule and DEVKIT_APPROVAL_MODE manually (see README, Harness permission notes)',
+      gate === 'v1-object'
+        ? 'ASK approval posture: opencode config unreadable or the run-tool permission key is not a bare ask/allow/deny string — the installer keeps it untouched; add the ask key and DEVKIT_APPROVAL_MODE manually (see README, Harness permission notes)'
+        : 'ASK approval posture: opencode config unreadable or permissions not array-shaped — the installer keeps it untouched; add the ask rule and DEVKIT_APPROVAL_MODE manually (see README, Harness permission notes)',
     );
     return;
   }
@@ -106,7 +111,9 @@ export function opencodeDoctorAskRule(ctx: DoctorReporter): void {
     ctx.check(
       label,
       false,
-      'the permissions rule for the run tool is "allow" (always allow) — writes no longer prompt: fail-open when DEVKIT_APPROVAL_MODE=ask, a plain token gate otherwise. Delete that rule or set its effect to "ask" (see README, Harness permission notes)',
+      gate === 'v1-object'
+        ? 'the permission value for the run tool is "allow" (always allow) — writes no longer prompt: fail-open when DEVKIT_APPROVAL_MODE=ask, a plain token gate otherwise. Delete that key or set its value to "ask" (see README, Harness permission notes)'
+        : 'the permissions rule for the run tool is "allow" (always allow) — writes no longer prompt: fail-open when DEVKIT_APPROVAL_MODE=ask, a plain token gate otherwise. Delete that rule or set its effect to "ask" (see README, Harness permission notes)',
     );
     return;
   }
@@ -114,7 +121,9 @@ export function opencodeDoctorAskRule(ctx: DoctorReporter): void {
     ctx.check(
       label,
       false,
-      'the permissions rule for the run tool is "deny" — the write tool is blocked entirely. Delete that rule or set its effect to "ask" (see README, Harness permission notes)',
+      gate === 'v1-object'
+        ? 'the permission value for the run tool is "deny" — the write tool is blocked entirely. Delete that key or set its value to "ask" (see README, Harness permission notes)'
+        : 'the permissions rule for the run tool is "deny" — the write tool is blocked entirely. Delete that rule or set its effect to "ask" (see README, Harness permission notes)',
     );
     return;
   }
@@ -123,7 +132,9 @@ export function opencodeDoctorAskRule(ctx: DoctorReporter): void {
     ctx.check(
       label,
       false,
-      'DEVKIT_APPROVAL_MODE=ask is set but the permissions ask rule is missing — the server trusts a client prompt nobody shows (re-run: npx huaweicloud-devkit install --target opencode, or unset DEVKIT_APPROVAL_MODE in the mcp entry)',
+      gate === 'v1-object'
+        ? 'DEVKIT_APPROVAL_MODE=ask is set but the permission ask key is missing — the server trusts a client prompt nobody shows (re-run: npx huaweicloud-devkit install --target opencode, or unset DEVKIT_APPROVAL_MODE in the mcp entry)'
+        : 'DEVKIT_APPROVAL_MODE=ask is set but the permissions ask rule is missing — the server trusts a client prompt nobody shows (re-run: npx huaweicloud-devkit install --target opencode, or unset DEVKIT_APPROVAL_MODE in the mcp entry)',
     );
     return;
   }

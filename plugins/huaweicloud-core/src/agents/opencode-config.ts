@@ -25,8 +25,10 @@ import {
 import {
   ASK_RULE_ACTION,
   applyAskPermissionRule,
-  opencodeAskRuleVersionSupported,
+  applyAskPermissionRuleV1,
+  askRuleShapeFor,
   removeAskPermissionRule,
+  removeAskPermissionRuleV1,
 } from '../lib/opencode-ask-rule.ts';
 import { asRecord } from '../lib/as-record.ts';
 import { devkitOwnedSkillNames, tryCoreSkillNames } from '../install-payload.ts';
@@ -40,19 +42,28 @@ import { devkitOwnedSkillNames, tryCoreSkillNames } from '../install-payload.ts'
 // an older version may reject the keys outright. A later update heals the
 // skip: the seam is a third change source in updateOpenCodeConfig, so an
 // unchanged mcp config no longer short-circuits.
+// Spawned at most once per process: the seam gate, the ask gate, and the
+// ask-shape probe under the 'on' override all ask the same question, and
+// a second spawn in one process can only return the same answer.
 function probeOpencodeVersion(): string | null {
-  // The probe runs the agent's own binary, which initializes its config
-  // root on every run — so the probe must pin that root to a throwaway
-  // mkdtemp directory instead of inheriting the caller's XDG/HOME: a
-  // relative XDG_CONFIG_HOME makes opencode materialize dirs against its
-  // cwd (the known 1.19.0 divergence cross-platform-install.test.ts
-  // pins), and an inherited HOME would create legacy ~/.config/opencode
-  // roots in fake-home installs. A fixed shared name would be clippable
-  // on multi-user machines, so the root is per-run and best-effort
-  // cleaned. The version string never depends on the config root. The
-  // win32 retries cover npm-global .cmd shims (spawn cannot execute them
-  // without a shell — the hasCodexCLI precedent; the shell string is a
-  // fixed literal, no interpolation surface).
+  return probedVersion === undefined ? (probedVersion = probeOpencodeVersionUncached()) : probedVersion;
+}
+
+let probedVersion: string | null | undefined;
+
+// The probe runs the agent's own binary, which initializes its config
+// root on every run — so the probe must pin that root to a throwaway
+// mkdtemp directory instead of inheriting the caller's XDG/HOME: a
+// relative XDG_CONFIG_HOME makes opencode materialize dirs against its
+// cwd (the known 1.19.0 divergence cross-platform-install.test.ts
+// pins), and an inherited HOME would create legacy ~/.config/opencode
+// roots in fake-home installs. A fixed shared name would be clippable
+// on multi-user machines, so the root is per-run and best-effort
+// cleaned. The version string never depends on the config root. The
+// win32 retries cover npm-global .cmd shims (spawn cannot execute them
+// without a shell — the hasCodexCLI precedent; the shell string is a
+// fixed literal, no interpolation surface).
+function probeOpencodeVersionUncached(): string | null {
   let probeRoot: string;
   try {
     probeRoot = mkdtempSync(join(tmpdir(), 'devkit-opencode-probe-'));
@@ -99,17 +110,30 @@ export function openCodeSeamGate(): 'on' | 'off' {
 }
 
 // The ask rule's version gate, same doctrine as the seam's:
-// HUAWEICLOUD_OPENCODE_ASK_RULE=on|off is the deterministic override for
-// the installer test suite (e2e strips it — the runner's install relies on
-// the natural probe); unset runs the probe. Unknown polarity is off: the
-// `permissions` array is the V2 shape measured on 2.2.7 only, so a
-// below-2.0, absent, or unparsable opencode writes NEITHER half of the
-// posture — the client rule without the server env double-gates, the env
-// without the rule fail-opens, and the pair must move together.
-export function openCodeAskGate(): 'on' | 'off' {
+// HUAWEICLOUD_OPENCODE_ASK_RULE is the deterministic override for the
+// installer test suite (e2e strips it — the runner's install relies on
+// the natural probe); unset runs the probe. Polarity:
+//   'off'      — neither half of the posture is written (token mode stays).
+//   'v1'/'v2'  — force the rule SHAPE (the deterministic test matrix; the
+//                env halves are identical across shapes).
+//   'on'       — the probe decides the shape; an absent/unparsable
+//                opencode falls back to the documented V2 array — the
+//                override's contract since the posture landed.
+// Unset with an unsupported opencode is 'off': the V2 array is measured on
+// 2.2.7 and the V1 permission key is source-verified on 1.19.0, so a
+// below-floor, absent, or unparsable opencode writes NEITHER half — the
+// client rule without the server env double-gates, the env without the
+// rule fail-opens, and the pair must move together.
+export type OpenCodeAskGate = 'off' | 'v2-array' | 'v1-object';
+
+export function openCodeAskGate(): OpenCodeAskGate {
   const forced = process.env.HUAWEICLOUD_OPENCODE_ASK_RULE;
-  if (forced === 'on' || forced === 'off') return forced;
-  return opencodeAskRuleVersionSupported(probeOpencodeVersion()) ? 'on' : 'off';
+  if (forced === 'off') return 'off';
+  if (forced === 'v2') return 'v2-array';
+  if (forced === 'v1') return 'v1-object';
+  const shape = askRuleShapeFor(probeOpencodeVersion());
+  if (shape !== 'unsupported') return shape;
+  return forced === 'on' ? 'v2-array' : 'off';
 }
 
 // The server half of the ask posture: DEVKIT_APPROVAL_MODE=ask in the mcp
@@ -183,25 +207,31 @@ export function updateOpenCodeConfig(pluginDir: string): void {
       '  \x1b[33m[INFO]\x1b[0m opencode not verifiably at or above the measured permission floor — skipping the skills-tree permission write; see README (Harness permission notes) if direct skill reads prompt for approval.',
     );
   }
-  const askOn = openCodeAskGate() === 'on';
+  const askGate = openCodeAskGate();
+  const askOn = askGate !== 'off';
   // The ask rule is a FOURTH change source, computed before the unchanged
   // short-circuit for the same reason as the seam: an unchanged mcp entry
   // is the dominant update shape, and every install made before the ask
   // posture existed is exactly the population this must heal. The rule
   // mutates config in place (ownership rules in lib/opencode-ask-rule.ts),
-  // so the single write below carries it.
+  // so the single write below carries it. The client half's SHAPE rides
+  // the probed generation: the V2 permissions array on 2.0+, the V1
+  // permission key on 1.19–1.x (the run tool's rule name is byte-identical
+  // across shapes, and the mcp env half is shared).
   let askRuleChanged = false;
   if (askOn) {
-    const applied = applyAskPermissionRule(config);
+    const applied = askGate === 'v1-object' ? applyAskPermissionRuleV1(config) : applyAskPermissionRule(config);
     askRuleChanged = applied.changed;
     if (applied.skipped) {
       console.log(
-        `  \x1b[33m[WARN]\x1b[0m opencode permissions already has an entry for ${ASK_RULE_ACTION} — keeping it as the user's (the posture follows its effect; see README, Harness permission notes).`,
+        askGate === 'v1-object'
+          ? `  \x1b[33m[WARN]\x1b[0m opencode permission already has the ${ASK_RULE_ACTION} key — keeping it as the user's (the posture follows its value; see README, Harness permission notes).`
+          : `  \x1b[33m[WARN]\x1b[0m opencode permissions already has an entry for ${ASK_RULE_ACTION} — keeping it as the user's (the posture follows its effect; see README, Harness permission notes).`,
       );
     }
   } else {
     console.log(
-      '  \x1b[33m[INFO]\x1b[0m opencode not verifiably at or above 2.0 — keeping the terminal token approval gate; no permissions ask rule or DEVKIT_APPROVAL_MODE is written.',
+      '  \x1b[33m[INFO]\x1b[0m opencode not verifiably at or above 1.19.0 — keeping the terminal token approval gate; no ask rule or DEVKIT_APPROVAL_MODE is written.',
     );
   }
   const existing: unknown = asRecord(config.mcp)['huaweicloud-devkit'];
@@ -265,10 +295,12 @@ export function removeOpenCodeConfig(): void {
   // The ask-rule cleanup also runs unconditionally of the version gate: an
   // uninstall must remove what any past install wrote — the opencode that
   // gated the write may since have been upgraded, downgraded, or removed
-  // from PATH. Value-exact deletion keeps user-modified entries (the
+  // from PATH, and the rule's shape rode the generation that was current
+  // then. Both shapes are attempted: V2 array entries and V1 object keys
+  // (value-exact deletion keeps user-modified rules in either shape — the
   // ownership contract lives in lib/opencode-ask-rule.ts); the mcp entry
   // (and its DEVKIT_APPROVAL_MODE env) is already gone wholesale above.
-  const askCleaned = removeAskPermissionRule(config);
+  const askCleaned = removeAskPermissionRule(config) || removeAskPermissionRuleV1(config);
   if (!hadEntry && !permCleaned && !askCleaned) return;
   writeMcpSettingsFile(configPath, config);
   if (hadEntry) console.log(`  OpenCode MCP config cleaned: ${configPath}`);

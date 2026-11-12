@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
@@ -120,12 +120,12 @@ test('doctor: rule absent and env absent is the legitimate token-mode PASS', () 
   assert.ok(stdout.includes('[PASS] ASK approval posture (token mode)'), `token mode must pass, got:\n${stdout}`);
 });
 
-test('doctor: a below-2.0 (gate-off) probe skips the section instead of failing', () => {
+test('doctor: a below-floor (gate-off) probe skips the section instead of failing', () => {
   const home = fixtureDir('hwc-ask-skip-');
   installAskOn(home);
   const stdout = runDoctor(home, { HUAWEICLOUD_OPENCODE_ASK_RULE: 'off' });
   assert.ok(
-    stdout.includes('[SKIP] ASK approval posture (opencode not verifiably at or above 2.0)'),
+    stdout.includes('[SKIP] ASK approval posture (opencode not verifiably at or above 1.19.0)'),
     `expected the gate-off skip, got:\n${stdout}`,
   );
 });
@@ -136,5 +136,112 @@ test('install with the ask gate off writes neither half of the pair', () => {
   const config = loadOpencodeConfig(home);
   assert.ok(config.mcp, 'the mcp entry is still written');
   assert.equal('permissions' in config, false, 'no V2 permissions rules are written');
+  assert.equal(
+    (config.permission as Record<string, unknown> | undefined)?.[ASK_RULE_ACTION],
+    undefined,
+    'no V1 ask key is written (the skills-tree seam’s own permission keys may coexist)',
+  );
   assert.equal(envOf(mcpEntry(config)).DEVKIT_APPROVAL_MODE, undefined, 'no DEVKIT_APPROVAL_MODE env is written');
+});
+
+// ── The V1 shape: the `permission` object form (opencode 1.19.0 – 1.x) ──
+// HUAWEICLOUD_OPENCODE_ASK_RULE=v1 forces the shape deterministically (the
+// natural probe on a host without opencode cannot), and the env half is
+// identical across shapes — so the V1 matrix re-runs the V2 posture logic
+// against the object form.
+
+function installAskV1(home: string): Record<string, unknown> {
+  runInstall(home, { HUAWEICLOUD_OPENCODE_ASK_RULE: 'v1' });
+  return loadOpencodeConfig(home);
+}
+
+function v1Permission(config: Record<string, unknown>): Record<string, unknown> {
+  return config.permission as Record<string, unknown>;
+}
+
+test('doctor: the v1 gate writes the permission key + env pair, and doctor PASSes', () => {
+  const home = fixtureDir('hwc-ask-v1-pair-');
+  const config = installAskV1(home);
+  assert.equal(v1Permission(config)[ASK_RULE_ACTION], 'ask', 'the V1 permission key carries the client half');
+  assert.equal('permissions' in config, false, 'the V2 array is not written on the v1 shape');
+  assert.equal(envOf(mcpEntry(config)).DEVKIT_APPROVAL_MODE, 'ask', 'the mcp env carries the server half');
+  const stdout = runDoctor(home, { HUAWEICLOUD_OPENCODE_ASK_RULE: 'v1' });
+  assert.ok(stdout.includes(`[PASS] ${ASK_LABEL}`), `expected the v1 pair to pass, got:\n${stdout}`);
+});
+
+test('doctor: a v1 allow value FAILs with the key-shaped remediation (the ask contract is silently gone)', () => {
+  const home = fixtureDir('hwc-ask-v1-allow-');
+  const config = installAskV1(home);
+  v1Permission(config)[ASK_RULE_ACTION] = 'allow';
+  saveOpencodeConfig(home, config);
+  const stdout = runDoctor(home, { HUAWEICLOUD_OPENCODE_ASK_RULE: 'v1' });
+  assert.ok(stdout.includes(`[FAIL] ${ASK_LABEL}`), `expected the v1 allow to fail, got:\n${stdout}`);
+  assert.ok(stdout.includes('the permission value for the run tool is "allow" (always allow)'), 'the danger is named');
+  assert.ok(stdout.includes('Delete that key or set its value to "ask"'), 'the shape-accurate remediation is named');
+});
+
+test('doctor: a v1 deny value FAILs (the write tool is blocked entirely)', () => {
+  const home = fixtureDir('hwc-ask-v1-deny-');
+  const config = installAskV1(home);
+  v1Permission(config)[ASK_RULE_ACTION] = 'deny';
+  saveOpencodeConfig(home, config);
+  const stdout = runDoctor(home, { HUAWEICLOUD_OPENCODE_ASK_RULE: 'v1' });
+  assert.ok(stdout.includes(`[FAIL] ${ASK_LABEL}`), `expected the v1 deny to fail, got:\n${stdout}`);
+  assert.ok(stdout.includes('"deny" — the write tool is blocked entirely'), 'the danger is named');
+});
+
+test('doctor: the v1 key without the mcp env FAILs (the double-gate direction)', () => {
+  const home = fixtureDir('hwc-ask-v1-noenv-');
+  const config = installAskV1(home);
+  delete envOf(mcpEntry(config)).DEVKIT_APPROVAL_MODE;
+  saveOpencodeConfig(home, config);
+  const stdout = runDoctor(home, { HUAWEICLOUD_OPENCODE_ASK_RULE: 'v1' });
+  assert.ok(stdout.includes(`[FAIL] ${ASK_LABEL}`), `expected the missing env to fail, got:\n${stdout}`);
+  assert.ok(
+    stdout.includes('the client prompts AND the server still demands a token'),
+    'the double-gate direction is named',
+  );
+});
+
+test('doctor: the v1 env without the key FAILs (the fail-open direction)', () => {
+  const home = fixtureDir('hwc-ask-v1-norule-');
+  const config = installAskV1(home);
+  delete config.permission;
+  saveOpencodeConfig(home, config);
+  const stdout = runDoctor(home, { HUAWEICLOUD_OPENCODE_ASK_RULE: 'v1' });
+  assert.ok(stdout.includes(`[FAIL] ${ASK_LABEL}`), `expected the missing key to fail, got:\n${stdout}`);
+  assert.ok(stdout.includes('the server trusts a client prompt nobody shows'), 'the fail-open direction is named');
+});
+
+test('doctor: v1 key and env both absent is the legitimate token-mode PASS', () => {
+  const home = fixtureDir('hwc-ask-v1-token-');
+  const config = installAskV1(home);
+  delete config.permission;
+  delete envOf(mcpEntry(config)).DEVKIT_APPROVAL_MODE;
+  saveOpencodeConfig(home, config);
+  const stdout = runDoctor(home, { HUAWEICLOUD_OPENCODE_ASK_RULE: 'v1' });
+  assert.ok(stdout.includes('[PASS] ASK approval posture (token mode)'), `token mode must pass, got:\n${stdout}`);
+});
+
+test('doctor: a v1 pattern-map value is a foreign SKIP, never a misread posture', () => {
+  const home = fixtureDir('hwc-ask-v1-foreign-');
+  const config = installAskV1(home);
+  v1Permission(config)[ASK_RULE_ACTION] = { '*': 'ask' };
+  saveOpencodeConfig(home, config);
+  const stdout = runDoctor(home, { HUAWEICLOUD_OPENCODE_ASK_RULE: 'v1' });
+  assert.ok(stdout.includes('[SKIP] ASK approval posture'), `expected the foreign skip, got:\n${stdout}`);
+  assert.ok(stdout.includes('not a bare ask/allow/deny string'), 'the shape-accurate skip reason is named');
+});
+
+test('install honors a user-owned v1 key: add-only-if-absent keeps any value', () => {
+  const home = fixtureDir('hwc-ask-v1-userkey-');
+  const pre = { mcp: {}, permission: { [ASK_RULE_ACTION]: 'deny' } };
+  // Seed the config the installer merges into.
+  mkdirSync(join(home, '.config', 'opencode'), { recursive: true });
+  writeFileSync(join(home, '.config', 'opencode', 'opencode.json'), JSON.stringify(pre, null, 2), 'utf8');
+  runInstall(home, { HUAWEICLOUD_OPENCODE_ASK_RULE: 'v1' });
+  const config = loadOpencodeConfig(home);
+  assert.equal(v1Permission(config)[ASK_RULE_ACTION], 'deny', 'the user’s value survives the write');
+  const stdout = runDoctor(home, { HUAWEICLOUD_OPENCODE_ASK_RULE: 'v1' });
+  assert.ok(stdout.includes('"deny" — the write tool is blocked entirely'), 'doctor names the user-owned denial');
 });
