@@ -618,3 +618,24 @@ test('the cli-and-auth skill names both approval-mode confirm steps in the appro
     assert.match(text, /harness client prompts the user/, `${label}: the ask-mode confirmation channel is taught`);
   }
 });
+
+test('the troubleshooting skill teaches the codex unsupported-call signature as a harness failure', () => {
+  // Measured (2026-11-13, live codex 0.167.2 session, reproduced against
+  // the same custom OpenAI-compatible provider): codex dispatches MCP
+  // tools only through the function_call `namespace` field; a provider
+  // that drops it answers `unsupported call: <tool>` for every call after
+  // the first (690 of 692, none reaching the devkit). The teaching pins
+  // the three load-bearing facts: the error is a harness failure, not a
+  // Huawei Cloud error; the call never reached the devkit; retrying the
+  // identical call cannot succeed.
+  const surfaces = [
+    ['source', readSource(join('src', 'packs', 'core', 'skills', 'huaweicloud-troubleshooting', 'SKILL.md'))],
+    ['generated', readFileSync(join(pluginRoot, 'skills', 'huaweicloud-troubleshooting', 'SKILL.md'), 'utf8')],
+  ] as const;
+  for (const [label, text] of surfaces) {
+    assert.match(text, /unsupported call/, `${label}: the signature is taught by its literal`);
+    assert.match(text, /namespace/, `${label}: the namespace mechanism is named`);
+    assert.match(text, /never reached the devkit/, `${label}: the never-reached-the-devkit fact is stated`);
+    assert.match(text, /Do not retry|Stop retrying/, `${label}: the no-retry rule is taught`);
+  }
+});

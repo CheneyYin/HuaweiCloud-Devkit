@@ -114,6 +114,23 @@ const VENDOR_BOUNDARY_RULE =
   "When the vendor is still unknown, ask the user which cloud they mean before operating on cloud resources through any tool or hcloud command, and before probing Huawei Cloud tooling, credential, or account state (CLI install checks, profile reads, auth status). Cloud-facing tools enforce this with a vendorConfirmed parameter — pass the user's establishing words as its value, never an invented quote. " +
   "Requests that are not cloud tasks are outside this rule; tasks for other clouds remain answerable from general knowledge — the devkit's tools themselves only operate on Huawei Cloud. ";
 
+// Harness tool-routing failure, shared by the stdio instruction forms (the
+// remote face rides no harness model wire — see the remote return).
+// Measured failure (2026-11-13, live codex 0.167.2 session + reproduced
+// against the same provider): codex presents MCP tools as namespace-type
+// tools and dispatches ONLY through the `namespace` field on function_call
+// items, with no flat-name fallback; a custom OpenAI-compatible model
+// gateway that drops that field (request history and/or generated calls)
+// turns every regenerated call namespace-less, codex's registry
+// (namespace, name) exact-match misses, and the harness answers
+// `unsupported call: <tool>` — 690 of 692 huaweicloud calls in the dump,
+// none ever reaching the devkit server, while the model retried the
+// identical call in a spin. The devkit cannot observe or fix these
+// calls; the only devkit-side lever is teaching the agent what the
+// signature means so the spin stops after one reply.
+const UNSUPPORTED_CALL_RULE =
+  'Tool-routing note: a reply "unsupported call: <tool>" naming a huaweicloud tool comes from your harness client, not from the devkit or Huawei Cloud — the call never reached this server, so retrying the identical call cannot succeed; report it to the user once and stop. ';
+
 export function instructionsFor(remote: boolean, runtimePacks = false): string {
   if (remote) {
     return (
@@ -155,6 +172,7 @@ export function instructionsFor(remote: boolean, runtimePacks = false): string {
     // directory, and the stdio instructions render on both.
     "Root disambiguation: huawei-* pack-owned service skills live only in this tree — on directory-loading agents, the native skills directory carrying the six huaweicloud-* meta-skill copies in your context is a different root, so never guess a service skill's path by analogy to it; the tree location stated above (skillRoot, the field a huaweicloud_list_skills payload carries) must be in hand before the first service-skill read, never fetched in parallel with a guessed one. " +
     VENDOR_BOUNDARY_RULE +
+    UNSUPPORTED_CALL_RULE +
     'Route Huawei Cloud tasks through the huaweicloud-core skill; browse packs with huaweicloud_list_packs.'
   );
 }
