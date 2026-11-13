@@ -1,6 +1,7 @@
 import {
   execWithSessionSchema,
   execOneShotSchema,
+  execPollSchema,
   closeSessionSchema,
   uploadFileSchema,
   uploadProjectSchema,
@@ -15,6 +16,7 @@ import {
   credentialsSchema,
 } from './schemas.ts';
 import { handleExecWithSession, handleExecOneShot, handleCloseSession } from './handlers-session.ts';
+import { handleHwexecPoll } from './handlers-hwexec.ts';
 import { handleUploadFile, handleUploadProject } from './handlers-upload.ts';
 import { handleDeployNginx, handleDeployCheck } from './handlers-deploy.ts';
 import { handleExposeTunnel, handleRenewTunnel, handleKeepaliveWatchdog } from './handlers-tunnel.ts';
@@ -32,10 +34,12 @@ import type { PackToolDefinition, LooseToolSchema } from '../../lib/pack-types.t
 // here. The family behind it (all siblings inside src/packs/sandbox/,
 // joining the pack-boundaries walk automatically): schemas.ts (the zod
 // schema block + the timeout table), git-transfer.ts (the repo transfer
-// trio), handlers-session.ts / handlers-upload.ts / handlers-deploy.ts /
-// handlers-tunnel.ts / handlers-account.ts / handlers-credentials.ts (the
-// tool handlers, migrated verbatim from src/tools.ts with the P2 pack
-// program).
+// trio), handlers-session.ts / handlers-hwexec.ts / handlers-upload.ts /
+// handlers-deploy.ts / handlers-tunnel.ts / handlers-account.ts /
+// handlers-credentials.ts (the tool handlers, migrated verbatim from
+// src/tools.ts with the P2 pack program; handlers-hwexec.ts carries the
+// async-exec claim protocol — the exec_one_shot async branch and the
+// exec_poll tool).
 
 export { SANDBOX_TIMEOUT_MS } from './schemas.ts';
 
@@ -50,9 +54,16 @@ export const SANDBOX_TOOLS = [
   {
     name: 'huaweicloud_sandbox_exec_one_shot',
     description:
-      'Execute a command on a workspace terminal with a fresh connection per call (no session state carries over). Each invocation opens a new WebSocket connection, executes one command, then disconnects. Use for long-running build/deploy/install commands (>30s) that do not need shell state persistence between calls. More stable than session-based execution for heavy workloads.',
+      'Execute a command on a workspace terminal with a fresh connection per call (no session state carries over). Each invocation opens a new WebSocket connection, executes one command, then disconnects. Use for long-running build/deploy/install commands (>30s) that do not need shell state persistence between calls. More stable than session-based execution for heavy workloads. Commands that can outlive the sync timeout (default 120s) must run in mode: "async" instead: the tool claims a per-task directory with an atomic O_EXCL claim, spawns the command detached (setsid/nohup/disown — it survives the exec session), and returns immediately with {started, taskId, taskDir}; poll the verdict with huaweicloud_sandbox_exec_poll — that async + poll pair is the >30s long-command doctrine, and the same-task_id retry after started:"uncertain" is structurally double-spawn-safe. started:"dup" + verdict "never" → start over with a NEW task_id.',
     schema: execOneShotSchema,
     handler: handleExecOneShot,
+  },
+  {
+    name: 'huaweicloud_sandbox_exec_poll',
+    description:
+      'Poll an async sandbox task started by huaweicloud_sandbox_exec_one_shot with mode: "async". One call runs a bounded server-side wait (wait_ms 0-60000: sleep-2 intervals checking the task\'s status file; the exec timeout auto-folds to wait_ms + 15s so the wait always fits), then returns the task\'s verdict as a discriminated union — done (exitCode + logTail: the command finished), running (logTail: keep polling), lost (the wrapper died without an exit status, or the task directory vanished — a sandbox reboot — while this process remembered the task; restart with a new task_id if needed), never (the task was claimed but never launched — the start exec died between claim and spawn; start a NEW task_id, a same-id retry can never spawn), unknown (no task directory and no memory of the task_id — it never started here, or both the sandbox and this agent restarted). logTail is the last tail_bytes (default 4096) of the task\'s captured stdout+stderr. The retry ladder: started:"uncertain" → retry the SAME task_id (the claim file blocks a second copy); started:"dup" + verdict "never" → new task_id.',
+    schema: execPollSchema,
+    handler: handleHwexecPoll,
   },
   {
     name: 'huaweicloud_sandbox_close_session',
@@ -148,6 +159,7 @@ export type SandboxToolName = (typeof SANDBOX_TOOLS)[number]['name'];
 export const SANDBOX_TOOL_SCHEMAS: Readonly<Record<SandboxToolName, LooseToolSchema>> = {
   huaweicloud_sandbox_exec_with_session: execWithSessionSchema,
   huaweicloud_sandbox_exec_one_shot: execOneShotSchema,
+  huaweicloud_sandbox_exec_poll: execPollSchema,
   huaweicloud_sandbox_close_session: closeSessionSchema,
   huaweicloud_sandbox_upload_file: uploadFileSchema,
   huaweicloud_sandbox_upload_project: uploadProjectSchema,
@@ -168,6 +180,7 @@ export const SANDBOX_TOOL_SCHEMAS: Readonly<Record<SandboxToolName, LooseToolSch
 export const SANDBOX_TOOL_HANDLERS: Readonly<Record<SandboxToolName, PackToolDefinition['handler']>> = {
   huaweicloud_sandbox_exec_with_session: handleExecWithSession,
   huaweicloud_sandbox_exec_one_shot: handleExecOneShot,
+  huaweicloud_sandbox_exec_poll: handleHwexecPoll,
   huaweicloud_sandbox_close_session: handleCloseSession,
   huaweicloud_sandbox_upload_file: handleUploadFile,
   huaweicloud_sandbox_upload_project: handleUploadProject,
