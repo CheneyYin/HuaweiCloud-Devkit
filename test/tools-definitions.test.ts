@@ -137,3 +137,16 @@ test('TOOL_SCHEMAS keys exactly match TOOL_DEFINITIONS names (no orphans either 
     'a tool registered without a schema is unreachable over MCP; a schema without a registry entry is dead code',
   );
 });
+
+test('every top-level parameter on every tool schema carries a description', () => {
+  const missing: string[] = [];
+  for (const name of Object.keys(TOOL_SCHEMAS) as Array<keyof typeof TOOL_SCHEMAS>) {
+    const js = getToolSchema(name).toJSONSchema();
+    for (const [key, prop] of Object.entries(js.properties ?? {})) {
+      if (!prop || typeof prop !== 'object' || !(prop as Record<string, unknown>).description) {
+        missing.push(name + '.' + key);
+      }
+    }
+  }
+  assert.deepEqual(missing, [], 'every agent-facing parameter must be described on the raw tools/list face');
+});

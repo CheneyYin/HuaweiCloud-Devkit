@@ -458,7 +458,7 @@ const planCliCommandSchema = z.looseObject({
 });
 const runReadonlyCommandSchema = z.looseObject({
   vendorConfirmed,
-  args: stringArrayArg,
+  args: stringArrayArg.describe('hcloud arguments, excluding the hcloud executable.'),
   timeoutMs: numericArg.optional().describe('Optional timeout in milliseconds. Defaults to 60000.'),
   maxRetries: numericArg.optional().describe('Optional retry count for transient network errors. Defaults to 1.'),
   cwd: z.string().optional().describe('Optional working directory for the hcloud process.'),

@@ -39,7 +39,7 @@ const TOOL_SCHEMAS = {
     command: z.string().describe('The exact command text to inspect.'),
   }),
   huaweicloud_hook_check_artifacts: z.looseObject({
-    artifacts: z.array(artifactsItem),
+    artifacts: z.array(artifactsItem).describe('Artifacts to inspect, each with a path and its full text content.'),
   }),
   huaweicloud_hook_check_deploy_plan: z.looseObject({
     plan: z
@@ -54,11 +54,17 @@ const TOOL_SCHEMAS = {
       .describe('Developer intent to route, such as deploy app, use API, debug error, or inspect resources.'),
   }),
   huaweicloud_explain_error: z.looseObject({
-    service: z.string().optional(),
-    errorCode: z.string().optional(),
+    service: z.string().optional().describe('Optional service name (e.g., ECS, VPC, APIG) to route the lookup.'),
+    errorCode: z
+      .string()
+      .optional()
+      .describe('The error code to explain, such as APIGW.0301 or Ecs.0038. Extracted from message when omitted.'),
     code: z.string().optional().describe('Alias of errorCode, accepted for compatibility. Prefer errorCode.'),
-    message: z.string().optional(),
-    requestId: z.string().optional(),
+    message: z
+      .string()
+      .optional()
+      .describe('Optional raw error message; the error code is extracted from it when errorCode is not provided.'),
+    requestId: z.string().optional().describe('Optional request ID from the failed response, for support escalation.'),
   }),
   huaweicloud_search_docs: z.looseObject({
     query: z.string().describe('Search query across skill descriptions and documentation.'),

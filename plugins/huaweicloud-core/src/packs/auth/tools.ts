@@ -231,15 +231,20 @@ const authSwitchSchema = z.looseObject({
   vendorConfirmed,
   mode: z.enum(['import', 'memory', 'mcp-config']).optional().describe('Credential source channel'),
   action: z.enum(['persist', 'temporary', 'clear']).optional().describe('Apply scope'),
-  ak: z.string().optional(),
-  sk: z.string().optional(),
-  securityToken: z.string().optional(),
-  region: z.string().optional(),
+  ak: z.string().optional().describe('Huawei Cloud Access Key to switch this session to.'),
+  sk: z.string().optional().describe('Huawei Cloud Secret Key to switch this session to.'),
+  securityToken: z.string().optional().describe('Security (STS) token when the new credentials are session-scoped.'),
+  region: z.string().optional().describe('Optional default region applied with the switched credentials.'),
 });
 
 const authConfirmSchema = z.looseObject({
   token: z.string().optional().describe('confirmation token from the needs_confirmation response'),
-  decision: z.enum(['s1', 'newImported']).optional(),
+  decision: z
+    .enum(['s1', 'newImported'])
+    .optional()
+    .describe(
+      'Reconciliation choice: s1 keeps the existing S1 vault credentials; newImported adopts the newly imported ones.',
+    ),
 });
 
 async function handleCheckAccountType(args: ToolArgs = {}, _opts: CallToolOptions = {}) {
