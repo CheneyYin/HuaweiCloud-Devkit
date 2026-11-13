@@ -159,6 +159,10 @@ export const TOOL_DEFINITIONS_LITERALS = [
     description: packDescription('huaweicloud_sandbox_exec_one_shot'),
   },
   {
+    name: 'huaweicloud_sandbox_exec_poll',
+    description: packDescription('huaweicloud_sandbox_exec_poll'),
+  },
+  {
     name: 'huaweicloud_sandbox_close_session',
     description: packDescription('huaweicloud_sandbox_close_session'),
   },

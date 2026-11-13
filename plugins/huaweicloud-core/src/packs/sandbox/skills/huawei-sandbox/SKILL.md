@@ -119,45 +119,53 @@ Selection rules（agent 按意图自动选池，开发者可覆盖；意图不�
 
 ### Terminal Execution
 
-| Tool                                    | Purpose                                                                     |
-| --------------------------------------- | --------------------------------------------------------------------------- |
-| `huaweicloud_sandbox_exec_with_session` | Session-based execution (state persists; best for interactive work)         |
-| `huaweicloud_sandbox_exec_one_shot`     | One-shot execution (fresh connection; best for long/heavy commands)         |
-| `huaweicloud_sandbox_upload_file`       | Upload a local file into the sandbox (chunked base64 write + md5 verify)    |
-| `huaweicloud_sandbox_upload_project`    | Upload a local project directory to sandbox (HTTP tunnel, tar.gz + extract) |
-| `huaweicloud_sandbox_deploy_nginx`      | Deploy nginx config with permissions fix and reload in one call             |
-| `huaweicloud_sandbox_deploy_check`      | Run deployment completeness check (nginx, DevBridge, URL, QR if needed)     |
-| `huaweicloud_sandbox_close_session`     | Close a persistent terminal session                                         |
+| Tool                                    | Purpose                                                                                         |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `huaweicloud_sandbox_exec_with_session` | Session-based execution (state persists; best for interactive work)                             |
+| `huaweicloud_sandbox_exec_one_shot`     | One-shot execution (fresh connection; best for long/heavy commands — `mode: "async"` for >120s) |
+| `huaweicloud_sandbox_exec_poll`         | Poll an async task's verdict (done/running/lost/never/unknown) + log tail                       |
+| `huaweicloud_sandbox_upload_file`       | Upload a local file into the sandbox (chunked base64 write + md5 verify)                        |
+| `huaweicloud_sandbox_upload_project`    | Upload a local project directory to sandbox (HTTP tunnel, tar.gz + extract)                     |
+| `huaweicloud_sandbox_deploy_nginx`      | Deploy nginx config with permissions fix and reload in one call                                 |
+| `huaweicloud_sandbox_deploy_check`      | Run deployment completeness check (nginx, DevBridge, URL, QR if needed)                         |
+| `huaweicloud_sandbox_close_session`     | Close a persistent terminal session                                                             |
 
 ### Tool Selection Guide
 
-| Scenario                           | Use                                | Why                                                          |
-| ---------------------------------- | ---------------------------------- | ------------------------------------------------------------ |
-| `cd`, env setup, command chains    | `exec_with_session`                | Needs shared shell state across calls                        |
-| `npm install`, `apt-get`, builds   | `exec_one_shot`                    | Long-running (>30s), no state needed, more stable            |
-| `curl`, health checks, quick tests | Either — `exec_one_shot` preferred | Stateless, fast                                              |
-| Server startup (background)        | `exec_with_session`                | Need to `nohup ... &` then check output in same session      |
-| Deployment scripts                 | `exec_one_shot+shot`               | Long script, fresh connection avoids session timeouts        |
-| nginx configuration                | `deploy_nginx`                     | Auto-generates correct template + permissions + reload       |
-| Deployment completeness check      | `deploy_check`                     | Verifies nginx, DevBridge, URL, QR before reporting success  |
-| Tunnel lifetime renewal            | `renew_tunnel`                     | Rolling-window renewal, same URL stays alive                 |
-| URL must outlive the session       | `keepalive_watchdog`               | Unattended host re-attach + daily renewal + health check     |
-| Single file upload (<1MB)          | `upload_file`                      | Base64 chunked, reliable for small files                     |
-| Project directory upload (>1MB)    | `upload_project`                   | HTTP tunnel, much faster than base64 for multi-file projects |
+| Scenario                           | Use                                    | Why                                                                         |
+| ---------------------------------- | -------------------------------------- | --------------------------------------------------------------------------- |
+| `cd`, env setup, command chains    | `exec_with_session`                    | Needs shared shell state across calls                                       |
+| `npm install`, `apt-get`, builds   | `exec_one_shot` (async) + `exec_poll`  | Long-running, no state needed; async survives the sync timeout              |
+| Long build (>120s)                 | `exec_one_shot` mode: `"async"` + poll | The claim protocol keeps exactly one copy running; log captured server-side |
+| `curl`, health checks, quick tests | Either — `exec_one_shot` preferred     | Stateless, fast                                                             |
+| Server startup (background)        | `exec_with_session`                    | Need to `nohup ... &` then check output in same session                     |
+| Deployment scripts                 | `exec_one_shot` (async for long ones)  | Long script, fresh connection avoids session timeouts                       |
+| nginx configuration                | `deploy_nginx`                         | Auto-generates correct template + permissions + reload                      |
+| Deployment completeness check      | `deploy_check`                         | Verifies nginx, DevBridge, URL, QR before reporting success                 |
+| Tunnel lifetime renewal            | `renew_tunnel`                         | Rolling-window renewal, same URL stays alive                                |
+| URL must outlive the session       | `keepalive_watchdog`                   | Unattended host re-attach + daily renewal + health check                    |
+| Single file upload (<1MB)          | `upload_file`                          | Base64 chunked, reliable for small files                                    |
+| Project directory upload (>1MB)    | `upload_project`                       | HTTP tunnel, much faster than base64 for multi-file projects                |
 
-**Timeout tuning**: default is 120s. For commands expected to run longer (e.g. large builds), pass `timeout_ms` explicitly:
+**Long commands: async mode, not bigger timeouts.** A command that can outlive the sync timeout (default 120s — builds, installs, test suites) must run as an async task instead of raising `timeout_ms`:
 
 ```json
-{ "timeout_ms": 300000 }
+{ "command": "cd /workspace/<dirname> && <buildCmd>", "mode": "async", "task_id": "build-<dirname>-1" }
 ```
 
+`exec_one_shot` with `mode: "async"` claims a per-task directory on the sandbox, spawns the command detached (it survives the exec session), and returns immediately with `{started, taskId, taskDir}`. Poll with `huaweicloud_sandbox_exec_poll` (`task_id`, `wait_ms` up to 60000, `tail_bytes` default 4096) until the verdict is `done` — `exitCode` and `logTail` are the command's result, and the log is captured server-side (no `tee` needed).
+
+The retry ladder (the claim protocol is double-spawn-safe by construction):
+
+- `started: "uncertain"` (the start exec timed out — the claim may already be placed) → **retry with the SAME task_id**: the task's claim file blocks a second copy from ever spawning.
+- `started: "dup"` → the task already exists; the receipt carries the current verdict (a `done` verdict hands over the result immediately).
+- `started: "dup"` + verdict `never` → the start exec died between claim and spawn — **start over with a NEW task_id** (a same-id retry can never spawn).
+
+Poll verdicts: `done` (exitCode, logTail), `running` (logTail — keep polling), `lost` (the wrapper died without an exit status, or the sandbox rebooted — restart with a new task_id if needed), `never` (new task_id), `unknown` (no task directory and no memory of the task_id — never started here, or everything restarted). Poll correctness never depends on this agent's memory of the task; only the lost/unknown split does.
+
+**Sync fallback**: for callers that prefer bounded waits, sync `exec_one_shot` with an explicit `timeout_ms` stays supported (see the timeout table in the build section below). A sync timeout no longer has a recovery decision tree — the command may still be running server-side with no captured output; migrate the command to `mode: "async"` with a new `task_id` and poll it to completion instead of blind-retrying.
+
 **Session recovery**: if `exec_with_session` returns `session is not ready`, the WebSocket connection has dropped. Do NOT retry the same session — fall back to `exec_one_shot` for that command instead. To recover state (cd, env vars), reconstruct them explicitly in the one-shot command.
-
-**Timeout recovery**: if `exec_one_shot` returns a timeout error, check whether partial output is available before declaring failure:
-
-- For build commands: check `tail -30 /tmp/build.log` — the build may have completed but the tee pipe didn't flush before timeout
-- For long scripts: split into independent `exec_one_shot` calls (max 5 sub-commands per call, 15s timeout per call)
-- Do NOT retry the same composite command — split and retry individual steps
 
 ## Workflow
 
@@ -210,7 +218,7 @@ Setup is a **plugin-side preflight** — the developer should be asked a questio
 
    **DevBridge API Key 前置引导（before expose, not mid-expose）**: the address-generation service (DevBridge 0.2.x) requires an API Key. Recent sandbox images auto-acquire one from the platform keyring — but if the sandbox was created on an older image (cannot auto-acquire), prepare the key at THIS stage instead of being interrupted halfway through the expose flow: create it once at https://devstation.connect.huaweicloud.com/space/devbridge/apikey (value shown only once, `devbridge_` prefix), hand it over via `export HW_API_KEY=<key>` locally (preferred) or paste it in the conversation for the `api_key` param, then run `huaweicloud_sandbox_credentials`. Full why/where/how guide: [Step 1, NO_CREDENTIAL branch](#step-1-authenticate--api-key-only-aksk-removed-auto-create-fallback).
 
-8. **Execute commands**: use `huaweicloud_sandbox_exec_with_session` for interactive work (cd, env setup), or `huaweicloud_sandbox_exec_one_shot` for long-running builds/installs. See [Tool Selection Guide](#tool-selection-guide).
+8. **Execute commands**: use `huaweicloud_sandbox_exec_with_session` for interactive work (cd, env setup), or `huaweicloud_sandbox_exec_one_shot` for long-running builds/installs — commands that can exceed the sync timeout go out as `mode: "async"` + `huaweicloud_sandbox_exec_poll`. See [Tool Selection Guide](#tool-selection-guide).
 9. **Upload project** (if deploying local code): `huaweicloud_sandbox_upload_project` to transfer a local project directory into `/workspace/<name>` — uses HTTP tunnel, much faster than base64 for multi-file projects. Use `huaweicloud_sandbox_upload_file` for single files.
 10. **Expose the deployed app and return the public URL**: set up a public access link for the app port and give the URL to the developer as the final result (see "Expose the deployed app (public URL)") — this step uses an internal tunnel mechanism that must never be mentioned to the developer. **Every URL handoff MUST include the sandbox-lifetime notice from `urlLifetimeHint` (or `warnings`)**: the address dies when the sandbox idles out (ephemeral: shutdown/delete; persistent: shutdown, data retained), and the tunnel expiry is not the sandbox lifetime
 
@@ -708,7 +716,7 @@ Use `exec_one_shot` for install (no shared state needed). Skip if `node_modules`
 cd /workspace/<dirname> && [ -d node_modules ] && echo "SKIP: node_modules exists" || <installCmd>
 ```
 
-Wait for install to complete. For large projects on aarch64 sandboxes (1000+ packages), set `timeout_ms` to 180000 (3 min).
+Wait for install to complete. For large projects on aarch64 sandboxes (1000+ packages), the install can exceed the sync timeout — run it as an async task instead of raising `timeout_ms`: `exec_one_shot` with `mode: "async"` + a `task_id`, then `exec_poll` to completion (same flow as builds below).
 
 **Node version compatibility**: if `npm install` fails with native module errors (e.g., `rollup 4`, `@esbuild`, `node-gyp`), check the Node version:
 
@@ -736,7 +744,7 @@ fi
 
 #### 4c: Build
 
-**Timeout strategy by framework type:**
+**Timeout strategy by framework type** (sync-mode `timeout_ms` — the fallback for callers that stay synchronous; async tasks need none of this table, their command is unbounded and polled):
 
 | Type                           | timeout_ms      | Rationale                             |
 | ------------------------------ | --------------- | ------------------------------------- |
@@ -746,13 +754,19 @@ fi
 | Monorepo                       | 600000 (10 min) | Multiple apps, shared packages        |
 | `null` (no build)              | N/A             | Skip                                  |
 
-**Build with `exec_one_shot`:**
+**Build as an async task (preferred)**: `exec_one_shot` with `mode: "async"` + a `task_id`, then poll to completion — the task's server-side log survives the exec timeout (no `tee` needed), exactly one copy of the command runs (the claim protocol), and the poll hands over the `exitCode` and `logTail`:
 
-```bash
-cd /workspace/<dirname> && [ -d <outputDir> ] && echo "SKIP: <outputDir> exists" || (umask 022 && <buildCmd> 2>&1 | tee /tmp/build.log)
+```json
+{
+  "command": "cd /workspace/<dirname> && [ -d <outputDir> ] && echo \"SKIP: <outputDir> exists\" || (umask 022 && <buildCmd>)",
+  "mode": "async",
+  "task_id": "build-<dirname>-1"
+}
 ```
 
-Always pipe build output through `tee /tmp/build.log` — captures stderr+stdout so diagnostics are available even if the command times out.
+Poll with `huaweicloud_sandbox_exec_poll` (`task_id`, `wait_ms` up to 60000) until `verdict: "done"`. The retry ladder applies: `started: "uncertain"` → retry the SAME `task_id`; `started: "dup"` + verdict `never` → start a new `task_id`.
+
+**Sync fallback (for callers that stay synchronous)**: run the build inline with `exec_one_shot` and an explicit `timeout_ms` from the table above — the async mechanism has replaced the sync post-timeout recovery tree; if a sync build still times out, do not blind-retry it: restart it as an async task with a new `task_id` and poll.
 
 **OutDir verification**: before building for the first time, check the project's actual output directory (not just the default from framework detection). Projects can override outDir in config (e.g., VitePress `outDir: '../dist'`):
 
@@ -777,43 +791,14 @@ fi
 
 If `REAL_OUTDIR` differs from `<outputDir>`, use `REAL_OUTDIR` for all subsequent steps (nginx config, port check, etc.).
 
-**Post-timeout recovery**: if `exec_one_shot` returns a timeout error (Request timed out), do NOT fail immediately. First dump any captured build log, then check the output directory:
-
-```bash
-# If timeout occurred, show captured output and verify build
-if timeout_error; then
-  echo "=== Build log (tail) ==="
-  tail -30 /tmp/build.log 2>/dev/null
-  echo "=== Checking output ==="
-  if [ -d <outputDir> ] && [ "$(ls -A <outputDir> 2>/dev/null)" ]; then
-    # Verify at least one key output file exists (not just empty dir from broken build)
-    if [ -f <outputDir>/index.html ] || [ -f <outputDir>/server.js ] || [ -f <outputDir>/app.js ]; then
-      echo "Build output detected despite timeout — continuing with deployment"
-    else
-      echo "ERROR: Output directory exists but missing expected files (index.html/server.js). Build may have failed silently."
-      echo "Full log: /tmp/build.log"
-      exit 1
-    fi
-  else
-    echo "ERROR: Build did not complete. Output directory empty or missing."
-    echo "Full log: /tmp/build.log"
-    exit 1
-  fi
-fi
-```
+**Post-timeout handling**: the async mechanism replaced the old post-timeout recovery tree. A sync timeout means the command may still be running server-side with no captured output — do NOT retry the same composite command. Restart it as an async task (new `task_id`) and poll to completion; the poll's `logTail` shows what the run produced, `exitCode` whether it succeeded.
 
 For SSR frameworks, also verify the server entry point exists: `test -f <outputDir>/server.js || test -f node_modules/next/dist/server/next-server.js`.
 
-**Build progress visibility**: for very large builds, touch a marker file before starting and use `exec_with_session` to poll intermediate logs:
+**Build progress visibility**: for very large builds, the async task's poll IS the progress view — each `huaweicloud_sandbox_exec_poll` call returns the task's `logTail` (the last `tail_bytes`, default 4096, of the captured stdout+stderr). Poll with a `wait_ms` to wait server-side between reads; no marker files or side-channel `cat` calls are needed:
 
-```bash
-# Before build:
-touch /tmp/build-start && echo "Build started at $(date)"
-
-# During build via exec_with_session (separate call for polling):
-cat .next/trace 2>/dev/null | tail -5  # Next.js build trace
-# or
-tail -5 /tmp/build.log 2>/dev/null
+```json
+{ "task_id": "build-<dirname>-1", "wait_ms": 30000 }
 ```
 
 - `cd /workspace/<dirname>/<subAppPath>` for Monorepo sub-apps.
@@ -825,10 +810,10 @@ tail -5 /tmp/build.log 2>/dev/null
 
 Build failures fall into two categories. Handle them differently:
 
-| Failure Type            | Behavior                                                                                                                                           |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Timeout** (timed out) | Check `/tmp/build.log` tail and output directory — build may have completed but `tee` pipe didn't flush. See Post-timeout recovery above.          |
-| **Non-zero exit code**  | **STOP immediately.** The build engine explicitly rejected the output. Do NOT retry, modify source, or tweak env vars. Follow the procedure below. |
+| Failure Type            | Behavior                                                                                                                                                                                                                                                                      |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Timeout** (timed out) | The command may still be running server-side — do NOT blind-retry it. Migrate to `mode: "async"` with a NEW `task_id` and poll it to completion (async tasks never hit this row: their timeout became the `started: "uncertain"` receipt with the same-task_id retry ladder). |
+| **Non-zero exit code**  | **STOP immediately.** The build engine explicitly rejected the output. Do NOT retry, modify source, or tweak env vars. Follow the procedure below.                                                                                                                            |
 
 **When a build exits with non-zero exit code:**
 

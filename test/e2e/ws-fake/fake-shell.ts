@@ -161,6 +161,26 @@ const INTENT_TABLE: IntentRow[] = [
     run: () => ({ stdout: 'ACTIVE\n' }),
   },
   {
+    // exec_one_shot's async start (hwexec-task.ts, the claim protocol):
+    // opens with the literal task-dir assignment. Synthesizes the
+    // won-claim receipt; the dup/claim-error branches never occur on the
+    // fake (no real O_EXCL state to lose a race against).
+    intent: 'hwexec-start',
+    pattern: /^D=\/tmp\/\.hwexec\/([a-z0-9][a-z0-9-]{0,63})$/,
+    run: (m) => ({ stdout: `HW_STARTED=${m[1]}\n` }),
+  },
+  {
+    // exec_poll's script (hwexec-task.ts): opens with the #999-class
+    // concatenated pgrep-pattern construction (unique first line — the
+    // start script's D= line cannot collide with it). Synthesizes a
+    // healthy finished task: launched, wrapper dead, exit 0, empty log.
+    intent: 'hwexec-poll',
+    pattern: /^P="hwexec\/""[a-z0-9-]+""\/launched"$/,
+    run: () => ({
+      stdout: 'HW_DIR=1\nHW_STATUS=exit:0\nHW_ALIVE=0\nHW_LAUNCHED=1\nHW_LOG_BEGIN\nHW_LOG_END\n',
+    }),
+  },
+  {
     intent: 'echo',
     pattern: /^echo\s+(.*)$/,
     run: (m) => ({ stdout: `${m[1]}\n` }),

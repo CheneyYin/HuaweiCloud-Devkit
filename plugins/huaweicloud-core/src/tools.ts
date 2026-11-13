@@ -134,6 +134,11 @@ export type ToolArgs = {
   workspace_id?: string;
   username?: string;
   timeout_ms?: number;
+  // The async-exec claim protocol (huaweicloud_sandbox_exec_one_shot mode:
+  // "async" + huaweicloud_sandbox_exec_poll).
+  task_id?: string;
+  wait_ms?: number;
+  tail_bytes?: number;
   local_path?: string;
   remote_path?: string;
   local_dir?: string;

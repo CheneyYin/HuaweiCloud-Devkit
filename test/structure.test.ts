@@ -24,7 +24,12 @@ test('sandbox timeout defaults stay single-sourced (no raw numeric fallbacks)', 
     assert.doesNotMatch(src, /args\.timeout_ms \|\| \d/, 'handler fallbacks must read SANDBOX_TIMEOUT_MS');
     fallbacks += src.match(/args\.timeout_ms \|\| SANDBOX_TIMEOUT_MS\.\w+/g)?.length ?? 0;
   }
-  assert.equal(fallbacks, 9, 'nine tool handlers apply the shared defaults');
+  // 11 since the async-exec claim protocol: the nine legacy timeout-bearing
+  // handlers, plus the async-start branch (exec_one_shot_async) and the
+  // exec_poll handler (both in handlers-hwexec.ts) — the poll's wait_ms
+  // budget folds ON TOP of its table default via
+  // resolveHwexecPollTimeoutMs, which is why its fallback reads the table.
+  assert.equal(fallbacks, 11, 'eleven tool handlers apply the shared defaults');
 });
 
 test('agent-registration reports openclaw registration status', () => {

@@ -39,6 +39,7 @@ const EXEMPT_TOOLS = new Set([
   'huaweicloud_check_account_type',
   'huaweicloud_sandbox_renew_tunnel',
   'huaweicloud_sandbox_keepalive_watchdog',
+  'huaweicloud_sandbox_exec_poll',
 ]);
 
 // Declared, intentional drifts from the legacy literals. Each entry names the
@@ -111,6 +112,18 @@ const DELIBERATE_ADDITIONS = [
     property: 'code',
     reason:
       '2026-11-05 UX report #11: `code` was the silent-failure alias agents actually sent (the loose schema already passed it through to the handler); declaring it documents the accepted alias instead of leaving the drop implicit.',
+  },
+  {
+    tool: 'huaweicloud_sandbox_exec_one_shot',
+    property: 'mode',
+    reason:
+      'The async-exec claim protocol (TLA+-verified as HwExecClaim): mode "async" claims a task directory and spawns the command detached, so long build-class commands stop hitting the synchronous timeout cliff; the pre-migration contract only knew the sync exec.',
+  },
+  {
+    tool: 'huaweicloud_sandbox_exec_one_shot',
+    property: 'task_id',
+    reason:
+      "The async-exec claim protocol's task identity: a path- and pgrep-safe id the caller reuses when retrying an uncertain start — the claim file blocks a second spawn; omitting it lets the tool generate one.",
   },
 ];
 

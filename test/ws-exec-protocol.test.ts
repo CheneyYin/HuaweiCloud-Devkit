@@ -38,6 +38,12 @@ import {
   buildDevbridgeKeepaliveScript,
   buildKeepaliveTunnelsReadScript,
 } from '../plugins/huaweicloud-core/src/sandbox/devbridge-keepalive.ts';
+import {
+  buildHwexecPollScript,
+  buildHwexecStartScript,
+  deriveHwexecVerdict,
+  parseHwexecPollOutput,
+} from '../plugins/huaweicloud-core/src/sandbox/hwexec-task.ts';
 
 // Golden pins for the hwlink wire protocol the E2E ws-fake shares with the
 // product. The fake imports the product's codec, so a codec regression
@@ -329,4 +335,26 @@ test('devbridge fake rows recognize the real scripts (first-line anchors)', () =
   // not the auth-probe row.
   const plain = runShellCommand('export PATH=/workspace/.local/bin:$HOME/.huawei/bin${PATH:+:$PATH}', fs);
   assert.equal(plain.stdout, '');
+});
+
+test('hwexec fake rows recognize the real claim-protocol scripts (first-line anchors)', () => {
+  // Builder-driven, same doctrine as the devbridge rows above: the REAL
+  // start script's D= first line and the REAL poll script's concatenated
+  // P= first line must hit their own rows — and the two must never collide
+  // (the start script's literal D= line would swallow a poll whose first
+  // line were also D=; the poll opens with the P= construction instead).
+  const fs = new FakeFs();
+  const start = runShellCommand(buildHwexecStartScript('e2e-hwexec-1', 'npm run build'), fs);
+  assert.equal(start.intent, 'hwexec-start');
+  assert.equal(start.stdout, 'HW_STARTED=e2e-hwexec-1\n');
+  const poll = runShellCommand(buildHwexecPollScript('e2e-hwexec-1', 0, 4096), fs);
+  assert.equal(poll.intent, 'hwexec-poll');
+  // The synthesized healthy-done vocabulary parses through the product's
+  // parser — both sides of the grammar stay pinned together.
+  const parsed = parseHwexecPollOutput(poll.stdout);
+  assert.equal(parsed.dir, true);
+  assert.equal(parsed.status, 'exit:0');
+  assert.equal(parsed.alive, false);
+  assert.equal(parsed.launched, true);
+  assert.equal(deriveHwexecVerdict(parsed, true).verdict, 'done');
 });

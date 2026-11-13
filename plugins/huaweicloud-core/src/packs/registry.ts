@@ -59,6 +59,7 @@ export const PACK_OF = {
   huaweicloud_check_account_type: 'auth',
   huaweicloud_sandbox_exec_with_session: 'sandbox',
   huaweicloud_sandbox_exec_one_shot: 'sandbox',
+  huaweicloud_sandbox_exec_poll: 'sandbox',
   huaweicloud_sandbox_close_session: 'sandbox',
   huaweicloud_sandbox_upload_file: 'sandbox',
   huaweicloud_sandbox_upload_project: 'sandbox',
