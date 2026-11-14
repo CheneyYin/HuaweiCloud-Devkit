@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { buildCaseEnv, scrubSecrets } from './env-policy.ts';
+import { E2E_VAULT_MASTER_KEY, startApprovalsWatcher } from './approvals-watcher.ts';
 import { evaluateCase, type CaseVerdict, type Recordings } from './evaluate.ts';
 import { HttpFake } from './http-fake.ts';
 import { WsFake } from './ws-fake/hwlink-server.ts';
@@ -67,6 +68,12 @@ export async function runCase(
     const workdir = mkdtempSync(join(tmpdir(), `${TEMP_PREFIX}work-`));
     const wsFake = caseDef.fixtures.ws ? new WsFake() : null;
     let httpFake: HttpFake | null = null;
+    // The simulated user's terminal (approvals-watcher.ts): started before
+    // the agent run so a plan minted in the first seconds is confirmed
+    // before the model's run call lands (the LLM's plan→run turnaround is
+    // seconds; the poll fires in milliseconds). Declared in the attempt
+    // scope so the finally can stop it on every exit path.
+    const approvalsWatcher = caseDef.autoConfirmApprovals ? startApprovalsWatcher(home) : null;
     try {
       // Ws fake first: its ephemeral port resolves the literal {wsUrl}
       // token inside the http script (the hwlink GET-poll returns it as
@@ -126,9 +133,13 @@ export async function runCase(
       // it in the entry's environment. Absent cases never set it: their
       // posture is the installer's natural one (ask on opencode at or
       // above the seam floor — core-approval-negative's teaching).
+      // The autoConfirm pin also injects the pinned env-tier custody key:
+      // the MCP server child must resolve the SAME master key as the
+      // watcher's confirm or the grant MAC never verifies.
       const approvalCaseEnv: Record<string, string> = {
         ...caseDef.env,
         ...(caseDef.approvalMode ? { DEVKIT_APPROVAL_MODE: caseDef.approvalMode } : {}),
+        ...(caseDef.autoConfirmApprovals ? { HW_VAULT_MASTER_KEY: E2E_VAULT_MASTER_KEY } : {}),
       };
       const env = buildCaseEnv({
         processEnv: process.env,
@@ -219,6 +230,7 @@ export async function runCase(
       });
       lastVerdict = lastVerdict ?? verdict;
     } finally {
+      approvalsWatcher?.stop();
       await httpFake?.stop();
       await wsFake?.stop();
       rmSync(home, { recursive: true, force: true });

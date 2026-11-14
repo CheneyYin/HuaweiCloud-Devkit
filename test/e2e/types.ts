@@ -230,6 +230,18 @@ export interface E2eCase {
   // entry — the halves move together) and the run env's
   // DEVKIT_APPROVAL_MODE for the MCP child.
   approvalMode?: 'token';
+  // Play the user's out-of-band terminal confirmation for every approval
+  // token minted in this case's home: the watcher module
+  // (approvals-watcher.ts) confirms through the product's own
+  // confirmApprovalToken, keyed on the pinned env-tier custody key that
+  // the case env also injects (HW_VAULT_MASTER_KEY), so the MCP server's
+  // grant verify passes without touching any machine's OS keychain. The
+  // PIN/TTY gates belong to the interactive CLI the headless suite cannot
+  // exercise — the same untestable class as the ask-mode client prompt.
+  // The simulated-user doctrine mirrors the fake cloud boundary: the
+  // in-chat half of the human is the prompt ("我批准…"), the terminal half
+  // is this watcher.
+  autoConfirmApprovals?: true;
   fixtures: CaseFixtures;
   expect: Expectation[];
   softExpect?: Expectation[];

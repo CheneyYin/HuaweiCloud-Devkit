@@ -37,6 +37,30 @@ the process env on the MCP child; measured on 2.2.7).
 for the user is the ask note's taught surface, and its pass needs no
 executed run call.
 
+**The user's terminal half is simulated** (`E2eCase.autoConfirmApprovals`
+→ `approvals-watcher.ts`): the token chain's out-of-band confirmation
+(`npx huaweicloud-devkit approve <token>`) is the HUMAN's move, and its
+interactive CLI is deliberately un-simulatable headless — TTY-gated and
+PIN-gated so an agent piping into Bash cannot pass (by design). The
+watcher plays that half through the product's own
+`confirmApprovalToken` (the same function the CLI calls after its
+gates): the custody-HMAC grant it writes is real, the server-side grant
+verify in `consumeApprovalToken` is real, the single-use consume is
+real — the same doctrine as the fake cloud boundary (the prompt plays
+the in-chat "我批准", the watcher plays the terminal approve). Key
+agreement is the pinned env tier: the case env and the watcher both
+carry the same `HW_VAULT_MASTER_KEY` (the product's documented CI tier,
+first in the custody resolution order), so the MCP server child and the
+watcher derive the same grant MAC key and no machine's OS keychain is
+ever read or bootstrapped by the suite — the strip list keeps any host
+value out, so the pinned key is the only one in play. Race residual: if
+the model's run call lands before the watcher's 200ms poll confirms the
+mint (parallel tool calls, a sub-second turnaround), the run rejects
+with `USER_CONFIRMATION_REQUIRED`, the token stays usable, and a retry
+would succeed — but a well-behaved model asks the user and ends the
+turn, so the case reds; attempts: 2 is the backstop, and the measured
+plan→run turnarounds are seconds against the poll's milliseconds.
+
 | Channel                            | Seam                                                                                                      | Owner                                                                                                                                          |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | hcloud argv (agent session)        | `HCLOUD_BIN` + `HCLOUD_BIN_ARGS_JSON` + `HCLOUD_FAKE_LOG` (+ `HCLOUD_FAKE_SCRIPT`, `HCLOUD_FAKE_VERSION`) | env contract (long-standing; the install phase rides a sibling log, `hcloud-fake-install.log`, so the run recording names agent activity only) |
