@@ -216,6 +216,20 @@ export interface E2eCase {
   // treats it exactly like a boundary-liveness pass — no waiver flag, no
   // streak special-case.
   liveness?: 'boundary' | 'disclosure';
+  // The hcloud write-approval posture this case must run under. 'token':
+  // plan mints an approvalToken and run consumes it — the only positive
+  // approval chain that is testable headless, because the ask posture's
+  // confirmation is an interactive client permission prompt, and a
+  // headless `opencode run` has no approver (measured on 1.19.0: an
+  // ask-gated MCP tool call never executes — the refusal spins the model
+  // turn into a retry loop). Absent = the installer's natural posture
+  // (ask on opencode at or above the seam floor; the default token
+  // elsewhere), which stays the tested surface for the negative case.
+  // case-run.ts turns the pin into two channels: the install-time ask-gate
+  // off (opencode: no ask rule, no DEVKIT_APPROVAL_MODE=ask in the mcp
+  // entry — the halves move together) and the run env's
+  // DEVKIT_APPROVAL_MODE for the MCP child.
+  approvalMode?: 'token';
   fixtures: CaseFixtures;
   expect: Expectation[];
   softExpect?: Expectation[];

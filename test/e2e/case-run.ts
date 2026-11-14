@@ -108,13 +108,34 @@ export async function runCase(
           'hcloud-fake-install.log',
         ),
       });
+      // A case-pinned approval posture must ride the INSTALL too: the
+      // opencode ask gate writes the ask halves (the permission ask rule +
+      // DEVKIT_APPROVAL_MODE=ask in the mcp entry's environment), and the
+      // entry's environment beats the agent process env on the MCP child
+      // (measured on opencode 2.2.7). Turning the gate off for this case's
+      // throwaway home is the runner's deliberate per-case override — the
+      // same channel doctrine as install --packs, not a host leak (the
+      // env-policy strip keeps ambient values out of this decision).
+      if (caseDef.approvalMode) {
+        installEnv.HUAWEICLOUD_OPENCODE_ASK_RULE = 'off';
+      }
       runInstall(bin, home, workdir, installEnv, driver.installTarget, caseDef.installPacks);
+      // The run half of the pin: DEVKIT_APPROVAL_MODE reaches the MCP child
+      // through the codex env loader directly, and through opencode's
+      // parent-env inheritance once the gate-off install stopped overriding
+      // it in the entry's environment. Absent cases never set it: their
+      // posture is the installer's natural one (ask on opencode at or
+      // above the seam floor — core-approval-negative's teaching).
+      const approvalCaseEnv: Record<string, string> = {
+        ...caseDef.env,
+        ...(caseDef.approvalMode ? { DEVKIT_APPROVAL_MODE: caseDef.approvalMode } : {}),
+      };
       const env = buildCaseEnv({
         processEnv: process.env,
         home,
         driverVars: driver.prepare({ home, workdir, platform: process.platform }),
         seamVars: seamVars(home, scriptPath, kooCliVersion, httpFake, caseDef.fixtures, pathShimDir),
-        caseEnv: caseDef.env,
+        caseEnv: approvalCaseEnv,
         relaxFixed: caseDef.fixtures.updateCheck ? ['HUAWEICLOUD_DEVKIT_SKIP_UPDATE'] : undefined,
       });
       if (caseDef.fixtures.updateCheck) {
@@ -164,6 +185,10 @@ export async function runCase(
         httpCalls: summarizeHttpCalls(recordings.http),
         gatewayCalls: summarizeGatewayCalls(recordings.gateway),
         wsCalls: summarizeWsCalls(recordings.ws),
+        // The wire evidence rides the artifact even on green attempts: a
+        // pass over a 90%-dead wire is exactly the flake the summary should
+        // be able to name later.
+        wireStats: run.wireStats,
         // The recorded transcript can echo anything the agent printed; the
         // model keys ride the session env (both legs), so their values are
         // scrubbed before the report exists — the report is a CI artifact.
